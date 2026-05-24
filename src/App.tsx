@@ -27,12 +27,16 @@ const renderTabContent = (tabId: string) => {
 }
 
 function App() {
-  const { activeTab, setActiveTab } = useAppStore()
+  const { activeTab, setActiveTab, loadConfig } = useAppStore()
   const [darkMode, setDarkMode] = useState(true)
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', darkMode)
   }, [darkMode])
+
+  useEffect(() => {
+    loadConfig()
+  }, [loadConfig])
 
   return (
     <div className={`h-screen flex overflow-hidden ${darkMode ? 'dark bg-gray-900 text-gray-100' : 'bg-gray-50 text-gray-900'}`}>
