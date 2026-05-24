@@ -180,9 +180,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   downloadProgress: {},
   setModels: (models) => set({ models }),
   setEngines: (engines) => set({ engines }),
-  setModelDirs: (dirs) => set({ modelDirs: dirs }),
-  setEngineDirs: (dirs) => set({ engineDirs: dirs }),
-  setDefaultEngineId: (id) => set({ defaultEngineId: id }),
+  setModelDirs: (dirs) => { set({ modelDirs: dirs }); get().saveConfig() },
+  setEngineDirs: (dirs) => { set({ engineDirs: dirs }); get().saveConfig() },
+  setDefaultEngineId: (id) => { set({ defaultEngineId: id }); get().saveConfig() },
   setActiveConfigInstanceId: (id) => set({ activeConfigInstanceId: id }),
   setActiveTab: (tab) => set({ activeTab: tab }),
 
@@ -294,25 +294,33 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // ── 配置持久化 ────────────────────────────────────────────────
   saveConfig: async () => {
-    const { instances } = get()
+    const { instances, modelDirs, engineDirs, defaultEngineId } = get()
     const map: Record<string, InstanceConfig> = {}
     instances.forEach((i) => { map[i.id] = i.config })
-    await invoke('save_config', { instances: map })
+    await invoke('save_config', { instances: map, modelDirs, engineDirs, defaultEngineId: defaultEngineId || '' })
   },
 
   loadConfig: async () => {
     try {
-      const map = await invoke<Record<string, InstanceConfig>>('load_config')
-      const list: Instance[] = Object.entries(map).map(([id, config]) => ({
-        id,
-        name: config.name || '未命名实例',
-        status: 'stopped' as const,
+      const global = await invoke<{ instances: Record<string, InstanceConfig>; model_dirs: string[]; engine_dirs: string[]; default_engine_id: string }>('load_config')
+      const list: Instance[] = Object.entries(global.instances).map(([id, config]) => ({
+        id, name: config.name || '未命名实例', status: 'stopped' as const,
         model: config.model_path.split('\\').pop() || config.model_path,
-        port: config.port,
-        healthCheck: 'pending' as const,
-        config,
+        port: config.port, healthCheck: 'pending' as const, config,
       }))
-      if (list.length > 0) set({ instances: list })
+      set({
+        instances: list,
+        modelDirs: global.model_dirs || [],
+        engineDirs: global.engine_dirs || [],
+        defaultEngineId: global.default_engine_id || null,
+      })
+      // 如果有保存的模型/引擎目录，自动扫描一次
+      if ((global.model_dirs || []).length > 0) {
+        invoke('scan_models', { paths: global.model_dirs }).then((models) => set({ models: models as any })).catch(() => {})
+      }
+      if ((global.engine_dirs || []).length > 0) {
+        invoke('scan_engines', { paths: global.engine_dirs }).then((engines) => set({ engines: engines as any })).catch(() => {})
+      }
     } catch (e) { console.error('load_config error:', e) }
   },
 

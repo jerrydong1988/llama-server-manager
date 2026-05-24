@@ -872,36 +872,43 @@ async fn open_browser(host: String, port: u16) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct GlobalConfig {
+    instances: HashMap<String, InstanceConfig>,
+    model_dirs: Vec<String>,
+    engine_dirs: Vec<String>,
+    default_engine_id: String,
+}
 // ── 配置持久化 ────────────────────────────────────────────────────
 #[tauri::command]
 async fn save_config(
     instances: HashMap<String, InstanceConfig>,
+    model_dirs: Vec<String>,
+    engine_dirs: Vec<String>,
+    default_engine_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    // Save to instances.json
     let mut stored = state.instances.lock().unwrap();
     *stored = instances.clone();
+    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id };
     let config_dir = state.config_dir.lock().unwrap().clone();
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     let path = config_dir.join("instances.json");
-    let json = serde_json::to_string_pretty(&instances).map_err(|e| format!("{}", e))?;
+    let json = serde_json::to_string_pretty(&global).map_err(|e| format!("{}", e))?;
     std::fs::write(&path, json).map_err(|e| format!("保存失败: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
-async fn load_config(state: tauri::State<'_, AppState>) -> Result<HashMap<String, InstanceConfig>, String> {
+async fn load_config(state: tauri::State<'_, AppState>) -> Result<GlobalConfig, String> {
     let config_dir = state.config_dir.lock().unwrap().clone();
     let path = config_dir.join("instances.json");
-    if !path.exists() {
-        return Ok(HashMap::new());
-    }
+    if !path.exists() { return Ok(GlobalConfig { instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![], default_engine_id: String::new() }); }
     let json = std::fs::read_to_string(&path).map_err(|e| format!("{}", e))?;
-    let instances: HashMap<String, InstanceConfig> =
-        serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
+    let global: GlobalConfig = serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
     let mut stored = state.instances.lock().unwrap();
-    *stored = instances.clone();
-    Ok(instances)
+    *stored = global.instances.clone();
+    Ok(global)
 }
 
 // ── ModelScope 浏览 ──────────────────────────────────────────────
