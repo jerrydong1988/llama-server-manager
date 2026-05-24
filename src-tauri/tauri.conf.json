@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "vite build"
   },
   "app": {
     "windows": [
@@ -26,8 +26,8 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all",
+    "active": true,
+    "targets": "msi",
     "icon": ["icons/icon.ico"],
     "windows": {
       "certificateThumbprint": null,
