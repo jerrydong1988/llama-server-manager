@@ -918,7 +918,7 @@ async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -
     for (id, ri) in &global.running {
         #[cfg(windows)]
         {
-            // Windows: 检查 PID 对应进程是否存活
+            use std::os::windows::process::CommandExt;
             let alive = std::process::Command::new("tasklist")
                 .args(["/FI", &format!("PID eq {}", ri.pid), "/NH"])
                 .creation_flags(0x08000000)
