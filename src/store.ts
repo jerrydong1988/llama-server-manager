@@ -302,11 +302,19 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   loadConfig: async () => {
     try {
-      const global = await invoke<{ instances: Record<string, InstanceConfig>; model_dirs: string[]; engine_dirs: string[]; default_engine_id: string }>('load_config')
+      const global = await invoke<{
+        instances: Record<string, InstanceConfig>
+        model_dirs: string[]
+        engine_dirs: string[]
+        default_engine_id: string
+        running: Record<string, { instance_id: string; pid: number; port: number; host: string }>
+      }>('load_config')
+
+      const runningIds = new Set(Object.keys(global.running || {}))
       const list: Instance[] = Object.entries(global.instances).map(([id, config]) => ({
-        id, name: config.name || '未命名实例', status: 'stopped' as const,
+        id, name: config.name || '未命名实例', status: runningIds.has(id) ? 'running' as const : 'stopped' as const,
         model: config.model_path.split('\\').pop() || config.model_path,
-        port: config.port, healthCheck: 'pending' as const, config,
+        port: config.port, healthCheck: runningIds.has(id) ? 'pending' as const : 'pending' as const, config,
       }))
       set({
         instances: list,
@@ -314,12 +322,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         engineDirs: global.engine_dirs || [],
         defaultEngineId: global.default_engine_id || null,
       })
-      // 如果有保存的模型/引擎目录，自动扫描一次
+      // 加载后扫描模型和引擎
       if ((global.model_dirs || []).length > 0) {
         invoke('scan_models', { paths: global.model_dirs }).then((models) => set({ models: models as any })).catch(() => {})
       }
       if ((global.engine_dirs || []).length > 0) {
         invoke('scan_engines', { paths: global.engine_dirs }).then((engines) => set({ engines: engines as any })).catch(() => {})
+      }
+      // 为恢复的运行中实例启动健康检查
+      for (const id of runningIds) {
+        const ri = global.running[id]
+        if (ri) {
+          // 通过调用空操作触发后端健康检查，或直接在前端模拟
+          setTimeout(() => {
+            get().updateInstance(id, { startTime: Date.now() })
+          }, 100)
+        }
       }
     } catch (e) { console.error('load_config error:', e) }
   },

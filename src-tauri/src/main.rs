@@ -878,6 +878,7 @@ struct GlobalConfig {
     model_dirs: Vec<String>,
     engine_dirs: Vec<String>,
     default_engine_id: String,
+    running: HashMap<String, RunningInstance>,
 }
 // ── 配置持久化 ────────────────────────────────────────────────────
 #[tauri::command]
@@ -890,7 +891,8 @@ async fn save_config(
 ) -> Result<(), String> {
     let mut stored = state.instances.lock().unwrap();
     *stored = instances.clone();
-    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id };
+    let running_snapshot = state.running.lock().unwrap().clone();
+    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id, running: running_snapshot };
     let config_dir = state.config_dir.lock().unwrap().clone();
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     let path = config_dir.join("instances.json");
@@ -900,14 +902,55 @@ async fn save_config(
 }
 
 #[tauri::command]
-async fn load_config(state: tauri::State<'_, AppState>) -> Result<GlobalConfig, String> {
+async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<GlobalConfig, String> {
     let config_dir = state.config_dir.lock().unwrap().clone();
     let path = config_dir.join("instances.json");
-    if !path.exists() { return Ok(GlobalConfig { instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![], default_engine_id: String::new() }); }
+    if !path.exists() {
+        return Ok(GlobalConfig { instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![], default_engine_id: String::new(), running: HashMap::new() });
+    }
     let json = std::fs::read_to_string(&path).map_err(|e| format!("{}", e))?;
-    let global: GlobalConfig = serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
+    let mut global: GlobalConfig = serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
     let mut stored = state.instances.lock().unwrap();
     *stored = global.instances.clone();
+
+    // 恢复仍在运行的后台进程
+    let mut restored = HashMap::new();
+    for (id, ri) in &global.running {
+        #[cfg(windows)]
+        {
+            // Windows: 检查 PID 对应进程是否存活
+            let alive = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {}", ri.pid), "/NH"])
+                .creation_flags(0x08000000)
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains(&ri.pid.to_string()))
+                .unwrap_or(false);
+            if alive { restored.insert(id.clone(), ri.clone()); }
+        }
+        #[cfg(not(windows))]
+        {
+            // Linux/macOS: 用 kill -0 检测
+            let alive = std::process::Command::new("kill").arg("-0").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false);
+            if alive { restored.insert(id.clone(), ri.clone()); }
+        }
+    }
+    // 只在状态中保留仍然活着的进程
+    let mut running = state.running.lock().unwrap();
+    *running = restored;
+
+    // 清理配置中不再运行的进程记录并返回
+    global.running = running.clone();
+    // 为恢复的运行中实例启动健康检查
+    for (id, ri) in &*running {
+        let id = id.clone();
+        let host = if ri.host == "0.0.0.0" { "localhost".to_string() } else { ri.host.clone() };
+        let port = ri.port;
+        let pid = ri.pid;
+        let app = app.clone();
+        std::thread::spawn(move || {
+            health_check_loop(&id, &host, port, pid, app);
+        });
+    }
     Ok(global)
 }
 
