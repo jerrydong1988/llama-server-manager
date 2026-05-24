@@ -3,7 +3,7 @@ import { Search, Download, FolderOpen, Trash2, RefreshCw, FileText, X, ChevronDo
 import { useAppStore, type MsFileEntry } from '../store'
 import { listen } from '@tauri-apps/api/event'
 
-const DEFAULT_SAVE_DIR = '..\\models'
+const DEFAULT_SAVE_DIR = 'models'
 
 const ModelRepo = () => {
   const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder, browseModelscope, downloadModelscopeFiles, cancelFileDownload } = useAppStore()

@@ -672,12 +672,13 @@ async fn start_server(
     let cmd = generate_command(&config, &engine_exe);
     let cmd_str = cmd.join(" ");
 
-    let mut child = Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_str))?;
+    let mut child = {
+        let mut c = Command::new(&cmd[0]);
+        c.args(&cmd[1..]).stdout(Stdio::piped()).stderr(Stdio::piped());
+        #[cfg(windows)]
+        { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
+        c.spawn().map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_str))?
+    };
 
     let pid = child.id();
     let stdout = child.stdout.take();
@@ -839,9 +840,10 @@ async fn stop_server(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     if let Some(ri) = state.running.lock().unwrap().remove(&instance_id) {
-        #[cfg(target_os = "windows")]
+        #[cfg(windows)]
         {
-            let _ = Command::new("taskkill")
+            let _ = std::os::windows::process::CommandExt::creation_flags(
+                &mut Command::new("taskkill"), 0x08000000)
                 .args(["/F", "/PID", &ri.pid.to_string()])
                 .output();
         }
@@ -861,8 +863,10 @@ async fn stop_server(
 #[tauri::command]
 async fn open_browser(host: String, port: u16) -> Result<(), String> {
     let url = format!("http://{}:{}", host, port);
-    #[cfg(target_os = "windows")]
-    { std::process::Command::new("cmd").args(["/c", "start", &url]).spawn().map_err(|e| format!("{}", e))?; }
+    #[cfg(windows)]
+    { std::os::windows::process::CommandExt::creation_flags(
+        &mut std::process::Command::new("cmd"), 0x08000000)
+        .args(["/c", "start", &url]).spawn().map_err(|e| format!("{}", e))?; }
     #[cfg(not(target_os = "windows"))]
     { std::process::Command::new("open").arg(&url).spawn().map_err(|e| format!("{}", e))?; }
     Ok(())
@@ -1072,23 +1076,18 @@ async fn cancel_file_download(file_name: String, state: tauri::State<'_, AppStat
 }
 
 // ── 辅助函数 ──────────────────────────────────────────────────────
-fn get_app_dir(state: &AppState) -> PathBuf {
-    let config_dir = state.config_dir.lock().unwrap();
-    config_dir.parent().unwrap_or(Path::new(".")).to_path_buf()
+fn get_app_dir(_state: &AppState) -> PathBuf {
+    std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."))
+        .parent().unwrap_or(Path::new(".")).to_path_buf()
 }
 
 fn main() {
     let default_models: Vec<ModelInfo> = vec![];
     let default_engines: Vec<EngineInfo> = vec![];
 
-    let app_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    // dev 模式下 current_dir 可能是 src-tauri/，配置和模型应放在项目根目录
-    let project_root = if app_dir.ends_with("src-tauri") {
-        app_dir.parent().unwrap_or(&app_dir).to_path_buf()
-    } else {
-        app_dir
-    };
-    let config_dir = project_root.join("configs");
+    let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    let exe_dir = exe_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let config_dir = exe_dir.join("configs");
 
     let instances = {
         let path = config_dir.join("instances.json");
