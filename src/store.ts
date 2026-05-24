@@ -366,31 +366,35 @@ listen<{ instanceId: string; text: string }>('server-log', (event) => {
 }).catch(() => {})
 
 listen<{ instanceId: string }>('server-started', (event) => {
-  useAppStore.getState().updateInstance(event.payload.instanceId, {
+  const state = useAppStore.getState()
+  state.updateInstance(event.payload.instanceId, {
     status: 'running',
     healthCheck: 'pending',
     startTime: Date.now(),
   })
+  state.saveConfig()
 }).catch(() => {})
 
 listen<{ instanceId: string }>('server-stopped', (event) => {
   const state = useAppStore.getState()
   const inst = state.instances.find(i => i.id === event.payload.instanceId)
   if (inst) {
-    // 健康检查从未成功 → 启动失败
     const isError = inst.status === 'running' && inst.healthCheck !== 'ok'
     state.updateInstance(event.payload.instanceId, {
       status: isError ? 'error' : 'stopped',
       healthCheck: isError ? 'fail' : 'pending',
     })
   }
+  state.saveConfig()
 }).catch(() => {})
 
 listen<{ instanceId: string; error: string }>('server-error', (event) => {
-  useAppStore.getState().updateInstance(event.payload.instanceId, {
+  const state = useAppStore.getState()
+  state.updateInstance(event.payload.instanceId, {
     status: 'error',
     healthCheck: 'fail',
   })
+  state.saveConfig()
 }).catch(() => {})
 
 listen<{ instanceId: string; status: string }>('health-status', (event) => {
