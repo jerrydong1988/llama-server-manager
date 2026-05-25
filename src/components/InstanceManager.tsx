@@ -127,14 +127,15 @@ const InstanceManager = () => {
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.port}：</span><span>{inst.config.port}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.engine}：</span>
-                  <select key={inst.id + '-' + (inst.config.engine_id || defaultEngineId)} value={inst.config.engine_id || defaultEngineId || ''}
+                  <select key={inst.id + '-' + (inst.config.engine_id || defaultEngineId)} value={inst.config.engine_id || ''}
                     onChange={e => {
                       const newConfig = { ...inst.config, engine_id: e.target.value }
                       updateInstance(inst.id, { config: newConfig })
                       useAppStore.getState().saveConfig()
                     }}
                     className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-1 py-0.5 max-w-[180px] truncate">
-                    {engines.map(e => (
+                    <option value="">{engines.find(e => e.id === defaultEngineId)?.name || (engines[0]?.name) || t.instance.sysPath} (默认)</option>
+                    {engines.filter(e => e.id !== defaultEngineId).map(e => (
                       <option key={e.id} value={e.id}>{e.name}</option>
                     ))}
                 </select></div>
