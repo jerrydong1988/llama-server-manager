@@ -319,8 +319,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveConfig: async () => {
     const { instances, modelDirs, engineDirs, defaultEngineId } = get()
     const map: Record<string, InstanceConfig> = {}
-    instances.forEach((i) => { map[i.id] = i.config })
-    await invoke('save_config', { instances: map, modelDirs, engineDirs, defaultEngineId: defaultEngineId || '' })
+    const order: string[] = []
+    instances.forEach((i) => { map[i.id] = i.config; order.push(i.id) })
+    await invoke('save_config', { instances: map, modelDirs, engineDirs, defaultEngineId: defaultEngineId || '', instanceOrder: order })
   },
 
   loadConfig: async () => {
@@ -331,14 +332,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         engine_dirs: string[]
         default_engine_id: string
         running: Record<string, { instance_id: string; pid: number; port: number; host: string }>
+        instance_order: string[]
       }>('load_config')
 
       const runningIds = new Set(Object.keys(global.running || {}))
-      const list: Instance[] = Object.entries(global.instances).map(([id, config]) => ({
+      const order = global.instance_order || Object.keys(global.instances)
+      let list: Instance[] = Object.entries(global.instances).map(([id, config]) => ({
         id, name: config.name || '未命名实例', status: runningIds.has(id) ? 'running' as const : 'stopped' as const,
         model: config.model_path.split('\\').pop() || config.model_path,
         port: config.port, healthCheck: runningIds.has(id) ? 'pending' as const : 'pending' as const, config,
       }))
+      // 按保存的顺序排列
+      list.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
       set({
         instances: list,
         modelDirs: global.model_dirs || [],

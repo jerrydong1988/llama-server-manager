@@ -883,6 +883,7 @@ struct GlobalConfig {
     engine_dirs: Vec<String>,
     default_engine_id: String,
     running: HashMap<String, RunningInstance>,
+    instance_order: Vec<String>,
 }
 // ── 配置持久化 ────────────────────────────────────────────────────
 #[tauri::command]
@@ -891,12 +892,13 @@ async fn save_config(
     model_dirs: Vec<String>,
     engine_dirs: Vec<String>,
     default_engine_id: String,
+    instance_order: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let mut stored = state.instances.lock().unwrap();
     *stored = instances.clone();
     let running_snapshot = state.running.lock().unwrap().clone();
-    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id, running: running_snapshot };
+    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order };
     let config_dir = state.config_dir.lock().unwrap().clone();
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     let path = config_dir.join("instances.json");
@@ -910,7 +912,7 @@ async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -
     let config_dir = state.config_dir.lock().unwrap().clone();
     let path = config_dir.join("instances.json");
     if !path.exists() {
-        return Ok(GlobalConfig { instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![], default_engine_id: String::new(), running: HashMap::new() });
+        return Ok(GlobalConfig { instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![], default_engine_id: String::new(), running: HashMap::new(), instance_order: vec![] });
     }
     let json = std::fs::read_to_string(&path).map_err(|e| format!("{}", e))?;
     let mut global: GlobalConfig = serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
