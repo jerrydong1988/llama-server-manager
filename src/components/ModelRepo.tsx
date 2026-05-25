@@ -192,7 +192,7 @@ const ModelRepo = () => {
   const handleBrowseSaveDir = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const dir = await open({ directory: true, title: '选择下载保存目录' })
+      const dir = await open({ directory: true, title: t.modelRepo.saveDir })
       if (dir) setMsSaveDir(dir as string)
     } catch (_) {}
   }
@@ -352,11 +352,11 @@ const ModelRepo = () => {
                             </div>
                             <div className="flex items-center gap-2">
                               <span className="text-xs text-yellow-500">{formatSize(prev.downloaded ?? 0)} / {formatSize(prev.total ?? f.size)}</span>
-                              <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">▶ 继续</button>
-                              <button onClick={() => {
-                                setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
-                                cancelAndCleanupDownload(f.name, partialPath)
-                              }} className="text-xs text-red-500 hover:text-red-700 ml-auto">✕ 取消</button>
+                               <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
+                                <button onClick={() => {
+                                  setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
+                                  cancelAndCleanupDownload(f.name, partialPath)
+                                }} className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                             </div>
                           </div>
                         )
@@ -380,18 +380,26 @@ const ModelRepo = () => {
                           <div className="flex items-center gap-2">
                             {(!st || st.status === 'done' || st.status === 'error' || st.status === 'cancelled') ? (
                               <>
-                                {(st?.status === 'done') && <span className="text-xs text-green-500">✓ 完成</span>}
-                                {(st?.status === 'error') && <span className="text-xs text-red-500">{st.error || '✗ 失败'}</span>}
-                                {(st?.status === 'cancelled') && <span className="text-xs text-yellow-500">已取消</span>}
+                                {(st?.status === 'done') && <span className="text-xs text-green-500">{t.modelRepo.done}</span>}
+                                {(st?.status === 'error') && <span className="text-xs text-red-500">{st.error || t.modelRepo.failed}</span>}
+                                {(st?.status === 'cancelled') && <span className="text-xs text-yellow-500">{t.modelRepo.cancelled}</span>}
                                 <button onClick={startSingleDownload}
-                                  className="text-xs text-blue-500 hover:text-blue-700 ml-auto">⬇ 下载</button>
+                                  className="text-xs text-blue-500 hover:text-blue-700 ml-auto">{t.modelRepo.downloadBtn}</button>
                               </>
                             ) : st.status === 'paused' ? (
                               <>
                                 <span className="text-xs text-yellow-500">{formatSize(st.downloaded)} / {formatSize(st.total)}</span>
-                                <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">▶ 继续</button>
+                                <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
                                 <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
-                                  className="text-xs text-red-500 hover:text-red-700 ml-auto">✕ 取消</button>
+                                  className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
+                              </>
+                            ) : st.status === 'downloading' || st.status === 'pending' ? (
+                              <>
+                                <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}</span>
+                                <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.add(f.name); return n }); pauseFileDownload(f.name) }}
+                                  className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
+                                <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
+                                  className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                               </>
                             ) : st.status === 'downloading' || st.status === 'pending' ? (
                               <>

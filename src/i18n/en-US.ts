@@ -135,5 +135,6 @@ export const enUS = {
     browse: 'Browse', download: 'Download', cancelDownload: 'Cancel Download',
     browseFiles: 'Browse Files', selectFromRepo: 'Select from Repository',
     default: 'Default',
+    appTitle: 'Llama Server Manager',
   }
 }

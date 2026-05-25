@@ -141,5 +141,6 @@ export const zhCN = {
     browse: '浏览', download: '下载', cancelDownload: '取消下载',
     browseFiles: '浏览文件', selectFromRepo: '从模型仓库选择',
     default: '默认',
+    appTitle: 'Llama 服务器管理器',
   }
 }
