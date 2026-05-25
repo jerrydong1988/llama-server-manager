@@ -285,8 +285,12 @@ const InstanceManager = () => {
                 {engines.map(e => (
                   <button key={e.id}
                     onClick={() => {
-                      const newConfig = { ...inst.config, engine_id: e.id }
-                      updateInstance(inst.id, { config: newConfig })
+                      const s = useAppStore.getState()
+                      const idx = s.instances.findIndex(i => i.id === enginePickerForId)
+                      if (idx < 0) { setEnginePickerForId(''); return }
+                      const newList = [...s.instances]
+                      newList[idx] = { ...newList[idx], config: { ...newList[idx].config, engine_id: e.id } }
+                      useAppStore.setState({ instances: newList })
                       useAppStore.getState().saveConfig()
                       setEnginePickerForId('')
                     }}
@@ -295,8 +299,12 @@ const InstanceManager = () => {
                   </button>
                 ))}
                 <button onClick={() => {
-                  const newConfig = { ...inst.config, engine_id: '' }
-                  updateInstance(inst.id, { config: newConfig })
+                  const s = useAppStore.getState()
+                  const idx = s.instances.findIndex(i => i.id === enginePickerForId)
+                  if (idx < 0) { setEnginePickerForId(''); return }
+                  const newList = [...s.instances]
+                  newList[idx] = { ...newList[idx], config: { ...newList[idx].config, engine_id: '' } }
+                  useAppStore.setState({ instances: newList })
                   useAppStore.getState().saveConfig()
                   setEnginePickerForId('')
                 }}
