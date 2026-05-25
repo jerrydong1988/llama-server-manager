@@ -299,6 +299,9 @@ fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, Opti
             else if fname.contains("iq3") { Some("IQ3".into()) }
             else if fname.contains("iq2") { Some("IQ2".into()) }
             else if fname.contains("iq1") { Some("IQ1".into()) }
+            else if fname.contains("mxfp4") { Some("MXFP4".into()) }
+            else if fname.contains("mxfp6") { Some("MXFP6".into()) }
+            else if fname.contains("mxfp8") { Some("MXFP8".into()) }
             else if fname.contains("gguf") { Some("原始精度".into()) }
             else { None }
         }

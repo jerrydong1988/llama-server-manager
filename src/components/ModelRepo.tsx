@@ -135,7 +135,7 @@ const ModelRepo = () => {
           m.file_type === 'mmproj' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' :
           'bg-blue-100 dark:bg-blue-900/30 text-blue-700'
         }`}>
-          {m.file_type === 'mmproj' ? 'MMProj' : 'Model'}
+          {m.file_type === 'mmproj' ? t.modelRepo.typeMmprojShort : t.modelRepo.typeModelShort}
         </span>
         {m.quant_type && <span className="text-xs text-gray-400 shrink-0 w-14 text-right">{m.quant_type}</span>}
         <span className="text-xs text-gray-400 shrink-0 w-20 text-right">{formatSize(m.size)}</span>

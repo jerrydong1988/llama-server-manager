@@ -32,6 +32,7 @@ export const enUS = {
     modelDirEmpty: 'No .gguf files found in',
     msTitle: 'ModelScope Download',
     typeModel: '📄Model', typeMmproj: '📷Projector', typeImatrix: '📊Imatrix',
+    typeModelShort: 'Model', typeMmprojShort: 'Projector',
   },
   engineMgr: {
     scan: 'Scan Engines', addDir: 'Add Engine Directory',

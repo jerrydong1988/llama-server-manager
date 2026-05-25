@@ -32,6 +32,7 @@ export const zhCN = {
     modelDirEmpty: '中未找到 .gguf 模型文件',
     msTitle: 'ModelScope 模型下载',
     typeModel: '📄主模型', typeMmproj: '📷多模态投影器', typeImatrix: '📊权重矩阵',
+    typeModelShort: '模型', typeMmprojShort: '投影器',
   },
   engineMgr: {
     scan: '扫描引擎', addDir: '添加引擎根目录',
