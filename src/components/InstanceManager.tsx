@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { Play, Square, Plus, Trash2, Copy, Globe, CheckCircle2, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi } from 'lucide-react'
+import { Play, Square, Plus, Trash2, Copy, Globe, CheckCircle2, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from '../i18n'
 
 const InstanceManager = () => {
-  const { instances, addInstance, deleteInstance, startInstance, stopInstance, openBrowser, generateCommand, models, modelDirs, engines, defaultEngineId, saveConfig, setActiveConfigInstanceId, setActiveTab } = useAppStore()
+  const { instances, addInstance, deleteInstance, startInstance, stopInstance, openBrowser, generateCommand, models, modelDirs, engines, defaultEngineId, saveConfig, setActiveConfigInstanceId, setActiveTab, moveInstance, renameInstance } = useAppStore()
   const { t } = useI18n()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCmdModal, setShowCmdModal] = useState('')
@@ -14,6 +14,8 @@ const InstanceManager = () => {
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [newInst, setNewInst] = useState({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: 8080, engineId: '' })
   const [testResult, setTestResult] = useState('')
+  const [editingId, setEditingId] = useState('')
+  const [editName, setEditName] = useState('')
 
   const formatUptime = (startTime?: number) => {
     if (!startTime) return '0 min'
@@ -93,7 +95,24 @@ const InstanceManager = () => {
           <div key={inst.id} className="bg-white dark:bg-gray-800 rounded-lg p-5 border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
             <div className="flex items-start justify-between mb-4">
               <div>
-                <h4 className="font-semibold text-lg">{inst.name}</h4>
+                <div className="flex items-center gap-2">
+                  {editingId === inst.id ? (
+                    <input type="text" value={editName}
+                      onChange={e => setEditName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { renameInstance(inst.id, editName); setEditingId('') } if (e.key === 'Escape') setEditingId('') }}
+                      onBlur={() => { renameInstance(inst.id, editName); setEditingId('') }}
+                      autoFocus
+                      className="font-semibold text-lg bg-transparent border-b border-blue-500 outline-none px-1 w-48 dark:text-white" />
+                  ) : (
+                    <>
+                      <h4 className="font-semibold text-lg">{inst.name}</h4>
+                      <button onClick={() => { setEditingId(inst.id); setEditName(inst.name) }}
+                        className="p-0.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors" title="修改名称">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 mt-1">
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBg(inst.status)}`}>
                     {inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error}
@@ -123,6 +142,19 @@ const InstanceManager = () => {
               <button onClick={() => handleShowCommand(inst.id)} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title={t.instance.genCommand}><Terminal className="w-4 h-4" /></button>
               <button onClick={() => { setActiveConfigInstanceId(inst.id); setActiveTab('config') }} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title={t.instance.configParams}><Settings className="w-4 h-4" /></button>
               <button onClick={() => handleDelete(inst.id)} className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors" title={t.instance.delete}><Trash2 className="w-4 h-4" /></button>
+              {/* 排序箭头 */}
+              <div className="flex flex-col gap-0.5 ml-1">
+                <button onClick={() => moveInstance(inst.id, 'up')}
+                  disabled={instances.indexOf(inst) === 0}
+                  className="p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded transition-colors" title="上移">
+                  <ArrowUp className="w-3 h-3" />
+                </button>
+                <button onClick={() => moveInstance(inst.id, 'down')}
+                  disabled={instances.indexOf(inst) === instances.length - 1}
+                  className="p-0.5 text-gray-400 hover:text-gray-600 disabled:opacity-30 rounded transition-colors" title="下移">
+                  <ArrowDown className="w-3 h-3" />
+                </button>
+              </div>
             </div>
           </div>
         ))}

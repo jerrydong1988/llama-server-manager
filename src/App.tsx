@@ -20,7 +20,7 @@ const renderTabContent = (tabId: string) => {
 }
 
 function AppInner() {
-  const { activeTab, setActiveTab, loadConfig } = useAppStore()
+  const { activeTab, setActiveTab, loadConfig, instances, startInstance, stopInstance, saveConfig } = useAppStore()
   const { t, lang, setLang } = useI18n()
   const [darkMode, setDarkMode] = useState(true)
 
@@ -34,6 +34,29 @@ function AppInner() {
 
   useEffect(() => { document.documentElement.classList.toggle('dark', darkMode) }, [darkMode])
   useEffect(() => { loadConfig() }, [loadConfig])
+
+  // 键盘快捷键
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!e.ctrlKey) return
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        // Ctrl+Enter: 实例页则启动第一个已停止的实例，或停止第一个运行中的实例
+        if (instances.length > 0) {
+          const running = instances.find(i => i.status === 'running')
+          const stopped = instances.find(i => i.status !== 'running')
+          if (running) stopInstance(running.id)
+          else if (stopped) startInstance(stopped.id)
+        }
+      }
+      if (e.key === 's' || e.key === 'S') {
+        e.preventDefault()
+        saveConfig()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [instances, startInstance, stopInstance, saveConfig])
 
   return (
     <div className={`h-screen flex overflow-hidden ${darkMode ? 'dark bg-gray-900 text-gray-100' : 'bg-gray-50 text-gray-900'}`}>

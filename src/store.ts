@@ -140,6 +140,8 @@ interface AppState {
   addInstance: (instance: Instance) => void
   updateInstance: (id: string, partial: Partial<Instance>) => void
   deleteInstance: (id: string) => void
+  moveInstance: (id: string, direction: 'up' | 'down') => void
+  renameInstance: (id: string, name: string) => void
   addLog: (entry: LogEntry) => void
   clearLogs: (instanceId: string) => void
 
@@ -195,6 +197,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteInstance: (id) => set((s) => ({
     instances: s.instances.filter((i) => i.id !== id),
   })),
+
+  moveInstance: (id, direction) => set((s) => {
+    const idx = s.instances.findIndex(i => i.id === id)
+    if (idx < 0) return s
+    const target = direction === 'up' ? idx - 1 : idx + 1
+    if (target < 0 || target >= s.instances.length) return s
+    const arr = [...s.instances];
+    [arr[idx], arr[target]] = [arr[target], arr[idx]]
+    get().saveConfig()
+    return { instances: arr }
+  }),
+
+  renameInstance: (id, name) => set((s) => {
+    const inst = s.instances.find(i => i.id === id)
+    if (!inst) return s
+    const newConfig = { ...inst.config, name }
+    get().saveConfig()
+    return { instances: s.instances.map(i => i.id === id ? { ...i, name, config: newConfig } : i) }
+  }),
 
   addLog: (entry) => set((s) => {
     const existing = s.logs[entry.instanceId] || []
