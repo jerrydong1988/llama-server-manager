@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import { Search, Download, FolderOpen, Trash2, RefreshCw, FileText, X, ChevronDown, ChevronRight, File, Image } from 'lucide-react'
 import { useAppStore, type MsFileEntry } from '../store'
+import { useI18n } from '../i18n'
 import { listen } from '@tauri-apps/api/event'
 
 const DEFAULT_SAVE_DIR = 'models'
 
 const ModelRepo = () => {
   const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder, browseModelscope, downloadModelscopeFiles, cancelFileDownload, pauseFileDownload, cancelAndCleanupDownload } = useAppStore()
+  const { t } = useI18n()
   const [searchQuery, setSearchQuery] = useState('')
   const [showMsModal, setShowMsModal] = useState(false)
   const [msRepoId, setMsRepoId] = useState('')
@@ -107,7 +109,7 @@ const ModelRepo = () => {
             {depth === 0 ? <FolderOpen className="w-3.5 h-3.5 text-yellow-500 shrink-0" /> : <span className="text-xs text-gray-400 w-3.5 shrink-0">📁</span>}
             <span className="text-xs font-medium truncate flex-1">{node.name}</span>
             <span className="text-xs text-gray-400 shrink-0">
-              {cnt.models > 0 && `${cnt.models} 模型`}{cnt.models > 0 && cnt.mmproj > 0 && ' · '}{cnt.mmproj > 0 && `${cnt.mmproj} 投影器`}
+              {cnt.models > 0 && `${cnt.models} ${t.instance.model}`}{cnt.models > 0 && cnt.mmproj > 0 && ' · '}{cnt.mmproj > 0 && `${cnt.mmproj} MMProj`}
             </span>
           </button>
           {!isCollapsed && node.children && (
@@ -133,15 +135,15 @@ const ModelRepo = () => {
           m.file_type === 'mmproj' ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300' :
           'bg-blue-100 dark:bg-blue-900/30 text-blue-700'
         }`}>
-          {m.file_type === 'mmproj' ? '投影器' : '模型'}
+          {m.file_type === 'mmproj' ? 'MMProj' : 'Model'}
         </span>
         {m.quant_type && <span className="text-xs text-gray-400 shrink-0 w-14 text-right">{m.quant_type}</span>}
         <span className="text-xs text-gray-400 shrink-0 w-20 text-right">{formatSize(m.size)}</span>
         <div className="flex items-center gap-0.5 shrink-0">
-          <button onClick={() => openModelFolder(m.path)} className="p-0.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded" title="打开目录">
+          <button onClick={() => openModelFolder(m.path)} className="p-0.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded" title={t.modelRepo.openFolder}>
             <FolderOpen className="w-3 h-3" />
           </button>
-          <button onClick={() => handleDeleteFile(m.path)} className="p-0.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded" title="删除">
+          <button onClick={() => handleDeleteFile(m.path)} className="p-0.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded" title={t.modelRepo.delete}>
             <Trash2 className="w-3 h-3" />
           </button>
         </div>
@@ -156,8 +158,8 @@ const ModelRepo = () => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
   }
 
-  const modelTypeLabel = (t: string) => {
-    switch (t) { case 'mmproj': return '📷多模态投影器'; case 'imatrix': return '📊权重矩阵'; default: return '📄主模型' }
+  const modelTypeLabel = (fileType: string) => {
+    switch (fileType) { case 'mmproj': return t.modelRepo.typeMmproj; case 'imatrix': return t.modelRepo.typeImatrix; default: return t.modelRepo.typeModel }
   }
 
   const handleScan = async () => {
@@ -169,7 +171,7 @@ const ModelRepo = () => {
   const handleAddDirectory = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
-      const dir = await open({ directory: true, title: '选择包含 GGUF 模型的目录' })
+      const dir = await open({ directory: true, title: t.modelRepo.addDir })
       if (dir) {
         const d = dir as string
         const all = [...new Set([...modelDirs, d])]
@@ -197,21 +199,21 @@ const ModelRepo = () => {
 
   const handleDeleteFile = async (path: string) => {
     const name = path.split('\\').pop() || path
-    if (!confirm(`确定要删除 ${name} 吗？此操作不可撤销！`)) return
+    if (!confirm(t.modelRepo.deleteConfirm)) return
     await deleteModelFile(path)
   }
 
   const handleMsBrowse = async () => {
-    if (!msRepoId.trim()) { setMsStatus('请输入仓库 ID'); return }
+    if (!msRepoId.trim()) { setMsStatus(t.modelRepo.inputRepoId); return }
     setMsBrowsing(true)
-    setMsStatus('查询中...')
+    setMsStatus(t.modelRepo.querying)
     try {
       const files = await browseModelscope(msRepoId.trim())
       setMsFiles(files)
-      if (files.length === 0) setMsStatus('未找到 GGUF 文件')
-      else setMsStatus(`找到 ${files.length} 个文件`)
+      if (files.length === 0) setMsStatus(t.modelRepo.notFound)
+      else setMsStatus(`${t.modelRepo.found} ${files.length} ${t.modelRepo.files}`)
     } catch (e: any) {
-      setMsStatus(`查询失败：${typeof e === 'string' ? e : '网络错误'}`)
+      setMsStatus(`${t.modelRepo.queryFailed}${typeof e === 'string' ? e : t.modelRepo.networkError}`)
     } finally { setMsBrowsing(false) }
   }
 
@@ -221,35 +223,35 @@ const ModelRepo = () => {
         <div className="flex items-center gap-4">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input type="text" placeholder="搜索模型..." value={searchQuery}
+            <input type="text" placeholder={t.modelRepo.searchPlaceholder} value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-10 pr-4 py-2 rounded-lg border dark:border-gray-700 bg-white dark:bg-gray-800 w-80" />
           </div>
           <button onClick={handleScan} disabled={isLoading}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors">
-            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} /> 扫描模型
+            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} /> {t.modelRepo.scan}
           </button>
           <button onClick={handleAddDirectory}
             className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">
-            <FolderOpen className="w-4 h-4" /> 添加模型目录
+            <FolderOpen className="w-4 h-4" /> {t.modelRepo.addDir}
           </button>
         </div>
         <button onClick={() => setShowMsModal(true)}
           className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-colors">
-          <Download className="w-4 h-4" /> 从 ModelScope 下载
+          <Download className="w-4 h-4" /> {t.modelRepo.downloadMS}
         </button>
       </div>
 
       {/* 模型目录列表 */}
       {modelDirs.length > 0 && (
         <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-3 text-sm">
-          <div className="flex items-center gap-2 mb-2 text-gray-500 font-medium">已添加的模型目录：</div>
+          <div className="flex items-center gap-2 mb-2 text-gray-500 font-medium">{t.modelRepo.modelDirs}</div>
           {modelDirs.map(d => (
             <div key={d} className="flex items-center justify-between py-1 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
               <span className="text-xs truncate flex-1 mr-2">{d}</span>
               <button onClick={() => handleRemoveDir(d)}
                 className="text-xs text-red-500 hover:text-red-700 px-2 py-0.5 rounded hover:bg-red-50 dark:hover:bg-red-900/20">
-                移除
+                {t.modelRepo.remove}
               </button>
             </div>
           ))}
@@ -266,7 +268,7 @@ const ModelRepo = () => {
       {trees.length === 0 ? (
         <div className="bg-white dark:bg-gray-800 rounded-lg p-12 text-center border dark:border-gray-700">
           <FileText className="w-12 h-12 mx-auto mb-3 opacity-50" />
-          <p className="text-gray-500 dark:text-gray-400">暂无模型，请点击「扫描模型」或「添加模型目录」</p>
+          <p className="text-gray-500 dark:text-gray-400">{t.modelRepo.noModels}</p>
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-lg border dark:border-gray-700 overflow-hidden max-h-[calc(100vh-300px)] overflow-y-auto">
@@ -279,7 +281,7 @@ const ModelRepo = () => {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold">ModelScope 模型下载</h3>
+              <h3 className="text-lg font-semibold">{t.modelRepo.msTitle}</h3>
               <button onClick={() => setShowMsModal(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-5 h-5" /></button>
             </div>
 
@@ -287,11 +289,11 @@ const ModelRepo = () => {
               <div className="flex gap-2">
                 <input type="text" value={msRepoId} onChange={(e) => setMsRepoId(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleMsBrowse()}
-                  placeholder="仓库 ID，例如 unsloth/Qwen3.6-35B-A3B-GGUF"
+                  placeholder={t.modelRepo.repoIdPlaceholder}
                   className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                 <button onClick={handleMsBrowse} disabled={msBrowsing}
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors">
-                  浏览文件
+                  {t.modelRepo.browseFiles}
                 </button>
               </div>
 
@@ -300,7 +302,7 @@ const ModelRepo = () => {
               {msFiles.length > 0 && (
                 <>
                   <div>
-                    <label className="block text-sm font-medium mb-1">保存目录</label>
+                    <label className="block text-sm font-medium mb-1">{t.modelRepo.saveDir}</label>
                     <div className="flex gap-2">
                       <input type="text" value={msSaveDir} onChange={(e) => setMsSaveDir(e.target.value)}
                         className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-sm" />
