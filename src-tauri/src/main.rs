@@ -33,8 +33,11 @@ pub struct EngineInfo {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct InstanceConfig {
+    #[serde(default)]
     pub id: String,
     pub name: String,
+    #[serde(default)]
+    pub engine_id: String,
     pub model_path: String,
     pub alias: String,
     pub lora_path: String,
@@ -112,7 +115,7 @@ pub struct InstanceConfig {
 impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
-            id: String::new(), name: String::new(), model_path: String::new(),
+            id: String::new(), name: String::new(), engine_id: String::new(), model_path: String::new(),
             alias: String::new(), lora_path: String::new(), mmproj_path: String::new(),
             chat_template: String::new(), reasoning_format: String::new(),
             reasoning_effort: String::new(), reasoning: String::new(), jinja: false,
@@ -881,7 +884,9 @@ struct GlobalConfig {
     instances: HashMap<String, InstanceConfig>,
     model_dirs: Vec<String>,
     engine_dirs: Vec<String>,
+    #[serde(default)]
     default_engine_id: String,
+    #[serde(default)]
     running: HashMap<String, RunningInstance>,
     #[serde(default)]
     instance_order: Vec<String>,

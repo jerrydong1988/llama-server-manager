@@ -24,7 +24,7 @@ export interface EngineInfo {
 }
 
 export interface InstanceConfig {
-  id: string; name: string; model_path: string; alias: string;
+  id: string; name: string; engine_id: string; model_path: string; alias: string;
   lora_path: string; mmproj_path: string; chat_template: string;
   reasoning_format: string; reasoning_effort: string; reasoning: string;
   jinja: boolean; reasoning_budget: string; grammar_file: string;
@@ -88,7 +88,7 @@ interface DownloadProgress {
 // ── 默认配置 ───────────────────────────────────────────────────
 export function defaultInstanceConfig(): InstanceConfig {
   return {
-    id: '', name: '', model_path: '', alias: '',
+    id: '', name: '', engine_id: '', model_path: '', alias: '',
     lora_path: '', mmproj_path: '', chat_template: '',
     reasoning_format: '', reasoning_effort: '', reasoning: '',
     jinja: false, reasoning_budget: '', grammar_file: '',
@@ -289,12 +289,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   startInstance: async (id: string) => {
-    const { instances, engines, defaultEngineId } = get()
-    const inst = instances.find((i) => i.id === id)
-    const engine = engines.find((e) => e.id === defaultEngineId) || engines[0]
-    if (!inst || !engine) return
-
     try {
+      const { instances, engines, defaultEngineId } = get()
+      const inst = instances.find(i => i.id === id)
+      if (!inst) return
+      // 实例指定引擎 > 默认引擎 > 第一个引擎
+      const engine = engines.find(e => e.id === inst.config.engine_id)
+        || engines.find(e => e.id === defaultEngineId)
+        || engines[0]
+      if (!engine) return
+
       await invoke('start_server', { instanceId: id, config: inst.config, engineExe: engine.exe })
       get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
     } catch (e) {

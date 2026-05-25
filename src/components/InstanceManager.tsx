@@ -125,7 +125,19 @@ const InstanceManager = () => {
             <div className="space-y-2 mb-4 text-sm">
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.port}：</span><span>{inst.config.port}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">{t.instance.engine}：</span><span className="truncate max-w-[180px]">{engines.find(e => e.id === defaultEngineId)?.name || (engines[0]?.name) || t.instance.sysPath}</span></div>
+              <div className="flex justify-between"><span className="text-gray-500">{t.instance.engine}：</span>
+                <select value={inst.config.engine_id || defaultEngineId || ''}
+                  onChange={e => {
+                    const newConfig = { ...inst.config, engine_id: e.target.value }
+                    updateInstance(inst.id, { config: newConfig })
+                    saveConfig()
+                  }}
+                  className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-1 py-0.5 max-w-[180px] truncate">
+                  <option value="">{engines.find(e => e.id === defaultEngineId)?.name || (engines[0]?.name) || t.instance.sysPath}</option>
+                  {engines.filter(e => e.id !== defaultEngineId).map(e => (
+                    <option key={e.id} value={e.id}>{e.name}</option>
+                  ))}
+                </select></div>
             </div>
             <div className="flex items-center gap-2">
               {inst.status !== 'running' ? (
