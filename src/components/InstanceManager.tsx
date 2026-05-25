@@ -128,37 +128,10 @@ const InstanceManager = () => {
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.port}：</span><span>{inst.config.port}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.engine}：</span>
-                <div className="relative">
-                  <button onClick={() => setEnginePickerForId(enginePickerForId === inst.id ? '' : inst.id)}
-                    className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-2 py-0.5 hover:bg-gray-50 dark:hover:bg-gray-700 truncate max-w-[180px]">
-                    {engines.find(e => e.id === (inst.config.engine_id || defaultEngineId))?.name || (engines[0]?.name) || t.instance.sysPath}
-                  </button>
-                  {enginePickerForId === inst.id && (
-                    <div className="absolute right-0 mt-1 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-lg z-50 min-w-[220px] max-h-48 overflow-y-auto" onClick={e => e.stopPropagation()}>
-                      {engines.map(e => (
-                        <button key={e.id}
-                          onMouseDown={(e) => { e.stopPropagation(); e.preventDefault()
-                            const newConfig = { ...inst.config, engine_id: e.id }
-                            updateInstance(inst.id, { config: newConfig })
-                            useAppStore.getState().saveConfig()
-                            setEnginePickerForId('')
-                          }}
-                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 ${(inst.config.engine_id || defaultEngineId) === e.id ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : ''}`}>
-                          {e.name}
-                        </button>
-                      ))}
-                      <button onMouseDown={(e) => { e.stopPropagation(); e.preventDefault()
-                        const newConfig = { ...inst.config, engine_id: '' }
-                        updateInstance(inst.id, { config: newConfig })
-                        useAppStore.getState().saveConfig()
-                        setEnginePickerForId('')
-                      }}
-                        className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 border-t dark:border-gray-700 ${!inst.config.engine_id ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : ''}`}>
-                        {t.instance.sysPath} (默认)
-                      </button>
-                    </div>
-                  )}
-                </div></div>
+                <button onClick={() => setEnginePickerForId(inst.id)}
+                  className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-2 py-0.5 hover:bg-gray-50 dark:hover:bg-gray-700 truncate max-w-[180px]">
+                  {engines.find(e => e.id === (inst.config.engine_id || defaultEngineId))?.name || (engines[0]?.name) || t.instance.sysPath}
+                </button></div>
             </div>
             <div className="flex items-center gap-2">
               {inst.status !== 'running' ? (
@@ -296,6 +269,46 @@ const InstanceManager = () => {
           </div>
         </div>
       )}
+
+      {/* 引擎选择弹窗 */}
+      {enginePickerForId && (() => {
+        const inst = instances.find(i => i.id === enginePickerForId)
+        if (!inst) return null
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-sm">
+              <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
+                <h3 className="text-lg font-semibold">{t.instance.selectEngine} — {inst.name}</h3>
+                <button onClick={() => setEnginePickerForId('')} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-5 h-5" /></button>
+              </div>
+              <div className="p-2 max-h-64 overflow-y-auto">
+                {engines.map(e => (
+                  <button key={e.id}
+                    onClick={() => {
+                      const newConfig = { ...inst.config, engine_id: e.id }
+                      updateInstance(inst.id, { config: newConfig })
+                      useAppStore.getState().saveConfig()
+                      setEnginePickerForId('')
+                    }}
+                    className={`w-full text-left px-4 py-2 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 ${(inst.config.engine_id || defaultEngineId) === e.id ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : ''}`}>
+                    {e.name} <span className="text-xs text-gray-400">({e.backend})</span>
+                  </button>
+                ))}
+                <button onClick={() => {
+                  const newConfig = { ...inst.config, engine_id: '' }
+                  updateInstance(inst.id, { config: newConfig })
+                  useAppStore.getState().saveConfig()
+                  setEnginePickerForId('')
+                }}
+                  className={`w-full text-left px-4 py-2 text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-700 border-t dark:border-gray-700 ${!inst.config.engine_id ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : ''}`}>
+                  {t.instance.sysPath} (默认)
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
     </div>
   )
 }
