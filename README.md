@@ -17,8 +17,6 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 <img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/974a8169-9d48-4f8b-a3dd-452818f041e0" />
 
 
-*（截图待补充 / Screenshots coming soon）*
-
 ---
 
 ## 功能特性 / Features
