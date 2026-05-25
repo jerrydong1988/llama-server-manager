@@ -498,7 +498,7 @@ fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<EngineInfo
     let version = name.clone();
     let backend = detect_backend(dir);
     Some(EngineInfo {
-        id: uuid::Uuid::new_v4().to_string(),
+        id: exe.parent().unwrap_or(Path::new(".")).to_string_lossy().to_string(),
         name: format!("{} ({})", name, backend),
         dir: dir.to_string_lossy().to_string(),
         exe: exe.to_string_lossy().to_string(),
