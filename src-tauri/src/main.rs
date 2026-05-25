@@ -884,11 +884,8 @@ struct GlobalConfig {
     instances: HashMap<String, InstanceConfig>,
     model_dirs: Vec<String>,
     engine_dirs: Vec<String>,
-    #[serde(default)]
     default_engine_id: String,
-    #[serde(default)]
     running: HashMap<String, RunningInstance>,
-    #[serde(default)]
     instance_order: Vec<String>,
 }
 // ── 配置持久化 ────────────────────────────────────────────────────

@@ -35,10 +35,10 @@ const InstanceManager = () => {
     if (!defaultEngineId && engines[0]) useAppStore.setState({ defaultEngineId: engines[0].id })
     setShowCreateModal(false)
     setNewInst({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: newInst.port + 1, engineId: newInst.engineId })
-    saveConfig()
+    useAppStore.getState().saveConfig()
   }
 
-  const handleDelete = (id: string) => { if (!confirm(t.instance.confirmDelete)) return; deleteInstance(id); saveConfig() }
+  const handleDelete = (id: string) => {     if (!confirm(t.instance.confirmDelete)) return; deleteInstance(id); useAppStore.getState().saveConfig() }
   const handleCopyCommand = (text: string) => { navigator.clipboard.writeText(text) }
 
   const handleShowCommand = async (id: string) => {
@@ -130,7 +130,7 @@ const InstanceManager = () => {
                   onChange={e => {
                     const newConfig = { ...inst.config, engine_id: e.target.value }
                     updateInstance(inst.id, { config: newConfig })
-                    saveConfig()
+                    useAppStore.getState().saveConfig()
                   }}
                   className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-1 py-0.5 max-w-[180px] truncate">
                   <option value="">{engines.find(e => e.id === defaultEngineId)?.name || (engines[0]?.name) || t.instance.sysPath}</option>
