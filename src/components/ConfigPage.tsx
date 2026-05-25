@@ -268,7 +268,7 @@ const ConfigPage = () => {
                     </div>)
                   }
                   const m = node.model!
-                  if (m.file_type === 'mmproj') return (<div key={node.path} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex items-center gap-2 py-1 pr-2 text-xs text-gray-500"><Image className="w-3 h-3 text-purple-500 shrink-0" /><span className="truncate flex-1">{m.name}</span><span className="text-purple-400 shrink-0 text-xs">投影器</span></div>)
+                  if (m.file_type === 'mmproj') return (<div key={node.path} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex items-center gap-2 py-1 pr-2 text-xs text-gray-500"><Image className="w-3 h-3 text-purple-500 shrink-0" /><span className="truncate flex-1">{m.name}</span><span className="text-purple-400 shrink-0 text-xs">{t.modelRepo.typeMmprojShort}</span></div>)
                   return (<button key={node.path} onClick={() => pickModel(m.path)} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="w-full flex items-center gap-2 py-1 pr-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded text-left text-xs">
                     <File className="w-3 h-3 text-blue-500 shrink-0" /><span className="truncate flex-1">{m.name}</span><span className="text-gray-400 shrink-0">{m.quant_type || ''}</span>
                     <span className="text-gray-400 shrink-0">{m.size > 1024 * 1024 * 1024 ? (m.size / 1024 / 1024 / 1024).toFixed(1) + ' GB' : m.size > 1024 * 1024 ? (m.size / 1024 / 1024).toFixed(1) + ' MB' : m.size > 1024 ? (m.size / 1024).toFixed(1) + ' KB' : m.size + ' B'}</span>
