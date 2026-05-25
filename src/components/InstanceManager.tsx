@@ -46,7 +46,9 @@ const InstanceManager = () => {
   const handleShowCommand = async (id: string) => {
     const inst = instances.find(i => i.id === id)
     if (!inst) return
-    const engine = engines.find(e => e.id === defaultEngineId) || engines[0]
+    const engine = engines.find(e => e.id === inst.config.engine_id)
+      || engines.find(e => e.id === defaultEngineId)
+      || engines[0]
     if (!engine) return
     try { const cmd = await generateCommand(inst.config, engine.exe); setCmdText(cmd.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')); setShowCmdModal(id) }
     catch (e) { console.error(e) }
