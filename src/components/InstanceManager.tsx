@@ -134,10 +134,10 @@ const InstanceManager = () => {
                     {engines.find(e => e.id === (inst.config.engine_id || defaultEngineId))?.name || (engines[0]?.name) || t.instance.sysPath}
                   </button>
                   {enginePickerForId === inst.id && (
-                    <div className="absolute right-0 mt-1 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-lg z-50 min-w-[220px] max-h-48 overflow-y-auto">
+                    <div className="absolute right-0 mt-1 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-lg z-50 min-w-[220px] max-h-48 overflow-y-auto" onClick={e => e.stopPropagation()}>
                       {engines.map(e => (
                         <button key={e.id}
-                          onClick={() => {
+                          onMouseDown={(e) => { e.stopPropagation(); e.preventDefault()
                             const newConfig = { ...inst.config, engine_id: e.id }
                             updateInstance(inst.id, { config: newConfig })
                             useAppStore.getState().saveConfig()
@@ -147,7 +147,7 @@ const InstanceManager = () => {
                           {e.name}
                         </button>
                       ))}
-                      <button onClick={() => {
+                      <button onMouseDown={(e) => { e.stopPropagation(); e.preventDefault()
                         const newConfig = { ...inst.config, engine_id: '' }
                         updateInstance(inst.id, { config: newConfig })
                         useAppStore.getState().saveConfig()
