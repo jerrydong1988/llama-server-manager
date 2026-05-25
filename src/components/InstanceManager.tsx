@@ -31,6 +31,7 @@ const InstanceManager = () => {
     const config = defaultInstanceConfig()
     config.id = id; config.name = newInst.name || model.name.replace('.gguf', '')
     config.model_path = newInst.modelPath; config.mmproj_path = newInst.mmprojPath; config.port = newInst.port; config.host = '127.0.0.1'
+    config.engine_id = newInst.engineId || defaultEngineId || ''
     addInstance({ id, name: config.name, status: 'stopped', model: model.name, port: newInst.port, healthCheck: 'pending', config })
     if (!defaultEngineId && engines[0]) useAppStore.setState({ defaultEngineId: engines[0].id })
     setShowCreateModal(false)
@@ -126,17 +127,16 @@ const InstanceManager = () => {
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.port}：</span><span>{inst.config.port}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.engine}：</span>
-                <select value={inst.config.engine_id || defaultEngineId || ''}
-                  onChange={e => {
-                    const newConfig = { ...inst.config, engine_id: e.target.value }
-                    updateInstance(inst.id, { config: newConfig })
-                    useAppStore.getState().saveConfig()
-                  }}
-                  className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-1 py-0.5 max-w-[180px] truncate">
-                  <option value="">{engines.find(e => e.id === defaultEngineId)?.name || (engines[0]?.name) || t.instance.sysPath}</option>
-                  {engines.filter(e => e.id !== defaultEngineId).map(e => (
-                    <option key={e.id} value={e.id}>{e.name}</option>
-                  ))}
+                  <select value={inst.config.engine_id || defaultEngineId || ''}
+                    onChange={e => {
+                      const newConfig = { ...inst.config, engine_id: e.target.value }
+                      updateInstance(inst.id, { config: newConfig })
+                      useAppStore.getState().saveConfig()
+                    }}
+                    className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-1 py-0.5 max-w-[180px] truncate">
+                    {engines.map(e => (
+                      <option key={e.id} value={e.id}>{e.name}</option>
+                    ))}
                 </select></div>
             </div>
             <div className="flex items-center gap-2">
