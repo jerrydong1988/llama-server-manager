@@ -9,6 +9,13 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 ---
 
 ## 界面预览 / Screenshots
+<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/5fd90304-fc39-4f33-8ceb-681890584297" />
+<img width="1280" height="800" alt="image" src="https://github.com/user-attachments/assets/9cd8588a-c17d-45a8-a619-bcfb6d3f55d5" />
+<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/7edba269-1147-408b-b61c-38c5825450ac" />
+<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/29d10bff-bad8-4f8b-a385-2d925bc35c6a" />
+<img width="1280" height="1390" alt="image" src="https://github.com/user-attachments/assets/a34b0460-4e19-43fb-b576-63263d0ff5f5" />
+<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/974a8169-9d48-4f8b-a3dd-452818f041e0" />
+
 
 *（截图待补充 / Screenshots coming soon）*
 
