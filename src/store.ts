@@ -164,6 +164,8 @@ interface AppState {
   browseModelscope: (repoId: string) => Promise<MsFileEntry[]>
   downloadModelscopeFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>
   cancelFileDownload: (fileName: string) => Promise<void>
+  pauseFileDownload: (fileName: string) => Promise<void>
+  cancelAndCleanupDownload: (fileName: string, filePath: string) => Promise<void>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -353,6 +355,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   cancelFileDownload: async (fileName: string) => {
     try { await invoke('cancel_file_download', { fileName }) } catch (e) { console.error(e) }
+  },
+
+  pauseFileDownload: async (fileName: string) => {
+    try { await invoke('pause_file_download', { fileName }) } catch (e) { console.error(e) }
+  },
+
+  cancelAndCleanupDownload: async (fileName: string, filePath: string) => {
+    try { await invoke('cancel_and_cleanup_download', { fileName, filePath }) } catch (e) { console.error(e) }
   },
 }))
 

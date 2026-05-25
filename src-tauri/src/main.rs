@@ -155,6 +155,7 @@ pub struct AppState {
     pub running: Mutex<HashMap<String, RunningInstance>>,
     pub config_dir: Mutex<PathBuf>,
     pub cancel_flags: Mutex<HashMap<String, bool>>,
+    pub pause_flags: Mutex<HashMap<String, bool>>,
 }
 
 // ── GGUF 元信息解析（复刻原程序 _read_gguf_metadata） ─────────
@@ -1040,7 +1041,9 @@ async fn download_modelscope_files(
             async move {
             let shared = app.state::<AppState>();
             if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-                let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
+                if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
+                    let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
+                }
                 return;
             }
 
@@ -1049,12 +1052,16 @@ async fn download_modelscope_files(
                 .build()
                 .unwrap_or_default();
 
-            let resp = match client
-                .get(&url)
-                .header("User-Agent", "Mozilla/5.0")
-                .send()
-                .await
-            {
+            // 检查是否存在断点文件
+            let dest = save_path.join(&file_name);
+            let resume_from = dest.metadata().map(|m| m.len()).unwrap_or(0);
+
+            let mut req = client.get(&url).header("User-Agent", "Mozilla/5.0");
+            if resume_from > 0 {
+                req = req.header("Range", format!("bytes={}-", resume_from));
+            }
+
+            let resp = match req.send().await {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = app.emit("download-error", serde_json::json!({
@@ -1063,16 +1070,25 @@ async fn download_modelscope_files(
                     return;
                 }
             };
-            if !resp.status().is_success() {
+            if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
                 let _ = app.emit("download-error", serde_json::json!({
                     "fileName": file_name, "error": format!("HTTP {}", resp.status())
                 }));
                 return;
             }
 
-            let total = resp.content_length().unwrap_or(file_size);
-            let mut downloaded: u64 = 0;
-            let mut buf = Vec::new();
+            let total = if resume_from > 0 {
+                resp.content_length().unwrap_or(0) + resume_from
+            } else {
+                resp.content_length().unwrap_or(file_size)
+            };
+            let mut downloaded = resume_from;
+
+            use std::io::Write;
+            // 以追加模式打开文件
+            let mut file = std::fs::OpenOptions::new()
+                .create(true).append(resume_from == 0).write(true)
+                .open(&dest).unwrap();
 
             let mut stream = resp.bytes_stream();
             while let Some(chunk) = stream.next().await {
@@ -1082,7 +1098,7 @@ async fn download_modelscope_files(
                 }
                 match chunk {
                     Ok(bytes) => {
-                        buf.extend_from_slice(&bytes);
+                        file.write_all(&bytes).unwrap();
                         downloaded += bytes.len() as u64;
                         let _ = app.emit("download-progress", serde_json::json!({
                             "fileName": file_name, "downloaded": downloaded,
@@ -1096,13 +1112,6 @@ async fn download_modelscope_files(
                         return;
                     }
                 }
-            }
-            let dest = save_path.join(&file_name);
-            if let Err(e) = std::fs::write(&dest, &buf) {
-                let _ = app.emit("download-error", serde_json::json!({
-                    "fileName": file_name, "error": format!("保存失败: {}", e)
-                }));
-                return;
             }
             let _ = app.emit("download-complete", serde_json::json!({
                 "fileName": file_name, "path": dest.to_string_lossy(),
@@ -1125,7 +1134,37 @@ async fn cancel_file_download(file_name: String, state: tauri::State<'_, AppStat
     Ok(())
 }
 
+#[tauri::command]
+async fn pause_file_download(file_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.pause_flags.lock().unwrap().insert(file_name.clone(), true);
+    state.cancel_flags.lock().unwrap().insert(file_name, true);
+    Ok(())
+}
+
+#[tauri::command]
+async fn cancel_and_cleanup_download(file_name: String, file_path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    state.cancel_flags.lock().unwrap().insert(file_name.clone(), true);
+    state.pause_flags.lock().unwrap().remove(&file_name);
+    let _ = std::fs::remove_file(&file_path);
+    Ok(())
+}
+
 // ── 辅助函数 ──────────────────────────────────────────────────────
+#[tauri::command]
+async fn test_connection(host: String, port: u16) -> Result<String, String> {
+    let url = format!("http://{}:{}/health", if host == "0.0.0.0" { "localhost" } else { &host }, port);
+    let client = reqwest::Client::new();
+    match client.get(&url).timeout(std::time::Duration::from_secs(3)).send().await {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                Ok("✓ 连接成功，服务正常".into())
+            } else {
+                Err(format!("服务返回 HTTP {}", resp.status()))
+            }
+        }
+        Err(e) => Err(format!("无法连接: {}", e))
+    }
+}
 fn get_app_dir(_state: &AppState) -> PathBuf {
     std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."))
         .parent().unwrap_or(Path::new(".")).to_path_buf()
@@ -1211,6 +1250,7 @@ fn main() {
             running: Mutex::new(HashMap::new()),
             config_dir: Mutex::new(config_dir),
             cancel_flags: Mutex::new(HashMap::new()),
+            pause_flags: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             scan_models,
@@ -1231,6 +1271,9 @@ fn main() {
             browse_modelscope,
             download_modelscope_files,
             cancel_file_download,
+            pause_file_download,
+            cancel_and_cleanup_download,
+            test_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

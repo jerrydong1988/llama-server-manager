@@ -1,15 +1,19 @@
 import { useState } from 'react'
-import { Play, Square, Plus, Trash2, Copy, Globe, CheckCircle2, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown } from 'lucide-react'
+import { Play, Square, Plus, Trash2, Copy, Globe, CheckCircle2, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
+import { invoke } from '@tauri-apps/api/core'
+import { useI18n } from '../i18n'
 
 const InstanceManager = () => {
   const { instances, addInstance, deleteInstance, startInstance, stopInstance, openBrowser, generateCommand, models, modelDirs, engines, defaultEngineId, saveConfig, setActiveConfigInstanceId, setActiveTab } = useAppStore()
+  const { t } = useI18n()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCmdModal, setShowCmdModal] = useState('')
   const [cmdText, setCmdText] = useState('')
   const [showCreatePicker, setShowCreatePicker] = useState(false)
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [newInst, setNewInst] = useState({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: 8080, engineId: '' })
+  const [testResult, setTestResult] = useState('')
 
   const formatUptime = (startTime?: number) => {
     if (!startTime) return '0 分钟'
@@ -32,8 +36,20 @@ const InstanceManager = () => {
     saveConfig()
   }
 
-  const handleDelete = (id: string) => { if (!confirm('确定要删除此实例吗？')) return; deleteInstance(id); saveConfig() }
+  const handleDelete = (id: string) => { if (!confirm(t.instance.confirmDelete)) return; deleteInstance(id); saveConfig() }
   const handleCopyCommand = (text: string) => { navigator.clipboard.writeText(text) }
+
+  const handleTestConnection = async (inst: typeof instances[0]) => {
+    setTestResult('testing...')
+    try {
+      const result = await invoke('test_connection', { host: inst.config.host, port: inst.config.port })
+      setTestResult(result as string)
+      setTimeout(() => setTestResult(''), 3000)
+    } catch (e: any) {
+      setTestResult(e?.toString() || '连接失败')
+      setTimeout(() => setTestResult(''), 3000)
+    }
+  }
 
   const handleShowCommand = async (id: string) => {
     const inst = instances.find(i => i.id === id)
@@ -61,10 +77,15 @@ const InstanceManager = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h3 className="text-lg font-semibold">服务器实例 ({instances.length})</h3>
-        <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
-          <Plus className="w-4 h-4" /> 创建实例
+        <h3 className="text-lg font-semibold">{t.instance.title} ({instances.length})</h3>
+        <div className="flex items-center gap-4">
+          {testResult && (
+            <span className={`text-sm ${testResult.startsWith('✓') ? 'text-green-500' : 'text-red-500'}`}>{testResult}</span>
+          )}
+          <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+          <Plus className="w-4 h-4" /> {t.instance.create}
         </button>
+      </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -75,26 +96,35 @@ const InstanceManager = () => {
                 <h4 className="font-semibold text-lg">{inst.name}</h4>
                 <div className="flex items-center gap-2 mt-1">
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBg(inst.status)}`}>
-                    {inst.status === 'running' ? '运行中' : inst.status === 'stopped' ? '已停止' : '错误'}
+                    {inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error}
                   </span>
-                  {inst.status === 'running' && <span className="text-xs text-gray-500">已运行 {formatUptime(inst.startTime)}</span>}
+                  {inst.status === 'running' && <span className="text-xs text-gray-500">{t.instance.uptime} {formatUptime(inst.startTime)}</span>}
                 </div>
               </div>
               {healthIcon(inst)}
             </div>
             <div className="space-y-2 mb-4 text-sm">
-              <div className="flex justify-between"><span className="text-gray-500">模型：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">端口：</span><span>{inst.config.port}</span></div>
-              <div className="flex justify-between"><span className="text-gray-500">引擎：</span><span className="truncate max-w-[180px]">{engines.find(e => e.id === defaultEngineId)?.name || (engines[0]?.name) || '未选择'}</span></div>
+              <div className="flex justify-between">                <span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
+              <div className="flex justify-between">                <span className="text-gray-500">{t.instance.port}：</span><span>{inst.config.port}</span></div>
+              <div className="flex justify-between">                <span className="text-gray-500">{t.instance.engine}：</span><span className="truncate max-w-[180px]">{engines.find(e => e.id === defaultEngineId)?.name || (engines[0]?.name) || '未选择'}</span></div>
             </div>
             <div className="flex items-center gap-2">
               {inst.status !== 'running' ? (
-                <button onClick={() => startInstance(inst.id)} className="flex-1 flex items-center justify-center gap-2 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"><Play className="w-4 h-4" /> 启动</button>
+                <button onClick={() => startInstance(inst.id)} className="flex-1 flex items-center justify-center gap-2 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors">                  <Play className="w-4 h-4" /> {t.instance.start}</button>
               ) : (
-                <button onClick={() => stopInstance(inst.id)} className="flex-1 flex items-center justify-center gap-2 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"><Square className="w-4 h-4" /> 停止</button>
+                <button onClick={() => stopInstance(inst.id)} className="flex-1 flex items-center justify-center gap-2 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">                  <Square className="w-4 h-4" /> {t.instance.stop}</button>
               )}
               {inst.status === 'running' && (
-                <button onClick={() => openBrowser(inst.config.host, inst.config.port)} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title="在浏览器中打开"><Globe className="w-4 h-4" /></button>
+                <>
+                  <button onClick={() => openBrowser(inst.config.host, inst.config.port)}
+                    className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title="在浏览器中打开">
+                    <Globe className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => handleTestConnection(inst)}
+                    className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title="测试连接">
+                    <Wifi className="w-4 h-4" />
+                  </button>
+                </>
               )}
               <button onClick={() => handleShowCommand(inst.id)} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title="生成命令"><Terminal className="w-4 h-4" /></button>
               <button onClick={() => { setActiveConfigInstanceId(inst.id); setActiveTab('config') }} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title="配置参数"><Settings className="w-4 h-4" /></button>

@@ -1,0 +1,29 @@
+import React, { createContext, useContext, useState } from 'react'
+import { zhCN } from './zh-CN'
+import { enUS } from './en-US'
+
+type Lang = 'zh-CN' | 'en-US'
+type Translations = typeof enUS
+
+const translations: Record<Lang, Translations> = { 'zh-CN': zhCN as any, 'en-US': enUS }
+
+interface I18nContextValue {
+  lang: Lang
+  t: Translations
+  setLang: (l: Lang) => void
+}
+
+const I18nContext = createContext<I18nContextValue>({
+  lang: 'zh-CN',
+  t: translations['zh-CN'],
+  setLang: () => {},
+})
+
+export function I18nProvider({ children }: { children: React.ReactNode }) {
+  const [lang, setLang] = useState<Lang>('zh-CN')
+  return <I18nContext.Provider value={{ lang, t: translations[lang], setLang }}>{children}</I18nContext.Provider>
+}
+
+export function useI18n() {
+  return useContext(I18nContext)
+}
