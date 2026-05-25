@@ -16,6 +16,7 @@ const InstanceManager = () => {
   const [testResult, setTestResult] = useState('')
   const [editingId, setEditingId] = useState('')
   const [editName, setEditName] = useState('')
+  const [enginePickerForId, setEnginePickerForId] = useState('')
 
   const formatUptime = (startTime?: number) => {
     if (!startTime) return '0 min'
@@ -127,18 +128,37 @@ const InstanceManager = () => {
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.port}：</span><span>{inst.config.port}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.engine}：</span>
-                  <select key={inst.id} defaultValue={inst.config.engine_id || ''}
-                    onChange={e => {
-                      const newConfig = { ...inst.config, engine_id: e.target.value }
-                      updateInstance(inst.id, { config: newConfig })
-                      useAppStore.getState().saveConfig()
-                    }}
-                    className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-1 py-0.5 max-w-[180px] truncate">
-                    <option value="">{engines.find(e => e.id === defaultEngineId)?.name || (engines[0]?.name) || t.instance.sysPath} (默认)</option>
-                    {engines.filter(e => e.id !== defaultEngineId).map(e => (
-                      <option key={e.id} value={e.id}>{e.name}</option>
-                    ))}
-                </select></div>
+                <div className="relative">
+                  <button onClick={() => setEnginePickerForId(enginePickerForId === inst.id ? '' : inst.id)}
+                    className="text-xs border dark:border-gray-700 rounded bg-white dark:bg-gray-800 px-2 py-0.5 hover:bg-gray-50 dark:hover:bg-gray-700 truncate max-w-[180px]">
+                    {engines.find(e => e.id === (inst.config.engine_id || defaultEngineId))?.name || (engines[0]?.name) || t.instance.sysPath}
+                  </button>
+                  {enginePickerForId === inst.id && (
+                    <div className="absolute right-0 mt-1 bg-white dark:bg-gray-800 border dark:border-gray-700 rounded-lg shadow-lg z-50 min-w-[220px] max-h-48 overflow-y-auto">
+                      {engines.map(e => (
+                        <button key={e.id}
+                          onClick={() => {
+                            const newConfig = { ...inst.config, engine_id: e.id }
+                            updateInstance(inst.id, { config: newConfig })
+                            useAppStore.getState().saveConfig()
+                            setEnginePickerForId('')
+                          }}
+                          className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 ${(inst.config.engine_id || defaultEngineId) === e.id ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : ''}`}>
+                          {e.name}
+                        </button>
+                      ))}
+                      <button onClick={() => {
+                        const newConfig = { ...inst.config, engine_id: '' }
+                        updateInstance(inst.id, { config: newConfig })
+                        useAppStore.getState().saveConfig()
+                        setEnginePickerForId('')
+                      }}
+                        className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 border-t dark:border-gray-700 ${!inst.config.engine_id ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600' : ''}`}>
+                        {t.instance.sysPath} (默认)
+                      </button>
+                    </div>
+                  )}
+                </div></div>
             </div>
             <div className="flex items-center gap-2">
               {inst.status !== 'running' ? (
