@@ -25,12 +25,12 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - 多目录递归扫描，支持 LM Studio / NovaMax 等任意目录结构
 - GGUF 元信息自动解析（架构 / 上下文长度 / 量化类型）
 - 自适应递归树结构，按实际文件系统层级展示
-- 从 ModelScope（魔搭社区）直接下载模型，支持并行下载、独立取消
+- 从 ModelScope（魔搭社区）直接下载模型，支持断点续传、独立文件下载/暂停/继续/取消
 - 一键在资源管理器中打开、从磁盘删除
 - Multi-directory recursive scanning, supports LM Studio/NovaMax
 - Automatic GGUF metadata parsing (architecture / context length / quantization)
 - Adaptive recursive tree matching actual filesystem hierarchy
-- Direct model download from ModelScope with parallel downloads & per-file cancellation
+- Direct model download from ModelScope with resume, per-file download/pause/resume/cancel
 - Open in Explorer, delete from disk
 
 ### 引擎管理 / Engine Management
@@ -43,12 +43,12 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 
 ### 实例管理 / Instance Management
 - 多实例并行运行，每个实例独立配置
-- 一键启停，进程实时监控（1 秒快速故障检测）
+- 一键启停，进程实时监控（1 秒快速故障检测），测试连接
 - 健康检查，自动识别启动失败
 - 生成命令行预览，一键复制/直接启动
 - 一键在浏览器打开 API 页面
 - Multiple parallel instances with independent configs
-- One-click start/stop with real-time process monitoring (1s fault detection)
+- One-click start/stop with real-time process monitoring (1s fault detection), test connection
 - Health check with automatic startup failure detection
 - Command-line preview with copy & direct launch
 - Open API page in browser
@@ -71,10 +71,12 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - 服务器日志实时捕获，关键词高亮
 - 系统托盘支持，关闭窗口隐藏到托盘
 - 明暗主题切换
+- 完整中英双语界面
 - 配置持久化（JSON）
 - Real-time server log capture with keyword highlighting
 - System tray support, close to tray
 - Light/dark theme toggle
+- Full i18n support (Chinese / English)
 - Config persistence (JSON)
 
 ---
@@ -128,6 +130,7 @@ The compiled executable is located in `src-tauri/target/release/`.
 llama-server-manager/
 ├── src/                    # React 前端源码 / Frontend source
 │   ├── components/         # 组件 / Components
+│   ├── i18n/               # 国际化 / Internationalization
 │   ├── store.ts            # 全局状态 / Global state
 │   ├── App.tsx             # 主应用 / Main app
 │   └── main.tsx            # 入口 / Entry point
