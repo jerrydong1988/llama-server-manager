@@ -127,7 +127,7 @@ const InstanceManager = () => {
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.port}：</span><span>{inst.config.port}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.engine}：</span>
-                  <select key={inst.id + '-' + (inst.config.engine_id || defaultEngineId)} value={inst.config.engine_id || ''}
+                  <select key={inst.id} defaultValue={inst.config.engine_id || ''}
                     onChange={e => {
                       const newConfig = { ...inst.config, engine_id: e.target.value }
                       updateInstance(inst.id, { config: newConfig })
