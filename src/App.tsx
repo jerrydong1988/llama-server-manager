@@ -20,9 +20,8 @@ const renderTabContent = (tabId: string) => {
 }
 
 function AppInner() {
-  const { activeTab, setActiveTab, loadConfig, instances, startInstance, stopInstance, saveConfig } = useAppStore()
+  const { activeTab, setActiveTab, loadConfig, instances, startInstance, stopInstance, saveConfig, darkMode, setDarkMode } = useAppStore()
   const { t, lang, setLang } = useI18n()
-  const [darkMode, setDarkMode] = useState(true)
 
   const navigation = [
     { id: 'model-repo', name: t.nav.modelRepo, icon: Database },
@@ -31,8 +30,7 @@ function AppInner() {
     { id: 'config', name: t.nav.config, icon: Settings },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
   ]
-
-  useEffect(() => { document.documentElement.classList.toggle('dark', darkMode) }, [darkMode])
+  // dark mode handled by store setDarkMode
   useEffect(() => { loadConfig() }, [loadConfig])
 
   // 键盘快捷键

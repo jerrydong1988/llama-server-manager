@@ -129,7 +129,9 @@ interface AppState {
   engineDirs: string[]
   activeConfigInstanceId: string | null
   activeTab: string
+  darkMode: boolean
   setActiveTab: (tab: string) => void
+  setDarkMode: (dm: boolean) => void
   setActiveConfigInstanceId: (id: string | null) => void
 
   setModels: (models: ModelInfo[]) => void
@@ -188,7 +190,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setEngineDirs: (dirs) => { set({ engineDirs: dirs }); get().saveConfig() },
   setDefaultEngineId: (id) => { set({ defaultEngineId: id }); get().saveConfig() },
   setActiveConfigInstanceId: (id) => set({ activeConfigInstanceId: id }),
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  setActiveTab: (tab) => { set({ activeTab: tab }); get().saveConfig() },
+  setDarkMode: (dm) => { set({ darkMode: dm }); document.documentElement.classList.toggle('dark', dm); get().saveConfig() },
 
   addInstance: (instance) => set((s) => ({ instances: [...s.instances, instance] })),
   updateInstance: (id, partial) => set((s) => ({
@@ -321,11 +324,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // ── 配置持久化 ────────────────────────────────────────────────
   saveConfig: async () => {
-    const { instances, modelDirs, engineDirs, defaultEngineId } = get()
+    const { instances, modelDirs, engineDirs, defaultEngineId, activeTab, darkMode } = get()
     const map: Record<string, InstanceConfig> = {}
     const order: string[] = []
     instances.forEach((i) => { map[i.id] = i.config; order.push(i.id) })
-    await invoke('save_config', { instances: map, modelDirs, engineDirs, defaultEngineId: defaultEngineId || '', instanceOrder: order })
+    await invoke('save_config', { instances: map, modelDirs, engineDirs, defaultEngineId: defaultEngineId || '', instanceOrder: order, lastTab: activeTab, darkMode })
   },
 
   loadConfig: async () => {
@@ -337,6 +340,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         default_engine_id: string
         running: Record<string, { instance_id: string; pid: number; port: number; host: string }>
         instance_order: string[]
+        last_tab: string
+        dark_mode: boolean
       }>('load_config')
 
       const runningIds = new Set(Object.keys(global.running || {}))
@@ -348,12 +353,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       }))
       // 按保存的顺序排列
       list.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
-      set({
-        instances: list,
-        modelDirs: global.model_dirs || [],
-        engineDirs: global.engine_dirs || [],
-        defaultEngineId: global.default_engine_id || null,
-      })
+        set({
+          instances: list,
+          modelDirs: global.model_dirs || [],
+          engineDirs: global.engine_dirs || [],
+          defaultEngineId: global.default_engine_id || null,
+          activeTab: global.last_tab || 'model-repo',
+        })
+        if (global.dark_mode !== undefined) {
+          document.documentElement.classList.toggle('dark', global.dark_mode)
+        }
       // 加载后扫描模型和引擎
       if ((global.model_dirs || []).length > 0) {
         invoke('scan_models', { paths: global.model_dirs }).then((models) => set({ models: models as any })).catch(() => {})

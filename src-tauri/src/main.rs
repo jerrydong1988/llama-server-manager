@@ -887,6 +887,8 @@ struct GlobalConfig {
     default_engine_id: String,
     running: HashMap<String, RunningInstance>,
     instance_order: Vec<String>,
+    last_tab: String,
+    dark_mode: bool,
 }
 // ── 配置持久化 ────────────────────────────────────────────────────
 #[tauri::command]
@@ -896,12 +898,14 @@ async fn save_config(
     engine_dirs: Vec<String>,
     default_engine_id: String,
     instance_order: Vec<String>,
+    last_tab: String,
+    dark_mode: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let mut stored = state.instances.lock().unwrap();
     *stored = instances.clone();
     let running_snapshot = state.running.lock().unwrap().clone();
-    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order };
+    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order, last_tab, dark_mode };
     let config_dir = state.config_dir.lock().unwrap().clone();
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     let path = config_dir.join("instances.json");
@@ -915,7 +919,7 @@ async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -
     let config_dir = state.config_dir.lock().unwrap().clone();
     let path = config_dir.join("instances.json");
     if !path.exists() {
-        return Ok(GlobalConfig { instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![], default_engine_id: String::new(), running: HashMap::new(), instance_order: vec![] });
+        return Ok(GlobalConfig { instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![], default_engine_id: String::new(), running: HashMap::new(), instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true });
     }
     let json = std::fs::read_to_string(&path).map_err(|e| format!("{}", e))?;
     let mut global: GlobalConfig = serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
@@ -1091,6 +1095,9 @@ async fn download_modelscope_files(
                 resp.content_length().unwrap_or(file_size)
             };
             let mut downloaded = resume_from;
+            let dl_start = std::time::Instant::now();
+            let mut last_emit = dl_start;
+            let mut last_bytes = resume_from;
 
             use std::io::Write;
             // 以追加模式打开文件
@@ -1106,11 +1113,18 @@ async fn download_modelscope_files(
                 }
                 match chunk {
                     Ok(bytes) => {
+                        let len = bytes.len() as u64;
                         file.write_all(&bytes).unwrap();
-                        downloaded += bytes.len() as u64;
+                        downloaded += len;
+                        let now = std::time::Instant::now();
+                        let elapsed = now.duration_since(last_emit).as_secs_f64().max(0.1);
+                        let speed = if elapsed > 0.0 { (downloaded - last_bytes) as f64 / elapsed } else { 0.0 };
+                        last_emit = now;
+                        last_bytes = downloaded;
                         let _ = app.emit("download-progress", serde_json::json!({
                             "fileName": file_name, "downloaded": downloaded,
                             "total": total, "totalFiles": total_files,
+                            "speed": speed,
                         }));
                     }
                     Err(e) => {
@@ -1157,7 +1171,39 @@ async fn cancel_and_cleanup_download(file_name: String, file_path: String, state
     Ok(())
 }
 
-// ── 辅助函数 ──────────────────────────────────────────────────────
+// ── 端口检测 ─────────────────────────────────────────────────────
+#[tauri::command]
+async fn check_port(port: u16) -> Result<bool, String> {
+    use std::net::TcpListener;
+    match TcpListener::bind(format!("127.0.0.1:{}", port)) {
+        Ok(_) => Ok(true), // 端口空闲
+        Err(_) => Ok(false), // 端口被占用
+    }
+}
+
+// ── 窗口状态 ─────────────────────────────────────────────────────
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WindowState { x: i32, y: i32, width: u32, height: u32 }
+
+#[tauri::command]
+fn save_window_state(x: i32, y: i32, width: u32, height: u32, state: tauri::State<'_, AppState>) {
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let _ = std::fs::create_dir_all(&config_dir);
+    let ws = WindowState { x, y, width, height };
+    if let Ok(json) = serde_json::to_string(&ws) {
+        let _ = std::fs::write(config_dir.join("window_state.json"), json);
+    }
+}
+
+#[tauri::command]
+fn load_window_state(state: tauri::State<'_, AppState>) -> Option<WindowState> {
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let path = config_dir.join("window_state.json");
+    if path.exists() {
+        std::fs::read_to_string(&path).ok()
+            .and_then(|s| serde_json::from_str::<WindowState>(&s).ok())
+    } else { None }
+}
 #[tauri::command]
 async fn test_connection(host: String, port: u16) -> Result<String, String> {
     let url = format!("http://{}:{}/health", if host == "0.0.0.0" { "localhost" } else { &host }, port);
@@ -1202,6 +1248,19 @@ fn main() {
         .plugin(tauri_plugin_shell::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                // 保存窗口状态
+                if let Ok(pos) = window.outer_position() {
+                    if let Ok(size) = window.outer_size() {
+                        let ws = WindowState { x: pos.x, y: pos.y, width: size.width, height: size.height };
+                        if let Some(s) = window.try_state::<AppState>() {
+                            let config_dir = s.config_dir.lock().unwrap().clone();
+                            let _ = std::fs::create_dir_all(&config_dir);
+                            if let Ok(json) = serde_json::to_string(&ws) {
+                                let _ = std::fs::write(config_dir.join("window_state.json"), json);
+                            }
+                        }
+                    }
+                }
                 api.prevent_close();
                 let _ = window.hide();
             }
@@ -1282,6 +1341,9 @@ fn main() {
             pause_file_download,
             cancel_and_cleanup_download,
             test_connection,
+            check_port,
+            save_window_state,
+            load_window_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -17,6 +17,7 @@ const InstanceManager = () => {
   const [editingId, setEditingId] = useState('')
   const [editName, setEditName] = useState('')
   const [enginePickerForId, setEnginePickerForId] = useState('')
+  const [portStatus, setPortStatus] = useState('')
 
   const formatUptime = (startTime?: number) => {
     if (!startTime) return '0 min'
@@ -82,6 +83,13 @@ const InstanceManager = () => {
 
   return (
     <div className="space-y-6">
+      {/* 引擎未检测到提示 */}
+      {engines.length === 0 && (
+        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 text-sm text-yellow-700 dark:text-yellow-400">
+          ⚠ 未检测到引擎，请先前往 <button onClick={() => setActiveTab('engine')} className="underline font-medium hover:text-yellow-800 dark:hover:text-yellow-300">引擎管理</button> 添加 llama-server.exe
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold">{t.instance.title} ({instances.length})</h3>
         <div className="flex items-center gap-4">
@@ -189,7 +197,8 @@ const InstanceManager = () => {
                 <select value={newInst.engineId || defaultEngineId || ''} onChange={e => setNewInst({ ...newInst, engineId: e.target.value })} className="w-full px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
                   <option value="">{t.instance.sysPath}</option>{engines.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                 </select></div>
-              <div><label className="block text-sm font-medium mb-1">{t.instance.port}</label><input type="number" min={1} max={65535} value={newInst.port} onChange={e => setNewInst({ ...newInst, port: parseInt(e.target.value) || 8080 })} className="w-full px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" /></div>
+              <div><label className="block text-sm font-medium mb-1">{t.instance.port}</label><input type="number" min={1} max={65535} value={newInst.port} onChange={e => { const p = parseInt(e.target.value) || 8080; setNewInst({ ...newInst, port: p }); invoke('check_port', { port: p }).then(r => setPortStatus(r ? '✓ 端口可用' : '✗ 端口已被占用')).catch(() => setPortStatus('')) }} className="w-full px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" /></div>
+              {portStatus && <p className={`text-xs ${portStatus.startsWith('✓') ? 'text-green-500' : 'text-red-500'}`}>{portStatus}</p>}
             </div>
             <div className="flex gap-3 mt-6">
               <button onClick={() => setShowCreateModal(false)} className="flex-1 px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg">{t.instance.cancelCreate}</button>

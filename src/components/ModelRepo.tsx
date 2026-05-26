@@ -15,7 +15,7 @@ const ModelRepo = () => {
   const [msFiles, setMsFiles] = useState<MsFileEntry[]>([])
   const [msStatus, setMsStatus] = useState('')
   const [msBrowsing, setMsBrowsing] = useState(false)
-  const [fileStates, setFileStates] = useState<Record<string, {downloaded: number; total: number; status: 'pending'|'downloading'|'done'|'error'|'cancelled'|'paused'; error?: string}>>({})
+  const [fileStates, setFileStates] = useState<Record<string, {downloaded: number; total: number; speed?: number; status: 'pending'|'downloading'|'done'|'error'|'cancelled'|'paused'; error?: string}>>({})
   const [msSaveDir, setMsSaveDir] = useState(DEFAULT_SAVE_DIR)
   const [scanError, setScanError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
@@ -26,8 +26,8 @@ const ModelRepo = () => {
   // 下载事件监听
   useEffect(() => {
     const fns: (() => void)[] = []
-    listen<{fileName: string; downloaded: number; total: number}>('download-progress', (e) => {
-      setFileStates(s => ({...s, [e.payload.fileName]: {downloaded: e.payload.downloaded, total: e.payload.total, status: 'downloading'}}))
+    listen<{fileName: string; downloaded: number; total: number; speed?: number}>('download-progress', (e) => {
+      setFileStates(s => ({...s, [e.payload.fileName]: {downloaded: e.payload.downloaded, total: e.payload.total, speed: e.payload.speed, status: 'downloading'}}))
     }).then(f => fns.push(f))
     listen<{fileName: string; path: string}>('download-complete', (e) => {
       setFileStates(s => ({...s, [e.payload.fileName]: {...(s[e.payload.fileName]||{downloaded:0,total:0}), status: 'done' as const}}))
@@ -156,6 +156,12 @@ const ModelRepo = () => {
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB'
     if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB'
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+  }
+
+  const formatSpeed = (bytesPerSec: number) => {
+    if (bytesPerSec < 1024) return bytesPerSec.toFixed(0) + ' B/s'
+    if (bytesPerSec < 1024 * 1024) return (bytesPerSec / 1024).toFixed(1) + ' KB/s'
+    return (bytesPerSec / 1024 / 1024).toFixed(1) + ' MB/s'
   }
 
   const modelTypeLabel = (fileType: string) => {
@@ -395,7 +401,7 @@ const ModelRepo = () => {
                               </>
                             ) : st.status === 'downloading' || st.status === 'pending' ? (
                               <>
-                                <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}</span>
+                                <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}{st.speed ? ` · ${formatSpeed(st.speed)}` : ''}</span>
                                 <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.add(f.name); return n }); pauseFileDownload(f.name) }}
                                   className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
                                 <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
@@ -403,7 +409,7 @@ const ModelRepo = () => {
                               </>
                             ) : st.status === 'downloading' || st.status === 'pending' ? (
                               <>
-                                <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}</span>
+                                <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}{st.speed ? ` · ${formatSpeed(st.speed)}` : ''}</span>
                                 <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.add(f.name); return n }); pauseFileDownload(f.name) }}
                                   className="text-xs text-yellow-500 hover:text-yellow-700">⏸ 暂停</button>
                                 <button onClick={() => { setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{}), status: 'cancelled' as const}})); cancelAndCleanupDownload(f.name, partialPath) }}
