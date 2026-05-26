@@ -1230,23 +1230,55 @@ struct UpdateInfo {
 async fn check_update() -> Result<UpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION");
     let url = "https://api.github.com/repos/jerrydong1988/llama-server-manager/releases/latest";
-    let client = reqwest::Client::new();
-    let resp = match client.get(url)
-        .header("User-Agent", "llama-server-manager")
-        .header("Accept", "application/vnd.github+json")
-        .send().await
-    {
-        Ok(r) => r,
-        Err(_) => return Ok(UpdateInfo { has_update: false, latest_version: String::new(), url: String::new() }),
-    };
-    let json: serde_json::Value = match resp.json().await {
-        Ok(j) => j,
-        Err(_) => return Ok(UpdateInfo { has_update: false, latest_version: String::new(), url: String::new() }),
-    };
-    let tag = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v');
-    let html_url = json["html_url"].as_str().unwrap_or("");
-    let has_update = compare_versions(tag, current);
-    Ok(UpdateInfo { has_update, latest_version: tag.to_string(), url: html_url.to_string() })
+    let no_update = Ok(UpdateInfo { has_update: false, latest_version: String::new(), url: String::new() });
+
+    // 异步辅助：用指定 client 获取最新版本
+    async fn fetch_latest(client: &reqwest::Client, url: &str) -> Option<(String, String)> {
+        let resp = client.get(url)
+            .header("User-Agent", "llama-server-manager")
+            .header("Accept", "application/vnd.github+json")
+            .send().await.ok()?;
+        let json: serde_json::Value = resp.json().await.ok()?;
+        let tag = json["tag_name"].as_str()?.trim_start_matches('v').to_string();
+        let html = json["html_url"].as_str()?.to_string();
+        Some((tag, html))
+    }
+
+    // 第 1 步：直连
+    let direct = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .unwrap_or_default();
+    if let Some((tag, html)) = fetch_latest(&direct, url).await {
+        let has = compare_versions(&tag, current);
+        return Ok(UpdateInfo { has_update: has, latest_version: tag, url: html });
+    }
+
+    // 第 2 步：读系统代理环境变量（Clash/v2ray/通用代理软件均会设置）
+    let proxy_url = std::env::var("HTTPS_PROXY")
+        .or_else(|_| std::env::var("https_proxy"))
+        .or_else(|_| std::env::var("HTTP_PROXY"))
+        .or_else(|_| std::env::var("http_proxy"))
+        .or_else(|_| std::env::var("ALL_PROXY"))
+        .or_else(|_| std::env::var("all_proxy"))
+        .ok();
+
+    if let Some(proxy) = proxy_url {
+        if let Ok(p) = reqwest::Proxy::all(&proxy) {
+            if let Ok(proxied) = reqwest::Client::builder()
+                .proxy(p)
+                .timeout(std::time::Duration::from_secs(5))
+                .build()
+            {
+                if let Some((tag, html)) = fetch_latest(&proxied, url).await {
+                    let has = compare_versions(&tag, current);
+                    return Ok(UpdateInfo { has_update: has, latest_version: tag, url: html });
+                }
+            }
+        }
+    }
+
+    no_update
 }
 
 fn compare_versions(latest: &str, current: &str) -> bool {
