@@ -7,6 +7,7 @@ import LogsViewer from './components/LogsViewer'
 import ConfigPage from './components/ConfigPage'
 import { useAppStore } from './store'
 import { I18nProvider, useI18n } from './i18n'
+import { invoke } from '@tauri-apps/api/core'
 
 const renderTabContent = (tabId: string) => {
   switch (tabId) {
@@ -22,6 +23,7 @@ const renderTabContent = (tabId: string) => {
 function AppInner() {
   const { activeTab, setActiveTab, loadConfig, instances, startInstance, stopInstance, saveConfig, darkMode, setDarkMode } = useAppStore()
   const { t, lang, setLang } = useI18n()
+  const [updateInfo, setUpdateInfo] = useState<{latest_version: string; url: string} | null>(null)
 
   const navigation = [
     { id: 'model-repo', name: t.nav.modelRepo, icon: Database },
@@ -32,6 +34,13 @@ function AppInner() {
   ]
   // dark mode handled by store setDarkMode
   useEffect(() => { loadConfig() }, [loadConfig])
+
+  // 自动更新检查
+  useEffect(() => {
+    invoke<{has_update: boolean; latest_version: string; url: string}>('check_update').then(r => {
+      if (r.has_update) setUpdateInfo(r)
+    }).catch(() => {})
+  }, [])
 
   // 键盘快捷键
   useEffect(() => {
@@ -85,6 +94,13 @@ function AppInner() {
             {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           </button>
         </div>
+        {/* 更新提示 */}
+        {updateInfo && (
+          <a href={updateInfo.url} target="_blank" rel="noreferrer"
+            className="block mt-2 px-2 py-1.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-xs text-center hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors">
+            _ 新版本 v{updateInfo.latest_version} 可用 | 点击下载
+          </a>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-7xl mx-auto p-6">

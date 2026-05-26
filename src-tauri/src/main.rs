@@ -1217,6 +1217,50 @@ fn load_window_state(state: tauri::State<'_, AppState>) -> Option<WindowState> {
             .and_then(|s| serde_json::from_str::<WindowState>(&s).ok())
     } else { None }
 }
+
+// ── 自动更新检查 ─────────────────────────────────────────────────
+#[derive(serde::Serialize)]
+struct UpdateInfo {
+    has_update: bool,
+    latest_version: String,
+    url: String,
+}
+
+#[tauri::command]
+async fn check_update() -> Result<UpdateInfo, String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let url = "https://api.github.com/repos/jerrydong1988/llama-server-manager/releases/latest";
+    let client = reqwest::Client::new();
+    let resp = match client.get(url)
+        .header("User-Agent", "llama-server-manager")
+        .header("Accept", "application/vnd.github+json")
+        .send().await
+    {
+        Ok(r) => r,
+        Err(_) => return Ok(UpdateInfo { has_update: false, latest_version: String::new(), url: String::new() }),
+    };
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(_) => return Ok(UpdateInfo { has_update: false, latest_version: String::new(), url: String::new() }),
+    };
+    let tag = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v');
+    let html_url = json["html_url"].as_str().unwrap_or("");
+    let has_update = compare_versions(tag, current);
+    Ok(UpdateInfo { has_update, latest_version: tag.to_string(), url: html_url.to_string() })
+}
+
+fn compare_versions(latest: &str, current: &str) -> bool {
+    let l: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
+    let c: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
+    for i in 0..l.len().max(c.len()) {
+        let lv = l.get(i).copied().unwrap_or(0);
+        let cv = c.get(i).copied().unwrap_or(0);
+        if lv > cv { return true; }
+        if lv < cv { return false; }
+    }
+    false
+}
+
 #[tauri::command]
 async fn test_connection(host: String, port: u16) -> Result<String, String> {
     let url = format!("http://{}:{}/health", if host == "0.0.0.0" { "localhost" } else { &host }, port);
@@ -1354,6 +1398,7 @@ fn main() {
             pause_file_download,
             cancel_and_cleanup_download,
             test_connection,
+            check_update,
             check_port,
             save_window_state,
             load_window_state,
