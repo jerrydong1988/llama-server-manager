@@ -362,6 +362,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         })
         if (global.dark_mode !== undefined) {
           document.documentElement.classList.toggle('dark', global.dark_mode)
+          set({ darkMode: !!global.dark_mode })
         }
       // 加载后扫描模型和引擎
       if ((global.model_dirs || []).length > 0) {
