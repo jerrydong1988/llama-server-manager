@@ -7,7 +7,6 @@ import LogsViewer from './components/LogsViewer'
 import ConfigPage from './components/ConfigPage'
 import { useAppStore } from './store'
 import { I18nProvider, useI18n } from './i18n'
-import { invoke } from '@tauri-apps/api/core'
 
 const renderTabContent = (tabId: string) => {
   switch (tabId) {
@@ -35,11 +34,21 @@ function AppInner() {
   // dark mode handled by store setDarkMode
   useEffect(() => { loadConfig() }, [loadConfig])
 
-  // 自动更新检查
+  // 自动更新检查 (前端 fetch 走 Chromium 网络栈, 兼容TUN/Clash)
   useEffect(() => {
-    invoke<{has_update: boolean; latest_version: string; url: string}>('check_update').then(r => {
-      if (r.has_update) setUpdateInfo(r)
-    }).catch(() => {})
+    fetch('https://api.github.com/repos/jerrydong1988/llama-server-manager/releases/latest', {
+      headers: { 'Accept': 'application/vnd.github+json' }
+    })
+    .then(r => r.json())
+    .then(json => {
+      const latest = (json.tag_name || '').replace(/^v/, '')
+      const current = '2.0.5'
+      const l = latest.split('.').map(Number)
+      const c = current.split('.').map(Number)
+      const has = l.some((v: number, i: number) => v > (c[i] || 0)) && !c.some((v: number, i: number) => v > (l[i] || 0))
+      if (has) setUpdateInfo({ latest_version: latest, url: json.html_url || '' })
+    })
+    .catch(() => {})
   }, [])
 
   // 键盘快捷键

@@ -1218,81 +1218,6 @@ fn load_window_state(state: tauri::State<'_, AppState>) -> Option<WindowState> {
     } else { None }
 }
 
-// ── 自动更新检查 ─────────────────────────────────────────────────
-#[derive(serde::Serialize)]
-struct UpdateInfo {
-    has_update: bool,
-    latest_version: String,
-    url: String,
-}
-
-#[tauri::command]
-async fn check_update() -> Result<UpdateInfo, String> {
-    let current = env!("CARGO_PKG_VERSION");
-    let url = "https://api.github.com/repos/jerrydong1988/llama-server-manager/releases/latest";
-    let no_update = Ok(UpdateInfo { has_update: false, latest_version: String::new(), url: String::new() });
-
-    // 异步辅助：用指定 client 获取最新版本
-    async fn fetch_latest(client: &reqwest::Client, url: &str) -> Option<(String, String)> {
-        let resp = client.get(url)
-            .header("User-Agent", "llama-server-manager")
-            .header("Accept", "application/vnd.github+json")
-            .send().await.ok()?;
-        let json: serde_json::Value = resp.json().await.ok()?;
-        let tag = json["tag_name"].as_str()?.trim_start_matches('v').to_string();
-        let html = json["html_url"].as_str()?.to_string();
-        Some((tag, html))
-    }
-
-    // 第 1 步：直连
-    let direct = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3))
-        .build()
-        .unwrap_or_default();
-    if let Some((tag, html)) = fetch_latest(&direct, url).await {
-        let has = compare_versions(&tag, current);
-        return Ok(UpdateInfo { has_update: has, latest_version: tag, url: html });
-    }
-
-    // 第 2 步：读系统代理环境变量（Clash/v2ray/通用代理软件均会设置）
-    let proxy_url = std::env::var("HTTPS_PROXY")
-        .or_else(|_| std::env::var("https_proxy"))
-        .or_else(|_| std::env::var("HTTP_PROXY"))
-        .or_else(|_| std::env::var("http_proxy"))
-        .or_else(|_| std::env::var("ALL_PROXY"))
-        .or_else(|_| std::env::var("all_proxy"))
-        .ok();
-
-    if let Some(proxy) = proxy_url {
-        if let Ok(p) = reqwest::Proxy::all(&proxy) {
-            if let Ok(proxied) = reqwest::Client::builder()
-                .proxy(p)
-                .timeout(std::time::Duration::from_secs(5))
-                .build()
-            {
-                if let Some((tag, html)) = fetch_latest(&proxied, url).await {
-                    let has = compare_versions(&tag, current);
-                    return Ok(UpdateInfo { has_update: has, latest_version: tag, url: html });
-                }
-            }
-        }
-    }
-
-    no_update
-}
-
-fn compare_versions(latest: &str, current: &str) -> bool {
-    let l: Vec<u32> = latest.split('.').filter_map(|s| s.parse().ok()).collect();
-    let c: Vec<u32> = current.split('.').filter_map(|s| s.parse().ok()).collect();
-    for i in 0..l.len().max(c.len()) {
-        let lv = l.get(i).copied().unwrap_or(0);
-        let cv = c.get(i).copied().unwrap_or(0);
-        if lv > cv { return true; }
-        if lv < cv { return false; }
-    }
-    false
-}
-
 #[tauri::command]
 async fn test_connection(host: String, port: u16) -> Result<String, String> {
     let url = format!("http://{}:{}/health", if host == "0.0.0.0" { "localhost" } else { &host }, port);
@@ -1430,7 +1355,6 @@ fn main() {
             pause_file_download,
             cancel_and_cleanup_download,
             test_connection,
-            check_update,
             check_port,
             save_window_state,
             load_window_state,
