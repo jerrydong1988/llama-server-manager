@@ -62,7 +62,7 @@ function AppInner() {
         <div className="flex items-center gap-2 mb-6 shrink-0">
           <Zap className="w-8 h-8 text-blue-500" />
           <h1 className="text-xl font-bold">{t.common.appTitle}</h1>
-          <span className="text-xs text-gray-500 ml-1">v2.0.4</span>
+          <span className="text-xs text-gray-500 ml-1">v2.0.5</span>
         </div>
         <nav className="space-y-1 overflow-y-auto flex-1">
           {navigation.map((item) => {
