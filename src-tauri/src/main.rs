@@ -1100,8 +1100,8 @@ async fn download_modelscope_files(
             let dl_start = std::time::Instant::now();
             let mut last_emit = dl_start;
             let mut last_bytes = resume_from;
-            let mut speed_window: f64 = 0.0;
-            let mut speed_samples: u32 = 0;
+            let mut win_start = dl_start;
+            let mut win_bytes: u64 = 0;
 
             use std::io::Write;
             // 以追加模式打开文件
@@ -1121,12 +1121,17 @@ async fn download_modelscope_files(
                         file.write_all(&bytes).unwrap();
                         downloaded += len;
                         let now = std::time::Instant::now();
-                        let elapsed = now.duration_since(last_emit).as_secs_f64().max(0.1);
-                        let instant_speed = if elapsed > 0.0 { (downloaded - last_bytes) as f64 / elapsed } else { 0.0 };
-                        // 1秒滑动窗口平均
-                        speed_window = speed_window * 0.7 + instant_speed * 0.3;
-                        speed_samples += 1;
-                        let speed = if speed_samples > 3 { speed_window } else { instant_speed };
+                        // 1 秒滚动窗口平均速度
+                        win_bytes += len;
+                        let win_elapsed = now.duration_since(win_start).as_secs_f64();
+                        let speed = if win_elapsed >= 1.0 {
+                            let s = win_bytes as f64 / win_elapsed;
+                            win_start = now;
+                            win_bytes = 0;
+                            s
+                        } else if win_elapsed > 0.0 {
+                            win_bytes as f64 / win_elapsed
+                        } else { 0.0 };
                         last_emit = now;
                         last_bytes = downloaded;
                         let _ = app.emit("download-progress", serde_json::json!({
