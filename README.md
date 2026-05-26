@@ -6,6 +6,8 @@
 
 A fully-featured desktop application for managing the `llama-server` lifecycle: **download models → select engines → configure parameters → start & monitor**. Say goodbye to complex CLI arguments.
 
+[📥 **下载最新版 / Download Latest**](https://github.com/jerrydong1988/llama-server-manager/releases/latest) | [📖 **使用教程 / User Guide**](GUIDE.md)
+
 ---
 
 ## 界面预览 / Screenshots
@@ -43,15 +45,21 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 
 ### 实例管理 / Instance Management
 - 多实例并行运行，每个实例独立配置
+- 每个实例可独立选择引擎，覆盖全局默认
 - 一键启停，进程实时监控（1 秒快速故障检测），测试连接
 - 健康检查，自动识别启动失败
 - 生成命令行预览，一键复制/直接启动
 - 一键在浏览器打开 API 页面
+- 实例排序（↑↓），名称可编辑（✏️）
+- 键盘快捷键：`Ctrl+Enter` 启动/停止，`Ctrl+S` 保存配置
 - Multiple parallel instances with independent configs
+- Per-instance engine selection, overriding global default
 - One-click start/stop with real-time process monitoring (1s fault detection), test connection
 - Health check with automatic startup failure detection
 - Command-line preview with copy & direct launch
 - Open API page in browser
+- Instance reordering (↑↓), name editing (✏️)
+- Keyboard shortcuts: `Ctrl+Enter` start/stop, `Ctrl+S` save configs
 
 ### 参数配置 / Configuration
 - 统一参数配置页面，按实例关联
@@ -70,14 +78,16 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 ### 其他 / Other
 - 服务器日志实时捕获，关键词高亮
 - 系统托盘支持，关闭窗口隐藏到托盘
-- 明暗主题切换
+- 明暗主题切换（持久化）+ 窗口尺寸/位置记忆
 - 完整中英双语界面
-- 配置持久化（JSON）
+- 配置持久化（JSON）+ 自动更新检查
+- 端口冲突检测
 - Real-time server log capture with keyword highlighting
 - System tray support, close to tray
-- Light/dark theme toggle
+- Light/dark theme toggle (persistent) + window size/position memory
 - Full i18n support (Chinese / English)
-- Config persistence (JSON)
+- Config persistence (JSON) + auto-update check
+- Port conflict detection
 
 ---
 
@@ -142,6 +152,14 @@ llama-server-manager/
 ├── package.json            # Node 依赖 / Node deps
 └── vite.config.ts          # Vite 配置 / Vite config
 ```
+
+---
+
+## 使用教程 / User Guide
+
+详细操作指南请参阅 [GUIDE.md](GUIDE.md)
+
+Please refer to [GUIDE.md](GUIDE.md) for a detailed user guide.
 
 ---
 
