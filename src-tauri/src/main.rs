@@ -856,10 +856,11 @@ async fn stop_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    let ri = state.running.lock().unwrap().remove(&instance_id);
-    
-    // 方法 1：按 PID 杀
+    // 先读，不 remove
+    let ri = state.running.lock().unwrap().get(&instance_id).cloned();
     let mut killed = false;
+
+    // 方法 1：按 PID 杀
     if let Some(ref ri) = ri {
         #[cfg(windows)]
         {
@@ -879,12 +880,18 @@ async fn stop_server(
             #[cfg(windows)]
             {
                 let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
-                let _ = std::os::windows::process::CommandExt::creation_flags(
+                let r = std::os::windows::process::CommandExt::creation_flags(
                     &mut Command::new("powershell"), 0x08000000)
                     .args(["-NoProfile", "-Command", &cmd])
                     .output();
+                killed = r.map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
             }
         }
+    }
+
+    // 确认杀成功后移除 running
+    if killed {
+        state.running.lock().unwrap().remove(&instance_id);
     }
 
     app.emit("server-stopped", serde_json::json!({
