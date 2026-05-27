@@ -149,6 +149,7 @@ pub struct RunningInstance {
     pub pid: u32,
     pub port: u16,
     pub host: String,
+    pub start_time: u64,
 }
 
 pub struct AppState {
@@ -696,6 +697,7 @@ async fn start_server(
         pid,
         port: config.port,
         host: config.host.clone(),
+        start_time: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     });
 
     app.emit("server-started", serde_json::json!({
@@ -869,6 +871,7 @@ async fn stop_server(
 
 #[tauri::command]
 async fn open_browser(host: String, port: u16) -> Result<(), String> {
+    let host = if host == "0.0.0.0" { "localhost" } else { &host };
     let url = format!("http://{}:{}", host, port);
     #[cfg(windows)]
     { std::os::windows::process::CommandExt::creation_flags(

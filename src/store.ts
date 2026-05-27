@@ -338,7 +338,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         model_dirs: string[]
         engine_dirs: string[]
         default_engine_id: string
-        running: Record<string, { instance_id: string; pid: number; port: number; host: string }>
+        running: Record<string, { instance_id: string; pid: number; port: number; host: string; start_time?: number }>
         instance_order: string[]
         last_tab: string
         dark_mode: boolean
@@ -350,6 +350,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         id, name: config.name || '未命名实例', status: runningIds.has(id) ? 'running' as const : 'stopped' as const,
         model: config.model_path.split('\\').pop() || config.model_path,
         port: config.port, healthCheck: runningIds.has(id) ? 'pending' as const : 'pending' as const, config,
+        startTime: global.running?.[id]?.start_time ? global.running[id].start_time * 1000 : undefined,
       }))
       // 按保存的顺序排列
       list.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
