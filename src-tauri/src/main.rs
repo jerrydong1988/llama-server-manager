@@ -705,6 +705,19 @@ async fn start_server(
         start_time: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
     });
 
+    // 立即同步写 running 到磁盘（不等前端异步 saveConfig）
+    {
+        let config_dir = state.config_dir.lock().unwrap().clone();
+        let path = config_dir.join("instances.json");
+        let _ = std::fs::create_dir_all(&config_dir);
+        if let Ok(json) = std::fs::read_to_string(&path) {
+            if let Ok(mut global) = serde_json::from_str::<GlobalConfig>(&json) {
+                global.running = state.running.lock().unwrap().clone();
+                let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
+            }
+        }
+    }
+
     app.emit("server-started", serde_json::json!({
         "instanceId": instance_id,
         "pid": pid,
@@ -1344,21 +1357,19 @@ fn main() {
                             }
                         }
                         "quit" => {
-                            // 直接从内存构造 GlobalConfig（不依赖磁盘，避免异步写入窗口问题）
+                            // 读磁盘配�?只更新 running 字段（保留 last_tab/instance_order 等前端已写字段）
                             if let Some(s) = app.try_state::<AppState>() {
                                 let config_dir = s.config_dir.lock().unwrap().clone();
                                 let path = config_dir.join("instances.json");
                                 let _ = std::fs::create_dir_all(&config_dir);
-                                let global = GlobalConfig {
-                                    instances: s.instances.lock().unwrap().clone(),
-                                    model_dirs: s.model_dirs_cache.lock().unwrap().clone(),
-                                    engine_dirs: s.engine_dirs_cache.lock().unwrap().clone(),
-                                    default_engine_id: String::new(),
-                                    running: s.running.lock().unwrap().clone(),
-                                    instance_order: vec![],
-                                    last_tab: "model-repo".into(),
-                                    dark_mode: true,
-                                };
+                                let mut global = std::fs::read_to_string(&path).ok()
+                                    .and_then(|j| serde_json::from_str::<GlobalConfig>(&j).ok())
+                                    .unwrap_or(GlobalConfig {
+                                        instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
+                                        default_engine_id: String::new(), running: HashMap::new(),
+                                        instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
+                                    });
+                                global.running = s.running.lock().unwrap().clone();
                                 let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
                             }
                             app.exit(0);
