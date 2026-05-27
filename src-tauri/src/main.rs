@@ -1325,7 +1325,28 @@ fn main() {
                                 let _ = window.set_focus();
                             }
                         }
-                        "quit" => { app.exit(0); }
+                        "quit" => {
+                            // 退出前保存运行状态
+                            if let Some(s) = app.try_state::<AppState>() {
+                                let config_dir = s.config_dir.lock().unwrap().clone();
+                                let path = config_dir.join("instances.json");
+                                let _ = std::fs::create_dir_all(&config_dir);
+                                if let Ok(json) = std::fs::read_to_string(&path) {
+                                    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&json) {
+                                        let running_map: serde_json::Value = s.running.lock().unwrap().iter()
+                                            .map(|(k, v)| (k.clone(), serde_json::json!({
+                                                "instance_id": v.instance_id, "pid": v.pid,
+                                                "port": v.port, "host": v.host, "start_time": v.start_time
+                                            })))
+                                            .collect::<serde_json::Map<_, _>>()
+                                            .into();
+                                        val["running"] = running_map;
+                                        let _ = std::fs::write(&path, serde_json::to_string_pretty(&val).unwrap_or_default());
+                                    }
+                                }
+                            }
+                            app.exit(0);
+                        }
                         _ => {}
                     }
                 })
