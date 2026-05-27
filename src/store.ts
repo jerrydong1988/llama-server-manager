@@ -372,16 +372,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       if ((global.engine_dirs || []).length > 0) {
         invoke('scan_engines', { paths: global.engine_dirs }).then((engines) => set({ engines: engines as any })).catch(() => {})
       }
-      // 为恢复的运行中实例启动健康检查
-      for (const id of runningIds) {
-        const ri = global.running[id]
-        if (ri) {
-          // 通过调用空操作触发后端健康检查，或直接在前端模拟
-          setTimeout(() => {
-            get().updateInstance(id, { startTime: Date.now() })
-          }, 100)
-        }
-      }
     } catch (e) { console.error('load_config error:', e) }
   },
 

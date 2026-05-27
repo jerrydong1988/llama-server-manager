@@ -1002,13 +1002,12 @@ async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -
         }
     }
     // 只在状态中保留仍然活着的进程
-    let mut running = state.running.lock().unwrap();
-    *running = restored;
+    *state.running.lock().unwrap() = restored.clone();
 
     // 清理配置中不再运行的进程记录并返回
-    global.running = running.clone();
+    global.running = restored.clone();
     // 为恢复的运行中实例启动健康检查
-    for (id, ri) in &*running {
+    for (id, ri) in &restored {
         let id = id.clone();
         let host = if ri.host == "0.0.0.0" { "localhost".to_string() } else { ri.host.clone() };
         let port = ri.port;
