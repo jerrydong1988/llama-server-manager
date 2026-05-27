@@ -161,8 +161,6 @@ pub struct AppState {
     pub config_dir: Mutex<PathBuf>,
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,
-    pub model_dirs_cache: Mutex<Vec<String>>,
-    pub engine_dirs_cache: Mutex<Vec<String>>,
 }
 
 // ── GGUF 元信息解析（复刻原程序 _read_gguf_metadata） ─────────
@@ -384,7 +382,6 @@ async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) -> R
 
     let mut state_models = state.models.lock().unwrap();
     *state_models = models.clone();
-    *state.model_dirs_cache.lock().unwrap() = paths.clone();
     Ok(models)
 }
 
@@ -495,7 +492,6 @@ async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>) -> 
 
     let mut state_engines = state.engines.lock().unwrap();
     *state_engines = engines.clone();
-    *state.engine_dirs_cache.lock().unwrap() = paths.clone();
     Ok(engines)
 }
 
@@ -1400,8 +1396,6 @@ fn main() {
             config_dir: Mutex::new(config_dir),
             cancel_flags: Mutex::new(HashMap::new()),
             pause_flags: Mutex::new(HashMap::new()),
-            model_dirs_cache: Mutex::new(vec![]),
-            engine_dirs_cache: Mutex::new(vec![]),
         })
         .invoke_handler(tauri::generate_handler![
             scan_models,
