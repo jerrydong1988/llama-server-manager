@@ -149,6 +149,7 @@ pub struct RunningInstance {
     pub pid: u32,
     pub port: u16,
     pub host: String,
+    #[serde(default)]
     pub start_time: u64,
 }
 

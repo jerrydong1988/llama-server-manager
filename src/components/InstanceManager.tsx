@@ -18,6 +18,13 @@ const InstanceManager = () => {
   const [editName, setEditName] = useState('')
   const [enginePickerForId, setEnginePickerForId] = useState('')
   const [portStatus, setPortStatus] = useState('')
+  const [, setTick] = useState(0)
+
+  // 每30秒刷新运行时间显示
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 30000)
+    return () => clearInterval(t)
+  }, [])
 
   const formatUptime = (startTime?: number) => {
     if (!startTime) return '0 min'
