@@ -809,8 +809,11 @@ fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid: u32
                     if !is_my_instance() { return; }
                     if let Ok(resp) = client.get(&url).timeout(std::time::Duration::from_secs(5)).send() {
                         if !resp.status().is_success() {
-                            // 暂时不可用，继续等
                             std::thread::sleep(std::time::Duration::from_secs(3));
+                        } else {
+                            let _ = app.emit("health-status", serde_json::json!({
+                                "instanceId": instance_id, "status": "ok",
+                            }));
                         }
                     }
                 }
@@ -835,6 +838,10 @@ fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid: u32
                     if let Ok(resp) = client.get(&url).timeout(std::time::Duration::from_secs(5)).send() {
                         if !resp.status().is_success() {
                             std::thread::sleep(std::time::Duration::from_secs(3));
+                        } else {
+                            let _ = app.emit("health-status", serde_json::json!({
+                                "instanceId": instance_id, "status": "ok",
+                            }));
                         }
                     }
                 }
