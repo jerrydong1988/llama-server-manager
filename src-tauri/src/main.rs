@@ -849,17 +849,34 @@ async fn stop_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    if let Some(ri) = state.running.lock().unwrap().remove(&instance_id) {
+    let ri = state.running.lock().unwrap().remove(&instance_id);
+    
+    // 方法 1：按 PID 杀
+    let mut killed = false;
+    if let Some(ref ri) = ri {
         #[cfg(windows)]
         {
-            let _ = std::os::windows::process::CommandExt::creation_flags(
+            let r = std::os::windows::process::CommandExt::creation_flags(
                 &mut Command::new("taskkill"), 0x08000000)
                 .args(["/F", "/PID", &ri.pid.to_string()])
                 .output();
+            killed = r.map(|o| o.status.success()).unwrap_or(false);
         }
         #[cfg(not(target_os = "windows"))]
-        {
-            let _ = Command::new("kill").arg(ri.pid.to_string()).output();
+        { killed = Command::new("kill").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false); }
+    }
+
+    // 方法 2：按端口查杀兜底
+    if !killed {
+        if let Some(ref ri) = ri {
+            #[cfg(windows)]
+            {
+                let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
+                let _ = std::os::windows::process::CommandExt::creation_flags(
+                    &mut Command::new("powershell"), 0x08000000)
+                    .args(["-NoProfile", "-Command", &cmd])
+                    .output();
+            }
         }
     }
 
