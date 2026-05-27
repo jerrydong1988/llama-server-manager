@@ -161,6 +161,8 @@ pub struct AppState {
     pub config_dir: Mutex<PathBuf>,
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,
+    pub model_dirs_cache: Mutex<Vec<String>>,
+    pub engine_dirs_cache: Mutex<Vec<String>>,
 }
 
 // ── GGUF 元信息解析（复刻原程序 _read_gguf_metadata） ─────────
@@ -382,6 +384,7 @@ async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) -> R
 
     let mut state_models = state.models.lock().unwrap();
     *state_models = models.clone();
+    *state.model_dirs_cache.lock().unwrap() = paths.clone();
     Ok(models)
 }
 
@@ -492,6 +495,7 @@ async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>) -> 
 
     let mut state_engines = state.engines.lock().unwrap();
     *state_engines = engines.clone();
+    *state.engine_dirs_cache.lock().unwrap() = paths.clone();
     Ok(engines)
 }
 
@@ -1340,19 +1344,21 @@ fn main() {
                             }
                         }
                         "quit" => {
-                            // 退出前：读 GlobalConfig，更新 running，写回（与 save_config 同一路径）
+                            // 直接从内存构造 GlobalConfig（不依赖磁盘，避免异步写入窗口问题）
                             if let Some(s) = app.try_state::<AppState>() {
                                 let config_dir = s.config_dir.lock().unwrap().clone();
                                 let path = config_dir.join("instances.json");
                                 let _ = std::fs::create_dir_all(&config_dir);
-                                let mut global = std::fs::read_to_string(&path).ok()
-                                    .and_then(|j| serde_json::from_str::<GlobalConfig>(&j).ok())
-                                    .unwrap_or(GlobalConfig {
-                                        instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
-                                        default_engine_id: String::new(), running: HashMap::new(),
-                                        instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
-                                    });
-                                global.running = s.running.lock().unwrap().clone();
+                                let global = GlobalConfig {
+                                    instances: s.instances.lock().unwrap().clone(),
+                                    model_dirs: s.model_dirs_cache.lock().unwrap().clone(),
+                                    engine_dirs: s.engine_dirs_cache.lock().unwrap().clone(),
+                                    default_engine_id: String::new(),
+                                    running: s.running.lock().unwrap().clone(),
+                                    instance_order: vec![],
+                                    last_tab: "model-repo".into(),
+                                    dark_mode: true,
+                                };
                                 let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
                             }
                             app.exit(0);
@@ -1384,6 +1390,8 @@ fn main() {
             config_dir: Mutex::new(config_dir),
             cancel_flags: Mutex::new(HashMap::new()),
             pause_flags: Mutex::new(HashMap::new()),
+            model_dirs_cache: Mutex::new(vec![]),
+            engine_dirs_cache: Mutex::new(vec![]),
         })
         .invoke_handler(tauri::generate_handler![
             scan_models,
