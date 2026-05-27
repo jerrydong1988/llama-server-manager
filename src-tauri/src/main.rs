@@ -1340,24 +1340,20 @@ fn main() {
                             }
                         }
                         "quit" => {
-                            // 退出前保存运行状态
+                            // 退出前：读 GlobalConfig，更新 running，写回（与 save_config 同一路径）
                             if let Some(s) = app.try_state::<AppState>() {
                                 let config_dir = s.config_dir.lock().unwrap().clone();
                                 let path = config_dir.join("instances.json");
                                 let _ = std::fs::create_dir_all(&config_dir);
-                                if let Ok(json) = std::fs::read_to_string(&path) {
-                                    if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&json) {
-                                        let running_map: serde_json::Value = s.running.lock().unwrap().iter()
-                                            .map(|(k, v)| (k.clone(), serde_json::json!({
-                                                "instance_id": v.instance_id, "pid": v.pid,
-                                                "port": v.port, "host": v.host, "start_time": v.start_time
-                                            })))
-                                            .collect::<serde_json::Map<_, _>>()
-                                            .into();
-                                        val["running"] = running_map;
-                                        let _ = std::fs::write(&path, serde_json::to_string_pretty(&val).unwrap_or_default());
-                                    }
-                                }
+                                let mut global = std::fs::read_to_string(&path).ok()
+                                    .and_then(|j| serde_json::from_str::<GlobalConfig>(&j).ok())
+                                    .unwrap_or(GlobalConfig {
+                                        instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
+                                        default_engine_id: String::new(), running: HashMap::new(),
+                                        instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
+                                    });
+                                global.running = s.running.lock().unwrap().clone();
+                                let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
                             }
                             app.exit(0);
                         }
