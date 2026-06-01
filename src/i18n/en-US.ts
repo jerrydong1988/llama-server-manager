@@ -245,6 +245,7 @@ export const enUS = {
     runningTag: '(running)', noInstances: 'No running instances. Create and start an instance first.',
     noLogsForInstance: 'No logs for this instance',
     hint: 'Logs are displayed in real-time. Start an instance to capture output. Select an instance to view grouped logs.',
+    paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries',
   },
   common: {
     cancel: 'Cancel', confirm: 'Confirm', save: 'Save', delete: 'Delete',
