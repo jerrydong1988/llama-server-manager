@@ -63,30 +63,36 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 
 ### 参数配置 / Configuration
 - 统一参数配置页面，按实例关联
-- 全部 llama-server 参数：模型/生成/性能/高级/网络 & API
-- 高级采样总开关，一键启用/禁用 Mirostat/XTC/DRY 等
+- **118 个参数**完整覆盖 llama.cpp b9442，含 RoPE/YaRN 上下文缩放、推测解码、GPU 设备、多模型路由等全部新增参数
+- **智能参数校验**：保存时自动检测 25 条规则，分 high/medium/low 三级彩色横幅警告
+- 高级采样总开关 + 推测解码/专家设置子开关，一键启用/禁用相关参数
 - 向量模型自动检测，锁定不适用参数
 - 模型路径仓库树选择器，自动关联 mmproj
-- 所有参数带悬停提示说明
+- 所有参数带悬停提示说明（中英双语）
 - Unified config page associated per instance
-- Full llama-server parameters: model/generation/performance/advanced/network & API
-- Advanced sampling master toggle for Mirostat/XTC/DRY
+- **118 parameters** covering llama.cpp b9442, including RoPE/YaRN scaling, speculative decoding, GPU devices, multi-model routing
+- **Smart validation**: 25 rules auto-checked on save, high/medium/low severity color-coded banners
+- Advanced sampling master toggle + speculative decoding/expert settings sub-toggles
 - Embedding model auto-detection with irrelevant parameter locking
 - Model path tree picker with automatic mmproj association
-- Tooltip hints on all parameters
+- Bilingual tooltip hints on all parameters
 
 ### 其他 / Other
-- 服务器日志实时捕获，关键词高亮
+- 服务器日志实时捕获，关键词彩色高亮，**自动滚动 + 暂停/恢复**
+- 启动命令自动记录到日志（含完整命令行和 PID）
 - 系统托盘支持，关闭窗口隐藏到托盘
 - 明暗主题切换（持久化）+ 窗口尺寸/位置记忆
 - 完整中英双语界面
-- 配置持久化（JSON）+ 自动更新检查
+- 配置持久化（JSON）+ **自动备份恢复** + 自动更新检查
+- 模型并发下载限制（避免资源耗尽）
 - 端口冲突检测
-- Real-time server log capture with keyword highlighting
+- Real-time server log capture with keyword color highlighting, **auto-scroll + pause/resume**
+- Startup command auto-logged to console (full CLI + PID)
 - System tray support, close to tray
 - Light/dark theme toggle (persistent) + window size/position memory
 - Full i18n support (Chinese / English)
-- Config persistence (JSON) + auto-update check
+- Config persistence (JSON) + **auto backup/restore** + auto-update check
+- Concurrent download limiting (prevents resource exhaustion)
 - Port conflict detection
 
 ---
@@ -138,19 +144,33 @@ The compiled executable is located in `src-tauri/target/release/`.
 
 ```
 llama-server-manager/
-├── src/                    # React 前端源码 / Frontend source
-│   ├── components/         # 组件 / Components
-│   ├── i18n/               # 国际化 / Internationalization
-│   ├── store.ts            # 全局状态 / Global state
-│   ├── App.tsx             # 主应用 / Main app
-│   └── main.tsx            # 入口 / Entry point
-├── src-tauri/              # Rust 后端 / Rust backend
+├── src/                    # React 前端 / Frontend
+│   ├── components/
+│   │   ├── ConfigPage/     # 参数配置子组件 (shared + sections)
+│   │   ├── InstanceManager.tsx
+│   │   ├── ModelRepo.tsx
+│   │   ├── EngineManager.tsx
+│   │   └── LogsViewer.tsx
+│   ├── store/              # 状态管理 / State (Zustand)
+│   │   ├── types.ts        # 类型定义
+│   │   └── defaults.ts     # 默认配置
+│   ├── i18n/               # 国际化 (中/英)
+│   ├── validators.ts       # 参数校验引擎 (25 规则)
+│   ├── App.tsx
+│   └── main.tsx
+├── src-tauri/              # Rust 后端 / Backend
 │   ├── src/
-│   │   └── main.rs         # 核心逻辑 / Core logic
-│   ├── Cargo.toml          # Rust 依赖 / Rust deps
-│   └── tauri.conf.json     # Tauri 配置 / Tauri config
-├── package.json            # Node 依赖 / Node deps
-└── vite.config.ts          # Vite 配置 / Vite config
+│   │   ├── main.rs         # 入口 + 窗口/托盘 (173 行)
+│   │   ├── models.rs       # 数据结构定义
+│   │   ├── utils.rs        # GGUF 解析 / 后端检测
+│   │   └── commands/       # 命令模块 (5 文件)
+│   │       ├── config.rs   # 配置持久化 + 备份恢复
+│   │       ├── server.rs   # 命令生成 + 启停 + 健康检查
+│   │       ├── scanner.rs  # 模型/引擎扫描
+│   │       └── download.rs # ModelScope 下载
+│   └── Cargo.toml
+├── package.json
+└── vite.config.ts
 ```
 
 ---
