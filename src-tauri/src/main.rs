@@ -42,44 +42,166 @@ pub struct InstanceConfig {
     pub alias: String,
     pub lora_path: String,
     pub mmproj_path: String,
+    #[serde(default)]
+    pub lora_init_without_apply: bool,
     pub chat_template: String,
+    #[serde(default)]
+    pub chat_template_file: String,
+    #[serde(default)]
+    pub skip_chat_parsing: bool,
     pub reasoning_format: String,
     pub reasoning_effort: String,
     pub reasoning: String,
     pub jinja: bool,
     pub reasoning_budget: String,
+    #[serde(default)]
+    pub reasoning_budget_message: String,
     pub grammar_file: String,
+    #[serde(default)]
+    pub grammar: String,
     pub ctx_size: u32,
     pub ctx_size_auto: bool,
     pub gpu_layers: u32,
     pub threads: u32,
     pub batch_size: u32,
     pub ubatch_size: u32,
-    pub parallel: u32,
+    pub parallel: i32,
     pub cont_batching: bool,
     pub cache_prompt: bool,
     pub threads_batch: u32,
+    #[serde(default)]
+    pub threads_http: i32,
+    #[serde(default)]
+    pub keep: u32,
+    #[serde(default)]
+    pub cache_reuse: u32,
+    #[serde(default)]
+    pub cache_ram: u32,
+    #[serde(default)]
+    pub warmup: bool,
+    #[serde(default)]
+    pub ctx_checkpoints: u32,
+    #[serde(default)]
+    pub checkpoint_min_step: u32,
+    #[serde(default)]
+    pub swa_full: bool,
+    // RoPE / YaRN
+    #[serde(default)]
+    pub rope_scaling: String,
+    #[serde(default)]
+    pub rope_scale: f32,
+    #[serde(default)]
+    pub rope_freq_base: f32,
+    #[serde(default)]
+    pub rope_freq_scale: f32,
+    #[serde(default)]
+    pub yarn_ext_factor: f32,
+    #[serde(default)]
+    pub yarn_attn_factor: f32,
+    #[serde(default)]
+    pub yarn_beta_slow: f32,
+    #[serde(default)]
+    pub yarn_beta_fast: f32,
     pub flash_attn: String,
     pub moe_cpu_layers: u32,
     pub mlock: bool,
     pub no_mmap: bool,
     pub numa: bool,
+    pub context_shift: bool,
+    #[serde(default)]
+    pub check_tensors: bool,
+    #[serde(default)]
+    pub fit: bool,
+    #[serde(default)]
+    pub kv_unified: bool,
+    #[serde(default)]
+    pub cache_idle_slots: bool,
     pub cache_type_k: String,
     pub cache_type_v: String,
+    #[serde(default)]
+    pub cache_type_draft_k: String,
+    #[serde(default)]
+    pub cache_type_draft_v: String,
     pub draft_model_path: String,
     pub draft_gpu_layers: u32,
     pub draft_tokens: u32,
     pub spec_draft_n_min: u32,
     pub spec_type: String,
+    #[serde(default)]
+    pub spec_draft_p_min: f32,
+    #[serde(default)]
+    pub spec_draft_p_split: f32,
+    #[serde(default)]
+    pub spec_draft_device: String,
+    #[serde(default)]
+    pub lookup_cache_static: String,
+    #[serde(default)]
+    pub lookup_cache_dynamic: String,
+    // GPU & Device
+    #[serde(default)]
+    pub device: String,
+    #[serde(default)]
+    pub split_mode: String,
+    #[serde(default)]
+    pub tensor_split: String,
+    #[serde(default)]
+    pub main_gpu: u32,
+    #[serde(default)]
+    pub override_kv: String,
     pub host: String,
     pub port: u16,
     pub api_key: String,
+    #[serde(default)]
+    pub api_key_file: String,
     pub ssl_key_file: String,
     pub ssl_cert_file: String,
+    #[serde(default)]
+    pub path_prefix: String,
+    #[serde(default)]
+    pub api_prefix: String,
     pub no_ui: bool,
+    #[serde(default)]
+    pub ui_config_file: String,
     pub embedding: bool,
     pub pooling: String,
+    #[serde(default)]
+    pub embd_normalize: u32,
     pub reranking: bool,
+    #[serde(default)]
+    pub metrics: bool,
+    #[serde(default)]
+    pub props: bool,
+    #[serde(default)]
+    pub slots_enabled: bool,
+    #[serde(default)]
+    pub slot_save_path: String,
+    #[serde(default)]
+    pub slot_prompt_similarity: f32,
+    #[serde(default)]
+    pub prefill_assistant: String,
+    // Multi-Model & Media
+    #[serde(default)]
+    pub models_dir: String,
+    #[serde(default)]
+    pub models_preset: String,
+    #[serde(default)]
+    pub models_max: u32,
+    #[serde(default)]
+    pub models_autoload: bool,
+    #[serde(default)]
+    pub mmproj_url: String,
+    #[serde(default)]
+    pub mmproj_auto: bool,
+    #[serde(default)]
+    pub image_min_tokens: u32,
+    #[serde(default)]
+    pub image_max_tokens: u32,
+    #[serde(default)]
+    pub tags: String,
+    #[serde(default)]
+    pub media_path: String,
+    #[serde(default)]
+    pub tools: String,
     pub n_predict: i32,
     pub ignore_eos: bool,
     pub json_schema: String,
@@ -92,6 +214,14 @@ pub struct InstanceConfig {
     pub presence_penalty: f32,
     pub frequency_penalty: f32,
     pub repeat_last_n: i32,
+    #[serde(default)]
+    pub reverse_prompt: String,
+    #[serde(default)]
+    pub special: bool,
+    #[serde(default)]
+    pub spm_infill: bool,
+    #[serde(default)]
+    pub backend_sampling: bool,
     pub mirostat: u8,
     pub mirostat_lr: f32,
     pub mirostat_ent: f32,
@@ -105,9 +235,20 @@ pub struct InstanceConfig {
     pub dry_allowed_length: u32,
     pub dry_penalty_last_n: i32,
     pub dry_sequence_breaker: String,
+    #[serde(default)]
+    pub adaptive_target: f32,
+    #[serde(default)]
+    pub adaptive_decay: f32,
+    #[serde(default)]
+    pub top_n_sigma: f32,
+    #[serde(default)]
+    pub logit_bias: String,
+    #[serde(default)]
+    pub samplers: String,
+    #[serde(default)]
+    pub sampler_seq: String,
     pub timeout: u32,
     pub sleep_idle: i32,
-    pub context_shift: bool,
     pub verbose: bool,
     pub custom_args: Vec<String>,
 }
@@ -117,28 +258,54 @@ impl Default for InstanceConfig {
         Self {
             id: String::new(), name: String::new(), engine_id: String::new(), model_path: String::new(),
             alias: String::new(), lora_path: String::new(), mmproj_path: String::new(),
-            chat_template: String::new(), reasoning_format: String::new(),
-            reasoning_effort: String::new(), reasoning: String::new(), jinja: false,
-            reasoning_budget: String::new(), grammar_file: String::new(),
+            lora_init_without_apply: false,
+            chat_template: String::new(), chat_template_file: String::new(), skip_chat_parsing: false,
+            reasoning_format: String::new(), reasoning_effort: String::new(),
+            reasoning: String::new(), jinja: false,
+            reasoning_budget: String::new(), reasoning_budget_message: String::new(),
+            grammar_file: String::new(), grammar: String::new(),
             ctx_size: 4096, ctx_size_auto: false, gpu_layers: 99, threads: 0,
-            batch_size: 2048, ubatch_size: 512, parallel: 1, cont_batching: false,
-            cache_prompt: true, threads_batch: 0, flash_attn: "auto".into(),
-            moe_cpu_layers: 0, mlock: false, no_mmap: false, numa: false,
+            batch_size: 2048, ubatch_size: 512, parallel: -1, cont_batching: false,
+            cache_prompt: true, threads_batch: 0,
+            threads_http: -1, keep: 0, cache_reuse: 0, cache_ram: 0,
+            warmup: false, ctx_checkpoints: 32, checkpoint_min_step: 0, swa_full: false,
+            rope_scaling: String::new(), rope_scale: 0.0, rope_freq_base: 0.0, rope_freq_scale: 0.0,
+            yarn_ext_factor: -1.0, yarn_attn_factor: 1.0, yarn_beta_slow: 0.0, yarn_beta_fast: 32.0,
+            flash_attn: "auto".into(), moe_cpu_layers: 0, mlock: false,
+            no_mmap: false, numa: false, context_shift: false,
+            check_tensors: false, fit: false, kv_unified: false, cache_idle_slots: true,
             cache_type_k: String::new(), cache_type_v: String::new(),
+            cache_type_draft_k: String::new(), cache_type_draft_v: String::new(),
             draft_model_path: String::new(), draft_gpu_layers: 99, draft_tokens: 16,
             spec_draft_n_min: 0, spec_type: String::new(),
+            spec_draft_p_min: 0.0, spec_draft_p_split: 0.1, spec_draft_device: String::new(),
+            lookup_cache_static: String::new(), lookup_cache_dynamic: String::new(),
+            device: String::new(), split_mode: String::new(), tensor_split: String::new(),
+            main_gpu: 0, override_kv: String::new(),
             host: "127.0.0.1".into(), port: 8080, api_key: String::new(),
+            api_key_file: String::new(),
             ssl_key_file: String::new(), ssl_cert_file: String::new(),
-            no_ui: false, embedding: false, pooling: String::new(), reranking: false,
+            path_prefix: String::new(), api_prefix: String::new(),
+            no_ui: false, ui_config_file: String::new(),
+            embedding: false, pooling: String::new(), embd_normalize: 2, reranking: false,
+            metrics: false, props: false, slots_enabled: true,
+            slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: String::new(),
+            models_dir: String::new(), models_preset: String::new(), models_max: 4, models_autoload: false,
+            mmproj_url: String::new(), mmproj_auto: false, image_min_tokens: 0, image_max_tokens: 0,
+            tags: String::new(), media_path: String::new(), tools: String::new(),
             n_predict: -1, ignore_eos: false, json_schema: String::new(),
             temp: 0.8, top_k: 40, top_p: 0.9, repeat_penalty: 1.1, seed: -1,
             min_p: 0.05, presence_penalty: 0.0, frequency_penalty: 0.0,
-            repeat_last_n: 64, mirostat: 0, mirostat_lr: 0.1, mirostat_ent: 5.0,
-            xtc_probability: 0.0, xtc_threshold: 0.1, dynatemp_range: 0.0,
-            dynatemp_exp: 1.0, typical_p: 1.0, dry_multiplier: 0.0, dry_base: 1.75,
-            dry_allowed_length: 2, dry_penalty_last_n: -1,
-            dry_sequence_breaker: String::new(), timeout: 600, sleep_idle: -1,
-            context_shift: false, verbose: false, custom_args: vec![],
+            repeat_last_n: 64,
+            reverse_prompt: String::new(), special: false, spm_infill: false, backend_sampling: false,
+            mirostat: 0,             mirostat_lr: 0.0, mirostat_ent: 0.0,
+            xtc_probability: 0.0, xtc_threshold: 0.0, dynatemp_range: 0.0,
+            dynatemp_exp: 0.0, typical_p: 1.0, dry_multiplier: 0.0, dry_base: 0.0,
+            dry_allowed_length: 0, dry_penalty_last_n: 0,
+            dry_sequence_breaker: String::new(),
+            adaptive_target: 0.0, adaptive_decay: 0.0, top_n_sigma: -1.0,
+            logit_bias: String::new(), samplers: String::new(), sampler_seq: String::new(),
+            timeout: 600, sleep_idle: -1, verbose: false, custom_args: vec![],
         }
     }
 }
@@ -547,66 +714,118 @@ fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
     let mut cmd = vec![exe, "-m".into(), config.model_path.clone()];
     let is_emb = config.embedding;
 
+    // ── Basic ──
     if !config.alias.is_empty() { cmd.extend_from_slice(&["-a".into(), config.alias.clone()]); }
     if !is_emb {
         if !config.lora_path.is_empty() { cmd.extend_from_slice(&["--lora".into(), config.lora_path.clone()]); }
+        if config.lora_init_without_apply { cmd.push("--lora-init-without-apply".into()); }
         if !config.mmproj_path.is_empty() { cmd.extend_from_slice(&["--mmproj".into(), config.mmproj_path.clone()]); }
+        if !config.mmproj_url.is_empty() { cmd.extend_from_slice(&["--mmproj-url".into(), config.mmproj_url.clone()]); }
+        if config.mmproj_auto { cmd.push("--mmproj-auto".into()); }
         if !config.chat_template.is_empty() { cmd.extend_from_slice(&["--chat-template".into(), config.chat_template.clone()]); }
+        if !config.chat_template_file.is_empty() { cmd.extend_from_slice(&["--chat-template-file".into(), config.chat_template_file.clone()]); }
+        if config.skip_chat_parsing { cmd.push("--skip-chat-parsing".into()); }
         if !config.reasoning_format.is_empty() { cmd.extend_from_slice(&["--reasoning-format".into(), config.reasoning_format.clone()]); }
         if !config.reasoning.is_empty() { cmd.extend_from_slice(&["--reasoning".into(), config.reasoning.clone()]); }
         if !config.reasoning_budget.is_empty() { cmd.extend_from_slice(&["--reasoning-budget".into(), config.reasoning_budget.clone()]); }
+        if !config.reasoning_budget_message.is_empty() { cmd.extend_from_slice(&["--reasoning-budget-message".into(), config.reasoning_budget_message.clone()]); }
         if !config.reasoning_effort.is_empty() {
             let re = format!("{{\"reasoning_effort\": \"{}\"}}", config.reasoning_effort);
             cmd.extend_from_slice(&["--chat-template-kwargs".into(), re]);
         }
         if config.jinja { cmd.push("--jinja".into()); }
         if !config.grammar_file.is_empty() { cmd.extend_from_slice(&["--grammar-file".into(), config.grammar_file.clone()]); }
+        if !config.grammar.is_empty() { cmd.extend_from_slice(&["--grammar".into(), config.grammar.clone()]); }
     }
 
-    // Performance
+    // ── Performance & Context ──
     if !config.ctx_size_auto { cmd.extend_from_slice(&["-c".into(), config.ctx_size.to_string()]); }
     cmd.extend_from_slice(&["-ngl".into(), config.gpu_layers.to_string()]);
     if config.threads > 0 { cmd.extend_from_slice(&["-t".into(), config.threads.to_string()]); }
     if config.batch_size > 0 { cmd.extend_from_slice(&["-b".into(), config.batch_size.to_string()]); }
     if config.ubatch_size > 0 { cmd.extend_from_slice(&["-ub".into(), config.ubatch_size.to_string()]); }
-    if config.parallel > 0 { cmd.extend_from_slice(&["-np".into(), config.parallel.to_string()]); }
+    if config.parallel > 0 || config.parallel == -1 { cmd.extend_from_slice(&["-np".into(), config.parallel.to_string()]); }
     if config.cont_batching { cmd.push("-cb".into()); }
     if !config.cache_prompt { cmd.push("--no-cache-prompt".into()); }
     if config.threads_batch > 0 { cmd.extend_from_slice(&["--threads-batch".into(), config.threads_batch.to_string()]); }
+    if config.threads_http >= 0 { cmd.extend_from_slice(&["--threads-http".into(), config.threads_http.to_string()]); }
+    if config.keep > 0 { cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]); }
+    if config.cache_reuse > 0 { cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]); }
+    if config.cache_ram > 0 { cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]); }
+    if config.warmup { cmd.push("--warmup".into()); }
+    if config.ctx_checkpoints != 32 { cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]); }
+    if config.checkpoint_min_step > 0 { cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]); }
+    if config.swa_full { cmd.push("--swa-full".into()); }
 
-    // Flash Attention
+    // ── RoPE / YaRN ──
+    if !config.rope_scaling.is_empty() { cmd.extend_from_slice(&["--rope-scaling".into(), config.rope_scaling.clone()]); }
+    if config.rope_scale > 0.0 { cmd.extend_from_slice(&["--rope-scale".into(), config.rope_scale.to_string()]); }
+    if config.rope_freq_base > 0.0 { cmd.extend_from_slice(&["--rope-freq-base".into(), config.rope_freq_base.to_string()]); }
+    if config.rope_freq_scale > 0.0 { cmd.extend_from_slice(&["--rope-freq-scale".into(), config.rope_freq_scale.to_string()]); }
+    if config.yarn_ext_factor >= 0.0 { cmd.extend_from_slice(&["--yarn-ext-factor".into(), config.yarn_ext_factor.to_string()]); }
+    if config.yarn_attn_factor != 1.0 { cmd.extend_from_slice(&["--yarn-attn-factor".into(), config.yarn_attn_factor.to_string()]); }
+    if config.yarn_beta_slow > 0.0 { cmd.extend_from_slice(&["--yarn-beta-slow".into(), config.yarn_beta_slow.to_string()]); }
+    if config.yarn_beta_fast != 32.0 { cmd.extend_from_slice(&["--yarn-beta-fast".into(), config.yarn_beta_fast.to_string()]); }
+
+    // ── Flash Attention ──
     if !is_emb {
         let fa = config.flash_attn.as_str();
         if fa != "auto" && !fa.is_empty() { cmd.extend_from_slice(&["-fa".into(), fa.to_string()]); }
     }
 
+    // ── Memory & Loading ──
     if config.moe_cpu_layers > 0 { cmd.extend_from_slice(&["--n-cpu-moe".into(), config.moe_cpu_layers.to_string()]); }
     if config.mlock { cmd.push("--mlock".into()); }
     if config.no_mmap { cmd.push("--no-mmap".into()); }
     if config.numa { cmd.extend_from_slice(&["--numa".into(), "distribute".into()]); }
+    if config.check_tensors { cmd.push("--check-tensors".into()); }
+    if config.fit { cmd.extend_from_slice(&["--fit".into(), "on".into()]); }
+
+    // ── KV Cache ──
     if !config.cache_type_k.is_empty() { cmd.extend_from_slice(&["-ctk".into(), config.cache_type_k.clone()]); }
     if !config.cache_type_v.is_empty() { cmd.extend_from_slice(&["-ctv".into(), config.cache_type_v.clone()]); }
+    if !config.cache_type_draft_k.is_empty() { cmd.extend_from_slice(&["-ctdk".into(), config.cache_type_draft_k.clone()]); }
+    if !config.cache_type_draft_v.is_empty() { cmd.extend_from_slice(&["-ctdv".into(), config.cache_type_draft_v.clone()]); }
+    if config.kv_unified { cmd.push("--kv-unified".into()); }
+    if !config.cache_idle_slots { cmd.push("--no-cache-idle-slots".into()); }
 
-    // Speculative decoding
+    // ── GPU & Device ──
+    if !config.device.is_empty() { cmd.extend_from_slice(&["-dev".into(), config.device.clone()]); }
+    if !config.split_mode.is_empty() { cmd.extend_from_slice(&["-sm".into(), config.split_mode.clone()]); }
+    if !config.tensor_split.is_empty() { cmd.extend_from_slice(&["-ts".into(), config.tensor_split.clone()]); }
+    if config.main_gpu > 0 { cmd.extend_from_slice(&["-mg".into(), config.main_gpu.to_string()]); }
+    if !config.override_kv.is_empty() { cmd.extend_from_slice(&["--override-kv".into(), config.override_kv.clone()]); }
+
+    // ── Speculative Decoding ──
     if !is_emb {
         if !config.draft_model_path.is_empty() { cmd.extend_from_slice(&["-md".into(), config.draft_model_path.clone()]); }
-        if config.draft_gpu_layers > 0 { cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]); }
+        if config.draft_gpu_layers > 0 && config.draft_gpu_layers < 99 { cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]); }
         if config.draft_tokens > 0 { cmd.extend_from_slice(&["--spec-draft-n-max".into(), config.draft_tokens.to_string()]); }
         if config.spec_draft_n_min > 0 { cmd.extend_from_slice(&["--spec-draft-n-min".into(), config.spec_draft_n_min.to_string()]); }
         if !config.spec_type.is_empty() { cmd.extend_from_slice(&["--spec-type".into(), config.spec_type.clone()]); }
+        if config.spec_draft_p_min > 0.0 { cmd.extend_from_slice(&["--spec-draft-p-min".into(), config.spec_draft_p_min.to_string()]); }
+        if config.spec_draft_p_split != 0.1 { cmd.extend_from_slice(&["--spec-draft-p-split".into(), config.spec_draft_p_split.to_string()]); }
+        if !config.spec_draft_device.is_empty() { cmd.extend_from_slice(&["--spec-draft-device".into(), config.spec_draft_device.clone()]); }
+        if !config.lookup_cache_static.is_empty() { cmd.extend_from_slice(&["-lcs".into(), config.lookup_cache_static.clone()]); }
+        if !config.lookup_cache_dynamic.is_empty() { cmd.extend_from_slice(&["-lcd".into(), config.lookup_cache_dynamic.clone()]); }
     }
 
-    // Network
+    // ── Network ──
     cmd.extend_from_slice(&["--host".into(), config.host.clone(), "--port".into(), config.port.to_string()]);
     if !config.api_key.is_empty() { cmd.extend_from_slice(&["--api-key".into(), config.api_key.clone()]); }
+    if !config.api_key_file.is_empty() { cmd.extend_from_slice(&["--api-key-file".into(), config.api_key_file.clone()]); }
     if !config.ssl_key_file.is_empty() { cmd.extend_from_slice(&["--ssl-key-file".into(), config.ssl_key_file.clone()]); }
     if !config.ssl_cert_file.is_empty() { cmd.extend_from_slice(&["--ssl-cert-file".into(), config.ssl_cert_file.clone()]); }
     if config.no_ui { cmd.push("--no-ui".into()); }
+    if !config.path_prefix.is_empty() { cmd.extend_from_slice(&["--path".into(), config.path_prefix.clone()]); }
+    if !config.api_prefix.is_empty() { cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]); }
+    if !config.ui_config_file.is_empty() { cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]); }
 
-    // Embedding / Generation
+    // ── Embedding / Generation ──
     if config.embedding {
         cmd.push("--embedding".into());
         if !config.pooling.is_empty() { cmd.extend_from_slice(&["--pooling".into(), config.pooling.clone()]); }
+        if config.embd_normalize != 2 { cmd.extend_from_slice(&["--embd-normalize".into(), config.embd_normalize.to_string()]); }
         if config.reranking { cmd.push("--reranking".into()); }
     } else {
         if config.n_predict > 0 { cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]); }
@@ -622,6 +841,10 @@ fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
         if config.presence_penalty > 0.0 { cmd.extend_from_slice(&["--presence-penalty".into(), config.presence_penalty.to_string()]); }
         if config.frequency_penalty > 0.0 { cmd.extend_from_slice(&["--frequency-penalty".into(), config.frequency_penalty.to_string()]); }
         if config.repeat_last_n > 0 { cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]); }
+        if !config.reverse_prompt.is_empty() { cmd.extend_from_slice(&["-r".into(), config.reverse_prompt.clone()]); }
+        if config.special { cmd.push("-sp".into()); }
+        if config.spm_infill { cmd.push("--spm-infill".into()); }
+        if config.backend_sampling { cmd.push("-bs".into()); }
 
         // Advanced sampling
         if config.mirostat > 0 { cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]); }
@@ -637,13 +860,36 @@ fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
         if config.dry_allowed_length > 0 { cmd.extend_from_slice(&["--dry-allowed-length".into(), config.dry_allowed_length.to_string()]); }
         if config.dry_penalty_last_n > 0 { cmd.extend_from_slice(&["--dry-penalty-last-n".into(), config.dry_penalty_last_n.to_string()]); }
         if !config.dry_sequence_breaker.is_empty() { cmd.extend_from_slice(&["--dry-sequence-breaker".into(), config.dry_sequence_breaker.clone()]); }
+        if config.adaptive_target > 0.0 { cmd.extend_from_slice(&["--adaptive-target".into(), config.adaptive_target.to_string()]); }
+        if config.adaptive_decay > 0.0 { cmd.extend_from_slice(&["--adaptive-decay".into(), config.adaptive_decay.to_string()]); }
+        if config.top_n_sigma >= 0.0 { cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]); }
+        if !config.logit_bias.is_empty() { cmd.extend_from_slice(&["-l".into(), config.logit_bias.clone()]); }
+        if !config.samplers.is_empty() { cmd.extend_from_slice(&["--samplers".into(), config.samplers.clone()]); }
+        if !config.sampler_seq.is_empty() { cmd.extend_from_slice(&["--sampler-seq".into(), config.sampler_seq.clone()]); }
     }
 
-    // Server reliability
+    // ── Server features ──
     if config.timeout > 0 { cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]); }
     if config.sleep_idle >= 0 { cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]); }
     if config.context_shift { cmd.push("--context-shift".into()); }
     if config.verbose { cmd.push("-v".into()); }
+    if config.metrics { cmd.push("--metrics".into()); }
+    if config.props { cmd.push("--props".into()); }
+    if !config.slots_enabled { cmd.push("--no-slots".into()); }
+    if !config.slot_save_path.is_empty() { cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]); }
+    if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON { cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]); }
+    if !config.prefill_assistant.is_empty() { cmd.extend_from_slice(&["--prefill-assistant".into(), config.prefill_assistant.clone()]); }
+
+    // ── Multi-Model & Media ──
+    if !config.models_dir.is_empty() { cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]); }
+    if !config.models_preset.is_empty() { cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]); }
+    if config.models_max != 4 { cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]); }
+    if config.models_autoload { cmd.push("--models-autoload".into()); }
+    if config.image_min_tokens > 0 { cmd.extend_from_slice(&["--image-min-tokens".into(), config.image_min_tokens.to_string()]); }
+    if config.image_max_tokens > 0 { cmd.extend_from_slice(&["--image-max-tokens".into(), config.image_max_tokens.to_string()]); }
+    if !config.tags.is_empty() { cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]); }
+    if !config.media_path.is_empty() { cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]); }
+    if !config.tools.is_empty() { cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]); }
 
     // Custom args
     for arg in &config.custom_args {
