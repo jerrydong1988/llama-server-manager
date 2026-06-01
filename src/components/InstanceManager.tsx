@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Play, Square, Plus, Trash2, Copy, Globe, CheckCircle2, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
+import { formatStartupCommand } from '../store'
 import { invoke } from '@tauri-apps/api/core'
 import { useI18n } from '../i18n'
 
@@ -10,6 +11,7 @@ const InstanceManager = () => {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCmdModal, setShowCmdModal] = useState('')
   const [cmdText, setCmdText] = useState('')
+  const [cmdRaw, setCmdRaw] = useState('')
   const [showCreatePicker, setShowCreatePicker] = useState(false)
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [newInst, setNewInst] = useState({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: 8080, engineId: '' })
@@ -51,7 +53,7 @@ const InstanceManager = () => {
       || engines.find(e => e.id === defaultEngineId)
       || engines[0]
     if (!engine) return
-    try { const cmd = await generateCommand(inst.config, engine.exe); setCmdText(cmd.map(a => a.includes(' ') ? `"${a}"` : a).join(' ')); setShowCmdModal(id) }
+    try { const cmd = await generateCommand(inst.config, engine.exe); const raw = cmd.map(a => a.includes(' ') ? `"${a}"` : a).join(' '); setCmdRaw(raw); setCmdText(formatStartupCommand(raw)); setShowCmdModal(id) }
     catch (e) { console.error(e) }
   }
 
@@ -274,7 +276,7 @@ const InstanceManager = () => {
             <div className="flex items-center justify-between mb-4"><h3 className="text-lg font-semibold">{t.instance.genCommandTitle}</h3><button onClick={() => setShowCmdModal('')} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-5 h-5" /></button></div>
             <pre className="bg-gray-900 text-gray-200 p-4 rounded-lg overflow-x-auto text-sm font-mono whitespace-pre-wrap break-all max-h-80 overflow-y-auto">{cmdText}</pre>
             <div className="flex gap-2 mt-4">
-              <button onClick={() => handleCopyCommand(cmdText)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"><Copy className="w-4 h-4" /> {t.instance.copyClipboard}</button>
+              <button onClick={() => handleCopyCommand(cmdRaw)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"><Copy className="w-4 h-4" /> {t.instance.copyClipboard}</button>
               <button onClick={() => { const i = instances.find(x => x.id === showCmdModal); if (i) startInstance(i.id); setShowCmdModal('') }} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg">▶ {t.instance.directStart}</button>
             </div>
           </div>

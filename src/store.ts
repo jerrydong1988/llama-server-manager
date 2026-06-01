@@ -287,7 +287,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 // ── 事件监听 ─────────────────────────────────────────────────
 
 // 格式化启动命令为分组可读格式
-function formatStartupCommand(cmdStr: string): string {
+export function formatStartupCommand(cmdStr: string): string {
   const tokens = cmdStr.match(/(?:[^\s"]+|"[^"]*")+/g) || []
   const exeName = (tokens[0] || '').split(/[\\/]/).pop() || tokens[0] || ''
 
