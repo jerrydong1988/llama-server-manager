@@ -285,6 +285,80 @@ export const useAppStore = create<AppState>((set, get) => ({
 }))
 
 // ── 事件监听 ─────────────────────────────────────────────────
+
+// 格式化启动命令为分组可读格式
+function formatStartupCommand(cmdStr: string): string {
+  const tokens = cmdStr.match(/(?:[^\s"]+|"[^"]*")+/g) || []
+  const exeName = (tokens[0] || '').split(/[\\/]/).pop() || tokens[0] || ''
+
+  // 分组规则: 按 flag 前缀归类
+  const groups: Record<string, string[]> = {
+    '\u6A21\u578B': [],  // 模型
+    '\u63A8\u7406': [],  // 推理
+    '\u6027\u80FD': [],  // 性能
+    '\u7F13\u5B58': [],  // 缓存
+    '\u5185\u5B58': [],  // 内存
+    '\u91C7\u6837': [],  // 采样
+    '\u63A8\u6D4B': [],  // 推测
+    '\u89C6\u89C9': [],  // 视觉
+    '\u7F51\u7EDC': [],  // 网络
+    '\u5176\u4ED6': [],  // 其他
+  }
+
+  const classify = (flag: string): string => {
+    if (/^-m$|^-a$|^--alias|^--mmproj|^--lora|^--chat-template|^--chat-template-file|^--grammar\b|^--skip-chat|^--jinja/.test(flag)) return '\u6A21\u578B'
+    if (/^--reasoning|^--reasoning-budget/.test(flag)) return '\u63A8\u7406'
+    if (/^-ngl|^-t$|^-tb$|^-b$|^-ub$|^-np|^-cb|^--threads|^--batch/.test(flag)) return '\u6027\u80FD'
+    if (/^-c$|^--ctx|^--keep|^-cram|^--cache-ram|^--cache-reuse|^--cache-idle|^--kv-unified|^--warmup|^--no-cache/.test(flag)) return '\u7F13\u5B58'
+    if (/^-fa|^--mlock|^--no-mmap|^--numa|^--check-tensors|^--fit/.test(flag)) return '\u5185\u5B58'
+    if (/^-n$|^--temp$|^--top-k|^--top-p|^--top-n-sigma|^--min-p|^--repeat|^-s$|^--seed|^--presence|^--frequency|^--ignore-eos|^--json-schema|^--mirostat|^--xtc|^--dynatemp|^--typical|^--dry|^--adaptive|^--logit-bias|^--samplers\b|^--sampler-seq|^-bs|^--backend-sampling|^-sp$|^--special|^--reverse-prompt|^--spm-infill/.test(flag)) return '\u91C7\u6837'
+    if (/^--spec|^-md$|^-ngld|-lcs|-lcd|^--lookup|^--draft/.test(flag)) return '\u63A8\u6D4B'
+    if (/^--image|^--mmproj-url|^--mmproj-auto|^--embedding|^--pooling|^--reranking|^--embd-normalize|^--tags|^--media/.test(flag)) return '\u89C6\u89C9'
+    if (/^--host|^--port|^--api-key|^--ssl|^--path|^--api-prefix|^--no-ui|^--threads-http|^--metrics|^--props|^--slot|^--ui-config/.test(flag)) return '\u7F51\u7EDC'
+    return '\u5176\u4ED6'
+  }
+
+  for (let i = 1; i < tokens.length; i++) {
+    const t = tokens[i].replace(/^"|"$/g, '')
+    if (t.startsWith('-')) {
+      const cat = classify(t)
+      if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
+        const val = tokens[i + 1].replace(/^"|"$/g, '')
+        // 路径缩短: 只显示文件名
+        const shortVal = (t === '-m' || t === '-md' || t === '--mmproj' || t === '--lora')
+          ? val.split(/[\\/]/).pop() || val : val
+        groups[cat].push(`${t} ${shortVal}`)
+        i++
+      } else {
+        groups[cat].push(t)
+      }
+    }
+  }
+
+  const lines: string[] = []
+  lines.push('\u250C\u2500\u2500 \u542F\u52A8\u547D\u4EE4 (EXE: ' + exeName + ')')  // ┌── 启动命令 (EXE: ...)
+
+  for (const [label, args] of Object.entries(groups)) {
+    if (args.length > 0) {
+      lines.push(`\u2502 [${label}]  ${args.join('  ')}`)
+    }
+  }
+
+  // 底部短路径: 完整命令(一行, 路径截断为文件名)
+  const shortCmd = tokens.map((t, i) => {
+    const s = t.replace(/^"|"$/g, '')
+    if (i > 0 && (s === '-m' || s === '-md' || s === '--mmproj' || s === '--lora' || s === '--lora-init-without-apply')) {
+      const next = tokens[i + 1]?.replace(/^"|"$/g, '')
+      return s + ' "' + ((next || '').split(/[\\/]/).pop() || next) + '"'
+    }
+    return t
+  }).slice(1).join(' ')
+  lines.push('\u2502')
+  lines.push(`\u2502 \u5B8C\u6574: ${shortCmd.length > 120 ? shortCmd.substring(0, 117) + '...' : shortCmd}`)
+
+  return lines.join('\n')
+}
+
 listen<{ instanceId: string; text: string }>('server-log', (event) => {
   useAppStore.getState().addLog({
     instanceId: event.payload.instanceId,
@@ -302,7 +376,7 @@ listen<{ instanceId: string; pid: number; port: number; command: string }>('serv
   })
   state.addLog({
     instanceId: event.payload.instanceId,
-    text: `\u250C\u2500\u2500 \u542F\u52A8\u547D\u4EE4\n\u2502 ${event.payload.command}\n\u2514\u2500\u2500 PID: ${event.payload.pid} | \u7AEF\u53E3: ${event.payload.port}`,
+    text: formatStartupCommand(event.payload.command) + '\n\u2514\u2500\u2500 PID: ' + event.payload.pid + ' | \u7AEF\u53E3: ' + event.payload.port,
     timestamp: Date.now(),
   })
   state.saveConfig()
