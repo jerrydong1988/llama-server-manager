@@ -293,12 +293,17 @@ listen<{ instanceId: string; text: string }>('server-log', (event) => {
   })
 }).catch(() => {})
 
-listen<{ instanceId: string }>('server-started', (event) => {
+listen<{ instanceId: string; pid: number; port: number; command: string }>('server-started', (event) => {
   const state = useAppStore.getState()
   state.updateInstance(event.payload.instanceId, {
     status: 'running',
     healthCheck: 'pending',
     startTime: Date.now(),
+  })
+  state.addLog({
+    instanceId: event.payload.instanceId,
+    text: `\u250C\u2500\u2500 \u542F\u52A8\u547D\u4EE4\n\u2502 ${event.payload.command}\n\u2514\u2500\u2500 PID: ${event.payload.pid} | \u7AEF\u53E3: ${event.payload.port}`,
+    timestamp: Date.now(),
   })
   state.saveConfig()
 }).catch(() => {})
