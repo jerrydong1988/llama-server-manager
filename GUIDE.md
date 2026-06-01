@@ -1,6 +1,6 @@
 # Llama Server Manager 使用教程 / User Guide
 
-> v2.0.6
+> v2.1.0
 
 ---
 
@@ -230,23 +230,58 @@ Click the engine name on an instance card → a picker dialog opens → select a
 
 Click the ⚙ button on an instance card to jump to the config page.
 
-配置页包含 5 个折叠组：
+配置页包含 **6 个折叠组**，覆盖 **118 个参数**：
 
-The config page has 5 collapsible sections:
+The config page has **6 collapsible sections** covering **118 parameters**:
 
 | 组 | 内容 |
 |------|------|
-| **基本参数** Basic | 模型路径、别名、LoRA、投影器、聊天模板、推理参数 |
-| **生成参数** Generation | 温度、Top-K/P、重复惩罚、种子、Min-P 等 |
-| **高级采样** Advanced Sampling | Mirostat、XTC、动态温度、DRY（有总开关） |
-| **性能配置** Performance | 上下文大小、GPU 层数、线程、批处理 |
-| **网络 & API** Network & API | 主机、端口、API 密钥、Embedding 模式、SSL |
+| **基本参数** Basic | 模型路径、别名、LoRA、投影器、聊天模板、推理参数（15 项） |
+| **生成参数** Generation | 温度、Top-K/P、重复惩罚、种子、Min-P、反向提示等（16 项） |
+| **高级采样** Advanced Sampling | Mirostat、XTC、DRY、动态温度、Typical-P 等（19 项，总开关） |
+| **性能 & 上下文** Performance & Context | 线程、GPU、批处理、上下文、缓存、**RoPE/YaRN 缩放**（25 项） |
+| **服务 & 网络** Server & Network | 主机、端口、API 密钥、SSL、Embedding、**服务特性**（24 项） |
+| **高级参数** Advanced | 内存加载、KV 缓存、**推测解码**、GPU 设备、**专家设置**（32 项） |
 
 ### 高级采样开关 / Advanced Sampling Toggle
 
-高级采样默认关闭。每个参数展开后会有一个「已关闭/已开启」切换按钮。关闭时所有高级采样参数不参与启动命令。
+高级采样默认关闭。展开后有一个「已关闭/已开启」切换按钮。关闭时所有 19 项高级采样参数不参与启动命令（使用哨兵值 0）。
 
-Advanced sampling is off by default. Each section has an on/off toggle. When off, none of the advanced sampling parameters are included in the startup command.
+Advanced sampling is off by default. An on/off toggle controls 19 parameters. When off, all use sentinel value 0 and are excluded from the startup command.
+
+### 推测解码 & 专家设置 / Spec Decoding & Expert Settings
+
+高级参数区域包含两个子开关组：
+
+- **推测解码**（默认关）：草稿模型、推测类型、草稿令牌数、P 阈值等
+- **专家设置**（默认关）：GPU 设备选择、多模型路由、多模态媒体参数
+
+打开后参数可编辑，关闭时自动重置为默认值。重新进入配置页时，开关状态会**自动回显**（与已保存的配置值同步）。
+
+The Advanced section has two sub-toggle groups:
+
+- **Speculative Decoding** (default off): draft model, spec type, draft tokens, P thresholds
+- **Expert Settings** (default off): GPU devices, multi-model routing, multimodal media params
+
+### 智能参数校验 / Smart Validation
+
+保存配置时，程序自动检测 **25 条规则**，按严重度分三级显示：
+
+| 严重度 | 颜色 | 示例 |
+|--------|------|------|
+| **高** High | 红色 🔴 | Backend Sampling 在 ROCm GPU 上会产生警告 |
+| **中** Medium | 黄色 🟡 | 上下文大小超过模型原始上下文 4 倍 |
+| **低** Low | 蓝色 🔵 | 同时设置了聊天模板和模板文件（冗余） |
+
+校验提示在保存后显示 6 秒，不阻塞操作。
+
+On save, the app checks **25 rules** and shows color-coded banners:
+
+| Severity | Color | Example |
+|----------|-------|---------|
+| **High** | Red 🔴 | Backend Sampling on ROCm GPU (known warnings) |
+| **Medium** | Yellow 🟡 | Context size exceeds 4x model context |
+| **Low** | Blue 🔵 | Both chat template and template file set (redundant) |
 
 ### 向量模型检测 / Embedding Model Detection
 
@@ -264,9 +299,9 @@ When an embedding model is selected (e.g. BGE, GTE, Qwen3-Embedding), the app au
 
 ### 参数悬停提示 / Tooltips
 
-所有参数名称和输入框都有鼠标悬停提示，说明该参数的作用和推荐值。
+所有参数名称和输入框都有鼠标悬停提示（中英双语），说明该参数的作用和推荐值。
 
-All parameter labels and inputs have hover tooltips explaining their purpose and recommended values.
+All parameter labels and inputs have bilingual hover tooltips explaining their purpose and recommended values.
 
 ### 模型路径树选择器 / Model Path Picker
 
@@ -280,13 +315,21 @@ The 📂 button next to Model Path opens the repository tree for one-click model
 
 - 实时显示实例的 `stdout`/`stderr` 输出
 - 关键词自动高亮：红色=错误、黄色=警告、绿色=就绪、青色=性能
-- 可按实例筛选查看
-- 点击「清空日志」清除当前显示
+- **自动滚动**到最新输出（跟随模式）
+- **上滑暂停**：手动上滑查看历史日志时自动暂停，显示 ⏸ 暂停指示器
+- **回到底部**：暂停时右下角浮出「⬇ 最新」按钮，点击恢复跟随
+- 实例启动时**自动打印完整命令行 + PID**
+- 底部显示日志总数计数器
+- 可按实例筛选查看 / 点击「清空日志」清除
 
 - Real-time display of instance `stdout`/`stderr` output
 - Keyword auto-highlighting: red=error, yellow=warning, green=ready, cyan=performance
-- Filter by instance
-- "Clear Logs" to reset
+- **Auto-scroll** to latest output (follow mode)
+- **Pause on scroll up**: automatically pauses when scrolling up, shows ⏸ indicator
+- **Back to bottom**: floating "⬇ Latest" button, click to resume following
+- **Startup command + PID** auto-logged when instance starts
+- Log entry count at bottom
+- Filter by instance / "Clear Logs" to reset
 
 ---
 
@@ -318,13 +361,17 @@ When you close the window (✕), the app minimizes to the system tray instead of
 
 ### 配置文件 / Config Persistence
 
-所有配置（模型目录、引擎目录、实例、引擎设置、主题偏好、窗口位置）自动保存在 `configs/` 目录下的 JSON 文件中。关闭程序后重新打开，一切配置自动恢复。
+所有配置（模型目录、引擎目录、实例、引擎设置、主题偏好、窗口位置）自动保存在 `configs/` 目录下的 JSON 文件中。
 
-All configs (model dirs, engine dirs, instances, engine settings, theme, window position) are auto-saved as JSON files in the `configs/` directory. Everything is restored when you reopen the app.
+**自动备份**：每次保存配置时自动创建 `instances.json.bak` 备份文件。如果主配置文件损坏，程序启动时自动从备份恢复。
 
-**注意：** 如果程序更新后配置文件格式不兼容，删除 `configs/instances.json` 重新配置即可。
+All configs are auto-saved as JSON in `configs/`. An **auto-backup** (`instances.json.bak`) is created on every save. If the main config is corrupted, the app auto-recovers from the backup on startup.
 
-**Note:** If the config format becomes incompatible after an update, simply delete `configs/instances.json` and reconfigure.
+### 模型下载并发限制 / Download Concurrency
+
+从 ModelScope 下载时，最多同时下载 **3 个文件**，其余排队等待。避免并发过多导致网络或磁盘 I/O 耗尽。
+
+When downloading from ModelScope, at most **3 files** download concurrently. Others are queued to prevent resource exhaustion.
 
 ### 自动更新检查 / Auto-update
 
