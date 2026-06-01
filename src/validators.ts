@@ -35,17 +35,14 @@ export function validateConfig(
 
   // ═══ A 组：参数逻辑矛盾 ═══
 
-  // A1: reasoning=off 但 reasoning 相关参数仍设置
-  if (config.reasoning === 'off') {
-    if (config.reasoning_effort && config.reasoning_effort !== '')
-      w.push({ field: 'reasoning_effort', severity: 'high', key: 'warnA1' })
-    if (config.reasoning_format && config.reasoning_format !== '' && config.reasoning_format !== 'none')
-      w.push({ field: 'reasoning_format', severity: 'high', key: 'warnA1' })
-    if (config.reasoning_budget && config.reasoning_budget !== '')
-      w.push({ field: 'reasoning_budget', severity: 'high', key: 'warnA1' })
-    if (config.reasoning_budget_message && config.reasoning_budget_message !== '')
-      w.push({ field: 'reasoning_budget_message', severity: 'high', key: 'warnA1' })
-  }
+  // A1: reasoning=off 但 reasoning 相关参数仍设置（合并为单条警告）
+  if (config.reasoning === 'off' && (
+    (config.reasoning_effort && config.reasoning_effort !== '') ||
+    (config.reasoning_format && config.reasoning_format !== '' && config.reasoning_format !== 'none') ||
+    (config.reasoning_budget && config.reasoning_budget !== '') ||
+    (config.reasoning_budget_message && config.reasoning_budget_message !== '')
+  ))
+    w.push({ field: 'reasoning', severity: 'high', key: 'warnA1' })
 
   // A2: embedding 模式下生成/采样参数仍设置
   if (config.embedding) {

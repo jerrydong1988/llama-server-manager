@@ -1398,9 +1398,17 @@ async fn download_modelscope_files(
 
             use std::io::Write;
             // 以追加模式打开文件
-            let mut file = std::fs::OpenOptions::new()
+            let mut file = match std::fs::OpenOptions::new()
                 .create(true).append(resume_from == 0).write(true)
-                .open(&dest).unwrap();
+                .open(&dest) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = app.emit("download-error", serde_json::json!({
+                        "fileName": file_name, "error": format!("文件创建失败: {}", e)
+                    }));
+                    return;
+                }
+            };
 
             let mut stream = resp.bytes_stream();
             while let Some(chunk) = stream.next().await {
@@ -1598,7 +1606,7 @@ fn main() {
                             }
                         }
                         "quit" => {
-                            // 读磁盘配�?只更新 running 字段（保留 last_tab/instance_order 等前端已写字段）
+                            // 读磁盘配置，只更新 running 字段（保留 last_tab/instance_order 等前端已写字段）
                             if let Some(s) = app.try_state::<AppState>() {
                                 let config_dir = s.config_dir.lock().unwrap().clone();
                                 let path = config_dir.join("instances.json");
