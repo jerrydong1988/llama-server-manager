@@ -7,7 +7,7 @@ mod commands;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use tauri::Manager;
-use crate::models::{AppState, InstanceConfig, WindowState};
+use crate::models::{AppState, WindowState};
 use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, open_engine_folder};
 use crate::commands::config::{save_config, load_config, save_window_state, load_window_state};
 use crate::commands::server::{generate_server_command, start_server, stop_server, open_browser, test_connection, check_port};
@@ -21,20 +21,15 @@ fn main() {
     let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
     let config_dir = exe_dir.join("configs");
 
-    let instances = {
-        let path = config_dir.join("instances.json");
-        if path.exists() {
-            std::fs::read_to_string(&path).ok()
-                .and_then(|s| serde_json::from_str::<HashMap<String, InstanceConfig>>(&s).ok())
-                .unwrap_or_default()
-        } else {
-            HashMap::new()
-        }
-    };
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if let Ok(pos) = window.outer_position() {
@@ -110,7 +105,7 @@ fn main() {
         .manage(AppState {
             models: Mutex::new(default_models),
             engines: Mutex::new(default_engines),
-            instances: Mutex::new(instances),
+            instances: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
             config_dir: Mutex::new(config_dir),
             cancel_flags: Mutex::new(HashMap::new()),
