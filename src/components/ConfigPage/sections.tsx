@@ -40,6 +40,9 @@ export function ReasoningSection({ local, set, t, isEmbedding }: Props) {
     <Section title={t.configPage.reasoning} defaultOpen={true}>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Select label={t.configPage.reasoningSwitch} value={local.reasoning} onChange={v => set('reasoning', v)} options={['', 'on', 'off', 'auto']} title={t.configPage.reasoningTip} disabled={isEmbedding} defaultLabel={t.common.default} />
+        <Select label={t.configPage.specType} value={local.spec_type} onChange={v => set('spec_type', v)} options={specTypes} title={t.configPage.specTypeTip} disabled={isEmbedding} defaultLabel={t.common.default} />
+        <Num label={t.configPage.draftTokens} value={local.draft_tokens} onChange={v => set('draft_tokens', v)} min={0} title={t.configPage.draftTokensTip} disabled={isEmbedding} />
+        <Num label={t.configPage.specDraftNMin} value={local.spec_draft_n_min} onChange={v => set('spec_draft_n_min', v)} min={0} title={t.configPage.specDraftNMinTip} disabled={isEmbedding} />
       </div>
     </Section>
   )
@@ -148,12 +151,9 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
           </div>
         </CollapsibleGroup>
 
-        {/* 4d 推测解码 (10) */}
+        {/* 4d 推测解码 (7) */}
         <CollapsibleGroup title={t.configPage.subAdvSpec} onReset={() => resetGroup('advancedSpec')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Select label={t.configPage.specType} value={local.spec_type} onChange={v => set('spec_type', v)} options={specTypes} title={t.configPage.specTypeTip} disabled={isEmbedding} defaultLabel={t.common.default} />
-            <Num label={t.configPage.draftTokens} value={local.draft_tokens} onChange={v => set('draft_tokens', v)} min={0} title={t.configPage.draftTokensTip} disabled={isEmbedding} />
-            <Num label={t.configPage.specDraftNMin} value={local.spec_draft_n_min} onChange={v => set('spec_draft_n_min', v)} min={0} title={t.configPage.specDraftNMinTip} disabled={isEmbedding} />
             <Input label={t.configPage.draftModel} value={local.draft_model_path} onChange={v => set('draft_model_path', v)} title={t.configPage.draftModelTip} disabled={isEmbedding} />
             <Num label={t.configPage.draftGpu} value={local.draft_gpu_layers} onChange={v => set('draft_gpu_layers', v)} min={0} max={99} title={t.configPage.draftGpuTip} disabled={isEmbedding} />
             <Num label={t.configPage.specDraftPMin} value={local.spec_draft_p_min} onChange={v => set('spec_draft_p_min', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPMinTip} disabled={isEmbedding} />

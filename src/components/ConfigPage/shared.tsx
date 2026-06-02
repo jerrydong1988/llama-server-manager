@@ -110,8 +110,8 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     backend_sampling: false, json_schema: '',
   },
   advancedSpec: {
-    spec_type: '', draft_model_path: '', draft_gpu_layers: 99, draft_tokens: 16,
-    spec_draft_n_min: 0, spec_draft_p_min: 0, spec_draft_p_split: 0.1, spec_draft_device: '',
+    draft_model_path: '', draft_gpu_layers: 99,
+    spec_draft_p_min: 0, spec_draft_p_split: 0.1, spec_draft_device: '',
     lookup_cache_static: '', lookup_cache_dynamic: '',
   },
   advancedRope: {
