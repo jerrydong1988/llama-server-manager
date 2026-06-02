@@ -3,7 +3,7 @@ import { Settings, File, Image, X, FolderOpen, ChevronRight, ChevronDown } from 
 import { useAppStore, type InstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
-import { BasicSection, GenerationSection, AdvancedSamplingSection, PerformanceSection, ServerNetworkSection, AdvancedSection } from './ConfigPage/sections'
+import { BasicSection, ReasoningSection, GenerationSection, AdvancedSamplingSection, PerformanceSection, ServerNetworkSection, AdvancedSection } from './ConfigPage/sections'
 
 const ConfigPage = () => {
   const { instances, activeConfigInstanceId, updateInstance, saveConfig, models, modelDirs, engines, defaultEngineId } = useAppStore()
@@ -15,7 +15,11 @@ const ConfigPage = () => {
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [useAdvSampling, setUseAdvSampling] = useState(false)
   const [useSpecDecoding, setUseSpecDecoding] = useState(false)
-  const [useExpertSettings, setUseExpertSettings] = useState(false)
+  const [useExpert, setUseExpert] = useState(false)
+  const [useRopeYarn, setUseRopeYarn] = useState(false)
+  const [useCacheExt, setUseCacheExt] = useState(false)
+  const [useGpuDevice, setUseGpuDevice] = useState(false)
+  const [useServerExt, setUseServerExt] = useState(false)
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
 
   useEffect(() => { if (inst) setLocal({ ...inst.config }); else setLocal(null) }, [activeConfigInstanceId, instances])
@@ -40,7 +44,24 @@ const ConfigPage = () => {
       local.spec_draft_device !== '' ||
       local.lookup_cache_static !== '' || local.lookup_cache_dynamic !== ''
     )
-    setUseExpertSettings(
+    setUseRopeYarn(
+      local.rope_scaling !== '' || local.rope_scale !== 0 || local.rope_freq_base !== 0 ||
+      local.rope_freq_scale !== 0 || local.yarn_ext_factor >= 0 || local.yarn_attn_factor !== 1 ||
+      local.yarn_beta_slow !== 0 || local.yarn_beta_fast !== 32
+    )
+    setUseCacheExt(
+      local.cache_reuse !== 0 || local.cache_ram !== 0 || local.warmup !== false ||
+      local.cache_idle_slots !== true || local.ctx_checkpoints !== 32 || local.checkpoint_min_step !== 0
+    )
+    setUseGpuDevice(
+      local.device !== '' || local.split_mode !== '' || local.tensor_split !== '' ||
+      local.main_gpu !== 0 || local.override_kv !== ''
+    )
+    setUseServerExt(
+      local.metrics !== false || local.props !== false || local.slot_save_path !== '' ||
+      local.slot_prompt_similarity !== 0.1 || local.prefill_assistant !== '' || local.ui_config_file !== ''
+    )
+    setUseExpert(
       local.device !== '' || local.split_mode !== '' || local.tensor_split !== '' ||
       local.main_gpu !== 0 || local.override_kv !== '' ||
       local.models_dir !== '' || local.models_preset !== '' || local.models_max !== 4 ||
@@ -90,7 +111,7 @@ const ConfigPage = () => {
     setTimeout(() => { setSaved(false); setSaveWarnings([]) }, 6000)
   }
 
-  const sectionProps = { local, set, t, isEmbedding, useAdvSampling, setUseAdvSampling, useSpecDecoding, setUseSpecDecoding, useExpertSettings, setUseExpertSettings, onShowPicker: () => setShowPicker(true) }
+  const sectionProps = { local, set, t, isEmbedding, useAdvSampling, setUseAdvSampling, useSpecDecoding, setUseSpecDecoding, useExpert, setUseExpert, useRopeYarn, setUseRopeYarn, useCacheExt, setUseCacheExt, useGpuDevice, setUseGpuDevice, useServerExt, setUseServerExt, onShowPicker: () => setShowPicker(true) }
 
   return (
     <div className="space-y-6">
@@ -126,6 +147,7 @@ const ConfigPage = () => {
 
       <div className="space-y-3">
         <BasicSection {...sectionProps} />
+        <ReasoningSection {...sectionProps} />
         <GenerationSection {...sectionProps} />
         <AdvancedSamplingSection {...sectionProps} />
         <PerformanceSection {...sectionProps} />

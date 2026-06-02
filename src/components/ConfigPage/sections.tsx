@@ -7,15 +7,16 @@ interface Props {
   t: any
   isEmbedding: boolean
   onShowPicker: () => void
-  useAdvSampling: boolean
-  setUseAdvSampling: (v: boolean) => void
-  useSpecDecoding: boolean
-  setUseSpecDecoding: (v: boolean) => void
-  useExpertSettings: boolean
-  setUseExpertSettings: (v: boolean) => void
+  useAdvSampling: boolean; setUseAdvSampling: (v: boolean) => void
+  useSpecDecoding: boolean; setUseSpecDecoding: (v: boolean) => void
+  useRopeYarn: boolean; setUseRopeYarn: (v: boolean) => void
+  useCacheExt: boolean; setUseCacheExt: (v: boolean) => void
+  useGpuDevice: boolean; setUseGpuDevice: (v: boolean) => void
+  useServerExt: boolean; setUseServerExt: (v: boolean) => void
+  useExpert: boolean; setUseExpert: (v: boolean) => void
 }
 
-export function BasicSection({ local, set, t, isEmbedding, onShowPicker }: Props) {
+export function BasicSection({ local, set, t, onShowPicker }: Props) {
   return (
     <Section title={t.configPage.basic}>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
@@ -27,19 +28,34 @@ export function BasicSection({ local, set, t, isEmbedding, onShowPicker }: Props
           </div>
         </div>
         <Input label={t.configPage.alias} value={local.alias} onChange={v => set('alias', v)} title={t.configPage.aliasTip} />
-        <Input label={t.configPage.lora} value={local.lora_path} onChange={v => set('lora_path', v)} title={t.configPage.loraTip} disabled={isEmbedding} />
-        <Input label={t.configPage.mmproj} value={local.mmproj_path} onChange={v => set('mmproj_path', v)} title={t.configPage.mmprojTip} disabled={isEmbedding} />
-        <Input label={t.configPage.grammarFile} value={local.grammar_file} onChange={v => set('grammar_file', v)} title={t.configPage.grammarFileTip} disabled={isEmbedding} />
-        <Input label={t.configPage.grammar} value={local.grammar} onChange={v => set('grammar', v)} title={t.configPage.grammarTip} disabled={isEmbedding} />
-        <Select label={t.configPage.chatTemplate} value={local.chat_template} onChange={v => set('chat_template', v)} options={chatTemplates} title={t.configPage.chatTemplateTip} disabled={isEmbedding} defaultLabel={t.common.default} />
-        <Input label={t.configPage.chatTemplateFile} value={local.chat_template_file} onChange={v => set('chat_template_file', v)} title={t.configPage.chatTemplateFileTip} disabled={isEmbedding} />
+        <Select label={t.configPage.chatTemplate} value={local.chat_template} onChange={v => set('chat_template', v)} options={chatTemplates} title={t.configPage.chatTemplateTip} defaultLabel={t.common.default} />
+        <Input label={t.configPage.host} value={local.host} onChange={v => set('host', v)} title={t.configPage.hostTip} />
+        <Num label={t.configPage.portLabel} value={local.port} onChange={v => set('port', v)} min={1} max={65535} title={t.configPage.portLabelTip} />
+        <Num label={t.configPage.gpuLayers} value={local.gpu_layers} onChange={v => set('gpu_layers', v)} min={0} max={99} title={t.configPage.gpuLayersTip} />
+        <Toggle label={t.configPage.embedding} value={local.embedding} onChange={v => set('embedding', v)} title={t.configPage.embeddingTip} />
+        <Select label={t.configPage.pooling} value={local.pooling} onChange={v => set('pooling', v)} options={['', 'none', 'mean', 'cls', 'last', 'rank']} title={t.configPage.poolingTip} defaultLabel={t.common.default} />
+      </div>
+    </Section>
+  )
+}
+
+export function ReasoningSection({ local, set, t, isEmbedding }: Props) {
+  return (
+    <Section title={t.configPage.reasoning}>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <Select label={t.configPage.reasoningSwitch} value={local.reasoning} onChange={v => set('reasoning', v)} options={['', 'on', 'off', 'auto']} title={t.configPage.reasoningTip} disabled={isEmbedding} defaultLabel={t.common.default} />
         <Select label={t.configPage.reasoningFormat} value={local.reasoning_format} onChange={v => set('reasoning_format', v)} options={['', 'none', 'deepseek', 'deepseek-legacy']} title={t.configPage.reasoningFormatTip} disabled={isEmbedding} defaultLabel={t.common.default} />
-        <Select label={t.configPage.reasoning} value={local.reasoning} onChange={v => set('reasoning', v)} options={['', 'on', 'off', 'auto']} title={t.configPage.reasoningTip} disabled={isEmbedding} defaultLabel={t.common.default} />
-        <Toggle label={t.configPage.jinja} value={local.jinja} onChange={v => set('jinja', v)} title={t.configPage.jinjaTip} disabled={isEmbedding} />
-        <Toggle label={t.configPage.skipChatParsing} value={local.skip_chat_parsing} onChange={v => set('skip_chat_parsing', v)} title={t.configPage.skipChatParsingTip} disabled={isEmbedding} />
         <Select label={t.configPage.reasoningEffort} value={local.reasoning_effort} onChange={v => set('reasoning_effort', v)} options={['', 'low', 'medium', 'high']} title={t.configPage.reasoningEffortTip} disabled={isEmbedding} defaultLabel={t.common.default} />
         <Num label={t.configPage.reasoningBudget} value={local.reasoning_budget ? parseInt(local.reasoning_budget) : 0} onChange={v => set('reasoning_budget', v.toString())} min={0} max={65536} step={256} title={t.configPage.reasoningBudgetTip} disabled={isEmbedding} />
         <Input label={t.configPage.reasoningBudgetMsg} value={local.reasoning_budget_message} onChange={v => set('reasoning_budget_message', v)} title={t.configPage.reasoningBudgetMsgTip} disabled={isEmbedding} />
+        <Toggle label={t.configPage.jinja} value={local.jinja} onChange={v => set('jinja', v)} title={t.configPage.jinjaTip} disabled={isEmbedding} />
+        <Input label={t.configPage.chatTemplateFile} value={local.chat_template_file} onChange={v => set('chat_template_file', v)} title={t.configPage.chatTemplateFileTip} disabled={isEmbedding} />
+        <Toggle label={t.configPage.skipChatParsing} value={local.skip_chat_parsing} onChange={v => set('skip_chat_parsing', v)} title={t.configPage.skipChatParsingTip} disabled={isEmbedding} />
+        <Input label={t.configPage.lora} value={local.lora_path} onChange={v => set('lora_path', v)} title={t.configPage.loraTip} disabled={isEmbedding} />
+        <Toggle label={t.configPage.loraInitNoApply} value={local.lora_init_without_apply} onChange={v => set('lora_init_without_apply', v)} title={t.configPage.loraInitNoApplyTip} disabled={isEmbedding} />
+        <Input label={t.configPage.mmproj} value={local.mmproj_path} onChange={v => set('mmproj_path', v)} title={t.configPage.mmprojTip} disabled={isEmbedding} />
+        <Input label={t.configPage.grammarFile} value={local.grammar_file} onChange={v => set('grammar_file', v)} title={t.configPage.grammarFileTip} disabled={isEmbedding} />
+        <Input label={t.configPage.grammar} value={local.grammar} onChange={v => set('grammar', v)} title={t.configPage.grammarTip} disabled={isEmbedding} />
       </div>
     </Section>
   )
@@ -71,7 +87,7 @@ export function GenerationSection({ local, set, t, isEmbedding }: Props) {
 }
 
 export function AdvancedSamplingSection({ local, set, t, isEmbedding, useAdvSampling, setUseAdvSampling }: Props) {
-  const toggleOff = () => {
+  const off = () => {
     set('mirostat', 0); set('mirostat_lr', 0); set('mirostat_ent', 0)
     set('xtc_probability', 0); set('xtc_threshold', 0)
     set('dynatemp_range', 0); set('dynatemp_exp', 0); set('typical_p', 1.0)
@@ -82,7 +98,7 @@ export function AdvancedSamplingSection({ local, set, t, isEmbedding, useAdvSamp
   }
   return (
     <Section title={t.configPage.advancedSampling} disabled={isEmbedding || !useAdvSampling}
-      onToggle={v => { setUseAdvSampling(v); if (!v) toggleOff() }} toggled={useAdvSampling}>
+      onToggle={v => { setUseAdvSampling(v); if (!v) off() }} toggled={useAdvSampling}>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Select label={t.configPage.mirostat} value={local.mirostat.toString()} onChange={v => set('mirostat', parseInt(v))} options={['0', '1', '2']} title={t.configPage.mirostatTip} defaultLabel={t.common.default} />
         <Num label={t.configPage.mirostatLr} value={local.mirostat_lr} onChange={v => set('mirostat_lr', v)} min={0.001} max={1} step={0.001} title={t.configPage.mirostatLrTip} />
@@ -108,7 +124,8 @@ export function AdvancedSamplingSection({ local, set, t, isEmbedding, useAdvSamp
   )
 }
 
-export function PerformanceSection({ local, set, t, isEmbedding }: Props) {
+export function PerformanceSection({ local, set, t, isEmbedding,
+  useSpecDecoding, setUseSpecDecoding, useRopeYarn, setUseRopeYarn, useCacheExt, setUseCacheExt }: Props) {
   return (
     <Section title={t.configPage.performance}>
       <div className="text-xs font-medium text-gray-400 mb-2">{t.configPage.subCompute}</div>
@@ -116,119 +133,41 @@ export function PerformanceSection({ local, set, t, isEmbedding }: Props) {
         <Num label={t.configPage.threads} value={local.threads} onChange={v => set('threads', v)} min={0} title={t.configPage.threadsTip} />
         <Num label={t.configPage.threadsBatch} value={local.threads_batch} onChange={v => set('threads_batch', v)} min={0} title={t.configPage.threadsBatchTip} />
         <Num label={t.configPage.threadsHttp} value={local.threads_http} onChange={v => set('threads_http', v)} min={-1} title={t.configPage.threadsHttpTip} />
-        <Num label={t.configPage.gpuLayers} value={local.gpu_layers} onChange={v => set('gpu_layers', v)} min={0} max={99} title={t.configPage.gpuLayersTip} />
         <Num label={t.configPage.batchSize} value={local.batch_size} onChange={v => set('batch_size', v)} min={1} title={t.configPage.batchSizeTip} />
         <Num label={t.configPage.ubatchSize} value={local.ubatch_size} onChange={v => set('ubatch_size', v)} min={1} title={t.configPage.ubatchSizeTip} />
         <Num label={t.configPage.parallel} value={local.parallel} onChange={v => set('parallel', v)} min={-1} title={t.configPage.parallelTip} />
         <Toggle label={t.configPage.contBatching} value={local.cont_batching} onChange={v => set('cont_batching', v)} title={t.configPage.contBatchingTip} />
       </div>
-      <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subCache}</div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Toggle label={t.configPage.cachePrompt} value={local.cache_prompt} onChange={v => set('cache_prompt', v)} title={t.configPage.cachePromptTip} />
-        <Num label={t.configPage.cacheReuse} value={local.cache_reuse} onChange={v => set('cache_reuse', v)} min={0} title={t.configPage.cacheReuseTip} />
-        <Num label={t.configPage.cacheRam} value={local.cache_ram} onChange={v => set('cache_ram', v)} min={0} step={256} title={t.configPage.cacheRamTip} />
-        <Toggle label={t.configPage.warmup} value={local.warmup} onChange={v => set('warmup', v)} title={t.configPage.warmupTip} />
-      </div>
-      <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subContext}</div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Toggle label={t.configPage.ctxAuto} value={local.ctx_size_auto} onChange={v => set('ctx_size_auto', v)} title={t.configPage.ctxAutoTip} />
-        {!local.ctx_size_auto && <Num label={t.configPage.ctxSize} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} />}
-        <Num label={t.configPage.keep} value={local.keep} onChange={v => set('keep', v)} min={0} title={t.configPage.keepTip} />
-        <Toggle label={t.configPage.swaFull} value={local.swa_full} onChange={v => set('swa_full', v)} title={t.configPage.swaFullTip} />
-        <Toggle label={t.configPage.contextShift} value={local.context_shift} onChange={v => set('context_shift', v)} title={t.configPage.contextShiftTip} disabled={isEmbedding} />
-        <Num label={t.configPage.ctxCheckpoints} value={local.ctx_checkpoints} onChange={v => set('ctx_checkpoints', v)} min={0} title={t.configPage.ctxCheckpointsTip} />
-        <Num label={t.configPage.checkpointMinStep} value={local.checkpoint_min_step} onChange={v => set('checkpoint_min_step', v)} min={0} title={t.configPage.checkpointMinStepTip} />
-      </div>
-      <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subRope}</div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Select label={t.configPage.ropeScaling} value={local.rope_scaling} onChange={v => set('rope_scaling', v)} options={['', 'none', 'linear', 'yarn']} title={t.configPage.ropeScalingTip} defaultLabel={t.common.default} />
-        <Num label={t.configPage.ropeScale} value={local.rope_scale} onChange={v => set('rope_scale', v)} min={0} max={10} step={0.1} title={t.configPage.ropeScaleTip} />
-        <Num label={t.configPage.ropeFreqBase} value={local.rope_freq_base} onChange={v => set('rope_freq_base', v)} min={0} title={t.configPage.ropeFreqBaseTip} />
-        <Num label={t.configPage.ropeFreqScale} value={local.rope_freq_scale} onChange={v => set('rope_freq_scale', v)} min={0} max={10} step={0.1} title={t.configPage.ropeFreqScaleTip} />
-      </div>
-      <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subYarn}</div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Num label={t.configPage.yarnExtFactor} value={local.yarn_ext_factor} onChange={v => set('yarn_ext_factor', v)} min={-1} max={10} step={0.1} title={t.configPage.yarnExtFactorTip} />
-        <Num label={t.configPage.yarnAttnFactor} value={local.yarn_attn_factor} onChange={v => set('yarn_attn_factor', v)} min={0} max={10} step={0.1} title={t.configPage.yarnAttnFactorTip} />
-        <Num label={t.configPage.yarnBetaSlow} value={local.yarn_beta_slow} onChange={v => set('yarn_beta_slow', v)} min={0} max={10} step={0.1} title={t.configPage.yarnBetaSlowTip} />
-        <Num label={t.configPage.yarnBetaFast} value={local.yarn_beta_fast} onChange={v => set('yarn_beta_fast', v)} min={0} max={128} title={t.configPage.yarnBetaFastTip} />
-      </div>
-    </Section>
-  )
-}
-
-export function ServerNetworkSection({ local, set, t }: Props) {
-  return (
-    <Section title={t.configPage.network}>
-      <div className="text-xs font-medium text-gray-400 mb-2">{t.configPage.subNetwork}</div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Input label={t.configPage.host} value={local.host} onChange={v => set('host', v)} title={t.configPage.hostTip} />
-        <Num label={t.configPage.portLabel} value={local.port} onChange={v => set('port', v)} min={1} max={65535} title={t.configPage.portLabelTip} />
-        <Input label={t.configPage.apiKey} value={local.api_key} onChange={v => set('api_key', v)} type="password" title={t.configPage.apiKeyTip} />
-        <Input label={t.configPage.apiKeyFile} value={local.api_key_file} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip} />
-        <Toggle label={t.configPage.noUi} value={local.no_ui} onChange={v => set('no_ui', v)} title={t.configPage.noUiTip} />
-        <Input label={t.configPage.pathPrefix} value={local.path_prefix} onChange={v => set('path_prefix', v)} title={t.configPage.pathPrefixTip} />
-        <Input label={t.configPage.apiPrefix} value={local.api_prefix} onChange={v => set('api_prefix', v)} title={t.configPage.apiPrefixTip} />
-        <Input label={t.configPage.uiConfigFile} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip} />
-      </div>
-      <div className="grid grid-cols-2 gap-3 mt-3">
-        <Input label={t.configPage.sslKey} value={local.ssl_key_file} onChange={v => set('ssl_key_file', v)} title={t.configPage.sslKeyTip} />
-        <Input label={t.configPage.sslCert} value={local.ssl_cert_file} onChange={v => set('ssl_cert_file', v)} title={t.configPage.sslCertTip} />
-      </div>
-      <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subServer}</div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Num label={t.configPage.timeout} value={local.timeout} onChange={v => set('timeout', v)} min={1} title={t.configPage.timeoutTip} />
-        <Num label={t.configPage.sleepIdle} value={local.sleep_idle} onChange={v => set('sleep_idle', v)} min={-1} title={t.configPage.sleepIdleTip} />
-        <Toggle label={t.configPage.verbose} value={local.verbose} onChange={v => set('verbose', v)} title={t.configPage.verboseTip} />
-        <Toggle label={t.configPage.metrics} value={local.metrics} onChange={v => set('metrics', v)} title={t.configPage.metricsTip} />
-        <Toggle label={t.configPage.props} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip} />
-        <Toggle label={t.configPage.slotsEnabled} value={local.slots_enabled} onChange={v => set('slots_enabled', v)} title={t.configPage.slotsEnabledTip} />
-        <Input label={t.configPage.slotSavePath} value={local.slot_save_path} onChange={v => set('slot_save_path', v)} title={t.configPage.slotSavePathTip} />
-        <Num label={t.configPage.slotPromptSimilarity} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip} />
-        <Input label={t.configPage.prefillAssistant} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip} />
-      </div>
-      <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subEmbedding}</div>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Toggle label={t.configPage.embedding} value={local.embedding} onChange={v => set('embedding', v)} title={t.configPage.embeddingTip} />
-        <Select label={t.configPage.pooling} value={local.pooling} onChange={v => set('pooling', v)} options={['', 'none', 'mean', 'cls', 'last', 'rank']} title={t.configPage.poolingTip} defaultLabel={t.common.default} />
-        <Num label={t.configPage.embdNormalize} value={local.embd_normalize} onChange={v => set('embd_normalize', v)} min={0} max={2} title={t.configPage.embdNormalizeTip} />
-        <Toggle label={t.configPage.reranking} value={local.reranking} onChange={v => set('reranking', v)} title={t.configPage.rerankingTip} />
-      </div>
-    </Section>
-  )
-}
-
-export function AdvancedSection({ local, set, t, isEmbedding, useSpecDecoding, setUseSpecDecoding, useExpertSettings, setUseExpertSettings }: Props) {
-  return (
-    <Section title={t.configPage.advanced}>
-      <div className="text-xs font-medium text-gray-400 mb-2">{t.configPage.subMemLoad}</div>
+      <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subGpuMem}</div>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Select label={t.configPage.flashAttn} value={local.flash_attn} onChange={v => set('flash_attn', v)} options={['auto', 'on', 'off']} title={t.configPage.flashAttnTip} defaultLabel={t.common.default} />
         <Num label={t.configPage.moeCpu} value={local.moe_cpu_layers} onChange={v => set('moe_cpu_layers', v)} min={0} max={99} title={t.configPage.moeCpuTip} disabled={isEmbedding} />
         <Toggle label={t.configPage.mlock} value={local.mlock} onChange={v => set('mlock', v)} title={t.configPage.mlockTip} />
         <Toggle label={t.configPage.noMmap} value={local.no_mmap} onChange={v => set('no_mmap', v)} title={t.configPage.noMmapTip} />
         <Toggle label={t.configPage.numa} value={local.numa} onChange={v => set('numa', v)} title={t.configPage.numaTip} />
-        <Toggle label={t.configPage.checkTensors} value={local.check_tensors} onChange={v => set('check_tensors', v)} title={t.configPage.checkTensorsTip} />
-        <Toggle label={t.configPage.fit} value={local.fit} onChange={v => set('fit', v)} title={t.configPage.fitTip} />
-        <Toggle label={t.configPage.loraInitNoApply} value={local.lora_init_without_apply} onChange={v => set('lora_init_without_apply', v)} title={t.configPage.loraInitNoApplyTip} disabled={isEmbedding} />
       </div>
       <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subKvCache}</div>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Select label={t.configPage.cacheTypeK} value={local.cache_type_k} onChange={v => set('cache_type_k', v)} options={cacheTypes} title={t.configPage.cacheTypeKTip} defaultLabel={t.common.default} />
         <Select label={t.configPage.cacheTypeV} value={local.cache_type_v} onChange={v => set('cache_type_v', v)} options={cacheTypes} title={t.configPage.cacheTypeVTip} defaultLabel={t.common.default} />
-        <Select label={t.configPage.cacheTypeDraftK} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default} />
-        <Select label={t.configPage.cacheTypeDraftV} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default} />
-        <Toggle label={t.configPage.kvUnified} value={local.kv_unified} onChange={v => set('kv_unified', v)} title={t.configPage.kvUnifiedTip} />
-        <Toggle label={t.configPage.cacheIdleSlots} value={local.cache_idle_slots} onChange={v => set('cache_idle_slots', v)} title={t.configPage.cacheIdleSlotsTip} />
       </div>
+      <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subContext}</div>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <Toggle label={t.configPage.ctxAuto} value={local.ctx_size_auto} onChange={v => set('ctx_size_auto', v)} title={t.configPage.ctxAutoTip} />
+        {!local.ctx_size_auto && <Num label={t.configPage.ctxSize} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} />}
+        <Num label={t.configPage.keep} value={local.keep} onChange={v => set('keep', v)} min={0} title={t.configPage.keepTip} />
+        <Toggle label={t.configPage.contextShift} value={local.context_shift} onChange={v => set('context_shift', v)} title={t.configPage.contextShiftTip} disabled={isEmbedding} />
+        <Toggle label={t.configPage.swaFull} value={local.swa_full} onChange={v => set('swa_full', v)} title={t.configPage.swaFullTip} />
+      </div>
+      {/* Spec Decoding (toggled) */}
       <div className="mt-3">
         <SubGroup label={t.configPage.subSpecDecoding} toggled={useSpecDecoding} onToggle={v => { setUseSpecDecoding(v); if (!v) { set('draft_model_path', ''); set('draft_gpu_layers', 99); set('draft_tokens', 16); set('spec_draft_n_min', 0); set('spec_type', ''); set('spec_draft_p_min', 0); set('spec_draft_p_split', 0.1); set('spec_draft_device', ''); set('lookup_cache_static', ''); set('lookup_cache_dynamic', '') } }}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3" style={isEmbedding ? { opacity: 0.5, pointerEvents: 'none' } : {}}>
-            <Input label={t.configPage.draftModel} value={local.draft_model_path} onChange={v => set('draft_model_path', v)} title={t.configPage.draftModelTip} disabled={isEmbedding} />
-            <Num label={t.configPage.draftGpu} value={local.draft_gpu_layers} onChange={v => set('draft_gpu_layers', v)} min={0} max={99} title={t.configPage.draftGpuTip} disabled={isEmbedding} />
+            <Select label={t.configPage.specType} value={local.spec_type} onChange={v => set('spec_type', v)} options={specTypes} title={t.configPage.specTypeTip} disabled={isEmbedding} defaultLabel={t.common.default} />
             <Num label={t.configPage.draftTokens} value={local.draft_tokens} onChange={v => set('draft_tokens', v)} min={0} title={t.configPage.draftTokensTip} disabled={isEmbedding} />
             <Num label={t.configPage.specDraftNMin} value={local.spec_draft_n_min} onChange={v => set('spec_draft_n_min', v)} min={0} title={t.configPage.specDraftNMinTip} disabled={isEmbedding} />
-            <Select label={t.configPage.specType} value={local.spec_type} onChange={v => set('spec_type', v)} options={specTypes} title={t.configPage.specTypeTip} disabled={isEmbedding} defaultLabel={t.common.default} />
+            <Input label={t.configPage.draftModel} value={local.draft_model_path} onChange={v => set('draft_model_path', v)} title={t.configPage.draftModelTip} disabled={isEmbedding} />
+            <Num label={t.configPage.draftGpu} value={local.draft_gpu_layers} onChange={v => set('draft_gpu_layers', v)} min={0} max={99} title={t.configPage.draftGpuTip} disabled={isEmbedding} />
             <Num label={t.configPage.specDraftPMin} value={local.spec_draft_p_min} onChange={v => set('spec_draft_p_min', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPMinTip} disabled={isEmbedding} />
             <Num label={t.configPage.specDraftPSplit} value={local.spec_draft_p_split} onChange={v => set('spec_draft_p_split', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPSplitTip} disabled={isEmbedding} />
             <Input label={t.configPage.specDraftDevice} value={local.spec_draft_device} onChange={v => set('spec_draft_device', v)} title={t.configPage.specDraftDeviceTip} disabled={isEmbedding} />
@@ -237,9 +176,89 @@ export function AdvancedSection({ local, set, t, isEmbedding, useSpecDecoding, s
           </div>
         </SubGroup>
       </div>
+      {/* Cache Ext (toggled) */}
       <div className="mt-3">
-        <SubGroup label={t.configPage.subExpert} toggled={useExpertSettings} onToggle={v => { setUseExpertSettings(v); if (!v) { set('device', ''); set('split_mode', ''); set('tensor_split', ''); set('main_gpu', 0); set('override_kv', ''); set('models_dir', ''); set('models_preset', ''); set('models_max', 4); set('models_autoload', false); set('mmproj_url', ''); set('mmproj_auto', false); set('image_min_tokens', 0); set('image_max_tokens', 0); set('media_path', ''); set('tags', ''); set('tools', '') } }}>
-          <div className="text-xs font-medium text-gray-400 mb-2">{t.configPage.subGpuDevice}</div>
+        <SubGroup label={t.configPage.subCacheExt} toggled={useCacheExt} onToggle={v => { setUseCacheExt(v); if (!v) { set('cache_reuse', 0); set('cache_ram', 0); set('warmup', false); set('cache_idle_slots', true); set('ctx_checkpoints', 32); set('checkpoint_min_step', 0) } }}>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Toggle label={t.configPage.cachePrompt} value={local.cache_prompt} onChange={v => set('cache_prompt', v)} title={t.configPage.cachePromptTip} />
+            <Num label={t.configPage.cacheReuse} value={local.cache_reuse} onChange={v => set('cache_reuse', v)} min={0} title={t.configPage.cacheReuseTip} />
+            <Num label={t.configPage.cacheRam} value={local.cache_ram} onChange={v => set('cache_ram', v)} min={0} step={256} title={t.configPage.cacheRamTip} />
+            <Toggle label={t.configPage.warmup} value={local.warmup} onChange={v => set('warmup', v)} title={t.configPage.warmupTip} />
+            <Toggle label={t.configPage.cacheIdleSlots} value={local.cache_idle_slots} onChange={v => set('cache_idle_slots', v)} title={t.configPage.cacheIdleSlotsTip} />
+            <Num label={t.configPage.ctxCheckpoints} value={local.ctx_checkpoints} onChange={v => set('ctx_checkpoints', v)} min={0} title={t.configPage.ctxCheckpointsTip} />
+            <Num label={t.configPage.checkpointMinStep} value={local.checkpoint_min_step} onChange={v => set('checkpoint_min_step', v)} min={0} title={t.configPage.checkpointMinStepTip} />
+          </div>
+        </SubGroup>
+      </div>
+      {/* RoPE/YaRN (toggled) */}
+      <div className="mt-3">
+        <SubGroup label={t.configPage.subRopeYarn} toggled={useRopeYarn} onToggle={v => { setUseRopeYarn(v); if (!v) { set('rope_scaling', ''); set('rope_scale', 0); set('rope_freq_base', 0); set('rope_freq_scale', 0); set('yarn_ext_factor', -1); set('yarn_attn_factor', 1); set('yarn_beta_slow', 0); set('yarn_beta_fast', 32) } }}>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Select label={t.configPage.ropeScaling} value={local.rope_scaling} onChange={v => set('rope_scaling', v)} options={['', 'none', 'linear', 'yarn']} title={t.configPage.ropeScalingTip} defaultLabel={t.common.default} />
+            <Num label={t.configPage.ropeScale} value={local.rope_scale} onChange={v => set('rope_scale', v)} min={0} max={10} step={0.1} title={t.configPage.ropeScaleTip} />
+            <Num label={t.configPage.ropeFreqBase} value={local.rope_freq_base} onChange={v => set('rope_freq_base', v)} min={0} title={t.configPage.ropeFreqBaseTip} />
+            <Num label={t.configPage.ropeFreqScale} value={local.rope_freq_scale} onChange={v => set('rope_freq_scale', v)} min={0} max={10} step={0.1} title={t.configPage.ropeFreqScaleTip} />
+            <Num label={t.configPage.yarnExtFactor} value={local.yarn_ext_factor} onChange={v => set('yarn_ext_factor', v)} min={-1} max={10} step={0.1} title={t.configPage.yarnExtFactorTip} />
+            <Num label={t.configPage.yarnAttnFactor} value={local.yarn_attn_factor} onChange={v => set('yarn_attn_factor', v)} min={0} max={10} step={0.1} title={t.configPage.yarnAttnFactorTip} />
+            <Num label={t.configPage.yarnBetaSlow} value={local.yarn_beta_slow} onChange={v => set('yarn_beta_slow', v)} min={0} max={10} step={0.1} title={t.configPage.yarnBetaSlowTip} />
+            <Num label={t.configPage.yarnBetaFast} value={local.yarn_beta_fast} onChange={v => set('yarn_beta_fast', v)} min={0} max={128} title={t.configPage.yarnBetaFastTip} />
+          </div>
+        </SubGroup>
+      </div>
+    </Section>
+  )
+}
+
+export function ServerNetworkSection({ local, set, t, useServerExt, setUseServerExt }: Props) {
+  return (
+    <Section title={t.configPage.network}>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <Input label={t.configPage.apiKey} value={local.api_key} onChange={v => set('api_key', v)} type="password" title={t.configPage.apiKeyTip} />
+        <Input label={t.configPage.apiKeyFile} value={local.api_key_file} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip} />
+        <Toggle label={t.configPage.noUi} value={local.no_ui} onChange={v => set('no_ui', v)} title={t.configPage.noUiTip} />
+        <Input label={t.configPage.pathPrefix} value={local.path_prefix} onChange={v => set('path_prefix', v)} title={t.configPage.pathPrefixTip} />
+        <Input label={t.configPage.apiPrefix} value={local.api_prefix} onChange={v => set('api_prefix', v)} title={t.configPage.apiPrefixTip} />
+        <Num label={t.configPage.timeout} value={local.timeout} onChange={v => set('timeout', v)} min={1} title={t.configPage.timeoutTip} />
+        <Num label={t.configPage.sleepIdle} value={local.sleep_idle} onChange={v => set('sleep_idle', v)} min={-1} title={t.configPage.sleepIdleTip} />
+        <Toggle label={t.configPage.verbose} value={local.verbose} onChange={v => set('verbose', v)} title={t.configPage.verboseTip} />
+        <Toggle label={t.configPage.slotsEnabled} value={local.slots_enabled} onChange={v => set('slots_enabled', v)} title={t.configPage.slotsEnabledTip} />
+        <Num label={t.configPage.embdNormalize} value={local.embd_normalize} onChange={v => set('embd_normalize', v)} min={0} max={2} title={t.configPage.embdNormalizeTip} />
+        <Toggle label={t.configPage.reranking} value={local.reranking} onChange={v => set('reranking', v)} title={t.configPage.rerankingTip} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 mt-3">
+        <Input label={t.configPage.sslKey} value={local.ssl_key_file} onChange={v => set('ssl_key_file', v)} title={t.configPage.sslKeyTip} />
+        <Input label={t.configPage.sslCert} value={local.ssl_cert_file} onChange={v => set('ssl_cert_file', v)} title={t.configPage.sslCertTip} />
+      </div>
+      {/* Server Ext (toggled) */}
+      <div className="mt-3">
+        <SubGroup label={t.configPage.subServerExt} toggled={useServerExt} onToggle={v => { setUseServerExt(v); if (!v) { set('metrics', false); set('props', false); set('slot_save_path', ''); set('slot_prompt_similarity', 0.1); set('prefill_assistant', ''); set('ui_config_file', '') } }}>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Toggle label={t.configPage.metrics} value={local.metrics} onChange={v => set('metrics', v)} title={t.configPage.metricsTip} />
+            <Toggle label={t.configPage.props} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip} />
+            <Input label={t.configPage.slotSavePath} value={local.slot_save_path} onChange={v => set('slot_save_path', v)} title={t.configPage.slotSavePathTip} />
+            <Num label={t.configPage.slotPromptSimilarity} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip} />
+            <Input label={t.configPage.prefillAssistant} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip} />
+            <Input label={t.configPage.uiConfigFile} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip} />
+          </div>
+        </SubGroup>
+      </div>
+    </Section>
+  )
+}
+
+export function AdvancedSection({ local, set, t, isEmbedding, useGpuDevice, setUseGpuDevice, useExpert, setUseExpert }: Props) {
+  return (
+    <Section title={t.configPage.advanced}>
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <Select label={t.configPage.cacheTypeDraftK} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default} />
+        <Select label={t.configPage.cacheTypeDraftV} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default} />
+        <Toggle label={t.configPage.kvUnified} value={local.kv_unified} onChange={v => set('kv_unified', v)} title={t.configPage.kvUnifiedTip} />
+        <Toggle label={t.configPage.checkTensors} value={local.check_tensors} onChange={v => set('check_tensors', v)} title={t.configPage.checkTensorsTip} />
+        <Toggle label={t.configPage.fit} value={local.fit} onChange={v => set('fit', v)} title={t.configPage.fitTip} />
+      </div>
+      {/* GPU Device (toggled) */}
+      <div className="mt-3">
+        <SubGroup label={t.configPage.subGpuDevice} toggled={useGpuDevice} onToggle={v => { setUseGpuDevice(v); if (!v) { set('device', ''); set('split_mode', ''); set('tensor_split', ''); set('main_gpu', 0); set('override_kv', '') } }}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Input label={t.configPage.device} value={local.device} onChange={v => set('device', v)} title={t.configPage.deviceTip} />
             <Select label={t.configPage.splitMode} value={local.split_mode} onChange={v => set('split_mode', v)} options={['', 'none', 'layer', 'row']} title={t.configPage.splitModeTip} defaultLabel={t.common.default} />
@@ -247,7 +266,12 @@ export function AdvancedSection({ local, set, t, isEmbedding, useSpecDecoding, s
             <Num label={t.configPage.mainGpu} value={local.main_gpu} onChange={v => set('main_gpu', v)} min={0} max={9} title={t.configPage.mainGpuTip} />
             <Input label={t.configPage.overrideKv} value={local.override_kv} onChange={v => set('override_kv', v)} title={t.configPage.overrideKvTip} />
           </div>
-          <div className="text-xs font-medium text-gray-400 mt-3 mb-2">{t.configPage.subMultiModel}</div>
+        </SubGroup>
+      </div>
+      {/* Expert (toggled) */}
+      <div className="mt-3">
+        <SubGroup label={t.configPage.subExpert} toggled={useExpert} onToggle={v => { setUseExpert(v); if (!v) { set('models_dir', ''); set('models_preset', ''); set('models_max', 4); set('models_autoload', false); set('mmproj_url', ''); set('mmproj_auto', false); set('image_min_tokens', 0); set('image_max_tokens', 0); set('media_path', ''); set('tags', ''); set('tools', '') } }}>
+          <div className="text-xs font-medium text-gray-400 mb-2">{t.configPage.subMultiModel}</div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Input label={t.configPage.modelsDir} value={local.models_dir} onChange={v => set('models_dir', v)} title={t.configPage.modelsDirTip} />
             <Input label={t.configPage.modelsPreset} value={local.models_preset} onChange={v => set('models_preset', v)} title={t.configPage.modelsPresetTip} />
