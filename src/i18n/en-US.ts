@@ -260,7 +260,7 @@ export const enUS = {
     cancel: 'Cancel', confirm: 'Confirm', save: 'Save', delete: 'Delete',
     browse: 'Browse', download: 'Download', cancelDownload: 'Cancel Download',
     browseFiles: 'Browse Files', selectFromRepo: 'Select from Repository',
-    default: 'Default',
+    default: 'Default', copySuccess: '\u2713 Copied!',
     appTitle: 'Llama Server Manager',
   }
 }

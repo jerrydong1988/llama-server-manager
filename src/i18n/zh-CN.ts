@@ -260,7 +260,7 @@ export const zhCN = {
     cancel: '\u53D6\u6D88', confirm: '\u786E\u5B9A', save: '\u4FDD\u5B58', delete: '\u5220\u9664',
     browse: '\u6D4F\u89C8', download: '\u4E0B\u8F7D', cancelDownload: '\u53D6\u6D88\u4E0B\u8F7D',
     browseFiles: '\u6D4F\u89C8\u6587\u4EF6', selectFromRepo: '\u4ECE\u6A21\u578B\u4ED3\u5E93\u9009\u62E9',
-    default: '\u9ED8\u8BA4',
+    default: '\u9ED8\u8BA4', copySuccess: '\u2713 \u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F',
     appTitle: 'Llama \u670D\u52A1\u5668\u7BA1\u7406\u5668',
   }
 }

@@ -44,7 +44,8 @@ const InstanceManager = () => {
   }
 
   const handleDelete = (id: string) => {     if (!confirm(t.instance.confirmDelete)) return; deleteInstance(id); useAppStore.getState().saveConfig() }
-  const handleCopyCommand = (text: string) => { navigator.clipboard.writeText(text) }
+  const [copyFeedback, setCopyFeedback] = useState(false)
+  const handleCopyCommand = async (text: string) => { try { await navigator.clipboard.writeText(text); setCopyFeedback(true); setTimeout(() => setCopyFeedback(false), 2000) } catch {} }
 
   const handleShowCommand = async (id: string) => {
     const inst = instances.find(i => i.id === id)
@@ -275,6 +276,7 @@ const InstanceManager = () => {
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-3xl">
             <div className="flex items-center justify-between mb-4"><h3 className="text-lg font-semibold">{t.instance.genCommandTitle}</h3><button onClick={() => setShowCmdModal('')} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-5 h-5" /></button></div>
             <pre className="bg-gray-900 text-gray-200 p-4 rounded-lg overflow-x-auto text-sm font-mono whitespace-pre-wrap break-all max-h-80 overflow-y-auto">{cmdText}</pre>
+            {copyFeedback && <div className="mt-3 text-center text-xs text-green-600 dark:text-green-400 font-medium">{t.common.copySuccess}</div>}
             <div className="flex gap-2 mt-4">
               <button onClick={() => handleCopyCommand(cmdRaw)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg"><Copy className="w-4 h-4" /> {t.instance.copyClipboard}</button>
               <button onClick={() => { const i = instances.find(x => x.id === showCmdModal); if (i) startInstance(i.id); setShowCmdModal('') }} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg">▶ {t.instance.directStart}</button>

@@ -306,15 +306,15 @@ export function formatStartupCommand(cmdStr: string): string {
   }
 
   const classify = (flag: string): string => {
-    if (/^-m$|^-a$|^--alias|^--mmproj|^--lora|^--chat-template|^--chat-template-file|^--grammar\b|^--skip-chat|^--jinja/.test(flag)) return '\u6A21\u578B'
+    if (/^-m$|^-a$|^--alias|^--mmproj|^--lora|^--chat-template|^--chat-template-file|^--grammar\b|^--skip-chat|^--jinja|^--models-dir|^--models-preset|^--models-max|^--models-autoload|^--tools/.test(flag)) return '\u6A21\u578B'
     if (/^--reasoning|^--reasoning-budget/.test(flag)) return '\u63A8\u7406'
     if (/^-ngl|^-t$|^-tb$|^-b$|^-ub$|^-np|^-cb|^--threads|^--batch/.test(flag)) return '\u6027\u80FD'
-    if (/^-c$|^--ctx|^--keep|^-cram|^--cache-ram|^--cache-reuse|^--cache-idle|^--kv-unified|^--warmup|^--no-cache/.test(flag)) return '\u7F13\u5B58'
+    if (/^-c$|^--ctx|^--keep|^-cram|^--cache-ram|^--cache-reuse|^--cache-idle|^--kv-unified|^--warmup|^--no-cache|^--override-kv|^--rope-scaling|^--rope-scale|^--rope-freq-base|^--rope-freq-scale|^--yarn-ext-factor|^--yarn-attn-factor|^--yarn-beta|^--no-context-shift|^--swa/.test(flag)) return '\u7F13\u5B58'
     if (/^-fa|^--mlock|^--no-mmap|^--numa|^--check-tensors|^--fit/.test(flag)) return '\u5185\u5B58'
     if (/^-n$|^--temp$|^--top-k|^--top-p|^--top-n-sigma|^--min-p|^--repeat|^-s$|^--seed|^--presence|^--frequency|^--ignore-eos|^--json-schema|^--mirostat|^--xtc|^--dynatemp|^--typical|^--dry|^--adaptive|^--logit-bias|^--samplers\b|^--sampler-seq|^-bs|^--backend-sampling|^-sp$|^--special|^--reverse-prompt|^--spm-infill/.test(flag)) return '\u91C7\u6837'
     if (/^--spec|^-md$|^-ngld|-lcs|-lcd|^--lookup|^--draft/.test(flag)) return '\u63A8\u6D4B'
     if (/^--image|^--mmproj-url|^--mmproj-auto|^--embedding|^--pooling|^--reranking|^--embd-normalize|^--tags|^--media/.test(flag)) return '\u89C6\u89C9'
-    if (/^--host|^--port|^--api-key|^--ssl|^--path|^--api-prefix|^--no-ui|^--threads-http|^--metrics|^--props|^--slot|^--ui-config/.test(flag)) return '\u7F51\u7EDC'
+    if (/^--host|^--port|^--api-key|^--ssl|^--path|^--api-prefix|^--no-ui|^--threads-http|^--metrics|^--props|^--slot|^--ui-config|^--sleep-idle|^--verbose/.test(flag)) return '\u7F51\u7EDC'
     return '\u5176\u4ED6'
   }
 
@@ -322,7 +322,10 @@ export function formatStartupCommand(cmdStr: string): string {
     const t = tokens[i].replace(/^"|"$/g, '')
     if (t.startsWith('-')) {
       const cat = classify(t)
-      if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
+      const nextIsValue = i + 1 < tokens.length && (
+        !tokens[i + 1].startsWith('-') || /^-\d+(\.\d+)?$/.test(tokens[i + 1])
+      )
+      if (nextIsValue) {
         const val = tokens[i + 1].replace(/^"|"$/g, '')
         // 路径缩短: 只显示文件名
         const shortVal = (t === '-m' || t === '-md' || t === '--mmproj' || t === '--lora')
@@ -354,7 +357,7 @@ export function formatStartupCommand(cmdStr: string): string {
     return t
   }).slice(1).join(' ')
   lines.push('\u2502')
-  lines.push(`\u2502 \u5B8C\u6574: ${shortCmd.length > 120 ? shortCmd.substring(0, 117) + '...' : shortCmd}`)
+  lines.push(`\u2502 \u5B8C\u6574: ${shortCmd}`)
 
   return lines.join('\n')
 }
