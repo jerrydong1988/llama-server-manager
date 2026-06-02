@@ -3,6 +3,7 @@ import { Search, Download, FolderOpen, Trash2, RefreshCw, FileText, X, ChevronDo
 import { useAppStore, type MsFileEntry } from '../store'
 import { useI18n } from '../i18n'
 import { listen } from '@tauri-apps/api/event'
+import { confirm } from '@tauri-apps/plugin-dialog'
 
 const DEFAULT_SAVE_DIR = 'models'
 
@@ -58,9 +59,9 @@ const ModelRepo = () => {
   // 构建树：从 rootDir 出发，按实际目录结构组织 model 文件
   function buildTree(rootDir: string, models: typeof models): TreeNode {
     const root: TreeNode = { name: rootDir, path: rootDir, isDir: true, children: new Map() }
-    const normRoot = rootDir.replace(/\\/g, '\\').toLowerCase()
+    const normRoot = rootDir.replace(/\\/g, '/').toLowerCase()
     for (const m of models) {
-      const normPath = m.path.replace(/\\/g, '\\').toLowerCase()
+      const normPath = m.path.replace(/\\/g, '/').toLowerCase()
       if (!normPath.startsWith(normRoot)) continue
       const rel = m.path.substring(rootDir.length).replace(/^[\\/]+/, '')
       const parts = rel.split(/[\\/]/)
@@ -189,7 +190,8 @@ const ModelRepo = () => {
     } catch (_) { await scanModels(modelDirs) }
   }
 
-  const handleRemoveDir = (dir: string) => {
+  const handleRemoveDir = async (dir: string) => {
+    if (!await confirm(t.modelRepo.removeDirConfirm, { title: t.modelRepo.remove, kind: 'warning' })) return
     const next = modelDirs.filter(d => d !== dir)
     setModelDirs(next)
     scanModels(next)
@@ -204,8 +206,7 @@ const ModelRepo = () => {
   }
 
   const handleDeleteFile = async (path: string) => {
-    const name = path.split('\\').pop() || path
-    if (!confirm(t.modelRepo.deleteConfirm)) return
+    if (!await confirm(t.modelRepo.deleteConfirm, { title: t.modelRepo.delete, kind: 'warning' })) return
     await deleteModelFile(path)
   }
 
@@ -406,14 +407,6 @@ const ModelRepo = () => {
                                   className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
                                 <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
                                   className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
-                              </>
-                            ) : st.status === 'downloading' || st.status === 'pending' ? (
-                              <>
-                                <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}{st.speed ? ` · ${formatSpeed(st.speed)}` : ''}</span>
-                                <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.add(f.name); return n }); pauseFileDownload(f.name) }}
-                                  className="text-xs text-yellow-500 hover:text-yellow-700">⏸ 暂停</button>
-                                <button onClick={() => { setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{}), status: 'cancelled' as const}})); cancelAndCleanupDownload(f.name, partialPath) }}
-                                  className="text-xs text-red-500 hover:text-red-700 ml-auto">✕ 取消</button>
                               </>
                             ) : null}
                           </div>

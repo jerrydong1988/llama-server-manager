@@ -8,15 +8,17 @@ import ConfigPage from './components/ConfigPage'
 import { useAppStore } from './store'
 import { I18nProvider, useI18n } from './i18n'
 
+// Moved outside AppInner to avoid re-creation on each render
+const TAB_CONTENT: Record<string, () => JSX.Element> = {
+  instances: () => <InstanceManager />,
+  'model-repo': () => <ModelRepo />,
+  engine: () => <EngineManager />,
+  config: () => <ConfigPage />,
+  logs: () => <LogsViewer />,
+}
 const renderTabContent = (tabId: string) => {
-  switch (tabId) {
-    case 'instances': return <InstanceManager />
-    case 'model-repo': return <ModelRepo />
-    case 'engine': return <EngineManager />
-    case 'config': return <ConfigPage />
-    case 'logs': return <LogsViewer />
-    default: return <div className="p-6 text-center text-gray-500">...</div>
-  }
+  const Renderer = TAB_CONTENT[tabId]
+  return Renderer ? <Renderer /> : <div className="p-6 text-center text-gray-500">...</div>
 }
 
 function AppInner() {
@@ -112,10 +114,14 @@ function AppInner() {
         )}
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-7xl mx-auto p-6">
-          <h2 className="text-2xl font-bold mb-6">{navigation.find(n => n.id === activeTab)?.name}</h2>
-          {renderTabContent(activeTab)}
-        </div>
+        {activeTab === 'logs' ? (
+          <LogsViewer />
+        ) : (
+          <div className="max-w-7xl mx-auto p-6">
+            <h2 className="text-2xl font-bold mb-6">{navigation.find(n => n.id === activeTab)?.name}</h2>
+            {renderTabContent(activeTab)}
+          </div>
+        )}
       </div>
     </div>
   )

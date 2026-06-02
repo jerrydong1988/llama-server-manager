@@ -5,6 +5,8 @@ import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
 import { BasicSection, ReasoningSection, PerformanceSection, AdvancedSection } from './ConfigPage/sections'
 
+const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
+
 const ConfigPage = () => {
   const { instances, activeConfigInstanceId, updateInstance, saveConfig, models, modelDirs, engines, defaultEngineId } = useAppStore()
   const { t } = useI18n()
@@ -17,7 +19,6 @@ const ConfigPage = () => {
 
   useEffect(() => { if (inst) setLocal({ ...inst.config }); else setLocal(null) }, [activeConfigInstanceId, instances])
 
-  const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
   const isEmbedding = (() => {
     if (!local?.model_path) return false
     const fname = local.model_path.replace(/\\/g, '/').split('/').pop() || ''
@@ -66,7 +67,7 @@ const ConfigPage = () => {
           <span className="text-lg font-semibold">{t.configPage.title}</span>
           <span className="text-sm text-gray-500">{'\u2014'} {inst?.name}</span>
         </div>
-        <button onClick={save} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">{saved ? t.configPage.saved : t.configPage.save}</button>
+        <button onClick={save} disabled={!local || !inst} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors">{saved ? t.configPage.saved : t.configPage.save}</button>
       </div>
       {saved && <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 text-sm text-green-600 dark:text-green-400">{t.configPage.savedMsg}{'\u300C'}{inst?.name}{'\u300D\u3002'}{t.configPage.savedHint}</div>}
       {isEmbedding && <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-sm text-blue-600 dark:text-blue-400">{t.configPage.embeddingBanner}</div>}
@@ -109,9 +110,9 @@ const ConfigPage = () => {
                 interface TNode { name: string; path: string; isDir: boolean; children?: Map<string, TNode>; model?: typeof models[0] }
                 function buildTree(rootDir: string): TNode {
                   const root: TNode = { name: rootDir, path: rootDir, isDir: true, children: new Map() }
-                  const normRoot = rootDir.replace(/\\/g, '\\').toLowerCase()
+                  const normRoot = rootDir.replace(/\\/g, '/').toLowerCase()
                   for (const m of models) {
-                    const normPath = m.path.replace(/\\/g, '\\').toLowerCase()
+                    const normPath = m.path.replace(/\\/g, '/').toLowerCase()
                     if (!normPath.startsWith(normRoot)) continue
                     const rel = m.path.substring(rootDir.length).replace(/^[\\/]+/, '')
                     if (!rel) continue
