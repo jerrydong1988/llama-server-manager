@@ -60,6 +60,13 @@ export const enUS = {
     subServerExt: 'Server Extensions', subAdvCache: '[Draft Cache & Checks]',
     subGpuDevice: '[GPU Device]', subMultiModel: '[Multi-Model / Router]',
     subMedia: '[Multimodal & Media]',
+    // Advanced container
+    advSectionTitle: 'Advanced', advSectionReset: 'Reset All', subGroupReset: 'Reset',
+    subAdvReasoning: 'Reasoning & Output Format', subAdvSampling: 'Advanced Sampling',
+    subAdvSamplingExt: 'Sampling Extensions', subAdvSpec: 'Speculative Decoding',
+    subAdvRope: 'Context Scaling / RoPE \u00B7 YaRN', subAdvKvCache: 'KV Cache & Context',
+    subAdvHardware: 'Hardware', subAdvServer: 'Server',
+    subAdvMulti: 'Multi-Model / Expert',
     // Basic
     modelPath: 'Model Path', modelPathTip: 'Path to GGUF model file',
     modelPathBtn: 'Select from model repository',

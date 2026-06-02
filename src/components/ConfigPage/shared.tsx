@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
+import type { InstanceConfig } from '../../store'
 
 export const cacheTypes = ['', 'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq4_nl', 'q5_0', 'q5_1']
 export const specTypes = ['', 'none', 'mtp', 'draft-mtp', 'draft-simple', 'draft-eagle3', 'ngram-cache', 'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod']
 export const chatTemplates = ['', 'bailing', 'chatglm3', 'chatglm4', 'chatml', 'command-r', 'deepseek', 'deepseek2', 'deepseek3', 'exaone3', 'gemma', 'gpt-oss', 'kimi-k2', 'llama2', 'llama3', 'llama4', 'mistral', 'openchat', 'phi3', 'phi4', 'vicuna', 'zephyr']
 
-export const Section = ({ title, children, disabled, onToggle, toggled }: { title: string; children: React.ReactNode; disabled?: boolean; onToggle?: (v: boolean) => void; toggled?: boolean }) => {
-  const [open, setOpen] = useState(false)
+export const Section = ({ title, children, disabled, onToggle, toggled, defaultOpen }: { title: string; children: React.ReactNode; disabled?: boolean; onToggle?: (v: boolean) => void; toggled?: boolean; defaultOpen?: boolean }) => {
+  const [open, setOpen] = useState(defaultOpen || false)
   return (
     <div className="border dark:border-gray-700 rounded-lg overflow-hidden">
       <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left dark:text-gray-200">
@@ -55,12 +56,91 @@ export const Select = ({ label, value, onChange, options, title, disabled, defau
   </div>
 )
 
-export const SubGroup = ({ label, toggled, onToggle, children }: { label: string; toggled: boolean; onToggle: (v: boolean) => void; children: React.ReactNode }) => (
-  <div>
-    <label className="flex items-center gap-2 cursor-pointer mb-2">
-      <input type="checkbox" checked={toggled} onChange={e => onToggle(e.target.checked)} className="w-3.5 h-3.5 rounded" />
-      <span className="text-xs font-medium text-gray-500">{label}</span>
-    </label>
-    {toggled && children}
-  </div>
+// ━━━━━━━━━━━━━━━━━━━━━━ NEW COMPONENTS ━━━━━━━━━━━━━━━━━━━━━━
+
+// Small reset button (↻ icon), used on sub-groups and container
+export const ResetButton = ({ onClick, title }: { onClick: () => void; title?: string }) => (
+  <button
+    onClick={e => { e.stopPropagation(); onClick() }}
+    title={title || 'Reset to defaults'}
+    className="ml-auto p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-400 hover:text-red-500 transition-colors shrink-0"
+  >
+    <RotateCcw className="w-3.5 h-3.5" />
+  </button>
 )
+
+// Collapsible sub-group card (chevron toggle + optional reset button)
+export const CollapsibleGroup = ({ title, defaultOpen, onReset, children, disabled }: { title: string; defaultOpen?: boolean; onReset?: () => void; children: React.ReactNode; disabled?: boolean }) => {
+  const [open, setOpen] = useState(defaultOpen || false)
+  return (
+    <div className="border dark:border-gray-600 rounded-lg overflow-hidden">
+      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors text-left dark:text-gray-200">
+        {open ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+        <span className="text-xs font-medium">{title}</span>
+        {onReset && <ResetButton onClick={onReset} />}
+      </button>
+      {open && <div className={`px-3 py-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>}
+    </div>
+  )
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━ RESET MAP ━━━━━━━━━━━━━━━━━━━━━━
+
+// Sentinel values for each advanced sub-group, sourced from store/defaults.ts
+// resetting to these values means the field won't appear in the generated command
+export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
+  advancedReasoning: {
+    reasoning_format: '', reasoning_effort: '', reasoning_budget: '', reasoning_budget_message: '',
+    jinja: false, chat_template_file: '', skip_chat_parsing: false,
+    lora_path: '', lora_init_without_apply: false, mmproj_path: '',
+    grammar: '', grammar_file: '',
+  },
+  advancedSampling: {
+    mirostat: 0, mirostat_lr: 0, mirostat_ent: 0,
+    xtc_probability: 0, xtc_threshold: 0,
+    dynatemp_range: 0, dynatemp_exp: 0, typical_p: 1.0,
+    dry_multiplier: 0, dry_base: 0, dry_allowed_length: 0, dry_penalty_last_n: 0,
+    dry_sequence_breaker: '',
+    adaptive_target: 0, adaptive_decay: 0, top_n_sigma: -1,
+    logit_bias: '', samplers: '', sampler_seq: '',
+  },
+  advancedSamplingExt: {
+    seed: -1, min_p: 0.05, presence_penalty: 0, frequency_penalty: 0,
+    repeat_last_n: 64, special: false, spm_infill: false,
+    backend_sampling: false, json_schema: '',
+  },
+  advancedSpec: {
+    spec_type: '', draft_model_path: '', draft_gpu_layers: 99, draft_tokens: 16,
+    spec_draft_n_min: 0, spec_draft_p_min: 0, spec_draft_p_split: 0.1, spec_draft_device: '',
+    lookup_cache_static: '', lookup_cache_dynamic: '',
+  },
+  advancedRope: {
+    rope_scaling: '', rope_scale: 0, rope_freq_base: 0, rope_freq_scale: 0,
+    yarn_ext_factor: -1, yarn_attn_factor: 1, yarn_beta_slow: 0, yarn_beta_fast: 32,
+  },
+  advancedCache: {
+    cache_type_k: '', cache_type_v: '', cache_type_draft_k: '', cache_type_draft_v: '',
+    cache_prompt: true, cache_reuse: 0, cache_ram: 0, warmup: false,
+    cache_idle_slots: true, ctx_checkpoints: 32, checkpoint_min_step: 0,
+    context_shift: false, swa_full: false, kv_unified: false,
+    ctx_size_auto: false, keep: 0,
+  },
+  advancedHardware: {
+    moe_cpu_layers: 0, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
+    override_kv: '', check_tensors: false, fit: false,
+    threads_batch: 0, threads_http: -1,
+  },
+  advancedServer: {
+    api_key: '', api_key_file: '', ssl_key_file: '', ssl_cert_file: '',
+    path_prefix: '', api_prefix: '', no_ui: false, ui_config_file: '',
+    timeout: 600, sleep_idle: -1, verbose: false,
+    slots_enabled: true, embd_normalize: 2, reranking: false,
+    metrics: false, props: false, slot_save_path: '', slot_prompt_similarity: 0.1,
+    prefill_assistant: '',
+  },
+  advancedMulti: {
+    models_dir: '', models_preset: '', models_max: 4, models_autoload: false,
+    mmproj_url: '', mmproj_auto: false, image_min_tokens: 0, image_max_tokens: 0,
+    media_path: '', tags: '', tools: '',
+  },
+}

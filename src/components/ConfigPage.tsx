@@ -3,7 +3,7 @@ import { Settings, File, Image, X, FolderOpen, ChevronRight, ChevronDown } from 
 import { useAppStore, type InstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
-import { BasicSection, ReasoningSection, GenerationSection, AdvancedSamplingSection, PerformanceSection, ServerNetworkSection, AdvancedSection } from './ConfigPage/sections'
+import { BasicSection, ReasoningSection, PerformanceSection, AdvancedSection } from './ConfigPage/sections'
 
 const ConfigPage = () => {
   const { instances, activeConfigInstanceId, updateInstance, saveConfig, models, modelDirs, engines, defaultEngineId } = useAppStore()
@@ -13,64 +13,9 @@ const ConfigPage = () => {
   const [saved, setSaved] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
-  const [useAdvSampling, setUseAdvSampling] = useState(false)
-  const [useSpecDecoding, setUseSpecDecoding] = useState(false)
-  const [useExpert, setUseExpert] = useState(false)
-  const [useRopeYarn, setUseRopeYarn] = useState(false)
-  const [useCacheExt, setUseCacheExt] = useState(false)
-  const [useGpuDevice, setUseGpuDevice] = useState(false)
-  const [useServerExt, setUseServerExt] = useState(false)
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
 
   useEffect(() => { if (inst) setLocal({ ...inst.config }); else setLocal(null) }, [activeConfigInstanceId, instances])
-
-  // Sync toggle states with actual config values on load
-  useEffect(() => {
-    if (!local) return
-    setUseAdvSampling(
-      local.mirostat !== 0 || local.mirostat_lr !== 0 || local.mirostat_ent !== 0 ||
-      local.xtc_probability !== 0 || local.xtc_threshold !== 0 ||
-      local.dynatemp_range !== 0 || local.dynatemp_exp !== 0 ||
-      local.typical_p !== 1.0 ||
-      local.dry_multiplier !== 0 || local.dry_base !== 0 || local.dry_allowed_length !== 0 ||
-      local.dry_penalty_last_n !== 0 || local.dry_sequence_breaker !== '' ||
-      local.adaptive_target !== 0 || local.adaptive_decay !== 0 ||
-      local.top_n_sigma !== -1 ||
-      local.logit_bias !== '' || local.samplers !== '' || local.sampler_seq !== ''
-    )
-    setUseSpecDecoding(
-      local.draft_model_path !== '' || local.spec_type !== '' ||
-      local.spec_draft_p_min !== 0 || local.spec_draft_p_split !== 0.1 ||
-      local.spec_draft_device !== '' ||
-      local.lookup_cache_static !== '' || local.lookup_cache_dynamic !== ''
-    )
-    setUseRopeYarn(
-      local.rope_scaling !== '' || local.rope_scale !== 0 || local.rope_freq_base !== 0 ||
-      local.rope_freq_scale !== 0 || local.yarn_ext_factor >= 0 || local.yarn_attn_factor !== 1 ||
-      local.yarn_beta_slow !== 0 || local.yarn_beta_fast !== 32
-    )
-    setUseCacheExt(
-      local.cache_reuse !== 0 || local.cache_ram !== 0 || local.warmup !== false ||
-      local.cache_idle_slots !== true || local.ctx_checkpoints !== 32 || local.checkpoint_min_step !== 0
-    )
-    setUseGpuDevice(
-      local.device !== '' || local.split_mode !== '' || local.tensor_split !== '' ||
-      local.main_gpu !== 0 || local.override_kv !== ''
-    )
-    setUseServerExt(
-      local.metrics !== false || local.props !== false || local.slot_save_path !== '' ||
-      local.slot_prompt_similarity !== 0.1 || local.prefill_assistant !== '' || local.ui_config_file !== ''
-    )
-    setUseExpert(
-      local.device !== '' || local.split_mode !== '' || local.tensor_split !== '' ||
-      local.main_gpu !== 0 || local.override_kv !== '' ||
-      local.models_dir !== '' || local.models_preset !== '' || local.models_max !== 4 ||
-      local.models_autoload !== false ||
-      local.mmproj_url !== '' || local.mmproj_auto !== false ||
-      local.image_min_tokens !== 0 || local.image_max_tokens !== 0 ||
-      local.media_path !== '' || local.tags !== '' || local.tools !== ''
-    )
-  }, [local])
 
   const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
   const isEmbedding = (() => {
@@ -111,7 +56,7 @@ const ConfigPage = () => {
     setTimeout(() => { setSaved(false); setSaveWarnings([]) }, 6000)
   }
 
-  const sectionProps = { local, set, t, isEmbedding, useAdvSampling, setUseAdvSampling, useSpecDecoding, setUseSpecDecoding, useExpert, setUseExpert, useRopeYarn, setUseRopeYarn, useCacheExt, setUseCacheExt, useGpuDevice, setUseGpuDevice, useServerExt, setUseServerExt, onShowPicker: () => setShowPicker(true) }
+  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => setShowPicker(true) }
 
   return (
     <div className="space-y-6">
@@ -148,10 +93,7 @@ const ConfigPage = () => {
       <div className="space-y-3">
         <BasicSection {...sectionProps} />
         <ReasoningSection {...sectionProps} />
-        <GenerationSection {...sectionProps} />
-        <AdvancedSamplingSection {...sectionProps} />
         <PerformanceSection {...sectionProps} />
-        <ServerNetworkSection {...sectionProps} />
         <AdvancedSection {...sectionProps} />
       </div>
 

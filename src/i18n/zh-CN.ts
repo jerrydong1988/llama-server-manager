@@ -60,6 +60,13 @@ export const zhCN = {
     subServerExt: '\u670D\u52A1\u6269\u5C55', subAdvCache: '[\u8349\u7A3F\u7F13\u5B58 & \u68C0\u67E5]',
     subGpuDevice: '[GPU \u8BBE\u5907]', subMultiModel: '[\u591A\u6A21\u578B / \u8DEF\u7531]',
     subMedia: '[\u591A\u6A21\u6001 & \u5A92\u4F53]',
+    // Advanced container
+    advSectionTitle: '\u9AD8\u7EA7\u8BBE\u7F6E', advSectionReset: '\u5168\u90E8\u91CD\u7F6E', subGroupReset: '\u91CD\u7F6E',
+    subAdvReasoning: '\u63A8\u7406\u4E0E\u8F93\u51FA\u683C\u5F0F', subAdvSampling: '\u9AD8\u7EA7\u91C7\u6837',
+    subAdvSamplingExt: '\u91C7\u6837\u53C2\u6570\u6269\u5C55', subAdvSpec: '\u63A8\u6D4B\u89E3\u7801',
+    subAdvRope: '\u4E0A\u4E0B\u6587\u7F29\u653E / RoPE \u00B7 YaRN', subAdvKvCache: 'KV \u7F13\u5B58\u4E0E\u4E0A\u4E0B\u6587',
+    subAdvHardware: '\u786C\u4EF6\u914D\u7F6E', subAdvServer: '\u670D\u52A1\u914D\u7F6E',
+    subAdvMulti: '\u591A\u6A21\u578B / \u4E13\u5BB6',
     // Basic
     modelPath: '\u6A21\u578B\u8DEF\u5F84', modelPathTip: 'GGUF \u6A21\u578B\u6587\u4EF6\u7684\u8DEF\u5F84',
     modelPathBtn: '\u4ECE\u6A21\u578B\u4ED3\u5E93\u4E2D\u9009\u62E9',
