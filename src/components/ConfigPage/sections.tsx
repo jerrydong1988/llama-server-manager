@@ -27,7 +27,7 @@ export function BasicSection({ local, set, t, onShowPicker }: Props) {
         <Input label={t.configPage.host} value={local.host} onChange={v => set('host', v)} title={t.configPage.hostTip} />
         <Num label={t.configPage.portLabel} value={local.port} onChange={v => set('port', v)} min={1} max={65535} title={t.configPage.portLabelTip} />
         <Num label={t.configPage.gpuLayers} value={local.gpu_layers} onChange={v => set('gpu_layers', v)} min={0} max={99} title={t.configPage.gpuLayersTip} />
-        <Num label={t.configPage.ctxSize} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} />
+        <Num label={t.configPage.ctxSize} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} disabled={local.ctx_size_auto} />
         <Toggle label={t.configPage.embedding} value={local.embedding} onChange={v => set('embedding', v)} title={t.configPage.embeddingTip} />
         <Select label={t.configPage.pooling} value={local.pooling} onChange={v => set('pooling', v)} options={['', 'none', 'mean', 'cls', 'last', 'rank']} title={t.configPage.poolingTip} defaultLabel={t.common.default} />
       </div>
@@ -43,6 +43,13 @@ export function ReasoningSection({ local, set, t, isEmbedding }: Props) {
         <Select label={t.configPage.specType} value={local.spec_type} onChange={v => set('spec_type', v)} options={specTypes} title={t.configPage.specTypeTip} disabled={isEmbedding} defaultLabel={t.common.default} />
         <Num label={t.configPage.draftTokens} value={local.draft_tokens} onChange={v => set('draft_tokens', v)} min={0} title={t.configPage.draftTokensTip} disabled={isEmbedding} />
         <Num label={t.configPage.specDraftNMin} value={local.spec_draft_n_min} onChange={v => set('spec_draft_n_min', v)} min={0} title={t.configPage.specDraftNMinTip} disabled={isEmbedding} />
+        <Num label={t.configPage.temp} value={local.temp} onChange={v => set('temp', v)} min={0} max={2} step={0.1} title={t.configPage.tempTip} disabled={isEmbedding} />
+        <Num label={t.configPage.topK} value={local.top_k} onChange={v => set('top_k', v)} min={0} title={t.configPage.topKTip} disabled={isEmbedding} />
+        <Num label={t.configPage.topP} value={local.top_p} onChange={v => set('top_p', v)} min={0} max={1} step={0.1} title={t.configPage.topPTip} disabled={isEmbedding} />
+        <Num label={t.configPage.repeatPenalty} value={local.repeat_penalty} onChange={v => set('repeat_penalty', v)} min={0} max={2} step={0.1} title={t.configPage.repeatPenaltyTip} disabled={isEmbedding} />
+        <Num label={t.configPage.nPredict} value={local.n_predict} onChange={v => set('n_predict', v)} min={-1} title={t.configPage.nPredictTip} disabled={isEmbedding} />
+        <Toggle label={t.configPage.ignoreEos} value={local.ignore_eos} onChange={v => set('ignore_eos', v)} title={t.configPage.ignoreEosTip} disabled={isEmbedding} />
+        <Input label={t.configPage.reversePrompt} value={local.reverse_prompt} onChange={v => set('reverse_prompt', v)} title={t.configPage.reversePromptTip} disabled={isEmbedding} />
       </div>
     </Section>
   )
@@ -93,25 +100,33 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
         <ResetButton onClick={resetAll} title={t.configPage.advSectionReset} />
       </div>
       <div className="space-y-2">
-        {/* 4a 推理与输出格式 (12) */}
-        <CollapsibleGroup title={t.configPage.subAdvReasoning} onReset={() => resetGroup('advancedReasoning')} disabled={isEmbedding}>
+        {/* 推理配置 (6) */}
+        <CollapsibleGroup title={t.configPage.subAdvReasoning} onReset={() => resetGroup('advancedReasoningConfig')} disabled={isEmbedding}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Select label={t.configPage.reasoningFormat} value={local.reasoning_format} onChange={v => set('reasoning_format', v)} options={['', 'none', 'deepseek', 'deepseek-legacy']} title={t.configPage.reasoningFormatTip} defaultLabel={t.common.default} />
             <Select label={t.configPage.reasoningEffort} value={local.reasoning_effort} onChange={v => set('reasoning_effort', v)} options={['', 'low', 'medium', 'high']} title={t.configPage.reasoningEffortTip} defaultLabel={t.common.default} />
             <Num label={t.configPage.reasoningBudget} value={local.reasoning_budget ? parseInt(local.reasoning_budget) : 0} onChange={v => set('reasoning_budget', v.toString())} min={0} max={65536} step={256} title={t.configPage.reasoningBudgetTip} />
             <Input label={t.configPage.reasoningBudgetMsg} value={local.reasoning_budget_message} onChange={v => set('reasoning_budget_message', v)} title={t.configPage.reasoningBudgetMsgTip} />
             <Toggle label={t.configPage.jinja} value={local.jinja} onChange={v => set('jinja', v)} title={t.configPage.jinjaTip} />
-            <Input label={t.configPage.chatTemplateFile} value={local.chat_template_file} onChange={v => set('chat_template_file', v)} title={t.configPage.chatTemplateFileTip} />
             <Toggle label={t.configPage.skipChatParsing} value={local.skip_chat_parsing} onChange={v => set('skip_chat_parsing', v)} title={t.configPage.skipChatParsingTip} />
-            <Input label={t.configPage.lora} value={local.lora_path} onChange={v => set('lora_path', v)} title={t.configPage.loraTip} />
-            <Toggle label={t.configPage.loraInitNoApply} value={local.lora_init_without_apply} onChange={v => set('lora_init_without_apply', v)} title={t.configPage.loraInitNoApplyTip} />
-            <Input label={t.configPage.mmproj} value={local.mmproj_path} onChange={v => set('mmproj_path', v)} title={t.configPage.mmprojTip} />
-            <Input label={t.configPage.grammarFile} value={local.grammar_file} onChange={v => set('grammar_file', v)} title={t.configPage.grammarFileTip} />
-            <Input label={t.configPage.grammar} value={local.grammar} onChange={v => set('grammar', v)} title={t.configPage.grammarTip} />
           </div>
         </CollapsibleGroup>
 
-        {/* 4b 高级采样 (19) */}
+        {/* 模型适配 (8) */}
+        <CollapsibleGroup title={t.configPage.subAdvModelAdapt} onReset={() => resetGroup('advancedModelAdapt')}>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Input label={t.configPage.chatTemplateFile} value={local.chat_template_file} onChange={v => set('chat_template_file', v)} title={t.configPage.chatTemplateFileTip} />
+            <Input label={t.configPage.lora} value={local.lora_path} onChange={v => set('lora_path', v)} title={t.configPage.loraTip} />
+            <Toggle label={t.configPage.loraInitNoApply} value={local.lora_init_without_apply} onChange={v => set('lora_init_without_apply', v)} title={t.configPage.loraInitNoApplyTip} />
+            <Input label={t.configPage.mmproj} value={local.mmproj_path} onChange={v => set('mmproj_path', v)} title={t.configPage.mmprojTip} disabled={isEmbedding} />
+            <Input label={t.configPage.grammarFile} value={local.grammar_file} onChange={v => set('grammar_file', v)} title={t.configPage.grammarFileTip} />
+            <Input label={t.configPage.grammar} value={local.grammar} onChange={v => set('grammar', v)} title={t.configPage.grammarTip} />
+            <Num label={t.configPage.embdNormalize} value={local.embd_normalize} onChange={v => set('embd_normalize', v)} min={0} max={2} title={t.configPage.embdNormalizeTip} />
+            <Toggle label={t.configPage.reranking} value={local.reranking} onChange={v => set('reranking', v)} title={t.configPage.rerankingTip} />
+          </div>
+        </CollapsibleGroup>
+
+        {/* 高级采样 (19) */}
         <CollapsibleGroup title={t.configPage.subAdvSampling} onReset={() => resetGroup('advancedSampling')} disabled={isEmbedding}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Select label={t.configPage.mirostat} value={local.mirostat.toString()} onChange={v => set('mirostat', parseInt(v))} options={['0', '1', '2']} title={t.configPage.mirostatTip} defaultLabel={t.common.default} />
@@ -136,7 +151,7 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
           </div>
         </CollapsibleGroup>
 
-        {/* 4c 采样参数扩展 (9) */}
+        {/* 采样参数扩展 (9) */}
         <CollapsibleGroup title={t.configPage.subAdvSamplingExt} onReset={() => resetGroup('advancedSamplingExt')} disabled={isEmbedding}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Num label={t.configPage.seed} value={local.seed} onChange={v => set('seed', v)} min={-1} title={t.configPage.seedTip} />
@@ -151,7 +166,7 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
           </div>
         </CollapsibleGroup>
 
-        {/* 4d 推测解码 (7) */}
+        {/* 推测解码 (9) */}
         <CollapsibleGroup title={t.configPage.subAdvSpec} onReset={() => resetGroup('advancedSpec')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Input label={t.configPage.draftModel} value={local.draft_model_path} onChange={v => set('draft_model_path', v)} title={t.configPage.draftModelTip} disabled={isEmbedding} />
@@ -161,10 +176,12 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
             <Input label={t.configPage.specDraftDevice} value={local.spec_draft_device} onChange={v => set('spec_draft_device', v)} title={t.configPage.specDraftDeviceTip} disabled={isEmbedding} />
             <Input label={t.configPage.lookupCacheStatic} value={local.lookup_cache_static} onChange={v => set('lookup_cache_static', v)} title={t.configPage.lookupCacheStaticTip} disabled={isEmbedding} />
             <Input label={t.configPage.lookupCacheDynamic} value={local.lookup_cache_dynamic} onChange={v => set('lookup_cache_dynamic', v)} title={t.configPage.lookupCacheDynamicTip} disabled={isEmbedding} />
+            <Select label={t.configPage.cacheTypeDraftK} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default} />
+            <Select label={t.configPage.cacheTypeDraftV} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default} />
           </div>
         </CollapsibleGroup>
 
-        {/* 4e 上下文缩放 / RoPE · YaRN (8) */}
+        {/* 上下文缩放 / RoPE · YaRN (8) */}
         <CollapsibleGroup title={t.configPage.subAdvRope} onReset={() => resetGroup('advancedRope')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Select label={t.configPage.ropeScaling} value={local.rope_scaling} onChange={v => set('rope_scaling', v)} options={['', 'none', 'linear', 'yarn']} title={t.configPage.ropeScalingTip} defaultLabel={t.common.default} />
@@ -178,30 +195,34 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
           </div>
         </CollapsibleGroup>
 
-        {/* 4f KV 缓存与上下文 (16) */}
-        <CollapsibleGroup title={t.configPage.subAdvKvCache} onReset={() => resetGroup('advancedCache')}>
-          <div className="text-xs font-medium text-gray-400 mb-2">{t.configPage.cacheTypeKTip ? 'Cache Types' : t.configPage.subKvCache}</div>
+        {/* KV 缓存 (8) */}
+        <CollapsibleGroup title={t.configPage.subAdvKvCache} onReset={() => resetGroup('advancedKvCache')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Select label={t.configPage.cacheTypeK} value={local.cache_type_k} onChange={v => set('cache_type_k', v)} options={cacheTypes} title={t.configPage.cacheTypeKTip} defaultLabel={t.common.default} />
             <Select label={t.configPage.cacheTypeV} value={local.cache_type_v} onChange={v => set('cache_type_v', v)} options={cacheTypes} title={t.configPage.cacheTypeVTip} defaultLabel={t.common.default} />
-            <Select label={t.configPage.cacheTypeDraftK} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default} />
-            <Select label={t.configPage.cacheTypeDraftV} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default} />
             <Toggle label={t.configPage.cachePrompt} value={local.cache_prompt} onChange={v => set('cache_prompt', v)} title={t.configPage.cachePromptTip} />
             <Num label={t.configPage.cacheReuse} value={local.cache_reuse} onChange={v => set('cache_reuse', v)} min={0} title={t.configPage.cacheReuseTip} />
             <Num label={t.configPage.cacheRam} value={local.cache_ram} onChange={v => set('cache_ram', v)} min={0} step={256} title={t.configPage.cacheRamTip} />
             <Toggle label={t.configPage.warmup} value={local.warmup} onChange={v => set('warmup', v)} title={t.configPage.warmupTip} />
             <Toggle label={t.configPage.cacheIdleSlots} value={local.cache_idle_slots} onChange={v => set('cache_idle_slots', v)} title={t.configPage.cacheIdleSlotsTip} />
+            <Toggle label={t.configPage.kvUnified} value={local.kv_unified} onChange={v => set('kv_unified', v)} title={t.configPage.kvUnifiedTip} />
+          </div>
+        </CollapsibleGroup>
+
+        {/* 上下文管理 (7) */}
+        <CollapsibleGroup title={t.configPage.subAdvContextMgmt} onReset={() => resetGroup('advancedContextMgmt')}>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Num label={t.configPage.ctxCheckpoints} value={local.ctx_checkpoints} onChange={v => set('ctx_checkpoints', v)} min={0} title={t.configPage.ctxCheckpointsTip} />
             <Num label={t.configPage.checkpointMinStep} value={local.checkpoint_min_step} onChange={v => set('checkpoint_min_step', v)} min={0} title={t.configPage.checkpointMinStepTip} />
             <Toggle label={t.configPage.contextShift} value={local.context_shift} onChange={v => set('context_shift', v)} title={t.configPage.contextShiftTip} disabled={isEmbedding} />
             <Toggle label={t.configPage.swaFull} value={local.swa_full} onChange={v => set('swa_full', v)} title={t.configPage.swaFullTip} />
-            <Toggle label={t.configPage.kvUnified} value={local.kv_unified} onChange={v => set('kv_unified', v)} title={t.configPage.kvUnifiedTip} />
             <Toggle label={t.configPage.ctxAuto} value={local.ctx_size_auto} onChange={v => set('ctx_size_auto', v)} title={t.configPage.ctxAutoTip} />
             <Num label={t.configPage.keep} value={local.keep} onChange={v => set('keep', v)} min={0} title={t.configPage.keepTip} />
+            <Input label={t.configPage.overrideKv} value={local.override_kv} onChange={v => set('override_kv', v)} title={t.configPage.overrideKvTip} />
           </div>
         </CollapsibleGroup>
 
-        {/* 4g 硬件配置 (10) */}
+        {/* 硬件配置 (9) */}
         <CollapsibleGroup title={t.configPage.subAdvHardware} onReset={() => resetGroup('advancedHardware')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Num label={t.configPage.moeCpu} value={local.moe_cpu_layers} onChange={v => set('moe_cpu_layers', v)} min={0} max={99} title={t.configPage.moeCpuTip} disabled={isEmbedding} />
@@ -209,7 +230,6 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
             <Select label={t.configPage.splitMode} value={local.split_mode} onChange={v => set('split_mode', v)} options={['', 'none', 'layer', 'row']} title={t.configPage.splitModeTip} defaultLabel={t.common.default} />
             <Input label={t.configPage.tensorSplit} value={local.tensor_split} onChange={v => set('tensor_split', v)} title={t.configPage.tensorSplitTip} />
             <Num label={t.configPage.mainGpu} value={local.main_gpu} onChange={v => set('main_gpu', v)} min={0} max={9} title={t.configPage.mainGpuTip} />
-            <Input label={t.configPage.overrideKv} value={local.override_kv} onChange={v => set('override_kv', v)} title={t.configPage.overrideKvTip} />
             <Toggle label={t.configPage.checkTensors} value={local.check_tensors} onChange={v => set('check_tensors', v)} title={t.configPage.checkTensorsTip} />
             <Toggle label={t.configPage.fit} value={local.fit} onChange={v => set('fit', v)} title={t.configPage.fitTip} />
             <Num label={t.configPage.threadsBatch} value={local.threads_batch} onChange={v => set('threads_batch', v)} min={0} title={t.configPage.threadsBatchTip} />
@@ -217,8 +237,8 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
           </div>
         </CollapsibleGroup>
 
-        {/* 4h 服务配置 (19) */}
-        <CollapsibleGroup title={t.configPage.subAdvServer} onReset={() => resetGroup('advancedServer')}>
+        {/* 服务基础 (10) */}
+        <CollapsibleGroup title={t.configPage.subAdvServer} onReset={() => resetGroup('advancedServerBasic')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Input label={t.configPage.apiKey} value={local.api_key} onChange={v => set('api_key', v)} type="password" title={t.configPage.apiKeyTip} />
             <Input label={t.configPage.apiKeyFile} value={local.api_key_file} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip} />
@@ -228,15 +248,6 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
             <Num label={t.configPage.timeout} value={local.timeout} onChange={v => set('timeout', v)} min={1} title={t.configPage.timeoutTip} />
             <Num label={t.configPage.sleepIdle} value={local.sleep_idle} onChange={v => set('sleep_idle', v)} min={-1} title={t.configPage.sleepIdleTip} />
             <Toggle label={t.configPage.verbose} value={local.verbose} onChange={v => set('verbose', v)} title={t.configPage.verboseTip} />
-            <Toggle label={t.configPage.slotsEnabled} value={local.slots_enabled} onChange={v => set('slots_enabled', v)} title={t.configPage.slotsEnabledTip} />
-            <Num label={t.configPage.embdNormalize} value={local.embd_normalize} onChange={v => set('embd_normalize', v)} min={0} max={2} title={t.configPage.embdNormalizeTip} />
-            <Toggle label={t.configPage.reranking} value={local.reranking} onChange={v => set('reranking', v)} title={t.configPage.rerankingTip} />
-            <Toggle label={t.configPage.metrics} value={local.metrics} onChange={v => set('metrics', v)} title={t.configPage.metricsTip} />
-            <Toggle label={t.configPage.props} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip} />
-            <Input label={t.configPage.slotSavePath} value={local.slot_save_path} onChange={v => set('slot_save_path', v)} title={t.configPage.slotSavePathTip} />
-            <Num label={t.configPage.slotPromptSimilarity} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip} />
-            <Input label={t.configPage.prefillAssistant} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip} />
-            <Input label={t.configPage.uiConfigFile} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip} />
           </div>
           <div className="grid grid-cols-2 gap-3 mt-3">
             <Input label={t.configPage.sslKey} value={local.ssl_key_file} onChange={v => set('ssl_key_file', v)} title={t.configPage.sslKeyTip} />
@@ -244,7 +255,20 @@ export function AdvancedSection({ local, set, t, isEmbedding }: Props) {
           </div>
         </CollapsibleGroup>
 
-        {/* 4i 多模型/专家 (11) */}
+        {/* 服务扩展 (7) */}
+        <CollapsibleGroup title={t.configPage.subAdvServerExt} onReset={() => resetGroup('advancedServerExt')}>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+            <Toggle label={t.configPage.slotsEnabled} value={local.slots_enabled} onChange={v => set('slots_enabled', v)} title={t.configPage.slotsEnabledTip} />
+            <Toggle label={t.configPage.metrics} value={local.metrics} onChange={v => set('metrics', v)} title={t.configPage.metricsTip} />
+            <Toggle label={t.configPage.props} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip} />
+            <Input label={t.configPage.slotSavePath} value={local.slot_save_path} onChange={v => set('slot_save_path', v)} title={t.configPage.slotSavePathTip} />
+            <Num label={t.configPage.slotPromptSimilarity} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip} />
+            <Input label={t.configPage.prefillAssistant} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip} />
+            <Input label={t.configPage.uiConfigFile} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip} />
+          </div>
+        </CollapsibleGroup>
+
+        {/* 多模型/专家 (11) */}
         <CollapsibleGroup title={t.configPage.subAdvMulti} onReset={() => resetGroup('advancedMulti')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Input label={t.configPage.modelsDir} value={local.models_dir} onChange={v => set('models_dir', v)} title={t.configPage.modelsDirTip} />

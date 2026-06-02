@@ -46,7 +46,7 @@ export const enUS = {
     title: 'Instance Config', saved: '\u2713 Saved', save: 'Save Config',
     savedMsg: 'Config saved to', savedHint: 'Return to Instances and click Start to apply the new config.',
     noInstance: 'Click the \u2699\uFE0F button on an instance card in Instances to configure it.',
-    basic: 'Basic', reasoning: 'Reasoning & Model', generation: 'Generation', advancedSampling: 'Advanced Sampling',
+    basic: 'Basic', reasoning: 'Reasoning & Generation', generation: 'Generation', advancedSampling: 'Advanced Sampling',
     performance: 'Performance', advanced: 'Advanced', network: 'Server & Network',
     embeddingBanner: '\uD83D\uDCCA Embedding model detected \u2014 Embedding mode auto-enabled. Generation/sampling/chat params are disabled.',
     advSamplingOn: 'On', advSamplingOff: 'Off',
@@ -62,10 +62,10 @@ export const enUS = {
     subMedia: '[Multimodal & Media]',
     // Advanced container
     advSectionTitle: 'Advanced', advSectionReset: 'Reset All', subGroupReset: 'Reset',
-    subAdvReasoning: 'Reasoning & Output Format', subAdvSampling: 'Advanced Sampling',
+    subAdvReasoning: 'Reasoning Config', subAdvModelAdapt: 'Model Adaptation', subAdvSampling: 'Advanced Sampling',
     subAdvSamplingExt: 'Sampling Extensions', subAdvSpec: 'Speculative Decoding',
-    subAdvRope: 'Context Scaling / RoPE \u00B7 YaRN', subAdvKvCache: 'KV Cache & Context',
-    subAdvHardware: 'Hardware', subAdvServer: 'Server',
+    subAdvRope: 'Context Scaling / RoPE \u00B7 YaRN', subAdvKvCache: 'KV Cache', subAdvContextMgmt: 'Context Management',
+    subAdvHardware: 'Hardware', subAdvServer: 'Server Basics', subAdvServerExt: 'Server Extensions',
     subAdvMulti: 'Multi-Model / Expert',
     // Basic
     modelPath: 'Model Path', modelPathTip: 'Path to GGUF model file',

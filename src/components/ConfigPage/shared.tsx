@@ -89,11 +89,13 @@ export const CollapsibleGroup = ({ title, defaultOpen, onReset, children, disabl
 // Sentinel values for each advanced sub-group, sourced from store/defaults.ts
 // resetting to these values means the field won't appear in the generated command
 export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
-  advancedReasoning: {
+  advancedReasoningConfig: {
     reasoning_format: '', reasoning_effort: '', reasoning_budget: '', reasoning_budget_message: '',
-    jinja: false, chat_template_file: '', skip_chat_parsing: false,
-    lora_path: '', lora_init_without_apply: false, mmproj_path: '',
-    grammar: '', grammar_file: '',
+    jinja: false, skip_chat_parsing: false,
+  },
+  advancedModelAdapt: {
+    chat_template_file: '', lora_path: '', lora_init_without_apply: false, mmproj_path: '',
+    grammar: '', grammar_file: '', embd_normalize: 2, reranking: false,
   },
   advancedSampling: {
     mirostat: 0, mirostat_lr: 0, mirostat_ent: 0,
@@ -113,30 +115,36 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     draft_model_path: '', draft_gpu_layers: 99,
     spec_draft_p_min: 0, spec_draft_p_split: 0.1, spec_draft_device: '',
     lookup_cache_static: '', lookup_cache_dynamic: '',
+    cache_type_draft_k: '', cache_type_draft_v: '',
   },
   advancedRope: {
     rope_scaling: '', rope_scale: 0, rope_freq_base: 0, rope_freq_scale: 0,
     yarn_ext_factor: -1, yarn_attn_factor: 1, yarn_beta_slow: 0, yarn_beta_fast: 32,
   },
-  advancedCache: {
-    cache_type_k: '', cache_type_v: '', cache_type_draft_k: '', cache_type_draft_v: '',
+  advancedKvCache: {
+    cache_type_k: '', cache_type_v: '',
     cache_prompt: true, cache_reuse: 0, cache_ram: 0, warmup: false,
-    cache_idle_slots: true, ctx_checkpoints: 32, checkpoint_min_step: 0,
-    context_shift: false, swa_full: false, kv_unified: false,
-    ctx_size_auto: false, keep: 0,
+    cache_idle_slots: true, kv_unified: false,
+  },
+  advancedContextMgmt: {
+    ctx_checkpoints: 32, checkpoint_min_step: 0,
+    context_shift: false, swa_full: false,
+    ctx_size_auto: false, keep: 0, override_kv: '',
   },
   advancedHardware: {
     moe_cpu_layers: 0, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
-    override_kv: '', check_tensors: false, fit: false,
+    check_tensors: false, fit: false,
     threads_batch: 0, threads_http: -1,
   },
-  advancedServer: {
-    api_key: '', api_key_file: '', ssl_key_file: '', ssl_cert_file: '',
-    path_prefix: '', api_prefix: '', no_ui: false, ui_config_file: '',
-    timeout: 600, sleep_idle: -1, verbose: false,
-    slots_enabled: true, embd_normalize: 2, reranking: false,
-    metrics: false, props: false, slot_save_path: '', slot_prompt_similarity: 0.1,
-    prefill_assistant: '',
+  advancedServerBasic: {
+    api_key: '', api_key_file: '', no_ui: false,
+    path_prefix: '', api_prefix: '', timeout: 600, sleep_idle: -1, verbose: false,
+    ssl_key_file: '', ssl_cert_file: '',
+  },
+  advancedServerExt: {
+    slots_enabled: true, metrics: false, props: false,
+    slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: '',
+    ui_config_file: '',
   },
   advancedMulti: {
     models_dir: '', models_preset: '', models_max: 4, models_autoload: false,
