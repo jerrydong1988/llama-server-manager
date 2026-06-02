@@ -44,7 +44,7 @@ function AppInner() {
     .then(r => r.json())
     .then(json => {
       const latest = (json.tag_name || '').replace(/^v/, '')
-      const current = '2.1.0'
+      const current = '2.2.0'
       const l = latest.split('.').map(Number)
       const c = current.split('.').map(Number)
       const has = l.some((v: number, i: number) => v > (c[i] || 0)) && !c.some((v: number, i: number) => v > (l[i] || 0))
@@ -82,7 +82,7 @@ function AppInner() {
         <div className="flex items-center gap-2 mb-6 shrink-0">
           <Zap className="w-8 h-8 text-blue-500" />
           <h1 className="text-xl font-bold">{t.common.appTitle}</h1>
-          <span className="text-xs text-gray-500 ml-1">v2.1.0</span>
+          <span className="text-xs text-gray-500 ml-1">v2.2.0</span>
         </div>
         <nav className="space-y-1 overflow-y-auto flex-1">
           {navigation.map((item) => {
