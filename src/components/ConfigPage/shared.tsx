@@ -129,7 +129,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedContextMgmt: {
     ctx_checkpoints: 32, checkpoint_min_step: 0,
     context_shift: false, swa_full: false,
-    ctx_size_auto: false, keep: 0, override_kv: '',
+    keep: 0, override_kv: '',
   },
   advancedHardware: {
     moe_cpu_layers: 0, device: '', split_mode: '', tensor_split: '', main_gpu: 0,

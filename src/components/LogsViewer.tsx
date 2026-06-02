@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useAppStore } from '../store'
 import { Trash2, ChevronDown, Pause, Play } from 'lucide-react'
 import { useI18n } from '../i18n'
+import { confirm } from '@tauri-apps/plugin-dialog'
 
 const LogsViewer = () => {
   const { instances, logs, clearLogs } = useAppStore()
@@ -34,6 +35,7 @@ const LogsViewer = () => {
     setSelectedInstanceId(id)
     setAutoScroll(true)
     userInteractedRef.current = false
+    logCountRef.current = 0
   }
 
   // Detect manual scroll position changes
@@ -77,9 +79,9 @@ const LogsViewer = () => {
     : instances.some(i => i.status === 'running')
 
   return (
-    <div className="space-y-4">
+    <div className="h-screen flex flex-col">
       {/* Toolbar */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 p-4 shrink-0">
         <label className="text-sm font-medium">{t.logs.selectInstance}</label>
         <select value={selectedInstanceId} onChange={(e) => handleInstanceChange(e.target.value)}
           className="px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 min-w-[250px]">
@@ -91,23 +93,23 @@ const LogsViewer = () => {
           ))}
         </select>
         {selectedInstanceId && (
-          <button onClick={() => { clearLogs(selectedInstanceId); logCountRef.current = 0; setAutoScroll(true) }}
+          <button onClick={async () => { if (!await confirm(t.logs.clearConfirm, { title: t.logs.clear, kind: 'warning' })) return; clearLogs(selectedInstanceId); logCountRef.current = 0; setAutoScroll(true) }}
             className="flex items-center gap-1 px-3 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors text-sm">
             <Trash2 className="w-4 h-4" /> {t.logs.clear}
           </button>
         )}
       </div>
 
-      {/* Log viewer */}
-      <div className="relative">
+      {/* Log viewer — fills remaining vertical space */}
+      <div className="flex-1 overflow-hidden px-4 pb-2">
         <div ref={scrollRef} onScroll={handleScroll}
-          className="bg-gray-900 dark:bg-gray-950 p-4 rounded-lg h-[500px] overflow-y-auto font-mono text-sm leading-relaxed">
+          className="h-full bg-gray-900 dark:bg-gray-950 p-4 rounded-lg overflow-y-auto font-mono text-sm leading-relaxed relative">
           {!hasLogs ? (
             <p className="text-gray-500 text-center py-8">
               {instances.length === 0 ? t.logs.noInstances : selectedInstanceId ? t.logs.noLogsForInstance : t.logs.noLogs}
             </p>
           ) : (
-            displayLogs.map((entry, idx) => {
+            displayLogs.slice(-1000).map((entry, idx) => {
               const time = new Date(entry.timestamp).toLocaleTimeString()
               const instName = instances.find((i) => i.id === entry.instanceId)?.name || entry.instanceId
               const text = entry.text
@@ -125,33 +127,33 @@ const LogsViewer = () => {
               )
             })
           )}
+
+          {/* Pause indicator + Resume button (top-right) */}
+          {!autoScroll && hasLogs && (
+            <button onClick={toggleAutoScroll}
+              className="absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5 bg-gray-700/90 hover:bg-gray-600 text-white rounded-lg text-xs shadow-lg transition-colors">
+              <Pause className="w-3 h-3" /> ⏸ {t.logs.paused || '已暂停'}
+            </button>
+          )}
+
+          {/* Scroll to bottom button (bottom-right) */}
+          {!autoScroll && hasLogs && (
+            <button onClick={scrollToBottom}
+              className="absolute bottom-2 right-2 flex items-center gap-1.5 px-3 py-2 bg-blue-600/90 hover:bg-blue-500 text-white rounded-lg text-xs shadow-lg transition-colors">
+              <ChevronDown className="w-4 h-4" /> {t.logs.scrollToBottom || '最新'}
+            </button>
+          )}
+
+          {/* Auto-scroll indicator (when actively following) */}
+          {autoScroll && hasLogs && hasRunningInstance && (
+            <div className="absolute bottom-2 left-2 flex items-center gap-1 px-2 py-1 bg-gray-700/70 text-gray-300 rounded text-xs">
+              <Play className="w-3 h-3 text-green-400" /> {t.logs.following || '实时'}
+            </div>
+          )}
         </div>
-
-        {/* Pause indicator + Resume button (top-right) */}
-        {!autoScroll && hasLogs && (
-          <button onClick={toggleAutoScroll}
-            className="absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1.5 bg-gray-700/90 hover:bg-gray-600 text-white rounded-lg text-xs shadow-lg transition-colors">
-            <Pause className="w-3 h-3" /> ⏸ {t.logs.paused || '已暂停'}
-          </button>
-        )}
-
-        {/* Scroll to bottom button (bottom-right) */}
-        {!autoScroll && hasLogs && (
-          <button onClick={scrollToBottom}
-            className="absolute bottom-2 right-2 flex items-center gap-1.5 px-3 py-2 bg-blue-600/90 hover:bg-blue-500 text-white rounded-lg text-xs shadow-lg transition-colors">
-            <ChevronDown className="w-4 h-4" /> {t.logs.scrollToBottom || '最新'}
-          </button>
-        )}
-
-        {/* Auto-scroll indicator (when actively following) */}
-        {autoScroll && hasLogs && hasRunningInstance && (
-          <div className="absolute bottom-2 left-2 flex items-center gap-1 px-2 py-1 bg-gray-700/70 text-gray-300 rounded text-xs">
-            <Play className="w-3 h-3 text-green-400" /> {t.logs.following || '实时'}
-          </div>
-        )}
       </div>
 
-      <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+      <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 px-4 pb-4 shrink-0">
         <span>{t.logs.hint}</span>
         <span>{displayLogs.length} {t.logs.entries || '条记录'}</span>
       </div>

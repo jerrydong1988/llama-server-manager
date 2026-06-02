@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Play, Square, Plus, Trash2, Copy, Globe, CheckCircle2, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { formatStartupCommand } from '../store'
 import { invoke } from '@tauri-apps/api/core'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import { useI18n } from '../i18n'
 
 const InstanceManager = () => {
@@ -20,6 +21,7 @@ const InstanceManager = () => {
   const [editName, setEditName] = useState('')
   const [enginePickerForId, setEnginePickerForId] = useState('')
   const [portStatus, setPortStatus] = useState('')
+  const portCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const formatUptime = (startTime?: number) => {
     if (!startTime) return '0 min'
@@ -31,19 +33,18 @@ const InstanceManager = () => {
   const handleCreate = () => {
     const model = models.find(m => m.id === newInst.modelId)
     if (!model || !newInst.modelPath) return
-    const id = Math.random().toString(36).substring(2, 11)
+    const id = crypto.randomUUID()
     const config = defaultInstanceConfig()
     config.id = id; config.name = newInst.name || model.name.replace('.gguf', '')
     config.model_path = newInst.modelPath; config.mmproj_path = newInst.mmprojPath; config.port = newInst.port; config.host = '127.0.0.1'
     config.engine_id = newInst.engineId || defaultEngineId || ''
-    addInstance({ id, name: config.name, status: 'stopped', model: model.name, port: newInst.port, healthCheck: 'pending', config })
     if (!defaultEngineId && engines[0]) useAppStore.setState({ defaultEngineId: engines[0].id })
+    addInstance({ id, name: config.name, status: 'stopped', model: model.name, port: newInst.port, healthCheck: 'pending', config })
     setShowCreateModal(false)
     setNewInst({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: newInst.port + 1, engineId: newInst.engineId })
-    useAppStore.getState().saveConfig()
   }
 
-  const handleDelete = (id: string) => {     if (!confirm(t.instance.confirmDelete)) return; deleteInstance(id); useAppStore.getState().saveConfig() }
+  const handleDelete = async (id: string) => { if (!await confirm(t.instance.confirmDelete, { title: t.instance.delete, kind: 'warning' })) return; deleteInstance(id); useAppStore.getState().saveConfig() }
   const [copyFeedback, setCopyFeedback] = useState(false)
   const handleCopyCommand = async (text: string) => { try { await navigator.clipboard.writeText(text); setCopyFeedback(true); setTimeout(() => setCopyFeedback(false), 2000) } catch {} }
 
@@ -200,7 +201,7 @@ const InstanceManager = () => {
                 <select value={newInst.engineId || defaultEngineId || ''} onChange={e => setNewInst({ ...newInst, engineId: e.target.value })} className="w-full px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
                   <option value="">{t.instance.sysPath}</option>{engines.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                 </select></div>
-              <div><label className="block text-sm font-medium mb-1">{t.instance.port}</label><input type="number" min={1} max={65535} value={newInst.port} onChange={e => { const p = parseInt(e.target.value) || 8080; setNewInst({ ...newInst, port: p }); invoke('check_port', { port: p }).then(r => setPortStatus(r ? '✓ 端口可用' : '✗ 端口已被占用')).catch(() => setPortStatus('')) }} className="w-full px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" /></div>
+              <div><label className="block text-sm font-medium mb-1">{t.instance.port}</label><input type="number" min={1} max={65535} value={newInst.port} onChange={e => { const p = parseInt(e.target.value) || 8080; setNewInst({ ...newInst, port: p }); if (portCheckTimerRef.current) clearTimeout(portCheckTimerRef.current); portCheckTimerRef.current = setTimeout(() => { invoke('check_port', { port: p }).then(r => setPortStatus(r ? '✓ 端口可用' : '✗ 端口已被占用')).catch(() => setPortStatus('')) }, 400) }} className="w-full px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" /></div>
               {portStatus && <p className={`text-xs ${portStatus.startsWith('✓') ? 'text-green-500' : 'text-red-500'}`}>{portStatus}</p>}
             </div>
             <div className="flex gap-3 mt-6">
@@ -221,9 +222,9 @@ const InstanceManager = () => {
                 interface TNode { name: string; path: string; isDir: boolean; children?: Map<string, TNode>; model?: typeof models[0] }
                 function buildTree(rootDir: string): TNode {
                   const root: TNode = { name: rootDir, path: rootDir, isDir: true, children: new Map() }
-                  const normRoot = rootDir.replace(/\\/g, '\\').toLowerCase()
+                  const normRoot = rootDir.replace(/\\/g, '/').toLowerCase()
                   for (const m of models) {
-                    const p = m.path.replace(/\\/g, '\\').toLowerCase()
+                    const p = m.path.replace(/\\/g, '/').toLowerCase()
                     if (!p.startsWith(normRoot)) continue
                     const rel = m.path.substring(rootDir.length).replace(/^[\\/]+/, '')
                     if (!rel) continue
