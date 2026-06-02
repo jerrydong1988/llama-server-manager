@@ -1,4 +1,5 @@
 import type { InstanceConfig, ModelInfo, EngineInfo } from './store'
+import { defaultInstanceConfig } from './store'
 
 export interface Warning {
   field: keyof InstanceConfig
@@ -46,12 +47,15 @@ export function validateConfig(
 
   // A2: embedding 模式下生成/采样参数仍设置
   if (config.embedding) {
-    const genDefaults = {
-      n_predict: -1, temp: 0.8, top_k: 40, top_p: 0.9,
-      repeat_penalty: 1.1, seed: -1, min_p: 0.05,
-      presence_penalty: 0, frequency_penalty: 0, repeat_last_n: 64,
-      ignore_eos: false, json_schema: '', reverse_prompt: '',
-      special: false, spm_infill: false, backend_sampling: false,
+    const defaults = defaultInstanceConfig()
+    const genDefaults: Record<string, string | number | boolean> = {
+      n_predict: defaults.n_predict, temp: defaults.temp, top_k: defaults.top_k,
+      top_p: defaults.top_p, repeat_penalty: defaults.repeat_penalty,
+      seed: defaults.seed, min_p: defaults.min_p,
+      presence_penalty: defaults.presence_penalty, frequency_penalty: defaults.frequency_penalty,
+      repeat_last_n: defaults.repeat_last_n, ignore_eos: defaults.ignore_eos,
+      json_schema: defaults.json_schema, reverse_prompt: defaults.reverse_prompt,
+      special: defaults.special, spm_infill: defaults.spm_infill, backend_sampling: defaults.backend_sampling,
     }
     let hasGenParam = false
     for (const [k, defVal] of Object.entries(genDefaults)) {
@@ -85,7 +89,7 @@ export function validateConfig(
 
   // A5: spec_type 为空但推测解码参数非默认值
   if ((!config.spec_type || config.spec_type === '' || config.spec_type === 'none') &&
-      (config.draft_tokens !== 16 || config.spec_draft_n_min !== 0 ||
+      (config.draft_tokens !== 16 && config.draft_tokens !== 0 || config.spec_draft_n_min !== 0 ||
        config.spec_draft_p_min !== 0 || config.spec_draft_p_split !== 0.1))
     w.push({ field: 'spec_type', severity: 'medium', key: 'warnA5' })
 
@@ -161,7 +165,7 @@ export function validateConfig(
     w.push({ field: 'gpu_layers', severity: 'low', key: 'warnB7' })
 
   // B8: ctx_checkpoints/checkpoint_min_step 设置了但 cache_ram=0
-  if (config.cache_ram === 0 && (config.ctx_checkpoints !== 32 || config.checkpoint_min_step !== 0))
+  if (config.cache_ram === 0 && ((config.ctx_checkpoints !== 32 && config.ctx_checkpoints !== 0) || config.checkpoint_min_step !== 0))
     w.push({ field: 'ctx_checkpoints', severity: 'low', key: 'warnB8' })
 
   // B9: lookup_cache 设置了但 spec_type 不含 ngram
