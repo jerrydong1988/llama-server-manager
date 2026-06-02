@@ -164,7 +164,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     }
 
     // ── Server features ──
-    if config.timeout > 0 { cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]); }
+    cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]);
     if config.sleep_idle >= 0 { cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]); }
     if config.context_shift { cmd.push("--context-shift".into()); }
     if config.verbose { cmd.push("-v".into()); }

@@ -1,15 +1,23 @@
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use crate::models::{AppState, MsFileEntry};
 use crate::utils;
 use tauri::{Emitter, Manager};
 use futures_util::StreamExt;
 
+// Shared HTTP client for all download operations
+static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .unwrap_or_default()
+});
+
 // ── ModelScope 浏览 ──────────────────────────────────────────────
 #[tauri::command]
 pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
     let url = format!("https://www.modelscope.cn/api/v1/models/{}/repo/files?Recursive=true", repo_id);
-    let client = reqwest::Client::new();
-    let resp = client.get(&url).send().await.map_err(|e| format!("网络错误: {}", e))?;
+    let resp = HTTP_CLIENT.get(&url).send().await.map_err(|e| format!("网络错误: {}", e))?;
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("{}", e))?;
 
     if !body.get("Success").and_then(|v| v.as_bool()).unwrap_or(false) {
@@ -89,15 +97,10 @@ pub async fn download_modelscope_files(
                 return;
             }
 
-            let client = reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::limited(5))
-                .build()
-                .unwrap_or_default();
-
             let dest = save_path.join(&file_name);
             let resume_from = dest.metadata().map(|m| m.len()).unwrap_or(0);
 
-            let mut req = client.get(&url).header("User-Agent", "Mozilla/5.0");
+            let mut req = HTTP_CLIENT.get(&url).header("User-Agent", "Mozilla/5.0");
             if resume_from > 0 {
                 req = req.header("Range", format!("bytes={}-", resume_from));
             }
@@ -150,7 +153,12 @@ pub async fn download_modelscope_files(
                 match chunk {
                     Ok(bytes) => {
                         let len = bytes.len() as u64;
-                        file.write_all(&bytes).unwrap();
+                        if let Err(e) = file.write_all(&bytes) {
+                            let _ = app.emit("download-error", serde_json::json!({
+                                "fileName": file_name, "error": format!("写入失败: {}", e)
+                            }));
+                            return;
+                        }
                         downloaded += len;
                         let now = std::time::Instant::now();
                         win_bytes += len;

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 // ── GGUF 元信息解析 ───────────────────────────────────────────────
 pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, Option<String>), String> {
     let mut f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
-    let size = f.metadata().map(|m| m.len()).unwrap_or(0).min(2_000_000) as usize;
+    let size = f.metadata().map(|m| m.len()).unwrap_or(0).min(4_000_000) as usize;
     if size < 24 { return Err("文件太小".into()); }
     let mut data = vec![0u8; size];
     use std::io::Read;

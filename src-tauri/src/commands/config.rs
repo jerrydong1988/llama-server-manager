@@ -73,7 +73,15 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
                 .args(["/FI", &format!("PID eq {}", ri.pid), "/NH"])
                 .creation_flags(0x08000000)
                 .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).contains(&ri.pid.to_string()))
+                .map(|o| {
+                    let out = String::from_utf8_lossy(&o.stdout);
+                    // Check PID with word boundaries to avoid substring false match
+                    // (e.g., PID=12 must not match PID=123)
+                    let pid_str = ri.pid.to_string();
+                    out.contains(&format!(" {pid_str} "))
+                        || out.ends_with(&format!(" {pid_str}\r\n"))
+                        || out.ends_with(&format!(" {pid_str}\n"))
+                })
                 .unwrap_or(false);
             if alive { restored.insert(id.clone(), ri.clone()); }
         }
