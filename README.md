@@ -81,6 +81,8 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - 服务器日志实时捕获，关键词彩色高亮，**自动滚动 + 暂停/恢复**
 - 启动命令自动记录到日志（含完整命令行和 PID）
 - 系统托盘支持，关闭窗口隐藏到托盘
+- **单实例检测**：重复打开自动聚焦已有窗口
+- **Tauri 原生确认对话框**：删除/移除操作均有原生警告弹窗
 - 明暗主题切换（持久化）+ 窗口尺寸/位置记忆
 - 完整中英双语界面
 - 配置持久化（JSON）+ **自动备份恢复** + 自动更新检查
@@ -89,6 +91,8 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - Real-time server log capture with keyword color highlighting, **auto-scroll + pause/resume**
 - Startup command auto-logged to console (full CLI + PID)
 - System tray support, close to tray
+- **Single instance detection**: auto-focus existing window on re-launch
+- **Tauri native confirm dialogs**: native warning popups for all delete/remove operations
 - Light/dark theme toggle (persistent) + window size/position memory
 - Full i18n support (Chinese / English)
 - Config persistence (JSON) + **auto backup/restore** + auto-update check
