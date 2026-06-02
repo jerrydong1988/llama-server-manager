@@ -20,9 +20,6 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
 // ── 模型扫描 ──────────────────────────────────────────────────────
 #[tauri::command]
 pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
-    let mut models: Vec<ModelInfo> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut errors = Vec::new();
     let app_dir = utils::get_app_dir();
     let default_path = app_dir.join("models");
 
@@ -32,42 +29,56 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) 
         paths.iter().map(PathBuf::from).collect()
     };
 
-    for scan_root in &scan_paths {
-        let root_str = scan_root.display().to_string();
-        if !scan_root.exists() { errors.push(format!("{} 不存在", root_str)); continue; }
-        if !scan_root.is_dir() { errors.push(format!("{} 不是目录", root_str)); continue; }
+    // Offload heavy disk I/O + GGUF parsing to a blocking thread
+    let models = tokio::task::spawn_blocking(move || -> Result<Vec<ModelInfo>, Vec<String>> {
+        let mut models: Vec<ModelInfo> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut errors = Vec::new();
 
-        let mut file_count = 0;
-        for entry in walkdir::WalkDir::new(scan_root).max_depth(5).into_iter().flatten() {
-            let path = entry.path();
-            if !path.is_file() { continue; }
-            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-            if ext != "gguf" { continue; }
-            let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if fname.starts_with('.') { continue; }
+        for scan_root in &scan_paths {
+            let root_str = scan_root.display().to_string();
+            if !scan_root.exists() { errors.push(format!("{} 不存在", root_str)); continue; }
+            if !scan_root.is_dir() { errors.push(format!("{} 不是目录", root_str)); continue; }
 
-            let name = fname.to_string();
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            let ftype = utils::classify_gguf_file(path);
-            let file_path = path.to_string_lossy().to_string();
-            if !seen.insert(file_path.clone()) { continue; }
+            let mut file_count = 0;
+            for entry in walkdir::WalkDir::new(scan_root).max_depth(5).into_iter().flatten() {
+                let path = entry.path();
+                if !path.is_file() { continue; }
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+                if ext != "gguf" { continue; }
+                let fname = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if fname.starts_with('.') { continue; }
 
-            let (architecture, context_length, quant_type) =
-                utils::parse_gguf_metadata(path).unwrap_or_else(|_| (None, None, None));
+                let name = fname.to_string();
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                let ftype = utils::classify_gguf_file(path);
+                let file_path = path.to_string_lossy().to_string();
+                if !seen.insert(file_path.clone()) { continue; }
 
-            file_count += 1;
-            models.push(ModelInfo {
-                id: uuid::Uuid::new_v4().to_string(),
-                name, path: file_path, size, architecture, context_length, quant_type,
-                file_type: ftype.to_string(),
-            });
+                let (architecture, context_length, quant_type) =
+                    utils::parse_gguf_metadata(path).unwrap_or_else(|_| (None, None, None));
+
+                file_count += 1;
+                models.push(ModelInfo {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name, path: file_path, size, architecture, context_length, quant_type,
+                    file_type: ftype.to_string(),
+                });
+            }
+            if file_count == 0 { errors.push(format!("{} 中未找到 .gguf 模型文件", root_str)); }
         }
-        if file_count == 0 { errors.push(format!("{} 中未找到 .gguf 模型文件", root_str)); }
-    }
 
-    if models.is_empty() && !errors.is_empty() {
-        return Err(errors.join("; "));
-    }
+        if models.is_empty() && !errors.is_empty() {
+            Err(errors)
+        } else {
+            Ok(models)
+        }
+    }).await.map_err(|e| format!("扫描线程失败: {}", e))?;
+
+    let models = match models {
+        Ok(m) => m,
+        Err(errors) => return Err(errors.join("; ")),
+    };
 
     let mut state_models = state.models.lock().unwrap();
     *state_models = models.clone();
