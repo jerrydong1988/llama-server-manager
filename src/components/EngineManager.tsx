@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { RefreshCw, FolderOpen, Trash2, Plus, Cpu } from 'lucide-react'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
+import { confirm } from '@tauri-apps/plugin-dialog'
 
 const EngineManager = () => {
   const { engines, scanEngines, loadInitialData, isLoading, deleteEngine, openEngineFolder, defaultEngineId, setDefaultEngineId, engineDirs, setEngineDirs } = useAppStore()
@@ -24,7 +25,8 @@ const EngineManager = () => {
     } catch (_) { await scanEngines(engineDirs) }
   }
 
-  const handleRemoveDir = (dir: string) => {
+  const handleRemoveDir = async (dir: string) => {
+    if (!await confirm(t.engineMgr.removeDirConfirm, { title: t.engineMgr.remove, kind: 'warning' })) return
     const next = engineDirs.filter(d => d !== dir)
     setEngineDirs(next)
     scanEngines(next)
@@ -33,7 +35,7 @@ const EngineManager = () => {
   const handleDelete = async (id: string) => {
     const eng = engines.find((e) => e.id === id)
     if (!eng) return
-    if (!confirm(t.engineMgr.removeConfirm)) return
+    if (!await confirm(t.engineMgr.removeConfirm, { title: t.engineMgr.remove, kind: 'warning' })) return
     await deleteEngine(id)
     if (defaultEngineId === id) setDefaultEngineId(null)
   }

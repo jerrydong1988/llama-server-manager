@@ -1,67 +1,17 @@
 import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { message } from '@tauri-apps/plugin-dialog'
 
 // Re-exports from split modules
 export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState } from './store/types'
 export { defaultInstanceConfig } from './store/defaults'
-import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry } from './store/types'
+import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry } from './store/types'
 import { defaultInstanceConfig } from './store/defaults'
 
 // ── Store 状态 ─────────────────────────────────────────────────
-interface AppState {
-  models: ModelInfo[]
-  engines: EngineInfo[]
-  instances: Instance[]
-  logs: Record<string, LogEntry[]>
-  isLoading: boolean
-  defaultEngineId: string | null
-  modelDirs: string[]
-  engineDirs: string[]
-  activeConfigInstanceId: string | null
-  activeTab: string
-  darkMode: boolean
-  setActiveTab: (tab: string) => void
-  setDarkMode: (dm: boolean) => void
-  setActiveConfigInstanceId: (id: string | null) => void
-
-  setModels: (models: ModelInfo[]) => void
-  setEngines: (engines: EngineInfo[]) => void
-  setModelDirs: (dirs: string[]) => void
-  setEngineDirs: (dirs: string[]) => void
-  setDefaultEngineId: (id: string | null) => void
-  addInstance: (instance: Instance) => void
-  updateInstance: (id: string, partial: Partial<Instance>) => void
-  deleteInstance: (id: string) => void
-  moveInstance: (id: string, direction: 'up' | 'down') => void
-  renameInstance: (id: string, name: string) => void
-  addLog: (entry: LogEntry) => void
-  clearLogs: (instanceId: string) => void
-
-  loadInitialData: () => Promise<void>
-  scanModels: (paths: string[]) => Promise<string | null>
-  deleteModelFile: (path: string) => Promise<void>
-  openModelFolder: (path: string) => Promise<void>
-  readGgufMetadata: (path: string) => Promise<[string | null, number | null, string | null]>
-
-  scanEngines: (paths: string[]) => Promise<void>
-  deleteEngine: (id: string) => Promise<void>
-  openEngineFolder: (dir: string) => Promise<void>
-
-  generateCommand: (config: InstanceConfig, engineExe: string) => Promise<string[]>
-  startInstance: (id: string) => Promise<void>
-  stopInstance: (id: string) => Promise<void>
-  openBrowser: (host: string, port: number) => Promise<void>
-
-  saveConfig: () => Promise<void>
-  loadConfig: () => Promise<void>
-
-  browseModelscope: (repoId: string) => Promise<MsFileEntry[]>
-  downloadModelscopeFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>
-  cancelFileDownload: (fileName: string) => Promise<void>
-  pauseFileDownload: (fileName: string) => Promise<void>
-  cancelAndCleanupDownload: (fileName: string, filePath: string) => Promise<void>
-}
+// AppState interface is defined in ./store/types.ts
+const MAX_LOG_ENTRIES = 1000
 
 export const useAppStore = create<AppState>((set, get) => ({
   models: [],
@@ -69,6 +19,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   instances: [],
   logs: {},
   isLoading: false,
+  darkMode: true,
   defaultEngineId: null,
   modelDirs: [],
   engineDirs: [],
@@ -84,7 +35,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setActiveTab: (tab) => { set({ activeTab: tab }); get().saveConfig() },
   setDarkMode: (dm) => { set({ darkMode: dm }); document.documentElement.classList.toggle('dark', dm); get().saveConfig() },
 
-  addInstance: (instance) => set((s) => ({ instances: [...s.instances, instance] })),
+  addInstance: (instance) => { set((s) => ({ instances: [...s.instances, instance] })); get().saveConfig() },
   updateInstance: (id, partial) => set((s) => ({
     instances: s.instances.map((i) => (i.id === id ? { ...i, ...partial } : i)),
   })),
@@ -107,13 +58,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const inst = s.instances.find(i => i.id === id)
     if (!inst) return s
     const newConfig = { ...inst.config, name }
+    const updated = s.instances.map(i => i.id === id ? { ...i, name, config: newConfig } : i)
     get().saveConfig()
-    return { instances: s.instances.map(i => i.id === id ? { ...i, name, config: newConfig } : i) }
+    return { instances: updated }
   }),
 
   addLog: (entry) => set((s) => {
     const existing = s.logs[entry.instanceId] || []
-    const updated = [...existing.slice(-499), { ...entry, timestamp: Date.now() }]
+    const updated = [...existing.slice(-(MAX_LOG_ENTRIES - 1)), { ...entry, timestamp: Date.now() }]
     return { logs: { ...s.logs, [entry.instanceId]: updated } }
   }),
   clearLogs: (instanceId) => set((s) => ({
@@ -186,12 +138,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       const { instances, engines, defaultEngineId } = get()
       const inst = instances.find(i => i.id === id)
-      if (!inst) return
+      if (!inst) { message('Instance not found.', { title: 'Error', kind: 'error' }); return }
       // 实例指定引擎 > 默认引擎 > 第一个引擎
       const engine = engines.find(e => e.id === inst.config.engine_id)
         || engines.find(e => e.id === defaultEngineId)
         || engines[0]
-      if (!engine) return
+      if (!engine) { message('No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' }); return }
 
       await invoke('start_server', { instanceId: id, config: inst.config, engineExe: engine.exe })
       get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
