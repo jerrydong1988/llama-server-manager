@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react'
 import { Search, Download, FolderOpen, Trash2, RefreshCw, FileText, X, ChevronDown, ChevronRight, File, Image } from 'lucide-react'
-import { useAppStore, type MsFileEntry } from '../store'
+import { useAppStore, type MsFileEntry, type ModelInfo } from '../store'
 import { useI18n } from '../i18n'
 import { listen } from '@tauri-apps/api/event'
 import { confirm } from '@tauri-apps/plugin-dialog'
+import { normalizePath, pathJoin } from '../utils/path'
 
 const DEFAULT_SAVE_DIR = 'models'
 
 const ModelRepo = () => {
-  const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder, browseModelscope, downloadModelscopeFiles, cancelFileDownload, pauseFileDownload, cancelAndCleanupDownload } = useAppStore()
+  const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder, browseModelscope, downloadModelscopeFiles, pauseFileDownload, cancelAndCleanupDownload } = useAppStore()
   const { t } = useI18n()
   const [searchQuery, setSearchQuery] = useState('')
   const [showMsModal, setShowMsModal] = useState(false)
@@ -57,20 +58,21 @@ const ModelRepo = () => {
   }
 
   // 构建树：从 rootDir 出发，按实际目录结构组织 model 文件
-  function buildTree(rootDir: string, models: typeof models): TreeNode {
-    const root: TreeNode = { name: rootDir, path: rootDir, isDir: true, children: new Map() }
-    const normRoot = rootDir.replace(/\\/g, '/').toLowerCase()
+  function buildTree(rootDir: string, models: ModelInfo[]): TreeNode {
+    const normDir = normalizePath(rootDir)
+    const root: TreeNode = { name: rootDir, path: normDir, isDir: true, children: new Map() }
+    const normRoot = normDir.toLowerCase()
     for (const m of models) {
-      const normPath = m.path.replace(/\\/g, '/').toLowerCase()
+      const normPath = normalizePath(m.path).toLowerCase()
       if (!normPath.startsWith(normRoot)) continue
-      const rel = m.path.substring(rootDir.length).replace(/^[\\/]+/, '')
-      const parts = rel.split(/[\\/]/)
+      const rel = normalizePath(m.path.substring(rootDir.length)).replace(/^\/+/, '')
+      const parts = rel.split('/')
       let cur = root
       for (let i = 0; i < parts.length; i++) {
         if (i === parts.length - 1) { cur.children!.set(parts[i], { name: parts[i], path: m.path, isDir: false, model: m }) }
         else {
           if (!cur.children!.has(parts[i])) {
-            const childPath = cur.path + (cur.path.endsWith('\\') ? '' : '\\') + parts[i]
+            const childPath = pathJoin(cur.path, parts[i])
             cur.children!.set(parts[i], { name: parts[i], path: childPath, isDir: true, children: new Map() })
           }
           cur = cur.children!.get(parts[i])!
@@ -324,7 +326,7 @@ const ModelRepo = () => {
                     {msFiles.map((f) => {
                       const st = fileStates[f.name]
                       const isPaused = pausedSet.has(f.name)
-                      const partialPath = msSaveDir + '\\' + msRepoId.replace('/', '\\') + '\\' + f.name
+                      const partialPath = pathJoin(msSaveDir, msRepoId, f.name)
 
                       // 单文件下载
                       const startSingleDownload = async () => {

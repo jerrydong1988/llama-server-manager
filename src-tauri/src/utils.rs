@@ -182,10 +182,25 @@ pub fn get_app_dir() -> PathBuf {
 
 // ── 获取数据目录 (ASCII-safe, 避免中文路径) ──────────────────────
 pub fn get_data_dir() -> PathBuf {
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("LOCALAPPDATA") {
             return PathBuf::from(appdata).join("LlamaServerManager");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join("Library/Application Support/LlamaServerManager");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(xdg) = std::env::var("XDG_DATA_HOME") {
+            return PathBuf::from(xdg).join("LlamaServerManager");
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(".local/share/LlamaServerManager");
         }
     }
     get_app_dir()

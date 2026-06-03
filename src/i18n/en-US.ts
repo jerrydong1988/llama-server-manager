@@ -18,7 +18,7 @@ export const enUS = {
   modelRepo: {
     searchPlaceholder: 'Search models...', scan: 'Scan Models', addDir: 'Add Directory',
     downloadMS: 'Download from ModelScope', browseFiles: 'Browse Files',
-    saveDir: 'Save Directory', saveDirPlaceholder: 'Default: %LOCALAPPDATA%\\LlamaServerManager\\models',
+    saveDir: 'Save Directory', saveDirPlaceholder: 'Default: models subdirectory in app data folder',
     repoIdPlaceholder: 'Repo ID, e.g. unsloth/Qwen3.6-35B-A3B-GGUF',
     queryFailed: 'Query failed: ', notFound: 'No GGUF files found', found: 'Found',
     files: ' files', inputRepoId: 'Enter repo ID', querying: 'Querying...',
@@ -36,11 +36,11 @@ export const enUS = {
   },
   engineMgr: {
     scan: 'Scan Engines', addDir: 'Add Engine Directory',
-    noEngines: 'No engines found. Click "Add Engine Directory" to select a parent folder containing llama-server.exe. Subdirectories will be auto-scanned.',
+    noEngines: 'No engines found. Click "Add Engine Directory" to select a parent folder containing llama-server. Subdirectories will be auto-scanned.',
     defaultEngine: 'Default Engine', setDefault: 'Set as Default',
     remove: 'Remove', removeConfirm: 'Remove this engine from the list? Files will not be deleted.', removeDirConfirm: 'Remove this directory from scan list? Files will not be deleted.',
     openFolder: 'Open Folder', sysPath: 'System PATH',
-    dirs: 'Added Engine Directories (auto-scan subdirectories):', addDirTitle: 'Select a parent directory containing llama-server.exe (subdirectories will be auto-scanned)',
+    dirs: 'Added Engine Directories (auto-scan subdirectories):', addDirTitle: 'Select a parent directory containing llama-server (subdirectories will be auto-scanned)',
   },
   configPage: {
     title: 'Instance Config', saved: '\u2713 Saved', save: 'Save Config',

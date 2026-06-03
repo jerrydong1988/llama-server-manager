@@ -5,6 +5,7 @@ import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
 import { BasicSection, ReasoningSection, PerformanceSection, AdvancedSection } from './ConfigPage/sections'
 import { getActiveParams } from './ConfigPage/activeParams'
+import { normalizePath, pathBasename, pathDirname, pathJoin } from '../utils/path'
 
 const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
 
@@ -22,7 +23,7 @@ const ConfigPage = () => {
 
   const isEmbedding = (() => {
     if (!local?.model_path) return false
-    const fname = local.model_path.replace(/\\/g, '/').split('/').pop() || ''
+    const fname = pathBasename(local.model_path)
     if (fname.toLowerCase().includes('embed')) return true
     const model = models.find(m => m.path === local.model_path)
     if (model?.architecture && EMBED_ARCHS.some(a => model.architecture!.toLowerCase().includes(a))) return true
@@ -41,8 +42,8 @@ const ConfigPage = () => {
   const set = (k: keyof InstanceConfig, v: any) => setLocal(l => l ? { ...l, [k]: v } : l)
   const pickModel = (modelPath: string) => {
     set('model_path', modelPath)
-    const dir = modelPath.replace(/[/\\][^/\\]*$/, '')
-    const mmproj = models.find(m => { const mDir = m.path.replace(/[/\\][^/\\]*$/, ''); return m.file_type === 'mmproj' && mDir === dir })
+    const dir = pathDirname(modelPath)
+    const mmproj = models.find(m => pathDirname(m.path) === dir && m.file_type === 'mmproj')
     if (mmproj) set('mmproj_path', mmproj.path); else set('mmproj_path', '')
     setShowPicker(false)
   }
@@ -110,19 +111,20 @@ const ConfigPage = () => {
               {(function TreeRenderer() {
                 interface TNode { name: string; path: string; isDir: boolean; children?: Map<string, TNode>; model?: typeof models[0] }
                 function buildTree(rootDir: string): TNode {
-                  const root: TNode = { name: rootDir, path: rootDir, isDir: true, children: new Map() }
-                  const normRoot = rootDir.replace(/\\/g, '/').toLowerCase()
+                  const normDir = normalizePath(rootDir)
+                  const root: TNode = { name: rootDir, path: normDir, isDir: true, children: new Map() }
+                  const normRoot = normDir.toLowerCase()
                   for (const m of models) {
-                    const normPath = m.path.replace(/\\/g, '/').toLowerCase()
+                    const normPath = normalizePath(m.path).toLowerCase()
                     if (!normPath.startsWith(normRoot)) continue
-                    const rel = m.path.substring(rootDir.length).replace(/^[\\/]+/, '')
+                    const rel = normalizePath(m.path.substring(rootDir.length)).replace(/^\/+/, '')
                     if (!rel) continue
-                    const parts = rel.split(/[\\/]/)
+                    const parts = rel.split('/')
                     let cur = root
                     for (let i = 0; i < parts.length; i++) {
                       if (i === parts.length - 1) { cur.children!.set(parts[i], { name: parts[i], path: m.path, isDir: false, model: m }) }
                       else {
-                        if (!cur.children!.has(parts[i])) { cur.children!.set(parts[i], { name: parts[i], path: cur.path + (cur.path.endsWith('\\') ? '' : '\\') + parts[i], isDir: true, children: new Map() }) }
+                        if (!cur.children!.has(parts[i])) { cur.children!.set(parts[i], { name: parts[i], path: pathJoin(cur.path, parts[i]), isDir: true, children: new Map() }) }
                         cur = cur.children!.get(parts[i])!
                       }
                     }

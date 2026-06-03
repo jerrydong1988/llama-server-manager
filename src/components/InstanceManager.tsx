@@ -5,9 +5,10 @@ import { formatStartupCommand } from '../store'
 import { invoke } from '@tauri-apps/api/core'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { useI18n } from '../i18n'
+import { normalizePath, pathJoin, pathDirname } from '../utils/path'
 
 const InstanceManager = () => {
-  const { instances, addInstance, deleteInstance, startInstance, stopInstance, openBrowser, generateCommand, models, modelDirs, engines, defaultEngineId, saveConfig, setActiveConfigInstanceId, setActiveTab, moveInstance, renameInstance } = useAppStore()
+  const { instances, addInstance, deleteInstance, startInstance, stopInstance, openBrowser, generateCommand, models, modelDirs, engines, defaultEngineId, setActiveConfigInstanceId, setActiveTab, moveInstance, renameInstance } = useAppStore()
   const { t } = useI18n()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCmdModal, setShowCmdModal] = useState('')
@@ -90,7 +91,7 @@ const InstanceManager = () => {
       {/* 引擎未检测到提示 */}
       {engines.length === 0 && (
         <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 text-sm text-yellow-700 dark:text-yellow-400">
-          ⚠ 未检测到引擎，请先前往 <button onClick={() => setActiveTab('engine')} className="underline font-medium hover:text-yellow-800 dark:hover:text-yellow-300">引擎管理</button> 添加 llama-server.exe
+          ⚠ 未检测到引擎，请先前往 <button onClick={() => setActiveTab('engine')} className="underline font-medium hover:text-yellow-800 dark:hover:text-yellow-300">引擎管理</button> 添加 llama-server
         </div>
       )}
 
@@ -221,19 +222,20 @@ const InstanceManager = () => {
               {(function TreeRenderer() {
                 interface TNode { name: string; path: string; isDir: boolean; children?: Map<string, TNode>; model?: typeof models[0] }
                 function buildTree(rootDir: string): TNode {
-                  const root: TNode = { name: rootDir, path: rootDir, isDir: true, children: new Map() }
-                  const normRoot = rootDir.replace(/\\/g, '/').toLowerCase()
+                  const normDir = normalizePath(rootDir)
+                  const root: TNode = { name: rootDir, path: normDir, isDir: true, children: new Map() }
+                  const normRoot = normDir.toLowerCase()
                   for (const m of models) {
-                    const p = m.path.replace(/\\/g, '/').toLowerCase()
+                    const p = normalizePath(m.path).toLowerCase()
                     if (!p.startsWith(normRoot)) continue
-                    const rel = m.path.substring(rootDir.length).replace(/^[\\/]+/, '')
+                    const rel = normalizePath(m.path.substring(rootDir.length)).replace(/^\/+/, '')
                     if (!rel) continue
-                    const parts = rel.split(/[\\/]/)
+                    const parts = rel.split('/')
                     let cur = root
                     for (let i = 0; i < parts.length; i++) {
                       if (i === parts.length - 1) { cur.children!.set(parts[i], { name: parts[i], path: m.path, isDir: false, model: m }) }
                       else {
-                        if (!cur.children!.has(parts[i])) { cur.children!.set(parts[i], { name: parts[i], path: cur.path + (cur.path.endsWith('\\') ? '' : '\\') + parts[i], isDir: true, children: new Map() }) }
+                        if (!cur.children!.has(parts[i])) { cur.children!.set(parts[i], { name: parts[i], path: pathJoin(cur.path, parts[i]), isDir: true, children: new Map() }) }
                         cur = cur.children!.get(parts[i])!
                       }
                     }
@@ -242,8 +244,8 @@ const InstanceManager = () => {
                 }
                 const toggleP = (k: string) => { const n = new Set(pickerCollapsed); if (n.has(k)) n.delete(k); else n.add(k); setPickerCollapsed(n) }
                 const pickForCreate = (m: typeof models[0]) => {
-                  const dir = m.path.replace(/[/\\][^/\\]*$/, '')
-                  const mmproj = models.find(x => { const xDir = x.path.replace(/[/\\][^/\\]*$/, ''); return x.file_type === 'mmproj' && xDir === dir })
+                  const dir = pathDirname(m.path)
+                  const mmproj = models.find(x => pathDirname(x.path) === dir && x.file_type === 'mmproj')
                   setNewInst({ ...newInst, modelId: m.id, modelPath: m.path, mmprojPath: mmproj?.path || '' })
                   setShowCreatePicker(false)
                 }

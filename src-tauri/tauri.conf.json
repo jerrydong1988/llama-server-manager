@@ -27,12 +27,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": ["nsis", "msi", "dmg", "deb", "appimage"],
     "icon": ["icons/icon.ico"],
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
       "timestampUrl": ""
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    },
+    "linux": {
+      "deb": {},
+      "appimage": {}
     }
   }
 }

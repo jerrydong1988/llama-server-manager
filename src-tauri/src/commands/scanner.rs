@@ -2,6 +2,14 @@ use std::path::{Path, PathBuf};
 use crate::models::{AppState, EngineInfo, ModelInfo};
 use crate::utils;
 
+// ── 跨平台可执行文件名 ────────────────────────────────────────────
+
+// ── 跨平台可执行文件名 ────────────────────────────────────────────
+#[cfg(target_os = "windows")]
+const ENGINE_EXE_NAME: &str = "llama-server.exe";
+#[cfg(not(target_os = "windows"))]
+const ENGINE_EXE_NAME: &str = "llama-server";
+
 // ── 引擎信息构建 ──────────────────────────────────────────────────
 pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<EngineInfo> {
     let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("llama-server").to_string();
@@ -103,8 +111,10 @@ pub async fn open_model_folder(path: String) -> Result<(), String> {
     let parent = Path::new(&path).parent().unwrap_or(Path::new("."));
     #[cfg(target_os = "windows")]
     { std::process::Command::new("explorer").arg(parent).spawn().map_err(|e| format!("{}", e))?; }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     { std::process::Command::new("open").arg(parent).spawn().map_err(|e| format!("{}", e))?; }
+    #[cfg(target_os = "linux")]
+    { std::process::Command::new("xdg-open").arg(parent).spawn().map_err(|e| format!("{}", e))?; }
     Ok(())
 }
 
@@ -125,7 +135,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
         for entry in std::fs::read_dir(&engines_dir).map_err(|e| format!("{}", e))?.flatten() {
             let dir = entry.path();
             if !dir.is_dir() { continue; }
-            let exe = dir.join("llama-server.exe");
+            let exe = dir.join(ENGINE_EXE_NAME);
             if exe.exists() {
                 let norm = dir.to_string_lossy().to_lowercase();
                 if seen.insert(norm) {
@@ -140,7 +150,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
     for p in &paths {
         let root = PathBuf::from(p);
         if !root.exists() || !root.is_dir() { continue; }
-        let direct_exe = root.join("llama-server.exe");
+        let direct_exe = root.join(ENGINE_EXE_NAME);
         if direct_exe.exists() {
             let norm = root.to_string_lossy().to_lowercase();
             if seen.insert(norm) {
@@ -153,7 +163,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
             for entry in entries.flatten() {
                 let sub = entry.path();
                 if !sub.is_dir() { continue; }
-                let exe = sub.join("llama-server.exe");
+                let exe = sub.join(ENGINE_EXE_NAME);
                 if exe.exists() {
                     let norm = sub.to_string_lossy().to_lowercase();
                     if seen.insert(norm) {
@@ -166,7 +176,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
                     for se in sub_entries.flatten() {
                         let sub2 = se.path();
                         if !sub2.is_dir() { continue; }
-                        let exe2 = sub2.join("llama-server.exe");
+                        let exe2 = sub2.join(ENGINE_EXE_NAME);
                         if exe2.exists() {
                             let norm = sub2.to_string_lossy().to_lowercase();
                             if seen.insert(norm) {
@@ -202,7 +212,9 @@ pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Res
 pub async fn open_engine_folder(dir: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     { std::process::Command::new("explorer").arg(&dir).spawn().map_err(|e| format!("{}", e))?; }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     { std::process::Command::new("open").arg(&dir).spawn().map_err(|e| format!("{}", e))?; }
+    #[cfg(target_os = "linux")]
+    { std::process::Command::new("xdg-open").arg(&dir).spawn().map_err(|e| format!("{}", e))?; }
     Ok(())
 }

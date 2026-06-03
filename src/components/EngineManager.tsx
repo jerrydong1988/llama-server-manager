@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { RefreshCw, FolderOpen, Trash2, Plus, Cpu } from 'lucide-react'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'

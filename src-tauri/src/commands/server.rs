@@ -407,7 +407,7 @@ pub async fn stop_server(
     let mut killed = false;
 
     if let Some(ref ri) = ri {
-        #[cfg(windows)]
+        #[cfg(target_os = "windows")]
         {
             let r = std::os::windows::process::CommandExt::creation_flags(
                 &mut Command::new("taskkill"), 0x08000000)
@@ -415,13 +415,13 @@ pub async fn stop_server(
                 .output();
             killed = r.map(|o| o.status.success()).unwrap_or(false);
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         { killed = Command::new("kill").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false); }
     }
 
     if !killed {
         if let Some(ref ri) = ri {
-            #[cfg(windows)]
+            #[cfg(target_os = "windows")]
             {
                 let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
                 let r = std::os::windows::process::CommandExt::creation_flags(
@@ -429,6 +429,23 @@ pub async fn stop_server(
                     .args(["-NoProfile", "-Command", &cmd])
                     .output();
                 killed = r.map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let port_str = ri.port.to_string();
+                if let Ok(out) = Command::new("lsof").args(["-ti", &format!(":{}", port_str)]).output() {
+                    let pids = String::from_utf8_lossy(&out.stdout);
+                    for pid in pids.lines() {
+                        let _ = Command::new("kill").arg("-9").arg(pid).status();
+                        killed = true;
+                    }
+                }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let _ = Command::new("fuser").args(["-k", &format!("{}/tcp", ri.port)]).status();
+                // fuser -k exits 0 even if nothing was killed; treat as best-effort
+                killed = true;
             }
         }
     }
@@ -448,12 +465,14 @@ pub async fn stop_server(
 pub async fn open_browser(host: String, port: u16) -> Result<(), String> {
     let host = if host == "0.0.0.0" { "localhost" } else { &host };
     let url = format!("http://{}:{}", host, port);
-    #[cfg(windows)]
+    #[cfg(target_os = "windows")]
     { std::os::windows::process::CommandExt::creation_flags(
         &mut std::process::Command::new("cmd"), 0x08000000)
         .args(["/c", "start", &url]).spawn().map_err(|e| format!("{}", e))?; }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     { std::process::Command::new("open").arg(&url).spawn().map_err(|e| format!("{}", e))?; }
+    #[cfg(target_os = "linux")]
+    { std::process::Command::new("xdg-open").arg(&url).spawn().map_err(|e| format!("{}", e))?; }
     Ok(())
 }
 

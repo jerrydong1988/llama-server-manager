@@ -2,12 +2,12 @@ import { create } from 'zustand'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { message } from '@tauri-apps/plugin-dialog'
+import { pathBasename } from './utils/path'
 
 // Re-exports from split modules
 export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState } from './store/types'
 export { defaultInstanceConfig } from './store/defaults'
 import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry } from './store/types'
-import { defaultInstanceConfig } from './store/defaults'
 
 // ── Store 状态 ─────────────────────────────────────────────────
 // AppState interface is defined in ./store/types.ts
@@ -189,12 +189,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const runningIds = new Set(Object.keys(global.running || {}))
       const order = global.instance_order || Object.keys(global.instances)
-      let list: Instance[] = Object.entries(global.instances).map(([id, config]) => ({
+      let list: Instance[] = Object.entries(global.instances).map(([id, config]) => {
+        const st = global.running?.[id]?.start_time ?? 0
+        return {
         id, name: config.name || '未命名实例', status: runningIds.has(id) ? 'running' as const : 'stopped' as const,
-        model: config.model_path.split('\\').pop() || config.model_path,
+        model: pathBasename(config.model_path),
         port: config.port, healthCheck: runningIds.has(id) ? 'pending' as const : 'pending' as const, config,
-        startTime: (global.running?.[id]?.start_time ?? 0) > 0 ? global.running[id].start_time * 1000 : undefined,
-      }))
+        startTime: st > 0 ? st * 1000 : undefined,
+      }})
       // 按保存的顺序排列
       list.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
         set({
