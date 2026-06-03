@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis", "msi", "dmg", "deb", "appimage"],
+    "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
       "certificateThumbprint": null,
       "digestAlgorithm": "sha256",
