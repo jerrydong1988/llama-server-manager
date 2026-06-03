@@ -4,6 +4,7 @@ import { useAppStore, type InstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
 import { BasicSection, ReasoningSection, PerformanceSection, AdvancedSection } from './ConfigPage/sections'
+import { getActiveParams } from './ConfigPage/activeParams'
 
 const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
 
@@ -57,7 +58,7 @@ const ConfigPage = () => {
     setTimeout(() => { setSaved(false); setSaveWarnings([]) }, 6000)
   }
 
-  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => setShowPicker(true) }
+  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => setShowPicker(true), activeParams: local ? getActiveParams(local, isEmbedding) : new Set() as Set<keyof InstanceConfig> }
 
   return (
     <div className="space-y-6">

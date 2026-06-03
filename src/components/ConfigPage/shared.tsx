@@ -26,16 +26,16 @@ export const Section = ({ title, children, disabled, onToggle, toggled, defaultO
   )
 }
 
-export const Input = ({ label, value, onChange, placeholder, type, title, disabled }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean }) => (
+export const Input = ({ label, value, onChange, placeholder, type, title, disabled, active }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; active?: boolean }) => (
   <div title={title}>
-    <label className="block text-xs font-medium mb-1 text-gray-500">{label}</label>
+    <label className={`block text-xs font-medium mb-1 ${active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
     <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
   </div>
 )
 
-export const Num = ({ label, value, onChange, min, max, step, title, disabled }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean }) => (
+export const Num = ({ label, value, onChange, min, max, step, title, disabled, active }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; active?: boolean }) => (
   <div title={title}>
-    <label className="block text-xs font-medium mb-1 text-gray-500">{label}</label>
+    <label className={`block text-xs font-medium mb-1 ${active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
     <input type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
   </div>
 )
@@ -47,9 +47,25 @@ export const Toggle = ({ label, value, onChange, title, disabled }: { label: str
   </label>
 )
 
-export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string }) => (
+export const Switch = ({ label, value, onChange, title, disabled, active }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; active?: boolean }) => (
+  <label className={`flex items-center gap-2.5 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`} title={title}>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={value}
+      onClick={() => onChange(!value)}
+      disabled={disabled}
+      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${value ? 'bg-blue-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+    >
+      <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
+    </button>
+    <span className={`text-sm ${active ? 'text-green-600 dark:text-green-400' : ''}`}>{label}</span>
+  </label>
+)
+
+export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, active }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; active?: boolean }) => (
   <div title={title}>
-    <label className="block text-xs font-medium mb-1 text-gray-500">{label}</label>
+    <label className={`block text-xs font-medium mb-1 ${active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
     <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
     </select>
@@ -134,7 +150,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedHardware: {
     moe_cpu_layers: 0, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
     check_tensors: false, fit: false,
-    threads_batch: 0, threads_http: -1,
+    threads_http: -1,
   },
   advancedServerBasic: {
     api_key: '', api_key_file: '', no_ui: false,
