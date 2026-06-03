@@ -11,12 +11,16 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 ---
 
 ## 界面预览 / Screenshots
-<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/5fd90304-fc39-4f33-8ceb-681890584297" />
-<img width="1280" height="800" alt="image" src="https://github.com/user-attachments/assets/9cd8588a-c17d-45a8-a619-bcfb6d3f55d5" />
-<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/7edba269-1147-408b-b61c-38c5825450ac" />
-<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/29d10bff-bad8-4f8b-a385-2d925bc35c6a" />
-<img width="1280" height="1390" alt="image" src="https://github.com/user-attachments/assets/a34b0460-4e19-43fb-b576-63263d0ff5f5" />
-<img width="1280" height="830" alt="image" src="https://github.com/user-attachments/assets/974a8169-9d48-4f8b-a3dd-452818f041e0" />
+<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/3fabebe2-c494-40b5-8e80-57a02cae2c6e" />
+<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/eb4d8007-2308-41bf-922e-6eddfffa83e9" />
+<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/0b7bc1fe-bb81-4a6c-b282-383d7afac671" />
+<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/591390b2-5194-4f46-924b-ab88cd0bec43" />
+<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/c7d56b66-dffa-4594-9e54-6c97c07e3309" />
+- 明暗主题切换（持久化）+ 窗口尺寸/位置记忆
+- 完整中英双语界面
+<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/2a244df3-98e1-4d09-a7d5-c773c9c2d3b1" />
+<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/7a11d216-0748-45ef-9cb1-59cc46f4f134" />
+
 
 
 ---
