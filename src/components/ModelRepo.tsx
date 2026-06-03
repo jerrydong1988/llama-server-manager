@@ -4,6 +4,7 @@ import { useAppStore, type MsFileEntry, type ModelInfo } from '../store'
 import { useI18n } from '../i18n'
 import { listen } from '@tauri-apps/api/event'
 import { confirm } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { normalizePath, pathJoin } from '../utils/path'
 
 const DEFAULT_SAVE_DIR = 'models'
@@ -334,7 +335,8 @@ const ModelRepo = () => {
                         setFileStates(s => ({...s, [f.name]: {downloaded: 0, total: f.size, status: 'pending' as const}}))
                         try {
                           await downloadModelscopeFiles(msRepoId, [f], msSaveDir)
-                          const allDirs = [...new Set([...modelDirs, msSaveDir])]
+                          const resolvedDir = await invoke<string>('resolve_path', { path: msSaveDir })
+                          const allDirs = [...new Set([...modelDirs, resolvedDir])]
                           setModelDirs(allDirs)
                           await scanModels(allDirs)
                         } catch (e: any) { console.error(e) }

@@ -140,3 +140,14 @@ pub fn load_window_state(state: tauri::State<'_, AppState>) -> Option<WindowStat
             .and_then(|s| serde_json::from_str::<WindowState>(&s).ok())
     } else { None }
 }
+
+// ── 路径 resolve（相对 → 绝对） ──────────────────────────────────
+#[tauri::command]
+pub fn resolve_path(path: String) -> String {
+    let pb = std::path::PathBuf::from(&path);
+    if pb.is_relative() {
+        crate::utils::get_data_dir().join(&path).to_string_lossy().to_string()
+    } else {
+        path
+    }
+}
