@@ -179,3 +179,14 @@ pub fn get_app_dir() -> PathBuf {
         .unwrap_or(Path::new("."))
         .to_path_buf()
 }
+
+// ── 获取数据目录 (ASCII-safe, 避免中文路径) ──────────────────────
+pub fn get_data_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Ok(appdata) = std::env::var("LOCALAPPDATA") {
+            return PathBuf::from(appdata).join("LlamaServerManager");
+        }
+    }
+    get_app_dir()
+}

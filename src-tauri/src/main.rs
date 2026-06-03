@@ -17,9 +17,8 @@ fn main() {
     let default_models: Vec<models::ModelInfo> = vec![];
     let default_engines: Vec<models::EngineInfo> = vec![];
 
-    let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
-    let config_dir = exe_dir.join("configs");
+    let data_dir = crate::utils::get_data_dir();
+    let config_dir = data_dir.join("configs");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

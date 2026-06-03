@@ -20,7 +20,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
 // ── 模型扫描 ──────────────────────────────────────────────────────
 #[tauri::command]
 pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
-    let app_dir = utils::get_app_dir();
+    let app_dir = utils::get_data_dir();
     let default_path = app_dir.join("models");
 
     let scan_paths: Vec<PathBuf> = if paths.is_empty() {
@@ -118,7 +118,7 @@ pub async fn read_gguf_metadata(path: String) -> Result<(Option<String>, Option<
 pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<Vec<EngineInfo>, String> {
     let mut engines: Vec<EngineInfo> = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    let app_dir = utils::get_app_dir();
+    let app_dir = utils::get_data_dir();
 
     let engines_dir = app_dir.join("engines");
     if engines_dir.exists() {
