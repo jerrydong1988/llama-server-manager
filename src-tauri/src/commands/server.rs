@@ -92,12 +92,13 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.override_kv.is_empty() { cmd.extend_from_slice(&["--override-kv".into(), config.override_kv.clone()]); }
 
     // ── Speculative Decoding ──
-    if !is_emb {
+    let spec_active = !is_emb && !config.spec_type.is_empty() && config.spec_type != "none";
+    if spec_active {
         if !config.draft_model_path.is_empty() { cmd.extend_from_slice(&["-md".into(), config.draft_model_path.clone()]); }
         if config.draft_gpu_layers > 0 && config.draft_gpu_layers < 99 { cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]); }
         if config.draft_tokens > 0 { cmd.extend_from_slice(&["--spec-draft-n-max".into(), config.draft_tokens.to_string()]); }
         if config.spec_draft_n_min > 0 { cmd.extend_from_slice(&["--spec-draft-n-min".into(), config.spec_draft_n_min.to_string()]); }
-        if !config.spec_type.is_empty() { cmd.extend_from_slice(&["--spec-type".into(), config.spec_type.clone()]); }
+        cmd.extend_from_slice(&["--spec-type".into(), config.spec_type.clone()]);
         if config.spec_draft_p_min > 0.0 { cmd.extend_from_slice(&["--spec-draft-p-min".into(), config.spec_draft_p_min.to_string()]); }
         if config.spec_draft_p_split != 0.1 { cmd.extend_from_slice(&["--spec-draft-p-split".into(), config.spec_draft_p_split.to_string()]); }
         if !config.spec_draft_device.is_empty() { cmd.extend_from_slice(&["--spec-draft-device".into(), config.spec_draft_device.clone()]); }
@@ -164,7 +165,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     }
 
     // ── Server features ──
-    cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]);
+    if config.timeout > 0 { cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]); }
     if config.sleep_idle >= 0 { cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]); }
     if config.context_shift { cmd.push("--context-shift".into()); }
     if config.verbose { cmd.push("-v".into()); }
