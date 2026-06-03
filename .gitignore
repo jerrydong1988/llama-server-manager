@@ -25,7 +25,6 @@ dist-ssr
 
 # Tauri
 src-tauri/target
-src-tauri/icons
 src-tauri/gen
 
 # Model files (can be very large)
