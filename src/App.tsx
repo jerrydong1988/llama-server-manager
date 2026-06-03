@@ -44,7 +44,7 @@ function AppInner() {
     .then(r => r.json())
     .then(json => {
       const latest = (json.tag_name || '').replace(/^v/, '')
-      const current = '2.2.0'
+      const current = '2.3.0'
       const l = latest.split('.').map(Number)
       const c = current.split('.').map(Number)
       const has = l.some((v: number, i: number) => v > (c[i] || 0)) && !c.some((v: number, i: number) => v > (l[i] || 0))
