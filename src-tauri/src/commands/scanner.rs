@@ -34,7 +34,10 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) 
     let scan_paths: Vec<PathBuf> = if paths.is_empty() {
         vec![default_path]
     } else {
-        paths.iter().map(PathBuf::from).collect()
+        paths.iter().map(|p| {
+            let pb = PathBuf::from(p);
+            if pb.is_relative() { app_dir.join(p) } else { pb }
+        }).collect()
     };
 
     // Offload heavy disk I/O + GGUF parsing to a blocking thread
