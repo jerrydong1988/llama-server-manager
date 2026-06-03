@@ -39,3 +39,4 @@ src-tauri/configs/
 .temp
 *.tmp
 .n.omo/
+.omo/

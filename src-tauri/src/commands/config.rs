@@ -60,6 +60,18 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
     };
 
     let mut global: GlobalConfig = serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
+
+    // 将相对路径的模型/引擎目录 resolve 为绝对路径
+    let app_dir = crate::utils::get_data_dir();
+    global.model_dirs = global.model_dirs.iter().map(|d| {
+        let pb = std::path::PathBuf::from(d);
+        if pb.is_relative() { app_dir.join(d).to_string_lossy().to_string() } else { d.clone() }
+    }).collect();
+    global.engine_dirs = global.engine_dirs.iter().map(|d| {
+        let pb = std::path::PathBuf::from(d);
+        if pb.is_relative() { app_dir.join(d).to_string_lossy().to_string() } else { d.clone() }
+    }).collect();
+
     let mut stored = state.instances.lock().unwrap();
     *stored = global.instances.clone();
 
