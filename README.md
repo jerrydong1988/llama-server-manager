@@ -40,10 +40,10 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - Open in Explorer, delete from disk
 
 ### 引擎管理 / Engine Management
-- 多引擎递归扫描，自动识别子目录中的 `llama-server.exe`
+- 多引擎递归扫描，自动识别子目录中的 `llama-server`
 - 后端类型自动检测（CUDA / ROCm / Vulkan / CPU）
 - 多引擎根目录管理，设为默认引擎
-- Recursive engine scanning, auto-discovers llama-server.exe in subdirectories
+- Recursive engine scanning, auto-discovers llama-server in subdirectories
 - Automatic backend detection (CUDA / ROCm / Vulkan / CPU)
 - Multi-root directory management, set default engine
 
@@ -119,7 +119,9 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 
 ## 系统要求 / Requirements
 
-- Windows 10/11（主要支持 / Primary）
+- Windows 10/11
+- macOS 13+（Apple Silicon）
+- Linux (Ubuntu 22.04+)
 - Rust 1.75+
 - Node.js 18+
 
@@ -142,9 +144,15 @@ npm run tauri dev
 npm run tauri build
 ```
 
-编译后的可执行文件位于 `src-tauri/target/release/` 目录。
+Linux 构建需先安装系统依赖 / Linux requires system dependencies:
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+```
 
-The compiled executable is located in `src-tauri/target/release/`.
+macOS 编译后运行需解除 Gatekeeper / macOS requires removing quarantine:
+```bash
+xattr -cr /Applications/LlamaServerManager.app
+```
 
 ---
 
@@ -163,20 +171,22 @@ llama-server-manager/
 │   │   ├── types.ts        # 类型定义
 │   │   └── defaults.ts     # 默认配置
 │   ├── i18n/               # 国际化 (中/英)
+│   │   └── utils/           # 跨平台路径工具
 │   ├── validators.ts       # 参数校验引擎 (25 规则)
 │   ├── App.tsx
 │   └── main.tsx
 ├── src-tauri/              # Rust 后端 / Backend
 │   ├── src/
-│   │   ├── main.rs         # 入口 + 窗口/托盘 (173 行)
+│   │   ├── main.rs         # 入口 + 窗口/托盘
 │   │   ├── models.rs       # 数据结构定义
-│   │   ├── utils.rs        # GGUF 解析 / 后端检测
+│   │   ├── utils.rs        # GGUF 解析 / 后端检测 / 路径
 │   │   └── commands/       # 命令模块 (5 文件)
 │   │       ├── config.rs   # 配置持久化 + 备份恢复
 │   │       ├── server.rs   # 命令生成 + 启停 + 健康检查
 │   │       ├── scanner.rs  # 模型/引擎扫描
 │   │       └── download.rs # ModelScope 下载
 │   └── Cargo.toml
+├── .github/workflows/      # CI/CD 三平台自动构建
 ├── package.json
 └── vite.config.ts
 ```
