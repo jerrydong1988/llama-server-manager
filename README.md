@@ -1,5 +1,5 @@
 # Llama Server Manager / Llama 服务器管理器
-
+## Windows · macOS · Linux 三平台均已实测验证通过
 > 现代化 Llama.cpp 服务器图形化管理器 | Modern GUI for managing llama.cpp servers
 
 一个功能完整的桌面应用程序，用于管理 `llama-server` 的全生命周期：**下载模型 → 选择引擎 → 配置参数 → 启动监控**。告别复杂的命令行参数。
