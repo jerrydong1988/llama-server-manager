@@ -66,7 +66,7 @@ export const Switch = ({ label, value, onChange, title, disabled, active }: { la
 export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, active }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; active?: boolean }) => (
   <div title={title}>
     <label className={`block text-xs font-medium mb-1 ${active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+    <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`select-custom w-full pl-3 pr-8 py-1.5 text-sm text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
     </select>
   </div>

@@ -199,7 +199,7 @@ const InstanceManager = () => {
                   <button onClick={() => setShowCreatePicker(true)} className="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm" title={t.modelRepo.selectFromRepo}>📂</button>
                 </div></div>
               <div><label className="block text-sm font-medium mb-1">{t.instance.selectEngine}</label>
-                <select value={newInst.engineId || defaultEngineId || ''} onChange={e => setNewInst({ ...newInst, engineId: e.target.value })} className="w-full px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
+                <select value={newInst.engineId || defaultEngineId || ''} onChange={e => setNewInst({ ...newInst, engineId: e.target.value })} className="select-custom w-full pl-3 pr-8 py-2 text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
                   <option value="">{t.instance.sysPath}</option>{engines.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
                 </select></div>
               <div><label className="block text-sm font-medium mb-1">{t.instance.port}</label><input type="number" min={1} max={65535} value={newInst.port} onChange={e => { const p = parseInt(e.target.value) || 8080; setNewInst({ ...newInst, port: p }); if (portCheckTimerRef.current) clearTimeout(portCheckTimerRef.current); portCheckTimerRef.current = setTimeout(() => { invoke('check_port', { port: p }).then(r => setPortStatus(r ? '✓ 端口可用' : '✗ 端口已被占用')).catch(() => setPortStatus('')) }, 400) }} className="w-full px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" /></div>
