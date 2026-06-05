@@ -24,6 +24,8 @@ pub struct EngineInfo {
     pub exe: String,
     pub version: String,
     pub backend: String,
+    #[serde(default)]
+    pub custom_name: Option<String>,
 }
 
 // ── 实例配置 ──────────────────────────────────────────────────────

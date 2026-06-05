@@ -1,14 +1,17 @@
-import { useEffect } from 'react'
-import { RefreshCw, FolderOpen, Trash2, Plus, Cpu } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { RefreshCw, FolderOpen, Trash2, Plus, Cpu, Pencil } from 'lucide-react'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
 import { confirm } from '@tauri-apps/plugin-dialog'
 
 const EngineManager = () => {
-  const { engines, scanEngines, loadInitialData, isLoading, deleteEngine, openEngineFolder, defaultEngineId, setDefaultEngineId, engineDirs, setEngineDirs } = useAppStore()
-  const { t } = useI18n()
+const { engines, scanEngines, loadInitialData, isLoading, deleteEngine, renameEngine, openEngineFolder, defaultEngineId, setDefaultEngineId, engineDirs, setEngineDirs } = useAppStore()
+const { t } = useI18n()
 
-  useEffect(() => { loadInitialData() }, [loadInitialData])
+const [editingId, setEditingId] = useState<string | null>(null)
+const [editName, setEditName] = useState('')
+
+useEffect(() => { loadInitialData() }, [loadInitialData])
 
   const handleScan = async () => await scanEngines(engineDirs)
 
@@ -84,7 +87,24 @@ const EngineManager = () => {
             <div className="flex items-start justify-between mb-3">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg"><Cpu className="w-5 h-5 text-blue-600 dark:text-blue-400" /></div>
-                <div><h3 className="font-semibold">{engine.name}</h3><p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{engine.version}</p></div>
+                <div>
+                  {editingId === engine.id ? (
+                    <input type="text" value={editName}
+                      onChange={e => setEditName(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { renameEngine(engine.id, editName); setEditingId(null) } if (e.key === 'Escape') setEditingId(null) }}
+                      onBlur={() => { renameEngine(engine.id, editName); setEditingId(null) }}
+                      autoFocus
+                      className="font-semibold bg-transparent border-b border-blue-500 outline-none px-1 w-40 dark:text-white" />
+                  ) : (
+                    <div className="flex items-center gap-1">
+                      <h3 className="font-semibold">{engine.name}</h3>
+                      <button onClick={() => { setEditingId(engine.id); setEditName(engine.name) }}
+                        className="p-0.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors" title="修改名称">
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{engine.version}</p></div>
               </div>
               <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${backendColor(engine.backend)}`}>{engine.backend}</span>
             </div>

@@ -22,6 +22,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
         exe: exe.to_string_lossy().to_string(),
         version,
         backend,
+        custom_name: None,
     })
 }
 
@@ -194,6 +195,19 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
         }
     }
 
+    // 保留已改名的引擎自定义名称
+    {
+        let old = state.engines.lock().unwrap();
+        for engine in &mut engines {
+            if let Some(old_eng) = old.iter().find(|e| e.id == engine.id) {
+                if let Some(ref cn) = old_eng.custom_name {
+                    engine.custom_name = Some(cn.clone());
+                    engine.name = cn.clone();
+                }
+            }
+        }
+    }
+
     let mut state_engines = state.engines.lock().unwrap();
     *state_engines = engines.clone();
     Ok(engines)
@@ -208,6 +222,15 @@ pub async fn get_engines(state: tauri::State<'_, AppState>) -> Result<Vec<Engine
 pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut engines = state.engines.lock().unwrap();
     engines.retain(|e| e.id != id);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_engine(id: String, name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let mut engines = state.engines.lock().unwrap();
+    if let Some(engine) = engines.iter_mut().find(|e| e.id == id) {
+        engine.custom_name = Some(name);
+    }
     Ok(())
 }
 

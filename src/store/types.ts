@@ -16,6 +16,7 @@ export interface EngineInfo {
   exe: string
   version: string
   backend: string
+  custom_name?: string
 }
 
 export interface InstanceConfig {
@@ -149,6 +150,7 @@ export interface AppState {
 
   scanEngines: (paths: string[]) => Promise<void>
   deleteEngine: (id: string) => Promise<void>
+  renameEngine: (id: string, name: string) => void
   openEngineFolder: (dir: string) => Promise<void>
 
   generateCommand: (config: InstanceConfig, engineExe: string) => Promise<string[]>
