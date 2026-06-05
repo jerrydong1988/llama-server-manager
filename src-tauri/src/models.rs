@@ -42,6 +42,8 @@ pub struct InstanceConfig {
     pub mmproj_path: String,
     #[serde(default)]
     pub lora_init_without_apply: bool,
+    #[serde(default)]
+    pub lora_scaled: String,
     pub chat_template: String,
     #[serde(default)]
     pub chat_template_file: String,
@@ -100,10 +102,14 @@ pub struct InstanceConfig {
     pub yarn_beta_slow: f32,
     #[serde(default)]
     pub yarn_beta_fast: f32,
+    #[serde(default)]
+    pub yarn_orig_ctx: u32,
     pub flash_attn: String,
     pub moe_cpu_layers: u32,
     pub mlock: bool,
     pub no_mmap: bool,
+    #[serde(default)]
+    pub no_repack: bool,
     pub numa: bool,
     pub context_shift: bool,
     #[serde(default)]
@@ -114,6 +120,8 @@ pub struct InstanceConfig {
     pub kv_unified: bool,
     #[serde(default)]
     pub cache_idle_slots: bool,
+    #[serde(default)]
+    pub no_kv_offload: bool,
     pub cache_type_k: String,
     pub cache_type_v: String,
     #[serde(default)]
@@ -159,6 +167,8 @@ pub struct InstanceConfig {
     pub api_prefix: String,
     pub no_ui: bool,
     #[serde(default)]
+    pub offline: bool,
+    #[serde(default)]
     pub ui_config_file: String,
     pub embedding: bool,
     pub pooling: String,
@@ -176,7 +186,7 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub slot_prompt_similarity: f32,
     #[serde(default)]
-    pub prefill_assistant: String,
+    pub prefill_assistant: bool,
     // Multi-Model & Media
     #[serde(default)]
     pub models_dir: String,
@@ -190,6 +200,10 @@ pub struct InstanceConfig {
     pub mmproj_url: String,
     #[serde(default)]
     pub mmproj_auto: bool,
+    #[serde(default)]
+    pub no_mmproj: bool,
+    #[serde(default)]
+    pub no_mmproj_offload: bool,
     #[serde(default)]
     pub image_min_tokens: u32,
     #[serde(default)]
@@ -256,7 +270,7 @@ impl Default for InstanceConfig {
         Self {
             id: String::new(), name: String::new(), engine_id: String::new(), model_path: String::new(),
             alias: String::new(), lora_path: String::new(), mmproj_path: String::new(),
-            lora_init_without_apply: false,
+            lora_init_without_apply: false, lora_scaled: String::new(),
             chat_template: String::new(), chat_template_file: String::new(), skip_chat_parsing: false,
             reasoning_format: String::new(), reasoning_effort: String::new(),
             reasoning: String::new(), jinja: false,
@@ -268,10 +282,10 @@ impl Default for InstanceConfig {
             threads_http: -1, keep: 0, cache_reuse: 0, cache_ram: 0,
             warmup: false, ctx_checkpoints: 32, checkpoint_min_step: 0, swa_full: false,
             rope_scaling: String::new(), rope_scale: 0.0, rope_freq_base: 0.0, rope_freq_scale: 0.0,
-            yarn_ext_factor: -1.0, yarn_attn_factor: 1.0, yarn_beta_slow: 0.0, yarn_beta_fast: 32.0,
+            yarn_ext_factor: -1.0, yarn_attn_factor: 1.0, yarn_beta_slow: 0.0,             yarn_beta_fast: 32.0, yarn_orig_ctx: 0,
             flash_attn: "auto".into(), moe_cpu_layers: 0, mlock: false,
-            no_mmap: false, numa: false, context_shift: false,
-            check_tensors: false, fit: false, kv_unified: false, cache_idle_slots: true,
+            no_mmap: false, no_repack: false, numa: false, context_shift: false,
+            check_tensors: false, fit: false, kv_unified: false, cache_idle_slots: true, no_kv_offload: false,
             cache_type_k: String::new(), cache_type_v: String::new(),
             cache_type_draft_k: String::new(), cache_type_draft_v: String::new(),
             draft_model_path: String::new(), draft_gpu_layers: 99, draft_tokens: 16,
@@ -284,12 +298,12 @@ impl Default for InstanceConfig {
             api_key_file: String::new(),
             ssl_key_file: String::new(), ssl_cert_file: String::new(),
             path_prefix: String::new(), api_prefix: String::new(),
-            no_ui: false, ui_config_file: String::new(),
+            no_ui: false, offline: false, ui_config_file: String::new(),
             embedding: false, pooling: String::new(), embd_normalize: 2, reranking: false,
             metrics: false, props: false, slots_enabled: true,
-            slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: String::new(),
+            slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: false,
             models_dir: String::new(), models_preset: String::new(), models_max: 4, models_autoload: false,
-            mmproj_url: String::new(), mmproj_auto: false, image_min_tokens: 0, image_max_tokens: 0,
+            mmproj_url: String::new(), mmproj_auto: false, no_mmproj: false, no_mmproj_offload: false, image_min_tokens: 0, image_max_tokens: 0,
             tags: String::new(), media_path: String::new(), tools: String::new(),
             n_predict: -1, ignore_eos: false, json_schema: String::new(),
             temp: 0.8, top_k: 40, top_p: 0.9, repeat_penalty: 1.1, seed: -1,

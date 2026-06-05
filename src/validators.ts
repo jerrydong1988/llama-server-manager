@@ -173,6 +173,10 @@ export function validateConfig(
       (!config.spec_type || !config.spec_type.includes('ngram')))
     w.push({ field: 'lookup_cache_static', severity: 'low', key: 'warnB9' })
 
+  // B10: --no-mmproj 与 --mmproj 同时设置
+  if (config.no_mmproj && config.mmproj_path)
+    w.push({ field: 'no_mmproj', severity: 'low', key: 'warnB10' })
+
   // ═══ C 组：环境感知 ═══
 
   // C1: mmproj 非空但模型架构不像视觉模型

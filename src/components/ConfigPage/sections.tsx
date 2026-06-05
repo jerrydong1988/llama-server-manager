@@ -75,6 +75,7 @@ export function PerformanceSection({ local, set, t, activeParams }: Props) {
         <Select label={`${t.configPage.flashAttn} (-fa)`} value={local.flash_attn} onChange={v => set('flash_attn', v)} options={['auto', 'on', 'off']} title={t.configPage.flashAttnTip} defaultLabel={t.common.default}  active={a('flash_attn')} />
         <Switch label={`${t.configPage.mlock} (--mlock)`} value={local.mlock} onChange={v => set('mlock', v)} title={t.configPage.mlockTip}  active={a('mlock')} />
         <Switch label={`${t.configPage.noMmap} (--no-mmap)`} value={local.no_mmap} onChange={v => set('no_mmap', v)} title={t.configPage.noMmapTip}  active={a('no_mmap')} />
+      <Switch label={`${t.configPage.noRepack} (--no-repack)`} value={local.no_repack} onChange={v => set('no_repack', v)} title={t.configPage.noRepackTip}  active={a('no_repack')} />
         <Switch label={`${t.configPage.numa} (--numa)`} value={local.numa} onChange={v => set('numa', v)} title={t.configPage.numaTip}  active={a('numa')} />
       </div>
     </Section>
@@ -128,6 +129,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Input label={`${t.configPage.chatTemplateFile} (--chat-template-file)`} value={local.chat_template_file} onChange={v => set('chat_template_file', v)} title={t.configPage.chatTemplateFileTip}  active={a('chat_template_file')} />
             <Input label={`${t.configPage.lora} (--lora)`} value={local.lora_path} onChange={v => set('lora_path', v)} title={t.configPage.loraTip}  active={a('lora_path')} />
             <Switch label={`${t.configPage.loraInitNoApply} (--lora-init-without-apply)`} value={local.lora_init_without_apply} onChange={v => set('lora_init_without_apply', v)} title={t.configPage.loraInitNoApplyTip}  active={a('lora_init_without_apply')} />
+      <Input label={`${t.configPage.loraScaled} (--lora-scaled)`} value={local.lora_scaled || ''} onChange={v => set('lora_scaled', v)} title={t.configPage.loraScaledTip} disabled={isEmbedding}  active={a('lora_scaled')} />
             <Input label={`${t.configPage.mmproj} (--mmproj)`} value={local.mmproj_path} onChange={v => set('mmproj_path', v)} title={t.configPage.mmprojTip} disabled={isEmbedding}  active={a('mmproj_path')} />
             <Input label={`${t.configPage.grammarFile} (--grammar-file)`} value={local.grammar_file} onChange={v => set('grammar_file', v)} title={t.configPage.grammarFileTip}  active={a('grammar_file')} />
             <Input label={`${t.configPage.grammar} (--grammar)`} value={local.grammar} onChange={v => set('grammar', v)} title={t.configPage.grammarTip}  active={a('grammar')} />
@@ -203,6 +205,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Num label={`${t.configPage.yarnAttnFactor} (--yarn-attn-factor)`} value={local.yarn_attn_factor} onChange={v => set('yarn_attn_factor', v)} min={0} max={10} step={0.1} title={t.configPage.yarnAttnFactorTip}  active={a('yarn_attn_factor')} />
             <Num label={`${t.configPage.yarnBetaSlow} (--yarn-beta-slow)`} value={local.yarn_beta_slow} onChange={v => set('yarn_beta_slow', v)} min={0} max={10} step={0.1} title={t.configPage.yarnBetaSlowTip}  active={a('yarn_beta_slow')} />
             <Num label={`${t.configPage.yarnBetaFast} (--yarn-beta-fast)`} value={local.yarn_beta_fast} onChange={v => set('yarn_beta_fast', v)} min={0} max={128} title={t.configPage.yarnBetaFastTip}  active={a('yarn_beta_fast')} />
+      <Num label={`${t.configPage.yarnOrigCtx} (--yarn-orig-ctx)`} value={local.yarn_orig_ctx || 0} onChange={v => set('yarn_orig_ctx', v)} min={0} max={1048576} title={t.configPage.yarnOrigCtxTip}  active={a('yarn_orig_ctx')} />
           </div>
         </CollapsibleGroup>
 
@@ -217,6 +220,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Switch label={`${t.configPage.warmup} (--warmup)`} value={local.warmup} onChange={v => set('warmup', v)} title={t.configPage.warmupTip}  active={a('warmup')} />
             <Switch label={`${t.configPage.cacheIdleSlots} (--no-cache-idle-slots)`} value={!local.cache_idle_slots} onChange={v => set('cache_idle_slots', !v)} title={t.configPage.cacheIdleSlotsTip} />
             <Switch label={`${t.configPage.kvUnified} (--kv-unified)`} value={local.kv_unified} onChange={v => set('kv_unified', v)} title={t.configPage.kvUnifiedTip}  active={a('kv_unified')} />
+      <Switch label={`${t.configPage.noKvOffload} (--no-kv-offload)`} value={local.no_kv_offload} onChange={v => set('no_kv_offload', v)} title={t.configPage.noKvOffloadTip}  active={a('no_kv_offload')} />
           </div>
         </CollapsibleGroup>
 
@@ -252,6 +256,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Input label={`${t.configPage.apiKey} (--api-key)`} value={local.api_key} onChange={v => set('api_key', v)} type="password" title={t.configPage.apiKeyTip}  active={a('api_key')} />
             <Input label={`${t.configPage.apiKeyFile} (--api-key-file)`} value={local.api_key_file} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip}  active={a('api_key_file')} />
             <Switch label={`${t.configPage.noUi} (--no-ui)`} value={local.no_ui} onChange={v => set('no_ui', v)} title={t.configPage.noUiTip}  active={a('no_ui')} />
+      <Switch label={`${t.configPage.offline} (--offline)`} value={local.offline} onChange={v => set('offline', v)} title={t.configPage.offlineTip}  active={a('offline')} />
             <Input label={`${t.configPage.pathPrefix} (--path)`} value={local.path_prefix} onChange={v => set('path_prefix', v)} title={t.configPage.pathPrefixTip}  active={a('path_prefix')} />
             <Input label={`${t.configPage.apiPrefix} (--api-prefix)`} value={local.api_prefix} onChange={v => set('api_prefix', v)} title={t.configPage.apiPrefixTip}  active={a('api_prefix')} />
             <Num label={`${t.configPage.timeout} (-to)`} value={local.timeout} onChange={v => set('timeout', v)} min={1} title={t.configPage.timeoutTip}  active={a('timeout')} />
@@ -272,7 +277,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Switch label={`${t.configPage.props} (--props)`} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip}  active={a('props')} />
             <Input label={`${t.configPage.slotSavePath} (--slot-save-path)`} value={local.slot_save_path} onChange={v => set('slot_save_path', v)} title={t.configPage.slotSavePathTip}  active={a('slot_save_path')} />
             <Num label={`${t.configPage.slotPromptSimilarity} (-sps)`} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip}  active={a('slot_prompt_similarity')} />
-            <Input label={`${t.configPage.prefillAssistant} (--prefill-assistant)`} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip}  active={a('prefill_assistant')} />
+            <Switch label={`${t.configPage.prefillAssistant} (--prefill-assistant)`} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip}  active={a('prefill_assistant')} />
             <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip}  active={a('ui_config_file')} />
           </div>
         </CollapsibleGroup>
@@ -286,6 +291,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Switch label={`${t.configPage.modelsAutoload} (--models-autoload)`} value={local.models_autoload} onChange={v => set('models_autoload', v)} title={t.configPage.modelsAutoloadTip}  active={a('models_autoload')} />
             <Input label={`${t.configPage.mmprojUrl} (--mmproj-url)`} value={local.mmproj_url} onChange={v => set('mmproj_url', v)} title={t.configPage.mmprojUrlTip} disabled={isEmbedding}  active={a('mmproj_url')} />
             <Switch label={`${t.configPage.mmprojAuto} (--mmproj-auto)`} value={local.mmproj_auto} onChange={v => set('mmproj_auto', v)} title={t.configPage.mmprojAutoTip} disabled={isEmbedding}  active={a('mmproj_auto')} />
+      <Switch label={`${t.configPage.noMmproj} (--no-mmproj)`} value={local.no_mmproj} onChange={v => set('no_mmproj', v)} title={t.configPage.noMmprojTip} disabled={isEmbedding}  active={a('no_mmproj')} />
+      <Switch label={`${t.configPage.noMmprojOffload} (--no-mmproj-offload)`} value={local.no_mmproj_offload} onChange={v => set('no_mmproj_offload', v)} title={t.configPage.noMmprojOffloadTip} disabled={isEmbedding || local.no_mmproj}  active={a('no_mmproj_offload')} />
             <Num label={`${t.configPage.imageMinTokens} (--image-min-tokens)`} value={local.image_min_tokens} onChange={v => set('image_min_tokens', v)} min={0} title={t.configPage.imageMinTokensTip} disabled={isEmbedding}  active={a('image_min_tokens')} />
             <Num label={`${t.configPage.imageMaxTokens} (--image-max-tokens)`} value={local.image_max_tokens} onChange={v => set('image_max_tokens', v)} min={0} title={t.configPage.imageMaxTokensTip} disabled={isEmbedding}  active={a('image_max_tokens')} />
             <Input label={`${t.configPage.mediaPath} (--media-path)`} value={local.media_path} onChange={v => set('media_path', v)} title={t.configPage.mediaPathTip}  active={a('media_path')} />

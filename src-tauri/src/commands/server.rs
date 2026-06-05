@@ -14,9 +14,12 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !is_emb {
         if !config.lora_path.is_empty() { cmd.extend_from_slice(&["--lora".into(), config.lora_path.clone()]); }
         if config.lora_init_without_apply { cmd.push("--lora-init-without-apply".into()); }
+        if !config.lora_scaled.is_empty() { cmd.extend_from_slice(&["--lora-scaled".into(), config.lora_scaled.clone()]); }
         if !config.mmproj_path.is_empty() { cmd.extend_from_slice(&["--mmproj".into(), config.mmproj_path.clone()]); }
         if !config.mmproj_url.is_empty() { cmd.extend_from_slice(&["--mmproj-url".into(), config.mmproj_url.clone()]); }
         if config.mmproj_auto { cmd.push("--mmproj-auto".into()); }
+        if config.no_mmproj { cmd.push("--no-mmproj".into()); }
+        if config.no_mmproj_offload { cmd.push("--no-mmproj-offload".into()); }
         if !config.chat_template.is_empty() { cmd.extend_from_slice(&["--chat-template".into(), config.chat_template.clone()]); }
         if !config.chat_template_file.is_empty() { cmd.extend_from_slice(&["--chat-template-file".into(), config.chat_template_file.clone()]); }
         if config.skip_chat_parsing { cmd.push("--skip-chat-parsing".into()); }
@@ -61,6 +64,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.yarn_attn_factor != 1.0 { cmd.extend_from_slice(&["--yarn-attn-factor".into(), config.yarn_attn_factor.to_string()]); }
     if config.yarn_beta_slow > 0.0 { cmd.extend_from_slice(&["--yarn-beta-slow".into(), config.yarn_beta_slow.to_string()]); }
     if config.yarn_beta_fast != 32.0 { cmd.extend_from_slice(&["--yarn-beta-fast".into(), config.yarn_beta_fast.to_string()]); }
+    if config.yarn_orig_ctx > 0 { cmd.extend_from_slice(&["--yarn-orig-ctx".into(), config.yarn_orig_ctx.to_string()]); }
 
     // ── Flash Attention ──
     if !is_emb {
@@ -72,6 +76,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.moe_cpu_layers > 0 { cmd.extend_from_slice(&["--n-cpu-moe".into(), config.moe_cpu_layers.to_string()]); }
     if config.mlock { cmd.push("--mlock".into()); }
     if config.no_mmap { cmd.push("--no-mmap".into()); }
+    if config.no_repack { cmd.push("--no-repack".into()); }
     if config.numa { cmd.extend_from_slice(&["--numa".into(), "distribute".into()]); }
     if config.check_tensors { cmd.push("--check-tensors".into()); }
     if config.fit { cmd.extend_from_slice(&["--fit".into(), "on".into()]); }
@@ -79,9 +84,10 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     // ── KV Cache ──
     if !config.cache_type_k.is_empty() { cmd.extend_from_slice(&["-ctk".into(), config.cache_type_k.clone()]); }
     if !config.cache_type_v.is_empty() { cmd.extend_from_slice(&["-ctv".into(), config.cache_type_v.clone()]); }
-    if !config.cache_type_draft_k.is_empty() { cmd.extend_from_slice(&["-ctdk".into(), config.cache_type_draft_k.clone()]); }
-    if !config.cache_type_draft_v.is_empty() { cmd.extend_from_slice(&["-ctdv".into(), config.cache_type_draft_v.clone()]); }
+    if !config.cache_type_draft_k.is_empty() { cmd.extend_from_slice(&["-ctkd".into(), config.cache_type_draft_k.clone()]); }
+    if !config.cache_type_draft_v.is_empty() { cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]); }
     if config.kv_unified { cmd.push("--kv-unified".into()); }
+    if config.no_kv_offload { cmd.push("--no-kv-offload".into()); }
     if !config.cache_idle_slots { cmd.push("--no-cache-idle-slots".into()); }
 
     // ── GPU & Device ──
@@ -113,6 +119,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.ssl_key_file.is_empty() { cmd.extend_from_slice(&["--ssl-key-file".into(), config.ssl_key_file.clone()]); }
     if !config.ssl_cert_file.is_empty() { cmd.extend_from_slice(&["--ssl-cert-file".into(), config.ssl_cert_file.clone()]); }
     if config.no_ui { cmd.push("--no-ui".into()); }
+    if config.offline { cmd.push("--offline".into()); }
     if !config.path_prefix.is_empty() { cmd.extend_from_slice(&["--path".into(), config.path_prefix.clone()]); }
     if !config.api_prefix.is_empty() { cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]); }
     if !config.ui_config_file.is_empty() { cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]); }
@@ -174,7 +181,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.slots_enabled { cmd.push("--no-slots".into()); }
     if !config.slot_save_path.is_empty() { cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]); }
     if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON { cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]); }
-    if !config.prefill_assistant.is_empty() { cmd.extend_from_slice(&["--prefill-assistant".into(), config.prefill_assistant.clone()]); }
+    if config.prefill_assistant { cmd.push("--prefill-assistant".into()); }
 
     // ── Multi-Model & Media ──
     if !config.models_dir.is_empty() { cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]); }

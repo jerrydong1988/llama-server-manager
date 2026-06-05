@@ -22,7 +22,7 @@ export interface EngineInfo {
 export interface InstanceConfig {
   // Basic
   id: string; name: string; engine_id: string; model_path: string; alias: string;
-  lora_path: string; mmproj_path: string; lora_init_without_apply: boolean;
+  lora_path: string; mmproj_path: string; lora_init_without_apply: boolean; lora_scaled: string;
   chat_template: string; chat_template_file: string; skip_chat_parsing: boolean;
   reasoning_format: string; reasoning_effort: string; reasoning: string;
   jinja: boolean; reasoning_budget: string; reasoning_budget_message: string;
@@ -36,11 +36,11 @@ export interface InstanceConfig {
   swa_full: boolean;
   // RoPE / YaRN
   rope_scaling: string; rope_scale: number; rope_freq_base: number; rope_freq_scale: number;
-  yarn_ext_factor: number; yarn_attn_factor: number; yarn_beta_slow: number; yarn_beta_fast: number;
+  yarn_ext_factor: number; yarn_attn_factor: number; yarn_beta_slow: number; yarn_beta_fast: number; yarn_orig_ctx: number;
   // Memory & KV Cache
   flash_attn: string; moe_cpu_layers: number; mlock: boolean;
-  no_mmap: boolean; numa: boolean; context_shift: boolean;
-  check_tensors: boolean; fit: boolean; kv_unified: boolean; cache_idle_slots: boolean;
+  no_mmap: boolean; no_repack: boolean; numa: boolean; context_shift: boolean;
+  check_tensors: boolean; fit: boolean; kv_unified: boolean; cache_idle_slots: boolean; no_kv_offload: boolean;
   cache_type_k: string; cache_type_v: string;
   cache_type_draft_k: string; cache_type_draft_v: string;
   // Speculative Decoding
@@ -54,13 +54,13 @@ export interface InstanceConfig {
   // Server & Network
   host: string; port: number; api_key: string; api_key_file: string;
   ssl_key_file: string; ssl_cert_file: string; path_prefix: string; api_prefix: string;
-  no_ui: boolean; ui_config_file: string;
+  no_ui: boolean; offline: boolean; ui_config_file: string;
   embedding: boolean; pooling: string; embd_normalize: number; reranking: boolean;
   metrics: boolean; props: boolean; slots_enabled: boolean;
-  slot_save_path: string; slot_prompt_similarity: number; prefill_assistant: string;
+  slot_save_path: string; slot_prompt_similarity: number; prefill_assistant: boolean;
   // Multi-Model & Media
   models_dir: string; models_preset: string; models_max: number; models_autoload: boolean;
-  mmproj_url: string; mmproj_auto: boolean; image_min_tokens: number; image_max_tokens: number;
+  mmproj_url: string; mmproj_auto: boolean; no_mmproj: boolean; no_mmproj_offload: boolean; image_min_tokens: number; image_max_tokens: number;
   tags: string; media_path: string; tools: string;
   // Generation
   n_predict: number; ignore_eos: boolean; json_schema: string;

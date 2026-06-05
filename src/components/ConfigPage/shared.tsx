@@ -159,7 +159,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   },
   advancedServerExt: {
     slots_enabled: true, metrics: false, props: false,
-    slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: '',
+    slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
     ui_config_file: '',
   },
   advancedMulti: {

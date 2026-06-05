@@ -18,9 +18,12 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (!e) {
     if (config.lora_path) a.add('lora_path')
     if (config.lora_init_without_apply) a.add('lora_init_without_apply')
+    if (config.lora_scaled) a.add('lora_scaled')
     if (config.mmproj_path) a.add('mmproj_path')
     if (config.mmproj_url) a.add('mmproj_url')
     if (config.mmproj_auto) a.add('mmproj_auto')
+    if (config.no_mmproj) a.add('no_mmproj')
+    if (config.no_mmproj_offload) a.add('no_mmproj_offload')
     if (config.chat_template) a.add('chat_template')
     if (config.chat_template_file) a.add('chat_template_file')
     if (config.skip_chat_parsing) a.add('skip_chat_parsing')
@@ -62,6 +65,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.yarn_attn_factor !== 1) a.add('yarn_attn_factor')
   if (config.yarn_beta_slow > 0) a.add('yarn_beta_slow')
   if (config.yarn_beta_fast !== 32) a.add('yarn_beta_fast')
+  if (config.yarn_orig_ctx > 0) a.add('yarn_orig_ctx')
 
   // ── Flash Attention ──
   if (!e && config.flash_attn !== 'auto' && config.flash_attn !== '') a.add('flash_attn')
@@ -70,6 +74,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.moe_cpu_layers > 0) a.add('moe_cpu_layers')
   if (config.mlock) a.add('mlock')
   if (config.no_mmap) a.add('no_mmap')
+  if (config.no_repack) a.add('no_repack')
   if (config.numa) a.add('numa')
   if (config.check_tensors) a.add('check_tensors')
   if (config.fit) a.add('fit')
@@ -81,6 +86,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.cache_type_draft_v) a.add('cache_type_draft_v')
   if (config.kv_unified) a.add('kv_unified')
   if (!config.cache_idle_slots) a.add('cache_idle_slots')   // negative: --no-cache-idle-slots when false
+  if (config.no_kv_offload) a.add('no_kv_offload')
 
   // ── GPU & Device ──
   if (config.device) a.add('device')
@@ -109,6 +115,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.ssl_key_file) a.add('ssl_key_file')
   if (config.ssl_cert_file) a.add('ssl_cert_file')
   if (config.no_ui) a.add('no_ui')
+  if (config.offline) a.add('offline')
   if (config.path_prefix) a.add('path_prefix')
   if (config.api_prefix) a.add('api_prefix')
   if (config.ui_config_file) a.add('ui_config_file')
