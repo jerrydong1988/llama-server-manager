@@ -79,6 +79,7 @@ fn main() {
                                         instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
                                         default_engine_id: String::new(), running: HashMap::new(),
                                         instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
+                                        engine_names: HashMap::new(),
                                     });
                                 global.running = s.running.lock().unwrap().clone();
                                 let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
@@ -104,6 +105,7 @@ fn main() {
         .manage(AppState {
             models: Mutex::new(default_models),
             engines: Mutex::new(default_engines),
+            engine_names: Mutex::new(HashMap::new()),
             instances: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
             config_dir: Mutex::new(config_dir),

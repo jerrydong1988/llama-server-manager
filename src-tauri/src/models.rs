@@ -323,6 +323,7 @@ pub struct RunningInstance {
 pub struct AppState {
     pub models: Mutex<Vec<ModelInfo>>,
     pub engines: Mutex<Vec<EngineInfo>>,
+    pub engine_names: Mutex<HashMap<String, String>>,
     pub instances: Mutex<HashMap<String, InstanceConfig>>,
     pub running: Mutex<HashMap<String, RunningInstance>>,
     pub config_dir: Mutex<PathBuf>,
@@ -343,6 +344,8 @@ pub struct GlobalConfig {
     pub last_tab: String,
     #[serde(default)]
     pub dark_mode: bool,
+    #[serde(default)]
+    pub engine_names: HashMap<String, String>,
 }
 
 // ── 窗口状态 ─────────────────────────────────────────────────────

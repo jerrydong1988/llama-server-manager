@@ -16,7 +16,8 @@ pub async fn save_config(
     let mut stored = state.instances.lock().unwrap();
     *stored = instances.clone();
     let running_snapshot = state.running.lock().unwrap().clone();
-    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order, last_tab, dark_mode };
+    let engine_names = state.engine_names.lock().unwrap().clone();
+    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order, last_tab, dark_mode, engine_names };
     let config_dir = state.config_dir.lock().unwrap().clone();
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     let path = config_dir.join("instances.json");
@@ -56,6 +57,7 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
             instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
             default_engine_id: String::new(), running: HashMap::new(),
             instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
+            engine_names: HashMap::new(),
         }),
     };
 
@@ -74,6 +76,7 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
 
     let mut stored = state.instances.lock().unwrap();
     *stored = global.instances.clone();
+    *state.engine_names.lock().unwrap() = global.engine_names.clone();
 
     // 恢复仍在运行的后台进程
     let mut restored = HashMap::new();

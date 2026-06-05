@@ -197,13 +197,11 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
 
     // 保留已改名的引擎自定义名称
     {
-        let old = state.engines.lock().unwrap();
+        let saved_names = state.engine_names.lock().unwrap();
         for engine in &mut engines {
-            if let Some(old_eng) = old.iter().find(|e| e.id == engine.id) {
-                if let Some(ref cn) = old_eng.custom_name {
-                    engine.custom_name = Some(cn.clone());
-                    engine.name = cn.clone();
-                }
+            if let Some(cn) = saved_names.get(&engine.id) {
+                engine.custom_name = Some(cn.clone());
+                engine.name = cn.clone();
             }
         }
     }
@@ -229,8 +227,10 @@ pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Res
 pub async fn rename_engine(id: String, name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut engines = state.engines.lock().unwrap();
     if let Some(engine) = engines.iter_mut().find(|e| e.id == id) {
-        engine.custom_name = Some(name);
+        engine.custom_name = Some(name.clone());
+        engine.name = name.clone();
     }
+    state.engine_names.lock().unwrap().insert(id, name);
     Ok(())
 }
 
