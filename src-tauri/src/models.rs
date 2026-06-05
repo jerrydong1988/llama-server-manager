@@ -185,7 +185,6 @@ pub struct InstanceConfig {
     pub slot_save_path: String,
     #[serde(default)]
     pub slot_prompt_similarity: f32,
-    #[serde(default)]
     pub prefill_assistant: bool,
     // Multi-Model & Media
     #[serde(default)]
