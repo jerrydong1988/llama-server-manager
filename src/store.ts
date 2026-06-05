@@ -125,12 +125,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((s) => ({ engines: s.engines.filter((e) => e.id !== id) }))
   },
 
-  renameEngine: (id, name) => set((s) => {
+  renameEngine: (id, name) => {
     invoke('rename_engine', { id, name })
-    return {
+    set((s) => ({
       engines: s.engines.map(e => e.id === id ? { ...e, name, custom_name: name } : e)
-    }
-  }),
+    }))
+  },
 
   openEngineFolder: async (dir: string) => {
     await invoke('open_engine_folder', { dir })

@@ -82,6 +82,7 @@ fn main() {
                                         engine_names: HashMap::new(),
                                     });
                                 global.running = s.running.lock().unwrap().clone();
+                                global.engine_names = s.engine_names.lock().unwrap().clone();
                                 let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
                             }
                             app.exit(0);
