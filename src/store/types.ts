@@ -79,6 +79,8 @@ export interface InstanceConfig {
   logit_bias: string; samplers: string; sampler_seq: string;
   // Misc
   timeout: number; sleep_idle: number; verbose: boolean; custom_args: string[];
+  // Server features (aligned with llama.cpp master)
+  rpc_servers: string; log_json: boolean; sse_ping_interval: number; reuse_port: boolean;
 }
 
 export interface Instance {
