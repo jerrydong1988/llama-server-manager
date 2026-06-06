@@ -222,34 +222,39 @@ pub async fn cancel_and_cleanup_download(file_name: String, file_path: String, s
 
 // ── HuggingFace 数据结构和浏览 ──────────────────────────────────
 #[derive(serde::Deserialize)]
-struct HfRepoInfo {
-    siblings: Vec<HfSibling>,
+struct HfFileEntry {
+    path: String,
+    #[serde(rename = "type")]
+    entry_type: String,
+    size: Option<u64>,
+    #[serde(default)]
+    lfs: Option<HfLfsInfo>,
 }
 
 #[derive(serde::Deserialize)]
-struct HfSibling {
-    rfilename: String,
-    #[serde(default)]
-    size: Option<u64>,
+struct HfLfsInfo {
+    size: u64,
 }
 
 #[tauri::command]
 pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
-    let url = format!("https://huggingface.co/api/models/{}", repo_id);
+    let url = format!("https://huggingface.co/api/models/{}/tree/main?recursive=true", repo_id);
     let resp = HTTP_CLIENT.get(&url).send().await.map_err(|e| format!("网络错误: {}", e))?;
     if !resp.status().is_success() {
         return Err(format!("仓库未找到 (HTTP {})", resp.status()));
     }
-    let info: HfRepoInfo = resp.json().await.map_err(|e| format!("解析失败: {}", e))?;
+    let entries: Vec<HfFileEntry> = resp.json().await.map_err(|e| format!("解析失败: {}", e))?;
 
-    let mut result: Vec<MsFileEntry> = info.siblings.iter().filter_map(|s| {
-        let name = s.rfilename.split('/').last()?.to_string();
+    let mut result: Vec<MsFileEntry> = entries.iter().filter_map(|e| {
+        if e.entry_type != "file" { return None; }
+        let name = e.path.split('/').last()?.to_string();
         if !name.ends_with(".gguf") && !name.ends_with(".txt") { return None; }
+        let size = e.lfs.as_ref().map(|l| l.size).or(e.size).unwrap_or(0);
         Some(MsFileEntry {
             file_type: utils::classify_gguf_file(Path::new(&name)).to_string(),
             name,
-            path: s.rfilename.clone(),
-            size: s.size.unwrap_or(0),
+            path: e.path.clone(),
+            size,
         })
     }).collect();
 
