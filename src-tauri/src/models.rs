@@ -262,6 +262,15 @@ pub struct InstanceConfig {
     pub sleep_idle: i32,
     pub verbose: bool,
     pub custom_args: Vec<String>,
+    // Server features (aligned with llama.cpp master)
+    #[serde(default)]
+    pub rpc_servers: String,
+    #[serde(default)]
+    pub log_json: bool,
+    #[serde(default)]
+    pub sse_ping_interval: u32,
+    #[serde(default)]
+    pub reuse_port: bool,
 }
 
 impl Default for InstanceConfig {
@@ -272,16 +281,16 @@ impl Default for InstanceConfig {
             lora_init_without_apply: false, lora_scaled: String::new(),
             chat_template: String::new(), chat_template_file: String::new(), skip_chat_parsing: false,
             reasoning_format: String::new(), reasoning_effort: String::new(),
-            reasoning: String::new(), jinja: false,
+            reasoning: String::new(),             jinja: true,
             reasoning_budget: String::new(), reasoning_budget_message: String::new(),
             grammar_file: String::new(), grammar: String::new(),
             ctx_size: 4096, ctx_size_auto: false, gpu_layers: 99, threads: 0,
-            batch_size: 2048, ubatch_size: 512, parallel: -1, cont_batching: false,
+            batch_size: 2048, ubatch_size: 512, parallel: -1, cont_batching: true,
             cache_prompt: true, threads_batch: 0,
-            threads_http: -1, keep: 0, cache_reuse: 0, cache_ram: 0,
-            warmup: false, ctx_checkpoints: 32, checkpoint_min_step: 0, swa_full: false,
+            threads_http: -1, keep: 0, cache_reuse: 0, cache_ram: 8192,
+            warmup: true, ctx_checkpoints: 32, checkpoint_min_step: 256, swa_full: false,
             rope_scaling: String::new(), rope_scale: 0.0, rope_freq_base: 0.0, rope_freq_scale: 0.0,
-            yarn_ext_factor: -1.0, yarn_attn_factor: 1.0, yarn_beta_slow: 0.0,             yarn_beta_fast: 32.0, yarn_orig_ctx: 0,
+            yarn_ext_factor: -1.0, yarn_attn_factor: -1.0, yarn_beta_slow: 0.0,             yarn_beta_fast: -1.0, yarn_orig_ctx: 0,
             flash_attn: "auto".into(), moe_cpu_layers: 0, mlock: false,
             no_mmap: false, no_repack: false, numa: false, context_shift: false,
             check_tensors: false, fit: false, kv_unified: false, cache_idle_slots: true, no_kv_offload: false,
@@ -300,8 +309,8 @@ impl Default for InstanceConfig {
             no_ui: false, offline: false, ui_config_file: String::new(),
             embedding: false, pooling: String::new(), embd_normalize: 2, reranking: false,
             metrics: false, props: false, slots_enabled: true,
-            slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: false,
-            models_dir: String::new(), models_preset: String::new(), models_max: 4, models_autoload: false,
+            slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: true,
+            models_dir: String::new(), models_preset: String::new(), models_max: 4, models_autoload: true,
             mmproj_url: String::new(), mmproj_auto: false, no_mmproj: false, no_mmproj_offload: false, image_min_tokens: 0, image_max_tokens: 0,
             tags: String::new(), media_path: String::new(), tools: String::new(),
             n_predict: -1, ignore_eos: false, json_schema: String::new(),
@@ -312,11 +321,12 @@ impl Default for InstanceConfig {
             mirostat: 0, mirostat_lr: 0.0, mirostat_ent: 0.0,
             xtc_probability: 0.0, xtc_threshold: 0.0, dynatemp_range: 0.0,
             dynatemp_exp: 0.0, typical_p: 1.0, dry_multiplier: 0.0, dry_base: 0.0,
-            dry_allowed_length: 0, dry_penalty_last_n: 0,
+            dry_allowed_length: 2, dry_penalty_last_n: -1,
             dry_sequence_breaker: String::new(),
             adaptive_target: 0.0, adaptive_decay: 0.0, top_n_sigma: -1.0,
             logit_bias: String::new(), samplers: String::new(), sampler_seq: String::new(),
-            timeout: 600, sleep_idle: -1, verbose: false, custom_args: vec![],
+            timeout: 3600, sleep_idle: -1, verbose: false, custom_args: vec![],
+            rpc_servers: String::new(), log_json: false, sse_ping_interval: 30, reuse_port: false,
         }
     }
 }

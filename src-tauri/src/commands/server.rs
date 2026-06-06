@@ -61,9 +61,9 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.rope_freq_base > 0.0 { cmd.extend_from_slice(&["--rope-freq-base".into(), config.rope_freq_base.to_string()]); }
     if config.rope_freq_scale > 0.0 { cmd.extend_from_slice(&["--rope-freq-scale".into(), config.rope_freq_scale.to_string()]); }
     if config.yarn_ext_factor >= 0.0 { cmd.extend_from_slice(&["--yarn-ext-factor".into(), config.yarn_ext_factor.to_string()]); }
-    if config.yarn_attn_factor != 1.0 { cmd.extend_from_slice(&["--yarn-attn-factor".into(), config.yarn_attn_factor.to_string()]); }
+    if config.yarn_attn_factor != -1.0 { cmd.extend_from_slice(&["--yarn-attn-factor".into(), config.yarn_attn_factor.to_string()]); }
     if config.yarn_beta_slow > 0.0 { cmd.extend_from_slice(&["--yarn-beta-slow".into(), config.yarn_beta_slow.to_string()]); }
-    if config.yarn_beta_fast != 32.0 { cmd.extend_from_slice(&["--yarn-beta-fast".into(), config.yarn_beta_fast.to_string()]); }
+    if config.yarn_beta_fast != -1.0 { cmd.extend_from_slice(&["--yarn-beta-fast".into(), config.yarn_beta_fast.to_string()]); }
     if config.yarn_orig_ctx > 0 { cmd.extend_from_slice(&["--yarn-orig-ctx".into(), config.yarn_orig_ctx.to_string()]); }
 
     // ── Flash Attention ──
@@ -172,7 +172,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     }
 
     // ── Server features ──
-    if config.timeout > 0 { cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]); }
+    if config.timeout > 0 { cmd.extend_from_slice(&["--timeout-read".into(), config.timeout.to_string(), "--timeout-write".into(), config.timeout.to_string()]); }
     if config.sleep_idle >= 0 { cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]); }
     if config.context_shift { cmd.push("--context-shift".into()); }
     if config.verbose { cmd.push("-v".into()); }
@@ -182,6 +182,12 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.slot_save_path.is_empty() { cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]); }
     if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON { cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]); }
     if config.prefill_assistant { cmd.push("--prefill-assistant".into()); }
+
+    // ── New server features (aligned with llama.cpp master) ──
+    if !config.rpc_servers.is_empty() { cmd.extend_from_slice(&["--rpc".into(), config.rpc_servers.clone()]); }
+    if config.log_json { cmd.push("--log-json".into()); }
+    if config.sse_ping_interval != 30 { cmd.extend_from_slice(&["--sse-ping-interval".into(), config.sse_ping_interval.to_string()]); }
+    if config.reuse_port { cmd.push("--reuse-port".into()); }
 
     // ── Multi-Model & Media ──
     if !config.models_dir.is_empty() { cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]); }
