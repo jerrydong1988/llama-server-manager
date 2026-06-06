@@ -229,7 +229,8 @@ struct HfRepoInfo {
 #[derive(serde::Deserialize)]
 struct HfSibling {
     rfilename: String,
-    size: u64,
+    #[serde(default)]
+    size: Option<u64>,
 }
 
 #[tauri::command]
@@ -248,7 +249,7 @@ pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, Str
             file_type: utils::classify_gguf_file(Path::new(&name)).to_string(),
             name,
             path: s.rfilename.clone(),
-            size: s.size,
+            size: s.size.unwrap_or(0),
         })
     }).collect();
 
