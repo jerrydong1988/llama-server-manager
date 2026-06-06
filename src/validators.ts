@@ -151,7 +151,7 @@ export function validateConfig(
 
   // B5: samplers 自定义了且单独采样参数也为非默认
   if (config.samplers && config.samplers !== '') {
-    if (config.temp !== 0.8 || config.top_k !== 40 || config.top_p !== 0.9 ||
+    if (config.temp !== 0.8 || config.top_k !== 40 || config.top_p !== 0.95 ||
         config.min_p !== 0.05 || config.typical_p !== 1.0)
       w.push({ field: 'samplers', severity: 'low', key: 'warnB5' })
   }

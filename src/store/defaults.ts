@@ -37,7 +37,7 @@ export function defaultInstanceConfig(): InstanceConfig {
     mmproj_url: '', mmproj_auto: false, no_mmproj: false, no_mmproj_offload: false, image_min_tokens: 0, image_max_tokens: 0,
     tags: '', media_path: '', tools: '',
     n_predict: -1, ignore_eos: false, json_schema: '',
-    temp: 0.8, top_k: 40, top_p: 0.9, repeat_penalty: 1.1,
+    temp: 0.8, top_k: 40, top_p: 0.95, repeat_penalty: 1.0,
     seed: -1, min_p: 0.05, presence_penalty: 0,
     frequency_penalty: 0, repeat_last_n: 64,
     reverse_prompt: '', special: false, spm_infill: false, backend_sampling: false,
