@@ -232,6 +232,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     await invoke('download_modelscope_files', { repoId, files, saveDir })
   },
 
+  // ── HuggingFace ──────────────────────────────────────────────────
+  browseHuggingface: async (repoId: string) => {
+    return await invoke<MsFileEntry[]>('browse_huggingface', { repoId })
+  },
+
+  downloadHuggingfaceFiles: async (repoId: string, files: MsFileEntry[], saveDir: string) => {
+    await invoke('download_huggingface_files', { repoId, files, saveDir })
+  },
+
   cancelFileDownload: async (fileName: string) => {
     try { await invoke('cancel_file_download', { fileName }) } catch (e) { console.error(e) }
   },

@@ -163,6 +163,8 @@ export interface AppState {
 
   browseModelscope: (repoId: string) => Promise<MsFileEntry[]>
   downloadModelscopeFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>
+  browseHuggingface: (repoId: string) => Promise<MsFileEntry[]>
+  downloadHuggingfaceFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>
   cancelFileDownload: (fileName: string) => Promise<void>
   pauseFileDownload: (fileName: string) => Promise<void>
   cancelAndCleanupDownload: (fileName: string, filePath: string) => Promise<void>

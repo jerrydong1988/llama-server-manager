@@ -10,7 +10,7 @@ import { normalizePath, pathJoin } from '../utils/path'
 const DEFAULT_SAVE_DIR = 'models'
 
 const ModelRepo = () => {
-  const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder, browseModelscope, downloadModelscopeFiles, pauseFileDownload, cancelAndCleanupDownload } = useAppStore()
+  const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder, browseModelscope, downloadModelscopeFiles, browseHuggingface, downloadHuggingfaceFiles, pauseFileDownload, cancelAndCleanupDownload } = useAppStore()
   const { t } = useI18n()
   const [searchQuery, setSearchQuery] = useState('')
   const [showMsModal, setShowMsModal] = useState(false)
@@ -20,6 +20,12 @@ const ModelRepo = () => {
   const [msBrowsing, setMsBrowsing] = useState(false)
   const [fileStates, setFileStates] = useState<Record<string, {downloaded: number; total: number; speed?: number; status: 'pending'|'downloading'|'done'|'error'|'cancelled'|'paused'; error?: string}>>({})
   const [msSaveDir, setMsSaveDir] = useState(DEFAULT_SAVE_DIR)
+  const [hfRepoId, setHfRepoId] = useState('')
+  const [hfFiles, setHfFiles] = useState<MsFileEntry[]>([])
+  const [hfFilesState, setHfFilesState] = useState<Record<string, any>>({})
+  const [hfBrowsing, setHfBrowsing] = useState(false)
+  const [hfPausedSet, setHfPausedSet] = useState<Set<string>>(new Set())
+  const [downloadTab, setDownloadTab] = useState<'ms' | 'hf'>('ms')
   const [scanError, setScanError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [pausedSet, setPausedSet] = useState<Set<string>>(new Set())
@@ -227,6 +233,20 @@ const ModelRepo = () => {
     } finally { setMsBrowsing(false) }
   }
 
+  const handleHfBrowse = async () => {
+    if (!hfRepoId.trim()) { setMsStatus(t.modelRepo.inputRepoId); return }
+    setHfBrowsing(true);
+    setMsStatus(t.modelRepo.querying)
+    try {
+      const files = await browseHuggingface(hfRepoId.trim())
+      setHfFiles(files)
+      if (files.length === 0) setMsStatus(t.modelRepo.notFound)
+      else setMsStatus(`${t.modelRepo.found} ${files.length} ${t.modelRepo.files}`)
+    } catch (e: any) {
+      setMsStatus(`${t.modelRepo.queryFailed}${typeof e === 'string' ? e : t.modelRepo.networkError}`)
+    } finally { setHfBrowsing(false) }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -286,15 +306,26 @@ const ModelRepo = () => {
         </div>
       )}
 
-      {/* ModelScope 下载弹窗 */}
+      {/* 模型下载弹窗 */}
       {showMsModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-semibold">{t.modelRepo.msTitle}</h3>
+              <div className="flex gap-2">
+                <button onClick={() => setDownloadTab('ms')}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${downloadTab === 'ms' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
+                  ModelScope
+                </button>
+                <button onClick={() => setDownloadTab('hf')}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${downloadTab === 'hf' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600'}`}>
+                  HuggingFace
+                </button>
+              </div>
               <button onClick={() => setShowMsModal(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-5 h-5" /></button>
             </div>
 
+            {/* ModelScope Tab */}
+            {downloadTab === 'ms' && (
             <div className="space-y-4">
               <div className="flex gap-2">
                 <input type="text" value={msRepoId} onChange={(e) => setMsRepoId(e.target.value)}
@@ -421,6 +452,97 @@ const ModelRepo = () => {
                 </>
               )}
             </div>
+            )}
+
+            {/* HuggingFace Tab */}
+            {downloadTab === 'hf' && (
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                <input type="text" value={hfRepoId} onChange={(e) => setHfRepoId(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleHfBrowse()}
+                  placeholder={t.modelRepo.hfRepoIdPlaceholder || 'Repo ID, e.g. ggml-org/Qwen2.5-0.5B-Instruct-GGUF'}
+                  className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                <button onClick={handleHfBrowse} disabled={hfBrowsing}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors">
+                  {t.modelRepo.browseFiles}
+                </button>
+              </div>
+
+              {msStatus && downloadTab === 'hf' && <p className="text-sm text-gray-500">{msStatus}</p>}
+
+              {hfFiles.length > 0 && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium mb-1">{t.modelRepo.saveDir}</label>
+                    <div className="flex gap-2">
+                      <input type="text" value={msSaveDir} onChange={(e) => setMsSaveDir(e.target.value)}
+                        placeholder={t.modelRepo.saveDirPlaceholder}
+                        className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-sm" />
+                      <button onClick={handleBrowseSaveDir}
+                        className="px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors">
+                        <FolderOpen className="w-5 h-5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="border dark:border-gray-700 rounded-lg max-h-64 overflow-y-auto">
+                    {hfFiles.map((f) => {
+                      const st = hfFilesState[f.name]
+                      const isPaused = hfPausedSet.has(f.name)
+
+                      const startHfDownload = async () => {
+                        setHfPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
+                        setHfFilesState(s => ({...s, [f.name]: {downloaded: 0, total: f.size, status: 'pending' as const}}))
+                        try {
+                          await downloadHuggingfaceFiles(hfRepoId, [f], msSaveDir)
+                          const resolvedDir = await invoke<string>('resolve_path', { path: msSaveDir })
+                          const allDirs = [...new Set([...modelDirs, resolvedDir])]
+                          setModelDirs(allDirs)
+                          await scanModels(allDirs)
+                        } catch (e: any) { console.error(e) }
+                      }
+
+                      const resumeDownload = async () => {
+                        setHfPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
+                        try {
+                          await downloadHuggingfaceFiles(hfRepoId, [f], msSaveDir)
+                        } catch (e: any) { console.error(e) }
+                      }
+
+                      const progress = st && (st.status === 'pending' || st.status === 'downloading')
+                      const done = st && st.status === 'done'
+                      const err = st && st.status === 'error'
+
+                      return (
+                        <div key={f.path} className="px-4 py-2.5 border-b dark:border-gray-700 last:border-0 space-y-1">
+                          <div className="flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-2 truncate flex-1">
+                              <span title={f.name}>{f.name}</span>
+                              <span className="text-xs text-gray-400 shrink-0 ml-2">{modelTypeLabel(f.file_type)} · {formatSize(f.size)}</span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              {!done && !progress && !err && (
+                                <button onClick={startHfDownload}
+                                  className="text-xs text-blue-600 hover:text-blue-800">{t.modelRepo.downloadBtn}</button>
+                              )}
+                              {done && <span className="text-xs text-green-600">{t.modelRepo.done}</span>}
+                              {err && <span className="text-xs text-red-500">{st.error || t.modelRepo.failed}</span>}
+                              {isPaused && <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>}
+                            </div>
+                          </div>
+                          {progress && (
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                              <div className="bg-blue-500 h-1.5 rounded-full" style={{width: `${st.total>0?(st.downloaded/st.total)*100:0}%`}} />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+            )}
           </div>
         </div>
       )}

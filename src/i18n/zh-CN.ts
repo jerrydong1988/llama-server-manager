@@ -20,6 +20,7 @@ export const zhCN = {
     downloadMS: '\u4ECE ModelScope \u4E0B\u8F7D', browseFiles: '\u6D4F\u89C8\u6587\u4EF6',
     saveDir: '\u4FDD\u5B58\u76EE\u5F55', saveDirPlaceholder: '\u9ED8\u8BA4\u4FDD\u5B58\u5230\u5E94\u7528\u6570\u636E\u76EE\u5F55\u4E0B\u7684 models \u5B50\u6587\u4EF6\u5939',
     repoIdPlaceholder: '\u4ED3\u5E93 ID\uFF0C\u4F8B\u5982 unsloth/Qwen3.6-35B-A3B-GGUF',
+  hfRepoIdPlaceholder: '\u4ED3\u5E93 ID\uFF0C\u4F8B\u5982 ggml-org/Qwen2.5-0.5B-Instruct-GGUF',
     queryFailed: '\u67E5\u8BE2\u5931\u8D25\uFF1A', notFound: '\u672A\u627E\u5230 GGUF \u6587\u4EF6', found: '\u627E\u5230',
     files: '\u4E2A\u6587\u4EF6', inputRepoId: '\u8BF7\u8F93\u5165\u4ED3\u5E93 ID', querying: '\u67E5\u8BE2\u4E2D...',
     networkError: '\u7F51\u7EDC\u9519\u8BEF', selectFromRepo: '\u4ECE\u6A21\u578B\u4ED3\u5E93\u9009\u62E9',

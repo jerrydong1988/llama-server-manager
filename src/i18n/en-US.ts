@@ -20,6 +20,7 @@ export const enUS = {
     downloadMS: 'Download from ModelScope', browseFiles: 'Browse Files',
     saveDir: 'Save Directory', saveDirPlaceholder: 'Default: models subdirectory in app data folder',
     repoIdPlaceholder: 'Repo ID, e.g. unsloth/Qwen3.6-35B-A3B-GGUF',
+  hfRepoIdPlaceholder: 'Repo ID, e.g. ggml-org/Qwen2.5-0.5B-Instruct-GGUF',
     queryFailed: 'Query failed: ', notFound: 'No GGUF files found', found: 'Found',
     files: ' files', inputRepoId: 'Enter repo ID', querying: 'Querying...',
     networkError: 'Network error', selectFromRepo: 'Select from Repository',
