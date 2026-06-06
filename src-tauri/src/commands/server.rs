@@ -172,7 +172,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     }
 
     // ── Server features ──
-    if config.timeout > 0 { cmd.extend_from_slice(&["--timeout-read".into(), config.timeout.to_string(), "--timeout-write".into(), config.timeout.to_string()]); }
+    if config.timeout > 0 { cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]); }
     if config.sleep_idle >= 0 { cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]); }
     if config.context_shift { cmd.push("--context-shift".into()); }
     if config.verbose { cmd.push("-v".into()); }
@@ -185,7 +185,6 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
 
     // ── New server features (aligned with llama.cpp master) ──
     if !config.rpc_servers.is_empty() { cmd.extend_from_slice(&["--rpc".into(), config.rpc_servers.clone()]); }
-    if config.log_json { cmd.push("--log-json".into()); }
     if config.sse_ping_interval != 30 { cmd.extend_from_slice(&["--sse-ping-interval".into(), config.sse_ping_interval.to_string()]); }
     if config.reuse_port { cmd.push("--reuse-port".into()); }
 

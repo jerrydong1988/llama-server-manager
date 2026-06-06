@@ -121,7 +121,6 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
    if (config.ui_config_file) a.add('ui_config_file')
    // New server params
    if (config.rpc_servers) a.add('rpc_servers')
-   if (config.log_json) a.add('log_json')
    if (Math.abs(config.sse_ping_interval - 30) > 0.001) a.add('sse_ping_interval')
    if (config.reuse_port) a.add('reuse_port')
 

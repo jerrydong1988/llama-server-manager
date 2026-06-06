@@ -266,8 +266,6 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub rpc_servers: String,
     #[serde(default)]
-    pub log_json: bool,
-    #[serde(default)]
     pub sse_ping_interval: u32,
     #[serde(default)]
     pub reuse_port: bool,
@@ -326,7 +324,7 @@ impl Default for InstanceConfig {
             adaptive_target: 0.0, adaptive_decay: 0.0, top_n_sigma: -1.0,
             logit_bias: String::new(), samplers: String::new(), sampler_seq: String::new(),
             timeout: 3600, sleep_idle: -1, verbose: false, custom_args: vec![],
-            rpc_servers: String::new(), log_json: false, sse_ping_interval: 30, reuse_port: false,
+            rpc_servers: String::new(), sse_ping_interval: 30, reuse_port: false,
         }
     }
 }

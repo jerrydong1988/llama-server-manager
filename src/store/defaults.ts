@@ -50,6 +50,6 @@ export function defaultInstanceConfig(): InstanceConfig {
     adaptive_target: 0, adaptive_decay: 0, top_n_sigma: -1,
     logit_bias: '', samplers: '', sampler_seq: '',
     timeout: 3600, sleep_idle: -1, verbose: false, custom_args: [],
-    rpc_servers: '', log_json: false, sse_ping_interval: 30, reuse_port: false,
+    rpc_servers: '', sse_ping_interval: 30, reuse_port: false,
   }
 }

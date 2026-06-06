@@ -161,7 +161,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     slots_enabled: true, metrics: false, props: false,
     slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
     ui_config_file: '',
-    rpc_servers: '', log_json: false, sse_ping_interval: 30, reuse_port: false,
+    rpc_servers: '', sse_ping_interval: 30, reuse_port: false,
   },
   advancedMulti: {
     models_dir: '', models_preset: '', models_max: 4, models_autoload: false,

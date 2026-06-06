@@ -228,7 +228,6 @@ export const enUS = {
     sleepIdle: 'Idle Sleep (s)', sleepIdleTip: 'Auto-unload model after N idle seconds to free VRAM. -1=disabled. [Scene] Set 300-600 for shared GPU environments — model reloads on next request. [Trade-off] Saves VRAM but adds latency on wake.',
     verbose: 'Verbose Logs', verboseTip: 'Enables maximum verbosity logging (-v flag). [Scene] Debugging startup issues, model loading errors, or unusual behavior. [Trade-off] Much more log output — use temporarily.',
     rpcServers: 'RPC Servers', rpcServersTip: 'Comma-separated list of RPC server endpoints for distributed inference. [Scene] Offload model layers to remote GPU servers. [Principle] Each RPC server handles a portion of the model computation. Format: "host:port,host2:port2".',
-    logJson: 'JSON Logs', logJsonTip: 'Enables JSON-formatted server logs (--log-json). [Scene] For log aggregation systems (ELK, Loki, Datadog) that parse structured logs. [Trade-off] Less human-readable but machine-parseable.',
     ssePingInterval: 'SSE Ping Interval', ssePingIntervalTip: 'Server-Sent Events (SSE) ping interval in seconds. Default 30. [Scene] Adjust for proxies with different timeout settings. [Principle] Periodic pings keep SSE connections alive through proxies.',
     reusePort: 'Reuse Port', reusePortTip: 'Allow multiple sockets to bind to the same port (SO_REUSEPORT). [Scene] Multi-process server deployments for load balancing. [Principle] Kernel distributes incoming connections across all listening sockets.',
     // ── Validation warnings ──

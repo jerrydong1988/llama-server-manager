@@ -142,7 +142,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
         <CollapsibleGroup title={t.configPage.subAdvSampling} onReset={() => resetGroup('advancedSampling')} disabled={isEmbedding}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Select label={`${t.configPage.mirostat} (--mirostat)`} value={local.mirostat.toString()} onChange={v => set('mirostat', parseInt(v))} options={['0', '1', '2']} title={t.configPage.mirostatTip} defaultLabel={t.common.default} />
-            <Num label={`${t.configPage.mirostatLr} (--mirostat-lr)`} value={local.mirostat_lr} onChange={v => set('mirostat_lr', v)} min={0.001} max={1} step={0.001} title={t.configPage.mirostatLrTip}  active={a('mirostat_lr')} />
+            <Num label={`${t.configPage.mirostatLr} (--mirostat-lr)`} value={local.mirostat_lr} onChange={v => set('mirostat_lr', v)} min={0} max={1} step={0.001} title={t.configPage.mirostatLrTip}  active={a('mirostat_lr')} />
             <Num label={`${t.configPage.mirostatEnt} (--mirostat-ent)`} value={local.mirostat_ent} onChange={v => set('mirostat_ent', v)} min={0} max={10} step={0.1} title={t.configPage.mirostatEntTip}  active={a('mirostat_ent')} />
             <Num label={`${t.configPage.xtcProbability} (--xtc-probability)`} value={local.xtc_probability} onChange={v => set('xtc_probability', v)} min={0} max={1} step={0.05} title={t.configPage.xtcProbabilityTip}  active={a('xtc_probability')} />
             <Num label={`${t.configPage.xtcThreshold} (--xtc-threshold)`} value={local.xtc_threshold} onChange={v => set('xtc_threshold', v)} min={0} max={1} step={0.05} title={t.configPage.xtcThresholdTip}  active={a('xtc_threshold')} />
@@ -282,7 +282,6 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
             <Input label={`${t.configPage.rpcServers} (--rpc)`} value={local.rpc_servers} onChange={v => set('rpc_servers', v)} title={t.configPage.rpcServersTip}  active={a('rpc_servers')} />
-            <Switch label={`${t.configPage.logJson} (--log-json)`} value={local.log_json} onChange={v => set('log_json', v)} title={t.configPage.logJsonTip}  active={a('log_json')} />
             <Num label={`${t.configPage.ssePingInterval} (--sse-ping-interval)`} value={local.sse_ping_interval} onChange={v => set('sse_ping_interval', v)} min={0} title={t.configPage.ssePingIntervalTip}  active={a('sse_ping_interval')} />
             <Switch label={`${t.configPage.reusePort} (--reuse-port)`} value={local.reuse_port} onChange={v => set('reuse_port', v)} title={t.configPage.reusePortTip}  active={a('reuse_port')} />
           </div>
