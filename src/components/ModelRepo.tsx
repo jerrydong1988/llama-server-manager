@@ -117,7 +117,7 @@ const ModelRepo = () => {
             {depth === 0 ? <FolderOpen className="w-3.5 h-3.5 text-yellow-500 shrink-0" /> : <span className="text-xs text-gray-400 w-3.5 shrink-0">📁</span>}
             <span className="text-xs font-medium truncate flex-1">{node.name}</span>
             <span className="text-xs text-gray-400 shrink-0">
-              {cnt.models > 0 && `${cnt.models} ${t.instance.model}`}{cnt.models > 0 && cnt.mmproj > 0 && ' · '}{cnt.mmproj > 0 && `${cnt.mmproj} MMProj`}
+              {cnt.models > 0 && `${cnt.models} ${t.instance.model}`}{cnt.models > 0 && cnt.mmproj > 0 && ' · '}{cnt.mmproj > 0 && `${cnt.mmproj} ${t.modelRepo.mmprojCount}`}
             </span>
           </button>
           {!isCollapsed && node.children && (

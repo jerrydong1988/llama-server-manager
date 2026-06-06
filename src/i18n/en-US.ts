@@ -34,6 +34,7 @@ export const enUS = {
     msTitle: 'ModelScope Download',
     typeModel: '\uD83D\uDCC4Model', typeMmproj: '\uD83D\uDCF7Projector', typeImatrix: '\uD83D\uDCCAImatrix',
     typeModelShort: 'Model', typeMmprojShort: 'Projector',
+    mmprojCount: 'MMProj',
   },
   engineMgr: {
     scan: 'Scan Engines', addDir: 'Add Engine Directory',

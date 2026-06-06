@@ -34,6 +34,7 @@ export const zhCN = {
     msTitle: 'ModelScope \u6A21\u578B\u4E0B\u8F7D',
     typeModel: '\uD83D\uDCC4\u4E3B\u6A21\u578B', typeMmproj: '\uD83D\uDCF7\u591A\u6A21\u6001\u6295\u5F71\u5668', typeImatrix: '\uD83D\uDCCA\u6743\u91CD\u77E9\u9635',
     typeModelShort: '\u6A21\u578B', typeMmprojShort: '\u6295\u5F71\u5668',
+    mmprojCount: '\u591A\u6A21\u6001\u6295\u5F71\u5668',
   },
   engineMgr: {
     scan: '\u626B\u63CF\u5F15\u64CE', addDir: '\u6DFB\u52A0\u5F15\u64CE\u6839\u76EE\u5F55',
