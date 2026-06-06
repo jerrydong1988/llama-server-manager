@@ -135,7 +135,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   },
   advancedRope: {
     rope_scaling: '', rope_scale: 0, rope_freq_base: 0, rope_freq_scale: 0,
-    yarn_ext_factor: -1, yarn_attn_factor: 1, yarn_beta_slow: 0, yarn_beta_fast: 32,
+    yarn_ext_factor: -1, yarn_attn_factor: -1, yarn_beta_slow: 0, yarn_beta_fast: -1,
   },
   advancedKvCache: {
     cache_type_k: '', cache_type_v: '',
@@ -161,6 +161,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     slots_enabled: true, metrics: false, props: false,
     slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
     ui_config_file: '',
+    rpc_servers: '', log_json: false, sse_ping_interval: 30, reuse_port: false,
   },
   advancedMulti: {
     models_dir: '', models_preset: '', models_max: 4, models_autoload: false,

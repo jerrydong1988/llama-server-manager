@@ -202,9 +202,9 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Num label={`${t.configPage.ropeFreqBase} (--rope-freq-base)`} value={local.rope_freq_base} onChange={v => set('rope_freq_base', v)} min={0} title={t.configPage.ropeFreqBaseTip}  active={a('rope_freq_base')} />
             <Num label={`${t.configPage.ropeFreqScale} (--rope-freq-scale)`} value={local.rope_freq_scale} onChange={v => set('rope_freq_scale', v)} min={0} max={10} step={0.1} title={t.configPage.ropeFreqScaleTip}  active={a('rope_freq_scale')} />
             <Num label={`${t.configPage.yarnExtFactor} (--yarn-ext-factor)`} value={local.yarn_ext_factor} onChange={v => set('yarn_ext_factor', v)} min={-1} max={10} step={0.1} title={t.configPage.yarnExtFactorTip}  active={a('yarn_ext_factor')} />
-            <Num label={`${t.configPage.yarnAttnFactor} (--yarn-attn-factor)`} value={local.yarn_attn_factor} onChange={v => set('yarn_attn_factor', v)} min={0} max={10} step={0.1} title={t.configPage.yarnAttnFactorTip}  active={a('yarn_attn_factor')} />
+            <Num label={`${t.configPage.yarnAttnFactor} (--yarn-attn-factor)`} value={local.yarn_attn_factor} onChange={v => set('yarn_attn_factor', v)} min={-1} max={10} step={0.1} title={t.configPage.yarnAttnFactorTip}  active={a('yarn_attn_factor')} />
             <Num label={`${t.configPage.yarnBetaSlow} (--yarn-beta-slow)`} value={local.yarn_beta_slow} onChange={v => set('yarn_beta_slow', v)} min={0} max={10} step={0.1} title={t.configPage.yarnBetaSlowTip}  active={a('yarn_beta_slow')} />
-            <Num label={`${t.configPage.yarnBetaFast} (--yarn-beta-fast)`} value={local.yarn_beta_fast} onChange={v => set('yarn_beta_fast', v)} min={0} max={128} title={t.configPage.yarnBetaFastTip}  active={a('yarn_beta_fast')} />
+            <Num label={`${t.configPage.yarnBetaFast} (--yarn-beta-fast)`} value={local.yarn_beta_fast} onChange={v => set('yarn_beta_fast', v)} min={-1} max={128} title={t.configPage.yarnBetaFastTip}  active={a('yarn_beta_fast')} />
       <Num label={`${t.configPage.yarnOrigCtx} (--yarn-orig-ctx)`} value={local.yarn_orig_ctx || 0} onChange={v => set('yarn_orig_ctx', v)} min={0} max={1048576} title={t.configPage.yarnOrigCtxTip}  active={a('yarn_orig_ctx')} />
           </div>
         </CollapsibleGroup>
@@ -279,6 +279,12 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Num label={`${t.configPage.slotPromptSimilarity} (-sps)`} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip}  active={a('slot_prompt_similarity')} />
             <Switch label={`${t.configPage.prefillAssistant} (--prefill-assistant)`} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip}  active={a('prefill_assistant')} />
             <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip}  active={a('ui_config_file')} />
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
+            <Input label={`${t.configPage.rpcServers} (--rpc)`} value={local.rpc_servers} onChange={v => set('rpc_servers', v)} title={t.configPage.rpcServersTip}  active={a('rpc_servers')} />
+            <Switch label={`${t.configPage.logJson} (--log-json)`} value={local.log_json} onChange={v => set('log_json', v)} title={t.configPage.logJsonTip}  active={a('log_json')} />
+            <Num label={`${t.configPage.ssePingInterval} (--sse-ping-interval)`} value={local.sse_ping_interval} onChange={v => set('sse_ping_interval', v)} min={0} title={t.configPage.ssePingIntervalTip}  active={a('sse_ping_interval')} />
+            <Switch label={`${t.configPage.reusePort} (--reuse-port)`} value={local.reuse_port} onChange={v => set('reuse_port', v)} title={t.configPage.reusePortTip}  active={a('reuse_port')} />
           </div>
         </CollapsibleGroup>
 

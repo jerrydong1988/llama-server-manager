@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Settings, File, Image, X, FolderOpen, ChevronRight, ChevronDown } from 'lucide-react'
-import { useAppStore, type InstanceConfig } from '../store'
+import { useAppStore, type InstanceConfig, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
 import { BasicSection, ReasoningSection, PerformanceSection, AdvancedSection } from './ConfigPage/sections'
@@ -19,7 +19,7 @@ const ConfigPage = () => {
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
 
-  useEffect(() => { if (inst) setLocal({ ...inst.config }); else setLocal(null) }, [activeConfigInstanceId, instances])
+  useEffect(() => { if (inst) setLocal({ ...defaultInstanceConfig(), ...inst.config }); else setLocal(null) }, [activeConfigInstanceId, instances])
 
   const isEmbedding = (() => {
     if (!local?.model_path) return false

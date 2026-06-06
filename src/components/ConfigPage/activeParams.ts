@@ -62,9 +62,9 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.rope_freq_base > 0) a.add('rope_freq_base')
   if (config.rope_freq_scale > 0) a.add('rope_freq_scale')
   if (config.yarn_ext_factor >= 0) a.add('yarn_ext_factor')
-  if (config.yarn_attn_factor !== 1) a.add('yarn_attn_factor')
+  if (config.yarn_attn_factor !== -1) a.add('yarn_attn_factor')
   if (config.yarn_beta_slow > 0) a.add('yarn_beta_slow')
-  if (config.yarn_beta_fast !== 32) a.add('yarn_beta_fast')
+  if (config.yarn_beta_fast !== -1) a.add('yarn_beta_fast')
   if (config.yarn_orig_ctx > 0) a.add('yarn_orig_ctx')
 
   // ── Flash Attention ──
@@ -109,16 +109,21 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.lookup_cache_dynamic) a.add('lookup_cache_dynamic')
   }
 
-  // ── Network ──
-  if (config.api_key) a.add('api_key')
-  if (config.api_key_file) a.add('api_key_file')
-  if (config.ssl_key_file) a.add('ssl_key_file')
-  if (config.ssl_cert_file) a.add('ssl_cert_file')
-  if (config.no_ui) a.add('no_ui')
-  if (config.offline) a.add('offline')
-  if (config.path_prefix) a.add('path_prefix')
-  if (config.api_prefix) a.add('api_prefix')
-  if (config.ui_config_file) a.add('ui_config_file')
+   // ── Network ──
+   if (config.api_key) a.add('api_key')
+   if (config.api_key_file) a.add('api_key_file')
+   if (config.ssl_key_file) a.add('ssl_key_file')
+   if (config.ssl_cert_file) a.add('ssl_cert_file')
+   if (config.no_ui) a.add('no_ui')
+   if (config.offline) a.add('offline')
+   if (config.path_prefix) a.add('path_prefix')
+   if (config.api_prefix) a.add('api_prefix')
+   if (config.ui_config_file) a.add('ui_config_file')
+   // New server params
+   if (config.rpc_servers) a.add('rpc_servers')
+   if (config.log_json) a.add('log_json')
+   if (Math.abs(config.sse_ping_interval - 30) > 0.001) a.add('sse_ping_interval')
+   if (config.reuse_port) a.add('reuse_port')
 
   // ── Embedding ──
   if (config.embedding) {

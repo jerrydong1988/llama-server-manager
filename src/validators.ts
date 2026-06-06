@@ -97,8 +97,8 @@ export function validateConfig(
   if (config.ctx_size_auto && (
     config.rope_scaling !== '' || config.rope_scale !== 0 ||
     config.rope_freq_base !== 0 || config.rope_freq_scale !== 0 ||
-    config.yarn_ext_factor >= 0 || config.yarn_attn_factor !== 1 ||
-    config.yarn_beta_slow !== 0 || config.yarn_beta_fast !== 32))
+   config.yarn_ext_factor >= 0 || config.yarn_attn_factor !== -1 ||
+   config.yarn_beta_slow !== 0 || config.yarn_beta_fast !== -1))
     w.push({ field: 'ctx_size_auto', severity: 'medium', key: 'warnA6' })
 
   // A7: ctx_size 超过模型上下文 4 倍
