@@ -131,7 +131,7 @@ export const zhCN = {
     gpuLayers: 'GPU \u5C42\u6570', gpuLayersTip: '卸载到 GPU 的模型层数。99=全部。[场景] 模型超出 VRAM 时减少——每层约数百 MB。[原理] 未卸载层在 CPU 上运行——慢很多。设为能放进 VRAM 的最大值。',
     batchSize: '\u6279\u5927\u5C0F', batchSizeTip: '提示处理的逻辑最大批大小。默认 2048。[场景] 大提示时增大提高吞吐；OOM 时减小。[原理] 更大 batch=更好 GPU 利用率但更多 VRAM。',
     ubatchSize: '\u5FAE\u6279\u5927\u5C0F', ubatchSizeTip: '物理批大小(硬件级)。默认 512。[场景] OOM 时减小——直接控制每批次 VRAM。[原理] ubatch_size <= batch_size。',
-    parallel: '\u5E76\u884C\u69FD\u4F4D', parallelTip: '并发请求槽位数。-1=自动，0=单个。[场景] 多用户服务时增加(每槽约上下文大小的 KV 缓存)。[权衡] 更多槽=更多内存。每槽独立运行。',
+    parallel: '\u5E76\u884C\u69FD\u4F4D', parallelTip: '并发请求槽位数。-1=显式自动（4槽位+kv_unified），0=服务器默认（同自动），1+=自定义槽位数。[场景] 多用户服务时增加(每槽约上下文大小的 KV 缓存)。[权衡] 更多槽=更多内存。每槽独立运行。',
     contBatching: '\u6301\u7EED\u6279\u5904\u7406', contBatchingTip: '启用动态批处理——新请求加入已进行中的 batch。[场景] 多用户服务必备。[权衡] 更高吞吐但单请求延迟略高。',
     cachePrompt: '\u7981\u7528\u63D0\u793A\u7F13\u5B58', cachePromptTip: '勾选后提示缓存被禁用。[原理] 提示缓存重用重复/相似提示的 KV 计算——巨大加速。[场景] 仅缓存导致问题或调试时禁用。',
     cacheReuse: '\u7F13\u5B58\u590D\u7528', cacheReuseTip: 'KV 缓存通过上下文偏移复用的最小 chunk 大小。0=默认。[场景] 减小=更激进复用(更高命中率)；增大=更严格。[原理] 需提示缓存已启用。',
