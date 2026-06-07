@@ -17,7 +17,7 @@ export const enUS = {
   },
   modelRepo: {
     searchPlaceholder: 'Search models...', scan: 'Scan Models', addDir: 'Add Directory',
-    downloadMS: 'Download from ModelScope', browseFiles: 'Browse Files',
+    downloadMS: 'Download Model', browseFiles: 'Browse Files',
     saveDir: 'Save Directory', saveDirPlaceholder: 'Default: models subdirectory in app data folder',
     repoIdPlaceholder: 'Repo ID, e.g. unsloth/Qwen3.6-35B-A3B-GGUF',
     hfRepoIdPlaceholder: 'Repo ID, e.g. ggml-org/Qwen2.5-0.5B-Instruct-GGUF',
@@ -31,7 +31,7 @@ export const enUS = {
     openFolder: 'Show in Folder',
     modelDirs: 'Added Model Directories:', remove: 'Remove', removeDirConfirm: 'Remove this directory from scan list? Files will not be deleted.',
     modelDirEmpty: 'No .gguf files found in',
-    msTitle: 'ModelScope Download',
+    msTitle: 'Download Model',
     typeModel: '\uD83D\uDCC4Model', typeMmproj: '\uD83D\uDCF7Projector', typeImatrix: '\uD83D\uDCCAImatrix',
     typeModelShort: 'Model', typeMmprojShort: 'Projector',
     mmprojCount: 'MMProj',

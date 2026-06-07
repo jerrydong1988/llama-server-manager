@@ -17,7 +17,7 @@ export const zhCN = {
   },
   modelRepo: {
     searchPlaceholder: '\u641C\u7D22\u6A21\u578B...', scan: '\u626B\u63CF\u6A21\u578B', addDir: '\u6DFB\u52A0\u6A21\u578B\u76EE\u5F55',
-    downloadMS: '\u4ECE ModelScope \u4E0B\u8F7D', browseFiles: '\u6D4F\u89C8\u6587\u4EF6',
+    downloadMS: '\u4E0B\u8F7D\u6A21\u578B', browseFiles: '\u6D4F\u89C8\u6587\u4EF6',
     saveDir: '\u4FDD\u5B58\u76EE\u5F55', saveDirPlaceholder: '\u9ED8\u8BA4\u4FDD\u5B58\u5230\u5E94\u7528\u6570\u636E\u76EE\u5F55\u4E0B\u7684 models \u5B50\u6587\u4EF6\u5939',
     repoIdPlaceholder: '\u4ED3\u5E93 ID\uFF0C\u4F8B\u5982 unsloth/Qwen3.6-35B-A3B-GGUF',
   hfRepoIdPlaceholder: '\u4ED3\u5E93 ID\uFF0C\u4F8B\u5982 ggml-org/Qwen2.5-0.5B-Instruct-GGUF',
@@ -31,7 +31,7 @@ export const zhCN = {
     openFolder: '\u6253\u5F00\u76EE\u5F55',
     modelDirs: '\u5DF2\u6DFB\u52A0\u7684\u6A21\u578B\u76EE\u5F55\uFF1A', remove: '\u79FB\u9664', removeDirConfirm: '\u786E\u5B9A\u8981\u5C06\u6B64\u76EE\u5F55\u4ECE\u626B\u63CF\u5217\u8868\u4E2D\u79FB\u9664\u5417\uFF1F\u6587\u4EF6\u4E0D\u4F1A\u88AB\u5220\u9664\u3002',
     modelDirEmpty: '\u4E2D\u672A\u627E\u5230 .gguf \u6A21\u578B\u6587\u4EF6',
-    msTitle: 'ModelScope \u6A21\u578B\u4E0B\u8F7D',
+    msTitle: '\u4E0B\u8F7D\u6A21\u578B',
     typeModel: '\uD83D\uDCC4\u4E3B\u6A21\u578B', typeMmproj: '\uD83D\uDCF7\u591A\u6A21\u6001\u6295\u5F71\u5668', typeImatrix: '\uD83D\uDCCA\u6743\u91CD\u77E9\u9635',
     typeModelShort: '\u6A21\u578B', typeMmprojShort: '\u6295\u5F71\u5668',
     mmprojCount: '\u591A\u6A21\u6001\u6295\u5F71\u5668',
