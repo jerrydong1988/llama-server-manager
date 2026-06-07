@@ -28,7 +28,8 @@ export function BasicSection({ local, set, t, onShowPicker, activeParams }: Prop
         <Select label={`${t.configPage.chatTemplate} (--chat-template)`} value={local.chat_template} onChange={v => set('chat_template', v)} options={chatTemplates} title={t.configPage.chatTemplateTip} defaultLabel={t.common.default}  active={a('chat_template')} />
         <Input label={`${t.configPage.host} (--host)`} value={local.host} onChange={v => set('host', v)} title={t.configPage.hostTip}  active={a('host')} />
         <Num label={`${t.configPage.portLabel} (--port)`} value={local.port} onChange={v => set('port', v)} min={1} max={65535} title={t.configPage.portLabelTip}  active={a('port')} />
-        <Num label={`${t.configPage.gpuLayers} (-ngl)`} value={local.gpu_layers} onChange={v => set('gpu_layers', v)} min={0} max={99} title={t.configPage.gpuLayersTip}  active={a('gpu_layers')} />
+        <Num label={`${t.configPage.gpuLayers} (-ngl)`} value={local.gpu_layers} onChange={v => set('gpu_layers', v)} min={0} max={99} title={t.configPage.gpuLayersTip} disabled={local.gpu_layers_auto}  active={a('gpu_layers')} />
+        <Switch label={`${t.configPage.gpuLayersAuto}`} value={local.gpu_layers_auto} onChange={v => set('gpu_layers_auto', v)} title={t.configPage.gpuLayersAutoTip}  active={a('gpu_layers_auto')} />
         <Num label={`${t.configPage.ctxSize} (-c)`} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} disabled={local.ctx_size_auto}  active={a('ctx_size')} />
         <Switch label={`${t.configPage.ctxAuto}`} value={local.ctx_size_auto} onChange={v => set('ctx_size_auto', v)} title={t.configPage.ctxAutoTip}  active={a('ctx_size_auto')} />
         <Switch label={`${t.configPage.embedding} (--embedding)`} value={local.embedding} onChange={v => set('embedding', v)} title={t.configPage.embeddingTip}  active={a('embedding')} />
@@ -175,6 +176,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Switch label={`${t.configPage.spmInfill} (--spm-infill)`} value={local.spm_infill} onChange={v => set('spm_infill', v)} title={t.configPage.spmInfillTip}  active={a('spm_infill')} />
             <Switch label={`${t.configPage.backendSampling} (-bs)`} value={local.backend_sampling} onChange={v => set('backend_sampling', v)} title={t.configPage.backendSamplingTip}  active={a('backend_sampling')} />
             <Input label={`${t.configPage.jsonSchema} (--json-schema)`} value={local.json_schema} onChange={v => set('json_schema', v)} title={t.configPage.jsonSchemaTip}  active={a('json_schema')} />
+            <Input label={`${t.configPage.jsonSchemaFile} (-jf)`} value={local.json_schema_file} onChange={v => set('json_schema_file', v)} title={t.configPage.jsonSchemaFileTip}  active={a('json_schema_file')} />
           </div>
         </CollapsibleGroup>
 
@@ -191,6 +193,10 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Input label={`${t.configPage.lookupCacheDynamic} (-lcd)`} value={local.lookup_cache_dynamic} onChange={v => set('lookup_cache_dynamic', v)} title={t.configPage.lookupCacheDynamicTip} disabled={isEmbedding}  active={a('lookup_cache_dynamic')} />
             <Select label={`${t.configPage.cacheTypeDraftK} (-ctdk)`} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default}  active={a('cache_type_draft_k')} />
             <Select label={`${t.configPage.cacheTypeDraftV} (-ctdv)`} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default}  active={a('cache_type_draft_v')} />
+            <Switch label={`${t.configPage.specDefault} (--spec-default)`} value={local.spec_default} onChange={v => set('spec_default', v)} title={t.configPage.specDefaultTip} disabled={isEmbedding}  active={a('spec_default')} />
+            <Switch label={`${t.configPage.specDraftBackendSampling} (--no-spec-draft-backend-sampling)`} value={!local.spec_draft_backend_sampling} onChange={v => set('spec_draft_backend_sampling', !v)} title={t.configPage.specDraftBackendSamplingTip} disabled={isEmbedding} />
+            <Num label={`${t.configPage.specDraftThreads} (-td)`} value={local.spec_draft_threads} onChange={v => set('spec_draft_threads', v)} min={0} title={t.configPage.specDraftThreadsTip} disabled={isEmbedding}  active={a('spec_draft_threads')} />
+            <Num label={`${t.configPage.specDraftThreadsBatch} (-tbd)`} value={local.spec_draft_threads_batch} onChange={v => set('spec_draft_threads_batch', v)} min={0} title={t.configPage.specDraftThreadsBatchTip} disabled={isEmbedding}  active={a('spec_draft_threads_batch')} />
           </div>
         </CollapsibleGroup>
 
@@ -244,8 +250,11 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Select label={`${t.configPage.splitMode} (-sm)`} value={local.split_mode} onChange={v => set('split_mode', v)} options={['', 'none', 'layer', 'row']} title={t.configPage.splitModeTip} defaultLabel={t.common.default}  active={a('split_mode')} />
             <Input label={`${t.configPage.tensorSplit} (-ts)`} value={local.tensor_split} onChange={v => set('tensor_split', v)} title={t.configPage.tensorSplitTip}  active={a('tensor_split')} />
             <Num label={`${t.configPage.mainGpu} (-mg)`} value={local.main_gpu} onChange={v => set('main_gpu', v)} min={0} max={9} title={t.configPage.mainGpuTip}  active={a('main_gpu')} />
+            <Switch label={`${t.configPage.perf} (--perf)`} value={local.perf} onChange={v => set('perf', v)} title={t.configPage.perfTip}  active={a('perf')} />
             <Switch label={`${t.configPage.checkTensors} (--check-tensors)`} value={local.check_tensors} onChange={v => set('check_tensors', v)} title={t.configPage.checkTensorsTip}  active={a('check_tensors')} />
             <Switch label={`${t.configPage.fit} (--fit)`} value={local.fit} onChange={v => set('fit', v)} title={t.configPage.fitTip}  active={a('fit')} />
+            <Input label={`${t.configPage.fitTarget} (-fitt)`} value={local.fit_target} onChange={v => set('fit_target', v)} title={t.configPage.fitTargetTip} disabled={!local.fit}  active={a('fit_target')} />
+            <Num label={`${t.configPage.fitCtx} (-fitc)`} value={local.fit_ctx} onChange={v => set('fit_ctx', v)} min={0} title={t.configPage.fitCtxTip} disabled={!local.fit}  active={a('fit_ctx')} />
             <Num label={`${t.configPage.threadsHttp} (--threads-http)`} value={local.threads_http} onChange={v => set('threads_http', v)} min={-1} title={t.configPage.threadsHttpTip}  active={a('threads_http')} />
           </div>
         </CollapsibleGroup>
@@ -279,6 +288,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Num label={`${t.configPage.slotPromptSimilarity} (-sps)`} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip}  active={a('slot_prompt_similarity')} />
             <Switch label={`${t.configPage.prefillAssistant} (--prefill-assistant)`} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip}  active={a('prefill_assistant')} />
             <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip}  active={a('ui_config_file')} />
+            <Input label={`${t.configPage.uiConfig} (--ui-config)`} value={local.ui_config} onChange={v => set('ui_config', v)} title={t.configPage.uiConfigTip}  active={a('ui_config')} />
+            <Switch label={`${t.configPage.uiMcpProxy} (--ui-mcp-proxy)`} value={local.ui_mcp_proxy} onChange={v => set('ui_mcp_proxy', v)} title={t.configPage.uiMcpProxyTip}  active={a('ui_mcp_proxy')} />
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
             <Input label={`${t.configPage.rpcServers} (--rpc)`} value={local.rpc_servers} onChange={v => set('rpc_servers', v)} title={t.configPage.rpcServersTip}  active={a('rpc_servers')} />

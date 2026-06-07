@@ -38,8 +38,8 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   }
 
   // ── Performance & Context ──
-  if (!config.ctx_size_auto) a.add('ctx_size')  // -c flag
-  // -ngl always emitted
+  if (!config.ctx_size_auto) a.add('ctx_size')
+  if (!config.gpu_layers_auto) a.add('gpu_layers')
   if (config.threads > 0) a.add('threads')
   if (config.batch_size > 0) a.add('batch_size')
   if (config.ubatch_size > 0) a.add('ubatch_size')
@@ -76,8 +76,11 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.no_mmap) a.add('no_mmap')
   if (config.no_repack) a.add('no_repack')
   if (config.numa) a.add('numa')
+  if (config.perf) a.add('perf')
   if (config.check_tensors) a.add('check_tensors')
   if (config.fit) a.add('fit')
+  if (config.fit_target) a.add('fit_target')
+  if (config.fit_ctx !== 4096) a.add('fit_ctx')
 
   // ── KV Cache ──
   if (config.cache_type_k) a.add('cache_type_k')
@@ -107,6 +110,10 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.spec_draft_device) a.add('spec_draft_device')
     if (config.lookup_cache_static) a.add('lookup_cache_static')
     if (config.lookup_cache_dynamic) a.add('lookup_cache_dynamic')
+    if (config.spec_default) a.add('spec_default')
+    if (!config.spec_draft_backend_sampling) a.add('spec_draft_backend_sampling')
+    if (config.spec_draft_threads > 0) a.add('spec_draft_threads')
+    if (config.spec_draft_threads_batch > 0) a.add('spec_draft_threads_batch')
   }
 
    // ── Network ──
@@ -119,6 +126,8 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
    if (config.path_prefix) a.add('path_prefix')
    if (config.api_prefix) a.add('api_prefix')
    if (config.ui_config_file) a.add('ui_config_file')
+   if (config.ui_config) a.add('ui_config')
+   if (config.ui_mcp_proxy) a.add('ui_mcp_proxy')
    // New server params
    if (config.rpc_servers) a.add('rpc_servers')
    if (Math.abs(config.sse_ping_interval - 30) > 0.001) a.add('sse_ping_interval')
@@ -137,6 +146,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.n_predict !== 0) a.add('n_predict')
     if (config.ignore_eos) a.add('ignore_eos')
     if (config.json_schema) a.add('json_schema')
+    if (config.json_schema_file) a.add('json_schema_file')
     if (config.temp > 0) a.add('temp')
     if (config.top_k > 0) a.add('top_k')
     if (config.top_p > 0) a.add('top_p')
@@ -150,21 +160,31 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.special) a.add('special')
     if (config.spm_infill) a.add('spm_infill')
     if (config.backend_sampling) a.add('backend_sampling')
-    if (config.mirostat > 0) a.add('mirostat')
-    if (config.mirostat_lr > 0) a.add('mirostat_lr')
-    if (config.mirostat_ent > 0) a.add('mirostat_ent')
-    if (config.xtc_probability > 0) a.add('xtc_probability')
-    if (config.xtc_threshold > 0) a.add('xtc_threshold')
-    if (config.dynatemp_range > 0) a.add('dynatemp_range')
-    if (config.dynatemp_exp > 0) a.add('dynatemp_exp')
+    if (config.mirostat > 0) {
+      a.add('mirostat')
+      if (config.mirostat_lr > 0) a.add('mirostat_lr')
+      if (config.mirostat_ent > 0) a.add('mirostat_ent')
+    }
+    if (config.xtc_probability > 0) {
+      a.add('xtc_probability')
+      if (config.xtc_threshold > 0) a.add('xtc_threshold')
+    }
+    if (config.dynatemp_range > 0) {
+      a.add('dynatemp_range')
+      if (config.dynatemp_exp > 0) a.add('dynatemp_exp')
+    }
     if (config.typical_p < 1 && config.typical_p > 0) a.add('typical_p')
-    if (config.dry_multiplier > 0) a.add('dry_multiplier')
-    if (config.dry_base > 0) a.add('dry_base')
-    if (config.dry_allowed_length > 0) a.add('dry_allowed_length')
-    if (config.dry_penalty_last_n > 0) a.add('dry_penalty_last_n')
-    if (config.dry_sequence_breaker) a.add('dry_sequence_breaker')
-    if (config.adaptive_target > 0) a.add('adaptive_target')
-    if (config.adaptive_decay > 0) a.add('adaptive_decay')
+    if (config.dry_multiplier > 0) {
+      a.add('dry_multiplier')
+      if (config.dry_base > 0) a.add('dry_base')
+      if (config.dry_allowed_length > 0) a.add('dry_allowed_length')
+      if (config.dry_penalty_last_n > 0) a.add('dry_penalty_last_n')
+      if (config.dry_sequence_breaker) a.add('dry_sequence_breaker')
+    }
+    if (config.adaptive_target > 0) {
+      a.add('adaptive_target')
+      if (config.adaptive_decay > 0) a.add('adaptive_decay')
+    }
     if (config.top_n_sigma >= 0) a.add('top_n_sigma')
     if (config.logit_bias) a.add('logit_bias')
     if (config.samplers) a.add('samplers')

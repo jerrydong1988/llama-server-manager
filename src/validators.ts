@@ -67,11 +67,11 @@ export function validateConfig(
       if (k === 'reverse_prompt' && val !== '') { hasGenParam = true; break }
       if (typeof defVal === 'boolean' && val !== defVal) { hasGenParam = true; break }
     }
-    if (config.mirostat !== 0 || config.mirostat_lr !== 0 || config.mirostat_ent !== 0 ||
-        config.xtc_probability !== 0 || config.xtc_threshold !== 0 ||
-        config.dynatemp_range !== 0 || config.dynatemp_exp !== 0 ||
+    if (config.mirostat !== 0 || Math.abs(config.mirostat_lr - 0.1) > 0.001 || Math.abs(config.mirostat_ent - 5.0) > 0.001 ||
+        Math.abs(config.xtc_probability) > 0.001 || Math.abs(config.xtc_threshold - 0.1) > 0.001 ||
+        config.dynatemp_range !== 0 || config.dynatemp_exp !== 1.0 ||
         config.typical_p !== 1.0 || config.dry_multiplier !== 0 ||
-        config.dry_base !== 0 || config.dry_allowed_length !== 0) hasGenParam = true
+        Math.abs(config.dry_base - 1.75) > 0.001 || config.dry_allowed_length !== 0) hasGenParam = true
     if (hasGenParam)
       w.push({ field: 'embedding', severity: 'high', key: 'warnA2' })
   }
@@ -89,7 +89,7 @@ export function validateConfig(
 
   // A5: spec_type 为空但推测解码参数非默认值
   if ((!config.spec_type || config.spec_type === '' || config.spec_type === 'none') &&
-      (config.draft_tokens !== 16 && config.draft_tokens !== 0 || config.spec_draft_n_min !== 0 ||
+      (config.draft_tokens !== 3 && config.draft_tokens !== 0 || config.spec_draft_n_min !== 0 ||
        config.spec_draft_p_min !== 0 || config.spec_draft_p_split !== 0.1))
     w.push({ field: 'spec_type', severity: 'medium', key: 'warnA5' })
 
@@ -98,7 +98,7 @@ export function validateConfig(
     config.rope_scaling !== '' || config.rope_scale !== 0 ||
     config.rope_freq_base !== 0 || config.rope_freq_scale !== 0 ||
    config.yarn_ext_factor >= 0 || config.yarn_attn_factor !== -1 ||
-   config.yarn_beta_slow !== 0 || config.yarn_beta_fast !== -1))
+   config.yarn_beta_slow > 0 || config.yarn_beta_fast !== -1))
     w.push({ field: 'ctx_size_auto', severity: 'medium', key: 'warnA6' })
 
   // A7: ctx_size 超过模型上下文 4 倍
@@ -176,6 +176,10 @@ export function validateConfig(
   // B10: --no-mmproj 与 --mmproj 同时设置
   if (config.no_mmproj && config.mmproj_path)
     w.push({ field: 'no_mmproj', severity: 'low', key: 'warnB10' })
+
+  // B11: json_schema 与 json_schema_file 同时设置
+  if (config.json_schema && config.json_schema_file)
+    w.push({ field: 'json_schema', severity: 'low', key: 'warnB11' })
 
   // ═══ C 组：环境感知 ═══
 

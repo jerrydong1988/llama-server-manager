@@ -28,7 +28,7 @@ export interface InstanceConfig {
   jinja: boolean; reasoning_budget: string; reasoning_budget_message: string;
   grammar_file: string; grammar: string;
   // Performance & Context
-  ctx_size: number; ctx_size_auto: boolean; gpu_layers: number;
+  ctx_size: number; ctx_size_auto: boolean; gpu_layers_auto: boolean; gpu_layers: number;
   threads: number; batch_size: number; ubatch_size: number; parallel: number;
   cont_batching: boolean; cache_prompt: boolean; threads_batch: number;
   threads_http: number; keep: number; cache_reuse: number; cache_ram: number;
@@ -40,7 +40,7 @@ export interface InstanceConfig {
   // Memory & KV Cache
   flash_attn: string; moe_cpu_layers: number; mlock: boolean;
   no_mmap: boolean; no_repack: boolean; numa: boolean; context_shift: boolean;
-  check_tensors: boolean; fit: boolean; kv_unified: boolean; cache_idle_slots: boolean; no_kv_offload: boolean;
+  perf: boolean; check_tensors: boolean; fit: boolean; fit_target: string; fit_ctx: number; kv_unified: boolean; cache_idle_slots: boolean; no_kv_offload: boolean;
   cache_type_k: string; cache_type_v: string;
   cache_type_draft_k: string; cache_type_draft_v: string;
   // Speculative Decoding
@@ -48,13 +48,14 @@ export interface InstanceConfig {
   spec_draft_n_min: number; spec_type: string;
   spec_draft_p_min: number; spec_draft_p_split: number; spec_draft_device: string;
   lookup_cache_static: string; lookup_cache_dynamic: string;
+  spec_default: boolean; spec_draft_backend_sampling: boolean; spec_draft_threads: number; spec_draft_threads_batch: number;
   // GPU & Device
   device: string; split_mode: string; tensor_split: string; main_gpu: number;
   override_kv: string;
   // Server & Network
   host: string; port: number; api_key: string; api_key_file: string;
   ssl_key_file: string; ssl_cert_file: string; path_prefix: string; api_prefix: string;
-  no_ui: boolean; offline: boolean; ui_config_file: string;
+  no_ui: boolean; offline: boolean; ui_config_file: string; ui_config: string; ui_mcp_proxy: boolean;
   embedding: boolean; pooling: string; embd_normalize: number; reranking: boolean;
   metrics: boolean; props: boolean; slots_enabled: boolean;
   slot_save_path: string; slot_prompt_similarity: number; prefill_assistant: boolean;
@@ -63,7 +64,7 @@ export interface InstanceConfig {
   mmproj_url: string; mmproj_auto: boolean; no_mmproj: boolean; no_mmproj_offload: boolean; image_min_tokens: number; image_max_tokens: number;
   tags: string; media_path: string; tools: string;
   // Generation
-  n_predict: number; ignore_eos: boolean; json_schema: string;
+  n_predict: number; ignore_eos: boolean; json_schema: string; json_schema_file: string;
   temp: number; top_k: number; top_p: number; repeat_penalty: number;
   seed: number; min_p: number; presence_penalty: number;
   frequency_penalty: number; repeat_last_n: number;

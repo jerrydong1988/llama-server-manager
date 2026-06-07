@@ -38,7 +38,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
 
     // ── Performance & Context ──
     if !config.ctx_size_auto { cmd.extend_from_slice(&["-c".into(), config.ctx_size.to_string()]); }
-    cmd.extend_from_slice(&["-ngl".into(), config.gpu_layers.to_string()]);
+    if !config.gpu_layers_auto { cmd.extend_from_slice(&["-ngl".into(), config.gpu_layers.to_string()]); }
     if config.threads > 0 { cmd.extend_from_slice(&["-t".into(), config.threads.to_string()]); }
     if config.batch_size > 0 { cmd.extend_from_slice(&["-b".into(), config.batch_size.to_string()]); }
     if config.ubatch_size > 0 { cmd.extend_from_slice(&["-ub".into(), config.ubatch_size.to_string()]); }
@@ -79,7 +79,10 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.no_repack { cmd.push("--no-repack".into()); }
     if config.numa { cmd.extend_from_slice(&["--numa".into(), "distribute".into()]); }
     if config.check_tensors { cmd.push("--check-tensors".into()); }
+    if config.perf { cmd.push("--perf".into()); }
     if config.fit { cmd.extend_from_slice(&["--fit".into(), "on".into()]); }
+    if !config.fit_target.is_empty() { cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]); }
+    if config.fit_ctx != 4096 { cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]); }
 
     // ── KV Cache ──
     if !config.cache_type_k.is_empty() { cmd.extend_from_slice(&["-ctk".into(), config.cache_type_k.clone()]); }
@@ -110,6 +113,10 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         if !config.spec_draft_device.is_empty() { cmd.extend_from_slice(&["--spec-draft-device".into(), config.spec_draft_device.clone()]); }
         if !config.lookup_cache_static.is_empty() { cmd.extend_from_slice(&["-lcs".into(), config.lookup_cache_static.clone()]); }
         if !config.lookup_cache_dynamic.is_empty() { cmd.extend_from_slice(&["-lcd".into(), config.lookup_cache_dynamic.clone()]); }
+        if config.spec_default { cmd.push("--spec-default".into()); }
+        if !config.spec_draft_backend_sampling { cmd.push("--no-spec-draft-backend-sampling".into()); }
+        if config.spec_draft_threads > 0 { cmd.extend_from_slice(&["-td".into(), config.spec_draft_threads.to_string()]); }
+        if config.spec_draft_threads_batch > 0 { cmd.extend_from_slice(&["-tbd".into(), config.spec_draft_threads_batch.to_string()]); }
     }
 
     // ── Network ──
@@ -123,6 +130,8 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.path_prefix.is_empty() { cmd.extend_from_slice(&["--path".into(), config.path_prefix.clone()]); }
     if !config.api_prefix.is_empty() { cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]); }
     if !config.ui_config_file.is_empty() { cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]); }
+    if !config.ui_config.is_empty() { cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]); }
+    if config.ui_mcp_proxy { cmd.push("--ui-mcp-proxy".into()); }
 
     // ── Embedding / Generation ──
     if config.embedding {
@@ -135,6 +144,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         else if config.n_predict == 0 {} else { cmd.extend_from_slice(&["-n".into(), "-1".into()]); }
         if config.ignore_eos { cmd.push("--ignore-eos".into()); }
         if !config.json_schema.is_empty() { cmd.extend_from_slice(&["--json-schema".into(), config.json_schema.clone()]); }
+        if !config.json_schema_file.is_empty() { cmd.extend_from_slice(&["-jf".into(), config.json_schema_file.clone()]); }
         if config.temp > 0.0 { cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]); }
         if config.top_k > 0 { cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]); }
         if config.top_p > 0.0 { cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]); }
@@ -150,21 +160,31 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         if config.backend_sampling { cmd.push("-bs".into()); }
 
         // Advanced sampling
-        if config.mirostat > 0 { cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]); }
-        if config.mirostat_lr > 0.0 { cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]); }
-        if config.mirostat_ent > 0.0 { cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]); }
-        if config.xtc_probability > 0.0 { cmd.extend_from_slice(&["--xtc-probability".into(), config.xtc_probability.to_string()]); }
-        if config.xtc_threshold > 0.0 { cmd.extend_from_slice(&["--xtc-threshold".into(), config.xtc_threshold.to_string()]); }
-        if config.dynatemp_range > 0.0 { cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]); }
-        if config.dynatemp_exp > 0.0 { cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]); }
+        if config.mirostat > 0 {
+            cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]);
+            if config.mirostat_lr > 0.0 { cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]); }
+            if config.mirostat_ent > 0.0 { cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]); }
+        }
+        if config.xtc_probability > 0.0 {
+            cmd.extend_from_slice(&["--xtc-probability".into(), config.xtc_probability.to_string()]);
+            if config.xtc_threshold > 0.0 { cmd.extend_from_slice(&["--xtc-threshold".into(), config.xtc_threshold.to_string()]); }
+        }
+        if config.dynatemp_range > 0.0 {
+            cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]);
+            if config.dynatemp_exp > 0.0 { cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]); }
+        }
         if config.typical_p < 1.0 && config.typical_p > 0.0 { cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]); }
-        if config.dry_multiplier > 0.0 { cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]); }
-        if config.dry_base > 0.0 { cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]); }
-        if config.dry_allowed_length > 0 { cmd.extend_from_slice(&["--dry-allowed-length".into(), config.dry_allowed_length.to_string()]); }
-        if config.dry_penalty_last_n > 0 { cmd.extend_from_slice(&["--dry-penalty-last-n".into(), config.dry_penalty_last_n.to_string()]); }
-        if !config.dry_sequence_breaker.is_empty() { cmd.extend_from_slice(&["--dry-sequence-breaker".into(), config.dry_sequence_breaker.clone()]); }
-        if config.adaptive_target > 0.0 { cmd.extend_from_slice(&["--adaptive-target".into(), config.adaptive_target.to_string()]); }
-        if config.adaptive_decay > 0.0 { cmd.extend_from_slice(&["--adaptive-decay".into(), config.adaptive_decay.to_string()]); }
+        if config.dry_multiplier > 0.0 {
+            cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]);
+            if config.dry_base > 0.0 { cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]); }
+            if config.dry_allowed_length > 0 { cmd.extend_from_slice(&["--dry-allowed-length".into(), config.dry_allowed_length.to_string()]); }
+            if config.dry_penalty_last_n > 0 { cmd.extend_from_slice(&["--dry-penalty-last-n".into(), config.dry_penalty_last_n.to_string()]); }
+            if !config.dry_sequence_breaker.is_empty() { cmd.extend_from_slice(&["--dry-sequence-breaker".into(), config.dry_sequence_breaker.clone()]); }
+        }
+        if config.adaptive_target > 0.0 {
+            cmd.extend_from_slice(&["--adaptive-target".into(), config.adaptive_target.to_string()]);
+            if config.adaptive_decay > 0.0 { cmd.extend_from_slice(&["--adaptive-decay".into(), config.adaptive_decay.to_string()]); }
+        }
         if config.top_n_sigma >= 0.0 { cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]); }
         if !config.logit_bias.is_empty() { cmd.extend_from_slice(&["-l".into(), config.logit_bias.clone()]); }
         if !config.samplers.is_empty() { cmd.extend_from_slice(&["--samplers".into(), config.samplers.clone()]); }

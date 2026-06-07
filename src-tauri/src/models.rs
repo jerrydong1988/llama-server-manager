@@ -61,6 +61,8 @@ pub struct InstanceConfig {
     pub grammar: String,
     pub ctx_size: u32,
     pub ctx_size_auto: bool,
+    #[serde(default = "default_true")]
+    pub gpu_layers_auto: bool,
     pub gpu_layers: u32,
     pub threads: u32,
     pub batch_size: u32,
@@ -115,7 +117,13 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub check_tensors: bool,
     #[serde(default)]
+    pub perf: bool,
+    #[serde(default)]
     pub fit: bool,
+    #[serde(default)]
+    pub fit_target: String,
+    #[serde(default = "default_fit_ctx")]
+    pub fit_ctx: u32,
     #[serde(default)]
     pub kv_unified: bool,
     #[serde(default)]
@@ -143,6 +151,14 @@ pub struct InstanceConfig {
     pub lookup_cache_static: String,
     #[serde(default)]
     pub lookup_cache_dynamic: String,
+    #[serde(default)]
+    pub spec_default: bool,
+    #[serde(default = "default_true")]
+    pub spec_draft_backend_sampling: bool,
+    #[serde(default)]
+    pub spec_draft_threads: u32,
+    #[serde(default)]
+    pub spec_draft_threads_batch: u32,
     // GPU & Device
     #[serde(default)]
     pub device: String,
@@ -170,6 +186,10 @@ pub struct InstanceConfig {
     pub offline: bool,
     #[serde(default)]
     pub ui_config_file: String,
+    #[serde(default)]
+    pub ui_config: String,
+    #[serde(default)]
+    pub ui_mcp_proxy: bool,
     pub embedding: bool,
     pub pooling: String,
     #[serde(default)]
@@ -216,6 +236,8 @@ pub struct InstanceConfig {
     pub n_predict: i32,
     pub ignore_eos: bool,
     pub json_schema: String,
+    #[serde(default)]
+    pub json_schema_file: String,
     pub temp: f32,
     pub top_k: u32,
     pub top_p: f32,
@@ -282,22 +304,25 @@ impl Default for InstanceConfig {
             reasoning: String::new(),             jinja: true,
             reasoning_budget: String::new(), reasoning_budget_message: String::new(),
             grammar_file: String::new(), grammar: String::new(),
-            ctx_size: 4096, ctx_size_auto: false, gpu_layers: 99, threads: 0,
+            ctx_size: 0, ctx_size_auto: false, gpu_layers_auto: true, gpu_layers: 99, threads: 0,
             batch_size: 2048, ubatch_size: 512, parallel: -1, cont_batching: true,
             cache_prompt: true, threads_batch: 0,
             threads_http: -1, keep: 0, cache_reuse: 0, cache_ram: 8192,
             warmup: true, ctx_checkpoints: 32, checkpoint_min_step: 256, swa_full: false,
             rope_scaling: String::new(), rope_scale: 0.0, rope_freq_base: 0.0, rope_freq_scale: 0.0,
-            yarn_ext_factor: -1.0, yarn_attn_factor: -1.0, yarn_beta_slow: 0.0,             yarn_beta_fast: -1.0, yarn_orig_ctx: 0,
+            yarn_ext_factor: -1.0, yarn_attn_factor: -1.0, yarn_beta_slow: -1.0,             yarn_beta_fast: -1.0, yarn_orig_ctx: 0,
             flash_attn: "auto".into(), moe_cpu_layers: 0, mlock: false,
             no_mmap: false, no_repack: false, numa: false, context_shift: false,
-            check_tensors: false, fit: false, kv_unified: false, cache_idle_slots: true, no_kv_offload: false,
+            perf: false, check_tensors: false, fit: false, fit_target: String::new(), fit_ctx: 4096,
+            kv_unified: false, cache_idle_slots: true, no_kv_offload: false,
             cache_type_k: String::new(), cache_type_v: String::new(),
             cache_type_draft_k: String::new(), cache_type_draft_v: String::new(),
-            draft_model_path: String::new(), draft_gpu_layers: 99, draft_tokens: 16,
+            draft_model_path: String::new(), draft_gpu_layers: 99, draft_tokens: 3,
             spec_draft_n_min: 0, spec_type: String::new(),
             spec_draft_p_min: 0.0, spec_draft_p_split: 0.1, spec_draft_device: String::new(),
             lookup_cache_static: String::new(), lookup_cache_dynamic: String::new(),
+            spec_default: false, spec_draft_backend_sampling: true,
+            spec_draft_threads: 0, spec_draft_threads_batch: 0,
             device: String::new(), split_mode: String::new(), tensor_split: String::new(),
             main_gpu: 0, override_kv: String::new(),
             host: "127.0.0.1".into(), port: 8080, api_key: String::new(),
@@ -305,23 +330,24 @@ impl Default for InstanceConfig {
             ssl_key_file: String::new(), ssl_cert_file: String::new(),
             path_prefix: String::new(), api_prefix: String::new(),
             no_ui: false, offline: false, ui_config_file: String::new(),
+            ui_config: String::new(), ui_mcp_proxy: false,
             embedding: false, pooling: String::new(), embd_normalize: 2, reranking: false,
             metrics: false, props: false, slots_enabled: true,
             slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: true,
             models_dir: String::new(), models_preset: String::new(), models_max: 4, models_autoload: true,
             mmproj_url: String::new(), mmproj_auto: false, no_mmproj: false, no_mmproj_offload: false, image_min_tokens: 0, image_max_tokens: 0,
             tags: String::new(), media_path: String::new(), tools: String::new(),
-            n_predict: -1, ignore_eos: false, json_schema: String::new(),
+            n_predict: -1, ignore_eos: false, json_schema: String::new(), json_schema_file: String::new(),
             temp: 0.8, top_k: 40, top_p: 0.95, repeat_penalty: 1.0, seed: -1,
             min_p: 0.05, presence_penalty: 0.0, frequency_penalty: 0.0,
             repeat_last_n: 64,
             reverse_prompt: String::new(), special: false, spm_infill: false, backend_sampling: false,
-            mirostat: 0, mirostat_lr: 0.0, mirostat_ent: 0.0,
-            xtc_probability: 0.0, xtc_threshold: 0.0, dynatemp_range: 0.0,
-            dynatemp_exp: 0.0, typical_p: 1.0, dry_multiplier: 0.0, dry_base: 0.0,
+            mirostat: 0, mirostat_lr: 0.10, mirostat_ent: 5.0,
+            xtc_probability: 0.0, xtc_threshold: 0.10, dynatemp_range: 0.0,
+            dynatemp_exp: 1.0, typical_p: 1.0, dry_multiplier: 0.0, dry_base: 1.75,
             dry_allowed_length: 2, dry_penalty_last_n: -1,
             dry_sequence_breaker: String::new(),
-            adaptive_target: 0.0, adaptive_decay: 0.0, top_n_sigma: -1.0,
+            adaptive_target: -1.0, adaptive_decay: 0.90, top_n_sigma: -1.0,
             logit_bias: String::new(), samplers: String::new(), sampler_seq: String::new(),
             timeout: 3600, sleep_idle: -1, verbose: false, custom_args: vec![],
             rpc_servers: String::new(), sse_ping_interval: 30, reuse_port: false,
@@ -386,3 +412,6 @@ pub struct MsFileEntry {
     pub size: u64,
     pub file_type: String,
 }
+
+fn default_true() -> bool { true }
+fn default_fit_ctx() -> u32 { 4096 }

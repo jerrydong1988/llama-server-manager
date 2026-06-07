@@ -125,13 +125,15 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedSamplingExt: {
     seed: -1, min_p: 0.05, presence_penalty: 0, frequency_penalty: 0,
     repeat_last_n: 64, special: false, spm_infill: false,
-    backend_sampling: false, json_schema: '',
+    backend_sampling: false, json_schema: '', json_schema_file: '',
   },
   advancedSpec: {
     draft_model_path: '', draft_gpu_layers: 99,
     spec_draft_p_min: 0, spec_draft_p_split: 0.1, spec_draft_device: '',
     lookup_cache_static: '', lookup_cache_dynamic: '',
     cache_type_draft_k: '', cache_type_draft_v: '',
+    spec_default: false, spec_draft_backend_sampling: true,
+    spec_draft_threads: 0, spec_draft_threads_batch: 0,
   },
   advancedRope: {
     rope_scaling: '', rope_scale: 0, rope_freq_base: 0, rope_freq_scale: 0,
@@ -149,7 +151,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   },
   advancedHardware: {
     moe_cpu_layers: 0, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
-    check_tensors: false, fit: false,
+    perf: false, check_tensors: false, fit: false, fit_target: '', fit_ctx: 4096,
     threads_http: -1,
   },
   advancedServerBasic: {
@@ -160,7 +162,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedServerExt: {
     slots_enabled: true, metrics: false, props: false,
     slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
-    ui_config_file: '',
+    ui_config_file: '', ui_config: '', ui_mcp_proxy: false,
     rpc_servers: '', sse_ping_interval: 30, reuse_port: false,
   },
   advancedMulti: {
