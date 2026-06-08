@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
-import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings } from 'lucide-react'
+import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity } from 'lucide-react'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
 import InstanceManager from './components/InstanceManager'
 import LogsViewer from './components/LogsViewer'
 import ConfigPage from './components/ConfigPage'
+import PerformancePage from './components/PerformancePage/PerformancePage'
 import { useAppStore } from './store'
 import { I18nProvider, useI18n } from './i18n'
 
@@ -14,6 +15,7 @@ const TAB_CONTENT: Record<string, () => JSX.Element> = {
   'model-repo': () => <ModelRepo />,
   engine: () => <EngineManager />,
   config: () => <ConfigPage />,
+  perf: () => <PerformancePage />,
   logs: () => <LogsViewer />,
 }
 const renderTabContent = (tabId: string) => {
@@ -31,6 +33,7 @@ function AppInner() {
     { id: 'engine', name: t.nav.engine, icon: Cpu },
     { id: 'instances', name: t.nav.instances, icon: Server },
     { id: 'config', name: t.nav.config, icon: Settings },
+    { id: 'perf', name: t.nav.perf, icon: Activity },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
   ]
   // dark mode handled by store setDarkMode

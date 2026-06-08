@@ -10,7 +10,7 @@ use tauri::Manager;
 use crate::models::{AppState, WindowState};
 use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder};
 use crate::commands::config::{save_config, load_config, save_window_state, load_window_state, resolve_path};
-use crate::commands::server::{generate_server_command, start_server, stop_server, open_browser, test_connection, check_port};
+use crate::commands::server::{generate_server_command, start_server, stop_server, open_browser, test_connection, check_port, get_system_metrics, get_slots, get_metrics};
 use crate::commands::download::{browse_modelscope, download_modelscope_files, browse_huggingface, download_huggingface_files, cancel_file_download, pause_file_download, cancel_and_cleanup_download};
 
 fn main() {
@@ -122,6 +122,7 @@ fn main() {
             browse_huggingface, download_huggingface_files,
             cancel_file_download, pause_file_download, cancel_and_cleanup_download,
             test_connection, check_port,
+            get_system_metrics, get_slots, get_metrics,
             save_window_state, load_window_state,
             resolve_path,
         ])

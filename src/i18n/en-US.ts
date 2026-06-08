@@ -1,5 +1,5 @@
 export const enUS = {
-  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', logs: 'Server Logs' },
+  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', perf: 'Performance', logs: 'Server Logs' },
   instance: {
     title: 'Server Instances', create: 'Create Instance', newInstance: 'New Instance',
     name: 'Instance Name', namePlaceholder: 'e.g. Llama-3-8B',
@@ -270,6 +270,25 @@ export const enUS = {
     warnC1: 'Multimodal projector is set but model architecture does not appear to be a vision model',
     warnC2: 'Draft model path is set alongside MTP speculative type — MTP uses the main model internally and does not need a separate draft model',
     warnC3: 'Unlimited generation (n_predict=-1) with ignore_eos=true — generation may never stop',
+  },
+  perfBlock: {
+    noRunning: 'No running instances. Start an instance to monitor performance.',
+    waiting: 'Waiting for data...',
+    noMetricsData: 'Collecting data... (needs a few polling cycles)',
+    noSlots: 'No slot data available',
+    cpu: 'CPU',
+    memory: 'Memory',
+    vram: 'VRAM',
+    uptime: 'Uptime',
+    tokensPerSec: 'Tokens/s',
+    requests: 'Requests',
+    slots: 'Slots',
+    kvCache: 'KV Cache',
+    kvCacheUsage: 'KV Cache Usage (%)',
+    resources: 'CPU / Memory',
+    slotStatus: 'Slot Status',
+    busy: 'Busy',
+    idle: 'Idle',
   },
   logs: {
     title: 'Server Logs', selectInstance: 'View instance logs:', allInstances: 'All Instances',

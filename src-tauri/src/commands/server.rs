@@ -1,7 +1,9 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance};
+use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics};
+use crate::commands::adlx;
 use tauri::{Emitter, Manager};
+use sysinfo::System;
 
 // ── 生成 CLI 命令 ────────────────────────────────────────────────
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
@@ -531,4 +533,110 @@ pub async fn check_port(port: u16) -> Result<bool, String> {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
+}
+
+// ── 系统性能指标（sysinfo） ──────────────────────────────────
+
+fn get_process_metrics(pid: u32) -> (f32, f64) {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    sys.refresh_cpu_all();
+    if let Some(p) = sys.processes().values().find(|p| p.pid().as_u32() == pid) {
+        let raw = p.cpu_usage();
+        let cpu = if raw > 100.0 { raw / sys.cpus().len() as f32 } else { raw };
+        (cpu, p.memory() as f64 / (1024.0 * 1024.0))
+    } else {
+        (0.0, 0.0)
+    }
+}
+
+#[tauri::command]
+pub async fn get_system_metrics(
+    instance_id: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<SystemMetrics, String> {
+    let (pid, start_time) = {
+        let running = state.running.lock().unwrap();
+        let ri = running.get(&instance_id).ok_or("实例未运行")?;
+        (ri.pid, ri.start_time)
+    };
+    let uptime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap().as_secs() - start_time;
+
+    // Try ADLX first
+    if let Some(m) = adlx::collect_metrics() {
+        return Ok(SystemMetrics {
+            cpu_percent: m.cpu_percent.unwrap_or(0.0),
+            memory_mb: m.memory_mb.unwrap_or(0.0),
+            uptime_secs: uptime,
+            gpu_percent: m.gpu_percent,
+            vram_used_mb: m.vram_used_mb,
+            vram_total_mb: m.vram_total_mb,
+        });
+    }
+
+    // Fallback: sysinfo
+    let (cpu, mem) = get_process_metrics(pid);
+    Ok(SystemMetrics {
+        cpu_percent: cpu,
+        memory_mb: (mem * 10.0).round() / 10.0,
+        uptime_secs: uptime,
+        gpu_percent: None,
+        vram_used_mb: None,
+        vram_total_mb: None,
+    })
+}
+
+#[derive(serde::Serialize)]
+pub struct SlotInfo {
+    id: u32,
+    is_processing: bool,
+    n_ctx: u32,
+}
+
+#[tauri::command]
+pub async fn get_slots(host: String, port: u16) -> Result<Vec<SlotInfo>, String> {
+    let h = if host == "0.0.0.0" { "localhost" } else { &host };
+    let url = format!("http://{}:{}/slots", h, port);
+    let resp = reqwest::get(&url).await.map_err(|e| format!("请求失败: {}", e))?;
+    let arr: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
+    Ok(arr.iter().enumerate().map(|(i, v)| SlotInfo {
+        id: v.get("id").and_then(|s| s.as_u64()).unwrap_or(i as u64) as u32,
+        is_processing: v.get("is_processing").and_then(|s| s.as_bool()).unwrap_or(false),
+        n_ctx: v.get("n_ctx").and_then(|s| s.as_u64()).unwrap_or(0) as u32,
+    }).collect())
+}
+
+#[derive(serde::Serialize)]
+pub struct MetricsInfo {
+    tokens_per_sec: f64,
+    prompt_tokens: u64,
+    gen_tokens: u64,
+    requests: u64,
+}
+
+#[tauri::command]
+pub async fn get_metrics(host: String, port: u16) -> Result<Option<MetricsInfo>, String> {
+    let h = if host == "0.0.0.0" { "localhost" } else { &host };
+    let url = format!("http://{}:{}/metrics", h, port);
+    let resp = match reqwest::get(&url).await {
+        Ok(r) if r.status().is_success() => r,
+        Ok(r) if r.status().as_u16() == 404 => return Ok(None),
+        _ => return Ok(None),
+    };
+    let body = resp.text().await.map_err(|e| format!("读取失败: {}", e))?;
+    let extract = |key: &str| -> f64 {
+        body.lines()
+            .find(|l| l.starts_with(key))
+            .and_then(|l| l.split_whitespace().last()?.parse().ok())
+            .unwrap_or(0.0)
+    };
+    Ok(Some(MetricsInfo {
+        tokens_per_sec: extract("llamacpp:predicted_tokens_seconds"),
+        prompt_tokens: extract("llamacpp:prompt_tokens_total") as u64,
+        gen_tokens: extract("llamacpp:tokens_predicted_total") as u64,
+        requests: extract("llamacpp:n_decode_total") as u64,
+    }))
 }

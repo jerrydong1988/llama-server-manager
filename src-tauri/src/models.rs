@@ -366,6 +366,16 @@ pub struct RunningInstance {
     pub start_time: u64,
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SystemMetrics {
+    pub cpu_percent: f32,
+    pub memory_mb: f64,
+    pub uptime_secs: u64,
+    pub gpu_percent: Option<f32>,
+    pub vram_used_mb: Option<f64>,
+    pub vram_total_mb: Option<f64>,
+}
+
 // ── 应用全局状态 ──────────────────────────────────────────────────
 pub struct AppState {
     pub models: Mutex<Vec<ModelInfo>>,
