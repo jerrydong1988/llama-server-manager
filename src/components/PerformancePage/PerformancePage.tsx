@@ -23,6 +23,10 @@ interface MetricsData {
   prompt_tokens: number
   gen_tokens: number
   requests: number
+  prompt_tokens_per_sec: number
+  requests_processing: number
+  requests_deferred: number
+  busy_slots_per_decode: number
 }
 
 export default function PerformancePage() {
@@ -54,8 +58,8 @@ export default function PerformancePage() {
       try { setSlots(await invoke<SlotInfo[]>('get_slots', { host, port })) } catch { setSlots([]) }
       try {
         const m = await invoke<MetricsData | null>('get_metrics', { host, port })
-        setMetrics(m)
-      } catch { setMetrics(null) }
+        if (m) setMetrics(m)
+      } catch { /* noop */ }
     }
 
     poll()
@@ -103,9 +107,9 @@ export default function PerformancePage() {
         {sys ? (
           <>
             <Card label={t.perfBlock.cpu} value={sys.cpu_percent.toFixed(1)} unit="%" color="text-blue-500" />
-            <Card label={t.perfBlock.memory} value={sys.memory_mb.toFixed(0)} unit="MB" color="text-purple-500" />
+            <Card label={t.perfBlock.memory} value={(sys.memory_mb / 1024).toFixed(2)} unit="GB" color="text-purple-500" />
             {sys.vram_used_mb != null ? (
-              <Card label={t.perfBlock.vram} value={`${sys.vram_used_mb.toFixed(0)} / ${sys.vram_total_mb?.toFixed(0)}`} unit="MB" color="text-green-500" />
+              <Card label={t.perfBlock.vram} value={`${(sys.vram_used_mb / 1024).toFixed(2)} / ${(sys.vram_total_mb! / 1024).toFixed(2)}`} unit="GB" color="text-green-500" />
             ) : (
               <Card label={t.perfBlock.vram} value="—" color="text-gray-400" />
             )}
@@ -115,7 +119,6 @@ export default function PerformancePage() {
               <Card label="GPU" value="—" color="text-gray-400" />
             )}
             <Card label={t.perfBlock.uptime} value={fmtSecs(sys.uptime_secs)} color="text-gray-700 dark:text-gray-200" />
-            <Card label={t.perfBlock.slots} value={`${slots.filter(s => s.is_processing).length}`} unit={`/ ${slots.length}`} color="text-indigo-500" />
           </>
         ) : (
           <div className="col-span-5 text-center text-sm text-gray-400 py-4">{t.perfBlock.waiting}</div>
@@ -123,12 +126,20 @@ export default function PerformancePage() {
       </div>
 
       {metrics ? (
-        <div className="grid grid-cols-3 md:grid-cols-4 gap-3 mb-6">
-          <Card label={t.perfBlock.tokensPerSec} value={metrics.tokens_per_sec.toFixed(1)} color="text-orange-500" />
-          <Card label={t.perfBlock.requests} value={metrics.requests.toFixed(0)} color="text-teal-500" />
-          <Card label="Prompt Tokens" value={metrics.prompt_tokens.toFixed(0)} color="text-cyan-500" />
-          <Card label="Gen Tokens" value={metrics.gen_tokens.toFixed(0)} color="text-rose-500" />
-        </div>
+        <>
+          <div className="grid grid-cols-3 md:grid-cols-5 gap-3 mb-3">
+            <Card label={t.perfBlock.tokensPerSec} value={metrics.tokens_per_sec.toFixed(1)} color="text-orange-500" />
+            <Card label="Prompt Spd" value={metrics.prompt_tokens_per_sec.toFixed(1)} unit="t/s" color="text-amber-500" />
+            <Card label="Queue" value={`${metrics.requests_processing}`} unit={`/ ${metrics.requests_processing + metrics.requests_deferred}`} color="text-cyan-500" />
+            <Card label="Busy Slots" value={metrics.busy_slots_per_decode.toFixed(1)} color="text-indigo-500" />
+            <Card label={t.perfBlock.requests} value={metrics.requests.toFixed(0)} color="text-teal-500" />
+          </div>
+          <div className="flex gap-4 mb-6 text-sm">
+            <span className="text-cyan-500 font-medium">Prompt {metrics.prompt_tokens.toLocaleString()}</span>
+            <span className="text-rose-500 font-medium">Gen {metrics.gen_tokens.toLocaleString()}</span>
+            <span className="text-gray-700 dark:text-gray-300 font-medium">Total {(metrics.prompt_tokens + metrics.gen_tokens).toLocaleString()}</span>
+          </div>
+        </>
       ) : null}
 
       <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
@@ -154,6 +165,35 @@ export default function PerformancePage() {
           </div>
         )}
       </div>
+
+      {metrics ? (
+        <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-4">
+          <div className="text-xs text-gray-500 mb-3">Summary</div>
+          <div className="space-y-2 text-xs">
+            <Bar label="Context" current={metrics.prompt_tokens + metrics.gen_tokens} total={slots.reduce((s, n) => s + n.n_ctx, 1)} />
+            <div className="flex items-center gap-2">
+              <span className="w-16 text-gray-500 shrink-0">Output</span>
+              <span className="flex-1 text-gray-700 dark:text-gray-300 font-mono">{metrics.gen_tokens.toLocaleString()} tokens</span>
+            </div>
+            <Bar label="Throughput" current={metrics.tokens_per_sec} total={50} unit=" tok/s" />
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function Bar({ label, current, total, unit }: { label: string; current: number; total: number; unit?: string }) {
+  const pct = Math.min(100, total > 0 ? (current / total) * 100 : 0)
+  return (
+    <div className="flex items-center gap-2">
+      <span className="w-16 text-gray-500 shrink-0">{label}</span>
+      <div className="flex-1 h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+        <div className="h-full rounded-full bg-gradient-to-r from-blue-400 to-blue-600 transition-all duration-700" style={{ width: `${pct}%` }} />
+      </div>
+      <span className="text-gray-400 w-32 text-right shrink-0 font-mono">
+        {current.toLocaleString()}{total < 1e6 ? ` / ${total.toLocaleString()}` : ''}{unit || ''} ({pct.toFixed(1)}%)
+      </span>
     </div>
   )
 }

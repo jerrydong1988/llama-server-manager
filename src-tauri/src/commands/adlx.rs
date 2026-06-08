@@ -6,10 +6,20 @@ const ADLX_OK: AdlxResult = 0;
 static mut ADLX_LIB: Option<&'static libloading::Library> = None;
 static mut ADLX_SYS: *mut c_void = std::ptr::null_mut();
 
+#[cfg(target_os = "windows")]
+const ADLX_DLL: &str = r"C:\Windows\System32\amdadlx64.dll";
+
+#[cfg(target_os = "linux")]
+const ADLX_DLL: &str = "libADLX.so";
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn ensure_loaded() -> bool { false }
+
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn ensure_loaded() -> bool {
     unsafe {
         if ADLX_LIB.is_some() { return true; }
-        let lib = match libloading::Library::new(r"C:\Windows\System32\amdadlx64.dll") {
+        let lib = match libloading::Library::new(ADLX_DLL) {
             Ok(l) => Box::leak(Box::new(l)),
             Err(_) => return false,
         };

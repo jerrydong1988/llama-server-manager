@@ -611,10 +611,14 @@ pub async fn get_slots(host: String, port: u16) -> Result<Vec<SlotInfo>, String>
 
 #[derive(serde::Serialize)]
 pub struct MetricsInfo {
-    tokens_per_sec: f64,
-    prompt_tokens: u64,
-    gen_tokens: u64,
-    requests: u64,
+    pub tokens_per_sec: f64,
+    pub prompt_tokens: u64,
+    pub gen_tokens: u64,
+    pub requests: u64,
+    pub prompt_tokens_per_sec: f64,
+    pub requests_processing: u64,
+    pub requests_deferred: u64,
+    pub busy_slots_per_decode: f64,
 }
 
 #[tauri::command]
@@ -638,5 +642,9 @@ pub async fn get_metrics(host: String, port: u16) -> Result<Option<MetricsInfo>,
         prompt_tokens: extract("llamacpp:prompt_tokens_total") as u64,
         gen_tokens: extract("llamacpp:tokens_predicted_total") as u64,
         requests: extract("llamacpp:n_decode_total") as u64,
+        prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds"),
+        requests_processing: extract("llamacpp:requests_processing") as u64,
+        requests_deferred: extract("llamacpp:requests_deferred") as u64,
+        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode"),
     }))
 }
