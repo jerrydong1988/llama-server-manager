@@ -2,9 +2,9 @@
 ## Windows · macOS · Linux 三平台均已实测验证通过
 > 现代化 Llama.cpp 服务器图形化管理器 | Modern GUI for managing llama.cpp servers
 
-一个功能完整的桌面应用程序，用于管理 `llama-server` 的全生命周期：**下载模型 → 选择引擎 → 配置参数 → 启动监控**。告别复杂的命令行参数。
+一个功能完整的桌面应用程序，用于管理 `llama-server` 的全生命周期：**下载模型 → 选择引擎 → 配置参数 → 启动监控 → 性能分析**。告别复杂的命令行参数。
 
-A fully-featured desktop application for managing the `llama-server` lifecycle: **download models → select engines → configure parameters → start & monitor**. Say goodbye to complex CLI arguments.
+A fully-featured desktop application for managing the `llama-server` lifecycle: **download models → select engines → configure parameters → start & monitor → performance analytics**. Say goodbye to complex CLI arguments.
 
 [📥 **下载最新版 / Download Latest**](https://github.com/jerrydong1988/llama-server-manager/releases/latest) | [📖 **使用教程 / User Guide**](GUIDE.md)
 
@@ -20,6 +20,18 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - 完整中英双语界面
 <img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/2a244df3-98e1-4d09-a7d5-c773c9c2d3b1" />
 <img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/7a11d216-0748-45ef-9cb1-59cc46f4f134" />
+
+### 性能监控 / Performance Monitoring
+- 实时 CPU/GPU/显存指标（AMD GPU 通过 ADLX 与 Adrenalin 同源数据）
+- 推理吞吐（tokens/s / 提示速度 / 排队深度 / 活跃槽位）
+- 累计 token 统计（提示+生成+总计）
+- 服务汇总进度条（上下文使用率 / 生成速度）
+- 自适应降级：ADLX → sysinfo → 静默回退
+- Real-time CPU/GPU/VRAM metrics (AMD GPU via ADLX, same data source as Adrenalin)
+- Inference throughput (tokens/s, prompt speed, queue depth, busy slots)
+- Cumulative token stats (prompt + generation + total)
+- Summary progress bars (context usage, throughput gauge)
+- Graceful degradation: ADLX → sysinfo → silent fallback
 
 
 
@@ -67,8 +79,8 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 
 ### 参数配置 / Configuration
 - 统一参数配置页面，按实例关联
-- **118 个参数**完整覆盖 llama.cpp b9442，含 RoPE/YaRN 上下文缩放、推测解码、GPU 设备、多模型路由等全部新增参数
-- **智能参数校验**：保存时自动检测 25 条规则，分 high/medium/low 三级彩色横幅警告
+- **159 个参数**完整覆盖 llama.cpp 最新主分支（71% 覆盖率，覆盖全部生成/采样/缓存/推测解码/服务核心场景），含 RoPE/YaRN 上下文缩放、推测解码、GPU 设备、多模型路由等全部参数
+- **智能参数校验**：保存时自动检测 26 条规则，分 high/medium/low 三级彩色横幅警告
 - 高级采样总开关 + 推测解码/专家设置子开关，一键启用/禁用相关参数
 - 向量模型自动检测，锁定不适用参数
 - 模型路径仓库树选择器，自动关联 mmproj
@@ -114,6 +126,7 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 | UI 样式 / Styling | Tailwind CSS |
 | 状态管理 / State | Zustand |
 | 图标 / Icons | Lucide React |
+| 系统监控 / System Metrics | sysinfo (CPU/RAM) + ADLX/ROCm FFI (GPU/VRAM) |
 
 ---
 
@@ -163,6 +176,7 @@ llama-server-manager/
 ├── src/                    # React 前端 / Frontend
 │   ├── components/
 │   │   ├── ConfigPage/     # 参数配置子组件 (shared + sections)
+│   │   ├── PerformancePage/ # 性能监控 (指标卡 + 槽位状态 + 汇总条)
 │   │   ├── InstanceManager.tsx
 │   │   ├── ModelRepo.tsx
 │   │   ├── EngineManager.tsx
@@ -172,7 +186,7 @@ llama-server-manager/
 │   │   └── defaults.ts     # 默认配置
 │   ├── i18n/               # 国际化 (中/英)
 │   │   └── utils/           # 跨平台路径工具
-│   ├── validators.ts       # 参数校验引擎 (25 规则)
+│   ├── validators.ts       # 参数校验引擎 (26 规则)
 │   ├── App.tsx
 │   └── main.tsx
 ├── src-tauri/              # Rust 后端 / Backend
@@ -180,11 +194,13 @@ llama-server-manager/
 │   │   ├── main.rs         # 入口 + 窗口/托盘
 │   │   ├── models.rs       # 数据结构定义
 │   │   ├── utils.rs        # GGUF 解析 / 后端检测 / 路径
+│   │   ├── build.rs        # 构建脚本
 │   │   └── commands/       # 命令模块 (5 文件)
 │   │       ├── config.rs   # 配置持久化 + 备份恢复
-│   │       ├── server.rs   # 命令生成 + 启停 + 健康检查
+│   │       ├── server.rs   # 命令生成 + 启停 + 健康检查 + 指标采集
 │   │       ├── scanner.rs  # 模型/引擎扫描
-│   │       └── download.rs # ModelScope 下载
+│   │       ├── download.rs # ModelScope 下载
+│   │       └── adlx.rs     # ADLX GPU 指标采集 (AMD ROCm)
 │   └── Cargo.toml
 ├── .github/workflows/      # CI/CD 三平台自动构建
 ├── package.json
