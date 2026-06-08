@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity } from 'lucide-react'
+import { version } from '../package.json'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
 import InstanceManager from './components/InstanceManager'
@@ -47,7 +48,7 @@ function AppInner() {
     .then(r => r.json())
     .then(json => {
       const latest = (json.tag_name || '').replace(/^v/, '')
-      const current = '2.9.1'
+      const current = version
       const l = latest.split('.').map(Number)
       const c = current.split('.').map(Number)
       const has = l.some((v: number, i: number) => v > (c[i] || 0)) && !c.some((v: number, i: number) => v > (l[i] || 0))
@@ -85,7 +86,7 @@ function AppInner() {
         <div className="flex items-center gap-2 mb-6 shrink-0">
           <Zap className="w-8 h-8 text-blue-500" />
           <h1 className="text-xl font-bold">{t.common.appTitle}</h1>
-          <span className="text-xs text-gray-500 ml-1">v2.9.1</span>
+          <span className="text-xs text-gray-500 ml-1">v{version}</span>
         </div>
         <nav className="space-y-1 overflow-y-auto flex-1">
           {navigation.map((item) => {

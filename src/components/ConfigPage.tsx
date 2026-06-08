@@ -19,7 +19,7 @@ const ConfigPage = () => {
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
 
-  useEffect(() => { if (inst) setLocal({ ...defaultInstanceConfig(), ...inst.config }); else setLocal(null) }, [activeConfigInstanceId, instances])
+  useEffect(() => { if (inst) setLocal({ ...defaultInstanceConfig(), ...inst.config }); else setLocal(null) }, [activeConfigInstanceId])
 
   const isEmbedding = (() => {
     if (!local?.model_path) return false
