@@ -18,7 +18,7 @@ fn ensure_loaded() -> bool { false }
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn ensure_loaded() -> bool {
     unsafe {
-        if ADLX_LIB.is_some() { return true; }
+        if (*std::ptr::addr_of!(ADLX_LIB)).is_some() { return true; }
         let lib = match libloading::Library::new(ADLX_DLL) {
             Ok(l) => Box::leak(Box::new(l)),
             Err(_) => return false,

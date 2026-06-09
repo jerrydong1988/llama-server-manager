@@ -245,7 +245,7 @@ export const enUS = {
     // ── Validation warnings ──
     warnA1: 'reasoning=off but reasoning format/effort/budget is set — these will be ignored',
     warnA2: 'Embedding mode is ON but generation/sampling params are set — they will be ignored by the server',
-    warnA3: 'Speculative type requires a draft model file — draft_model_path is empty',
+    warnA3: 'Speculative type requires a draft model file — draft_model_path is empty (not needed if model has built-in MTP heads)',
     warnA4: 'Backend sampling is known to cause warnings on ROCm GPUs — consider disabling it',
     warnA5: 'Speculative type is empty/off but draft token counts are non-default — they will be ignored',
     warnA6: 'Auto context is enabled but RoPE/YaRN scaling params are set — they may not apply correctly',
@@ -268,7 +268,7 @@ export const enUS = {
     warnB10: '--no-mmproj is set but --mmproj path is also set — only one will apply',
     warnB11: 'Both inline JSON schema and JSON schema file are set — only one will be used',
     warnC1: 'Multimodal projector is set but model architecture does not appear to be a vision model',
-    warnC2: 'Draft model path is set alongside MTP speculative type — MTP uses the main model internally and does not need a separate draft model',
+    warnC4: 'Model already has built-in MTP heads — external draft model may be redundant. Ignore if intentional',
     warnC3: 'Unlimited generation (n_predict=-1) with ignore_eos=true — generation may never stop',
   },
   perfBlock: {

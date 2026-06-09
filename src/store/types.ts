@@ -6,6 +6,7 @@ export interface ModelInfo {
   architecture?: string
   context_length?: number
   quant_type?: string
+  has_mtp_head?: boolean
   file_type: string
 }
 

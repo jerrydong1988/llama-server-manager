@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 // ── GGUF 元信息解析 ───────────────────────────────────────────────
-pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, Option<String>), String> {
+pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, Option<String>, bool), String> {
     let mut f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
     let size = f.metadata().map(|m| m.len()).unwrap_or(0).min(4_000_000) as usize;
     if size < 24 { return Err("文件太小".into()); }
@@ -26,6 +26,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, 
     let mut architecture: Option<String> = None;
     let mut context_length: Option<u32> = None;
     let mut file_type: Option<u32> = None;
+    let mut has_mtp: bool = false;
 
     for _ in 0..metadata_kv_count.min(200) {
         if pos + 2 > data.len() { break; }
@@ -50,18 +51,21 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, 
                 pos += 4;
                 if key == "general.file_type" { file_type = Some(v); }
                 if key.contains("context_length") { context_length = Some(v); }
+                if key.contains("nextn_predict_layers") && v > 0 { has_mtp = true; }
             }
             5 => {
                 if pos + 4 > data.len() { break; }
                 let v = i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
                 pos += 4;
                 if key.contains("context_length") { context_length = Some(v as u32); }
+                if key.contains("nextn_predict_layers") && v > 0 { has_mtp = true; }
             }
             10 => {
                 if pos + 8 > data.len() { break; }
                 let v = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
                 pos += 8;
                 if key.contains("context_length") { context_length = Some(v as u32); }
+                if key.contains("nextn_predict_layers") && v > 0 { has_mtp = true; }
             }
             7 => { pos += 1; }
             0 | 1 => { pos += 1; }
@@ -151,7 +155,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, 
         }
     };
 
-    Ok((architecture, context_length, quant_type))
+    Ok((architecture, context_length, quant_type, has_mtp))
 }
 
 // ── 文件类型分类 ──────────────────────────────────────────────────

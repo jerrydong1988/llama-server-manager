@@ -138,6 +138,7 @@ mod tests {
     fn cfg() -> InstanceConfig {
         let mut c = InstanceConfig::default();
         c.model_path = "/test/model.gguf".into();
+        c.gpu_layers_auto = false;
         c
     }
 

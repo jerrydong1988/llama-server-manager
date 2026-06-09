@@ -67,13 +67,13 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) 
                 let file_path = path.to_string_lossy().to_string();
                 if !seen.insert(file_path.clone()) { continue; }
 
-                let (architecture, context_length, quant_type) =
-                    utils::parse_gguf_metadata(path).unwrap_or_else(|_| (None, None, None));
+                let (architecture, context_length, quant_type, has_mtp_head) =
+                    utils::parse_gguf_metadata(path).unwrap_or_else(|_| (None, None, None, false));
 
                 file_count += 1;
                 models.push(ModelInfo {
                     id: uuid::Uuid::new_v4().to_string(),
-                    name, path: file_path, size, architecture, context_length, quant_type,
+                    name, path: file_path, size, architecture, context_length, quant_type, has_mtp_head,
                     file_type: ftype.to_string(),
                 });
             }
@@ -123,7 +123,7 @@ pub async fn open_model_folder(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn read_gguf_metadata(path: String) -> Result<(Option<String>, Option<u32>, Option<String>), String> {
+pub async fn read_gguf_metadata(path: String) -> Result<(Option<String>, Option<u32>, Option<String>, bool), String> {
     utils::parse_gguf_metadata(Path::new(&path))
 }
 

@@ -76,11 +76,17 @@ export function validateConfig(
       w.push({ field: 'embedding', severity: 'high', key: 'warnA2' })
   }
 
-  // A3: spec_type 非空、非 mtp、非 ngram 但草稿模型未设置
+  // A3: spec_type 需要草稿模型但未设置（draft-mtp 有内置头时例外）
   if (config.spec_type && config.spec_type !== '' && config.spec_type !== 'none') {
-    const needsDraft = ['draft-simple', 'draft-eagle3'].some(t => config.spec_type.includes(t))
-    if (needsDraft && !config.draft_model_path)
-      w.push({ field: 'draft_model_path', severity: 'high', key: 'warnA3' })
+    const needsDraft = ['draft-simple', 'draft-eagle3', 'draft-mtp'].some(t => config.spec_type.includes(t))
+    if (needsDraft && !config.draft_model_path) {
+      // draft-mtp with builtin MTP heads doesn't strictly need external draft model
+      if (config.spec_type.includes('draft-mtp') && model?.has_mtp_head) {
+        // no warning — builtin heads suffice
+      } else {
+        w.push({ field: 'draft_model_path', severity: 'medium', key: 'warnA3' })
+      }
+    }
   }
 
   // A4: backend_sampling 在 ROCm 环境
@@ -188,13 +194,15 @@ export function validateConfig(
       !isVisionArch(model.architecture) && model.file_type !== 'mmproj')
     w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1' })
 
-  // C2: draft_model_path 非空且 spec_type 含 mtp（MTP 使用主模型内部头，不需要单独草稿模型）
-  if (config.draft_model_path && config.spec_type && config.spec_type.includes('mtp'))
-    w.push({ field: 'draft_model_path', severity: 'low', key: 'warnC2' })
+  // C2: (已删除 — draft-mtp 是否需要草稿模型取决于模型是否有内置 MTP 头，无法仅从配置判断)
 
   // C3: n_predict=-1 无限生成 + ignore_eos 忽略结束符
   if (config.n_predict === -1 && config.ignore_eos)
     w.push({ field: 'n_predict', severity: 'medium', key: 'warnC3' })
+
+  // C4: draft-mtp + 模型已有内置 MTP 头 + 额外设置了草稿模型（可能冗余）
+  if (config.draft_model_path && config.spec_type?.includes('draft-mtp') && model?.has_mtp_head)
+    w.push({ field: 'draft_model_path', severity: 'low', key: 'warnC4' })
 
   return w
 }

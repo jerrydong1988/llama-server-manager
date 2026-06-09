@@ -16,6 +16,7 @@ const ConfigPage = () => {
   const [local, setLocal] = useState<InstanceConfig | null>(null)
   const [saved, setSaved] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
+  const [pickerTarget, setPickerTarget] = useState<'model' | 'draft'>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
 
@@ -41,10 +42,14 @@ const ConfigPage = () => {
 
   const set = (k: keyof InstanceConfig, v: any) => setLocal(l => l ? { ...l, [k]: v } : l)
   const pickModel = (modelPath: string) => {
-    set('model_path', modelPath)
-    const dir = pathDirname(modelPath)
-    const mmproj = models.find(m => pathDirname(m.path) === dir && m.file_type === 'mmproj')
-    if (mmproj) set('mmproj_path', mmproj.path); else set('mmproj_path', '')
+    if (pickerTarget === 'model') {
+      set('model_path', modelPath)
+      const dir = pathDirname(modelPath)
+      const mmproj = models.find(m => pathDirname(m.path) === dir && m.file_type === 'mmproj')
+      if (mmproj) set('mmproj_path', mmproj.path); else set('mmproj_path', '')
+    } else {
+      set('draft_model_path', modelPath)
+    }
     setShowPicker(false)
   }
   const save = () => {
@@ -59,7 +64,7 @@ const ConfigPage = () => {
     setTimeout(() => { setSaved(false); setSaveWarnings([]) }, 6000)
   }
 
-  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => setShowPicker(true), activeParams: local ? getActiveParams(local, isEmbedding) : new Set() as Set<keyof InstanceConfig> }
+  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => { setPickerTarget('model'); setShowPicker(true) }, onShowDraftPicker: () => { setPickerTarget('draft'); setShowPicker(true) }, activeParams: local ? getActiveParams(local, isEmbedding) : new Set() as Set<keyof InstanceConfig> }
 
   return (
     <div className="space-y-6">

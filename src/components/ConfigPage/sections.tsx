@@ -7,6 +7,7 @@ interface Props {
   t: any
   isEmbedding: boolean
   onShowPicker?: () => void
+  onShowDraftPicker?: () => void
   activeParams: Set<keyof InstanceConfig>
 }
 
@@ -85,7 +86,7 @@ export function PerformanceSection({ local, set, t, activeParams }: Props) {
 
 // ━━━━━━━━━━━━━━━━━━━━━━ ADVANCED CONTAINER ━━━━━━━━━━━━━━━━━━━━━━
 
-export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Props) {
+export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker, activeParams }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   const resetAll = () => {
     for (const defaults of Object.values(RESET_MAP)) {
@@ -184,7 +185,13 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
         <CollapsibleGroup title={t.configPage.subAdvSpec} onReset={() => resetGroup('advancedSpec')} disabled={!specActive}>
           {!specActive && <div className="bg-gray-50 dark:bg-gray-800/50 rounded px-3 py-2 text-xs text-gray-500 mb-2">{t.configPage.specDisabled}</div>}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Input label={`${t.configPage.draftModel} (-md)`} value={local.draft_model_path} onChange={v => set('draft_model_path', v)} title={t.configPage.draftModelTip} disabled={isEmbedding}  active={a('draft_model_path')} />
+            <div title={t.configPage.draftModelTip}>
+              <label className={`block text-xs font-medium mb-1 ${a('draft_model_path') ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{`${t.configPage.draftModel} (-md)`}</label>
+              <div className="flex gap-1">
+                <input type="text" value={local.draft_model_path} onChange={e => set('draft_model_path', e.target.value)} disabled={isEmbedding} className={`flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${isEmbedding ? 'opacity-50 cursor-not-allowed' : ''}`} />
+                <button onClick={onShowDraftPicker} disabled={isEmbedding} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs disabled:opacity-50 disabled:cursor-not-allowed" title={t.configPage.draftModelTip}>{'\uD83D\uDCC2'}</button>
+              </div>
+            </div>
             <Num label={`${t.configPage.draftGpu} (-ngld)`} value={local.draft_gpu_layers} onChange={v => set('draft_gpu_layers', v)} min={0} max={99} title={t.configPage.draftGpuTip} disabled={isEmbedding}  active={a('draft_gpu_layers')} />
             <Num label={`${t.configPage.specDraftPMin} (--spec-draft-p-min)`} value={local.spec_draft_p_min} onChange={v => set('spec_draft_p_min', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPMinTip} disabled={isEmbedding}  active={a('spec_draft_p_min')} />
             <Num label={`${t.configPage.specDraftPSplit} (--spec-draft-p-split)`} value={local.spec_draft_p_split} onChange={v => set('spec_draft_p_split', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPSplitTip} disabled={isEmbedding}  active={a('spec_draft_p_split')} />
@@ -222,7 +229,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, activeParams }: Pr
             <Select label={`${t.configPage.cacheTypeV} (-ctv)`} value={local.cache_type_v} onChange={v => set('cache_type_v', v)} options={cacheTypes} title={t.configPage.cacheTypeVTip} defaultLabel={t.common.default}  active={a('cache_type_v')} />
             <Switch label={`${t.configPage.cachePrompt} (--no-cache-prompt)`} value={!local.cache_prompt} onChange={v => set('cache_prompt', !v)} title={t.configPage.cachePromptTip} />
             <Num label={`${t.configPage.cacheReuse} (--cache-reuse)`} value={local.cache_reuse} onChange={v => set('cache_reuse', v)} min={0} title={t.configPage.cacheReuseTip}  active={a('cache_reuse')} />
-            <Num label={`${t.configPage.cacheRam} (-cram)`} value={local.cache_ram} onChange={v => set('cache_ram', v)} min={0} step={256} title={t.configPage.cacheRamTip}  active={a('cache_ram')} />
+            <Num label={`${t.configPage.cacheRam} (-cram)`} value={local.cache_ram} onChange={v => set('cache_ram', v)} min={-1} step={256} title={t.configPage.cacheRamTip}  active={a('cache_ram')} />
             <Switch label={`${t.configPage.warmup} (--warmup)`} value={local.warmup} onChange={v => set('warmup', v)} title={t.configPage.warmupTip}  active={a('warmup')} />
             <Switch label={`${t.configPage.cacheIdleSlots} (--no-cache-idle-slots)`} value={!local.cache_idle_slots} onChange={v => set('cache_idle_slots', !v)} title={t.configPage.cacheIdleSlotsTip} />
             <Switch label={`${t.configPage.kvUnified} (--kv-unified)`} value={local.kv_unified} onChange={v => set('kv_unified', v)} title={t.configPage.kvUnifiedTip}  active={a('kv_unified')} />

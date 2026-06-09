@@ -12,6 +12,7 @@ pub struct ModelInfo {
     pub architecture: Option<String>,
     pub context_length: Option<u32>,
     pub quant_type: Option<String>,
+    pub has_mtp_head: bool,
     pub file_type: String,
 }
 
@@ -78,7 +79,7 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub cache_reuse: u32,
     #[serde(default)]
-    pub cache_ram: u32,
+    pub cache_ram: i32,
     #[serde(default)]
     pub warmup: bool,
     #[serde(default)]
