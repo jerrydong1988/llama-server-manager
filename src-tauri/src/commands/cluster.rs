@@ -62,6 +62,8 @@ fn get_lan_prefixes() -> Vec<String> {
         "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
         "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
         "p2p", "rndis", "usb", "bluetooth", "loopback",
+        "mihomo", "clash", "cfw", "tunnel", "sing-box", "hysteria",
+        "wireguard", "zerotier", "tailscale", "nebula",
     ];
 
     if let Ok(ifs) = if_addrs::get_if_addrs() {
