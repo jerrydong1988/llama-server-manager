@@ -29,8 +29,8 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
             binary, port, port, port, port, port
         ),
         "windows" => format!(
-            "start /b \"\" \"{}\" --host 0.0.0.0 --port {} & timeout /t 2 >NUL && netstat -an | findstr :{}",
-            binary, port, port
+            "chcp 65001 > NUL && powershell -Command \"Start-Process -FilePath '{}' -ArgumentList '--host 0.0.0.0 --port {}' -WindowStyle Hidden; Start-Sleep 3; $c = netstat -an | Select-String ':{}'; if ($c) {{ Write-Output 'PORT-OK' }} else {{ Write-Output 'PORT-NOT-FOUND' }}\"",
+            binary.replace('\'', "''"), port, port
         ),
         _ => format!(
             "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
