@@ -16,7 +16,7 @@ export default function ClusterPage() {
   const [mdnsActive, setMdnsActive] = useState(false)
   const [showLaunchWizard, setShowLaunchWizard] = useState(false)
   const [launchStep, setLaunchStep] = useState(0) // 0=host, 1=ssh, 2=confirm
-  const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052, rpcPath: '' })
+  const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052, rpcPath: '', sshPort: 22 })
   const [launching, setLaunching] = useState(false)
 
   // Auto-scan on mount
@@ -75,6 +75,7 @@ export default function ClusterPage() {
         sshPassword: launchForm.password || null,
         rpcPort: launchForm.port,
         remoteRpcPath: launchForm.rpcPath || null,
+        sshPort: launchForm.sshPort || 22,
       })
       if (result?.ok) {
         // Add worker and test
@@ -342,6 +343,10 @@ export default function ClusterPage() {
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.rpcPort}</label>
                     <input type="number" value={launchForm.port} onChange={e => setLaunchForm({ ...launchForm, port: parseInt(e.target.value) || 50052 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">SSH 端口</label>
+                    <input type="number" value={launchForm.sshPort} onChange={e => setLaunchForm({ ...launchForm, sshPort: parseInt(e.target.value) || 22 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">远程 rpc-server 路径（留空用 PATH 默认）</label>

@@ -9,7 +9,9 @@ pub async fn ssh_launch_rpc(
     ssh_password: Option<String>,
     rpc_port: u16,
     remote_rpc_path: Option<String>,
+    ssh_port: Option<u16>,
 ) -> Result<serde_json::Value, String> {
+    let ssh_port = ssh_port.unwrap_or(22);
     // 远程机器上使用 rpc-server（假设在 PATH），或者用户指定的路径
     let rpc_binary = remote_rpc_path
         .filter(|p| !p.is_empty())
@@ -18,8 +20,8 @@ pub async fn ssh_launch_rpc(
     let cmd = format!("nohup {} --host 0.0.0.0 --port {} > /dev/null 2>&1 &", rpc_binary, rpc_port);
 
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
-        let tcp = TcpStream::connect(format!("{}:22", host))
-            .map_err(|e| format!("SSH 连接失败 ({}:22): {}", host, e))?;
+        let tcp = TcpStream::connect(format!("{}:{}", host, ssh_port))
+            .map_err(|e| format!("SSH 连接失败 ({}:{}): {}", host, ssh_port, e))?;
 
         let mut sess = ssh2::Session::new()
             .map_err(|e| format!("SSH session: {}", e))?;
