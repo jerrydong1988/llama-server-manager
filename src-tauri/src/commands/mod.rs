@@ -5,3 +5,5 @@ pub mod scanner;
 pub mod adlx;
 pub mod cluster;
 pub mod cluster_network;
+pub mod cluster_mdns;
+pub mod cluster_ssh;

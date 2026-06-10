@@ -13,9 +13,9 @@ use crate::models::{WorkerInfo, WorkerDevice, WorkerStatus, AppState};
 use crate::utils;
 
 #[cfg(target_os = "windows")]
-const RPC_SERVER_NAME: &str = "rpc-server.exe";
+pub(crate) const RPC_SERVER_NAME: &str = "rpc-server.exe";
 #[cfg(not(target_os = "windows"))]
-const RPC_SERVER_NAME: &str = "rpc-server";
+pub(crate) const RPC_SERVER_NAME: &str = "rpc-server";
 
 // ═══════════════════════════════════════════════════════════════════
 // 持久化
@@ -25,7 +25,7 @@ fn workers_path() -> PathBuf {
     utils::get_data_dir().join("workers.json")
 }
 
-fn load_workers() -> Vec<WorkerInfo> {
+pub(crate) fn load_workers() -> Vec<WorkerInfo> {
     let path = workers_path();
     if !path.exists() {
         return Vec::new();
@@ -36,7 +36,7 @@ fn load_workers() -> Vec<WorkerInfo> {
         .unwrap_or_default()
 }
 
-fn save_workers(workers: &[WorkerInfo]) {
+pub(crate) fn save_workers(workers: &[WorkerInfo]) {
     let path = workers_path();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -374,7 +374,7 @@ pub async fn generate_rpc_launch_cmd(port: u16) -> Result<String, String> {
     Ok(format!("{} --host 0.0.0.0 --port {}", binary, port))
 }
 
-fn find_rpc_server_binary_internal() -> Option<String> {
+pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
     #[cfg(target_os = "windows")]
     const RPC_SERVER_NAME: &str = "rpc-server.exe";
     #[cfg(not(target_os = "windows"))]
@@ -394,6 +394,40 @@ fn find_rpc_server_binary_internal() -> Option<String> {
         }
     }
     None
+}
+
+#[tauri::command]
+pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let workers = load_workers();
+    let online: Vec<&WorkerInfo> = workers.iter().filter(|w| w.status == WorkerStatus::Online).collect();
+
+    let mut worker_metrics = Vec::new();
+    for w in &online {
+        let addr = format!("{}:{}", w.host, w.port);
+        let reachable = std::net::TcpStream::connect_timeout(
+            &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
+            std::time::Duration::from_millis(500),
+        ).is_ok();
+
+        worker_metrics.push(serde_json::json!({
+            "host": w.host,
+            "port": w.port,
+            "name": w.name,
+            "online": reachable,
+            "devices": w.devices.iter().map(|d| serde_json::json!({
+                "type": d.device_type,
+                "name": d.name,
+                "vram_mb": d.vram_mb,
+                "free_mb": d.free_mb,
+            })).collect::<Vec<_>>(),
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "total_workers": workers.len(),
+        "online_workers": online.len(),
+        "worker_metrics": worker_metrics,
+    }))
 }
 
 #[cfg(test)]

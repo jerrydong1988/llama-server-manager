@@ -179,6 +179,10 @@ export default function PerformancePage() {
           </div>
         </div>
       ) : null}
+
+      <div className="mt-4">
+        <ClusterThroughput t={t} />
+      </div>
     </div>
   )
 }
@@ -204,6 +208,46 @@ function Card({ label, value, unit, color }: { label: string; value: string; uni
       <div className="text-xs text-gray-500 mb-1">{label}</div>
       <div className={`text-lg font-bold ${color || ''}`}>
         {value}{unit ? <span className="text-xs font-normal ml-0.5 text-gray-500">{unit}</span> : null}
+      </div>
+    </div>
+  )
+}
+
+// ── Cluster Throughput Panel ──
+function ClusterThroughput({ t }: { t: any }) {
+  const [metrics, setMetrics] = useState<any>(null)
+
+  useEffect(() => {
+    const fetch = async () => {
+      try {
+        const m: any = await invoke('get_cluster_metrics')
+        setMetrics(m)
+      } catch {}
+    }
+    fetch()
+    const interval = setInterval(fetch, 5000)
+    return () => clearInterval(interval)
+  }, [])
+
+  if (!metrics || metrics.total_workers === 0) return null
+
+  return (
+    <div className="border dark:border-gray-700 rounded-lg overflow-hidden">
+      <div className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800 text-sm font-medium flex items-center gap-2">
+        <span>🔗</span> {t.clusterPage?.clusterThroughput || 'Cluster Throughput'}
+        <span className="text-xs text-gray-400 ml-2">{metrics.online_workers}/{metrics.total_workers} online</span>
+      </div>
+      <div className="p-4 space-y-2">
+        {metrics.worker_metrics?.map((w: any, i: number) => (
+          <div key={i} className="flex items-center gap-3 text-sm">
+            <span className={`inline-block w-2 h-2 rounded-full ${w.online ? 'bg-green-500' : 'bg-red-500'}`} />
+            <span className="flex-1">{w.name}</span>
+            <span className="text-gray-400">{w.host}:{w.port}</span>
+            {w.devices?.map((d: any, j: number) => (
+              <span key={j} className="text-xs text-gray-400">{d.name} ({(d.free_mb/1024).toFixed(0)} GB free)</span>
+            ))}
+          </div>
+        ))}
       </div>
     </div>
   )

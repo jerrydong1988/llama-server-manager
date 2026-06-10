@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square } from 'lucide-react'
+import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square, Radio, Zap } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
 import { invoke } from '@tauri-apps/api/core'
@@ -13,6 +13,11 @@ export default function ClusterPage() {
   const [formData, setFormData] = useState({ host: '', port: 50052, name: '' })
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const scanCancelled = useRef(false)
+  const [mdnsActive, setMdnsActive] = useState(false)
+  const [showLaunchWizard, setShowLaunchWizard] = useState(false)
+  const [launchStep, setLaunchStep] = useState(0) // 0=host, 1=ssh, 2=confirm
+  const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052 })
+  const [launching, setLaunching] = useState(false)
 
   // Auto-scan on mount
   useEffect(() => {
@@ -48,6 +53,41 @@ export default function ClusterPage() {
   const handleCancelScan = () => {
     scanCancelled.current = true
     setClusterScanning(false)
+  }
+
+  const handleMdnsToggle = async () => {
+    if (mdnsActive) {
+      await invoke('stop_mdns_discovery')
+      setMdnsActive(false)
+    } else {
+      await invoke('start_mdns_discovery')
+      setMdnsActive(true)
+    }
+  }
+
+  const handleSshLaunch = async () => {
+    setLaunching(true)
+    try {
+      const result: any = await invoke('ssh_launch_rpc', {
+        host: launchForm.host,
+        sshUser: launchForm.user,
+        sshKeyPath: launchForm.keyPath || null,
+        sshPassword: launchForm.password || null,
+        rpcPort: launchForm.port,
+      })
+      if (result?.ok) {
+        // Add worker and test
+        await invoke('add_worker', { host: launchForm.host, port: launchForm.port, name: launchForm.host })
+        const all: WorkerInfo[] = await invoke('get_workers')
+        setWorkers(all)
+        setShowLaunchWizard(false)
+        setLaunchStep(0)
+      }
+    } catch (e) {
+      console.error('SSH launch failed:', e)
+    } finally {
+      setLaunching(false)
+    }
   }
 
   const handleTest = async (host: string, port: number) => {
@@ -151,6 +191,14 @@ export default function ClusterPage() {
           <button onClick={() => setShowAddDialog(true)} className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-xs flex items-center gap-1">
             <Plus className="w-3 h-3" />
             {t.clusterPage.addWorker}
+          </button>
+          <button onClick={handleMdnsToggle} className={`px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 ${mdnsActive ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300'}`}>
+            <Radio className="w-3 h-3" />
+            {t.clusterPage.discoverMode}
+          </button>
+          <button onClick={() => { setShowLaunchWizard(true); setLaunchStep(0) }} className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs flex items-center gap-1">
+            <Zap className="w-3 h-3" />
+            {t.clusterPage.oneClickLaunch}
           </button>
         </div>
       </div>
@@ -271,6 +319,74 @@ export default function ClusterPage() {
             <div className="flex justify-end gap-2 px-6 py-4 border-t dark:border-gray-700">
               <button onClick={() => setShowAddDialog(false)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.common.cancel}</button>
               <button onClick={handleAdd} className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg">{t.common.save}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* SSH Launch Wizard */}
+      {showLaunchWizard && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-lg">
+            <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
+              <h3 className="font-semibold">{t.clusterPage.launchWizard}</h3>
+              <button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-6 space-y-4">
+              {launchStep === 0 && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">Worker IP / Host</label>
+                    <input type="text" value={launchForm.host} onChange={e => setLaunchForm({ ...launchForm, host: e.target.value })} placeholder="192.168.1.10" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.rpcPort}</label>
+                    <input type="number" value={launchForm.port} onChange={e => setLaunchForm({ ...launchForm, port: parseInt(e.target.value) || 50052 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                  </div>
+                </>
+              )}
+              {launchStep === 1 && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.sshUser}</label>
+                    <input type="text" value={launchForm.user} onChange={e => setLaunchForm({ ...launchForm, user: e.target.value })} placeholder="root" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.sshKeyPath}</label>
+                    <input type="text" value={launchForm.keyPath} onChange={e => setLaunchForm({ ...launchForm, keyPath: e.target.value })} placeholder="~/.ssh/id_rsa" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                  </div>
+                  <div className="text-xs text-gray-400">— {t.common.default} —</div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">SSH 密码</label>
+                    <input type="password" value={launchForm.password} onChange={e => setLaunchForm({ ...launchForm, password: e.target.value })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                  </div>
+                </>
+              )}
+              {launchStep === 2 && (
+                <div className="text-sm space-y-2">
+                  <div className="flex justify-between"><span className="text-gray-500">Worker:</span><span>{launchForm.host}:{launchForm.port}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">SSH:</span><span>{launchForm.user}@{launchForm.host}</span></div>
+                  <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded text-xs text-blue-600 dark:text-blue-400">
+                    {t.clusterPage.cmdPreview}: rpc-server --host 0.0.0.0 --port {launchForm.port}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="flex justify-between px-6 py-4 border-t dark:border-gray-700">
+              <div>
+                {launchStep > 0 && (
+                  <button onClick={() => setLaunchStep(s => s - 1)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">← 上一步</button>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.common.cancel}</button>
+                {launchStep < 2 ? (
+                  <button onClick={() => setLaunchStep(s => s + 1)} className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg">下一步</button>
+                ) : (
+                  <button onClick={handleSshLaunch} disabled={launching} className="px-4 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-lg">
+                    {launching ? '启动中...' : '启动 Worker'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
