@@ -346,6 +346,11 @@ fn is_local_ip(host: &str) -> bool {
 }
 
 #[tauri::command]
+pub async fn is_local_host(host: String) -> Result<bool, String> {
+    Ok(host == "127.0.0.1" || host == "localhost" || host == "::1" || is_local_ip(&host))
+}
+
+#[tauri::command]
 pub async fn add_worker(host: String, port: u16, name: String, state: State<'_, AppState>) -> Result<WorkerInfo, String> {
     let mut workers = load_workers();
 

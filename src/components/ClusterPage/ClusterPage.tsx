@@ -17,6 +17,7 @@ export default function ClusterPage() {
   const [showLaunchWizard, setShowLaunchWizard] = useState(false)
   const [launchStep, setLaunchStep] = useState(0) // 0=host, 1=ssh, 2=confirm
   const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052, rpcPath: '', sshPort: 22, remoteOs: 'auto' })
+  const [localHosts, setLocalHosts] = useState<Set<string>>(new Set(['127.0.0.1', 'localhost', '::1']))
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState('')
 
@@ -57,8 +58,24 @@ export default function ClusterPage() {
   }
 
   const isLocalWorker = (host: string) => {
-    return host === '127.0.0.1' || host === 'localhost' || host === '::1'
+    return localHosts.has(host)
   }
+
+  // 启动时批量检查所有 worker 是否本机
+  useEffect(() => {
+    const check = async () => {
+      const hosts = new Set(['127.0.0.1', 'localhost', '::1'])
+      for (const w of workers) {
+        if (hosts.has(w.host)) continue
+        try {
+          const isLocal: boolean = await invoke('is_local_host', { host: w.host })
+          if (isLocal) hosts.add(w.host)
+        } catch {}
+      }
+      setLocalHosts(hosts)
+    }
+    check()
+  }, [workers])
 
   const handleStopWorker = async (worker: WorkerInfo) => {
     try {
