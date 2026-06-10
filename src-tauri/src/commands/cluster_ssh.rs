@@ -1,8 +1,6 @@
 use std::io::Read;
 use std::net::TcpStream;
 
-use crate::commands::cluster::find_rpc_server_binary_internal;
-
 #[tauri::command]
 pub async fn ssh_launch_rpc(
     host: String,
@@ -10,16 +8,14 @@ pub async fn ssh_launch_rpc(
     ssh_key_path: Option<String>,
     ssh_password: Option<String>,
     rpc_port: u16,
+    remote_rpc_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let rpc_binary = find_rpc_server_binary_internal()
-        .unwrap_or_else(|| {
-            #[cfg(target_os = "windows")]
-            { "rpc-server.exe".to_string() }
-            #[cfg(not(target_os = "windows"))]
-            { "rpc-server".to_string() }
-        });
+    // 远程机器上使用 rpc-server（假设在 PATH），或者用户指定的路径
+    let rpc_binary = remote_rpc_path
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| "rpc-server".to_string());
 
-    let cmd = format!("{} --host 0.0.0.0 --port {} &", rpc_binary, rpc_port);
+    let cmd = format!("nohup {} --host 0.0.0.0 --port {} > /dev/null 2>&1 &", rpc_binary, rpc_port);
 
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let tcp = TcpStream::connect(format!("{}:22", host))

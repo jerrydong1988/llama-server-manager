@@ -16,7 +16,7 @@ export default function ClusterPage() {
   const [mdnsActive, setMdnsActive] = useState(false)
   const [showLaunchWizard, setShowLaunchWizard] = useState(false)
   const [launchStep, setLaunchStep] = useState(0) // 0=host, 1=ssh, 2=confirm
-  const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052 })
+  const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052, rpcPath: '' })
   const [launching, setLaunching] = useState(false)
 
   // Auto-scan on mount
@@ -74,6 +74,7 @@ export default function ClusterPage() {
         sshKeyPath: launchForm.keyPath || null,
         sshPassword: launchForm.password || null,
         rpcPort: launchForm.port,
+        remoteRpcPath: launchForm.rpcPath || null,
       })
       if (result?.ok) {
         // Add worker and test
@@ -342,6 +343,10 @@ export default function ClusterPage() {
                     <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.rpcPort}</label>
                     <input type="number" value={launchForm.port} onChange={e => setLaunchForm({ ...launchForm, port: parseInt(e.target.value) || 50052 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                   </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">远程 rpc-server 路径（留空用 PATH 默认）</label>
+                    <input type="text" value={launchForm.rpcPath} onChange={e => setLaunchForm({ ...launchForm, rpcPath: e.target.value })} placeholder="rpc-server（PATH 默认）" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                  </div>
                 </>
               )}
               {launchStep === 1 && (
@@ -366,7 +371,7 @@ export default function ClusterPage() {
                   <div className="flex justify-between"><span className="text-gray-500">Worker:</span><span>{launchForm.host}:{launchForm.port}</span></div>
                   <div className="flex justify-between"><span className="text-gray-500">SSH:</span><span>{launchForm.user}@{launchForm.host}</span></div>
                   <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded text-xs text-blue-600 dark:text-blue-400">
-                    {t.clusterPage.cmdPreview}: rpc-server --host 0.0.0.0 --port {launchForm.port}
+                    {t.clusterPage.cmdPreview}: {launchForm.rpcPath || 'rpc-server'} --host 0.0.0.0 --port {launchForm.port}
                   </div>
                 </div>
               )}
