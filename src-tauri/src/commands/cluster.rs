@@ -51,14 +51,36 @@ fn save_workers(workers: &[WorkerInfo]) {
 // ═══════════════════════════════════════════════════════════════════
 
 fn get_lan_prefixes() -> Vec<String> {
-    // 简化实现: 返回常见 LAN 段
-    // 后续可扩展为通过 local-ip-address crate 获取实际网卡
-    vec![
-        "192.168.1.".to_string(),
-        "192.168.0.".to_string(),
-        "10.0.0.".to_string(),
-        "172.16.0.".to_string(),
-    ]
+    let mut prefixes = Vec::new();
+
+    if let Ok(ifs) = if_addrs::get_if_addrs() {
+        for iface in ifs {
+            if iface.is_loopback() { continue; }
+            let ip = iface.addr.ip();
+            if !ip.is_ipv4() { continue; }
+            let octets = match ip {
+                std::net::IpAddr::V4(ipv4) => ipv4.octets(),
+                _ => continue,
+            };
+            // /24 subnet prefix
+            let prefix = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
+            if !prefixes.contains(&prefix) {
+                prefixes.push(prefix);
+            }
+        }
+    }
+
+    // fallback to common LAN ranges if no interfaces found
+    if prefixes.is_empty() {
+        prefixes.extend_from_slice(&[
+            "192.168.1.".to_string(),
+            "192.168.0.".to_string(),
+            "10.0.0.".to_string(),
+            "172.16.0.".to_string(),
+        ]);
+    }
+
+    prefixes
 }
 
 // ═══════════════════════════════════════════════════════════════════
