@@ -2129,6 +2129,7 @@ dependencies = [
  "reqwest 0.11.27",
  "serde",
  "serde_json",
+ "socket2 0.5.10",
  "sysinfo",
  "tauri",
  "tauri-build",

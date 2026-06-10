@@ -1,9 +1,9 @@
 use std::collections::HashSet;
-use std::net::{TcpStream, SocketAddr};
+use std::net::{TcpStream, SocketAddr, IpAddr, Ipv4Addr};
 use std::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
 use tauri::State;
@@ -109,6 +109,31 @@ fn get_lan_prefixes() -> Vec<String> {
     prefixes
 }
 
+/// 获取物理网卡的 IPv4 地址列表（用于 socket bind 绕过 VPN/TUN）
+fn get_physical_ips() -> Vec<Ipv4Addr> {
+    let mut ips = Vec::new();
+    if let Ok(ifs) = if_addrs::get_if_addrs() {
+        for iface in ifs {
+            if iface.is_loopback() { continue; }
+            let name_lower = iface.name.to_lowercase();
+            let is_virtual = [
+                "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
+                "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
+                "p2p", "rndis", "bluetooth", "loopback",
+                "mihomo", "clash", "cfw", "tunnel", "sing-box", "hysteria",
+                "wireguard", "zerotier", "tailscale", "nebula",
+            ].iter().any(|k| name_lower.contains(k));
+            if is_virtual { continue; }
+            if let IpAddr::V4(ipv4) = iface.addr.ip() {
+                let octets = ipv4.octets();
+                if matches!((octets[0], octets[1]), (169, 254) | (198, 18) | (198, 19) | (100, 64..=127)) { continue; }
+                ips.push(ipv4);
+            }
+        }
+    }
+    ips
+}
+
 // ═══════════════════════════════════════════════════════════════════
 // Tauri 命令
 // ═══════════════════════════════════════════════════════════════════
@@ -133,8 +158,10 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
         }
     }
 
-    // Concurrent scan with overall timeout
+    // Scan: bind to physical interface to bypass VPN/TUN routing
+    let physical_ips = get_physical_ips();
     let candidates = Arc::new(candidates);
+    let physical_ips = Arc::new(physical_ips);
     let discovered = Arc::new(tokio::sync::Mutex::new(Vec::<WorkerInfo>::new()));
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
@@ -144,26 +171,29 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
             let addr = candidates[idx].clone();
             let discovered = discovered.clone();
             let permit = semaphore.clone().acquire_owned().await;
+            let physical_ips = physical_ips.clone();
             let handle = tokio::task::spawn_blocking(move || {
                 let _permit = permit;
                 if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
-                    if let Ok(mut stream) = TcpStream::connect_timeout(&socket_addr, connect_timeout) {
-                        // 写后读验证：发一个字节，真实 rpc-server 保持连接，假连接（Clash TUN 拦截）会 RST
-                        let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
-                        let is_real = if stream.write_all(&[0x00]).is_err() {
-                            false   // 写入失败 = 连接已被远端关闭
-                        } else {
-                            let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
-                            let mut buf = [0u8; 1];
-                            match stream.read(&mut buf) {
-                                Ok(0) => false,          // 远端关闭连接 = 假
-                                Err(_) => true,          // 超时等待 = rpc-server 等待有效 gRPC 握手
-                                Ok(_) => true,           // 收到响应 = 真实服务
-                            }
-                        };
-                        drop(stream);
-                        if !is_real { return; }
+                    // 尝试通过物理网卡连接，绕过 VPN/TUN 路由
+                    let connected = if physical_ips.is_empty() {
+                        TcpStream::connect_timeout(&socket_addr, connect_timeout).ok()
+                    } else {
+                        physical_ips.iter().find_map(|bind_ip| {
+                            let bind_addr = SocketAddr::new(IpAddr::V4(*bind_ip), 0);
+                            let sock_addr = socket2::SockAddr::from(socket_addr);
+                            socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+                                .ok()
+                                .and_then(|s| {
+                                    s.bind(&bind_addr.into()).ok()?;
+                                    s.connect_timeout(&sock_addr, connect_timeout).ok()?;
+                                    s.set_nonblocking(false).ok()?;
+                                    Some(std::net::TcpStream::from(s))
+                                })
+                        })
+                    };
 
+                    if let Some(_stream) = connected {
                         let parts: Vec<&str> = addr.split(':').collect();
                         if parts.len() >= 2 {
                             let host = parts[0].to_string();
