@@ -18,6 +18,7 @@ export default function ClusterPage() {
   const [launchStep, setLaunchStep] = useState(0) // 0=host, 1=ssh, 2=confirm
   const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052, rpcPath: '', sshPort: 22 })
   const [launching, setLaunching] = useState(false)
+  const [launchError, setLaunchError] = useState('')
 
   // Auto-scan on mount
   useEffect(() => {
@@ -67,6 +68,7 @@ export default function ClusterPage() {
 
   const handleSshLaunch = async () => {
     setLaunching(true)
+    setLaunchError('')
     try {
       const result: any = await invoke('ssh_launch_rpc', {
         host: launchForm.host,
@@ -78,15 +80,16 @@ export default function ClusterPage() {
         sshPort: launchForm.sshPort || 22,
       })
       if (result?.ok) {
-        // Add worker and test
         await invoke('add_worker', { host: launchForm.host, port: launchForm.port, name: launchForm.host })
         const all: WorkerInfo[] = await invoke('get_workers')
         setWorkers(all)
         setShowLaunchWizard(false)
         setLaunchStep(0)
+      } else {
+        setLaunchError(result?.error || '启动失败，未返回错误详情')
       }
-    } catch (e) {
-      console.error('SSH launch failed:', e)
+    } catch (e: any) {
+      setLaunchError(typeof e === 'string' ? e : (e?.message || String(e)))
     } finally {
       setLaunching(false)
     }
@@ -374,10 +377,15 @@ export default function ClusterPage() {
               {launchStep === 2 && (
                 <div className="text-sm space-y-2">
                   <div className="flex justify-between"><span className="text-gray-500">Worker:</span><span>{launchForm.host}:{launchForm.port}</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">SSH:</span><span>{launchForm.user}@{launchForm.host}</span></div>
+                  <div className="flex justify-between"><span className="text-gray-500">SSH:</span><span>{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
                   <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded text-xs text-blue-600 dark:text-blue-400">
                     {t.clusterPage.cmdPreview}: {launchForm.rpcPath || 'rpc-server'} --host 0.0.0.0 --port {launchForm.port}
                   </div>
+                  {launchError && (
+                    <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-600 dark:text-red-400 whitespace-pre-wrap">
+                      {'\u26A0'} {launchError}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
