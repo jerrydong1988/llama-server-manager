@@ -16,7 +16,7 @@ export default function ClusterPage() {
   const [mdnsActive, setMdnsActive] = useState(false)
   const [showLaunchWizard, setShowLaunchWizard] = useState(false)
   const [launchStep, setLaunchStep] = useState(0) // 0=host, 1=ssh, 2=confirm
-  const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052, rpcPath: '', sshPort: 22 })
+  const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052, rpcPath: '', sshPort: 22, remoteOs: 'auto' })
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState('')
 
@@ -78,6 +78,7 @@ export default function ClusterPage() {
         rpcPort: launchForm.port,
         remoteRpcPath: launchForm.rpcPath || null,
         sshPort: launchForm.sshPort || 22,
+        remoteOs: launchForm.remoteOs || null,
       })
       if (result?.ok) {
         await invoke('add_worker', { host: launchForm.host, port: launchForm.port, name: launchForm.host })
@@ -350,6 +351,15 @@ export default function ClusterPage() {
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">SSH 端口</label>
                     <input type="number" value={launchForm.sshPort} onChange={e => setLaunchForm({ ...launchForm, sshPort: parseInt(e.target.value) || 22 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">远程系统</label>
+                    <select value={launchForm.remoteOs} onChange={e => setLaunchForm({ ...launchForm, remoteOs: e.target.value })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
+                      <option value="auto">自动检测</option>
+                      <option value="linux">Linux</option>
+                      <option value="macos">macOS</option>
+                      <option value="windows">Windows</option>
+                    </select>
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">远程 rpc-server 路径（留空用 PATH 默认）</label>

@@ -1,6 +1,35 @@
 use std::process::Command;
 use std::net::TcpStream;
 
+fn detect_remote_os(host: &str, ssh_user: &str, ssh_key_path: Option<&str>, ssh_port: u16) -> Option<String> {
+    let mut c = Command::new("ssh");
+    c.arg("-o").arg("StrictHostKeyChecking=no")
+     .arg("-o").arg("ConnectTimeout=5")
+     .arg("-o").arg("BatchMode=yes")
+     .arg("-p").arg(ssh_port.to_string());
+
+    if let Some(k) = ssh_key_path { c.arg("-i").arg(k); }
+
+    c.arg(format!("{}@{}", ssh_user, host))
+     .arg("uname -s 2>/dev/null || ver 2>NUL");
+
+    c.output().ok().and_then(|o| {
+        let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if s.contains("Linux") { Some("linux".into()) }
+        else if s.contains("Darwin") { Some("macos".into()) }
+        else if s.contains("Windows") || s.contains("Microsoft") { Some("windows".into()) }
+        else { None }
+    })
+}
+
+fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
+    match remote_os {
+        "linux" | "macos" => format!("nohup '{}' --host 0.0.0.0 --port {} > /dev/null 2>&1 &", binary, port),
+        "windows" => format!("start /b \"\" \"{}\" --host 0.0.0.0 --port {}", binary, port),
+        _ => format!("nohup '{}' --host 0.0.0.0 --port {} > /dev/null 2>&1 &", binary, port), // fallback Unix
+    }
+}
+
 #[tauri::command]
 pub async fn ssh_launch_rpc(
     host: String,
@@ -10,13 +39,20 @@ pub async fn ssh_launch_rpc(
     rpc_port: u16,
     remote_rpc_path: Option<String>,
     ssh_port: Option<u16>,
+    remote_os: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let ssh_port = ssh_port.unwrap_or(22);
     let rpc_binary = remote_rpc_path
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| "rpc-server".to_string());
 
-    let cmd = format!("nohup {} --host 0.0.0.0 --port {} > /dev/null 2>&1 &", rpc_binary, rpc_port);
+    // 自动检测远程 OS，或使用用户指定的
+    let os = remote_os
+        .filter(|o| !o.is_empty() && o != "auto")
+        .or_else(|| detect_remote_os(&host, &ssh_user, ssh_key_path.as_deref(), ssh_port))
+        .unwrap_or_else(|| "linux".to_string());
+
+    let cmd = build_remote_cmd(&rpc_binary, rpc_port, &os);
 
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let mut ssh_cmd = Command::new("ssh");
@@ -49,14 +85,14 @@ pub async fn ssh_launch_rpc(
             return Err(format!("SSH 执行失败: {}", msg.trim()));
         }
 
-        std::thread::sleep(std::time::Duration::from_secs(2));
+        std::thread::sleep(std::time::Duration::from_secs(3));
 
         match TcpStream::connect_timeout(
             &format!("{}:{}", host, rpc_port).parse().unwrap(),
-            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(5),
         ) {
-            Ok(_) => Ok(serde_json::json!({ "ok": true, "host": host, "port": rpc_port })),
-            Err(e) => Err(format!("rpc-server 启动后无法连接: {}", e)),
+            Ok(_) => Ok(serde_json::json!({ "ok": true, "host": host, "port": rpc_port, "remote_os": os })),
+            Err(e) => Err(format!("rpc-server 启动后无法连接 ({}): {}", os, e)),
         }
     }).await
     .map_err(|e| format!("SSH 任务失败: {}", e))?;
