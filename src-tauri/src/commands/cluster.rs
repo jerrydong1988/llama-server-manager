@@ -57,6 +57,13 @@ pub(crate) fn save_workers(workers: &[WorkerInfo]) {
 fn get_lan_prefixes() -> Vec<String> {
     let mut prefixes = Vec::new();
 
+    // 虚拟网卡名称关键字（不区分大小写）
+    let virtual_keywords = [
+        "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
+        "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
+        "p2p", "rndis", "usb", "bluetooth", "loopback",
+    ];
+
     if let Ok(ifs) = if_addrs::get_if_addrs() {
         for iface in ifs {
             if iface.is_loopback() { continue; }
@@ -66,7 +73,20 @@ fn get_lan_prefixes() -> Vec<String> {
                 std::net::IpAddr::V4(ipv4) => ipv4.octets(),
                 _ => continue,
             };
-            // /24 subnet prefix
+
+            // 排除已知虚拟子网
+            let is_virtual_subnet = matches!((octets[0], octets[1]),
+                (198, 18) | (198, 19) |           // benchmarking
+                (169, 254) |                       // link-local
+                (172, 17..=31) |                   // Docker default range
+                (100, 64..=127)                    // carrier-grade NAT
+            );
+            if is_virtual_subnet { continue; }
+
+            // 排除虚拟网卡名
+            let name_lower = iface.name.to_lowercase();
+            if virtual_keywords.iter().any(|k| name_lower.contains(k)) { continue; }
+
             let prefix = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
             if !prefixes.contains(&prefix) {
                 prefixes.push(prefix);
