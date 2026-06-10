@@ -3,7 +3,7 @@ use std::net::{TcpStream, SocketAddr};
 use std::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 
 use tauri::State;
@@ -146,13 +146,18 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                 let _permit = permit;
                 if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
                     if let Ok(mut stream) = TcpStream::connect_timeout(&socket_addr, connect_timeout) {
-                        // 快速读验证：真实 rpc-server 保持连接，代理/TUN 拦截立即断开
-                        let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
-                        let mut buf = [0u8; 1];
-                        let is_real = match stream.read(&mut buf) {
-                            Ok(0) => false,       // 连接立刻关闭 = 假
-                            Err(_) => true,        // 超时/阻塞 = rpc-server 在等待 gRPC 握手
-                            Ok(_) => true,         // 收到数据 = 真实服务
+                        // 写后读验证：发一个字节，真实 rpc-server 保持连接，假连接（Clash TUN 拦截）会 RST
+                        let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+                        let is_real = if stream.write_all(&[0x00]).is_err() {
+                            false   // 写入失败 = 连接已被远端关闭
+                        } else {
+                            let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+                            let mut buf = [0u8; 1];
+                            match stream.read(&mut buf) {
+                                Ok(0) => false,          // 远端关闭连接 = 假
+                                Err(_) => true,          // 超时等待 = rpc-server 等待有效 gRPC 握手
+                                Ok(_) => true,           // 收到响应 = 真实服务
+                            }
                         };
                         drop(stream);
                         if !is_real { return; }
