@@ -24,9 +24,18 @@ fn detect_remote_os(host: &str, ssh_user: &str, ssh_key_path: Option<&str>, ssh_
 
 fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
     match remote_os {
-        "linux" | "macos" => format!("nohup '{}' --host 0.0.0.0 --port {} > /dev/null 2>&1 &", binary, port),
-        "windows" => format!("start /b \"\" \"{}\" --host 0.0.0.0 --port {}", binary, port),
-        _ => format!("nohup '{}' --host 0.0.0.0 --port {} > /dev/null 2>&1 &", binary, port), // fallback Unix
+        "linux" | "macos" => format!(
+            "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
+            binary, port, port, port, port, port
+        ),
+        "windows" => format!(
+            "start /b \"\" \"{}\" --host 0.0.0.0 --port {} & timeout /t 2 >NUL && netstat -an | findstr :{}",
+            binary, port, port
+        ),
+        _ => format!(
+            "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
+            binary, port, port, port, port, port
+        ),
     }
 }
 
@@ -78,15 +87,24 @@ pub async fn ssh_launch_rpc(
         let output = ssh_cmd.output()
             .map_err(|e| format!("无法启动 SSH: {}", e))?;
 
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
         if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let stdout = String::from_utf8_lossy(&output.stdout);
             let msg = if !stderr.trim().is_empty() { stderr.to_string() } else { stdout.to_string() };
             return Err(format!("SSH 执行失败: {}", msg.trim()));
         }
 
-        std::thread::sleep(std::time::Duration::from_secs(3));
+        // 检查远程端口是否在监听
+        let combined = format!("{}{}", stdout, stderr);
+        if combined.contains("PORT-NOT-FOUND") {
+            // 提取启动日志（PORT-CHECK 之前的部分）
+            let log_part = stdout.split("---PORT-CHECK---").next().unwrap_or("").trim();
+            let log_msg = if log_part.is_empty() { "无输出".to_string() } else { log_part.to_string() };
+            return Err(format!("rpc-server 启动失败\n日志: {}", log_msg));
+        }
 
+        // 远程验证通过 — 本地再做一次确认
         match TcpStream::connect_timeout(
             &format!("{}:{}", host, rpc_port).parse().unwrap(),
             std::time::Duration::from_secs(5),
