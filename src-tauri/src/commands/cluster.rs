@@ -3,6 +3,8 @@ use std::net::{TcpStream, SocketAddr};
 use std::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 
 use tauri::State;
 use tokio::time::timeout as tokio_timeout;
@@ -212,11 +214,67 @@ pub async fn test_worker(host: String, port: u16, state: State<'_, AppState>) ->
 
 #[tauri::command]
 pub async fn get_worker_info(host: String, port: u16) -> Result<Vec<WorkerDevice>, String> {
-    // rpc-server 本身没有 HTTP health endpoint，返回空列表
-    // 设备信息通过 test_worker 后的 TCP 握手 + 日志解析获取
-    // 当前版本返回空 Vec，标记 worker 为 Online 即可
+    // 检查是否为本地 worker
+    let is_local = host == "127.0.0.1" || host == "localhost" || host == "::1"
+        || is_local_ip(&host);
+
+    if !is_local {
+        // 远程 worker — rpc-server 不暴露设备查询接口
+        return Ok(Vec::new());
+    }
+
+    let binary = find_rpc_server_binary_internal().unwrap_or_else(|| RPC_SERVER_NAME.to_string());
+
+    // 用临时端口启动 rpc-server，抓取启动输出中的设备信息，然后立即杀掉
+    let mut child = Command::new(&binary)
+        .args(["--host", "127.0.0.1", "--port", "0"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("无法启动 rpc-server: {}", e))?;
+
+    let stdout = child.stdout.take().ok_or("无法读取 rpc-server 输出")?;
+    let reader = BufReader::new(stdout);
+    let mut devices = Vec::new();
+    let mut in_devices = false;
+
+    for line in reader.lines().flatten() {
+        if line.starts_with("Devices:") { in_devices = true; continue; }
+        if in_devices && line.starts_with("Starting RPC server") { break; }
+        if in_devices {
+            if let Some(colon_pos) = line.find(':') {
+                let device_type = line[..colon_pos].trim().to_string();
+                let rest = line[colon_pos + 1..].trim();
+                let (name, vram_info) = if let Some(paren_open) = rest.rfind('(') {
+                    let name = rest[..paren_open].trim().to_string();
+                    let inside = rest[paren_open + 1..].trim_end_matches(')').to_string();
+                    (name, inside)
+                } else {
+                    (rest.to_string(), String::new())
+                };
+                let parts: Vec<&str> = vram_info.split(',').collect();
+                let total = parts.first().and_then(|s| s.trim().split_whitespace().next()?.parse::<u64>().ok()).unwrap_or(0);
+                let free = parts.get(1).and_then(|s| s.trim().split_whitespace().next()?.parse::<u64>().ok()).unwrap_or(0);
+                devices.push(WorkerDevice { device_type, name, vram_mb: total, free_mb: free });
+            }
+        }
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
     let _ = (host, port);
-    Ok(Vec::new())
+    Ok(devices)
+}
+
+fn is_local_ip(host: &str) -> bool {
+    if let Ok(ifs) = if_addrs::get_if_addrs() {
+        for iface in ifs {
+            if iface.addr.ip().to_string() == host {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 #[tauri::command]
