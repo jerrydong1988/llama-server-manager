@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square, Radio, Zap } from 'lucide-react'
+import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square, Radio, Zap, StopCircle } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
 import { invoke } from '@tauri-apps/api/core'
@@ -54,6 +54,19 @@ export default function ClusterPage() {
   const handleCancelScan = () => {
     scanCancelled.current = true
     setClusterScanning(false)
+  }
+
+  const isLocalWorker = (host: string) => {
+    return host === '127.0.0.1' || host === 'localhost' || host === '::1'
+  }
+
+  const handleStopWorker = async (worker: WorkerInfo) => {
+    try {
+      await invoke('stop_local_worker', { port: worker.port })
+      updateWorker(worker.id, { status: 'Offline' })
+    } catch (e) {
+      console.error('Failed to stop worker:', e)
+    }
   }
 
   const handleMdnsToggle = async () => {
@@ -255,12 +268,18 @@ export default function ClusterPage() {
                         <span className="font-medium">{w.name}</span>
                         <span className="text-gray-400">{w.host}:{w.port}</span>
                         {w.auto_discovered && <span className="text-gray-400 text-xs">[auto]</span>}
+                        {isLocalWorker(w.host) && <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-1.5 py-0.5 rounded">本机</span>}
                       </div>
                     </td>
                     <td className="px-4 py-2 text-gray-400 hidden md:table-cell">
                       {w.devices.length > 0 ? `${w.devices.length} devices` : statusLabel(w.status)}
                     </td>
                     <td className="px-4 py-2">
+                      {isLocalWorker(w.host) && w.status === 'Online' && (
+                        <button onClick={() => handleStopWorker(w)} className="p-1 text-red-400 hover:text-red-600 rounded mr-1" title="停止本机 Worker">
+                          <StopCircle className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       <button onClick={() => handleDelete(w)} className="p-1 text-gray-400 hover:text-red-500 rounded" title={t.clusterPage.deleteWorker}>
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>

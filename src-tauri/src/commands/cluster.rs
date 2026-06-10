@@ -394,6 +394,58 @@ pub async fn generate_rpc_launch_cmd(port: u16) -> Result<String, String> {
     Ok(format!("{} --host 0.0.0.0 --port {}", binary, port))
 }
 
+#[tauri::command]
+pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
+    tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "windows")]
+        {
+            let output = std::process::Command::new("cmd")
+                .args(["/c", &format!("netstat -ano | findstr :{}", port)])
+                .output()
+                .map_err(|e| format!("netstat 失败: {}", e))?;
+            let out = String::from_utf8_lossy(&output.stdout);
+            for line in out.lines() {
+                if line.contains(&format!(":{}", port)) && line.contains("LISTENING") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if let Some(pid) = parts.last() {
+                        let _ = std::process::Command::new("taskkill")
+                            .args(["/PID", pid, "/F"])
+                            .output();
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&format!("ss -tlnp | grep ':{}' | awk '{{print $NF}}' | grep -oP 'pid=\\K\\d+'", port))
+                .output()
+                .map_err(|e| format!("ss 失败: {}", e))?;
+            let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !out.is_empty() {
+                let _ = std::process::Command::new("kill").arg(&out).output();
+                return Ok(true);
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let output = std::process::Command::new("lsof")
+                .args(["-ti", &format!(":{}", port)])
+                .output()
+                .map_err(|e| format!("lsof 失败: {}", e))?;
+            let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !out.is_empty() {
+                let _ = std::process::Command::new("kill").arg(&out).output();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }).await
+    .map_err(|e| format!("停止 Worker 失败: {}", e))?
+}
+
 pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
     #[cfg(target_os = "windows")]
     const RPC_SERVER_NAME: &str = "rpc-server.exe";
