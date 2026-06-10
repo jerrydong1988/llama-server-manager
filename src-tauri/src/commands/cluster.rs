@@ -2,8 +2,10 @@ use std::collections::HashSet;
 use std::net::{TcpStream, SocketAddr};
 use std::time::Duration;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tauri::State;
+use tokio::time::timeout as tokio_timeout;
 
 use crate::models::{WorkerInfo, WorkerDevice, WorkerStatus, AppState};
 use crate::utils;
@@ -91,54 +93,85 @@ fn get_lan_prefixes() -> Vec<String> {
 pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerInfo>, String> {
     let prefixes = get_lan_prefixes();
     let port: u16 = 50052;
-    let timeout = Duration::from_millis(500);
+    let connect_timeout = Duration::from_millis(300);
+    let overall_timeout = Duration::from_secs(15);
+    let max_concurrent = 60;
 
-    let mut discovered: Vec<WorkerInfo> = Vec::new();
+    // Build candidate addresses
+    let mut candidates: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
-
     for prefix in &prefixes {
         for i in 1..=254 {
             let addr = format!("{}{}:{}", prefix, i, port);
-            if seen.contains(&addr) { continue; }
-            seen.insert(addr.clone());
-
-            if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
-                if TcpStream::connect_timeout(&socket_addr, timeout).is_ok() {
-                    let host = format!("{}{}", prefix, i);
-                    discovered.push(WorkerInfo {
-                        id: format!("auto-{}", host.replace('.', "-")),
-                        host,
-                        port,
-                        name: format!("Worker-{}", i),
-                        devices: Vec::new(),
-                        status: WorkerStatus::Online,
-                        last_seen: Some(chrono::Utc::now().to_rfc3339()),
-                        auto_discovered: true,
-                    });
-                }
+            if seen.insert(addr.clone()) {
+                candidates.push(addr);
             }
         }
     }
 
-    // 与已存储 worker 合并: 保留手动添加的，更新已存在的在线状态
-    let mut existing = load_workers();
-    for d in &discovered {
-        if let Some(e) = existing.iter_mut().find(|w| w.host == d.host && w.port == d.port) {
-            e.status = WorkerStatus::Online;
-            e.last_seen = Some(chrono::Utc::now().to_rfc3339());
-        } else {
-            existing.push(d.clone());
+    // Concurrent scan with overall timeout
+    let candidates = Arc::new(candidates);
+    let discovered = Arc::new(tokio::sync::Mutex::new(Vec::<WorkerInfo>::new()));
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+
+    let scan_future = async {
+        let mut handles = Vec::new();
+        for idx in 0..candidates.len() {
+            let addr = candidates[idx].clone();
+            let discovered = discovered.clone();
+            let permit = semaphore.clone().acquire_owned().await;
+            let handle = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
+                    if TcpStream::connect_timeout(&socket_addr, connect_timeout).is_ok() {
+                        let parts: Vec<&str> = addr.split(':').collect();
+                        if parts.len() >= 2 {
+                            let host = parts[0].to_string();
+                            let worker_name = format!("Worker-{}", host.split('.').last().unwrap_or("?"));
+                            if let Ok(mut list) = discovered.try_lock() {
+                                list.push(WorkerInfo {
+                                    id: format!("auto-{}", host.replace('.', "-")),
+                                    host,
+                                    port,
+                                    name: worker_name,
+                                    devices: Vec::new(),
+                                    status: WorkerStatus::Online,
+                                    last_seen: Some(chrono::Utc::now().to_rfc3339()),
+                                    auto_discovered: true,
+                                });
+                            }
+                        }
+                    }
+                }
+            });
+            handles.push(handle);
+        }
+        for h in handles { let _ = h.await; }
+        let discovered = discovered.lock().await;
+        discovered.clone()
+    };
+
+    match tokio_timeout(overall_timeout, scan_future).await {
+        Ok(results) => {
+            let mut existing = load_workers();
+            for d in &results {
+                if let Some(e) = existing.iter_mut().find(|w| w.host == d.host && w.port == d.port) {
+                    e.status = WorkerStatus::Online;
+                    e.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                } else {
+                    existing.push(d.clone());
+                }
+            }
+            save_workers(&existing);
+            if let Ok(mut w) = state.workers.lock() { *w = existing.clone(); }
+            Ok(existing)
+        }
+        Err(_) => {
+            // Timeout — return whatever was found so far
+            let partial = discovered.lock().await.clone();
+            Ok(partial)
         }
     }
-
-    save_workers(&existing);
-
-    // 更新 AppState
-    if let Ok(mut w) = state.workers.lock() {
-        *w = existing.clone();
-    }
-
-    Ok(existing)
 }
 
 #[tauri::command]

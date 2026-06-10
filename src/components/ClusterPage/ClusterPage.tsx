@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
 import { invoke } from '@tauri-apps/api/core'
@@ -12,6 +12,7 @@ export default function ClusterPage() {
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [formData, setFormData] = useState({ host: '', port: 50052, name: '' })
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const scanCancelled = useRef(false)
 
   // Auto-scan on mount
   useEffect(() => {
@@ -28,15 +29,25 @@ export default function ClusterPage() {
   }
 
   const handleScan = async () => {
+    scanCancelled.current = false
     setClusterScanning(true)
     try {
       const discovered: WorkerInfo[] = await invoke('scan_workers_tcp')
-      setWorkers(discovered)
+      if (!scanCancelled.current) {
+        setWorkers(discovered)
+      }
     } catch (e) {
-      console.error('Scan failed:', e)
+      if (!scanCancelled.current) {
+        console.error('Scan failed:', e)
+      }
     } finally {
       setClusterScanning(false)
     }
+  }
+
+  const handleCancelScan = () => {
+    scanCancelled.current = true
+    setClusterScanning(false)
   }
 
   const handleTest = async (host: string, port: number) => {
@@ -126,10 +137,17 @@ export default function ClusterPage() {
             {copiedId === 'cmd' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
             {t.clusterPage.copyLaunchCmd}
           </button>
-          <button onClick={handleScan} disabled={clusterScanning} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-gray-400 text-white rounded-lg text-xs flex items-center gap-1">
-            <RefreshCw className={`w-3 h-3 ${clusterScanning ? 'animate-spin' : ''}`} />
-            {clusterScanning ? t.clusterPage.scanning : t.clusterPage.scanLan}
-          </button>
+          {clusterScanning ? (
+            <button onClick={handleCancelScan} className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs flex items-center gap-1">
+              <Square className="w-3 h-3" />
+              停止扫描
+            </button>
+          ) : (
+            <button onClick={handleScan} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs flex items-center gap-1">
+              <RefreshCw className="w-3 h-3" />
+              {t.clusterPage.scanLan}
+            </button>
+          )}
           <button onClick={() => setShowAddDialog(true)} className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-xs flex items-center gap-1">
             <Plus className="w-3 h-3" />
             {t.clusterPage.addWorker}
