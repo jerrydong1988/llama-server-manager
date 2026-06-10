@@ -29,8 +29,8 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
             binary, port, port, port, port, port
         ),
         "windows" => format!(
-            "powershell -Command \"[Console]::OutputEncoding=[Text.Encoding]::UTF8; $tn='rpc-'+[System.Guid]::NewGuid().ToString('N').Substring(0,8); $a=New-ScheduledTaskAction -Execute '{}' -Argument '--host 0.0.0.0 --port {}'; $t=New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(2); Register-ScheduledTask -TaskName $tn -Action $a -Trigger $t -Force|Out-Null; Start-ScheduledTask -TaskName $tn|Out-Null; Start-Sleep 5; $f=netstat -an 2>$null|Select-String ':{} '; if($f){{Write-Output 'PORT-OK'}}else{{Write-Output 'PORT-NOT-FOUND'}}; Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue\"",
-            binary.replace('\'', "''"), port, port
+            "powershell -Command \"[Console]::OutputEncoding=[Text.Encoding]::UTF8; $tn='rpc-'+[System.Guid]::NewGuid().ToString('N').Substring(0,8); $a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-WindowStyle Hidden -NoLogo -NonInteractive -Command \"\"& ''{0}'' --host 0.0.0.0 --port {1}\"\"'; $t=New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(2); Register-ScheduledTask -TaskName $tn -Action $a -Trigger $t -Force|Out-Null; Start-ScheduledTask -TaskName $tn|Out-Null; Start-Sleep 5; $f=netstat -an 2>$null|Select-String ':{1} '; if($f){{Write-Output 'PORT-OK'}}else{{Write-Output 'PORT-NOT-FOUND'}}; Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue\"",
+            binary.replace('\'', "''"), port
         ),
         _ => format!(
             "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
