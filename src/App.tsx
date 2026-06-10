@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity } from 'lucide-react'
+import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network } from 'lucide-react'
 import { version } from '../package.json'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
@@ -7,6 +7,7 @@ import InstanceManager from './components/InstanceManager'
 import LogsViewer from './components/LogsViewer'
 import ConfigPage from './components/ConfigPage'
 import PerformancePage from './components/PerformancePage/PerformancePage'
+import ClusterPage from './components/ClusterPage/ClusterPage'
 import { useAppStore } from './store'
 import { I18nProvider, useI18n } from './i18n'
 
@@ -18,6 +19,7 @@ const TAB_CONTENT: Record<string, () => JSX.Element> = {
   config: () => <ConfigPage />,
   perf: () => <PerformancePage />,
   logs: () => <LogsViewer />,
+  cluster: () => <ClusterPage />,
 }
 const renderTabContent = (tabId: string) => {
   const Renderer = TAB_CONTENT[tabId]
@@ -34,6 +36,7 @@ function AppInner() {
     { id: 'engine', name: t.nav.engine, icon: Cpu },
     { id: 'instances', name: t.nav.instances, icon: Server },
     { id: 'config', name: t.nav.config, icon: Settings },
+    { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'perf', name: t.nav.perf, icon: Activity },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
   ]

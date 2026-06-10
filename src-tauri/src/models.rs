@@ -377,6 +377,58 @@ pub struct SystemMetrics {
     pub vram_total_mb: Option<f64>,
 }
 
+// ── 集群管理 / Worker ─────────────────────────────────────────────
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WorkerDevice {
+    pub device_type: String, // CUDA, ROCm, Metal, Vulkan, CPU
+    pub name: String,
+    pub vram_mb: u64,
+    pub free_mb: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub enum WorkerStatus {
+    Online,
+    Offline,
+    Testing,
+    Unknown,
+}
+
+impl Default for WorkerStatus {
+    fn default() -> Self { WorkerStatus::Unknown }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WorkerInfo {
+    pub id: String,
+    pub host: String,
+    pub port: u16,
+    pub name: String,
+    #[serde(default)]
+    pub devices: Vec<WorkerDevice>,
+    #[serde(default)]
+    pub status: WorkerStatus,
+    #[serde(default)]
+    pub last_seen: Option<String>,
+    #[serde(default)]
+    pub auto_discovered: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Usb4Adapter {
+    pub name: String,
+    pub if_index: u32,
+    pub description: String,
+    pub status: String,
+    pub ip: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ClusterState {
+    pub workers: Vec<WorkerInfo>,
+    pub usb4_adapters: Vec<Usb4Adapter>,
+}
+
 // ── 应用全局状态 ──────────────────────────────────────────────────
 pub struct AppState {
     pub models: Mutex<Vec<ModelInfo>>,
@@ -387,6 +439,8 @@ pub struct AppState {
     pub config_dir: Mutex<PathBuf>,
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,
+    pub workers: Mutex<Vec<WorkerInfo>>,
+    pub usb4_adapters: Mutex<Vec<Usb4Adapter>>,
 }
 
 // ── 全局配置结构（用于 JSON 序列化） ──────────────────────────────

@@ -5,7 +5,7 @@ import { message } from '@tauri-apps/plugin-dialog'
 import { pathBasename } from './utils/path'
 
 // Re-exports from split modules
-export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState } from './store/types'
+export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState, WorkerInfo, WorkerDevice, WorkerStatus, Usb4Adapter } from './store/types'
 export { defaultInstanceConfig } from './store/defaults'
 import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry } from './store/types'
 
@@ -25,6 +25,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   engineDirs: [],
   activeConfigInstanceId: null,
   activeTab: 'model-repo',
+  workers: [],
+  clusterScanning: false,
   downloadProgress: {},
   setModels: (models) => set({ models }),
   setEngines: (engines) => set({ engines }),
@@ -252,6 +254,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   cancelAndCleanupDownload: async (fileName: string, filePath: string) => {
     try { await invoke('cancel_and_cleanup_download', { fileName, filePath }) } catch (e) { console.error(e) }
   },
+
+  // ── Cluster ──
+  setWorkers: (workers) => set({ workers }),
+  addWorker: (worker) => set(s => ({ workers: [...s.workers, worker] })),
+  removeWorker: (id) => set(s => ({ workers: s.workers.filter(w => w.id !== id) })),
+  updateWorker: (id, partial) => set(s => ({
+    workers: s.workers.map(w => w.id === id ? { ...w, ...partial } : w)
+  })),
+  setClusterScanning: (scanning) => set({ clusterScanning: scanning }),
 }))
 
 // ── 事件监听 ─────────────────────────────────────────────────

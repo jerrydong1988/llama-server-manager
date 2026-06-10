@@ -26,6 +26,8 @@ futures-util = "0.3"
 tokio-util = { version = "0.7", features = ["codec"] }
 sysinfo = "0.32"
 libloading = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+regex-lite = "0.1"
 
 [features]
 default = ["custom-protocol"]

@@ -1,5 +1,6 @@
 ﻿import type { InstanceConfig } from '../../store'
 import { Section, Input, Num, Switch, Select, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
+import WorkerSelector from './WorkerSelector'
 
 interface Props {
   local: InstanceConfig
@@ -299,7 +300,9 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
             <Switch label={`${t.configPage.uiMcpProxy} (--ui-mcp-proxy)`} value={local.ui_mcp_proxy} onChange={v => set('ui_mcp_proxy', v)} title={t.configPage.uiMcpProxyTip}  active={a('ui_mcp_proxy')} />
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
-            <Input label={`${t.configPage.rpcServers} (--rpc)`} value={local.rpc_servers} onChange={v => set('rpc_servers', v)} title={t.configPage.rpcServersTip}  active={a('rpc_servers')} />
+            <div className="col-span-2 md:col-span-3">
+              <WorkerSelector value={local.rpc_servers} onChange={v => set('rpc_servers', v)} t={t} />
+            </div>
             <Num label={`${t.configPage.ssePingInterval} (--sse-ping-interval)`} value={local.sse_ping_interval} onChange={v => set('sse_ping_interval', v)} min={0} title={t.configPage.ssePingIntervalTip}  active={a('sse_ping_interval')} />
             <Switch label={`${t.configPage.reusePort} (--reuse-port)`} value={local.reuse_port} onChange={v => set('reuse_port', v)} title={t.configPage.reusePortTip}  active={a('reuse_port')} />
           </div>

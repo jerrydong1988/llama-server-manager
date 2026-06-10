@@ -109,6 +109,34 @@ export interface MsFileEntry {
   file_type: string
 }
 
+export interface WorkerDevice {
+  device_type: string  // CUDA, ROCm, Metal, Vulkan, CPU
+  name: string
+  vram_mb: number
+  free_mb: number
+}
+
+export type WorkerStatus = 'Online' | 'Offline' | 'Testing' | 'Unknown'
+
+export interface WorkerInfo {
+  id: string
+  host: string
+  port: number
+  name: string
+  devices: WorkerDevice[]
+  status: WorkerStatus
+  last_seen?: string
+  auto_discovered: boolean
+}
+
+export interface Usb4Adapter {
+  name: string
+  if_index: number
+  description: string
+  status: string
+  ip?: string
+}
+
 export interface DownloadProgress {
   fileName: string
   downloaded: number
@@ -129,6 +157,8 @@ export interface AppState {
   activeConfigInstanceId: string | null
   activeTab: string
   darkMode: boolean
+  workers: WorkerInfo[]
+  clusterScanning: boolean
   setActiveTab: (tab: string) => void
   setDarkMode: (dm: boolean) => void
   setActiveConfigInstanceId: (id: string | null) => void
@@ -172,4 +202,10 @@ export interface AppState {
   cancelFileDownload: (fileName: string) => Promise<void>
   pauseFileDownload: (fileName: string) => Promise<void>
   cancelAndCleanupDownload: (fileName: string, filePath: string) => Promise<void>
+  // Cluster
+  setWorkers: (workers: WorkerInfo[]) => void
+  addWorker: (worker: WorkerInfo) => void
+  removeWorker: (id: string) => void
+  updateWorker: (id: string, partial: Partial<WorkerInfo>) => void
+  setClusterScanning: (scanning: boolean) => void
 }
