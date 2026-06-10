@@ -29,7 +29,7 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
             binary, port, port, port, port, port
         ),
         "windows" => format!(
-            "chcp 65001 > NUL && powershell -Command \"Start-Process -FilePath '{}' -ArgumentList '--host 0.0.0.0 --port {}' -WindowStyle Hidden; Start-Sleep 3; $c = netstat -an | Select-String ':{}'; if ($c) {{ Write-Output 'PORT-OK' }} else {{ Write-Output 'PORT-NOT-FOUND' }}\"",
+            "powershell -Command \"[Console]::OutputEncoding=[Text.Encoding]::UTF8; $p = Start-Process -FilePath '{}' -ArgumentList '--host 0.0.0.0 --port {}' -PassThru -WindowStyle Hidden; Start-Sleep 3; if ($p.HasExited) {{ $code = $p.ExitCode; if ($code -ne 0) {{ Write-Output ('EXIT-CODE:' + $code) }} else {{ Write-Output 'PORT-NOT-FOUND' }} }} else {{ netstat -an | Select-String ':{}' | ForEach-Object {{ Write-Output 'PORT-OK' }} }}\"",
             binary.replace('\'', "''"), port, port
         ),
         _ => format!(
