@@ -555,6 +555,53 @@ pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_js
     }))
 }
 
+#[tauri::command]
+pub async fn start_local_rpc(engine_dir: Option<String>, port: u16) -> Result<serde_json::Value, String> {
+    tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let binary = if let Some(ref dir) = engine_dir {
+            let path = std::path::Path::new(dir);
+            #[cfg(target_os = "windows")]
+            let exe = path.join("rpc-server.exe");
+            #[cfg(not(target_os = "windows"))]
+            let exe = path.join("rpc-server");
+            if exe.exists() { exe.to_string_lossy().to_string() } else {
+                return Err(format!("引擎目录下未找到 rpc-server: {}", dir));
+            }
+        } else {
+            find_rpc_server_binary_internal()
+                .ok_or_else(|| "未找到 rpc-server，请指定引擎目录".to_string())?
+        };
+
+        #[cfg(target_os = "windows")]
+        {
+            std::process::Command::new("cmd")
+                .args(["/c", &format!("start /b \"\" \"{}\" --host 0.0.0.0 --port {}", binary, port)])
+                .spawn()
+                .map_err(|e| format!("无法启动: {}", e))?;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&format!("nohup '{}' --host 0.0.0.0 --port {} > /dev/null 2>&1 &", binary, port))
+                .spawn()
+                .map_err(|e| format!("无法启动: {}", e))?;
+        }
+
+        // 等待端口就绪
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        let addr = format!("127.0.0.1:{}", port);
+        match std::net::TcpStream::connect_timeout(
+            &addr.parse().unwrap(),
+            std::time::Duration::from_secs(3),
+        ) {
+            Ok(_) => Ok(serde_json::json!({ "ok": true, "port": port })),
+            Err(e) => Err(format!("rpc-server 启动后无法连接: {}", e)),
+        }
+    }).await
+    .map_err(|e| format!("启动失败: {}", e))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

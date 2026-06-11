@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square, Radio, Zap, StopCircle } from 'lucide-react'
+import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square, Radio, Zap, StopCircle, Play } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
 import { invoke } from '@tauri-apps/api/core'
@@ -7,7 +7,7 @@ import { ask } from '@tauri-apps/plugin-dialog'
 
 export default function ClusterPage() {
   const { t } = useI18n()
-  const { workers, clusterScanning, setWorkers, removeWorker, setClusterScanning, updateWorker } = useAppStore()
+  const { workers, clusterScanning, setWorkers, removeWorker, setClusterScanning, updateWorker, engines, defaultEngineId } = useAppStore()
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [formData, setFormData] = useState({ host: '', port: 50052, name: '' })
@@ -20,6 +20,9 @@ export default function ClusterPage() {
   const [localHosts, setLocalHosts] = useState<Set<string>>(new Set(['127.0.0.1', 'localhost', '::1']))
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState('')
+  const [showLocalLaunch, setShowLocalLaunch] = useState(false)
+  const [localPort, setLocalPort] = useState(50052)
+  const [localEngine, setLocalEngine] = useState('')
 
   // Auto-scan on mount
   useEffect(() => {
@@ -85,6 +88,27 @@ export default function ClusterPage() {
       console.error('Failed to stop worker:', e)
     }
   }
+
+  const handleLocalLaunch = async () => {
+    setLaunching(true)
+    setLaunchError('')
+    try {
+      const engineDir = localEngine || engines.find(e => e.id === defaultEngineId)?.dir || ''
+      const result: any = await invoke('start_local_rpc', { engineDir: engineDir || null, port: localPort })
+      if (result?.ok) {
+        await invoke('add_worker', { host: '127.0.0.1', port: localPort, name: 'Local-' + localPort })
+        const all: WorkerInfo[] = await invoke('get_workers')
+        setWorkers(all)
+        setShowLocalLaunch(false)
+      }
+    } catch (e: any) {
+      setLaunchError(typeof e === 'string' ? e : (e?.message || String(e)))
+    } finally {
+      setLaunching(false)
+    }
+  }
+
+  const defaultEngineDir = engines.find(e => e.id === defaultEngineId)?.dir
 
   const handleMdnsToggle = async () => {
     if (mdnsActive) {
@@ -236,6 +260,10 @@ export default function ClusterPage() {
             <Zap className="w-3 h-3" />
             {t.clusterPage.oneClickLaunch}
           </button>
+          <button onClick={() => { setShowLocalLaunch(true); setLaunchError('') }} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs flex items-center gap-1">
+            <Play className="w-3 h-3" />
+            本地启动
+          </button>
         </div>
       </div>
 
@@ -376,6 +404,9 @@ export default function ClusterPage() {
             <div className="p-6 space-y-4">
               {launchStep === 0 && (
                 <>
+                  <div className="p-2 mb-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-400">
+                    ⚠ 请确保远程 rpc-server 版本与主引擎一致。推荐从主引擎目录上传 rpc-server 二进制到远程。
+                  </div>
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">Worker IP / Host</label>
                     <input type="text" value={launchForm.host} onChange={e => setLaunchForm({ ...launchForm, host: e.target.value })} placeholder="192.168.1.10" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
@@ -451,6 +482,41 @@ export default function ClusterPage() {
                   </button>
                 )}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Local Launch Dialog */}
+      {showLocalLaunch && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-sm">
+            <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
+              <h3 className="font-semibold">本地启动 rpc-server</h3>
+              <button onClick={() => setShowLocalLaunch(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-4 h-4" /></button>
+            </div>
+            <div className="p-6 space-y-3">
+              <div>
+                <label className="block text-xs font-medium mb-1 text-gray-500">RPC 端口</label>
+                <input type="number" value={localPort} onChange={e => setLocalPort(parseInt(e.target.value) || 50052)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium mb-1 text-gray-500">引擎目录（默认引擎自动填充）</label>
+                <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
+                  <option value="">{defaultEngineDir || '默认引擎'}</option>
+                  {engines.map(e => (
+                    <option key={e.id} value={e.dir}>{e.name} ({e.dir})</option>
+                  ))}
+                </select>
+              </div>
+              {launchError && (
+                <div className="p-2 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-600 dark:text-red-400">{launchError}</div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 px-6 py-4 border-t dark:border-gray-700">
+              <button onClick={() => setShowLocalLaunch(false)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">取消</button>
+              <button onClick={handleLocalLaunch} disabled={launching} className="px-4 py-1.5 text-sm bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400 text-white rounded-lg">
+                {launching ? '启动中...' : '启动'}
+              </button>
             </div>
           </div>
         </div>
