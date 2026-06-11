@@ -23,6 +23,7 @@ export default function ClusterPage() {
   const [showLocalLaunch, setShowLocalLaunch] = useState(false)
   const [localPort, setLocalPort] = useState(50052)
   const [localEngine, setLocalEngine] = useState('')
+  const [localMode, setLocalMode] = useState<'engine' | 'custom'>('engine')
 
   // Auto-scan on mount
   useEffect(() => {
@@ -499,27 +500,33 @@ export default function ClusterPage() {
                 <input type="number" value={localPort} onChange={e => setLocalPort(parseInt(e.target.value) || 50052)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1 text-gray-500">引擎目录（默认引擎自动填充）</label>
-                <div className="flex gap-1">
-                  <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-                    {(() => {
-                      const isCustom = localEngine && !engines.some(e => e.dir === localEngine)
-                      if (isCustom) return <option value={localEngine}>{localEngine}</option>
-                      return null
-                    })()}
+                <label className="block text-xs font-medium mb-1 text-gray-500">引擎目录</label>
+                <div className="flex items-center gap-2 mb-2">
+                  <label className={`flex items-center gap-1 cursor-pointer text-xs ${localMode === 'engine' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400'}`}>
+                    <input type="radio" name="localMode" checked={localMode === 'engine'} onChange={() => setLocalMode('engine')} className="w-3 h-3" />
+                    引擎
+                  </label>
+                  <label className={`flex items-center gap-1 cursor-pointer text-xs ${localMode === 'custom' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400'}`}>
+                    <input type="radio" name="localMode" checked={localMode === 'custom'} onChange={() => setLocalMode('custom')} className="w-3 h-3" />
+                    自定义
+                  </label>
+                </div>
+                {localMode === 'engine' ? (
+                  <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
                     {engines.map(e => (
                       <option key={e.id} value={e.dir}>{e.name}{e.id === defaultEngineId ? '（默认）' : ''}</option>
                     ))}
                   </select>
-                  <button onClick={async () => {
-                    try {
-                      const selected = await open({ directory: true, multiple: false })
-                      if (selected && typeof selected === 'string') setLocalEngine(selected)
-                    } catch {}
-                  }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title="选择引擎目录">📂</button>
-                </div>
-                {localEngine && !engines.some(e => e.dir === localEngine) && (
-                  <div className="text-xs text-gray-400 mt-1 truncate">{localEngine}</div>
+                ) : (
+                  <div className="flex gap-1">
+                    <input type="text" value={localEngine} onChange={e => setLocalEngine(e.target.value)} placeholder="输入引擎目录路径..." className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                    <button onClick={async () => {
+                      try {
+                        const selected = await open({ directory: true, multiple: false })
+                        if (selected && typeof selected === 'string') setLocalEngine(selected)
+                      } catch {}
+                    }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title="选择引擎目录">📂</button>
+                  </div>
                 )}
               </div>
               {launchError && (
