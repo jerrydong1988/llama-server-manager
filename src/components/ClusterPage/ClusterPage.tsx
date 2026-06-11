@@ -502,6 +502,11 @@ export default function ClusterPage() {
                 <label className="block text-xs font-medium mb-1 text-gray-500">引擎目录（默认引擎自动填充）</label>
                 <div className="flex gap-1">
                   <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
+                    {(() => {
+                      const isCustom = localEngine && !engines.some(e => e.dir === localEngine)
+                      if (isCustom) return <option value={localEngine}>{localEngine}</option>
+                      return null
+                    })()}
                     {engines.map(e => (
                       <option key={e.id} value={e.dir}>{e.name}{e.id === defaultEngineId ? '（默认）' : ''}</option>
                     ))}
