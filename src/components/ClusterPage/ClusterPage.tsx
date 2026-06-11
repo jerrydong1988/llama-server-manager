@@ -426,12 +426,6 @@ export default function ClusterPage() {
                       <option value="macos">macOS</option>
                       <option value="windows">Windows</option>
                   </select>
-                  <button onClick={async () => {
-                    try {
-                      const selected = await open({ directory: true, multiple: false })
-                      if (selected && typeof selected === 'string') setLocalEngine(selected)
-                    } catch {}
-                  }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title="选择引擎目录">📂</button>
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">远程 rpc-server 路径（留空用 PATH 默认）</label>
@@ -508,11 +502,16 @@ export default function ClusterPage() {
                 <label className="block text-xs font-medium mb-1 text-gray-500">引擎目录（默认引擎自动填充）</label>
                 <div className="flex gap-1">
                   <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-                    <option value="">{engines.find(e => e.id === defaultEngineId)?.name || '默认引擎'}</option>
                     {engines.map(e => (
-                      <option key={e.id} value={e.dir}>{e.name}</option>
+                      <option key={e.id} value={e.dir}>{e.name}{e.id === defaultEngineId ? '（默认）' : ''}</option>
                     ))}
                   </select>
+                  <button onClick={async () => {
+                    try {
+                      const selected = await open({ directory: true, multiple: false })
+                      if (selected && typeof selected === 'string') setLocalEngine(selected)
+                    } catch {}
+                  }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title="选择引擎目录">📂</button>
                 </div>
               </div>
               {launchError && (
