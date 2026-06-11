@@ -574,10 +574,14 @@ pub async fn start_local_rpc(engine_dir: Option<String>, port: u16) -> Result<se
 
         #[cfg(target_os = "windows")]
         {
-            std::process::Command::new("cmd")
-                .args(["/c", &format!("start /b \"\" \"{}\" --host 0.0.0.0 --port {}", binary, port)])
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x00000008;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            std::process::Command::new(&binary)
+                .args(["--host", "0.0.0.0", "--port", &port.to_string()])
+                .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
                 .spawn()
-                .map_err(|e| format!("无法启动: {}", e))?;
+                .map_err(|e| format!("无法启动 {}: {}", binary, e))?;
         }
         #[cfg(not(target_os = "windows"))]
         {
