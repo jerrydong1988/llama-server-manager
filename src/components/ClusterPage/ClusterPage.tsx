@@ -93,7 +93,7 @@ export default function ClusterPage() {
     setLaunching(true)
     setLaunchError('')
     try {
-      const engineDir = localEngine || engines.find(e => e.id === defaultEngineId)?.dir || ''
+      let engineDir = localEngine === '__custom__' ? '' : (localEngine || engines.find(e => e.id === defaultEngineId)?.dir || '')
       const result: any = await invoke('start_local_rpc', { engineDir: engineDir || null, port: localPort })
       if (result?.ok) {
         const localHost: string = await invoke('get_local_host')
@@ -108,8 +108,6 @@ export default function ClusterPage() {
       setLaunching(false)
     }
   }
-
-  const defaultEngineDir = engines.find(e => e.id === defaultEngineId)?.dir
 
   const handleMdnsToggle = async () => {
     if (mdnsActive) {
@@ -503,11 +501,15 @@ export default function ClusterPage() {
               <div>
                 <label className="block text-xs font-medium mb-1 text-gray-500">引擎目录（默认引擎自动填充）</label>
                 <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-                  <option value="">{defaultEngineDir || '默认引擎'}</option>
+                  <option value="">{engines.find(e => e.id === defaultEngineId)?.name || '默认引擎'}</option>
                   {engines.map(e => (
-                    <option key={e.id} value={e.dir}>{e.name} ({e.dir})</option>
+                    <option key={e.id} value={e.dir}>{e.name} ({e.backend})</option>
                   ))}
+                  <option value="__custom__">📂 自定义路径...</option>
                 </select>
+                {localEngine === '__custom__' && (
+                  <input type="text" value="" onChange={e => setLocalEngine(e.target.value)} placeholder="输入 rpc-server 所在目录的完整路径..." className="w-full mt-1 px-3 py-1.5 text-xs border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                )}
               </div>
               {launchError && (
                 <div className="p-2 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-600 dark:text-red-400">{launchError}</div>
