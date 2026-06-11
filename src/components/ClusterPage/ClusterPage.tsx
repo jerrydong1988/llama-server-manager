@@ -96,7 +96,8 @@ export default function ClusterPage() {
       const engineDir = localEngine || engines.find(e => e.id === defaultEngineId)?.dir || ''
       const result: any = await invoke('start_local_rpc', { engineDir: engineDir || null, port: localPort })
       if (result?.ok) {
-        await invoke('add_worker', { host: '127.0.0.1', port: localPort, name: 'Local-' + localPort })
+        const localHost: string = await invoke('get_local_host')
+        await invoke('add_worker', { host: localHost, port: localPort, name: 'Local-' + localPort })
         const all: WorkerInfo[] = await invoke('get_workers')
         setWorkers(all)
         setShowLocalLaunch(false)

@@ -351,6 +351,29 @@ pub async fn is_local_host(host: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn get_local_host() -> Result<String, String> {
+    if let Ok(ifs) = if_addrs::get_if_addrs() {
+        for iface in ifs {
+            if iface.is_loopback() { continue; }
+            if let IpAddr::V4(ipv4) = iface.addr.ip() {
+                let name_lower = iface.name.to_lowercase();
+                let is_virtual = [
+                    "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
+                    "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
+                    "p2p", "rndis", "bluetooth", "loopback",
+                    "mihomo", "clash", "cfw", "tunnel", "sing-box", "hysteria",
+                    "wireguard", "zerotier", "tailscale", "nebula",
+                ].iter().any(|k| name_lower.contains(k));
+                if !is_virtual {
+                    return Ok(ipv4.to_string());
+                }
+            }
+        }
+    }
+    Ok("127.0.0.1".to_string())
+}
+
+#[tauri::command]
 pub async fn add_worker(host: String, port: u16, name: String, state: State<'_, AppState>) -> Result<WorkerInfo, String> {
     let mut workers = load_workers();
 
