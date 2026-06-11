@@ -3,7 +3,7 @@ import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronR
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
 import { invoke } from '@tauri-apps/api/core'
-import { ask } from '@tauri-apps/plugin-dialog'
+import { ask, open } from '@tauri-apps/plugin-dialog'
 
 export default function ClusterPage() {
   const { t } = useI18n()
@@ -425,7 +425,13 @@ export default function ClusterPage() {
                       <option value="linux">Linux</option>
                       <option value="macos">macOS</option>
                       <option value="windows">Windows</option>
-                    </select>
+                  </select>
+                  <button onClick={async () => {
+                    try {
+                      const selected = await open({ directory: true, multiple: false })
+                      if (selected && typeof selected === 'string') setLocalEngine(selected)
+                    } catch {}
+                  }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title="选择引擎目录">📂</button>
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">远程 rpc-server 路径（留空用 PATH 默认）</label>
@@ -500,13 +506,15 @@ export default function ClusterPage() {
               </div>
               <div>
                 <label className="block text-xs font-medium mb-1 text-gray-500">引擎目录（默认引擎自动填充）</label>
-                <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-                  <option value="">{engines.find(e => e.id === defaultEngineId)?.name || '默认引擎'}</option>
-                  {engines.map(e => (
-                    <option key={e.id} value={e.dir}>{e.name} ({e.backend})</option>
-                  ))}
-                  <option value="__custom__">📂 自定义路径...</option>
-                </select>
+                <div className="flex gap-1">
+                  <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
+                    <option value="">{engines.find(e => e.id === defaultEngineId)?.name || '默认引擎'}</option>
+                    {engines.map(e => (
+                      <option key={e.id} value={e.dir}>{e.name}</option>
+                    ))}
+                    <option value="__custom__">📂 自定义路径...</option>
+                  </select>
+                </div>
                 {localEngine === '__custom__' && (
                   <input type="text" value="" onChange={e => setLocalEngine(e.target.value)} placeholder="输入 rpc-server 所在目录的完整路径..." className="w-full mt-1 px-3 py-1.5 text-xs border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                 )}
