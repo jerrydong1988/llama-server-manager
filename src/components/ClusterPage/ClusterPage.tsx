@@ -518,6 +518,9 @@ export default function ClusterPage() {
                     } catch {}
                   }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title="选择引擎目录">📂</button>
                 </div>
+                {localEngine && !engines.some(e => e.dir === localEngine) && (
+                  <div className="text-xs text-gray-400 mt-1 truncate">{localEngine}</div>
+                )}
               </div>
               {launchError && (
                 <div className="p-2 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-600 dark:text-red-400">{launchError}</div>
