@@ -511,10 +511,9 @@ pub async fn open_browser(host: String, port: u16) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn test_connection(host: String, port: u16) -> Result<String, String> {
+pub async fn test_connection(host: String, port: u16, api_key: Option<String>) -> Result<String, String> {
     let url = format!("http://{}:{}/health", if host == "0.0.0.0" { "localhost" } else { &host }, port);
-    let client = reqwest::Client::new();
-    match client.get(&url).timeout(std::time::Duration::from_secs(3)).send().await {
+    match http_get(&url, api_key.as_deref()).timeout(std::time::Duration::from_secs(3)).send().await {
         Ok(resp) => {
             if resp.status().is_success() {
                 Ok("✓ 连接成功，服务正常".into())
@@ -596,11 +595,21 @@ pub struct SlotInfo {
     n_ctx: u32,
 }
 
+fn http_get(url: &str, api_key: Option<&str>) -> reqwest::RequestBuilder {
+    let client = reqwest::Client::new();
+    let req = client.get(url);
+    if let Some(key) = api_key {
+        req.header("Authorization", format!("Bearer {}", key))
+    } else {
+        req
+    }
+}
+
 #[tauri::command]
-pub async fn get_slots(host: String, port: u16) -> Result<Vec<SlotInfo>, String> {
+pub async fn get_slots(host: String, port: u16, api_key: Option<String>) -> Result<Vec<SlotInfo>, String> {
     let h = if host == "0.0.0.0" { "localhost" } else { &host };
     let url = format!("http://{}:{}/slots", h, port);
-    let resp = reqwest::get(&url).await.map_err(|e| format!("请求失败: {}", e))?;
+    let resp = http_get(&url, api_key.as_deref()).send().await.map_err(|e| format!("请求失败: {}", e))?;
     let arr: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
     Ok(arr.iter().enumerate().map(|(i, v)| SlotInfo {
         id: v.get("id").and_then(|s| s.as_u64()).unwrap_or(i as u64) as u32,
@@ -622,10 +631,10 @@ pub struct MetricsInfo {
 }
 
 #[tauri::command]
-pub async fn get_metrics(host: String, port: u16) -> Result<Option<MetricsInfo>, String> {
+pub async fn get_metrics(host: String, port: u16, api_key: Option<String>) -> Result<Option<MetricsInfo>, String> {
     let h = if host == "0.0.0.0" { "localhost" } else { &host };
     let url = format!("http://{}:{}/metrics", h, port);
-    let resp = match reqwest::get(&url).await {
+    let resp = match http_get(&url, api_key.as_deref()).send().await {
         Ok(r) if r.status().is_success() => r,
         Ok(r) if r.status().as_u16() == 404 => return Ok(None),
         _ => return Ok(None),

@@ -55,9 +55,9 @@ export default function PerformancePage() {
 
     const poll = async () => {
       try { setSys(await invoke<SystemMetrics>('get_system_metrics', { instanceId: selectedId })) } catch { /* stopped */ }
-      try { setSlots(await invoke<SlotInfo[]>('get_slots', { host, port })) } catch { setSlots([]) }
+      try { setSlots(await invoke<SlotInfo[]>('get_slots', { host, port, apiKey: inst?.config.api_key || null })) } catch { setSlots([]) }
       try {
-        const m = await invoke<MetricsData | null>('get_metrics', { host, port })
+        const m = await invoke<MetricsData | null>('get_metrics', { host, port, apiKey: inst?.config.api_key || null })
         if (m) setMetrics(m)
       } catch { /* noop */ }
     }
