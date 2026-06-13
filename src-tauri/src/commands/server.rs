@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics, DataPoint};
 use crate::commands::adlx;
@@ -311,22 +311,36 @@ pub async fn start_server(
         &engine_backend,
     ).unwrap_or_default();
 
-    // 监控线程：读 stdout/stderr + 1 秒快速检测进程是否存活 + 等待退出
+    // 监控线程：读 stdout/stderr + 写日志文件 + 1 秒快速检测进程是否存活 + 等待退出
     let id = instance_id.clone();
     let app_clone = app.clone();
     let config_dir_clone = config_dir.clone();
     let sid_clone = session_id.clone();
+
+    // 创建日志文件目录
+    let log_dir = config_dir.join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join(format!("{}.log", instance_id));
+
     std::thread::spawn(move || {
         let id1 = id.clone();
         let app1 = app_clone.clone();
         let stdout_handle = stdout.map(|s| {
+            let log_path2 = log_path.clone();
             std::thread::spawn(move || {
                 let reader = BufReader::new(s);
                 for line in reader.lines() {
                     if let Ok(text) = line {
+                        // Emit to frontend
                         let _ = app1.emit("server-log", serde_json::json!({
                             "instanceId": id1, "text": format!("{}\n", text),
                         }));
+                        // Persist to log file
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true).append(true).open(&log_path2)
+                        {
+                            let _ = writeln!(f, "{}", text);
+                        }
                     }
                 }
             })
@@ -335,13 +349,21 @@ pub async fn start_server(
         let id2 = id.clone();
         let app2 = app_clone.clone();
         let stderr_handle = stderr.map(|s| {
+            let log_path3 = log_path.clone();
             std::thread::spawn(move || {
                 let reader = BufReader::new(s);
                 for line in reader.lines() {
                     if let Ok(text) = line {
+                        // Emit to frontend
                         let _ = app2.emit("server-log", serde_json::json!({
                             "instanceId": id2, "text": format!("{}\n", text),
                         }));
+                        // Persist to log file
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true).append(true).open(&log_path3)
+                        {
+                            let _ = writeln!(f, "{}", text);
+                        }
                     }
                 }
             })
@@ -882,4 +904,101 @@ pub async fn get_metrics(host: String, port: u16, api_key: Option<String>) -> Re
         requests_deferred: extract("llamacpp:requests_deferred") as u64,
         busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode"),
     }))
+}
+
+// ── 重启后恢复日志和监控 ─────────────────────────────────────────
+
+/// 应用重启后，为已运行的实例重新建立日志捕获和指标推送。
+/// stdout/stderr 管道已不可用，改为从日志文件读取（tail 模式）。
+pub fn reconnect_running_instance(
+    instance_id: &str,
+    pid: u32,
+    host: &str,
+    port: u16,
+    config_dir: &std::path::Path,
+    app: tauri::AppHandle,
+) {
+    let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
+
+    // ── 日志恢复：先回放已有内容，再 tail 新内容 ──
+    {
+        let app_log = app.clone();
+        let id_log = instance_id.to_string();
+        std::thread::spawn(move || {
+            tail_log_file(&log_path, &id_log, app_log);
+        });
+    }
+
+    // ── 指标恢复：重新启动 monitor_loop ──
+    {
+        let app_metrics = app.clone();
+        let id_metrics = instance_id.to_string();
+        let host_m = if host == "0.0.0.0" { "localhost".to_string() } else { host.to_string() };
+        let config_dir_m = config_dir.to_path_buf();
+        std::thread::spawn(move || {
+            monitor_loop(&id_metrics, pid, &host_m, port, "", &config_dir_m, "", app_metrics);
+        });
+    }
+}
+
+/// 从日志文件尾部读取已有内容并持续 tail 新行，通过 server-log 事件推送。
+fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppHandle) {
+    use std::io::{Seek, SeekFrom};
+
+    // 回放最后 2000 行（足够覆盖前端 1000 条上限 + 缓冲）
+    if log_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&log_path) {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = if lines.len() > 2000 { lines.len() - 2000 } else { 0 };
+            for line in &lines[start..] {
+                let _ = app.emit("server-log", serde_json::json!({
+                    "instanceId": instance_id,
+                    "text": format!("{}\n", line),
+                }));
+            }
+        }
+    }
+
+    // Tail 新内容：每 500ms 检查一次文件是否有新行
+    let mut last_size = if log_path.exists() {
+        std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // 检查实例是否还在运行
+        {
+            let st = app.state::<AppState>();
+            let guard = st.running.lock().unwrap();
+            if !guard.contains_key(instance_id) { break; }
+        }
+
+        match std::fs::metadata(log_path) {
+            Ok(meta) => {
+                let current_size = meta.len();
+                if current_size > last_size {
+                    // 有新增内容，读取增量
+                    if let Ok(mut file) = std::fs::File::open(log_path) {
+                        if file.seek(SeekFrom::Start(last_size)).is_ok() {
+                            let reader = BufReader::new(file);
+                            for line in reader.lines() {
+                                if let Ok(text) = line {
+                                    if text.trim().is_empty() { continue; }
+                                    let _ = app.emit("server-log", serde_json::json!({
+                                        "instanceId": instance_id,
+                                        "text": format!("{}\n", text),
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                    last_size = current_size;
+                }
+            }
+            Err(_) => break, // 文件被删除
+        }
+    }
 }

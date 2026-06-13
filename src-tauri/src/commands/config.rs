@@ -109,16 +109,23 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
     *state.running.lock().unwrap() = restored.clone();
     global.running = restored.clone();
 
-    // 为恢复的运行中实例启动健康检查
+    // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
     for (id, ri) in &global.running {
         let id = id.clone();
+        let id2 = id.clone();
         let host = if ri.host == "0.0.0.0" { "localhost".to_string() } else { ri.host.clone() };
+        let host2 = host.clone();
         let port = ri.port;
         let pid = ri.pid;
         let app = app.clone();
+        let app2 = app.clone();
+        let config_dir = config_dir.clone();
+        // 健康检查
         std::thread::spawn(move || {
             crate::commands::server::health_check_loop(&id, &host, port, pid, app);
         });
+        // 日志 tail + 指标推送
+        crate::commands::server::reconnect_running_instance(&id2, pid, &host2, port, &config_dir, app2);
     }
     Ok(global)
 }
