@@ -375,6 +375,14 @@ pub struct SystemMetrics {
     pub gpu_percent: Option<f32>,
     pub vram_used_mb: Option<f64>,
     pub vram_total_mb: Option<f64>,
+    /// System-wide CPU usage (all cores, 0-100%)
+    pub system_cpu_percent: Option<f32>,
+    /// System-wide total physical RAM in MB
+    pub system_memory_total_mb: Option<f64>,
+    /// System-wide used RAM in MB
+    pub system_memory_used_mb: Option<f64>,
+    /// GPU vendor: "AMD" | "NVIDIA" | null (unknown/not detected)
+    pub gpu_vendor: Option<String>,
 }
 
 // ── 集群管理 / Worker ─────────────────────────────────────────────
@@ -441,6 +449,89 @@ pub struct AppState {
     pub pause_flags: Mutex<HashMap<String, bool>>,
     pub workers: Mutex<Vec<WorkerInfo>>,
     pub usb4_adapters: Mutex<Vec<Usb4Adapter>>,
+}
+
+// ── 历史记录类型 ───────────────────────────────────────────────────
+
+/// 关键配置参数快照（只存用于对比的参数）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConfigSnapshot {
+    pub model_path: String,
+    pub engine_path: String,
+    pub engine_backend: String,
+    pub ctx_size: u32,
+    pub gpu_layers: u32,
+    pub batch_size: u32,
+    pub threads: u32,
+    pub flash_attn: String,
+    pub cont_batching: bool,
+    pub host: String,
+    pub port: u16,
+}
+
+/// 单个时序数据点
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DataPoint {
+    pub ts: i64,
+    pub cpu: Option<f32>,
+    pub mem_mb: Option<f64>,
+    pub gpu: Option<f32>,
+    pub vram_u: Option<f64>,
+    pub vram_t: Option<f64>,
+    pub tps: Option<f64>,
+    pub ptps: Option<f64>,
+    pub p_tok: Option<u64>,
+    pub g_tok: Option<u64>,
+    pub proc: Option<u64>,
+    pub def: Option<u64>,
+    pub busy: Option<f64>,
+}
+
+/// Session 运行摘要（预计算聚合值）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionSummary {
+    pub data_points: u64,
+    pub avg_tps: Option<f64>,
+    pub peak_tps: Option<f64>,
+    pub avg_ptps: Option<f64>,
+    pub total_prompt_tok: Option<u64>,
+    pub total_gen_tok: Option<u64>,
+    pub max_vram_mb: Option<f64>,
+    pub vram_total_mb: Option<f64>,
+    pub avg_gpu_pct: Option<f64>,
+    pub avg_cpu_pct: Option<f64>,
+}
+
+/// Session 元数据条目（存于 index.json）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionMeta {
+    pub id: String,
+    pub instance_name: String,
+    pub instance_id: String,
+    pub started_at: i64,
+    #[serde(default)]
+    pub ended_at: Option<i64>,
+    #[serde(default)]
+    pub duration_secs: Option<u64>,
+    pub model_path: String,
+    pub engine_backend: String,
+    pub config_snapshot: ConfigSnapshot,
+    #[serde(default)]
+    pub summary: Option<SessionSummary>,
+    #[serde(default)]
+    pub unclean: bool, // true if process was killed before normal shutdown
+}
+
+/// Sessions 索引文件（index.json 的根结构）
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionsIndex {
+    pub sessions: Vec<SessionMeta>,
+}
+
+impl Default for SessionsIndex {
+    fn default() -> Self {
+        SessionsIndex { sessions: Vec::new() }
+    }
 }
 
 // ── 全局配置结构（用于 JSON 序列化） ──────────────────────────────
