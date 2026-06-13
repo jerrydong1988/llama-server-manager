@@ -1,7 +1,9 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
-use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics};
+use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics, DataPoint};
 use crate::commands::adlx;
+use crate::commands::nvml;
+use crate::commands::history;
 use tauri::{Emitter, Manager};
 use sysinfo::System;
 
@@ -244,6 +246,7 @@ pub async fn start_server(
     instance_id: String,
     config: InstanceConfig,
     engine_exe: String,
+    engine_backend: String,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -297,9 +300,22 @@ pub async fn start_server(
         "command": cmd_str,
     })).ok();
 
+    // P2: 创建历史记录 Session
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let session_id = history::create_session(
+        &config_dir,
+        &instance_id,
+        &config.name,
+        &config,
+        &engine_exe,
+        &engine_backend,
+    ).unwrap_or_default();
+
     // 监控线程：读 stdout/stderr + 1 秒快速检测进程是否存活 + 等待退出
     let id = instance_id.clone();
     let app_clone = app.clone();
+    let config_dir_clone = config_dir.clone();
+    let sid_clone = session_id.clone();
     std::thread::spawn(move || {
         let id1 = id.clone();
         let app1 = app_clone.clone();
@@ -353,8 +369,11 @@ pub async fn start_server(
           if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
             r.remove(&id);
             let _ = app_clone.emit("server-stopped", serde_json::json!({ "instanceId": id }));
-    }
-}
+        } }
+        // P2: 完成历史记录
+        if !sid_clone.is_empty() {
+            history::finalize_session(&config_dir_clone, &sid_clone);
+        }
         if let Some(h) = stdout_handle { h.join().ok(); }
         if let Some(h) = stderr_handle { h.join().ok(); }
     });
@@ -367,7 +386,167 @@ pub async fn start_server(
         health_check_loop(&id, &host, port, pid, app_for_health);
     });
 
+    // P1/P2: 后台指标推送 + 历史记录线程
+    let id_metrics = instance_id.clone();
+    let app_metrics = app.clone();
+    let host_metrics = if config.host == "0.0.0.0" { "localhost".to_string() } else { config.host.clone() };
+    let port_metrics = config.port;
+    let api_key_metrics = config.api_key.clone();
+    let sid_metrics = session_id.clone();
+    std::thread::spawn(move || {
+        monitor_loop(&id_metrics, pid, &host_metrics, port_metrics, &api_key_metrics, &config_dir, &sid_metrics, app_metrics);
+    });
+
     Ok(())
+}
+
+/// 后台指标采集循环 — 每 5 秒采集并推送到前端 + 记录历史
+fn monitor_loop(
+    instance_id: &str,
+    expected_pid: u32,
+    host: &str,
+    port: u16,
+    _api_key: &str,
+    config_dir: &std::path::Path,
+    session_id: &str,
+    app: tauri::AppHandle,
+) {
+    // 等待 llama-server 启动完成（给 3 秒启动时间）
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let is_my_instance = || {
+        let st = app.state::<AppState>();
+        let guard = st.running.lock().unwrap();
+        guard.get(instance_id).map(|r| r.pid == expected_pid).unwrap_or(false)
+    };
+
+    let client = reqwest::blocking::Client::new();
+    let metrics_url = format!("http://{}:{}/metrics", host, port);
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if !is_my_instance() { break; }
+
+        // ── 系统指标 ──
+        let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics();
+        let mut gpu_vendor: Option<String> = None;
+        let mut gpu_pct: Option<f32> = None;
+        let mut vram_u: Option<f64> = None;
+        let mut vram_t: Option<f64> = None;
+
+        // 进程级指标
+        let (cpu, mem) = get_process_metrics(expected_pid);
+        let mut cpu_pct = cpu;
+        let mut mem_mb = (mem * 10.0).round() / 10.0;
+
+        // GPU: ADLX → NVML
+        if let Some(m) = adlx::collect_metrics() {
+            if let Some(c) = m.cpu_percent { cpu_pct = c; }
+            if let Some(mb) = m.memory_mb { mem_mb = mb; }
+            gpu_pct = m.gpu_percent;
+            vram_u = m.vram_used_mb;
+            vram_t = m.vram_total_mb;
+            gpu_vendor = Some("AMD".into());
+        } else if let Some(m) = nvml::collect_metrics() {
+            gpu_pct = m.gpu_percent;
+            vram_u = m.vram_used_mb;
+            vram_t = m.vram_total_mb;
+            gpu_vendor = Some("NVIDIA".into());
+        }
+
+        let sys_metrics = serde_json::json!({
+            "cpu_percent": cpu_pct,
+            "memory_mb": mem_mb,
+            "uptime_secs": 0, // uptime not tracked in event stream
+            "gpu_percent": gpu_pct,
+            "vram_used_mb": vram_u,
+            "vram_total_mb": vram_t,
+            "system_cpu_percent": sys_cpu,
+            "system_memory_total_mb": sys_mem_total,
+            "system_memory_used_mb": sys_mem_used,
+            "gpu_vendor": gpu_vendor,
+        });
+
+        // ── llama 指标 ──
+        let mut llama_metrics: Option<serde_json::Value> = None;
+        if let Ok(resp) = client.get(&metrics_url)
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+        {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.text() {
+                    let extract = |key: &str| -> f64 {
+                        body.lines()
+                            .find(|l| l.starts_with(key))
+                            .and_then(|l| l.split_whitespace().last()?.parse().ok())
+                            .unwrap_or(0.0)
+                    };
+                    llama_metrics = Some(serde_json::json!({
+                        "tokens_per_sec": extract("llamacpp:predicted_tokens_seconds"),
+                        "prompt_tokens": extract("llamacpp:prompt_tokens_total") as u64,
+                        "gen_tokens": extract("llamacpp:tokens_predicted_total") as u64,
+                        "requests": extract("llamacpp:n_decode_total") as u64,
+                        "prompt_tokens_per_sec": extract("llamacpp:prompt_tokens_seconds"),
+                        "requests_processing": extract("llamacpp:requests_processing") as u64,
+                        "requests_deferred": extract("llamacpp:requests_deferred") as u64,
+                        "busy_slots_per_decode": extract("llamacpp:n_busy_slots_per_decode"),
+                    }));
+                }
+            }
+        }
+
+        // ── P2: 记录历史数据点 ──
+        if !session_id.is_empty() {
+            let tps_val = llama_metrics.as_ref()
+                .and_then(|m| m.get("tokens_per_sec"))
+                .and_then(|v| v.as_f64());
+            let ptps_val = llama_metrics.as_ref()
+                .and_then(|m| m.get("prompt_tokens_per_sec"))
+                .and_then(|v| v.as_f64());
+            let p_tok_val = llama_metrics.as_ref()
+                .and_then(|m| m.get("prompt_tokens"))
+                .and_then(|v| v.as_u64());
+            let g_tok_val = llama_metrics.as_ref()
+                .and_then(|m| m.get("gen_tokens"))
+                .and_then(|v| v.as_u64());
+            let proc_val = llama_metrics.as_ref()
+                .and_then(|m| m.get("requests_processing"))
+                .and_then(|v| v.as_u64());
+            let def_val = llama_metrics.as_ref()
+                .and_then(|m| m.get("requests_deferred"))
+                .and_then(|v| v.as_u64());
+            let busy_val = llama_metrics.as_ref()
+                .and_then(|m| m.get("busy_slots_per_decode"))
+                .and_then(|v| v.as_f64());
+
+            history::record_data_point(config_dir, session_id, &DataPoint {
+                ts: chrono::Utc::now().timestamp(),
+                cpu: Some(cpu_pct),
+                mem_mb: Some(mem_mb),
+                gpu: gpu_pct,
+                vram_u: vram_u,
+                vram_t: vram_t,
+                tps: tps_val,
+                ptps: ptps_val,
+                p_tok: p_tok_val,
+                g_tok: g_tok_val,
+                proc: proc_val,
+                def: def_val,
+                busy: busy_val,
+            });
+        }
+
+        // ── 发射事件 ──
+        let _ = app.emit("metrics-update", serde_json::json!({
+            "instanceId": instance_id,
+            "system": sys_metrics,
+            "llama": llama_metrics,
+            "ts": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        }));
+    }
 }
 
 pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid: u32, app: tauri::AppHandle) {
@@ -550,6 +729,24 @@ fn get_process_metrics(pid: u32) -> (f32, f64) {
     }
 }
 
+fn get_system_level_metrics() -> (Option<f32>, Option<f64>, Option<f64>) {
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    sys.refresh_cpu_all();
+    sys.refresh_memory();
+
+    let cpu = {
+        let usage = sys.global_cpu_usage();
+        if usage > 0.0 { Some(usage) } else { None }
+    };
+
+    let total_mb = Some(sys.total_memory() as f64 / (1024.0 * 1024.0));
+    let used_mb = Some(sys.used_memory() as f64 / (1024.0 * 1024.0));
+
+    (cpu, total_mb, used_mb)
+}
+
 #[tauri::command]
 pub async fn get_system_metrics(
     instance_id: String,
@@ -564,7 +761,11 @@ pub async fn get_system_metrics(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap().as_secs() - start_time;
 
-    // Try ADLX first
+    // System-level CPU/RAM (always collected, independent of GPU)
+    let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics();
+
+    // ── GPU: ADLX → NVML → sysinfo fallback ──
+    // Try ADLX first (AMD)
     if let Some(m) = adlx::collect_metrics() {
         return Ok(SystemMetrics {
             cpu_percent: m.cpu_percent.unwrap_or(0.0),
@@ -573,10 +774,31 @@ pub async fn get_system_metrics(
             gpu_percent: m.gpu_percent,
             vram_used_mb: m.vram_used_mb,
             vram_total_mb: m.vram_total_mb,
+            system_cpu_percent: sys_cpu,
+            system_memory_total_mb: sys_mem_total,
+            system_memory_used_mb: sys_mem_used,
+            gpu_vendor: Some("AMD".into()),
         });
     }
 
-    // Fallback: sysinfo
+    // Try NVML (NVIDIA)
+    if let Some(m) = nvml::collect_metrics() {
+        let (cpu, mem) = get_process_metrics(pid);
+        return Ok(SystemMetrics {
+            cpu_percent: cpu,
+            memory_mb: (mem * 10.0).round() / 10.0,
+            uptime_secs: uptime,
+            gpu_percent: m.gpu_percent,
+            vram_used_mb: m.vram_used_mb,
+            vram_total_mb: m.vram_total_mb,
+            system_cpu_percent: sys_cpu,
+            system_memory_total_mb: sys_mem_total,
+            system_memory_used_mb: sys_mem_used,
+            gpu_vendor: Some("NVIDIA".into()),
+        });
+    }
+
+    // Fallback: sysinfo only
     let (cpu, mem) = get_process_metrics(pid);
     Ok(SystemMetrics {
         cpu_percent: cpu,
@@ -585,6 +807,10 @@ pub async fn get_system_metrics(
         gpu_percent: None,
         vram_used_mb: None,
         vram_total_mb: None,
+        system_cpu_percent: sys_cpu,
+        system_memory_total_mb: sys_mem_total,
+        system_memory_used_mb: sys_mem_used,
+        gpu_vendor: None,
     })
 }
 
