@@ -333,7 +333,7 @@ impl Default for InstanceConfig {
             no_ui: false, offline: false, ui_config_file: String::new(),
             ui_config: String::new(), ui_mcp_proxy: false,
             embedding: false, pooling: String::new(), embd_normalize: 2, reranking: false,
-            metrics: false, props: false, slots_enabled: true,
+            metrics: true, props: false, slots_enabled: true,
             slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: true,
             models_dir: String::new(), models_preset: String::new(), models_max: 4, models_autoload: true,
             mmproj_url: String::new(), mmproj_auto: false, no_mmproj: false, no_mmproj_offload: false, image_min_tokens: 0, image_max_tokens: 0,

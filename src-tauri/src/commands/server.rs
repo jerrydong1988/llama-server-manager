@@ -874,12 +874,14 @@ pub async fn get_metrics(host: String, port: u16, api_key: Option<String>) -> Re
 
 /// 应用重启后，为已运行的实例重新建立日志捕获和指标推送。
 /// stdout/stderr 管道已不可用，改为从日志文件读取（tail 模式）。
+/// 同时创建新的 history session 继续记录。
 pub fn reconnect_running_instance(
     instance_id: &str,
     pid: u32,
     host: &str,
     port: u16,
     config_dir: &std::path::Path,
+    session_id: &str,
     app: tauri::AppHandle,
 ) {
     let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
@@ -893,14 +895,15 @@ pub fn reconnect_running_instance(
         });
     }
 
-    // ── 指标恢复：重新启动 monitor_loop ──
+    // ── 指标恢复：重新启动 monitor_loop，使用新 session 继续记录 ──
     {
         let app_metrics = app.clone();
         let id_metrics = instance_id.to_string();
         let host_m = if host == "0.0.0.0" { "localhost".to_string() } else { host.to_string() };
         let config_dir_m = config_dir.to_path_buf();
+        let sid_m = session_id.to_string();
         std::thread::spawn(move || {
-            monitor_loop(&id_metrics, pid, &host_m, port, "", &config_dir_m, "", app_metrics);
+            monitor_loop(&id_metrics, pid, &host_m, port, "", &config_dir_m, &sid_m, app_metrics);
         });
     }
 }

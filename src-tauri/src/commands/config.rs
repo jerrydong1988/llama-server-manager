@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::models::{AppState, GlobalConfig, InstanceConfig, WindowState};
+use crate::commands::history;
 
 // ── 配置持久化 ────────────────────────────────────────────────────
 #[tauri::command]
@@ -120,12 +121,39 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
         let app = app.clone();
         let app2 = app.clone();
         let config_dir = config_dir.clone();
+        let config_dir2 = config_dir.clone();
+
         // 健康检查
         std::thread::spawn(move || {
             crate::commands::server::health_check_loop(&id, &host, port, pid, app);
         });
-        // 日志 tail + 指标推送
-        crate::commands::server::reconnect_running_instance(&id2, pid, &host2, port, &config_dir, app2);
+
+        // 创建新的 history session（旧的已被 finalize_all_running 标记完成）
+        let instance_name = stored.get(&id2).map(|c| c.name.clone()).unwrap_or_else(|| id2.clone());
+        let engine_backend = stored.get(&id2)
+            .and_then(|c| {
+                let engine_names = state.engine_names.lock().unwrap();
+                engine_names.get(&c.engine_id).cloned()
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        let engine_path = stored.get(&id2)
+            .and_then(|c| {
+                if c.engine_id.is_empty() { None }
+                else { Some(c.engine_id.clone()) }
+            })
+            .unwrap_or_default();
+
+        let session_id = history::create_session(
+            &config_dir2,
+            &id2,
+            &instance_name,
+            stored.get(&id2).unwrap_or(&InstanceConfig::default()),
+            &engine_path,
+            &engine_backend,
+        ).unwrap_or_default();
+
+        // 日志 tail + 指标推送（带新 session_id）
+        crate::commands::server::reconnect_running_instance(&id2, pid, &host2, port, &config_dir2, &session_id, app2);
     }
     Ok(global)
 }
