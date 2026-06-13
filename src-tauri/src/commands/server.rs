@@ -1,5 +1,4 @@
-use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::sync::{Arc, Mutex};
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics, DataPoint};
 use crate::commands::adlx;
@@ -261,17 +260,28 @@ pub async fn start_server(
     let cmd = generate_command(&config, &engine_exe);
     let cmd_str = cmd.join(" ");
 
+    // 创建日志文件 — llama-server 直接写到这里（不经过 pipe 中转）
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let log_dir = config_dir.join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    let log_path = log_dir.join(format!("{}.log", instance_id));
+    let log_file = std::fs::File::create(&log_path)
+        .map_err(|e| format!("无法创建日志文件: {}", e))?;
+    // clone 一份 handle 给 stderr（Stdio::from 会消耗 File）
+    let log_stderr = log_file.try_clone()
+        .map_err(|e| format!("无法复制文件句柄: {}", e))?;
+
     let mut child = {
         let mut c = Command::new(&cmd[0]);
-        c.args(&cmd[1..]).stdout(Stdio::piped()).stderr(Stdio::piped());
+        c.args(&cmd[1..])
+         .stdout(Stdio::from(log_file))
+         .stderr(Stdio::from(log_stderr));
         #[cfg(windows)]
         { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
         c.spawn().map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_str))?
     };
 
     let pid = child.id();
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
 
     state.running.lock().unwrap().insert(instance_id.clone(), RunningInstance {
         instance_id: instance_id.clone(),
@@ -302,7 +312,6 @@ pub async fn start_server(
     })).ok();
 
     // P2: 创建历史记录 Session
-    let config_dir = state.config_dir.lock().unwrap().clone();
     let session_id = history::create_session(
         &config_dir,
         &instance_id,
@@ -312,65 +321,20 @@ pub async fn start_server(
         &engine_backend,
     ).unwrap_or_default();
 
-    // 监控线程：读 stdout/stderr + 写日志文件 + 1 秒快速检测进程是否存活 + 等待退出
+    // ── 日志 tail 线程：读取 llama-server 直接写入的日志文件 ──
+    let app_tail = app.clone();
+    let id_tail = instance_id.clone();
+    let log_path_tail = log_path.clone();
+    std::thread::spawn(move || {
+        tail_log_file(&log_path_tail, &id_tail, app_tail);
+    });
+
+    // ── 进程存活监控 + 退出清理 ──
     let id = instance_id.clone();
     let app_clone = app.clone();
     let config_dir_clone = config_dir.clone();
     let sid_clone = session_id.clone();
-
-    // 创建日志文件 — 单文件句柄，stdout/stderr 线程共享写入
-    let log_dir = config_dir.join("logs");
-    let _ = std::fs::create_dir_all(&log_dir);
-    let log_path = log_dir.join(format!("{}.log", instance_id));
-    let log_writer = Arc::new(Mutex::new(BufWriter::new(
-        std::fs::OpenOptions::new()
-            .create(true).append(true).open(&log_path)
-            .expect("无法创建日志文件")
-    )));
-
     std::thread::spawn(move || {
-        let id1 = id.clone();
-        let app1 = app_clone.clone();
-        let stdout_handle = stdout.map(|s| {
-            let w = Arc::clone(&log_writer);
-            std::thread::spawn(move || {
-                let reader = BufReader::new(s);
-                for line in reader.lines() {
-                    if let Ok(text) = line {
-                        let _ = app1.emit("server-log", serde_json::json!({
-                            "instanceId": id1, "text": format!("{}\n", text),
-                        }));
-                        // 通过共享句柄写入日志文件
-                        if let Ok(mut wr) = w.lock() {
-                            let _ = writeln!(wr, "{}", text);
-                            let _ = wr.flush(); // 实时落盘，保证 tailer 能立即读到
-                        }
-                    }
-                }
-            })
-        });
-
-        let id2 = id.clone();
-        let app2 = app_clone.clone();
-        let stderr_handle = stderr.map(|s| {
-            let w = Arc::clone(&log_writer);
-            std::thread::spawn(move || {
-                let reader = BufReader::new(s);
-                for line in reader.lines() {
-                    if let Ok(text) = line {
-                        let _ = app2.emit("server-log", serde_json::json!({
-                            "instanceId": id2, "text": format!("{}\n", text),
-                        }));
-                        // 通过共享句柄写入日志文件
-                        if let Ok(mut wr) = w.lock() {
-                            let _ = writeln!(wr, "{}", text);
-                            let _ = wr.flush();
-                        }
-                    }
-                }
-            })
-        });
-
         std::thread::sleep(std::time::Duration::from_secs(1));
         match child.try_wait() {
             Ok(Some(status)) if !status.success() => {
@@ -398,8 +362,6 @@ pub async fn start_server(
         if !sid_clone.is_empty() {
             history::finalize_session(&config_dir_clone, &sid_clone);
         }
-        if let Some(h) = stdout_handle { h.join().ok(); }
-        if let Some(h) = stderr_handle { h.join().ok(); }
     });
 
     let id = instance_id.clone();
