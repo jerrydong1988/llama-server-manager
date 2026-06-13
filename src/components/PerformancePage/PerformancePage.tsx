@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
+import PerfAnalysis from './PerfAnalysis'
 
 interface SystemMetrics {
   cpu_percent: number
@@ -42,7 +43,6 @@ export default function PerformancePage() {
   const [interval, setIntervalState] = useState(5)
   const [sys, setSys] = useState<SystemMetrics | null>(null)
   const [slots, setSlots] = useState<SlotInfo[]>([])
-  const [metrics, setMetrics] = useState<MetricsData | null>(null)
 
   const inst = instances.find(i => i.id === selectedId)
   const host = inst?.config.host || '127.0.0.1'
@@ -61,10 +61,6 @@ export default function PerformancePage() {
     const fetchInitial = async () => {
       try { setSys(await invoke<SystemMetrics>('get_system_metrics', { instanceId: selectedId })) } catch { /* stopped */ }
       try { setSlots(await invoke<SlotInfo[]>('get_slots', { host, port, apiKey: inst?.config.api_key || null })) } catch { setSlots([]) }
-      try {
-        const m = await invoke<MetricsData | null>('get_metrics', { host, port, apiKey: inst?.config.api_key || null })
-        if (m) setMetrics(m)
-      } catch { /* noop */ }
     }
     fetchInitial()
 
@@ -72,13 +68,11 @@ export default function PerformancePage() {
     const unlisten = listen<{
       instanceId: string
       system: SystemMetrics
-      llama: MetricsData | null
       ts: number
     }>('metrics-update', (event) => {
-      const { instanceId: evId, system, llama } = event.payload
+      const { instanceId: evId, system } = event.payload
       if (evId !== selectedId) return // 只处理当前选中实例的事件
       setSys(system)
-      if (llama) setMetrics(llama)
       // Slots 仍然用轮询（llama-server 不推送 slots 变更）
     })
 
@@ -192,19 +186,7 @@ export default function PerformancePage() {
         )}
       </div>
 
-      {metrics ? (
-        <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-4">
-          <div className="text-xs text-gray-500 mb-3">Summary</div>
-          <div className="space-y-2 text-xs">
-            <Bar label="Context" current={metrics.prompt_tokens + metrics.gen_tokens} total={slots.reduce((s, n) => s + n.n_ctx, 1)} />
-            <div className="flex items-center gap-2">
-              <span className="w-16 text-gray-500 shrink-0">Output</span>
-              <span className="flex-1 text-gray-700 dark:text-gray-300 font-mono">{metrics.gen_tokens.toLocaleString()} tokens</span>
-            </div>
-            <Bar label="Throughput" current={metrics.tokens_per_sec} total={50} unit=" tok/s" />
-          </div>
-        </div>
-      ) : null}
+      <PerfAnalysis instanceId={selectedId} />
 
       <div className="mt-4">
         <ClusterThroughput t={t} />

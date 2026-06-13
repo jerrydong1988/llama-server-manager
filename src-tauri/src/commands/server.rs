@@ -871,10 +871,185 @@ pub fn reconnect_running_instance(
     }
 }
 
+// ── 性能分析解析器 ───────────────────────────────────────────────
+
+use std::collections::HashMap;
+
+/// 单个推理任务的性能剖面
+#[derive(Clone, serde::Serialize)]
+struct TaskPerfState {
+    slot_id: u32,
+    task_id: u32,
+    n_decoded: u64,
+    tg: f64,
+    /// (n_decoded, tg) 历史采样点，用于速度曲线
+    history: Vec<(u64, f64)>,
+    // 最终汇总
+    prompt_tokens: Option<u64>,
+    prompt_time_ms: Option<f64>,
+    prompt_tps: Option<f64>,
+    gen_tokens: Option<u64>,
+    gen_time_ms: Option<f64>,
+    gen_tps: Option<f64>,
+    total_tokens: Option<u64>,
+    total_time_ms: Option<f64>,
+    // 推测解码
+    spec_accept_rate: Option<f64>,
+    spec_accepted: Option<u64>,
+    spec_generated: Option<u64>,
+    spec_gen_time_ms: Option<f64>,
+    completed: bool,
+}
+
+/// 预编译正则集合，避免每行重复编译
+struct PerfParser {
+    re_ids: regex_lite::Regex,
+    re_launch: regex_lite::Regex,
+    re_release: regex_lite::Regex,
+    re_decoded: regex_lite::Regex,
+    re_prompt: regex_lite::Regex,
+    re_eval: regex_lite::Regex,
+    re_total: regex_lite::Regex,
+    re_draft: regex_lite::Regex,
+    re_stats: regex_lite::Regex,
+}
+
+impl PerfParser {
+    fn new() -> Self {
+        PerfParser {
+            re_ids: regex_lite::Regex::new(r"id\s+(\d+)\s*\|\s*task\s+(\d+)").unwrap(),
+            re_launch: regex_lite::Regex::new(r"launch_slot_.*processing\s+task").unwrap(),
+            re_release: regex_lite::Regex::new(r"slot\s+release.*id\s+\d+\s*\|\s*task\s+\d+\s*\|\s*stop").unwrap(),
+            re_decoded: regex_lite::Regex::new(r"n_decoded\s*=\s*(\d+).*?tg\s*=\s*([\d.]+)\s*t/s").unwrap(),
+            re_prompt: regex_lite::Regex::new(r"prompt eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?\(\s*([\d.]+)\s*t/s\)").unwrap(),
+            re_eval: regex_lite::Regex::new(r"eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?\(\s*([\d.]+)\s*t/s\)").unwrap(),
+            re_total: regex_lite::Regex::new(r"total time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens").unwrap(),
+            re_draft: regex_lite::Regex::new(r"draft acceptance\s*=\s*([\d.]+)\s*\(\s*(\d+)\s*accepted\s*/\s*(\d+)\s*generated\)").unwrap(),
+            re_stats: regex_lite::Regex::new(r"statistics\s+draft-mtp.*?#gen tokens\s*=\s*(\d+).*?#acc tokens\s*=\s*(\d+).*?dur\(g\)\s*=\s*([\d.]+)").unwrap(),
+        }
+    }
+
+    fn extract_ids(&self, line: &str) -> Option<(u32, u32)> {
+        self.re_ids.captures(line).and_then(|c| {
+            let slot = c.get(1)?.as_str().parse::<u32>().ok()?;
+            let task = c.get(2)?.as_str().parse::<u32>().ok()?;
+            Some((slot, task))
+        })
+    }
+
+    fn is_launch(&self, line: &str) -> bool { self.re_launch.is_match(line) }
+    fn is_release(&self, line: &str) -> bool { self.re_release.is_match(line) }
+}
+
+/// 解析一行日志，更新任务性能状态。返回是否需要发射 perf-update。
+fn parse_perf_line(
+    parser: &PerfParser,
+    line: &str,
+    tasks: &mut HashMap<u32, TaskPerfState>,
+    last_completed: &mut Option<TaskPerfState>,
+) -> bool {
+    let Some((slot_id, task_id)) = parser.extract_ids(line) else { return false };
+
+    // ── 任务创建 ──
+    if parser.is_launch(line) {
+        tasks.insert(task_id, TaskPerfState {
+            slot_id, task_id,
+            n_decoded: 0, tg: 0.0, history: Vec::new(),
+            prompt_tokens: None, prompt_time_ms: None, prompt_tps: None,
+            gen_tokens: None, gen_time_ms: None, gen_tps: None,
+            total_tokens: None, total_time_ms: None,
+            spec_accept_rate: None, spec_accepted: None, spec_generated: None,
+            spec_gen_time_ms: None,
+            completed: false,
+        });
+        return true;
+    }
+
+    let task = match tasks.get_mut(&task_id) {
+        Some(t) => t,
+        None => return false, // stale line from before app started
+    };
+
+    // ── 进度更新 ──
+    if let Some(c) = parser.re_decoded.captures(line) {
+        if let (Ok(n), Ok(tg)) = (c.get(1).unwrap().as_str().parse::<u64>(), c.get(2).unwrap().as_str().parse::<f64>()) {
+            task.n_decoded = n;
+            task.tg = tg;
+            if task.history.len() < 500 {
+                task.history.push((n, tg));
+            }
+            return true;
+        }
+    }
+
+    // ── 提示阶段汇总 ──
+    if let Some(c) = parser.re_prompt.captures(line) {
+        task.prompt_time_ms = c.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
+        task.prompt_tokens = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
+        task.prompt_tps = c.get(3).and_then(|m| m.as_str().parse::<f64>().ok());
+        return true;
+    }
+
+    // ── 生成阶段汇总 ──
+    if let Some(c) = parser.re_eval.captures(line) {
+        task.gen_time_ms = c.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
+        task.gen_tokens = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
+        task.gen_tps = c.get(3).and_then(|m| m.as_str().parse::<f64>().ok());
+        return true;
+    }
+
+    // ── 总计时 ──
+    if let Some(c) = parser.re_total.captures(line) {
+        task.total_time_ms = c.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
+        task.total_tokens = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
+        return true;
+    }
+
+    // ── 推测解码 ──
+    if let Some(c) = parser.re_draft.captures(line) {
+        task.spec_accept_rate = c.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
+        task.spec_accepted = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
+        task.spec_generated = c.get(3).and_then(|m| m.as_str().parse::<u64>().ok());
+        return true;
+    }
+
+    // ── draft-mtp 详细统计 ──
+    if let Some(c) = parser.re_stats.captures(line) {
+        task.spec_generated = c.get(1).and_then(|m| m.as_str().parse::<u64>().ok())
+            .or(task.spec_generated);
+        task.spec_accepted = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok())
+            .or(task.spec_accepted);
+        task.spec_gen_time_ms = c.get(3).and_then(|m| m.as_str().parse::<f64>().ok());
+        return true;
+    }
+
+    // ── 任务完成 ──
+    if parser.is_release(line) {
+        task.completed = true;
+        *last_completed = Some(task.clone());
+        return true;
+    }
+
+    false
+}
+
 /// 从日志文件读取已有内容并持续 tail 新行，通过 server-log 事件推送。
 /// 对标 Docker `docker logs -f` / systemd `journalctl -f` 的实现模式。
 fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppHandle) {
     use std::io::{Seek, SeekFrom};
+
+    let parser = PerfParser::new();
+    let mut tasks: HashMap<u32, TaskPerfState> = HashMap::new();
+    let mut last_completed: Option<TaskPerfState> = None;
+
+    let emit_perf = |app: &tauri::AppHandle, tasks: &HashMap<u32, TaskPerfState>, last: &Option<TaskPerfState>| {
+        let active: Vec<&TaskPerfState> = tasks.values().filter(|t| !t.completed).collect();
+        let _ = app.emit("perf-update", serde_json::json!({
+            "instanceId": instance_id,
+            "tasks": active,
+            "lastCompleted": last,
+        }));
+    };
 
     // ── 阶段 1: 回放已有内容（最后 2000 行，覆盖前端 1000 条上限） ──
     if log_path.exists() {
@@ -887,9 +1062,13 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
                     "instanceId": instance_id,
                     "text": format!("{}\n", line),
                 }));
+                parse_perf_line(&parser, line, &mut tasks, &mut last_completed);
             }
+            // Clean up completed tasks from replay
+            tasks.retain(|_, t| !t.completed);
         }
     }
+    emit_perf(&app, &tasks, &last_completed);
 
     // ── 阶段 2: 持续 tail 新内容 ──
     // 等待一小段时间让任何正在进行的写入完成（避免读到半行）
@@ -919,7 +1098,7 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
         }
 
         if current_size > last_size {
-            // 有新增内容
+            let mut perf_changed = false;
             if let Ok(mut file) = std::fs::File::open(log_path) {
                 if file.seek(SeekFrom::Start(last_size)).is_ok() {
                     let reader = BufReader::new(file);
@@ -930,11 +1109,18 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
                                 "instanceId": instance_id,
                                 "text": format!("{}\n", text),
                             }));
+                            if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
+                                perf_changed = true;
+                            }
                         }
                     }
                 }
             }
             last_size = current_size;
+            if perf_changed {
+                tasks.retain(|_, t| !t.completed);
+                emit_perf(&app, &tasks, &last_completed);
+            }
         }
     }
 }
