@@ -1,4 +1,5 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::sync::{Arc, Mutex};
 use std::process::{Command, Stdio};
 use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics, DataPoint};
 use crate::commands::adlx;
@@ -317,29 +318,32 @@ pub async fn start_server(
     let config_dir_clone = config_dir.clone();
     let sid_clone = session_id.clone();
 
-    // 创建日志文件目录
+    // 创建日志文件 — 单文件句柄，stdout/stderr 线程共享写入
     let log_dir = config_dir.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join(format!("{}.log", instance_id));
+    let log_writer = Arc::new(Mutex::new(BufWriter::new(
+        std::fs::OpenOptions::new()
+            .create(true).append(true).open(&log_path)
+            .expect("无法创建日志文件")
+    )));
 
     std::thread::spawn(move || {
         let id1 = id.clone();
         let app1 = app_clone.clone();
         let stdout_handle = stdout.map(|s| {
-            let log_path2 = log_path.clone();
+            let w = Arc::clone(&log_writer);
             std::thread::spawn(move || {
                 let reader = BufReader::new(s);
                 for line in reader.lines() {
                     if let Ok(text) = line {
-                        // Emit to frontend
                         let _ = app1.emit("server-log", serde_json::json!({
                             "instanceId": id1, "text": format!("{}\n", text),
                         }));
-                        // Persist to log file
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true).append(true).open(&log_path2)
-                        {
-                            let _ = writeln!(f, "{}", text);
+                        // 通过共享句柄写入日志文件
+                        if let Ok(mut wr) = w.lock() {
+                            let _ = writeln!(wr, "{}", text);
+                            let _ = wr.flush(); // 实时落盘，保证 tailer 能立即读到
                         }
                     }
                 }
@@ -349,20 +353,18 @@ pub async fn start_server(
         let id2 = id.clone();
         let app2 = app_clone.clone();
         let stderr_handle = stderr.map(|s| {
-            let log_path3 = log_path.clone();
+            let w = Arc::clone(&log_writer);
             std::thread::spawn(move || {
                 let reader = BufReader::new(s);
                 for line in reader.lines() {
                     if let Ok(text) = line {
-                        // Emit to frontend
                         let _ = app2.emit("server-log", serde_json::json!({
                             "instanceId": id2, "text": format!("{}\n", text),
                         }));
-                        // Persist to log file
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true).append(true).open(&log_path3)
-                        {
-                            let _ = writeln!(f, "{}", text);
+                        // 通过共享句柄写入日志文件
+                        if let Ok(mut wr) = w.lock() {
+                            let _ = writeln!(wr, "{}", text);
+                            let _ = wr.flush();
                         }
                     }
                 }
@@ -941,16 +943,18 @@ pub fn reconnect_running_instance(
     }
 }
 
-/// 从日志文件尾部读取已有内容并持续 tail 新行，通过 server-log 事件推送。
+/// 从日志文件读取已有内容并持续 tail 新行，通过 server-log 事件推送。
+/// 对标 Docker `docker logs -f` / systemd `journalctl -f` 的实现模式。
 fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppHandle) {
     use std::io::{Seek, SeekFrom};
 
-    // 回放最后 2000 行（足够覆盖前端 1000 条上限 + 缓冲）
+    // ── 阶段 1: 回放已有内容（最后 2000 行，覆盖前端 1000 条上限） ──
     if log_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&log_path) {
             let lines: Vec<&str> = content.lines().collect();
             let start = if lines.len() > 2000 { lines.len() - 2000 } else { 0 };
             for line in &lines[start..] {
+                if line.trim().is_empty() { continue; }
                 let _ = app.emit("server-log", serde_json::json!({
                     "instanceId": instance_id,
                     "text": format!("{}\n", line),
@@ -959,12 +963,11 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
         }
     }
 
-    // Tail 新内容：每 500ms 检查一次文件是否有新行
-    let mut last_size = if log_path.exists() {
-        std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
+    // ── 阶段 2: 持续 tail 新内容 ──
+    // 等待一小段时间让任何正在进行的写入完成（避免读到半行）
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    let mut last_size = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -976,29 +979,34 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
             if !guard.contains_key(instance_id) { break; }
         }
 
-        match std::fs::metadata(log_path) {
-            Ok(meta) => {
-                let current_size = meta.len();
-                if current_size > last_size {
-                    // 有新增内容，读取增量
-                    if let Ok(mut file) = std::fs::File::open(log_path) {
-                        if file.seek(SeekFrom::Start(last_size)).is_ok() {
-                            let reader = BufReader::new(file);
-                            for line in reader.lines() {
-                                if let Ok(text) = line {
-                                    if text.trim().is_empty() { continue; }
-                                    let _ = app.emit("server-log", serde_json::json!({
-                                        "instanceId": instance_id,
-                                        "text": format!("{}\n", text),
-                                    }));
-                                }
-                            }
+        // 检查文件状态
+        let current_size = match std::fs::metadata(log_path) {
+            Ok(meta) => meta.len(),
+            Err(_) => break, // 文件被删除，退出
+        };
+
+        if current_size < last_size {
+            // 文件被截断（例如日志轮转），从当前位置重新开始
+            last_size = 0;
+        }
+
+        if current_size > last_size {
+            // 有新增内容
+            if let Ok(mut file) = std::fs::File::open(log_path) {
+                if file.seek(SeekFrom::Start(last_size)).is_ok() {
+                    let reader = BufReader::new(file);
+                    for line in reader.lines() {
+                        if let Ok(text) = line {
+                            if text.trim().is_empty() { continue; }
+                            let _ = app.emit("server-log", serde_json::json!({
+                                "instanceId": instance_id,
+                                "text": format!("{}\n", text),
+                            }));
                         }
                     }
-                    last_size = current_size;
                 }
             }
-            Err(_) => break, // 文件被删除
+            last_size = current_size;
         }
     }
 }
