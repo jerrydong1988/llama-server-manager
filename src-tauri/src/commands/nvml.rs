@@ -1,11 +1,19 @@
 use std::ffi::c_void;
+use std::sync::Mutex;
 
 type NvmlResult = u32;
 const NVML_SUCCESS: NvmlResult = 0;
 const NVML_ERROR_NO_PERMISSION: NvmlResult = 6;
 
-static mut NVML_LIB: Option<&'static libloading::Library> = None;
-static mut NVML_INITIALIZED: bool = false;
+// #3: 用 Mutex 替代 static mut 消除数据竞争（与 adlx.rs 一致）
+struct NvmlState {
+    lib: &'static libloading::Library,
+    initialized: bool,
+}
+unsafe impl Send for NvmlState {}
+unsafe impl Sync for NvmlState {}
+
+static NVML_STATE: Mutex<Option<NvmlState>> = Mutex::new(None);
 
 #[cfg(target_os = "windows")]
 const NVML_DLL: &str = "nvml.dll";
@@ -18,27 +26,25 @@ fn ensure_loaded() -> bool { false }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn ensure_loaded() -> bool {
-    unsafe {
-        if (*std::ptr::addr_of!(NVML_LIB)).is_some() { return true; }
-        let lib = match libloading::Library::new(NVML_DLL) {
-            Ok(l) => Box::leak(Box::new(l)),
-            Err(_) => {
-                // Try alternate name on Linux
-                #[cfg(target_os = "linux")]
-                {
-                    let lib2 = libloading::Library::new("libnvidia-ml.so");
-                    match lib2 {
-                        Ok(l) => Box::leak(Box::new(l)),
-                        Err(_) => return false,
-                    }
+    let mut state = NVML_STATE.lock().unwrap();
+    if state.is_some() { return true; }
+    let lib = unsafe { match libloading::Library::new(NVML_DLL) {
+        Ok(l) => Box::leak(Box::new(l)),
+        Err(_) => {
+            #[cfg(target_os = "linux")]
+            {
+                let lib2 = libloading::Library::new("libnvidia-ml.so");
+                match lib2 {
+                    Ok(l) => Box::leak(Box::new(l)),
+                    Err(_) => return false,
                 }
-                #[cfg(not(target_os = "linux"))]
-                return false;
             }
-        };
-        NVML_LIB = Some(lib);
-        true
-    }
+            #[cfg(not(target_os = "linux"))]
+            return false;
+        }
+    } };
+    *state = Some(NvmlState { lib, initialized: false });
+    true
 }
 
 #[repr(C)]
@@ -77,10 +83,12 @@ pub fn collect_metrics() -> Option<NvmlMetrics> {
 }
 
 unsafe fn try_collect() -> Option<NvmlMetrics> {
-    let lib = NVML_LIB.unwrap();
+    let mut state_guard = NVML_STATE.lock().unwrap();
+    let state = state_guard.as_mut()?;
+    let lib = state.lib;
 
     // ── Initialize NVML (only once) ──
-    if !NVML_INITIALIZED {
+    if !state.initialized {
         eprintln!("[nvml] initializing...");
         type InitFn = unsafe extern "system" fn() -> NvmlResult;
         let init: libloading::Symbol<InitFn> = lib.get(b"nvmlInit_v2\0").ok()?;
@@ -93,7 +101,7 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
             eprintln!("[nvml] nvmlInit_v2 failed with code {}", rc);
             return None;
         }
-        NVML_INITIALIZED = true;
+        state.initialized = true;
         eprintln!("[nvml] initialized OK");
     }
 
@@ -104,7 +112,6 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
     let mut device: *mut c_void = std::ptr::null_mut();
     if get_handle(0, &mut device) != NVML_SUCCESS || device.is_null() {
         eprintln!("[nvml] no GPU found at index 0");
-        // Don't return None — maybe GPU is present but index 0 failed? Fall through gracefully.
     }
 
     let mut m = NvmlMetrics {
@@ -139,12 +146,15 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
 
 /// Cleanup NVML — call on app shutdown (best-effort, not mandatory)
 pub fn shutdown() {
-    unsafe {
-        if let Some(lib) = NVML_LIB {
-            type ShutdownFn = unsafe extern "system" fn() -> NvmlResult;
-            if let Ok(shutdown_fn) = lib.get::<ShutdownFn>(b"nvmlShutdown\0") {
-                let _ = shutdown_fn();
+    if let Ok(mut state) = NVML_STATE.lock() {
+        if let Some(s) = state.as_ref() {
+            unsafe {
+                type ShutdownFn = unsafe extern "system" fn() -> NvmlResult;
+                if let Ok(shutdown_fn) = s.lib.get::<ShutdownFn>(b"nvmlShutdown\0") {
+                    let _ = shutdown_fn();
+                }
             }
         }
+        *state = None;
     }
 }

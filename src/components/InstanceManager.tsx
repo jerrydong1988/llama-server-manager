@@ -31,7 +31,7 @@ const InstanceManager = () => {
     return h > 0 ? `${h}h ${m}m` : `${m}m`
   }
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     const model = models.find(m => m.id === newInst.modelId)
     if (!model || !newInst.modelPath) return
     const id = crypto.randomUUID()
@@ -39,6 +39,14 @@ const InstanceManager = () => {
     config.id = id; config.name = newInst.name || model.name.replace('.gguf', '')
     config.model_path = newInst.modelPath; config.mmproj_path = newInst.mmprojPath; config.port = newInst.port; config.host = '127.0.0.1'
     config.engine_id = newInst.engineId || defaultEngineId || ''
+    // #14: 端口冲突检测
+    try {
+      const portFree = await invoke<boolean>('check_port', { port: newInst.port })
+      if (!portFree) {
+        setPortStatus(`Port ${newInst.port} is already in use`)
+        return
+      }
+    } catch { /* proceed anyway */ }
     if (!defaultEngineId && engines[0]) useAppStore.setState({ defaultEngineId: engines[0].id })
     addInstance({ id, name: config.name, status: 'stopped', model: model.name, port: newInst.port, healthCheck: 'pending', config })
     setShowCreateModal(false)

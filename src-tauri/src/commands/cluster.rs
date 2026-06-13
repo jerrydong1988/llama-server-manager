@@ -165,6 +165,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
     let discovered = Arc::new(tokio::sync::Mutex::new(Vec::<WorkerInfo>::new()));
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
+    // #5: 使用 tokio async connect 替代 spawn_blocking，减少线程创建
     let scan_future = async {
         let mut handles = Vec::new();
         for idx in 0..candidates.len() {
@@ -172,28 +173,36 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
             let discovered = discovered.clone();
             let permit = semaphore.clone().acquire_owned().await;
             let physical_ips = physical_ips.clone();
-            let handle = tokio::task::spawn_blocking(move || {
+            let handle = tokio::spawn(async move {
                 let _permit = permit;
                 if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
                     // 尝试通过物理网卡连接，绕过 VPN/TUN 路由
                     let connected = if physical_ips.is_empty() {
-                        TcpStream::connect_timeout(&socket_addr, connect_timeout).ok()
+                        // 通用情况：tokio async connect + timeout
+                        tokio::time::timeout(
+                            connect_timeout,
+                            tokio::net::TcpStream::connect(socket_addr),
+                        ).await.ok()
+                        .map(|_| ()) // discard stream, just check reachability
                     } else {
-                        physical_ips.iter().find_map(|bind_ip| {
-                            let bind_addr = SocketAddr::new(IpAddr::V4(*bind_ip), 0);
-                            let sock_addr = socket2::SockAddr::from(socket_addr);
-                            socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
-                                .ok()
-                                .and_then(|s| {
-                                    s.bind(&bind_addr.into()).ok()?;
-                                    s.connect_timeout(&sock_addr, connect_timeout).ok()?;
-                                    s.set_nonblocking(false).ok()?;
-                                    Some(std::net::TcpStream::from(s))
-                                })
-                        })
+                        // 绑定物理网卡：spawn_blocking 处理 socket2
+                        tokio::task::spawn_blocking(move || {
+                            physical_ips.iter().find_map(|bind_ip| {
+                                let bind_addr = SocketAddr::new(IpAddr::V4(*bind_ip), 0);
+                                let sock_addr = socket2::SockAddr::from(socket_addr);
+                                socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+                                    .ok()
+                                    .and_then(|s| {
+                                        s.bind(&bind_addr.into()).ok()?;
+                                        s.connect_timeout(&sock_addr, connect_timeout).ok()?;
+                                        s.set_nonblocking(false).ok()?;
+                                        Some(())
+                                    })
+                            })
+                        }).await.ok().flatten()
                     };
 
-                    if let Some(_stream) = connected {
+                    if connected.is_some() {
                         let parts: Vec<&str> = addr.split(':').collect();
                         if parts.len() >= 2 {
                             let host = parts[0].to_string();
@@ -421,47 +430,9 @@ pub async fn get_workers(state: State<'_, AppState>) -> Result<Vec<WorkerInfo>, 
 }
 
 #[tauri::command]
-pub async fn find_rpc_server_binary(state: State<'_, AppState>) -> Result<Option<String>, String> {
-    #[cfg(target_os = "windows")]
-    const RPC_SERVER_NAME: &str = "rpc-server.exe";
-    #[cfg(not(target_os = "windows"))]
-    const RPC_SERVER_NAME: &str = "rpc-server";
-
-    let exe = std::env::current_exe().unwrap_or_default();
-    let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
-
-    // 在 exe 目录及父级搜索
-    for dir in [exe_dir, exe_dir.parent().unwrap_or(std::path::Path::new("."))] {
-        let candidate = dir.join(RPC_SERVER_NAME);
-        if candidate.exists() {
-            return Ok(Some(candidate.to_string_lossy().to_string()));
-        }
-        // 也搜索子目录
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let sub = entry.path();
-                if sub.is_dir() {
-                    let c = sub.join(RPC_SERVER_NAME);
-                    if c.exists() {
-                        return Ok(Some(c.to_string_lossy().to_string()));
-                    }
-                }
-            }
-        }
-    }
-
-    // PATH 环境变量搜索
-    if let Ok(paths) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let candidate = dir.join(RPC_SERVER_NAME);
-            if candidate.exists() {
-                return Ok(Some(candidate.to_string_lossy().to_string()));
-            }
-        }
-    }
-
-    let _ = state;
-    Ok(None)
+pub async fn find_rpc_server_binary(_state: State<'_, AppState>) -> Result<Option<String>, String> {
+    // #8: 直接委托给内部函数，消除代码重复
+    Ok(find_rpc_server_binary_internal())
 }
 
 #[tauri::command]
@@ -480,12 +451,13 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
                 .output()
                 .map_err(|e| format!("netstat 失败: {}", e))?;
             let out = String::from_utf8_lossy(&output.stdout);
+            // #6: 用正则匹配 PID，避免 netstat 格式跨语言差异；加 /T 递归杀子进程
+            let pid_re = regex_lite::Regex::new(r"LISTENING\s+(\d+)$").ok();
             for line in out.lines() {
                 if line.contains(&format!(":{}", port)) && line.contains("LISTENING") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if let Some(pid) = parts.last() {
+                    if let Some(pid) = pid_re.as_ref().and_then(|re| re.captures(line)).and_then(|c| c.get(1)).map(|m| m.as_str()) {
                         let _ = std::process::Command::new("taskkill")
-                            .args(["/PID", pid, "/F"])
+                            .args(["/PID", pid, "/F", "/T"])
                             .output();
                         return Ok(true);
                     }
@@ -494,9 +466,10 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
         }
         #[cfg(target_os = "linux")]
         {
+            // #11: 避免 grep -P (PCRE)，改用 sed 兼容精简 Linux
             let output = std::process::Command::new("sh")
                 .arg("-c")
-                .arg(&format!("ss -tlnp | grep ':{}' | awk '{{print $NF}}' | grep -oP 'pid=\\K\\d+'", port))
+                .arg(&format!("ss -tlnp | grep ':{}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'", port))
                 .output()
                 .map_err(|e| format!("ss 失败: {}", e))?;
             let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -552,10 +525,10 @@ pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_js
     let mut worker_metrics = Vec::new();
     for w in &online {
         let addr = format!("{}:{}", w.host, w.port);
-        let reachable = std::net::TcpStream::connect_timeout(
-            &addr.parse().unwrap_or_else(|_| "127.0.0.1:0".parse().unwrap()),
-            std::time::Duration::from_millis(500),
-        ).is_ok();
+        // #7: 避免 parse().unwrap() panic
+        let reachable = addr.parse::<std::net::SocketAddr>().ok()
+            .and_then(|a| std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_millis(500)).ok())
+            .is_some();
 
         worker_metrics.push(serde_json::json!({
             "host": w.host,

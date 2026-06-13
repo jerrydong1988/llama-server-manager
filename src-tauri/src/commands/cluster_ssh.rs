@@ -3,7 +3,8 @@ use std::net::TcpStream;
 
 fn detect_remote_os(host: &str, ssh_user: &str, ssh_key_path: Option<&str>, ssh_port: u16) -> Option<String> {
     let mut c = Command::new("ssh");
-    c.arg("-o").arg("StrictHostKeyChecking=no")
+    // #1: accept-new 替代 no，首次信任后续验证
+    c.arg("-o").arg("StrictHostKeyChecking=accept-new")
      .arg("-o").arg("ConnectTimeout=5")
      .arg("-o").arg("BatchMode=yes")
      .arg("-p").arg(ssh_port.to_string());
@@ -29,6 +30,8 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
             binary, port, port, port, port, port
         ),
         "windows" => format!(
+            // #2: PowerShell 单引号字符串内只需转义单引号自身（加倍），
+            // $ " ` ( ) 在单引号内均无特殊含义，此转义安全。
             "powershell -Command \"[Console]::OutputEncoding=[Text.Encoding]::UTF8; $tn='rpc-'+[System.Guid]::NewGuid().ToString('N').Substring(0,8); $a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-WindowStyle Hidden -NoLogo -NonInteractive -Command \"\"& ''{0}'' --host 0.0.0.0 --port {1}\"\"'; $t=New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(2); Register-ScheduledTask -TaskName $tn -Action $a -Trigger $t -Force|Out-Null; Start-ScheduledTask -TaskName $tn|Out-Null; Start-Sleep 5; $f=netstat -an 2>$null|Select-String ':{1} '; if($f){{Write-Output 'PORT-OK'}}else{{Write-Output 'PORT-NOT-FOUND'}}; Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue\"",
             binary.replace('\'', "''"), port
         ),
@@ -67,7 +70,7 @@ pub async fn ssh_launch_rpc(
         let mut ssh_cmd = Command::new("ssh");
 
         ssh_cmd
-            .arg("-o").arg("StrictHostKeyChecking=no")
+            .arg("-o").arg("StrictHostKeyChecking=accept-new")
             .arg("-o").arg("ConnectTimeout=5")
             .arg("-p").arg(ssh_port.to_string());
 
@@ -75,7 +78,8 @@ pub async fn ssh_launch_rpc(
             ssh_cmd.arg("-i").arg(key_path);
             ssh_cmd.arg("-o").arg("BatchMode=yes");
         } else if let Some(ref _pwd) = ssh_password {
-            return Err("GUI SSH 暂不支持密码认证，请使用密钥文件".into());
+            // #13: bilingual error
+            return Err("Password auth not supported. Please use SSH key file.\n不支持密码认证，请使用 SSH 密钥文件。".into());
         } else {
             return Err("未提供 SSH 密钥或密码".into());
         }

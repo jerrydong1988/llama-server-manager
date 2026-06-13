@@ -15,8 +15,13 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
     let name = dir.file_name().and_then(|s| s.to_str()).unwrap_or("llama-server").to_string();
     let version = name.clone();
     let backend = utils::detect_backend(dir);
+    // #10: 使用目录规范化路径作为稳定 ID，避免移动目录导致引用断裂
+    let id = std::fs::canonicalize(dir)
+        .unwrap_or_else(|_| dir.to_path_buf())
+        .to_string_lossy()
+        .to_string();
     Some(EngineInfo {
-        id: exe.parent().unwrap_or(Path::new(".")).to_string_lossy().to_string(),
+        id,
         name: format!("{} ({})", name, backend),
         dir: dir.to_string_lossy().to_string(),
         exe: exe.to_string_lossy().to_string(),
@@ -130,6 +135,8 @@ pub async fn read_gguf_metadata(path: String) -> Result<(Option<String>, Option<
 // ── 引擎扫描 ──────────────────────────────────────────────────────
 #[tauri::command]
 pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<Vec<EngineInfo>, String> {
+    // #9: 卸载到阻塞线程，避免阻塞 async runtime
+    let mut engines = tokio::task::spawn_blocking(move || -> Result<Vec<EngineInfo>, String> {
     let mut engines: Vec<EngineInfo> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let app_dir = utils::get_data_dir();
@@ -195,7 +202,10 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
         }
     }
 
-    // 保留已改名的引擎自定义名称
+    Ok(engines)
+    }).await.map_err(|e| format!("扫描线程失败: {}", e))??;
+
+    // 保留已改名的引擎自定义名称（state 访问在 spawn_blocking 外部）
     {
         let saved_names = state.engine_names.lock().unwrap();
         for engine in &mut engines {
