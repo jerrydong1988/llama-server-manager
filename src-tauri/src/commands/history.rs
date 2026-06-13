@@ -305,3 +305,26 @@ pub async fn clear_all_history(
 
     Ok(())
 }
+
+/// 应用退出时调用：将所有未完成 (ended_at 为 null) 的 session 标记为完成。
+/// 正常停止时 monitor_loop 会调用 finalize_session，此函数处理异常退出场景。
+pub fn finalize_all_running(config_dir: &std::path::Path) {
+    let mut index = load_index(config_dir);
+    let now = chrono::Utc::now().timestamp();
+    let mut changed = false;
+
+    for meta in index.sessions.iter_mut() {
+        if meta.ended_at.is_none() {
+            meta.ended_at = Some(now);
+            meta.unclean = true; // 异常退出标记
+            if now > meta.started_at {
+                meta.duration_secs = Some((now - meta.started_at) as u64);
+            }
+            changed = true;
+        }
+    }
+
+    if changed {
+        save_index(config_dir, &index);
+    }
+}

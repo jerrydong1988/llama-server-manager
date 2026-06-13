@@ -76,6 +76,8 @@ fn main() {
                         "quit" => {
                             if let Some(s) = app.try_state::<AppState>() {
                                 let config_dir = s.config_dir.lock().unwrap().clone();
+                                // P2: 异常退出前完成所有运行中的 session
+                                commands::history::finalize_all_running(&config_dir);
                                 let path = config_dir.join("instances.json");
                                 let _ = std::fs::create_dir_all(&config_dir);
                                 let mut global = std::fs::read_to_string(&path).ok()
