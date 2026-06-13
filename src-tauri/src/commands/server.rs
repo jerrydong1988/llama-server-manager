@@ -510,6 +510,10 @@ fn monitor_loop(
                 .and_then(|m| m.get("busy_slots_per_decode"))
                 .and_then(|v| v.as_f64());
 
+            // ── 日志提取：每请求剖面 ──
+            let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
+            let perf = parse_perf_log(&log_path);
+
             history::record_data_point(config_dir, session_id, &DataPoint {
                 ts: chrono::Utc::now().timestamp(),
                 cpu: Some(cpu_pct),
@@ -524,6 +528,14 @@ fn monitor_loop(
                 proc: proc_val,
                 def: def_val,
                 busy: busy_val,
+                req_prompt_tps: perf.req_prompt_tps,
+                req_gen_tps: perf.req_gen_tps,
+                req_prompt_tokens: perf.req_prompt_tokens,
+                req_gen_tokens: perf.req_gen_tokens,
+                spec_accept_rate: perf.spec_accept_rate,
+                spec_accepted: perf.spec_accepted,
+                spec_generated: perf.spec_generated,
+                load_time_secs: perf.load_time_secs,
             });
         }
 
@@ -987,4 +999,110 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
             last_size = current_size;
         }
     }
+}
+
+// ── 日志性能解析 ────────────────────────────────────────────────
+
+struct PerfSnapshot {
+    req_prompt_tps: Option<f64>,
+    req_gen_tps: Option<f64>,
+    req_prompt_tokens: Option<u64>,
+    req_gen_tokens: Option<u64>,
+    spec_accept_rate: Option<f64>,
+    spec_accepted: Option<u64>,
+    spec_generated: Option<u64>,
+    load_time_secs: Option<f64>,
+}
+
+/// 从日志文件尾部提取 llama-server --perf 输出的性能事件。
+/// 只读取最后 ~2000 字节，解析结构化的计时和推测解码统计。
+fn parse_perf_log(log_path: &std::path::Path) -> PerfSnapshot {
+    let mut snap = PerfSnapshot {
+        req_prompt_tps: None, req_gen_tps: None,
+        req_prompt_tokens: None, req_gen_tokens: None,
+        spec_accept_rate: None, spec_accepted: None, spec_generated: None,
+        load_time_secs: None,
+    };
+
+    let content = match std::fs::read_to_string(log_path) {
+        Ok(c) => c,
+        Err(_) => return snap,
+    };
+
+    // 只解析尾部（最近的输出）
+    let tail: &str = if content.len() > 4000 {
+        &content[content.len() - 4000..]
+    } else {
+        &content
+    };
+
+    for line in tail.lines() {
+        // "slot 0: prompt eval time = 8864.03 ms / 7997 tokens ( 902.19 t/s)"
+        if line.contains("prompt eval time") {
+            if let Some(tps) = extract_value(line, "(", " t/s") {
+                snap.req_prompt_tps = Some(tps);
+            }
+            // extract prompt token count
+            if let Some(pos) = line.find("/") {
+                let rest = &line[pos..];
+                if let Some(end) = rest.find(" tokens") {
+                    let tok_str = rest[1..end].trim();
+                    snap.req_prompt_tokens = tok_str.parse::<u64>().ok();
+                }
+            }
+        }
+
+        // "slot 0: eval time = 185707.23 ms / 9377 tokens ( 50.49 t/s)"
+        if line.contains("eval time") && !line.contains("prompt eval") {
+            if let Some(tps) = extract_value(line, "(", " t/s") {
+                snap.req_gen_tps = Some(tps);
+            }
+            if let Some(pos) = line.find("/") {
+                let rest = &line[pos..];
+                if let Some(end) = rest.find(" tokens") {
+                    let tok_str = rest[1..end].trim();
+                    snap.req_gen_tokens = tok_str.parse::<u64>().ok();
+                }
+            }
+        }
+
+        // "drafted 8636 / accepted 7217 (83.57%)"
+        if line.contains("drafted") && line.contains("accepted") {
+            if let Some(rate) = extract_value(line, "(", "%)") {
+                snap.spec_accept_rate = Some(rate / 100.0);
+            }
+            if let Some(pos) = line.find("drafted ") {
+                let rest = &line[pos + 8..];
+                if let Some(slash) = rest.find(" /") {
+                    snap.spec_generated = rest[..slash].trim().parse::<u64>().ok();
+                }
+            }
+            if let Some(pos) = line.find("accepted ") {
+                let rest = &line[pos + 9..];
+                if let Some(paren) = rest.find(" (") {
+                    snap.spec_accepted = rest[..paren].trim().parse::<u64>().ok();
+                }
+            }
+        }
+
+        // "load_tensors: loaded 35B params in 29.00s" or "load_tensors: buffer size = XX MiB"
+        if line.contains("load_tensors") && line.contains("in ") {
+            if let Some(pos) = line.find("in ") {
+                let rest = &line[pos + 3..];
+                if let Some(end) = rest.find('s') {
+                    snap.load_time_secs = rest[..end].trim().parse::<f64>().ok();
+                }
+            }
+        }
+    }
+
+    snap
+}
+
+/// 从文本中提取 `prefix ... value suffix` 中的数值。
+fn extract_value(line: &str, prefix: &str, suffix: &str) -> Option<f64> {
+    let start = line.find(prefix)? + prefix.len();
+    let rest = &line[start..];
+    let end = rest.find(suffix)?;
+    rest[..end].trim().parse::<f64>().ok()
 }

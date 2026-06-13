@@ -453,31 +453,58 @@ pub struct AppState {
 
 // ── 历史记录类型 ───────────────────────────────────────────────────
 
-/// 关键配置参数快照（只存用于对比的参数）
+/// 关键配置参数快照（只存用于对比的参数，扩展至性能敏感参数）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConfigSnapshot {
     pub model_path: String,
     pub engine_path: String,
     pub engine_backend: String,
+    // 上下文 & 层数
     pub ctx_size: u32,
     pub gpu_layers: u32,
+    // 批处理
     pub batch_size: u32,
+    pub ubatch_size: u32,
+    // 线程
     pub threads: u32,
+    pub threads_batch: u32,
+    // Flash Attention
     pub flash_attn: String,
+    // 推测解码
+    pub spec_type: String,
+    pub draft_tokens: u32,
+    // KV Cache
+    pub cache_type_k: String,
+    pub cache_type_v: String,
+    pub cache_ram: i32,
+    // 连续批处理
     pub cont_batching: bool,
+    // 并行
+    pub parallel: i32,
+    // RoPE
+    pub rope_scaling: String,
+    pub rope_scale: f32,
+    // 采样 (MIROSTAT)
+    pub mirostat: u8,
+    pub temp: f32,
+    pub top_k: u32,
+    pub top_p: f32,
+    // 网络
     pub host: String,
     pub port: u16,
 }
 
-/// 单个时序数据点
+/// 单个时序数据点（扩展日志提取的每请求剖面）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DataPoint {
     pub ts: i64,
+    // 系统指标
     pub cpu: Option<f32>,
     pub mem_mb: Option<f64>,
     pub gpu: Option<f32>,
     pub vram_u: Option<f64>,
     pub vram_t: Option<f64>,
+    // llama /metrics 累计计数器
     pub tps: Option<f64>,
     pub ptps: Option<f64>,
     pub p_tok: Option<u64>,
@@ -485,21 +512,57 @@ pub struct DataPoint {
     pub proc: Option<u64>,
     pub def: Option<u64>,
     pub busy: Option<f64>,
+    // ── 日志提取的每请求剖面 ──
+    /// 最近一次请求的提示处理吞吐 (t/s)
+    pub req_prompt_tps: Option<f64>,
+    /// 最近一次请求的生成吞吐 (t/s)
+    pub req_gen_tps: Option<f64>,
+    /// 最近一次请求的提示 token 数
+    pub req_prompt_tokens: Option<u64>,
+    /// 最近一次请求的生成 token 数
+    pub req_gen_tokens: Option<u64>,
+    /// 推测解码接受率 (0.0-1.0)
+    pub spec_accept_rate: Option<f64>,
+    /// 累计接受草稿数
+    pub spec_accepted: Option<u64>,
+    /// 累计生成草稿数
+    pub spec_generated: Option<u64>,
+    /// 模型加载耗时 (秒)
+    pub load_time_secs: Option<f64>,
 }
 
 /// Session 运行摘要（预计算聚合值）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionSummary {
     pub data_points: u64,
+    // /metrics 累计
     pub avg_tps: Option<f64>,
     pub peak_tps: Option<f64>,
     pub avg_ptps: Option<f64>,
     pub total_prompt_tok: Option<u64>,
     pub total_gen_tok: Option<u64>,
+    // 系统
     pub max_vram_mb: Option<f64>,
     pub vram_total_mb: Option<f64>,
     pub avg_gpu_pct: Option<f64>,
     pub avg_cpu_pct: Option<f64>,
+    // ── 日志提取的每请求聚合 ──
+    /// 请求总数
+    pub request_count: Option<u64>,
+    /// 平均生成吞吐 (t/s)
+    pub avg_req_gen_tps: Option<f64>,
+    /// 峰值生成吞吐 (t/s)
+    pub peak_req_gen_tps: Option<f64>,
+    /// 平均提示吞吐 (t/s)
+    pub avg_req_prompt_tps: Option<f64>,
+    /// 总提示 token
+    pub total_req_prompt_tok: Option<u64>,
+    /// 总生成 token
+    pub total_req_gen_tok: Option<u64>,
+    /// 平均推测接受率
+    pub avg_spec_accept: Option<f64>,
+    /// 模型加载耗时 (秒)
+    pub load_time_secs: Option<f64>,
 }
 
 /// Session 元数据条目（存于 index.json）

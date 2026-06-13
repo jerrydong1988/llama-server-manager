@@ -21,6 +21,16 @@ struct RunningAggregate {
     sum_cpu_pct: f64,
     last_prompt_tok: u64,
     last_gen_tok: u64,
+    // 日志提取的请求级聚合
+    request_count: u64,
+    sum_req_gen_tps: f64,
+    max_req_gen_tps: f64,
+    sum_req_prompt_tps: f64,
+    total_req_prompt_tok: u64,
+    total_req_gen_tok: u64,
+    sum_spec_accept: f64,
+    spec_accept_count: u64,
+    load_time_secs: f64,
 }
 
 // ── 内部辅助 ────────────────────────────────────────────────────
@@ -65,9 +75,23 @@ fn build_config_snapshot(config: &InstanceConfig, engine_path: &str, engine_back
         ctx_size: config.ctx_size,
         gpu_layers: config.gpu_layers,
         batch_size: config.batch_size,
+        ubatch_size: config.ubatch_size,
         threads: config.threads,
+        threads_batch: config.threads_batch,
         flash_attn: config.flash_attn.clone(),
+        spec_type: config.spec_type.clone(),
+        draft_tokens: config.draft_tokens,
+        cache_type_k: config.cache_type_k.clone(),
+        cache_type_v: config.cache_type_v.clone(),
+        cache_ram: config.cache_ram,
         cont_batching: config.cont_batching,
+        parallel: config.parallel,
+        rope_scaling: config.rope_scaling.clone(),
+        rope_scale: config.rope_scale,
+        mirostat: config.mirostat,
+        temp: config.temp,
+        top_k: config.top_k,
+        top_p: config.top_p,
         host: config.host.clone(),
         port: config.port,
     }
@@ -120,16 +144,16 @@ pub fn create_session(
     // 初始化运行聚合
     RUNNING_AGGREGATES.lock().unwrap().insert(session_id.clone(), RunningAggregate {
         data_points: 0,
-        sum_tps: 0.0,
-        max_tps: 0.0,
-        sum_ptps: 0.0,
-        sum_gpu_pct: 0.0,
-        max_gpu_pct: 0.0,
-        max_vram_mb: 0.0,
-        vram_total_mb: 0.0,
-        sum_cpu_pct: 0.0,
-        last_prompt_tok: 0,
-        last_gen_tok: 0,
+        sum_tps: 0.0, max_tps: 0.0, sum_ptps: 0.0,
+        sum_gpu_pct: 0.0, max_gpu_pct: 0.0,
+        max_vram_mb: 0.0, vram_total_mb: 0.0, sum_cpu_pct: 0.0,
+        last_prompt_tok: 0, last_gen_tok: 0,
+        request_count: 0,
+        sum_req_gen_tps: 0.0, max_req_gen_tps: 0.0,
+        sum_req_prompt_tps: 0.0,
+        total_req_prompt_tok: 0, total_req_gen_tok: 0,
+        sum_spec_accept: 0.0, spec_accept_count: 0,
+        load_time_secs: 0.0,
     });
 
     // 确保 sessions 目录存在
@@ -180,6 +204,25 @@ pub fn record_data_point(
         if let Some(cpu) = dp.cpu { agg.sum_cpu_pct += cpu as f64; }
         if let Some(pt) = dp.p_tok { agg.last_prompt_tok = pt; }
         if let Some(gt) = dp.g_tok { agg.last_gen_tok = gt; }
+        // 日志提取的请求级聚合
+        if let Some(rtps) = dp.req_gen_tps {
+            if rtps > 0.0 {
+                agg.request_count += 1;
+                agg.sum_req_gen_tps += rtps;
+                if rtps > agg.max_req_gen_tps { agg.max_req_gen_tps = rtps; }
+            }
+        }
+        if let Some(ptps) = dp.req_prompt_tps {
+            if ptps > 0.0 { agg.sum_req_prompt_tps += ptps; }
+        }
+        if let Some(pt) = dp.req_prompt_tokens { agg.total_req_prompt_tok += pt; }
+        if let Some(gt) = dp.req_gen_tokens { agg.total_req_gen_tok += gt; }
+        if let Some(sr) = dp.spec_accept_rate {
+            if sr > 0.0 { agg.sum_spec_accept += sr; agg.spec_accept_count += 1; }
+        }
+        if let Some(lt) = dp.load_time_secs {
+            if lt > 0.0 { agg.load_time_secs = lt; }
+        }
     }
 }
 
@@ -205,6 +248,15 @@ pub fn finalize_session(
                 vram_total_mb: if agg.vram_total_mb > 0.0 { Some(agg.vram_total_mb) } else { None },
                 avg_gpu_pct: if n > 0.0 && agg.sum_gpu_pct > 0.0 { Some(agg.sum_gpu_pct / n) } else { None },
                 avg_cpu_pct: if n > 0.0 && agg.sum_cpu_pct > 0.0 { Some(agg.sum_cpu_pct / n) } else { None },
+                // 日志提取的请求级聚合
+                request_count: if agg.request_count > 0 { Some(agg.request_count) } else { None },
+                avg_req_gen_tps: if agg.request_count > 0 && agg.sum_req_gen_tps > 0.0 { Some(agg.sum_req_gen_tps / agg.request_count as f64) } else { None },
+                peak_req_gen_tps: if agg.max_req_gen_tps > 0.0 { Some(agg.max_req_gen_tps) } else { None },
+                avg_req_prompt_tps: if agg.request_count > 0 && agg.sum_req_prompt_tps > 0.0 { Some(agg.sum_req_prompt_tps / agg.request_count as f64) } else { None },
+                total_req_prompt_tok: if agg.total_req_prompt_tok > 0 { Some(agg.total_req_prompt_tok) } else { None },
+                total_req_gen_tok: if agg.total_req_gen_tok > 0 { Some(agg.total_req_gen_tok) } else { None },
+                avg_spec_accept: if agg.spec_accept_count > 0 { Some(agg.sum_spec_accept / agg.spec_accept_count as f64) } else { None },
+                load_time_secs: if agg.load_time_secs > 0.0 { Some(agg.load_time_secs) } else { None },
             }
         })
     };
