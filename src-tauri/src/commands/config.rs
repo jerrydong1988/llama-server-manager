@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use crate::models::{AppState, GlobalConfig, InstanceConfig, WindowState};
-use crate::commands::history;
 
 // ── 配置持久化 ────────────────────────────────────────────────────
 #[tauri::command]
@@ -112,8 +111,7 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
 
     // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
     for (id, ri) in &global.running {
-        let id = id.clone();
-        let id2 = id.clone();
+        let id_hc = id.clone();
         let host = if ri.host == "0.0.0.0" { "localhost".to_string() } else { ri.host.clone() };
         let host2 = host.clone();
         let port = ri.port;
@@ -121,40 +119,15 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
         let app = app.clone();
         let app2 = app.clone();
         let config_dir = config_dir.clone();
-        let config_dir2 = config_dir.clone();
 
         // 健康检查
-        let api_key_health = stored.get(&id).and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key.clone()) }).unwrap_or_default();
+        let api_key_health = stored.get(&id_hc).and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key.clone()) }).unwrap_or_default();
         std::thread::spawn(move || {
-            crate::commands::server::health_check_loop(&id, &host, port, pid, &api_key_health, app);
+            crate::commands::server::health_check_loop(&id_hc, &host, port, pid, &api_key_health, app);
         });
 
-        // 创建新的 history session（旧的已被 finalize_all_running 标记完成）
-        let instance_name = stored.get(&id2).map(|c| c.name.clone()).unwrap_or_else(|| id2.clone());
-        let engine_backend = stored.get(&id2)
-            .and_then(|c| {
-                let engine_names = state.engine_names.lock().unwrap();
-                engine_names.get(&c.engine_id).cloned()
-            })
-            .unwrap_or_else(|| "unknown".to_string());
-        let engine_path = stored.get(&id2)
-            .and_then(|c| {
-                if c.engine_id.is_empty() { None }
-                else { Some(c.engine_id.clone()) }
-            })
-            .unwrap_or_default();
-
-        let session_id = history::create_session(
-            &config_dir2,
-            &id2,
-            &instance_name,
-            stored.get(&id2).unwrap_or(&InstanceConfig::default()),
-            &engine_path,
-            &engine_backend,
-        ).unwrap_or_default();
-
-        // 日志 tail + 指标推送（带新 session_id）
-        crate::commands::server::reconnect_running_instance(&id2, pid, &host2, port, &config_dir2, &session_id, app2);
+        // 日志 tail + 指标推送
+        crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir, app2);
     }
     Ok(global)
 }

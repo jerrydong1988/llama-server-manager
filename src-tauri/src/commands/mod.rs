@@ -4,7 +4,6 @@ pub mod download;
 pub mod scanner;
 pub mod adlx;
 pub mod nvml;
-pub mod history;
 pub mod cluster;
 pub mod cluster_network;
 pub mod cluster_mdns;

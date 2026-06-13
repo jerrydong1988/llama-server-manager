@@ -11,7 +11,6 @@ use crate::models::{AppState, WindowState};
 use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder};
 use crate::commands::config::{save_config, load_config, save_window_state, load_window_state, resolve_path};
 use crate::commands::server::{generate_server_command, start_server, stop_server, open_browser, test_connection, check_port, get_system_metrics, get_slots, get_metrics};
-use crate::commands::history::{list_sessions, get_session_data, delete_session, clear_all_history};
 use crate::commands::download::{browse_modelscope, download_modelscope_files, browse_huggingface, download_huggingface_files, cancel_file_download, pause_file_download, cancel_and_cleanup_download};
 use crate::commands::cluster::{scan_workers_tcp, test_worker, get_worker_info, add_worker, remove_worker, get_workers, find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics, stop_local_worker, is_local_host, start_local_rpc, get_local_host};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
@@ -76,8 +75,6 @@ fn main() {
                         "quit" => {
                             if let Some(s) = app.try_state::<AppState>() {
                                 let config_dir = s.config_dir.lock().unwrap().clone();
-                                // P2: 异常退出前完成所有运行中的 session
-                                commands::history::finalize_all_running(&config_dir);
                                 let path = config_dir.join("instances.json");
                                 let _ = std::fs::create_dir_all(&config_dir);
                                 let mut global = std::fs::read_to_string(&path).ok()
@@ -132,7 +129,6 @@ fn main() {
             cancel_file_download, pause_file_download, cancel_and_cleanup_download,
             test_connection, check_port,
             get_system_metrics, get_slots, get_metrics,
-            list_sessions, get_session_data, delete_session, clear_all_history,
             save_window_state, load_window_state,
             resolve_path,
             scan_workers_tcp, test_worker, get_worker_info,

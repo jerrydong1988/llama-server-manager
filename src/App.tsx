@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Clock } from 'lucide-react'
+import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network } from 'lucide-react'
 import { version } from '../package.json'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
@@ -8,7 +8,6 @@ import LogsViewer from './components/LogsViewer'
 import ConfigPage from './components/ConfigPage'
 import PerformancePage from './components/PerformancePage/PerformancePage'
 import ClusterPage from './components/ClusterPage/ClusterPage'
-import HistoryPage from './components/HistoryPage/HistoryPage'
 import { useAppStore } from './store'
 import { I18nProvider, useI18n } from './i18n'
 
@@ -21,7 +20,6 @@ const TAB_CONTENT: Record<string, () => JSX.Element> = {
   perf: () => <PerformancePage />,
   logs: () => <LogsViewer />,
   cluster: () => <ClusterPage />,
-  history: () => <HistoryPage />,
 }
 const renderTabContent = (tabId: string) => {
   const Renderer = TAB_CONTENT[tabId]
@@ -40,7 +38,6 @@ function AppInner() {
     { id: 'config', name: t.nav.config, icon: Settings },
     { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'perf', name: t.nav.perf, icon: Activity },
-    { id: 'history', name: t.nav.history || 'History', icon: Clock },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
   ]
   // dark mode handled by store setDarkMode
