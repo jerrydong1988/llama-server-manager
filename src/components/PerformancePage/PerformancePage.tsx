@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
 
@@ -10,6 +11,10 @@ interface SystemMetrics {
   gpu_percent: number | null
   vram_used_mb: number | null
   vram_total_mb: number | null
+  system_cpu_percent: number | null
+  system_memory_total_mb: number | null
+  system_memory_used_mb: number | null
+  gpu_vendor: string | null
 }
 
 interface SlotInfo {
@@ -38,7 +43,6 @@ export default function PerformancePage() {
   const [sys, setSys] = useState<SystemMetrics | null>(null)
   const [slots, setSlots] = useState<SlotInfo[]>([])
   const [metrics, setMetrics] = useState<MetricsData | null>(null)
-  const intervalRef = useRef<number | null>(null)
 
   const inst = instances.find(i => i.id === selectedId)
   const host = inst?.config.host || '127.0.0.1'
@@ -53,7 +57,8 @@ export default function PerformancePage() {
   useEffect(() => {
     if (!selectedId || !inst) return
 
-    const poll = async () => {
+    // 立即获取初始数据
+    const fetchInitial = async () => {
       try { setSys(await invoke<SystemMetrics>('get_system_metrics', { instanceId: selectedId })) } catch { /* stopped */ }
       try { setSlots(await invoke<SlotInfo[]>('get_slots', { host, port, apiKey: inst?.config.api_key || null })) } catch { setSlots([]) }
       try {
@@ -61,10 +66,31 @@ export default function PerformancePage() {
         if (m) setMetrics(m)
       } catch { /* noop */ }
     }
+    fetchInitial()
 
-    poll()
-    intervalRef.current = window.setInterval(poll, interval * 1000)
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current) }
+    // P1: 监听后台推送的指标事件，替代轮询
+    const unlisten = listen<{
+      instanceId: string
+      system: SystemMetrics
+      llama: MetricsData | null
+      ts: number
+    }>('metrics-update', (event) => {
+      const { instanceId: evId, system, llama } = event.payload
+      if (evId !== selectedId) return // 只处理当前选中实例的事件
+      setSys(system)
+      if (llama) setMetrics(llama)
+      // Slots 仍然用轮询（llama-server 不推送 slots 变更）
+    })
+
+    // Slots 轮询（轻量，单独处理）
+    const slotsInterval = window.setInterval(async () => {
+      try { setSlots(await invoke<SlotInfo[]>('get_slots', { host, port, apiKey: inst?.config.api_key || null })) } catch { setSlots([]) }
+    }, interval * 1000)
+
+    return () => {
+      unlisten.then(fn => fn())
+      clearInterval(slotsInterval)
+    }
   }, [selectedId, interval, host, port])
 
   const fmtSecs = (s: number) => {
@@ -106,15 +132,15 @@ export default function PerformancePage() {
       <div className="grid grid-cols-3 md:grid-cols-5 gap-3 mb-6">
         {sys ? (
           <>
-            <Card label={t.perfBlock.cpu} value={sys.cpu_percent.toFixed(1)} unit="%" color="text-blue-500" />
-            <Card label={t.perfBlock.memory} value={(sys.memory_mb / 1024).toFixed(2)} unit="GB" color="text-purple-500" />
+            <Card label={t.perfBlock.cpu} value={`${sys.cpu_percent.toFixed(1)}${sys.system_cpu_percent != null ? ` / ${sys.system_cpu_percent.toFixed(1)}` : ''}`} unit="%" color="text-blue-500" />
+            <Card label={t.perfBlock.memory} value={`${(sys.memory_mb / 1024).toFixed(2)}${sys.system_memory_used_mb != null ? ` / ${(sys.system_memory_used_mb / 1024).toFixed(2)}` : ''}`} unit="GB" color="text-purple-500" />
             {sys.vram_used_mb != null ? (
-              <Card label={t.perfBlock.vram} value={`${(sys.vram_used_mb / 1024).toFixed(2)} / ${(sys.vram_total_mb! / 1024).toFixed(2)}`} unit="GB" color="text-green-500" />
+              <Card label={`${t.perfBlock.vram}${sys.gpu_vendor ? ` (${sys.gpu_vendor})` : ''}`} value={`${(sys.vram_used_mb / 1024).toFixed(2)} / ${(sys.vram_total_mb! / 1024).toFixed(2)}`} unit="GB" color="text-green-500" />
             ) : (
               <Card label={t.perfBlock.vram} value="—" color="text-gray-400" />
             )}
             {sys.gpu_percent != null ? (
-              <Card label="GPU" value={sys.gpu_percent.toFixed(1)} unit="%" color="text-emerald-500" />
+              <Card label={`GPU${sys.gpu_vendor ? ` (${sys.gpu_vendor})` : ''}`} value={sys.gpu_percent.toFixed(1)} unit="%" color="text-emerald-500" />
             ) : (
               <Card label="GPU" value="—" color="text-gray-400" />
             )}

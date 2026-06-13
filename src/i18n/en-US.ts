@@ -1,5 +1,5 @@
 export const enUS = {
-  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', perf: 'Performance', logs: 'Server Logs', cluster: 'Cluster' },
+  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', perf: 'Performance', history: 'History', logs: 'Server Logs', cluster: 'Cluster' },
   instance: {
     title: 'Server Instances', create: 'Create Instance', newInstance: 'New Instance',
     name: 'Instance Name', namePlaceholder: 'e.g. Llama-3-8B',
