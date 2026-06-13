@@ -154,7 +154,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         || engines[0]
       if (!engine) { message('No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' }); return }
 
-      await invoke('start_server', { instanceId: id, config: inst.config, engineExe: engine.exe })
+      await invoke('start_server', { instanceId: id, config: inst.config, engineExe: engine.exe, engineBackend: engine.backend })
       get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
     } catch (e) {
       console.error('start_server error:', e)
