@@ -122,12 +122,13 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
 
         // 健康检查
         let api_key_health = stored.get(&id_hc).and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key.clone()) }).unwrap_or_default();
+        let api_key_reconnect = api_key_health.clone();
         std::thread::spawn(move || {
             crate::commands::server::health_check_loop(&id_hc, &host, port, pid, &api_key_health, app);
         });
 
         // 日志 tail + 指标推送
-        crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir, app2);
+        crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir, &api_key_reconnect, app2);
     }
     Ok(global)
 }

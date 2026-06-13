@@ -142,6 +142,8 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, 
             else if fname.contains("q5_k") || fname.contains("q5k") { Some("Q5_K".into()) }
             else if fname.contains("q5_1") { Some("Q5_1".into()) }
             else if fname.contains("q5_0") { Some("Q5_0".into()) }
+            else if fname.contains("q4_k_xl") || fname.contains("q4k_xl") { Some("Q4_K_XL".into()) }
+            else if fname.contains("q4_k_l") || fname.contains("q4k_l") { Some("Q4_K_L".into()) }
             else if fname.contains("q4_k") || fname.contains("q4k") { Some("Q4_K".into()) }
             else if fname.contains("q4_1") { Some("Q4_1".into()) }
             else if fname.contains("q4_0") { Some("Q4_0".into()) }

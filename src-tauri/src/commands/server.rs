@@ -845,6 +845,7 @@ pub fn reconnect_running_instance(
     host: &str,
     port: u16,
     config_dir: &std::path::Path,
+    api_key: &str,
     app: tauri::AppHandle,
 ) {
     let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
@@ -863,8 +864,9 @@ pub fn reconnect_running_instance(
         let app_metrics = app.clone();
         let id_metrics = instance_id.to_string();
         let host_m = if host == "0.0.0.0" { "localhost".to_string() } else { host.to_string() };
+        let ak = api_key.to_string();
         std::thread::spawn(move || {
-            monitor_loop(&id_metrics, pid, &host_m, port, "", app_metrics);
+            monitor_loop(&id_metrics, pid, &host_m, port, &ak, app_metrics);
         });
     }
 }
