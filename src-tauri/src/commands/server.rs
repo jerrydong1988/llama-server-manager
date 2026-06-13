@@ -368,8 +368,9 @@ pub async fn start_server(
     let app_for_health = app.clone();
     let host = if config.host == "0.0.0.0" { "localhost".to_string() } else { config.host.clone() };
     let port = config.port;
+    let api_key_health = config.api_key.clone();
     std::thread::spawn(move || {
-        health_check_loop(&id, &host, port, pid, app_for_health);
+        health_check_loop(&id, &host, port, pid, &api_key_health, app_for_health);
     });
 
     // P1/P2: 后台指标推送 + 历史记录线程
@@ -392,7 +393,7 @@ fn monitor_loop(
     expected_pid: u32,
     host: &str,
     port: u16,
-    _api_key: &str,
+    api_key: &str,
     config_dir: &std::path::Path,
     session_id: &str,
     app: tauri::AppHandle,
@@ -455,7 +456,11 @@ fn monitor_loop(
 
         // ── llama 指标 ──
         let mut llama_metrics: Option<serde_json::Value> = None;
-        if let Ok(resp) = client.get(&metrics_url)
+        let mut req = client.get(&metrics_url);
+        if !api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", api_key));
+        }
+        if let Ok(resp) = req
             .timeout(std::time::Duration::from_secs(2))
             .send()
         {
@@ -535,9 +540,17 @@ fn monitor_loop(
     }
 }
 
-pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid: u32, app: tauri::AppHandle) {
+pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid: u32, api_key: &str, app: tauri::AppHandle) {
     let url = format!("http://{}:{}/health", host, port);
     let client = reqwest::blocking::Client::new();
+
+    let health_req = |timeout_secs: u64| {
+        let mut req = client.get(&url);
+        if !api_key.is_empty() {
+            req = req.header("Authorization", format!("Bearer {}", api_key));
+        }
+        req.timeout(std::time::Duration::from_secs(timeout_secs)).send()
+    };
 
     let is_my_instance = || {
         let st = app.state::<AppState>();
@@ -547,7 +560,7 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
 
     for _ in 0..30 {
         if !is_my_instance() { return; }
-        if let Ok(resp) = client.get(&url).timeout(std::time::Duration::from_secs(2)).send() {
+        if let Ok(resp) = health_req(2) {
             if resp.status().is_success() {
                 let _ = app.emit("health-status", serde_json::json!({
                     "instanceId": instance_id, "status": "ok",
@@ -555,7 +568,7 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     if !is_my_instance() { return; }
-                    if let Ok(resp) = client.get(&url).timeout(std::time::Duration::from_secs(5)).send() {
+                    if let Ok(resp) = health_req(5) {
                         if !resp.status().is_success() {
                             std::thread::sleep(std::time::Duration::from_secs(3));
                         } else {
@@ -573,7 +586,7 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
     loop {
         std::thread::sleep(std::time::Duration::from_secs(3));
         if !is_my_instance() { return; }
-        if let Ok(resp) = client.get(&url).timeout(std::time::Duration::from_secs(5)).send() {
+        if let Ok(resp) = health_req(5) {
             if resp.status().is_success() {
                 let _ = app.emit("health-status", serde_json::json!({
                     "instanceId": instance_id, "status": "ok",
@@ -581,7 +594,7 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     if !is_my_instance() { return; }
-                    if let Ok(resp) = client.get(&url).timeout(std::time::Duration::from_secs(5)).send() {
+                    if let Ok(resp) = health_req(5) {
                         if !resp.status().is_success() {
                             std::thread::sleep(std::time::Duration::from_secs(3));
                         } else {

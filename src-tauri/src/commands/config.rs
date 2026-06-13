@@ -124,8 +124,9 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
         let config_dir2 = config_dir.clone();
 
         // 健康检查
+        let api_key_health = stored.get(&id).and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key.clone()) }).unwrap_or_default();
         std::thread::spawn(move || {
-            crate::commands::server::health_check_loop(&id, &host, port, pid, app);
+            crate::commands::server::health_check_loop(&id, &host, port, pid, &api_key_health, app);
         });
 
         // 创建新的 history session（旧的已被 finalize_all_running 标记完成）
