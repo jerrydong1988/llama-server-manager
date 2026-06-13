@@ -222,10 +222,10 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.media_path.is_empty() { cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]); }
     if !config.tools.is_empty() { cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]); }
 
-    // Custom args
+    // Custom args（#13: 支持双引号包裹参数）
     for arg in &config.custom_args {
         if !arg.is_empty() {
-            cmd.extend(arg.split_whitespace().map(String::from));
+            cmd.extend(split_args(arg));
         }
     }
 
@@ -390,41 +390,54 @@ fn monitor_loop(
     let client = reqwest::blocking::Client::new();
     let metrics_url = format!("http://{}:{}/metrics", host, port);
 
+    // #5: 记录启动时间用于计算 uptime
+    let start_instant = std::time::Instant::now();
+
+    // #6: 复用 System 实例，只创建一次
+    let mut sys = System::new_all();
+
+    // #7: 缓存 GPU vendor 字符串，但持续采集实时数据
+    let mut cached_gpu_vendor: Option<String> = None;
+
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
         if !is_my_instance() { break; }
 
         // ── 系统指标 ──
-        let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics();
-        let mut gpu_vendor: Option<String> = None;
-        let mut gpu_pct: Option<f32> = None;
-        let mut vram_u: Option<f64> = None;
-        let mut vram_t: Option<f64> = None;
+        sys.refresh_all();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(&mut sys);
 
         // 进程级指标
-        let (cpu, mem) = get_process_metrics(expected_pid);
+        let (cpu, mem) = get_process_metrics(&mut sys, expected_pid);
         let mut cpu_pct = cpu;
         let mut mem_mb = (mem * 10.0).round() / 10.0;
 
-        // GPU: ADLX → NVML
+        // GPU: ADLX → NVML（实时采集，vendor 字符串只取第一次）
+        let mut gpu_pct: Option<f32> = None;
+        let mut vram_u: Option<f64> = None;
+        let mut vram_t: Option<f64> = None;
+        let mut gpu_vendor: Option<String> = None;
         if let Some(m) = adlx::collect_metrics() {
             if let Some(c) = m.cpu_percent { cpu_pct = c; }
             if let Some(mb) = m.memory_mb { mem_mb = mb; }
             gpu_pct = m.gpu_percent;
             vram_u = m.vram_used_mb;
             vram_t = m.vram_total_mb;
-            gpu_vendor = Some("AMD".into());
+            if cached_gpu_vendor.is_none() { cached_gpu_vendor = Some("AMD".into()); }
+            gpu_vendor = cached_gpu_vendor.clone();
         } else if let Some(m) = nvml::collect_metrics() {
             gpu_pct = m.gpu_percent;
             vram_u = m.vram_used_mb;
             vram_t = m.vram_total_mb;
-            gpu_vendor = Some("NVIDIA".into());
+            if cached_gpu_vendor.is_none() { cached_gpu_vendor = Some("NVIDIA".into()); }
+            gpu_vendor = cached_gpu_vendor.clone();
         }
 
         let sys_metrics = serde_json::json!({
             "cpu_percent": cpu_pct,
             "memory_mb": mem_mb,
-            "uptime_secs": 0, // uptime not tracked in event stream
+            "uptime_secs": start_instant.elapsed().as_secs(),
             "gpu_percent": gpu_pct,
             "vram_used_mb": vram_u,
             "vram_total_mb": vram_t,
@@ -522,7 +535,8 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
-    loop {
+    // #10: 30 次失败后退出，避免无限循环
+    for _ in 0..30 {
         std::thread::sleep(std::time::Duration::from_secs(3));
         if !is_my_instance() { return; }
         if let Ok(resp) = health_req(5) {
@@ -546,6 +560,7 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
             }
         }
     }
+    // 30 次全部失败，health check 线程自然退出
 }
 
 #[tauri::command]
@@ -558,57 +573,60 @@ pub async fn stop_server(
     let mut killed = false;
 
     if let Some(ref ri) = ri {
+        // #12: 先按端口杀（更精确），再按 PID 杀
         #[cfg(target_os = "windows")]
         {
+            let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
             let r = std::os::windows::process::CommandExt::creation_flags(
-                &mut Command::new("taskkill"), 0x08000000)
-                .args(["/F", "/PID", &ri.pid.to_string()])
+                &mut Command::new("powershell"), 0x08000000)
+                .args(["-NoProfile", "-Command", &cmd])
                 .output();
-            killed = r.map(|o| o.status.success()).unwrap_or(false);
+            killed = r.map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
         }
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        { killed = Command::new("kill").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false); }
+        #[cfg(target_os = "macos")]
+        {
+            let port_str = ri.port.to_string();
+            if let Ok(out) = Command::new("lsof").args(["-ti", &format!(":{}", port_str)]).output() {
+                let pids = String::from_utf8_lossy(&out.stdout);
+                for pid in pids.lines() {
+                    let _ = Command::new("kill").arg("-9").arg(pid).status();
+                    killed = true;
+                }
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let _ = Command::new("fuser").args(["-k", &format!("{}/tcp", ri.port)]).status();
+            killed = true;
+        }
     }
 
     if !killed {
         if let Some(ref ri) = ri {
             #[cfg(target_os = "windows")]
             {
-                let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
+                // #3: /T 递归杀子进程
                 let r = std::os::windows::process::CommandExt::creation_flags(
-                    &mut Command::new("powershell"), 0x08000000)
-                    .args(["-NoProfile", "-Command", &cmd])
+                    &mut Command::new("taskkill"), 0x08000000)
+                    .args(["/F", "/T", "/PID", &ri.pid.to_string()])
                     .output();
-                killed = r.map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
+                killed = r.map(|o| o.status.success()).unwrap_or(false);
             }
-            #[cfg(target_os = "macos")]
-            {
-                let port_str = ri.port.to_string();
-                if let Ok(out) = Command::new("lsof").args(["-ti", &format!(":{}", port_str)]).output() {
-                    let pids = String::from_utf8_lossy(&out.stdout);
-                    for pid in pids.lines() {
-                        let _ = Command::new("kill").arg("-9").arg(pid).status();
-                        killed = true;
-                    }
-                }
-            }
-            #[cfg(target_os = "linux")]
-            {
-                let _ = Command::new("fuser").args(["-k", &format!("{}/tcp", ri.port)]).status();
-                // fuser -k exits 0 even if nothing was killed; treat as best-effort
-                killed = true;
-            }
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            { killed = Command::new("kill").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false); }
         }
     }
 
-    if killed {
-        state.running.lock().unwrap().remove(&instance_id);
-    }
+    // #1: 无论 kill 是否成功，始终从 running 中移除，避免前后端状态不一致
+    state.running.lock().unwrap().remove(&instance_id);
 
     app.emit("server-stopped", serde_json::json!({
         "instanceId": instance_id,
     })).ok();
 
+    if !killed {
+        return Err("无法终止进程".into());
+    }
     Ok(())
 }
 
@@ -653,10 +671,8 @@ pub async fn check_port(port: u16) -> Result<bool, String> {
 
 // ── 系统性能指标（sysinfo） ──────────────────────────────────
 
-fn get_process_metrics(pid: u32) -> (f32, f64) {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-    std::thread::sleep(std::time::Duration::from_millis(300));
+/// #6: 复用 System 实例，避免每次 new → refresh → sleep → refresh 的 300ms 阻塞
+fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
     sys.refresh_cpu_all();
     if let Some(p) = sys.processes().values().find(|p| p.pid().as_u32() == pid) {
         let raw = p.cpu_usage();
@@ -667,21 +683,14 @@ fn get_process_metrics(pid: u32) -> (f32, f64) {
     }
 }
 
-fn get_system_level_metrics() -> (Option<f32>, Option<f64>, Option<f64>) {
-    let mut sys = System::new_all();
-    sys.refresh_all();
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    sys.refresh_cpu_all();
+fn get_system_level_metrics(sys: &mut System) -> (Option<f32>, Option<f64>, Option<f64>) {
     sys.refresh_memory();
-
     let cpu = {
         let usage = sys.global_cpu_usage();
         if usage > 0.0 { Some(usage) } else { None }
     };
-
     let total_mb = Some(sys.total_memory() as f64 / (1024.0 * 1024.0));
     let used_mb = Some(sys.used_memory() as f64 / (1024.0 * 1024.0));
-
     (cpu, total_mb, used_mb)
 }
 
@@ -700,7 +709,10 @@ pub async fn get_system_metrics(
         .unwrap().as_secs() - start_time;
 
     // System-level CPU/RAM (always collected, independent of GPU)
-    let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics();
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(&mut sys);
 
     // ── GPU: ADLX → NVML → sysinfo fallback ──
     // Try ADLX first (AMD)
@@ -721,7 +733,7 @@ pub async fn get_system_metrics(
 
     // Try NVML (NVIDIA)
     if let Some(m) = nvml::collect_metrics() {
-        let (cpu, mem) = get_process_metrics(pid);
+        let (cpu, mem) = get_process_metrics(&mut sys, pid);
         return Ok(SystemMetrics {
             cpu_percent: cpu,
             memory_mb: (mem * 10.0).round() / 10.0,
@@ -737,7 +749,7 @@ pub async fn get_system_metrics(
     }
 
     // Fallback: sysinfo only
-    let (cpu, mem) = get_process_metrics(pid);
+    let (cpu, mem) = get_process_metrics(&mut sys, pid);
     Ok(SystemMetrics {
         cpu_percent: cpu,
         memory_mb: (mem * 10.0).round() / 10.0,
@@ -923,5 +935,27 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
             last_size = current_size;
         }
     }
+}
+
+/// #13: 简单 shell 风格参数分割，支持双引号。
+fn split_args(input: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in input.chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ' ' | '\t' if !in_quotes => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
 }
 

@@ -219,9 +219,15 @@ export const useAppStore = create<AppState>((set, get) => ({
           document.documentElement.classList.toggle('dark', global.dark_mode)
           set({ darkMode: !!global.dark_mode })
         }
-      // 加载后扫描模型和引擎
-      invoke('scan_models', { paths: global.model_dirs || [] }).then((models) => set({ models: models as any })).catch(() => {})
-      invoke('scan_engines', { paths: global.engine_dirs || [] }).then((engines) => set({ engines: engines as any })).catch(() => {})
+      // #4: succeed-first — 扫描失败或返回空时不覆盖已有数据
+      invoke('scan_models', { paths: global.model_dirs || [] }).then((models) => {
+        const arr = models as any[]
+        if (arr && arr.length > 0) set({ models: arr })
+      }).catch(() => {})
+      invoke('scan_engines', { paths: global.engine_dirs || [] }).then((engines) => {
+        const arr = engines as any[]
+        if (arr && arr.length > 0) set({ engines: arr })
+      }).catch(() => {})
     } catch (e) { console.error('load_config error:', e) }
   },
 

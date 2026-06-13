@@ -13,7 +13,118 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
+// ── #9: 共享下载核心 ─────────────────────────────────────────────
+
+/// 下载单个文件的通用逻辑。
+async fn download_single_file(
+    url: String,
+    save_path: PathBuf,
+    file_name: String,
+    file_size: u64,
+    app: tauri::AppHandle,
+) {
+    let shared = app.state::<AppState>();
+
+    if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
+        if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
+            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
+        }
+        return;
+    }
+
+    let dest = save_path.join(&file_name);
+    let resume_from = dest.metadata().map(|m| m.len()).unwrap_or(0);
+
+    let mut req = HTTP_CLIENT.get(&url).header("User-Agent", "Mozilla/5.0");
+    if resume_from > 0 {
+        req = req.header("Range", format!("bytes={}-", resume_from));
+    }
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let _ = app.emit("download-error", serde_json::json!({
+                "fileName": file_name, "error": e.to_string()
+            }));
+            return;
+        }
+    };
+    if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        let _ = app.emit("download-error", serde_json::json!({
+            "fileName": file_name, "error": format!("HTTP {}", resp.status())
+        }));
+        return;
+    }
+
+    let total = if resume_from > 0 {
+        resp.content_length().unwrap_or(0) + resume_from
+    } else {
+        resp.content_length().unwrap_or(file_size)
+    };
+    let mut downloaded = resume_from;
+    let mut win_start = std::time::Instant::now();
+    let mut win_bytes: u64 = 0;
+
+    use std::io::Write;
+    let mut file = match std::fs::OpenOptions::new()
+        .create(true).append(resume_from == 0).write(true)
+        .open(&dest) {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = app.emit("download-error", serde_json::json!({
+                "fileName": file_name, "error": format!("文件创建失败: {}", e)
+            }));
+            return;
+        }
+    };
+
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
+            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
+            return;
+        }
+        match chunk {
+            Ok(bytes) => {
+                let len = bytes.len() as u64;
+                if let Err(e) = file.write_all(&bytes) {
+                    let _ = app.emit("download-error", serde_json::json!({
+                        "fileName": file_name, "error": format!("写入失败: {}", e)
+                    }));
+                    return;
+                }
+                downloaded += len;
+                let now = std::time::Instant::now();
+                win_bytes += len;
+                let win_elapsed = now.duration_since(win_start).as_secs_f64();
+                let speed = if win_elapsed >= 1.0 {
+                    let s = win_bytes as f64 / win_elapsed;
+                    win_start = now;
+                    win_bytes = 0;
+                    s
+                } else if win_elapsed > 0.0 {
+                    win_bytes as f64 / win_elapsed
+                } else { 0.0 };
+                let _ = app.emit("download-progress", serde_json::json!({
+                    "fileName": file_name, "downloaded": downloaded,
+                    "total": total, "speed": speed,
+                }));
+            }
+            Err(e) => {
+                let _ = app.emit("download-error", serde_json::json!({
+                    "fileName": file_name, "error": e.to_string()
+                }));
+                return;
+            }
+        }
+    }
+    let _ = app.emit("download-complete", serde_json::json!({
+        "fileName": file_name, "path": dest.to_string_lossy(),
+    }));
+}
+
 // ── ModelScope 浏览 ──────────────────────────────────────────────
+
 #[tauri::command]
 pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
     let url = format!("https://www.modelscope.cn/api/v1/models/{}/repo/files?Recursive=true", repo_id);
@@ -48,6 +159,7 @@ pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, Stri
 }
 
 // ── ModelScope 并行下载 ─────────────────────────────────────────
+
 #[tauri::command]
 pub async fn download_modelscope_files(
     repo_id: String,
@@ -64,141 +176,32 @@ pub async fn download_modelscope_files(
     };
     let save_path = save_path.join(repo_id.replace('/', &std::path::MAIN_SEPARATOR.to_string()));
     std::fs::create_dir_all(&save_path).map_err(|e| format!("创建目录失败: {}", e))?;
-    app.state::<AppState>().cancel_flags.lock().unwrap().clear();
 
     let mut handles = Vec::new();
-
-    // 并发控制：使用 semaphore 限制最多 3 个同时下载
     use std::sync::Arc;
     use tokio::sync::Semaphore;
     let semaphore = Arc::new(Semaphore::new(3));
 
     for file in files {
-
-        let url = format!(
-            "https://modelscope.cn/models/{}/resolve/master/{}",
-            repo_id, file.path
-        );
-        let save_path = save_path.clone();
-        let app = app.clone();
-        let file_name = file.name.clone();
-        let file_size = file.size;
-
+        let url = format!("https://modelscope.cn/models/{}/resolve/master/{}", repo_id, file.path);
+        let dest_dir = save_path.clone();
         let handle = tokio::spawn({
             let app = app.clone();
             let permit = semaphore.clone().acquire_owned();
             async move {
-            let _permit = permit.await;
-            let shared = app.state::<AppState>();
-            if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-                if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-                    let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
-                }
-                return;
-            }
-
-            let dest = save_path.join(&file_name);
-            let resume_from = dest.metadata().map(|m| m.len()).unwrap_or(0);
-
-            let mut req = HTTP_CLIENT.get(&url).header("User-Agent", "Mozilla/5.0");
-            if resume_from > 0 {
-                req = req.header("Range", format!("bytes={}-", resume_from));
-            }
-
-            let resp = match req.send().await {
-                Ok(r) => r,
-                Err(e) => {
-                    let _ = app.emit("download-error", serde_json::json!({
-                        "fileName": file_name, "error": e.to_string()
-                    }));
-                    return;
-                }
-            };
-            if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                let _ = app.emit("download-error", serde_json::json!({
-                    "fileName": file_name, "error": format!("HTTP {}", resp.status())
-                }));
-                return;
-            }
-
-            let total = if resume_from > 0 {
-                resp.content_length().unwrap_or(0) + resume_from
-            } else {
-                resp.content_length().unwrap_or(file_size)
-            };
-            let mut downloaded = resume_from;
-            let dl_start = std::time::Instant::now();
-            let mut win_start = dl_start;
-            let mut win_bytes: u64 = 0;
-
-            use std::io::Write;
-            let mut file = match std::fs::OpenOptions::new()
-                .create(true).append(resume_from == 0).write(true)
-                .open(&dest) {
-                Ok(f) => f,
-                Err(e) => {
-                    let _ = app.emit("download-error", serde_json::json!({
-                        "fileName": file_name, "error": format!("文件创建失败: {}", e)
-                    }));
-                    return;
-                }
-            };
-
-            let mut stream = resp.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-                    let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
-                    return;
-                }
-                match chunk {
-                    Ok(bytes) => {
-                        let len = bytes.len() as u64;
-                        if let Err(e) = file.write_all(&bytes) {
-                            let _ = app.emit("download-error", serde_json::json!({
-                                "fileName": file_name, "error": format!("写入失败: {}", e)
-                            }));
-                            return;
-                        }
-                        downloaded += len;
-                        let now = std::time::Instant::now();
-                        win_bytes += len;
-                        let win_elapsed = now.duration_since(win_start).as_secs_f64();
-                        let speed = if win_elapsed >= 1.0 {
-                            let s = win_bytes as f64 / win_elapsed;
-                            win_start = now;
-                            win_bytes = 0;
-                            s
-                        } else if win_elapsed > 0.0 {
-                            win_bytes as f64 / win_elapsed
-                        } else { 0.0 };
-                        let _ = app.emit("download-progress", serde_json::json!({
-                            "fileName": file_name, "downloaded": downloaded,
-                            "total": total, "speed": speed,
-                        }));
-                    }
-                    Err(e) => {
-                        let _ = app.emit("download-error", serde_json::json!({
-                            "fileName": file_name, "error": e.to_string()
-                        }));
-                        return;
-                    }
-                }
-            }
-            let _ = app.emit("download-complete", serde_json::json!({
-                "fileName": file_name, "path": dest.to_string_lossy(),
-            }));
+                let _permit = permit.await;
+                download_single_file(url, dest_dir, file.name.clone(), file.size, app).await;
             }
         });
         handles.push(handle);
     }
 
-    for h in handles {
-        let _ = h.await;
-    }
+    for h in handles { let _ = h.await; }
     Ok(())
 }
 
 // ── 下载控制 ─────────────────────────────────────────────────────
+
 #[tauri::command]
 pub async fn cancel_file_download(file_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     state.cancel_flags.lock().unwrap().insert(file_name, true);
@@ -221,6 +224,7 @@ pub async fn cancel_and_cleanup_download(file_name: String, file_path: String, s
 }
 
 // ── HuggingFace 数据结构和浏览 ──────────────────────────────────
+
 #[derive(serde::Deserialize)]
 struct HfFileEntry {
     path: String,
@@ -267,6 +271,7 @@ pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, Str
 }
 
 // ── HuggingFace 下载 ────────────────────────────────────────────
+
 #[tauri::command]
 pub async fn download_huggingface_files(
     repo_id: String,
@@ -286,99 +291,19 @@ pub async fn download_huggingface_files(
     };
     let save_path = save_path.join(repo_id.replace('/', &std::path::MAIN_SEPARATOR.to_string()));
     std::fs::create_dir_all(&save_path).map_err(|e| format!("创建目录失败: {}", e))?;
-    app.state::<AppState>().cancel_flags.lock().unwrap().clear();
 
     let semaphore = Arc::new(Semaphore::new(3));
     let mut handles = Vec::new();
 
     for file in files {
         let url = format!("https://huggingface.co/{}/resolve/main/{}", repo_id, file.path);
-        let save_path = save_path.clone();
-        let app = app.clone();
-        let file_name = file.name.clone();
-        let file_size = file.size;
-
+        let dest_dir = save_path.clone();
         let handle = tokio::spawn({
             let app = app.clone();
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                let shared = app.state::<AppState>();
-                if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-                    if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-                        let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
-                    }
-                    return;
-                }
-
-                let dest = save_path.join(&file_name);
-                let resume_from = dest.metadata().map(|m| m.len()).unwrap_or(0);
-                let mut req = HTTP_CLIENT.get(&url);
-                if resume_from > 0 {
-                    req = req.header("Range", format!("bytes={}-", resume_from));
-                }
-
-                let resp = match req.send().await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        let _ = app.emit("download-error", serde_json::json!({ "fileName": file_name, "error": e.to_string() }));
-                        return;
-                    }
-                };
-                if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                    let _ = app.emit("download-error", serde_json::json!({ "fileName": file_name, "error": format!("HTTP {}", resp.status()) }));
-                    return;
-                }
-
-                let total = if resume_from > 0 {
-                    resp.content_length().unwrap_or(0) + resume_from
-                } else {
-                    resp.content_length().unwrap_or(file_size)
-                };
-                let mut downloaded = resume_from;
-                let mut win_start = std::time::Instant::now();
-                let mut win_bytes: u64 = 0;
-
-                use std::io::Write;
-                let mut file = match std::fs::OpenOptions::new()
-                    .create(true).append(resume_from == 0).write(true)
-                    .open(&dest) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        let _ = app.emit("download-error", serde_json::json!({ "fileName": file_name, "error": format!("文件创建失败: {}", e) }));
-                        return;
-                    }
-                };
-
-                let mut stream = resp.bytes_stream();
-                while let Some(chunk) = stream.next().await {
-                    if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-                        let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
-                        return;
-                    }
-                    match chunk {
-                        Ok(bytes) => {
-                            if let Err(e) = file.write_all(&bytes) {
-                                let _ = app.emit("download-error", serde_json::json!({ "fileName": file_name, "error": format!("写入失败: {}", e) }));
-                                return;
-                            }
-                            downloaded += bytes.len() as u64;
-                            let now = std::time::Instant::now();
-                            win_bytes += bytes.len() as u64;
-                            let win_elapsed = now.duration_since(win_start).as_secs_f64();
-                            let speed = if win_elapsed >= 1.0 {
-                                let s = win_bytes as f64 / win_elapsed;
-                                win_start = now; win_bytes = 0; s
-                            } else if win_elapsed > 0.0 { win_bytes as f64 / win_elapsed } else { 0.0 };
-                            let _ = app.emit("download-progress", serde_json::json!({ "fileName": file_name, "downloaded": downloaded, "total": total, "speed": speed }));
-                        }
-                        Err(e) => {
-                            let _ = app.emit("download-error", serde_json::json!({ "fileName": file_name, "error": e.to_string() }));
-                            return;
-                        }
-                    }
-                }
-                let _ = app.emit("download-complete", serde_json::json!({ "fileName": file_name, "path": dest.to_string_lossy() }));
+                download_single_file(url, dest_dir, file.name.clone(), file.size, app).await;
             }
         });
         handles.push(handle);

@@ -22,12 +22,12 @@ pub async fn save_config(
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     let path = config_dir.join("instances.json");
     let json = serde_json::to_string_pretty(&global).map_err(|e| format!("{}", e))?;
-    // 备份旧配置（如果存在）
-    if path.exists() {
-        let bak = config_dir.join("instances.json.bak");
-        let _ = std::fs::copy(&path, &bak);
-    }
-    std::fs::write(&path, json).map_err(|e| format!("保存失败: {}", e))?;
+    // #2: 原子写入 — 先写临时文件再 rename，避免崩溃时损坏配置
+    let tmp = config_dir.join("instances.json.tmp");
+    std::fs::write(&tmp, &json).map_err(|e| format!("保存失败: {}", e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("保存失败: {}", e))?;
+    // 保留备份
+    let _ = std::fs::copy(&path, config_dir.join("instances.json.bak"));
     Ok(())
 }
 

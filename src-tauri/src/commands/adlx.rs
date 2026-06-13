@@ -1,10 +1,18 @@
 use std::ffi::c_void;
+use std::sync::Mutex;
 
 type AdlxResult = i32;
 const ADLX_OK: AdlxResult = 0;
 
-static mut ADLX_LIB: Option<&'static libloading::Library> = None;
-static mut ADLX_SYS: *mut c_void = std::ptr::null_mut();
+// #11: 用 Mutex 替代 static mut 消除数据竞争
+struct AdlxState {
+    lib: &'static libloading::Library,
+    sys: *mut c_void,
+}
+unsafe impl Send for AdlxState {}
+unsafe impl Sync for AdlxState {}
+
+static ADLX_STATE: Mutex<Option<AdlxState>> = Mutex::new(None);
 
 #[cfg(target_os = "windows")]
 const ADLX_DLL: &str = r"C:\Windows\System32\amdadlx64.dll";
@@ -17,15 +25,14 @@ fn ensure_loaded() -> bool { false }
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn ensure_loaded() -> bool {
-    unsafe {
-        if (*std::ptr::addr_of!(ADLX_LIB)).is_some() { return true; }
-        let lib = match libloading::Library::new(ADLX_DLL) {
-            Ok(l) => Box::leak(Box::new(l)),
-            Err(_) => return false,
-        };
-        ADLX_LIB = Some(lib);
-        true
-    }
+    let mut state = ADLX_STATE.lock().unwrap();
+    if state.is_some() { return true; }
+    let lib = unsafe { match libloading::Library::new(ADLX_DLL) {
+        Ok(l) => Box::leak(Box::new(l)),
+        Err(_) => return false,
+    } };
+    *state = Some(AdlxState { lib, sys: std::ptr::null_mut() });
+    true
 }
 
 pub struct AdlxMetrics {
@@ -65,10 +72,12 @@ pub fn collect_metrics() -> Option<AdlxMetrics> {
 }
 
 unsafe fn try_collect() -> Option<AdlxMetrics> {
-    let lib = ADLX_LIB.unwrap();
+    let mut state_guard = ADLX_STATE.lock().unwrap();
+    let state = state_guard.as_mut()?;
+    let lib = state.lib;
 
     // Initialize ADLX singleton (only once)
-    if ADLX_SYS.is_null() {
+    if state.sys.is_null() {
         eprintln!("[adlx] initializing...");
         type InitFn = unsafe extern "system" fn(u64, *mut *mut c_void) -> AdlxResult;
         let init: libloading::Symbol<InitFn> = lib.get(b"ADLXInitialize\0").ok()?;
@@ -77,11 +86,11 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
             eprintln!("[adlx] ADLXInitialize failed");
             return None;
         }
-        ADLX_SYS = sys;
+        state.sys = sys;
         eprintln!("[adlx] initialized OK");
     }
 
-    let sys = ADLX_SYS;
+    let sys = state.sys;
     let vt = *(sys as *const *const c_void);
     let mut m = AdlxMetrics { cpu_percent: None, memory_mb: None, gpu_percent: None, vram_used_mb: None, vram_total_mb: None };
 

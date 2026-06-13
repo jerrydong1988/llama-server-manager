@@ -3,14 +3,22 @@ use std::path::{Path, PathBuf};
 // ── GGUF 元信息解析 ───────────────────────────────────────────────
 pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, Option<String>, bool), String> {
     let mut f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
-    let size = f.metadata().map(|m| m.len()).unwrap_or(0).min(4_000_000) as usize;
-    if size < 24 { return Err("文件太小".into()); }
-    let mut data = vec![0u8; size];
-    use std::io::Read;
-    f.read_exact(&mut data).map_err(|e| format!("{}", e))?;
-    if &data[0..4] != b"GGUF" { return Err("不是有效的 GGUF 文件".into()); }
+    let file_size = f.metadata().map(|m| m.len()).unwrap_or(0) as usize;
+    if file_size < 24 { return Err("文件太小".into()); }
 
-    let metadata_kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap()) as usize;
+    // #8: 先读头部获取 metadata_kv_count，动态计算需要读取的字节
+    let mut header = [0u8; 24];
+    use std::io::Read;
+    f.read_exact(&mut header).map_err(|e| format!("{}", e))?;
+    if &header[0..4] != b"GGUF" { return Err("不是有效的 GGUF 文件".into()); }
+
+    let metadata_kv_count = u64::from_le_bytes(header[16..24].try_into().unwrap()) as usize;
+    // 每个 KV 对最多 ~512 字节（key + type + value），最多 200 个
+    let estimate = 24 + (metadata_kv_count.min(200) * 512);
+    let read_size = estimate.min(file_size);
+    let mut data = vec![0u8; read_size];
+    data[..24].copy_from_slice(&header);
+    f.read_exact(&mut data[24..]).map_err(|e| format!("{}", e))?;
     let mut pos: usize = 24;
 
     fn read_string(data: &[u8], pos: &mut usize) -> Option<String> {
