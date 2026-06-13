@@ -18,11 +18,22 @@ export default function MiniChart({
   label?: string
   unit?: string
 }) {
-  const values = data.map(d => d[field] as number | null).filter((v): v is number => v != null && v > 0)
+  const allValues = data.map(d => d[field] as number | null)
+  const nonNullCount = allValues.filter(v => v != null).length
+  const values = allValues.filter((v): v is number => v != null && v > 0)
+
   if (values.length < 2) {
+    const tokenFields = ['tps', 'ptps', 'p_tok', 'g_tok', 'proc', 'busy'] as readonly (keyof DataPoint)[]
+    const isTokenField = tokenFields.includes(field)
+    const message = nonNullCount === 0 && isTokenField
+      ? 'Token metrics unavailable (--metrics may be disabled)'
+      : nonNullCount < 2
+        ? `${label ? `${label}: ` : ''}Not enough data points`
+        : `${label ? `${label}: ` : ''}All values are zero`
+
     return (
       <div className="text-xs text-gray-400 text-center py-2">
-        {label ? `${label}: ` : ''}Not enough data
+        {message}
       </div>
     )
   }
