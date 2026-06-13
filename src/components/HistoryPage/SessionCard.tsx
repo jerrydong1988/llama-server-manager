@@ -92,10 +92,16 @@ export default function SessionCard({
           {/* Summary stats grid */}
           {s && (
             <div className="grid grid-cols-3 md:grid-cols-5 gap-2 text-xs">
-              {s.avg_tps != null && <Stat label="Avg tok/s" value={s.avg_tps.toFixed(1)} color="text-orange-500" />}
-              {s.peak_tps != null && <Stat label="Peak tok/s" value={s.peak_tps.toFixed(1)} color="text-amber-500" />}
-              {s.total_gen_tok != null && <Stat label="Gen tokens" value={fmtNum(s.total_gen_tok)} color="text-rose-500" />}
-              {s.total_prompt_tok != null && <Stat label="Prompt tokens" value={fmtNum(s.total_prompt_tok)} color="text-cyan-500" />}
+              {s.avg_req_gen_tps != null && <Stat label="Gen t/s" value={s.avg_req_gen_tps.toFixed(1)} color="text-orange-500" />}
+              {s.avg_req_prompt_tps != null && <Stat label="Prompt t/s" value={s.avg_req_prompt_tps.toFixed(1)} color="text-amber-500" />}
+              {s.avg_tps != null && s.avg_req_gen_tps == null && <Stat label="Avg tok/s" value={s.avg_tps.toFixed(1)} color="text-orange-500" />}
+              {s.peak_req_gen_tps != null && <Stat label="Peak Gen" value={s.peak_req_gen_tps.toFixed(1)} color="text-yellow-500" />}
+              {s.peak_tps != null && s.peak_req_gen_tps == null && <Stat label="Peak tok/s" value={s.peak_tps.toFixed(1)} color="text-amber-500" />}
+              {s.avg_spec_accept != null && <Stat label="Spec Accept" value={`${(s.avg_spec_accept * 100).toFixed(1)}%`} color="text-indigo-500" />}
+              {s.request_count != null && <Stat label="Requests" value={fmtNum(s.request_count)} color="text-teal-500" />}
+              {s.total_req_gen_tok != null && <Stat label="Gen tokens" value={fmtNum(s.total_req_gen_tok)} color="text-rose-500" />}
+              {s.total_req_prompt_tok != null && <Stat label="Prompt tokens" value={fmtNum(s.total_req_prompt_tok)} color="text-cyan-500" />}
+              {s.load_time_secs != null && <Stat label="Load time" value={`${s.load_time_secs.toFixed(1)}s`} color="text-gray-500" />}
               {s.avg_gpu_pct != null && <Stat label="Avg GPU" value={`${s.avg_gpu_pct.toFixed(1)}%`} color="text-emerald-500" />}
               {s.max_vram_mb != null && <Stat label="Max VRAM" value={`${(s.max_vram_mb / 1024).toFixed(1)} GB`} color="text-green-500" />}
               {s.avg_cpu_pct != null && <Stat label="Avg CPU" value={`${s.avg_cpu_pct.toFixed(1)}%`} color="text-blue-500" />}

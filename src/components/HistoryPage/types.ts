@@ -6,9 +6,23 @@ export interface ConfigSnapshot {
   ctx_size: number
   gpu_layers: number
   batch_size: number
+  ubatch_size: number
   threads: number
+  threads_batch: number
   flash_attn: string
+  spec_type: string
+  draft_tokens: number
+  cache_type_k: string
+  cache_type_v: string
+  cache_ram: number
   cont_batching: boolean
+  parallel: number
+  rope_scaling: string
+  rope_scale: number
+  mirostat: number
+  temp: number
+  top_k: number
+  top_p: number
   host: string
   port: number
 }
@@ -24,6 +38,14 @@ export interface SessionSummary {
   vram_total_mb: number | null
   avg_gpu_pct: number | null
   avg_cpu_pct: number | null
+  request_count: number | null
+  avg_req_gen_tps: number | null
+  peak_req_gen_tps: number | null
+  avg_req_prompt_tps: number | null
+  total_req_prompt_tok: number | null
+  total_req_gen_tok: number | null
+  avg_spec_accept: number | null
+  load_time_secs: number | null
 }
 
 export interface SessionMeta {
@@ -54,4 +76,12 @@ export interface DataPoint {
   proc: number | null
   def: number | null
   busy: number | null
+  req_prompt_tps: number | null
+  req_gen_tps: number | null
+  req_prompt_tokens: number | null
+  req_gen_tokens: number | null
+  spec_accept_rate: number | null
+  spec_accepted: number | null
+  spec_generated: number | null
+  load_time_secs: number | null
 }

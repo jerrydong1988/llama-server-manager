@@ -67,12 +67,16 @@ export default function ComparePanel({
             </tr>
           </thead>
           <tbody>
-            <Row label="Avg tok/s" a={sa?.avg_tps} b={sb?.avg_tps} fmt={v => v.toFixed(1)} diff={diff} dc={diffColor} higherIsBetter />
-            <Row label="Peak tok/s" a={sa?.peak_tps} b={sb?.peak_tps} fmt={v => v.toFixed(1)} diff={diff} dc={diffColor} higherIsBetter />
+            <Row label="Gen t/s" a={sa?.avg_req_gen_tps} b={sb?.avg_req_gen_tps} fmt={v => v.toFixed(1)} diff={diff} dc={diffColor} higherIsBetter />
+            <Row label="Prompt t/s" a={sa?.avg_req_prompt_tps} b={sb?.avg_req_prompt_tps} fmt={v => v.toFixed(1)} diff={diff} dc={diffColor} higherIsBetter />
+            <Row label="Peak Gen" a={sa?.peak_req_gen_tps} b={sb?.peak_req_gen_tps} fmt={v => v.toFixed(1)} diff={diff} dc={diffColor} higherIsBetter />
+            <Row label="Spec Accept" a={sa?.avg_spec_accept != null ? sa.avg_spec_accept * 100 : null} b={sb?.avg_spec_accept != null ? sb.avg_spec_accept * 100 : null} fmt={v => `${v.toFixed(1)}%`} diff={diff} dc={diffColor} higherIsBetter />
             <Row label="Avg GPU %" a={sa?.avg_gpu_pct} b={sb?.avg_gpu_pct} fmt={v => `${v.toFixed(1)}%`} diff={diff} dc={diffColor} higherIsBetter />
             <Row label="Max VRAM" a={sa?.max_vram_mb} b={sb?.max_vram_mb} fmt={v => `${(v / 1024).toFixed(1)} GB`} diff={diff} dc={() => 'text-gray-400'} />
             <Row label="Avg CPU %" a={sa?.avg_cpu_pct} b={sb?.avg_cpu_pct} fmt={v => `${v.toFixed(1)}%`} diff={diff} dc={diffColor} higherIsBetter={false} />
-            <Row label="Gen tokens" a={sa?.total_gen_tok} b={sb?.total_gen_tok} fmt={v => fmtNum(v)} diff={diff} dc={() => 'text-gray-400'} />
+            <Row label="Gen tokens" a={sa?.total_req_gen_tok} b={sb?.total_req_gen_tok} fmt={v => fmtNum(v)} diff={diff} dc={() => 'text-gray-400'} />
+            <Row label="Prompt tokens" a={sa?.total_req_prompt_tok} b={sb?.total_req_prompt_tok} fmt={v => fmtNum(v)} diff={diff} dc={() => 'text-gray-400'} />
+            <Row label="Requests" a={sa?.request_count} b={sb?.request_count} fmt={v => v.toString()} diff={diff} dc={() => 'text-gray-400'} />
             <Row label="Data pts" a={sa?.data_points} b={sb?.data_points} fmt={v => v.toString()} diff={diff} dc={() => 'text-gray-400'} />
           </tbody>
         </table>
@@ -81,12 +85,22 @@ export default function ComparePanel({
         <div className="mt-4 text-xs">
           <div className="text-gray-500 mb-1.5 font-medium">Config Diff</div>
           <div className="space-y-1">
-            <ConfigDiff label="Context size" a={ca.ctx_size} b={cb.ctx_size} />
+            <ConfigDiff label="Context" a={formatCtx(ca.ctx_size)} b={formatCtx(cb.ctx_size)} />
             <ConfigDiff label="GPU layers" a={ca.gpu_layers} b={cb.gpu_layers} />
-            <ConfigDiff label="Batch size" a={ca.batch_size} b={cb.batch_size} />
+            <ConfigDiff label="Batch" a={ca.batch_size} b={cb.batch_size} />
+            <ConfigDiff label="μBatch" a={ca.ubatch_size} b={cb.ubatch_size} />
             <ConfigDiff label="Threads" a={ca.threads} b={cb.threads} />
-            <ConfigDiff label="Flash Attn" a={ca.flash_attn} b={cb.flash_attn} />
-            <ConfigDiff label="Cont Batching" a={ca.cont_batching ? 'on' : 'off'} b={cb.cont_batching ? 'on' : 'off'} />
+            <ConfigDiff label="Threads Batch" a={ca.threads_batch} b={cb.threads_batch} />
+            <ConfigDiff label="Flash Attn" a={ca.flash_attn || 'auto'} b={cb.flash_attn || 'auto'} />
+            <ConfigDiff label="Spec Type" a={ca.spec_type || 'none'} b={cb.spec_type || 'none'} />
+            {ca.spec_type && <ConfigDiff label="Draft Tokens" a={ca.draft_tokens} b={cb.draft_tokens} />}
+            <ConfigDiff label="Cache RAM" a={ca.cache_ram || 'off'} b={cb.cache_ram || 'off'} />
+            <ConfigDiff label="Parallel" a={ca.parallel} b={cb.parallel} />
+            <ConfigDiff label="RoPE" a={ca.rope_scaling || 'none'} b={cb.rope_scaling || 'none'} />
+            <ConfigDiff label="Temp" a={formatNum(ca.temp)} b={formatNum(cb.temp)} />
+            <ConfigDiff label="Top-K" a={ca.top_k} b={cb.top_k} />
+            <ConfigDiff label="Top-P" a={formatNum(ca.top_p)} b={formatNum(cb.top_p)} />
+            <ConfigDiff label="Mirostat" a={ca.mirostat || 'off'} b={cb.mirostat || 'off'} />
           </div>
         </div>
       </div>
@@ -136,4 +150,15 @@ function fmtNum(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`
   return n.toFixed(0)
+}
+
+function formatCtx(n: number): string {
+  if (n === 0) return 'auto'
+  if (n >= 1024) return `${(n / 1024).toFixed(0)}K`
+  return n.toString()
+}
+
+function formatNum(n: number): string {
+  if (n === 0) return 'off'
+  return n.toPrecision(2)
 }
