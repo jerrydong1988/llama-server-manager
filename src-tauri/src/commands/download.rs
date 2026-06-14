@@ -184,6 +184,12 @@ pub async fn download_modelscope_files(
     use tokio::sync::Semaphore;
     let semaphore = Arc::new(Semaphore::new(3));
 
+    // 清除本批次文件的 cancel_flags（避免上次暂停/取消的标记残留）
+    {
+        let mut flags = app.state::<AppState>().cancel_flags.lock().unwrap();
+        for file in &files { flags.remove(&file.name); }
+    }
+
     for file in files {
         let url = format!("https://modelscope.cn/models/{}/resolve/master/{}", repo_id, file.path);
         let dest_dir = save_path.clone();
@@ -297,6 +303,12 @@ pub async fn download_huggingface_files(
 
     let semaphore = Arc::new(Semaphore::new(3));
     let mut handles = Vec::new();
+
+    // 清除本批次文件的 cancel_flags
+    {
+        let mut flags = app.state::<AppState>().cancel_flags.lock().unwrap();
+        for file in &files { flags.remove(&file.name); }
+    }
 
     for file in files {
         let url = format!("https://huggingface.co/{}/resolve/main/{}", repo_id, file.path);
