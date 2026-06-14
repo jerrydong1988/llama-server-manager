@@ -21,13 +21,14 @@ async fn download_single_file(
     save_path: PathBuf,
     file_name: String,
     file_size: u64,
+    repo_id: String,
     app: tauri::AppHandle,
 ) {
     let shared = app.state::<AppState>();
 
     if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
         if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
+            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id }));
         }
         return;
     }
@@ -44,14 +45,14 @@ async fn download_single_file(
         Ok(r) => r,
         Err(e) => {
             let _ = app.emit("download-error", serde_json::json!({
-                "fileName": file_name, "error": e.to_string()
+                "fileName": file_name, "error": e.to_string(), "repoId": repo_id,
             }));
             return;
         }
     };
     if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         let _ = app.emit("download-error", serde_json::json!({
-            "fileName": file_name, "error": format!("HTTP {}", resp.status())
+            "fileName": file_name, "error": format!("HTTP {}", resp.status()), "repoId": repo_id,
         }));
         return;
     }
@@ -72,7 +73,7 @@ async fn download_single_file(
         Ok(f) => f,
         Err(e) => {
             let _ = app.emit("download-error", serde_json::json!({
-                "fileName": file_name, "error": format!("文件创建失败: {}", e)
+                "fileName": file_name, "error": format!("文件创建失败: {}", e), "repoId": repo_id,
             }));
             return;
         }
@@ -81,16 +82,16 @@ async fn download_single_file(
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name }));
+            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id }));
             return;
         }
         match chunk {
             Ok(bytes) => {
                 let len = bytes.len() as u64;
                 if let Err(e) = file.write_all(&bytes) {
-                    let _ = app.emit("download-error", serde_json::json!({
-                        "fileName": file_name, "error": format!("写入失败: {}", e)
-                    }));
+                        let _ = app.emit("download-error", serde_json::json!({
+                            "fileName": file_name, "error": format!("写入失败: {}", e), "repoId": repo_id,
+                        }));
                     return;
                 }
                 downloaded += len;
@@ -107,7 +108,7 @@ async fn download_single_file(
                 } else { 0.0 };
                 let _ = app.emit("download-progress", serde_json::json!({
                     "fileName": file_name, "downloaded": downloaded,
-                    "total": total, "speed": speed,
+                    "total": total, "speed": speed, "repoId": repo_id,
                 }));
             }
             Err(e) => {
@@ -119,7 +120,7 @@ async fn download_single_file(
         }
     }
     let _ = app.emit("download-complete", serde_json::json!({
-        "fileName": file_name, "path": dest.to_string_lossy(),
+        "fileName": file_name, "path": dest.to_string_lossy(), "repoId": repo_id,
     }));
 }
 
@@ -190,7 +191,7 @@ pub async fn download_modelscope_files(
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                download_single_file(url, dest_dir, file.name.clone(), file.size, app).await;
+                download_single_file(url, dest_dir, file.name.clone(), file.size, repo_id.clone(), app).await;
             }
         });
         handles.push(handle);
@@ -303,7 +304,7 @@ pub async fn download_huggingface_files(
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                download_single_file(url, dest_dir, file.name.clone(), file.size, app).await;
+                download_single_file(url, dest_dir, file.name.clone(), file.size, repo_id.clone(), app).await;
             }
         });
         handles.push(handle);

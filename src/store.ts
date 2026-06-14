@@ -28,6 +28,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   workers: [],
   clusterScanning: false,
   downloadProgress: {},
+  downloadTasks: {},
+  setDownloadTasks: (tasks) => set({ downloadTasks: tasks }),
   setModels: (models) => set({ models }),
   setEngines: (engines) => set({ engines }),
   setModelDirs: (dirs) => { set({ modelDirs: dirs }); get().saveConfig() },
@@ -398,4 +400,30 @@ listen<{ instanceId: string; status: string }>('health-status', (event) => {
   useAppStore.getState().updateInstance(event.payload.instanceId, {
     healthCheck: event.payload.status === 'ok' ? 'ok' : 'fail',
   })
+}).catch(() => {})
+
+// ── 下载任务全局追踪 ──
+listen<{ fileName: string; repoId: string; downloaded: number; total: number; speed: number }>('download-progress', (e) => {
+  const s = useAppStore.getState()
+  const { fileName, repoId, downloaded, total, speed } = e.payload
+  s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { fileName, repoId, downloaded, total, speed, status: 'active' } })
+}).catch(() => {})
+
+listen<{ fileName: string; repoId: string; path: string }>('download-complete', (e) => {
+  const s = useAppStore.getState()
+  const { fileName, repoId, path } = e.payload
+  const prev = s.downloadTasks[fileName]
+  s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { ...(prev || { fileName, repoId, downloaded: 0, total: 0, speed: 0 }), status: 'completed', path } })
+}).catch(() => {})
+
+listen<{ fileName: string; repoId: string }>('download-cancelled', (e) => {
+  const s = useAppStore.getState()
+  const prev = s.downloadTasks[e.payload.fileName]
+  s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, downloaded: 0, total: 0, speed: 0 }), status: 'cancelled' } })
+}).catch(() => {})
+
+listen<{ fileName: string; repoId: string; error: string }>('download-error', (e) => {
+  const s = useAppStore.getState()
+  const prev = s.downloadTasks[e.payload.fileName]
+  s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, downloaded: 0, total: 0, speed: 0 }), status: 'error', error: e.payload.error } })
 }).catch(() => {})

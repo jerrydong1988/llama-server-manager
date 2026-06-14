@@ -141,8 +141,16 @@ export interface DownloadProgress {
   fileName: string
   downloaded: number
   total: number
-  index: number
-  totalFiles: number
+  speed: number
+  repoId: string
+  status: 'active' | 'completed' | 'cancelled' | 'error'
+  path?: string
+  error?: string
+}
+
+export interface DownloadGroup {
+  repoId: string
+  files: DownloadProgress[]
 }
 
 export interface AppState {
@@ -159,6 +167,7 @@ export interface AppState {
   darkMode: boolean
   workers: WorkerInfo[]
   clusterScanning: boolean
+  downloadTasks: Record<string, DownloadProgress>
   setActiveTab: (tab: string) => void
   setDarkMode: (dm: boolean) => void
   setActiveConfigInstanceId: (id: string | null) => void
@@ -202,6 +211,7 @@ export interface AppState {
   cancelFileDownload: (fileName: string) => Promise<void>
   pauseFileDownload: (fileName: string) => Promise<void>
   cancelAndCleanupDownload: (fileName: string, filePath: string) => Promise<void>
+  setDownloadTasks: (tasks: Record<string, DownloadProgress>) => void
   // Cluster
   setWorkers: (workers: WorkerInfo[]) => void
   addWorker: (worker: WorkerInfo) => void
