@@ -22,6 +22,7 @@ async fn download_single_file(
     file_name: String,
     file_size: u64,
     repo_id: String,
+    source: String,
     app: tauri::AppHandle,
 ) {
     let shared = app.state::<AppState>();
@@ -45,14 +46,14 @@ async fn download_single_file(
         Ok(r) => r,
         Err(e) => {
             let _ = app.emit("download-error", serde_json::json!({
-                "fileName": file_name, "error": e.to_string(), "repoId": repo_id,
+                "fileName": file_name, "error": e.to_string(), "repoId": repo_id, "source": source,
             }));
             return;
         }
     };
     if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
         let _ = app.emit("download-error", serde_json::json!({
-            "fileName": file_name, "error": format!("HTTP {}", resp.status()), "repoId": repo_id,
+            "fileName": file_name, "error": format!("HTTP {}", resp.status()), "repoId": repo_id, "source": source,
         }));
         return;
     }
@@ -73,7 +74,7 @@ async fn download_single_file(
         Ok(f) => f,
         Err(e) => {
             let _ = app.emit("download-error", serde_json::json!({
-                "fileName": file_name, "error": format!("文件创建失败: {}", e), "repoId": repo_id,
+                "fileName": file_name, "error": format!("文件创建失败: {}", e), "repoId": repo_id, "source": source,
             }));
             return;
         }
@@ -90,7 +91,7 @@ async fn download_single_file(
                 let len = bytes.len() as u64;
                 if let Err(e) = file.write_all(&bytes) {
                         let _ = app.emit("download-error", serde_json::json!({
-                            "fileName": file_name, "error": format!("写入失败: {}", e), "repoId": repo_id,
+                            "fileName": file_name, "error": format!("写入失败: {}", e), "repoId": repo_id, "source": source,
                         }));
                     return;
                 }
@@ -108,7 +109,7 @@ async fn download_single_file(
                 } else { 0.0 };
                 let _ = app.emit("download-progress", serde_json::json!({
                     "fileName": file_name, "downloaded": downloaded,
-                    "total": total, "speed": speed, "repoId": repo_id,
+                    "total": total, "speed": speed, "repoId": repo_id, "source": source,
                 }));
             }
             Err(e) => {
@@ -120,7 +121,7 @@ async fn download_single_file(
         }
     }
     let _ = app.emit("download-complete", serde_json::json!({
-        "fileName": file_name, "path": dest.to_string_lossy(), "repoId": repo_id,
+        "fileName": file_name, "path": dest.to_string_lossy(), "repoId": repo_id, "source": source,
     }));
 }
 
@@ -192,7 +193,7 @@ pub async fn download_modelscope_files(
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                download_single_file(url, dest_dir, file.name.clone(), file.size, rid, app).await;
+                download_single_file(url, dest_dir, file.name.clone(), file.size, rid, "modelscope".into(), app).await;
             }
         });
         handles.push(handle);
@@ -306,7 +307,7 @@ pub async fn download_huggingface_files(
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                download_single_file(url, dest_dir, file.name.clone(), file.size, rid, app).await;
+                download_single_file(url, dest_dir, file.name.clone(), file.size, rid, "huggingface".into(), app).await;
             }
         });
         handles.push(handle);

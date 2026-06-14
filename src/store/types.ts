@@ -143,7 +143,8 @@ export interface DownloadProgress {
   total: number
   speed: number
   repoId: string
-  status: 'active' | 'completed' | 'cancelled' | 'error'
+  source: string
+  status: 'active' | 'completed' | 'cancelled' | 'error' | 'paused'
   path?: string
   error?: string
 }

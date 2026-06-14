@@ -403,27 +403,27 @@ listen<{ instanceId: string; status: string }>('health-status', (event) => {
 }).catch(() => {})
 
 // ── 下载任务全局追踪 ──
-listen<{ fileName: string; repoId: string; downloaded: number; total: number; speed: number }>('download-progress', (e) => {
+listen<{ fileName: string; repoId: string; source: string; downloaded: number; total: number; speed: number }>('download-progress', (e) => {
   const s = useAppStore.getState()
-  const { fileName, repoId, downloaded, total, speed } = e.payload
-  s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { fileName, repoId, downloaded, total, speed, status: 'active' } })
+  const { fileName, repoId, source, downloaded, total, speed } = e.payload
+  s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { fileName, repoId, source, downloaded, total, speed, status: 'active' } })
 }).catch(() => {})
 
-listen<{ fileName: string; repoId: string; path: string }>('download-complete', (e) => {
+listen<{ fileName: string; repoId: string; source: string; path: string }>('download-complete', (e) => {
   const s = useAppStore.getState()
-  const { fileName, repoId, path } = e.payload
+  const { fileName, repoId, source, path } = e.payload
   const prev = s.downloadTasks[fileName]
-  s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { ...(prev || { fileName, repoId, downloaded: 0, total: 0, speed: 0 }), status: 'completed', path } })
+  s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { ...(prev || { fileName, repoId, source, downloaded: 0, total: 0, speed: 0 }), status: 'completed', path } })
 }).catch(() => {})
 
-listen<{ fileName: string; repoId: string }>('download-cancelled', (e) => {
+listen<{ fileName: string; repoId: string; source: string }>('download-cancelled', (e) => {
   const s = useAppStore.getState()
   const prev = s.downloadTasks[e.payload.fileName]
-  s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, downloaded: 0, total: 0, speed: 0 }), status: 'cancelled' } })
+  s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'cancelled' } })
 }).catch(() => {})
 
-listen<{ fileName: string; repoId: string; error: string }>('download-error', (e) => {
+listen<{ fileName: string; repoId: string; source: string; error: string }>('download-error', (e) => {
   const s = useAppStore.getState()
   const prev = s.downloadTasks[e.payload.fileName]
-  s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, downloaded: 0, total: 0, speed: 0 }), status: 'error', error: e.payload.error } })
+  s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'error', error: e.payload.error } })
 }).catch(() => {})

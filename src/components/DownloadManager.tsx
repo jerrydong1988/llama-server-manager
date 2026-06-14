@@ -1,28 +1,27 @@
-import { useState, useMemo } from 'react'
-import { Trash2, FolderOpen, Pause, X, Download } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Trash2, FolderOpen, X, Download } from 'lucide-react'
 import { useAppStore } from '../store'
 import type { DownloadProgress } from '../store/types'
 
 type Tab = 'active' | 'completed'
 
 export default function DownloadManager() {
-  const { downloadTasks, cancelFileDownload, pauseFileDownload, cancelAndCleanupDownload } = useAppStore()
+  const { downloadTasks, cancelFileDownload, cancelAndCleanupDownload } = useAppStore()
   const [tab, setTab] = useState<Tab>('active')
 
   const tasks = Object.values(downloadTasks)
 
-  // Group by repoId
   const groups = useMemo(() => {
     const map = new Map<string, DownloadProgress[]>()
     for (const t of tasks) {
-      const key = t.repoId || 'unknown'
+      const key = `${t.source || ''}:${t.repoId || 'unknown'}`
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(t)
     }
-    return Array.from(map.entries()).map(([repoId, files]) => ({ repoId, files }))
+    return Array.from(map.entries()).map(([key, files]) => ({ key, files }))
   }, [tasks])
 
-  const filterByTab = (g: { repoId: string; files: DownloadProgress[] }) => {
+  const filterByTab = (g: { files: DownloadProgress[] }) => {
     if (tab === 'active') return g.files.some(f => f.status === 'active' || f.status === 'error')
     return g.files.every(f => f.status === 'completed' || f.status === 'cancelled')
   }
@@ -62,7 +61,6 @@ export default function DownloadManager() {
         </h2>
       </div>
 
-      {/* Tabs */}
       <div className="flex gap-2 mb-4">
         <button onClick={() => setTab('active')}
           className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors ${tab === 'active' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700'}`}>
@@ -82,22 +80,18 @@ export default function DownloadManager() {
         <div className="space-y-4">
           {filtered.map((group) => {
             const totalSize = group.files.reduce((s, f) => s + f.total, 0)
-
             return (
-              <div key={group.repoId} className="border dark:border-gray-700 rounded-lg overflow-hidden">
-                {/* Repo header */}
+              <div key={group.key} className="border dark:border-gray-700 rounded-lg overflow-hidden">
                 <div className="px-4 py-2.5 bg-gray-100 dark:bg-gray-800 flex items-center justify-between">
-                  <div className="font-medium text-sm truncate flex-1">{group.repoId}</div>
+                  <div className="font-medium text-sm truncate flex-1">{group.key}</div>
                   <div className="text-xs text-gray-400 shrink-0 ml-2">
                     {group.files.length} file{group.files.length > 1 ? 's' : ''} · {fmtSize(totalSize)}
                   </div>
                 </div>
 
-                {/* Files */}
                 <div className="divide-y dark:divide-gray-700">
                   {group.files.map((file) => (
                     <div key={file.fileName} className="px-4 py-2.5">
-                      {/* File name and status */}
                       <div className="flex items-center justify-between mb-1">
                         <div className="text-sm truncate flex-1 min-w-0">
                           {file.fileName}
@@ -105,17 +99,12 @@ export default function DownloadManager() {
                         </div>
                         <div className="flex items-center gap-1 shrink-0 ml-2">
                           {file.status === 'active' && (
-                            <>
-                              <button onClick={() => pauseFileDownload(file.fileName)} title="Pause" className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded">
-                                <Pause className="w-3.5 h-3.5" />
-                              </button>
-                              <button onClick={() => cancelFileDownload(file.fileName)} title="Cancel" className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-red-500">
-                                <X className="w-3.5 h-3.5" />
-                              </button>
-                            </>
+                            <button onClick={() => cancelFileDownload(file.fileName)} title="Cancel" className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-red-500">
+                              <X className="w-3.5 h-3.5" />
+                            </button>
                           )}
                           {file.status === 'completed' && file.path && (
-                            <button onClick={() => {/* open in explorer */}} title="Open folder" className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-blue-500">
+                            <button onClick={() => {}} title="Open folder" className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded text-blue-500">
                               <FolderOpen className="w-3.5 h-3.5" />
                             </button>
                           )}
@@ -127,7 +116,6 @@ export default function DownloadManager() {
                         </div>
                       </div>
 
-                      {/* Progress bar */}
                       {file.status === 'active' && (
                         <>
                           <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden mb-1">
@@ -143,7 +131,6 @@ export default function DownloadManager() {
                           </div>
                         </>
                       )}
-
                       {file.status === 'completed' && (
                         <div className="text-xs text-green-500">✓ Completed · {fmtSize(file.total)}</div>
                       )}
