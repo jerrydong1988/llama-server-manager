@@ -186,7 +186,8 @@ pub async fn download_modelscope_files(
 
     // 清除本批次文件的 cancel_flags（避免上次暂停/取消的标记残留）
     {
-        let mut flags = app.state::<AppState>().cancel_flags.lock().unwrap();
+        let state = app.state::<AppState>();
+        let mut flags = state.cancel_flags.lock().unwrap();
         for file in &files { flags.remove(&file.name); }
     }
 
@@ -306,7 +307,8 @@ pub async fn download_huggingface_files(
 
     // 清除本批次文件的 cancel_flags
     {
-        let mut flags = app.state::<AppState>().cancel_flags.lock().unwrap();
+        let state = app.state::<AppState>();
+        let mut flags = state.cancel_flags.lock().unwrap();
         for file in &files { flags.remove(&file.name); }
     }
 
