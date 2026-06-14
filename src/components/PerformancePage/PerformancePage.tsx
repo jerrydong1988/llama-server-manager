@@ -24,17 +24,6 @@ interface SlotInfo {
   n_ctx: number
 }
 
-interface MetricsData {
-  tokens_per_sec: number
-  prompt_tokens: number
-  gen_tokens: number
-  requests: number
-  prompt_tokens_per_sec: number
-  requests_processing: number
-  requests_deferred: number
-  busy_slots_per_decode: number
-}
-
 export default function PerformancePage() {
   const { t } = useI18n()
   const { instances } = useAppStore()
@@ -145,23 +134,6 @@ export default function PerformancePage() {
         )}
       </div>
 
-      {metrics ? (
-        <>
-          <div className="grid grid-cols-3 md:grid-cols-5 gap-3 mb-3">
-            <Card label={t.perfBlock.tokensPerSec} value={metrics.tokens_per_sec.toFixed(1)} color="text-orange-500" />
-            <Card label="Prompt Spd" value={metrics.prompt_tokens_per_sec.toFixed(1)} unit="t/s" color="text-amber-500" />
-            <Card label="Queue" value={`${metrics.requests_processing}`} unit={`/ ${metrics.requests_processing + metrics.requests_deferred}`} color="text-cyan-500" />
-            <Card label="Busy Slots" value={metrics.busy_slots_per_decode.toFixed(1)} color="text-indigo-500" />
-            <Card label={t.perfBlock.requests} value={metrics.requests.toFixed(0)} color="text-teal-500" />
-          </div>
-          <div className="flex gap-4 mb-6 text-sm">
-            <span className="text-cyan-500 font-medium">Prompt {metrics.prompt_tokens.toLocaleString()}</span>
-            <span className="text-rose-500 font-medium">Gen {metrics.gen_tokens.toLocaleString()}</span>
-            <span className="text-gray-700 dark:text-gray-300 font-medium">Total {(metrics.prompt_tokens + metrics.gen_tokens).toLocaleString()}</span>
-          </div>
-        </>
-      ) : null}
-
       <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
         <div className="text-xs text-gray-500 mb-3">{t.perfBlock.slotStatus}</div>
         {slots.length === 0 ? (
@@ -191,21 +163,6 @@ export default function PerformancePage() {
       <div className="mt-4">
         <ClusterThroughput t={t} />
       </div>
-    </div>
-  )
-}
-
-function Bar({ label, current, total, unit }: { label: string; current: number; total: number; unit?: string }) {
-  const pct = Math.min(100, total > 0 ? (current / total) * 100 : 0)
-  return (
-    <div className="flex items-center gap-2">
-      <span className="w-16 text-gray-500 shrink-0">{label}</span>
-      <div className="flex-1 h-3 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-        <div className="h-full rounded-full bg-gradient-to-r from-blue-400 to-blue-600 transition-all duration-700" style={{ width: `${pct}%` }} />
-      </div>
-      <span className="text-gray-400 w-32 text-right shrink-0 font-mono">
-        {current.toLocaleString()}{total < 1e6 ? ` / ${total.toLocaleString()}` : ''}{unit || ''} ({pct.toFixed(1)}%)
-      </span>
     </div>
   )
 }

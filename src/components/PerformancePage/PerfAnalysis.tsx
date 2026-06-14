@@ -151,7 +151,7 @@ function SpeedCurve({ history }: { history: [number, number][] }) {
   const min = Math.min(...tgs); const max = Math.max(...tgs)
   const range = max - min || 1
 
-  const points = history.map(([n, tg], i) => {
+  const points = history.map(([n, tg]) => {
     const x = pad.left + (n / history[history.length - 1][0]) * pw
     const y = pad.top + ph - ((tg - min) / range) * ph
     return `${x},${y}`
