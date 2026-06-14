@@ -141,7 +141,7 @@ export default function ClusterPage() {
         setShowLaunchWizard(false)
         setLaunchStep(0)
       } else {
-        setLaunchError(result?.error || '启动失败，未返回错误详情')
+        setLaunchError(result?.error || t.clusterPage.launchErrorDefault)
       }
     } catch (e: any) {
       setLaunchError(typeof e === 'string' ? e : (e?.message || String(e)))
@@ -240,7 +240,7 @@ export default function ClusterPage() {
           {clusterScanning ? (
             <button onClick={handleCancelScan} className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs flex items-center gap-1">
               <Square className="w-3 h-3" />
-              停止扫描
+               {t.clusterPage.stopScan}
             </button>
           ) : (
             <button onClick={handleScan} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs flex items-center gap-1">
@@ -262,7 +262,7 @@ export default function ClusterPage() {
           </button>
           <button onClick={() => { setShowLocalLaunch(true); setLaunchError('') }} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs flex items-center gap-1">
             <Play className="w-3 h-3" />
-            本地启动
+             {t.clusterPage.localLaunch}
           </button>
         </div>
       </div>
@@ -313,7 +313,7 @@ export default function ClusterPage() {
                         <span className="font-medium">{w.name}</span>
                         <span className="text-gray-400">{w.host}:{w.port}</span>
                         {w.auto_discovered && <span className="text-gray-400 text-xs">[auto]</span>}
-                        {isLocalWorker(w.host) && <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-1.5 py-0.5 rounded">本机</span>}
+                        {isLocalWorker(w.host) && <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-1.5 py-0.5 rounded">{t.clusterPage.localWorker}</span>}
                       </div>
                     </td>
                     <td className="px-4 py-2 text-gray-400 hidden md:table-cell">
@@ -321,7 +321,7 @@ export default function ClusterPage() {
                     </td>
                     <td className="px-4 py-2">
                       {isLocalWorker(w.host) && w.status === 'Online' && (
-                        <button onClick={() => handleStopWorker(w)} className="p-1 text-red-400 hover:text-red-600 rounded mr-1" title="停止本机 Worker">
+                        <button onClick={() => handleStopWorker(w)} className="p-1 text-red-400 hover:text-red-600 rounded mr-1" title={t.clusterPage.stopLocalWorker}>
                           <StopCircle className="w-3.5 h-3.5" />
                         </button>
                       )}
@@ -405,7 +405,7 @@ export default function ClusterPage() {
               {launchStep === 0 && (
                 <>
                   <div className="p-2 mb-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-400">
-                    ⚠ 请确保远程 rpc-server 版本与主引擎一致。推荐从主引擎目录上传 rpc-server 二进制到远程。
+                    {t.clusterPage.sshWarning}
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">Worker IP / Host</label>
@@ -416,21 +416,21 @@ export default function ClusterPage() {
                     <input type="number" value={launchForm.port} onChange={e => setLaunchForm({ ...launchForm, port: parseInt(e.target.value) || 50052 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">SSH 端口</label>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.sshPort}</label>
                     <input type="number" value={launchForm.sshPort} onChange={e => setLaunchForm({ ...launchForm, sshPort: parseInt(e.target.value) || 22 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">远程系统</label>
-                    <select value={launchForm.remoteOs} onChange={e => setLaunchForm({ ...launchForm, remoteOs: e.target.value })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-                      <option value="auto">自动检测</option>
+<label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.remoteOS}</label>
+        <select value={launchForm.remoteOs} onChange={e => setLaunchForm({ ...launchForm, remoteOs: e.target.value })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
+          <option value="auto">{t.clusterPage.autoDetect}</option>
                       <option value="linux">Linux</option>
                       <option value="macos">macOS</option>
                       <option value="windows">Windows</option>
                   </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">远程 rpc-server 路径（留空用 PATH 默认）</label>
-                    <input type="text" value={launchForm.rpcPath} onChange={e => setLaunchForm({ ...launchForm, rpcPath: e.target.value })} placeholder="rpc-server（PATH 默认）" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+<label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.remoteRpcPath}</label>
+        <input type="text" value={launchForm.rpcPath} onChange={e => setLaunchForm({ ...launchForm, rpcPath: e.target.value })} placeholder={t.clusterPage.rpcPathPlaceholder} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                   </div>
                 </>
               )}
@@ -446,7 +446,7 @@ export default function ClusterPage() {
                   </div>
                   <div className="text-xs text-gray-400">— {t.common.default} —</div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">SSH 密码</label>
+                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.sshPassword}</label>
                     <input type="password" value={launchForm.password} onChange={e => setLaunchForm({ ...launchForm, password: e.target.value })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                   </div>
                 </>
@@ -469,16 +469,16 @@ export default function ClusterPage() {
             <div className="flex justify-between px-6 py-4 border-t dark:border-gray-700">
               <div>
                 {launchStep > 0 && (
-                  <button onClick={() => setLaunchStep(s => s - 1)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">← 上一步</button>
+                  <button onClick={() => setLaunchStep(s => s - 1)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.clusterPage.prevStep}</button>
                 )}
               </div>
               <div className="flex gap-2">
                 <button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.common.cancel}</button>
                 {launchStep < 2 ? (
-                  <button onClick={() => setLaunchStep(s => s + 1)} className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg">下一步</button>
+                  <button onClick={() => setLaunchStep(s => s + 1)} className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg">{t.clusterPage.nextStep}</button>
                 ) : (
                   <button onClick={handleSshLaunch} disabled={launching} className="px-4 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-lg">
-                    {launching ? '启动中...' : '启动 Worker'}
+                    {launching ? t.clusterPage.launching : t.clusterPage.launchWorker}
                   </button>
                 )}
               </div>
@@ -491,41 +491,41 @@ export default function ClusterPage() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
           <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-sm">
             <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
-              <h3 className="font-semibold">本地启动 rpc-server</h3>
+              <h3 className="font-semibold">{t.clusterPage.localLaunchTitle}</h3>
               <button onClick={() => setShowLocalLaunch(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-4 h-4" /></button>
             </div>
             <div className="p-6 space-y-3">
               <div>
-                <label className="block text-xs font-medium mb-1 text-gray-500">RPC 端口</label>
+                <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.rpcPort}</label>
                 <input type="number" value={localPort} onChange={e => setLocalPort(parseInt(e.target.value) || 50052)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1 text-gray-500">引擎目录</label>
+                <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.engineDir}</label>
                 <div className="flex items-center gap-2 mb-2">
                   <label className={`flex items-center gap-1 cursor-pointer text-xs ${localMode === 'engine' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400'}`}>
                     <input type="radio" name="localMode" checked={localMode === 'engine'} onChange={() => setLocalMode('engine')} className="w-3 h-3" />
-                    引擎
-                  </label>
-                  <label className={`flex items-center gap-1 cursor-pointer text-xs ${localMode === 'custom' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400'}`}>
-                    <input type="radio" name="localMode" checked={localMode === 'custom'} onChange={() => setLocalMode('custom')} className="w-3 h-3" />
-                    自定义
-                  </label>
-                </div>
-                {localMode === 'engine' ? (
-                  <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-                    {engines.map(e => (
-                      <option key={e.id} value={e.dir}>{e.name}{e.id === defaultEngineId ? '（默认）' : ''}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <div className="flex gap-1">
-                    <input type="text" value={localEngine} onChange={e => setLocalEngine(e.target.value)} placeholder="输入引擎目录路径..." className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                     {t.clusterPage.engineMode}
+                   </label>
+                   <label className={`flex items-center gap-1 cursor-pointer text-xs ${localMode === 'custom' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400'}`}>
+                     <input type="radio" name="localMode" checked={localMode === 'custom'} onChange={() => setLocalMode('custom')} className="w-3 h-3" />
+                     {t.clusterPage.customMode}
+                   </label>
+                 </div>
+                 {localMode === 'engine' ? (
+                   <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
+                     {engines.map(e => (
+                       <option key={e.id} value={e.dir}>{e.name}{e.id === defaultEngineId ? t.clusterPage.defaultEngineLabel : ''}</option>
+                     ))}
+                   </select>
+                 ) : (
+                   <div className="flex gap-1">
+                     <input type="text" value={localEngine} onChange={e => setLocalEngine(e.target.value)} placeholder={t.clusterPage.engineDirPlaceholder} className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                     <button onClick={async () => {
                       try {
                         const selected = await open({ directory: true, multiple: false })
                         if (selected && typeof selected === 'string') setLocalEngine(selected)
                       } catch {}
-                    }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title="选择引擎目录">📂</button>
+                    }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title={t.clusterPage.selectEngineDir}>📂</button>
                   </div>
                 )}
               </div>
@@ -534,9 +534,9 @@ export default function ClusterPage() {
               )}
             </div>
             <div className="flex justify-end gap-2 px-6 py-4 border-t dark:border-gray-700">
-              <button onClick={() => setShowLocalLaunch(false)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">取消</button>
+              <button onClick={() => setShowLocalLaunch(false)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.common.cancel}</button>
               <button onClick={handleLocalLaunch} disabled={launching} className="px-4 py-1.5 text-sm bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400 text-white rounded-lg">
-                {launching ? '启动中...' : '启动'}
+                {launching ? t.clusterPage.launching : t.instance.start}
               </button>
             </div>
           </div>
