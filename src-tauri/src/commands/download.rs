@@ -186,12 +186,13 @@ pub async fn download_modelscope_files(
     for file in files {
         let url = format!("https://modelscope.cn/models/{}/resolve/master/{}", repo_id, file.path);
         let dest_dir = save_path.clone();
+        let rid = repo_id.clone();
         let handle = tokio::spawn({
             let app = app.clone();
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                download_single_file(url, dest_dir, file.name.clone(), file.size, repo_id.clone(), app).await;
+                download_single_file(url, dest_dir, file.name.clone(), file.size, rid, app).await;
             }
         });
         handles.push(handle);
@@ -299,12 +300,13 @@ pub async fn download_huggingface_files(
     for file in files {
         let url = format!("https://huggingface.co/{}/resolve/main/{}", repo_id, file.path);
         let dest_dir = save_path.clone();
+        let rid = repo_id.clone();
         let handle = tokio::spawn({
             let app = app.clone();
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                download_single_file(url, dest_dir, file.name.clone(), file.size, repo_id.clone(), app).await;
+                download_single_file(url, dest_dir, file.name.clone(), file.size, rid, app).await;
             }
         });
         handles.push(handle);

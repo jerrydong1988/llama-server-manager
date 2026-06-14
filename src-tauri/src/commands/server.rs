@@ -573,61 +573,60 @@ pub async fn stop_server(
     let mut killed = false;
 
     if let Some(ref ri) = ri {
-        // #12: 先按端口杀（更精确），再按 PID 杀
+        // taskkill /T 优先（含子进程），PowerShell 按端口备用
         #[cfg(target_os = "windows")]
         {
-            let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
             let r = std::os::windows::process::CommandExt::creation_flags(
-                &mut Command::new("powershell"), 0x08000000)
-                .args(["-NoProfile", "-Command", &cmd])
+                &mut Command::new("taskkill"), 0x08000000)
+                .args(["/F", "/T", "/PID", &ri.pid.to_string()])
                 .output();
-            killed = r.map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
+            killed = r.map(|o| o.status.success()).unwrap_or(false);
         }
-        #[cfg(target_os = "macos")]
-        {
-            let port_str = ri.port.to_string();
-            if let Ok(out) = Command::new("lsof").args(["-ti", &format!(":{}", port_str)]).output() {
-                let pids = String::from_utf8_lossy(&out.stdout);
-                for pid in pids.lines() {
-                    let _ = Command::new("kill").arg("-9").arg(pid).status();
-                    killed = true;
-                }
-            }
-        }
-        #[cfg(target_os = "linux")]
-        {
-            let _ = Command::new("fuser").args(["-k", &format!("{}/tcp", ri.port)]).status();
-            killed = true;
-        }
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        { killed = Command::new("kill").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false); }
     }
 
     if !killed {
         if let Some(ref ri) = ri {
             #[cfg(target_os = "windows")]
             {
-                // #3: /T 递归杀子进程
+                let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
                 let r = std::os::windows::process::CommandExt::creation_flags(
-                    &mut Command::new("taskkill"), 0x08000000)
-                    .args(["/F", "/T", "/PID", &ri.pid.to_string()])
+                    &mut Command::new("powershell"), 0x08000000)
+                    .args(["-NoProfile", "-Command", &cmd])
                     .output();
-                killed = r.map(|o| o.status.success()).unwrap_or(false);
+                killed = r.map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
             }
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            { killed = Command::new("kill").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false); }
+            #[cfg(target_os = "macos")]
+            {
+                let port_str = ri.port.to_string();
+                if let Ok(out) = Command::new("lsof").args(["-ti", &format!(":{}", port_str)]).output() {
+                    let pids = String::from_utf8_lossy(&out.stdout);
+                    for pid in pids.lines() {
+                        let _ = Command::new("kill").arg("-9").arg(pid).status();
+                        killed = true;
+                    }
+                }
+            }
+            #[cfg(target_os = "linux")]
+            {
+                let _ = Command::new("fuser").args(["-k", &format!("{}/tcp", ri.port)]).status();
+                killed = true;
+            }
         }
     }
 
-    // #1: 无论 kill 是否成功，始终从 running 中移除，避免前后端状态不一致
-    state.running.lock().unwrap().remove(&instance_id);
-
-    app.emit("server-stopped", serde_json::json!({
-        "instanceId": instance_id,
-    })).ok();
-
-    if !killed {
-        return Err("无法终止进程".into());
+    if killed {
+        state.running.lock().unwrap().remove(&instance_id);
+        app.emit("server-stopped", serde_json::json!({
+            "instanceId": instance_id,
+        })).ok();
+        Ok(())
+    } else {
+        // 进程仍在运行，不发射 server-stopped，前端保持 running 状态
+        // 监控线程会在进程真正退出时处理清理
+        Err("无法终止进程".into())
     }
-    Ok(())
 }
 
 #[tauri::command]
