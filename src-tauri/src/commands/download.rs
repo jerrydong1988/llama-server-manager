@@ -9,6 +9,7 @@ use futures_util::StreamExt;
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_default()
 });
@@ -70,7 +71,7 @@ async fn download_single_file(
 
     use std::io::Write;
     let mut file = match std::fs::OpenOptions::new()
-        .create(true).append(resume_from == 0).write(true)
+        .create(true).append(resume_from > 0).write(true)
         .open(&dest) {
         Ok(f) => f,
         Err(e) => {
@@ -121,7 +122,7 @@ async fn download_single_file(
             }
             Err(e) => {
                 let _ = app.emit("download-error", serde_json::json!({
-                    "fileName": file_name, "error": e.to_string()
+                    "fileName": file_name, "error": e.to_string(), "repoId": repo_id, "source": source,
                 }));
                 return;
             }

@@ -373,6 +373,7 @@ const ModelRepo = () => {
 
                       const resumeDownload = async () => {
                         setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
+                        setFileStates(s => ({...s, [f.name]: {downloaded: (s[f.name]?.downloaded ?? 0), total: f.size, status: 'pending' as const}}))
                         try {
                           await downloadModelscopeFiles(msRepoId, [f], msSaveDir)
                         } catch (e: any) { console.error(e) }
