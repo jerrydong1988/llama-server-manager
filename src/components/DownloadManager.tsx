@@ -6,7 +6,7 @@ import type { DownloadProgress } from '../store/types'
 type Tab = 'active' | 'completed'
 
 export default function DownloadManager() {
-  const { downloadTasks, cancelFileDownload, cancelAndCleanupDownload } = useAppStore()
+  const { downloadTasks, downloadQueue, cancelFileDownload, cancelAndCleanupDownload, removeFromDownloadQueue } = useAppStore()
   const [tab, setTab] = useState<Tab>('active')
 
   const tasks = Object.values(downloadTasks)
@@ -22,7 +22,7 @@ export default function DownloadManager() {
   }, [tasks])
 
   const filterByTab = (g: { files: DownloadProgress[] }) => {
-    if (tab === 'active') return g.files.some(f => f.status === 'active' || f.status === 'error')
+    if (tab === 'active') return g.files.some(f => f.status === 'active' || f.status === 'queued' || f.status === 'error')
     return g.files.every(f => f.status === 'completed' || f.status === 'cancelled')
   }
 
@@ -60,6 +60,25 @@ export default function DownloadManager() {
           {totalActive > 0 && <span className="text-sm font-normal text-gray-400">({totalActive} active)</span>}
         </h2>
       </div>
+
+      {/* Queued */}
+      {downloadQueue.length > 0 && (
+        <div className="mb-4">
+          <div className="text-xs text-gray-500 mb-2">Queued ({downloadQueue.length})</div>
+          <div className="space-y-1">
+            {downloadQueue.map(entry => {
+              const totalSize = entry.files.reduce((s, f) => s + f.size, 0)
+              return (
+                <div key={entry.id} className="flex items-center justify-between px-3 py-1.5 bg-gray-50 dark:bg-gray-800 rounded text-xs">
+                  <span className="truncate flex-1">{entry.source}:{entry.repoId} · {entry.files.length} file{entry.files.length>1?'s':''} · {entry.files.map(f => f.name).join(', ')}</span>
+                  <span className="text-gray-400 mx-2">{fmtSize(totalSize)}</span>
+                  <button onClick={() => removeFromDownloadQueue(entry.id)} className="text-red-400 hover:text-red-600 ml-1">✕</button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-2 mb-4">
         <button onClick={() => setTab('active')}

@@ -10,7 +10,7 @@ import { normalizePath, pathJoin } from '../utils/path'
 const DEFAULT_SAVE_DIR = 'models'
 
 const ModelRepo = () => {
-  const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder, browseModelscope, downloadModelscopeFiles, browseHuggingface, downloadHuggingfaceFiles, pauseFileDownload, cancelAndCleanupDownload } = useAppStore()
+  const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder, browseModelscope, browseHuggingface, pauseFileDownload, cancelAndCleanupDownload, downloadTasks, addToDownloadQueue, setDownloadSaveDir } = useAppStore()
   const { t } = useI18n()
   const [searchQuery, setSearchQuery] = useState('')
   const [showMsModal, setShowMsModal] = useState(false)
@@ -18,7 +18,6 @@ const ModelRepo = () => {
   const [msFiles, setMsFiles] = useState<MsFileEntry[]>([])
   const [msStatus, setMsStatus] = useState('')
   const [msBrowsing, setMsBrowsing] = useState(false)
-  const [fileStates, setFileStates] = useState<Record<string, {downloaded: number; total: number; speed?: number; status: 'pending'|'downloading'|'done'|'error'|'cancelled'|'paused'; error?: string}>>({})
   const [msSaveDir, setMsSaveDir] = useState(DEFAULT_SAVE_DIR)
   const [hfRepoId, setHfRepoId] = useState('')
   const [hfFiles, setHfFiles] = useState<MsFileEntry[]>([])
@@ -26,32 +25,37 @@ const ModelRepo = () => {
   const [downloadTab, setDownloadTab] = useState<'ms' | 'hf'>('ms')
   const [scanError, setScanError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
-  const [pausedSet, setPausedSet] = useState<Set<string>>(new Set())
 
   useEffect(() => { loadInitialData() }, [loadInitialData])
 
-  // 下载事件监听
+  // 同步 saveDir 到 Store
+  useEffect(() => { setDownloadSaveDir(msSaveDir) }, [msSaveDir, setDownloadSaveDir])
+
+  // 下载完成后扫描模型目录
   useEffect(() => {
     const fns: (() => void)[] = []
-    listen<{fileName: string; downloaded: number; total: number; speed?: number}>('download-progress', (e) => {
-      setFileStates(s => ({...s, [e.payload.fileName]: {downloaded: e.payload.downloaded, total: e.payload.total, speed: e.payload.speed, status: 'downloading'}}))
-    }).then(f => fns.push(f))
-    listen<{fileName: string; path: string}>('download-complete', (e) => {
-      setFileStates(s => ({...s, [e.payload.fileName]: {...(s[e.payload.fileName]||{downloaded:0,total:0}), status: 'done' as const}}))
-    }).then(f => fns.push(f))
-    listen<{fileName: string; error: string}>('download-error', (e) => {
-      setFileStates(s => ({...s, [e.payload.fileName]: {...(s[e.payload.fileName]||{downloaded:0,total:0}), status: 'error' as const, error: e.payload.error}}))
-    }).then(f => fns.push(f))
-    listen<{fileName: string}>('download-cancelled', (e) => {
-      setFileStates(s => {
-        const prev = s[e.payload.fileName]
-        // 如果前端已标记为 paused，保持暂停状态，不被后端事件覆盖
-        if (prev?.status === 'paused') return s
-        return {...s, [e.payload.fileName]: {...(prev||{downloaded:0,total:0}), status: 'cancelled' as const}}
-      })
+    let repoComplete = false
+    listen<{ fileName: string; repoId: string; source: string; path: string }>('download-complete', (e) => {
+      const { repoId, source } = e.payload
+      const currentRepo = downloadTab === 'ms' ? msRepoId : hfRepoId
+      const currentSource = downloadTab === 'ms' ? 'modelscope' : 'huggingface'
+      if (repoId !== currentRepo || source !== currentSource) return
+      // 检查该 repo 全部文件是否已完成
+      const allFiles = downloadTab === 'ms' ? msFiles : hfFiles
+      if (allFiles.length === 0) return
+      const tasks = useAppStore.getState().downloadTasks
+      const allDone = allFiles.every(f => tasks[f.name]?.status === 'completed')
+      if (allDone && !repoComplete) {
+        repoComplete = true
+        invoke<string>('resolve_path', { path: msSaveDir }).then(resolvedDir => {
+          const allDirs = [...new Set([...modelDirs, resolvedDir])]
+          setModelDirs(allDirs)
+          scanModels(allDirs)
+        }).catch(() => {})
+      }
     }).then(f => fns.push(f))
     return () => { fns.forEach(fn => fn()) }
-  }, [])
+  }, [downloadTab, msRepoId, hfRepoId, msFiles, hfFiles, msSaveDir, modelDirs, setModelDirs, scanModels])
 
   // ── 自适应递归树 ──────────────────────────────────────────
   interface TreeNode {
@@ -354,34 +358,20 @@ const ModelRepo = () => {
 
                   <div className="border dark:border-gray-700 rounded-lg max-h-64 overflow-y-auto">
                     {msFiles.map((f) => {
-                      const st = fileStates[f.name]
-                      const isPaused = pausedSet.has(f.name)
+                      const task = downloadTasks[f.name]
                       const partialPath = pathJoin(msSaveDir, msRepoId, f.name)
 
-                      // 单文件下载
-                      const startSingleDownload = async () => {
-                        setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
-                        setFileStates(s => ({...s, [f.name]: {downloaded: 0, total: f.size, status: 'pending' as const}}))
-                        try {
-                          await downloadModelscopeFiles(msRepoId, [f], msSaveDir)
-                          const resolvedDir = await invoke<string>('resolve_path', { path: msSaveDir })
-                          const allDirs = [...new Set([...modelDirs, resolvedDir])]
-                          setModelDirs(allDirs)
-                          await scanModels(allDirs)
-                        } catch (e: any) { console.error(e) }
+                      const handleDownload = () => {
+                        addToDownloadQueue({
+                          repoId: msRepoId,
+                          source: 'modelscope',
+                          files: [f],
+                          saveDir: msSaveDir,
+                        })
                       }
 
-                      const resumeDownload = async () => {
-                        setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
-                        setFileStates(s => ({...s, [f.name]: {downloaded: (s[f.name]?.downloaded ?? 0), total: f.size, status: 'pending' as const}}))
-                        try {
-                          await downloadModelscopeFiles(msRepoId, [f], msSaveDir)
-                        } catch (e: any) { console.error(e) }
-                      }
-
-                      // 暂停 → 保持 pausedSet
-                      if (isPaused) {
-                        const prev = st || {downloaded: 0, total: f.size}
+                      // 暂停
+                      if (task?.status === 'paused') {
                         return (
                           <div key={f.path} className="px-4 py-2.5 border-b dark:border-gray-700 last:border-0 space-y-1">
                             <div className="flex items-center justify-between text-xs">
@@ -389,16 +379,13 @@ const ModelRepo = () => {
                               <span className="text-xs text-gray-400 shrink-0 ml-2">{modelTypeLabel(f.file_type)} · {formatSize(f.size)}</span>
                             </div>
                             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
-                              <div className="bg-yellow-500 h-1.5 rounded-full" style={{width: `${(prev.total ?? f.size)>0?((prev.downloaded ?? 0)/(prev.total ?? f.size))*100:0}%`}} />
+                              <div className="bg-yellow-500 h-1.5 rounded-full" style={{width: `${task.total>0?(task.downloaded/task.total)*100:0}%`}} />
                             </div>
                             <div className="flex items-center gap-2">
-                              <span className="text-xs text-yellow-500">{formatSize(prev.downloaded ?? 0)} / {formatSize(prev.total ?? f.size)}</span>
-                               <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
-                                <button onClick={() => {
-                                  setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
-                                  setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{downloaded:0,total:f.size}), status: 'cancelled' as const}}))
-                                  cancelAndCleanupDownload(f.name, partialPath)
-                                }} className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
+                              <span className="text-xs text-yellow-500">{formatSize(task.downloaded ?? 0)} / {formatSize(task.total)}</span>
+                              <button onClick={handleDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
+                              <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
+                                className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                             </div>
                           </div>
                         )
@@ -411,44 +398,34 @@ const ModelRepo = () => {
                             <span className="text-xs text-gray-400 shrink-0 ml-2">{modelTypeLabel(f.file_type)} · {formatSize(f.size)}</span>
                           </div>
 
-                          {/* 进度条 */}
-                          {st && (st.status === 'downloading' || st.status === 'pending' || st.status === 'paused') && (
+                          {task && (task.status === 'active' || task.status === 'queued') && (
                             <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
-                              <div className="bg-blue-600 h-1.5 rounded-full" style={{width: `${st.total>0?(st.downloaded/st.total)*100:0}%`}} />
+                              <div className="bg-blue-600 h-1.5 rounded-full" style={{width: `${task.total>0?(task.downloaded/task.total)*100:0}%`}} />
                             </div>
                           )}
 
-                          {/* 状态 + 操作按钮 */}
                           <div className="flex items-center gap-2">
-                            {(!st || st.status === 'done' || st.status === 'error' || st.status === 'cancelled') ? (
+                            {(!task || task.status === 'completed' || task.status === 'error' || task.status === 'cancelled') ? (
                               <>
-                                {(st?.status === 'done') && <span className="text-xs text-green-500">{t.modelRepo.done}</span>}
-                                {(st?.status === 'error') && <span className="text-xs text-red-500">{st.error || t.modelRepo.failed}</span>}
-                                {(st?.status === 'cancelled') && <span className="text-xs text-yellow-500">{t.modelRepo.cancelled}</span>}
-                                <button onClick={startSingleDownload}
+                                {task?.status === 'completed' && <span className="text-xs text-green-500">{t.modelRepo.done}</span>}
+                                {task?.status === 'error' && <span className="text-xs text-red-500">{task.error || t.modelRepo.failed}</span>}
+                                {task?.status === 'cancelled' && <span className="text-xs text-yellow-500">{t.modelRepo.cancelled}</span>}
+                                <button onClick={handleDownload}
                                   className="text-xs text-blue-500 hover:text-blue-700 ml-auto">{t.modelRepo.downloadBtn}</button>
                               </>
-                            ) : st.status === 'paused' ? (
+                            ) : task.status === 'active' ? (
                               <>
-                                <span className="text-xs text-yellow-500">{formatSize(st.downloaded)} / {formatSize(st.total)}</span>
-                                <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
-                                <button onClick={() => {
-                                  setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{downloaded:0,total:f.size}), status: 'cancelled' as const}}))
-                                  cancelAndCleanupDownload(f.name, partialPath)
-                                }}
-                                  className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
-                              </>
-                            ) : st.status === 'downloading' || st.status === 'pending' ? (
-                              <>
-                                <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}{st.speed ? ` · ${formatSpeed(st.speed)}` : ''}</span>
-                                <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.add(f.name); return n }); setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{downloaded:0,total:f.size}), status: 'paused' as const}})); pauseFileDownload(f.name) }}
+                                <span className="text-xs text-blue-500">{formatSize(task.downloaded ?? 0)} / {formatSize(task.total)}{task.speed ? ` · ${formatSpeed(task.speed)}` : ''}</span>
+                                <button onClick={() => { useAppStore.getState().setDownloadTasks({...useAppStore.getState().downloadTasks, [f.name]: {...task, status: 'paused'}}); pauseFileDownload(f.name) }}
                                   className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
                                 <button onClick={() => {
-                                  setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{downloaded:0,total:f.size}), status: 'cancelled' as const}}));
+                                  useAppStore.getState().setDownloadTasks({...useAppStore.getState().downloadTasks, [f.name]: {...task, status: 'cancelled'}})
                                   cancelAndCleanupDownload(f.name, partialPath)
                                 }}
                                   className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                               </>
+                            ) : task.status === 'queued' ? (
+                              <span className="text-xs text-gray-400">Queued...</span>
                             ) : null}
                           </div>
                         </div>
@@ -493,49 +470,33 @@ const ModelRepo = () => {
 
                   <div className="border dark:border-gray-700 rounded-lg max-h-64 overflow-y-auto">
                     {hfFiles.map((f) => {
-                      const st = fileStates[f.name]
-                      const isPaused = pausedSet.has(f.name)
+                      const task = downloadTasks[f.name]
                       const partialPath = pathJoin(msSaveDir, hfRepoId, f.name)
 
-                      const startHfDownload = async () => {
-                        setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
-                        setFileStates(s => ({...s, [f.name]: {downloaded: 0, total: f.size, status: 'pending' as const}}))
-                        try {
-                          await downloadHuggingfaceFiles(hfRepoId, [f], msSaveDir)
-                          const resolvedDir = await invoke<string>('resolve_path', { path: msSaveDir })
-                          const allDirs = [...new Set([...modelDirs, resolvedDir])]
-                          setModelDirs(allDirs)
-                          await scanModels(allDirs)
-                        } catch (e: any) { console.error(e) }
+                      const handleDownload = () => {
+                        addToDownloadQueue({
+                          repoId: hfRepoId,
+                          source: 'huggingface',
+                          files: [f],
+                          saveDir: msSaveDir,
+                        })
                       }
 
-                      const resumeDownload = async () => {
-                        setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
-                        try {
-                          await downloadHuggingfaceFiles(hfRepoId, [f], msSaveDir)
-                        } catch (e: any) { console.error(e) }
-                      }
-
-                      const progress = st && (st.status === 'pending' || st.status === 'downloading')
-                      const done = st && st.status === 'done'
-                      const err = st && st.status === 'error'
-
-                      if (isPaused && st) {
+                      if (task?.status === 'paused') {
                         return (
                           <div key={f.path} className="px-4 py-2.5 border-b dark:border-gray-700 last:border-0 space-y-1">
                             <div className="flex items-center justify-between text-xs">
-                              <div className="flex items-center gap-2 truncate flex-1">
-                                <span title={f.name}>{f.name}</span>
-                                <span className="text-xs text-gray-400 shrink-0 ml-2">{modelTypeLabel(f.file_type)} · {formatSize(f.size)}</span>
-                              </div>
-                              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
-                                <div className="bg-yellow-500 h-1.5 rounded-full" style={{width: `${(st.total ?? f.size)>0?((st.downloaded ?? 0)/(st.total ?? f.size))*100:0}%`}} />
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-yellow-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total ?? f.size)}</span>
-                                <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
-                                <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n }); cancelAndCleanupDownload(f.name, partialPath) }} className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
-                              </div>
+                              <span className="text-sm truncate flex-1 mr-2" title={f.name}>{f.name}</span>
+                              <span className="text-xs text-gray-400 shrink-0 ml-2">{modelTypeLabel(f.file_type)} · {formatSize(f.size)}</span>
+                            </div>
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                              <div className="bg-yellow-500 h-1.5 rounded-full" style={{width: `${task.total>0?(task.downloaded/task.total)*100:0}%`}} />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-yellow-500">{formatSize(task.downloaded ?? 0)} / {formatSize(task.total)}</span>
+                              <button onClick={handleDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
+                              <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
+                                className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                             </div>
                           </div>
                         )
@@ -544,34 +505,40 @@ const ModelRepo = () => {
                       return (
                         <div key={f.path} className="px-4 py-2.5 border-b dark:border-gray-700 last:border-0 space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <div className="flex items-center gap-2 truncate flex-1">
-                              <span title={f.name}>{f.name}</span>
-                              <span className="text-xs text-gray-400 shrink-0 ml-2">{modelTypeLabel(f.file_type)} · {formatSize(f.size)}</span>
-                            </div>
-                            <div className="flex items-center gap-2 shrink-0">
-                              {!done && !progress && !err && (
-                                <button onClick={startHfDownload}
-                                  className="text-xs text-blue-600 hover:text-blue-800">{t.modelRepo.downloadBtn}</button>
-                              )}
-                              {done && <span className="text-xs text-green-600">{t.modelRepo.done}</span>}
-                              {err && <span className="text-xs text-red-500">{st.error || t.modelRepo.failed}</span>}
-                              {isPaused && <button onClick={resumeDownload} className="text-xs text-green-500">{t.modelRepo.resume}</button>}
-                            </div>
+                            <span className="text-sm truncate flex-1 mr-2" title={f.name}>{f.name}</span>
+                            <span className="text-xs text-gray-400 shrink-0 ml-2">{modelTypeLabel(f.file_type)} · {formatSize(f.size)}</span>
                           </div>
-                          {progress && (
-                            <>
-                              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
-                                <div className="bg-blue-500 h-1.5 rounded-full" style={{width: `${st.total>0?(st.downloaded/st.total)*100:0}%`}} />
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}{st.speed ? ` · ${formatSpeed(st.speed)}` : ''}</span>
-                                <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.add(f.name); return n }); pauseFileDownload(f.name) }}
-                                  className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
-                                <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
-                                  className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
-                              </div>
-                            </>
+
+                          {task && (task.status === 'active' || task.status === 'queued') && (
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                              <div className="bg-blue-600 h-1.5 rounded-full" style={{width: `${task.total>0?(task.downloaded/task.total)*100:0}%`}} />
+                            </div>
                           )}
+
+                          <div className="flex items-center gap-2">
+                            {(!task || task.status === 'completed' || task.status === 'error' || task.status === 'cancelled') ? (
+                              <>
+                                {task?.status === 'completed' && <span className="text-xs text-green-500">{t.modelRepo.done}</span>}
+                                {task?.status === 'error' && <span className="text-xs text-red-500">{task.error || t.modelRepo.failed}</span>}
+                                {task?.status === 'cancelled' && <span className="text-xs text-yellow-500">{t.modelRepo.cancelled}</span>}
+                                <button onClick={handleDownload}
+                                  className="text-xs text-blue-500 hover:text-blue-700 ml-auto">{t.modelRepo.downloadBtn}</button>
+                              </>
+                            ) : task.status === 'active' ? (
+                              <>
+                                <span className="text-xs text-blue-500">{formatSize(task.downloaded ?? 0)} / {formatSize(task.total)}{task.speed ? ` · ${formatSpeed(task.speed)}` : ''}</span>
+                                <button onClick={() => { useAppStore.getState().setDownloadTasks({...useAppStore.getState().downloadTasks, [f.name]: {...task, status: 'paused'}}); pauseFileDownload(f.name) }}
+                                  className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
+                                <button onClick={() => {
+                                  useAppStore.getState().setDownloadTasks({...useAppStore.getState().downloadTasks, [f.name]: {...task, status: 'cancelled'}})
+                                  cancelAndCleanupDownload(f.name, partialPath)
+                                }}
+                                  className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
+                              </>
+                            ) : task.status === 'queued' ? (
+                              <span className="text-xs text-gray-400">Queued...</span>
+                            ) : null}
+                          </div>
                         </div>
                       )
                     })}

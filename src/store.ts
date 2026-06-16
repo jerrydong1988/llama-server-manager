@@ -29,7 +29,74 @@ export const useAppStore = create<AppState>((set, get) => ({
   clusterScanning: false,
   downloadProgress: {},
   downloadTasks: {},
+  downloadSaveDir: 'models',
+  downloadQueue: [],
+  processingQueue: false,
   setDownloadTasks: (tasks) => set({ downloadTasks: tasks }),
+  setDownloadSaveDir: (dir) => set({ downloadSaveDir: dir }),
+  addToDownloadQueue: (entry) => {
+    const s = get()
+    const id = crypto.randomUUID()
+    const fileNames = new Set(entry.files.map(f => f.name))
+    
+    // 去重：已在队列或正在下载/已完成的不重复入队
+    const alreadyInQueue = s.downloadQueue.some(q => 
+      q.repoId === entry.repoId && q.source === entry.source && 
+      q.files.some(f => fileNames.has(f.name)))
+    if (alreadyInQueue) return
+
+    // 更新已存在条目的状态为 queued
+    const updated = { ...s.downloadTasks }
+    for (const f of entry.files) {
+      if (updated[f.name]) {
+        updated[f.name] = { ...updated[f.name], status: 'queued' as const }
+      }
+    }
+    if (Object.keys(updated).length > 0) set({ downloadTasks: updated })
+
+    set({ downloadQueue: [...s.downloadQueue, { ...entry, id, addedAt: Date.now() }] })
+    // 尝试立即处理队列
+    get().processDownloadQueue!()
+  },
+  removeFromDownloadQueue: (id) => {
+    set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== id) }))
+  },
+  processDownloadQueue: async () => {
+    const s = get()
+    if (s.processingQueue) return
+    set({ processingQueue: true })
+    
+    try {
+      const { downloadQueue, downloadTasks } = get()
+      const activeCount = Object.values(downloadTasks).filter(t => t.status === 'active').length
+      const MAX = 3
+      
+      if (activeCount >= MAX || downloadQueue.length === 0) return
+
+      const next = downloadQueue[0]
+      set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== next.id) }))
+      
+      // 标记为 active
+      const tasks = { ...get().downloadTasks }
+      for (const f of next.files) {
+        tasks[f.name] = { fileName: f.name, repoId: next.repoId, source: next.source, downloaded: 0, total: f.size, speed: 0, status: 'active' }
+      }
+      set({ downloadTasks: tasks })
+
+      try {
+        if (next.source === 'modelscope') {
+          await invoke('download_modelscope_files', { repoId: next.repoId, files: next.files, saveDir: next.saveDir })
+        } else {
+          await invoke('download_huggingface_files', { repoId: next.repoId, files: next.files, saveDir: next.saveDir })
+        }
+      } finally {
+        set({ processingQueue: false })
+        await get().processDownloadQueue!()
+      }
+    } catch {
+      set({ processingQueue: false })
+    }
+  },
   setModels: (models) => set({ models }),
   setEngines: (engines) => set({ engines }),
   setModelDirs: (dirs) => { set({ modelDirs: dirs }); get().saveConfig() },
@@ -414,16 +481,19 @@ listen<{ fileName: string; repoId: string; source: string; path: string }>('down
   const { fileName, repoId, source, path } = e.payload
   const prev = s.downloadTasks[fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { ...(prev || { fileName, repoId, source, downloaded: 0, total: 0, speed: 0 }), status: 'completed', path } })
+  useAppStore.getState().processDownloadQueue!()
 }).catch(() => {})
 
 listen<{ fileName: string; repoId: string; source: string }>('download-cancelled', (e) => {
   const s = useAppStore.getState()
   const prev = s.downloadTasks[e.payload.fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'cancelled' } })
+  useAppStore.getState().processDownloadQueue!()
 }).catch(() => {})
 
 listen<{ fileName: string; repoId: string; source: string; error: string }>('download-error', (e) => {
   const s = useAppStore.getState()
   const prev = s.downloadTasks[e.payload.fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'error', error: e.payload.error } })
+  useAppStore.getState().processDownloadQueue!()
 }).catch(() => {})
