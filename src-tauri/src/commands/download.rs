@@ -66,6 +66,7 @@ async fn download_single_file(
     let mut downloaded = resume_from;
     let mut win_start = std::time::Instant::now();
     let mut win_bytes: u64 = 0;
+    let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1); // 首次立即发射
 
     use std::io::Write;
     let mut file = match std::fs::OpenOptions::new()
@@ -109,10 +110,14 @@ async fn download_single_file(
                 } else if win_elapsed > 0.0 {
                     win_bytes as f64 / win_elapsed
                 } else { 0.0 };
-                let _ = app.emit("download-progress", serde_json::json!({
-                    "fileName": file_name, "downloaded": downloaded,
-                    "total": total, "speed": speed, "repoId": repo_id, "source": source,
-                }));
+                // 限流：最多 500ms 发一次事件，避免前端被事件洪泛冲垮
+                if last_emit.elapsed().as_millis() >= 500 {
+                    last_emit = now;
+                    let _ = app.emit("download-progress", serde_json::json!({
+                        "fileName": file_name, "downloaded": downloaded,
+                        "total": total, "speed": speed, "repoId": repo_id, "source": source,
+                    }));
+                }
             }
             Err(e) => {
                 let _ = app.emit("download-error", serde_json::json!({
