@@ -395,6 +395,7 @@ const ModelRepo = () => {
                                <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
                                 <button onClick={() => {
                                   setPausedSet(s => { const n = new Set(s); n.delete(f.name); return n })
+                                  setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{downloaded:0,total:f.size}), status: 'cancelled' as const}}))
                                   cancelAndCleanupDownload(f.name, partialPath)
                                 }} className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                             </div>
@@ -430,15 +431,21 @@ const ModelRepo = () => {
                               <>
                                 <span className="text-xs text-yellow-500">{formatSize(st.downloaded)} / {formatSize(st.total)}</span>
                                 <button onClick={resumeDownload} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
-                                <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
+                                <button onClick={() => {
+                                  setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{downloaded:0,total:f.size}), status: 'cancelled' as const}}))
+                                  cancelAndCleanupDownload(f.name, partialPath)
+                                }}
                                   className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                               </>
                             ) : st.status === 'downloading' || st.status === 'pending' ? (
                               <>
                                 <span className="text-xs text-blue-500">{formatSize(st.downloaded ?? 0)} / {formatSize(st.total)}{st.speed ? ` · ${formatSpeed(st.speed)}` : ''}</span>
-                                <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.add(f.name); return n }); pauseFileDownload(f.name) }}
+                                <button onClick={() => { setPausedSet(s => { const n = new Set(s); n.add(f.name); return n }); setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{downloaded:0,total:f.size}), status: 'paused' as const}})); pauseFileDownload(f.name) }}
                                   className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
-                                <button onClick={() => cancelAndCleanupDownload(f.name, partialPath)}
+                                <button onClick={() => {
+                                  setFileStates(s => ({...s, [f.name]: {...(s[f.name]||{downloaded:0,total:f.size}), status: 'cancelled' as const}}));
+                                  cancelAndCleanupDownload(f.name, partialPath)
+                                }}
                                   className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                               </>
                             ) : null}
