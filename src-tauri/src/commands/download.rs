@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
-        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(30))
         .build()
         .unwrap_or_default()
 });
