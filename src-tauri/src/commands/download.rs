@@ -29,7 +29,7 @@ async fn download_single_file(
 
     if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
         if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id }));
+            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id, "source": source }));
         }
         return;
     }
@@ -83,7 +83,9 @@ async fn download_single_file(
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id }));
+            if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
+                let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id, "source": source }));
+            }
             return;
         }
         match chunk {
