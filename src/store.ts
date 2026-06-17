@@ -62,14 +62,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   processDownloadQueue: async () => {
     const s = get()
     if (s.processingQueue) return
-    set({ processingQueue: true })
     
+    const { downloadQueue, downloadTasks } = get()
+    const activeCount = Object.values(downloadTasks).filter(t => t.status === 'active').length
+    const MAX = 3
+    if (activeCount >= MAX || downloadQueue.length === 0) return
+
+    set({ processingQueue: true })
     try {
-      const { downloadQueue, downloadTasks } = get()
-      const activeCount = Object.values(downloadTasks).filter(t => t.status === 'active').length
-      const MAX = 3
-      
-      if (activeCount >= MAX || downloadQueue.length === 0) return
 
       const next = downloadQueue[0]
       set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== next.id) }))
