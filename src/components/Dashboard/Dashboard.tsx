@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Server, Database, Cpu, BarChart3, ArrowRight } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
+import { invoke } from '@tauri-apps/api/core'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
 import StatCard from './StatCard'
@@ -17,6 +18,19 @@ export default function Dashboard() {
   const stoppedInstances = instances.filter(i => i.status !== 'running')
 
   useEffect(() => {
+    // 首次挂载时立即拉取一次数据，避免等待 5 秒事件
+    const fetchInitial = async () => {
+      const running = useAppStore.getState().instances.filter(i => i.status === 'running')
+      if (running.length > 0) {
+        try {
+          const m = await invoke<any>('get_system_metrics', { instanceId: running[0].id })
+          setSysMetrics(m)
+          setMetricInstance(running[0].name)
+        } catch {}
+      }
+    }
+    fetchInitial()
+
     const unlisten = listen<{ system: any; instanceId: string }>('metrics-update', (e) => {
       setSysMetrics(e.payload.system)
       const inst = instances.find(i => i.id === e.payload.instanceId)
