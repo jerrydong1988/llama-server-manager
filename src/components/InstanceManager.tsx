@@ -68,22 +68,6 @@ const InstanceManager = () => {
     catch (e) { console.error(e) }
   }
 
-  const handleTestConnection = async (inst: typeof instances[0]) => {
-    console.log('[test] starting connection test for', inst.name, inst.config.host, inst.config.port)
-    setTestResult('⏳ Testing...')
-    try {
-      const result = await invoke<string>('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
-      console.log('[test] result:', result)
-      setTestResult(result)
-      setTimeout(() => setTestResult(''), 5000)
-    } catch (e: any) {
-      console.error('[test] error:', e)
-      const msg = typeof e === 'string' ? e : (e?.message || e?.toString() || 'Connection failed')
-      setTestResult('✗ ' + msg)
-      setTimeout(() => setTestResult(''), 5000)
-    }
-  }
-
   const statusBg = (s: string) => {
     switch (s) { case 'running': return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400'
       case 'stopped': return 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300'
@@ -169,7 +153,21 @@ const InstanceManager = () => {
               {inst.status === 'running' && (
                 <>
                   <button onClick={() => openBrowser(inst.config.host, inst.config.port)} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title={t.instance.openBrowser}><Globe className="w-4 h-4" /></button>
-                  <button onClick={() => handleTestConnection(inst)} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title={t.instance.testConnection}><Wifi className="w-4 h-4" /></button>
+                  <button onClick={async () => {
+                    console.log('[test] button clicked for', inst.name)
+                    setTestResult('⏳ Testing...')
+                    try {
+                      const result = await invoke<string>('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
+                      setTestResult(result)
+                      setTimeout(() => setTestResult(''), 5000)
+                    } catch (e: any) {
+                      setTestResult('✗ ' + (typeof e === 'string' ? e : (e?.message || 'Connection failed')))
+                      setTimeout(() => setTestResult(''), 5000)
+                    }
+                  }} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title={t.instance.testConnection}>
+                    <Wifi className="w-4 h-4" />
+                    <span className="sr-only">{t.instance.testConnection}</span>
+                  </button>
                 </>
               )}
               <button onClick={() => handleShowCommand(inst.id)} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title={t.instance.genCommand}><Terminal className="w-4 h-4" /></button>
