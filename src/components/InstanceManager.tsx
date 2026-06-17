@@ -131,11 +131,14 @@ const InstanceManager = () => {
                     {inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error}
                   </span>
                   {inst.status === 'running' && <span className="text-xs text-gray-500">{t.instance.uptime} {formatUptime(inst.startTime)}</span>}
-                </div>
               </div>
-              {healthIcon(inst)}
             </div>
-            <div className="space-y-2 mb-4 text-sm">
+            {healthIcon(inst)}
+          </div>
+          {inst.status === 'running' && testResult && (
+            <div className={`mb-4 text-xs font-medium ${testResult.startsWith('✓') ? 'text-emerald-500' : testResult.startsWith('⏳') ? 'text-blue-500' : 'text-red-500'}`}>{testResult}</div>
+          )}
+          <div className="space-y-2 mb-4 text-sm">
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.port}：</span><span>{inst.config.port}</span></div>
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.engine}：</span>
