@@ -53,8 +53,15 @@ async fn download_single_file(
         }
     };
     if !resp.status().is_success() && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
+        let msg = match resp.status().as_u16() {
+            416 => "服务器不支持断点续传，请重新下载 / Range not satisfiable, please restart download",
+            404 => "文件不存在 / File not found",
+            403 => "访问被拒绝 / Access denied",
+            429 => "请求过于频繁，请稍后重试 / Too many requests, please retry later",
+            code => &format!("HTTP {}", code),
+        };
         let _ = app.emit("download-error", serde_json::json!({
-            "fileName": file_name, "error": format!("HTTP {}", resp.status()), "repoId": repo_id, "source": source,
+            "fileName": file_name, "error": msg, "repoId": repo_id, "source": source,
         }));
         return;
     }

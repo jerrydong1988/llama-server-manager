@@ -129,6 +129,7 @@ export default function DownloadManager() {
         </div>
         <div className="flex gap-2">
           <input type="text" value={saveDir} onChange={e => setSaveDir(e.target.value)}
+            placeholder={t.downloadPage.saveDirLabel}
             className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-sm" />
           <button onClick={handleBrowseSaveDir} className="px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg">
             <FolderOpen className="w-5 h-5" />
@@ -143,7 +144,7 @@ export default function DownloadManager() {
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs text-gray-500">{status} · {fmtSize(files.reduce((s,f)=>s+f.size,0))}</div>
             <button onClick={handleDownloadAll} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs">
-              ⬇ Download All ({files.length} files)
+              ⬇ {t.downloadPage.downloadAll} ({files.length} {t.downloadPage.files})
             </button>
           </div>
           <div className="border dark:border-gray-700 rounded-lg max-h-80 overflow-y-auto divide-y dark:divide-gray-700">
@@ -174,9 +175,9 @@ export default function DownloadManager() {
                         <button onClick={() => handleCancel(f)} className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                       </>
                     ) : task?.status === 'completed' ? (
-                      <span className="text-xs text-green-500">✓ Done</span>
+                      <span className="text-xs text-green-500">✓ {t.modelRepo.done}</span>
                     ) : task?.status === 'queued' ? (
-                      <span className="text-xs text-gray-400">Queued...</span>
+                      <span className="text-xs text-gray-400">{t.downloadPage.queued}</span>
                     ) : task?.status === 'error' ? (
                       <span className="text-xs text-red-500">{task.error || t.modelRepo.failed}</span>
                     ) : (
@@ -193,7 +194,7 @@ export default function DownloadManager() {
       {/* ⏳ Queue */}
       {downloadQueue.length > 0 && (
         <div>
-          <div className="text-xs text-gray-500 mb-2">⏳ Queue ({downloadQueue.length})</div>
+          <div className="text-xs text-gray-500 mb-2">⏳ {t.downloadPage.queue} ({downloadQueue.length})</div>
           <div className="space-y-1">
             {downloadQueue.map(entry => (
               <div key={entry.id} className="flex items-center justify-between px-3 py-1.5 bg-gray-50 dark:bg-gray-800 rounded text-xs">
@@ -209,7 +210,7 @@ export default function DownloadManager() {
       {/* ═══ 进行中 ═══ */}
       {activeGroups.length > 0 && (
         <div>
-          <div className="text-xs text-gray-500 mb-2">Active ({activeGroups.reduce((s,g)=>s+g.files.length,0)})</div>
+          <div className="text-xs text-gray-500 mb-2">{t.downloadPage.active} ({activeGroups.reduce((s,g)=>s+g.files.length,0)})</div>
           <div className="space-y-3">
             {activeGroups.map(g => (
               <div key={g.key} className="border dark:border-gray-700 rounded-lg overflow-hidden">
@@ -241,8 +242,8 @@ export default function DownloadManager() {
       {completedGroups.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-500">Completed ({completedGroups.reduce((s,g)=>s+g.files.length,0)})</div>
-            <button onClick={clearCompleted} className="text-xs text-gray-400 hover:text-gray-600">Clear from list</button>
+            <div className="text-xs text-gray-500">{t.downloadPage.completed} ({completedGroups.reduce((s,g)=>s+g.files.length,0)})</div>
+            <button onClick={clearCompleted} className="text-xs text-gray-400 hover:text-gray-600">{t.downloadPage.clearCompleted}</button>
           </div>
           <div className="space-y-3">
             {completedGroups.map(g => (
@@ -254,7 +255,7 @@ export default function DownloadManager() {
                       <div>
                         <span>{f.fileName}</span>
                         <span className={`ml-2 ${f.status==='completed'?'text-green-500':'text-gray-400'}`}>
-                          {f.status==='completed'?`✓ ${fmtSize(f.total)}`:`Cancelled · ${fmtSize(f.downloaded)}/${fmtSize(f.total)}`}
+                          {f.status==='completed'?`✓ ${fmtSize(f.total)}`:`${t.modelRepo.cancelled} · ${fmtSize(f.downloaded)}/${fmtSize(f.total)}`}
                         </span>
                       </div>
                       {f.path && (
