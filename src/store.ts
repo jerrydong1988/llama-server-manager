@@ -495,3 +495,11 @@ listen<{ fileName: string; repoId: string; source: string; error: string }>('dow
   s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'error', error: e.payload.error } })
   useAppStore.getState().processDownloadQueue!()
 }).catch(() => {})
+
+
+listen<{ fileName: string }>('download-removed', (e) => {
+  const s = useAppStore.getState()
+  const tasks = { ...s.downloadTasks }
+  delete tasks[e.payload.fileName]
+  s.setDownloadTasks(tasks)
+}).catch(() => {})

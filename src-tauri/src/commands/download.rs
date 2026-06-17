@@ -241,11 +241,16 @@ pub async fn pause_file_download(file_name: String, state: tauri::State<'_, AppS
 }
 
 #[tauri::command]
-pub async fn cancel_and_cleanup_download(file_name: String, file_path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn cancel_and_cleanup_download(file_name: String, file_path: String, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
     state.cancel_flags.lock().unwrap().insert(file_name.clone(), true);
     state.pause_flags.lock().unwrap().remove(&file_name);
-    let _ = std::fs::remove_file(&file_path);
-    Ok(())
+    match std::fs::remove_file(&file_path) {
+        Ok(_) => {
+            let _ = app.emit("download-removed", serde_json::json!({ "fileName": file_name }));
+            Ok(())
+        }
+        Err(e) => Err(format!("删除文件失败: {}", e)),
+    }
 }
 
 // ── HuggingFace 数据结构和浏览 ──────────────────────────────────

@@ -17,7 +17,10 @@ export default function DownloadManager() {
   const [files, setFiles] = useState<MsFileEntry[]>([])
   const [status, setStatus] = useState('')
   const [browsing, setBrowsing] = useState(false)
-  const [saveDir, setSaveDir] = useState(DEFAULT_SAVE_DIR)
+  const [saveDir, setSaveDir] = useState(() => {
+    try { return localStorage.getItem('downloadSaveDir') || DEFAULT_SAVE_DIR }
+    catch { return DEFAULT_SAVE_DIR }
+  })
 
   const fmtSize = (n: number) => {
     if (n < 1024) return n + ' B'
@@ -143,7 +146,7 @@ export default function DownloadManager() {
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg text-sm">{t.modelRepo.browseFiles}</button>
         </div>
         <div className="flex gap-2">
-          <input type="text" value={saveDir} onChange={e => setSaveDir(e.target.value)}
+          <input type="text" value={saveDir} onChange={e => { setSaveDir(e.target.value); try { localStorage.setItem('downloadSaveDir', e.target.value) } catch {} }}
             placeholder={t.downloadPage.saveDirLabel}
             className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-sm" />
           <button onClick={handleBrowseSaveDir} className="px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg">
