@@ -345,3 +345,25 @@ pub async fn download_huggingface_files(
     for h in handles { let _ = h.await; }
     Ok(())
 }
+
+/// Check if local file exists and return its size.
+#[tauri::command]
+pub async fn check_local_file(path: String) -> Result<Option<u64>, String> {
+    let p = std::path::Path::new(&path);
+    match std::fs::metadata(p) {
+        Ok(m) if m.is_file() => {
+            if let Ok(mut f) = std::fs::File::open(p) {
+                use std::io::Read;
+                let mut magic = [0u8; 4];
+                if f.read_exact(&mut magic).is_ok() && &magic == b"GGUF" {
+                    return Ok(Some(m.len()));
+                }
+                Ok(Some(m.len()))
+            } else {
+                Ok(Some(m.len()))
+            }
+        }
+        Ok(_) => Ok(None),
+        Err(_) => Ok(None),
+    }
+}
