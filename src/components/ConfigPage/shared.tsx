@@ -6,12 +6,14 @@ export const cacheTypes = ['', 'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq
 export const specTypes = ['', 'none', 'draft-mtp', 'draft-simple', 'draft-eagle3', 'ngram-cache', 'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod']
 export const chatTemplates = ['', 'bailing', 'chatglm3', 'chatglm4', 'chatml', 'command-r', 'deepseek', 'deepseek2', 'deepseek3', 'exaone3', 'gemma', 'gpt-oss', 'kimi-k2', 'llama2', 'llama3', 'llama4', 'mistral', 'openchat', 'phi3', 'phi4', 'vicuna', 'zephyr']
 
-export const Section = ({ title, children, disabled, onToggle, toggled, defaultOpen }: { title: string; children: React.ReactNode; disabled?: boolean; onToggle?: (v: boolean) => void; toggled?: boolean; defaultOpen?: boolean }) => {
+export const Section = ({ title, children, disabled, onToggle, toggled, defaultOpen, searchQuery }: { title: string; children: React.ReactNode; disabled?: boolean; onToggle?: (v: boolean) => void; toggled?: boolean; defaultOpen?: boolean; searchQuery?: string }) => {
   const [open, setOpen] = useState(defaultOpen || false)
+  const shouldOpen = searchQuery && title.toLowerCase().includes(searchQuery.toLowerCase())
+  const isOpen = shouldOpen || open
   return (
-    <div className="border dark:border-gray-700 rounded-lg overflow-hidden">
-      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left dark:text-gray-200">
-        {open ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+    <div className={`border dark:border-gray-700 rounded-lg overflow-hidden ${searchQuery && !shouldOpen && !open ? 'opacity-40' : ''}`}>
+      <button onClick={() => setOpen(!isOpen)} className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left dark:text-gray-200">
+        {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
         <span className="text-sm font-medium">{title}</span>
         {disabled && <span className="text-xs text-gray-400 ml-1">{'\uD83D\uDED1'}</span>}
         {onToggle !== undefined && (
@@ -21,7 +23,7 @@ export const Section = ({ title, children, disabled, onToggle, toggled, defaultO
           </label>
         )}
       </button>
-      {open && <div className={`px-4 py-3 space-y-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>}
+      {isOpen && <div className={`px-4 py-3 space-y-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>}
     </div>
   )
 }

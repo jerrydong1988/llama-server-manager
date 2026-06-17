@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download } from 'lucide-react'
+import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3 } from 'lucide-react'
 import { version } from '../package.json'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
@@ -9,6 +9,7 @@ import ConfigPage from './components/ConfigPage'
 import PerformancePage from './components/PerformancePage/PerformancePage'
 import ClusterPage from './components/ClusterPage/ClusterPage'
 import DownloadManager from './components/DownloadManager'
+import Dashboard from './components/Dashboard/Dashboard'
 import { useAppStore } from './store'
 import { I18nProvider, useI18n } from './i18n'
 
@@ -16,6 +17,7 @@ import { I18nProvider, useI18n } from './i18n'
 const TAB_CONTENT: Record<string, () => JSX.Element> = {
   instances: () => <InstanceManager />,
   'model-repo': () => <ModelRepo />,
+  dashboard: () => <Dashboard />,
   engine: () => <EngineManager />,
   config: () => <ConfigPage />,
   perf: () => <PerformancePage />,
@@ -34,12 +36,13 @@ function AppInner() {
   const [updateInfo, setUpdateInfo] = useState<{latest_version: string; url: string} | null>(null)
 
   const navigation = [
+    { id: 'dashboard', name: t.nav.dashboard || 'Dashboard', icon: BarChart3 },
     { id: 'model-repo', name: t.nav.modelRepo, icon: Database },
-    { id: 'engine', name: t.nav.engine, icon: Cpu },
-    { id: 'instances', name: t.nav.instances, icon: Server },
-    { id: 'config', name: t.nav.config, icon: Settings },
-    { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'downloads', name: t.nav.downloads || 'Downloads', icon: Download },
+    { id: 'engine', name: t.nav.engine, icon: Cpu },
+    { id: 'instances', name: t.nav.instances, icon: Server, badge: instances.filter(i => i.status === 'running').length },
+    { id: 'config', name: t.nav.config, icon: Settings, separator: true },
+    { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'perf', name: t.nav.perf, icon: Activity },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
   ]
@@ -98,13 +101,25 @@ function AppInner() {
           {navigation.map((item) => {
             const Icon = item.icon
             return (
-              <button key={item.id} onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${activeTab === item.id ? 'bg-blue-600 text-white' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
-                <Icon className="w-5 h-5" /><span>{item.name}</span>
-              </button>
+              <div key={item.id}>
+                {item.separator && <div className="my-2 border-t border-gray-200 dark:border-gray-700" />}
+                <button onClick={() => setActiveTab(item.id)}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${activeTab === item.id ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'hover:bg-gray-100 dark:hover:bg-gray-800'}`}>
+                  <Icon className="w-5 h-5" /><span>{item.name}</span>
+                  {item.badge != null && item.badge > 0 && (
+                    <span className="ml-auto bg-emerald-500 text-white text-xs px-1.5 py-0.5 rounded-full font-medium">{item.badge}</span>
+                  )}
+                </button>
+              </div>
             )
           })}
         </nav>
+        <div className="flex items-center gap-1 shrink-0 pt-3 border-t border-gray-200 dark:border-gray-700">
+          <div className="flex-1 flex items-center justify-between text-xs text-gray-500">
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> {instances.filter(i => i.status === 'running').length} up</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> {instances.filter(i => i.status !== 'running').length} down</span>
+          </div>
+        </div>
         <div className="flex items-center gap-1 shrink-0">
           <button onClick={() => setLang(lang === 'zh-CN' ? 'en-US' : 'zh-CN')}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-xs">

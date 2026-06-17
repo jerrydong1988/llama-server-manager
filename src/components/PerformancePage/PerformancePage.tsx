@@ -4,6 +4,8 @@ import { listen } from '@tauri-apps/api/event'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
 import PerfAnalysis from './PerfAnalysis'
+import GaugeMeter from './GaugeMeter'
+import SysResourceBar from '../Dashboard/SysResourceBar'
 
 interface SystemMetrics {
   cpu_percent: number
@@ -32,6 +34,7 @@ export default function PerformancePage() {
   const [interval, setIntervalState] = useState(5)
   const [sys, setSys] = useState<SystemMetrics | null>(null)
   const [slots, setSlots] = useState<SlotInfo[]>([])
+  const [viewMode, setViewMode] = useState<'compact' | 'gauge'>('compact')
 
   const inst = instances.find(i => i.id === selectedId)
   const host = inst?.config.host || '127.0.0.1'
@@ -76,14 +79,6 @@ export default function PerformancePage() {
     }
   }, [selectedId, interval, host, port])
 
-  const fmtSecs = (s: number) => {
-    if (s < 60) return `${s}s`
-    if (s < 3600) return `${Math.floor(s / 60)}m${s % 60}s`
-    const h = Math.floor(s / 3600)
-    const m = Math.floor((s % 3600) / 60)
-    return `${h}h${m}m`
-  }
-
   if (!running.length) {
     return (
       <div className="flex-1 p-6">
@@ -112,29 +107,41 @@ export default function PerformancePage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 md:grid-cols-5 gap-3 mb-6">
-        {sys ? (
-          <>
-            <Card label={t.perfBlock.cpu} value={`${sys.cpu_percent.toFixed(1)}${sys.system_cpu_percent != null ? ` / ${sys.system_cpu_percent.toFixed(1)}` : ''}`} unit="%" color="text-blue-500" />
-            <Card label={t.perfBlock.memory} value={`${(sys.memory_mb / 1024).toFixed(2)}${sys.system_memory_used_mb != null ? ` / ${(sys.system_memory_used_mb / 1024).toFixed(2)}` : ''}`} unit="GB" color="text-purple-500" />
-            {sys.vram_used_mb != null ? (
-              <Card label={`${t.perfBlock.vram}${sys.gpu_vendor ? ` (${sys.gpu_vendor})` : ''}`} value={`${(sys.vram_used_mb / 1024).toFixed(2)} / ${(sys.vram_total_mb! / 1024).toFixed(2)}`} unit="GB" color="text-green-500" />
-            ) : (
-              <Card label={t.perfBlock.vram} value="—" color="text-gray-400" />
-            )}
-            {sys.gpu_percent != null ? (
-              <Card label={`GPU${sys.gpu_vendor ? ` (${sys.gpu_vendor})` : ''}`} value={sys.gpu_percent.toFixed(1)} unit="%" color="text-emerald-500" />
-            ) : (
-              <Card label="GPU" value="—" color="text-gray-400" />
-            )}
-            <Card label={t.perfBlock.uptime} value={fmtSecs(sys.uptime_secs)} color="text-gray-700 dark:text-gray-200" />
-          </>
-        ) : (
-          <div className="col-span-5 text-center text-sm text-gray-400 py-4">{t.perfBlock.waiting}</div>
-        )}
+      {/* 视图切换 */}
+      <div className="flex items-center gap-2 mb-4">
+        <button onClick={() => setViewMode('compact')} className={`px-3 py-1 text-xs rounded-lg transition-colors ${viewMode === 'compact' ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700'}`}>📊 Compact</button>
+        <button onClick={() => setViewMode('gauge')} className={`px-3 py-1 text-xs rounded-lg transition-colors ${viewMode === 'gauge' ? 'bg-indigo-600 text-white' : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700'}`}>⭕ Gauge</button>
       </div>
 
-      <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
+      {viewMode === 'compact' ? (
+        <div className="mb-6">
+          <SysResourceBar metrics={sys ? {
+            cpu_percent: sys.cpu_percent,
+            memory_mb: sys.memory_mb,
+            gpu_percent: sys.gpu_percent,
+            vram_used_mb: sys.vram_used_mb,
+            system_cpu_percent: sys.system_cpu_percent,
+            system_memory_total_mb: sys.system_memory_total_mb,
+            gpu_vendor: sys.gpu_vendor,
+            vram_total_mb: sys.vram_total_mb,
+          } : null} />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+          {sys ? (
+            <>
+              <GaugeMeter label={t.perfBlock.cpu} value={sys.cpu_percent} max={100} unit="%" color="blue" detail={`系统 ${sys.system_cpu_percent?.toFixed(0)}%`} />
+              <GaugeMeter label={t.perfBlock.memory} value={sys.memory_mb} max={sys.system_memory_total_mb ?? 32000} unit="MB" color="purple" detail={`${(sys.memory_mb / 1024).toFixed(1)} / ${((sys.system_memory_total_mb ?? 0) / 1024).toFixed(1)} GB`} />
+              <GaugeMeter label="GPU" value={sys.gpu_percent} max={100} unit="%" color="emerald" detail={sys.gpu_vendor || 'N/A'} />
+              <GaugeMeter label={t.perfBlock.vram} value={sys.vram_used_mb} max={sys.vram_total_mb ?? 8192} unit="MB" color="amber" detail={`${((sys.vram_used_mb ?? 0) / 1024).toFixed(1)} / ${((sys.vram_total_mb ?? 0) / 1024).toFixed(1)} GB`} />
+            </>
+          ) : (
+            <div className="col-span-4 text-center text-sm text-slate-400 py-4">{t.perfBlock.waiting}</div>
+          )}
+        </div>
+      )}
+
+      <div className="bg-slate-50 dark:bg-slate-800 rounded-lg p-4">
         <div className="text-xs text-gray-500 mb-3">{t.perfBlock.slotStatus}</div>
         {slots.length === 0 ? (
           <div className="text-sm text-gray-400 text-center py-2">{t.perfBlock.noSlots}</div>
@@ -162,17 +169,6 @@ export default function PerformancePage() {
 
       <div className="mt-4">
         <ClusterThroughput t={t} />
-      </div>
-    </div>
-  )
-}
-
-function Card({ label, value, unit, color }: { label: string; value: string; unit?: string; color?: string }) {
-  return (
-    <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 text-center">
-      <div className="text-xs text-gray-500 mb-1">{label}</div>
-      <div className={`text-lg font-bold ${color || ''}`}>
-        {value}{unit ? <span className="text-xs font-normal ml-0.5 text-gray-500">{unit}</span> : null}
       </div>
     </div>
   )

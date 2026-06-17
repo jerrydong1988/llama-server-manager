@@ -10,14 +10,15 @@ interface Props {
   onShowPicker?: () => void
   onShowDraftPicker?: () => void
   activeParams: Set<keyof InstanceConfig>
+  searchQuery: string
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━ COMMON SECTIONS ━━━━━━━━━━━━━━━━━━━━━━
 
-export function BasicSection({ local, set, t, onShowPicker, activeParams }: Props) {
+export function BasicSection({ local, set, t, onShowPicker, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   return (
-    <Section title={t.configPage.basic} defaultOpen={true}>
+    <Section title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery}>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <div title={t.configPage.modelPathTip}>
           <label className="block text-xs font-medium mb-1 text-gray-500">{`${t.configPage.modelPath} (-m)`}</label>
@@ -41,10 +42,10 @@ export function BasicSection({ local, set, t, onShowPicker, activeParams }: Prop
   )
 }
 
-export function ReasoningSection({ local, set, t, isEmbedding, activeParams }: Props) {
+export function ReasoningSection({ local, set, t, isEmbedding, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   return (
-    <Section title={t.configPage.reasoning} defaultOpen={true}>
+    <Section title={t.configPage.reasoning} defaultOpen={true} searchQuery={searchQuery}>
       {(() => { const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding; return (<>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Select label={`${t.configPage.reasoningSwitch} (--reasoning)`} value={local.reasoning} onChange={v => set('reasoning', v)} options={['', 'on', 'off', 'auto']} title={t.configPage.reasoningTip} disabled={isEmbedding} defaultLabel={t.common.default}  active={a('reasoning')} />
@@ -64,10 +65,10 @@ export function ReasoningSection({ local, set, t, isEmbedding, activeParams }: P
   )
 }
 
-export function PerformanceSection({ local, set, t, activeParams }: Props) {
+export function PerformanceSection({ local, set, t, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   return (
-    <Section title={t.configPage.performance} defaultOpen={true}>
+    <Section title={t.configPage.performance} defaultOpen={true} searchQuery={searchQuery}>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <Num label={`${t.configPage.threads} (-t)`} value={local.threads} onChange={v => set('threads', v)} min={0} title={t.configPage.threadsTip}  active={a('threads')} />
         <Num label={`${t.configPage.threadsBatch} (--threads-batch)`} value={local.threads_batch} onChange={v => set('threads_batch', v)} min={0} title={t.configPage.threadsBatchTip}  active={a('threads_batch')} />
@@ -87,7 +88,7 @@ export function PerformanceSection({ local, set, t, activeParams }: Props) {
 
 // ━━━━━━━━━━━━━━━━━━━━━━ ADVANCED CONTAINER ━━━━━━━━━━━━━━━━━━━━━━
 
-export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker, activeParams }: Props) {
+export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   const resetAll = () => {
     for (const defaults of Object.values(RESET_MAP)) {
@@ -108,7 +109,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
   const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding
 
   return (
-    <Section title={t.configPage.advSectionTitle} defaultOpen={false}>
+    <Section title={t.configPage.advSectionTitle} defaultOpen={false} searchQuery={searchQuery}>
       <div className="flex items-center justify-end mb-2">
         <span className="text-xs text-gray-400 mr-2">{t.configPage.advSectionReset}</span>
         <ResetButton onClick={resetAll} title={t.configPage.advSectionReset} />

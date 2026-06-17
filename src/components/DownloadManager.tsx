@@ -46,6 +46,9 @@ export default function DownloadManager() {
   const modelTypeLabel = (fileType: string) => {
     switch (fileType) { case 'mmproj': return t.modelRepo.typeMmproj; case 'imatrix': return t.modelRepo.typeImatrix; default: return t.modelRepo.typeModel }
   }
+  const modelTypeColor = (fileType: string) => {
+    switch (fileType) { case 'mmproj': return 'bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-300'; case 'imatrix': return 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-400'; default: return 'bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300' }
+  }
 
   const handleBrowse = async () => {
     if (!repoId.trim()) { setStatus(t.modelRepo.inputRepoId); return }
@@ -176,7 +179,7 @@ export default function DownloadManager() {
                 <div key={f.path} className="px-4 py-2.5 space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-sm truncate flex-1 mr-2">{f.name}</span>
-                    <span className="text-gray-400 shrink-0 ml-2">{modelTypeLabel(f.file_type)} · {fmtSize(f.size)}</span>
+                    <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ml-2 ${modelTypeColor(f.file_type)}`}>{modelTypeLabel(f.file_type)}</span> · {fmtSize(f.size)}
                   </div>
                   {task && (task.status === 'active' || task.status === 'queued') && (
                     <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">

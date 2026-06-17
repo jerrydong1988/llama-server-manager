@@ -19,6 +19,7 @@ const ConfigPage = () => {
   const [pickerTarget, setPickerTarget] = useState<'model' | 'draft'>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
 
   useEffect(() => { if (inst) setLocal({ ...defaultInstanceConfig(), ...inst.config }); else setLocal(null) }, [activeConfigInstanceId])
 
@@ -64,7 +65,7 @@ const ConfigPage = () => {
     setTimeout(() => { setSaved(false); setSaveWarnings([]) }, 6000)
   }
 
-  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => { setPickerTarget('model'); setShowPicker(true) }, onShowDraftPicker: () => { setPickerTarget('draft'); setShowPicker(true) }, activeParams: local ? getActiveParams(local, isEmbedding) : new Set() as Set<keyof InstanceConfig> }
+  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => { setPickerTarget('model'); setShowPicker(true) }, onShowDraftPicker: () => { setPickerTarget('draft'); setShowPicker(true) }, activeParams: local ? getActiveParams(local, isEmbedding) : new Set() as Set<keyof InstanceConfig>, searchQuery }
 
   return (
     <div className="space-y-6">
@@ -97,6 +98,14 @@ const ConfigPage = () => {
           ))}
         </div>
       )}
+
+      {/* 参数搜索 */}
+      <div className="relative">
+        <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+          placeholder={(t.configPage as any).searchParams || '搜索参数...'}
+          className="w-full pl-10 pr-4 py-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-sm" />
+        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+      </div>
 
       <div className="space-y-3">
         <BasicSection {...sectionProps} />

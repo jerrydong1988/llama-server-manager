@@ -1,5 +1,5 @@
 export const enUS = {
-  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', downloads: 'Downloads', cluster: 'Cluster', perf: 'Performance', logs: 'Server Logs' },
+  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', downloads: 'Downloads', cluster: 'Cluster', perf: 'Performance', logs: 'Server Logs', dashboard: 'Dashboard' },
   instance: {
     title: 'Server Instances', create: 'Create Instance', newInstance: 'New Instance',
     name: 'Instance Name', namePlaceholder: 'e.g. Llama-3-8B',
@@ -383,6 +383,17 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     defaultEngineLabel: ' (default)',
     engineDirPlaceholder: 'Enter engine directory path...',
     selectEngineDir: 'Select Engine Directory',
+  },
+
+  dashboard: {
+    title: 'Dashboard',
+    runningInstances: 'Running',
+    totalModels: 'Models',
+    totalEngines: 'Engines',
+    totalInstances: 'Instances',
+    noRunning: 'No running instances',
+    goToInstances: 'Go to Instances',
+    stoppedInstances: 'Stopped Instances',
   },
 
   downloadPage: {

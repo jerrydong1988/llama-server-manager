@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react'
-import { Play, Square, Plus, Trash2, Copy, Globe, CheckCircle2, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil } from 'lucide-react'
+import { Play, Square, Plus, Trash2, Copy, Globe, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { formatStartupCommand } from '../store'
 import { invoke } from '@tauri-apps/api/core'
@@ -81,17 +81,17 @@ const InstanceManager = () => {
   }
 
   const statusBg = (s: string) => {
-    switch (s) { case 'running': return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-      case 'stopped': return 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300'
+    switch (s) { case 'running': return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400'
+      case 'stopped': return 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300'
       default: return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400' }
   }
 
   const healthIcon = (inst: typeof instances[0]) => {
-    if (inst.status === 'stopped') return <div className="w-4 h-4 rounded-full border-2 border-gray-400" />
+    if (inst.status === 'stopped') return <div className="w-3 h-3 rounded-full bg-slate-400" />
     if (inst.status === 'error') return <XCircle className="w-4 h-4 text-red-500" />
-    if (inst.healthCheck === 'ok') return <CheckCircle2 className="w-4 h-4 text-green-500" />
+    if (inst.healthCheck === 'ok') return <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
     if (inst.healthCheck === 'fail') return <XCircle className="w-4 h-4 text-red-500" />
-    return <div className="w-4 h-4 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
+    return <div className="w-3 h-3 rounded-full bg-blue-400 animate-pulse" />
   }
 
   return (
@@ -117,7 +117,7 @@ const InstanceManager = () => {
 
       <div className="grid grid-cols-1 gap-4">
         {instances.map(inst => (
-          <div key={inst.id} className="bg-white dark:bg-gray-800 rounded-lg p-5 border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow-md transition-shadow">
+          <div key={inst.id} className={`bg-white dark:bg-slate-800 rounded-xl p-5 border shadow-sm hover:shadow-md transition-shadow ${inst.status === 'running' ? 'border-emerald-500/30 ring-2 ring-emerald-500/10' : 'border-slate-200 dark:border-slate-700'}`}>
             <div className="flex items-start justify-between mb-4">
               <div>
                 <div className="flex items-center gap-2">

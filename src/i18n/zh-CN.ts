@@ -1,5 +1,5 @@
 export const zhCN = {
-  nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', perf: '\u6027\u80FD\u76D1\u63A7', logs: '\u670D\u52A1\u5668\u65E5\u5FD7' },
+  nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', perf: '\u6027\u80FD\u76D1\u63A7', logs: '\u670D\u52A1\u5668\u65E5\u5FD7', dashboard: '\u603B\u89C8' },
   instance: {
     title: '\u670D\u52A1\u5668\u5B9E\u4F8B', create: '\u521B\u5EFA\u5B9E\u4F8B', newInstance: '\u521B\u5EFA\u65B0\u5B9E\u4F8B',
     name: '\u5B9E\u4F8B\u540D\u79F0', namePlaceholder: '\u4F8B\u5982\uFF1ALlama-3-8B',
@@ -386,6 +386,17 @@ export const zhCN = {
     defaultEngineLabel: '\uFF08\u9ED8\u8BA4\uFF09',
     engineDirPlaceholder: '\u8F93\u5165\u5F15\u64CE\u76EE\u5F55\u8DEF\u5F84...',
     selectEngineDir: '\u9009\u62E9\u5F15\u64CE\u76EE\u5F55',
+  },
+
+  dashboard: {
+    title: '\u603B\u89C8',
+    runningInstances: '\u8FD0\u884C\u4E2D',
+    totalModels: '\u6A21\u578B\u603B\u6570',
+    totalEngines: '\u5F15\u64CE\u603B\u6570',
+    totalInstances: '\u5B9E\u4F8B\u603B\u6570',
+    noRunning: '\u6682\u65E0\u8FD0\u884C\u4E2D\u7684\u5B9E\u4F8B',
+    goToInstances: '\u524D\u5F80\u5B9E\u4F8B\u7BA1\u7406',
+    stoppedInstances: '\u5DF2\u505C\u6B62\u5B9E\u4F8B',
   },
 
   downloadPage: {
