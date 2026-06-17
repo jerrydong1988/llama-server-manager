@@ -69,14 +69,15 @@ const InstanceManager = () => {
   }
 
   const handleTestConnection = async (inst: typeof instances[0]) => {
-    setTestResult('...')
+    setTestResult('⏳ Testing...')
     try {
-      const result = await invoke('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
-      setTestResult(result as string)
-      setTimeout(() => setTestResult(''), 3000)
+      const result = await invoke<string>('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
+      setTestResult(result)
+      setTimeout(() => setTestResult(''), 4000)
     } catch (e: any) {
-      setTestResult(e?.toString() || 'Conn failed')
-      setTimeout(() => setTestResult(''), 3000)
+      const msg = typeof e === 'string' ? e : (e?.message || e?.toString() || 'Connection failed')
+      setTestResult('✗ ' + msg)
+      setTimeout(() => setTestResult(''), 4000)
     }
   }
 
