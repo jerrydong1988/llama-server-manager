@@ -178,7 +178,6 @@ export interface AppState {
   workers: WorkerInfo[]
   clusterScanning: boolean
   downloadTasks: Record<string, DownloadProgress>
-  downloadSaveDir: string
   downloadQueue: DownloadQueueEntry[]
   processingQueue: boolean
   setActiveTab: (tab: string) => void
@@ -225,7 +224,6 @@ export interface AppState {
   pauseFileDownload: (fileName: string) => Promise<void>
   cancelAndCleanupDownload: (fileName: string, filePath: string) => Promise<void>
   setDownloadTasks: (tasks: Record<string, DownloadProgress>) => void
-  setDownloadSaveDir: (dir: string) => void
   addToDownloadQueue: (entry: { repoId: string; source: 'modelscope' | 'huggingface'; files: MsFileEntry[]; saveDir: string }) => void
   removeFromDownloadQueue: (id: string) => void
   processDownloadQueue: () => Promise<void>

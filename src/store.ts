@@ -29,11 +29,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   clusterScanning: false,
   downloadProgress: {},
   downloadTasks: {},
-  downloadSaveDir: 'models',
   downloadQueue: [],
   processingQueue: false,
   setDownloadTasks: (tasks) => set({ downloadTasks: tasks }),
-  setDownloadSaveDir: (dir) => set({ downloadSaveDir: dir }),
   addToDownloadQueue: (entry) => {
     const s = get()
     const id = crypto.randomUUID()
