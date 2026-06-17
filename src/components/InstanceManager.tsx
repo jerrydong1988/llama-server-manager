@@ -153,20 +153,13 @@ const InstanceManager = () => {
               {inst.status === 'running' && (
                 <>
                   <button onClick={() => openBrowser(inst.config.host, inst.config.port)} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title={t.instance.openBrowser}><Globe className="w-4 h-4" /></button>
-                  <button onClick={async () => {
-                    console.log('[test] button clicked for', inst.name)
+                  <button onClick={() => {
                     setTestResult('⏳ Testing...')
-                    try {
-                      const result = await invoke<string>('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
-                      setTestResult(result)
-                      setTimeout(() => setTestResult(''), 5000)
-                    } catch (e: any) {
-                      setTestResult('✗ ' + (typeof e === 'string' ? e : (e?.message || 'Connection failed')))
-                      setTimeout(() => setTestResult(''), 5000)
-                    }
+                    invoke<string>('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
+                      .then(result => { setTestResult(result); setTimeout(() => setTestResult(''), 5000) })
+                      .catch(e => { setTestResult('✗ ' + (typeof e === 'string' ? e : (e?.message || 'Failed'))); setTimeout(() => setTestResult(''), 5000) })
                   }} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title={t.instance.testConnection}>
-                    <Wifi className="w-4 h-4" />
-                    <span className="sr-only">{t.instance.testConnection}</span>
+                    <Wifi className="w-4 h-4 pointer-events-none" />
                   </button>
                 </>
               )}
