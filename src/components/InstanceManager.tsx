@@ -17,7 +17,7 @@ const InstanceManager = () => {
   const [showCreatePicker, setShowCreatePicker] = useState(false)
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [newInst, setNewInst] = useState({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: 8080, engineId: '' })
-  const [testResult, setTestResult] = useState('')
+  const [testResults, setTestResults] = useState<Record<string, string>>({})
   const [editingId, setEditingId] = useState('')
   const [editName, setEditName] = useState('')
   const [enginePickerForId, setEnginePickerForId] = useState('')
@@ -83,14 +83,14 @@ const InstanceManager = () => {
   }
 
   const handleTestConnection = async (inst: typeof instances[0]) => {
-    setTestResult('⏳ Testing...')
+    setTestResults(s => ({ ...s, [inst.id]: '⏳' }))
     try {
       const result = await invoke('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
-      setTestResult(result as string)
-      setTimeout(() => setTestResult(''), 3000)
+      setTestResults(s => ({ ...s, [inst.id]: result as string }))
+      setTimeout(() => setTestResults(s => { const n = { ...s }; delete n[inst.id]; return n }), 5000)
     } catch (e: any) {
-      setTestResult(e?.toString() || 'Connection failed')
-      setTimeout(() => setTestResult(''), 3000)
+      setTestResults(s => ({ ...s, [inst.id]: '✗ ' + (e?.toString() || 'Failed') }))
+      setTimeout(() => setTestResults(s => { const n = { ...s }; delete n[inst.id]; return n }), 5000)
     }
   }
 
@@ -106,9 +106,6 @@ const InstanceManager = () => {
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold">{t.instance.title} ({instances.length})</h3>
         <div className="flex items-center gap-4">
-          {testResult && (
-            <span className={`text-sm ${testResult.startsWith('✓') ? 'text-green-500' : 'text-red-500'}`}>{testResult}</span>
-          )}
           <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
             <Plus className="w-4 h-4" /> {t.instance.create}
           </button>
@@ -147,8 +144,8 @@ const InstanceManager = () => {
             </div>
             {healthIcon(inst)}
           </div>
-          {inst.status === 'running' && testResult && (
-            <div className={`mb-4 text-xs font-medium ${testResult.startsWith('✓') ? 'text-emerald-500' : testResult.startsWith('⏳') ? 'text-blue-500' : 'text-red-500'}`}>{testResult}</div>
+          {testResults[inst.id] && (
+            <div className={`mb-4 text-xs font-medium ${testResults[inst.id].startsWith('✓') ? 'text-emerald-500' : testResults[inst.id] === '⏳' ? 'text-blue-500' : 'text-red-500'}`}>{testResults[inst.id]}</div>
           )}
           <div className="space-y-2 mb-4 text-sm">
               <div className="flex justify-between"><span className="text-gray-500">{t.instance.model}：</span><span className="truncate max-w-[200px]" title={inst.config.model_path}>{inst.model}</span></div>
@@ -168,7 +165,7 @@ const InstanceManager = () => {
               {inst.status === 'running' && (
                 <>
                   <button onClick={() => openBrowser(inst.config.host, inst.config.port)} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title={t.instance.openBrowser}><Globe className="w-4 h-4" /></button>
-                  <button onClick={() => handleTestConnection(inst)} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title={t.instance.testConnection}><Wifi className="w-4 h-4" /></button>
+                  <button onClick={() => handleTestConnection(inst)} className={`p-2 rounded-lg transition-colors ${testResults[inst.id]?.startsWith('✓') ? 'text-emerald-500 bg-emerald-50 dark:bg-emerald-900/20' : testResults[inst.id]?.startsWith('✗') ? 'text-red-500 bg-red-50 dark:bg-red-900/20' : 'text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700'}`} title={t.instance.testConnection}><Wifi className="w-4 h-4" /></button>
                 </>
               )}
               <button onClick={() => handleShowCommand(inst.id)} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title={t.instance.genCommand}><Terminal className="w-4 h-4" /></button>
