@@ -1,41 +1,35 @@
-interface SystemMetrics {
-  cpu_percent: number | null
-  memory_mb: number | null
-  gpu_percent: number | null
-  vram_used_mb: number | null
-  system_cpu_percent: number | null
-  system_memory_total_mb: number | null
-  gpu_vendor: string | null
-  vram_total_mb: number | null
-}
+import type { SystemMetrics } from '../../store/types'
+import { useI18n } from '../../i18n'
 
-export default function SysResourceBar({ metrics }: { metrics: SystemMetrics | null }) {
+export default function SysResourceBar({ metrics, showInstance }: { metrics: SystemMetrics | null; showInstance?: string }) {
+  const { t } = useI18n()
+
   if (!metrics) {
     return (
       <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
-        <div className="text-sm text-slate-400 text-center py-4">等待系统指标...</div>
+        <div className="text-sm text-slate-400 text-center py-4">{t.perfBlock.waitingMetrics}</div>
       </div>
     )
   }
 
   const items = [
     {
-      label: 'CPU', pct: (metrics.cpu_percent ?? 0) / 100,
-      detail: `进程 ${(metrics.cpu_percent ?? 0).toFixed(0)}% / 系统 ${(metrics.system_cpu_percent ?? 0).toFixed(0)}%`,
+      label: t.perfBlock.cpu, pct: (metrics.cpu_percent ?? 0) / 100,
+      detail: `${t.perfBlock.procLabel} ${(metrics.cpu_percent ?? 0).toFixed(0)}% / ${t.perfBlock.sysLabel} ${(metrics.system_cpu_percent ?? 0).toFixed(0)}%`,
       color: 'bg-blue-500',
     },
     {
-      label: '内存', pct: (metrics.memory_mb ?? 0) / ((metrics.system_memory_total_mb ?? 1) || 1),
+      label: t.perfBlock.memory, pct: (metrics.memory_mb ?? 0) / ((metrics.system_memory_total_mb ?? 1) || 1),
       detail: `${((metrics.memory_mb ?? 0) / 1024).toFixed(1)} / ${((metrics.system_memory_total_mb ?? 0) / 1024).toFixed(1)} GB`,
       color: 'bg-purple-500',
     },
     {
-      label: 'GPU', pct: (metrics.gpu_percent ?? 0) / 100,
+      label: t.perfBlock.gpu, pct: (metrics.gpu_percent ?? 0) / 100,
       detail: metrics.gpu_vendor || 'N/A',
       color: 'bg-emerald-500',
     },
     {
-      label: '显存', pct: (metrics.vram_used_mb ?? 0) / ((metrics.vram_total_mb ?? 1) || 1),
+      label: t.perfBlock.vram, pct: (metrics.vram_used_mb ?? 0) / ((metrics.vram_total_mb ?? 1) || 1),
       detail: `${((metrics.vram_used_mb ?? 0) / 1024).toFixed(1)} / ${((metrics.vram_total_mb ?? 0) / 1024).toFixed(1)} GB`,
       color: 'bg-amber-500',
     },
@@ -43,6 +37,7 @@ export default function SysResourceBar({ metrics }: { metrics: SystemMetrics | n
 
   return (
     <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 space-y-3">
+      {showInstance && <div className="text-xs text-slate-400 mb-1">{showInstance}</div>}
       {items.map(item => (
         <div key={item.label} className="flex items-center gap-3">
           <span className="w-10 text-xs font-medium text-slate-500 dark:text-slate-400 shrink-0">{item.label}</span>

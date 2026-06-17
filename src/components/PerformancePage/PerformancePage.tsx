@@ -3,22 +3,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
+import type { SystemMetrics } from '../../store/types'
 import PerfAnalysis from './PerfAnalysis'
 import GaugeMeter from './GaugeMeter'
 import SysResourceBar from '../Dashboard/SysResourceBar'
-
-interface SystemMetrics {
-  cpu_percent: number
-  memory_mb: number
-  uptime_secs: number
-  gpu_percent: number | null
-  vram_used_mb: number | null
-  vram_total_mb: number | null
-  system_cpu_percent: number | null
-  system_memory_total_mb: number | null
-  system_memory_used_mb: number | null
-  gpu_vendor: string | null
-}
 
 interface SlotInfo {
   id: number
@@ -118,10 +106,12 @@ export default function PerformancePage() {
           <SysResourceBar metrics={sys ? {
             cpu_percent: sys.cpu_percent,
             memory_mb: sys.memory_mb,
+            uptime_secs: sys.uptime_secs,
             gpu_percent: sys.gpu_percent,
             vram_used_mb: sys.vram_used_mb,
             system_cpu_percent: sys.system_cpu_percent,
             system_memory_total_mb: sys.system_memory_total_mb,
+            system_memory_used_mb: sys.system_memory_used_mb,
             gpu_vendor: sys.gpu_vendor,
             vram_total_mb: sys.vram_total_mb,
           } : null} />
@@ -130,10 +120,10 @@ export default function PerformancePage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
           {sys ? (
             <>
-              <GaugeMeter label={t.perfBlock.cpu} value={sys.cpu_percent} max={100} unit="%" color="blue" detail={`系统 ${sys.system_cpu_percent?.toFixed(0)}%`} />
-              <GaugeMeter label={t.perfBlock.memory} value={sys.memory_mb} max={sys.system_memory_total_mb ?? 32000} unit="MB" color="purple" detail={`${(sys.memory_mb / 1024).toFixed(1)} / ${((sys.system_memory_total_mb ?? 0) / 1024).toFixed(1)} GB`} />
-              <GaugeMeter label="GPU" value={sys.gpu_percent} max={100} unit="%" color="emerald" detail={sys.gpu_vendor || 'N/A'} />
-              <GaugeMeter label={t.perfBlock.vram} value={sys.vram_used_mb} max={sys.vram_total_mb ?? 8192} unit="MB" color="amber" detail={`${((sys.vram_used_mb ?? 0) / 1024).toFixed(1)} / ${((sys.vram_total_mb ?? 0) / 1024).toFixed(1)} GB`} />
+              <GaugeMeter label={t.perfBlock.cpu} value={sys.cpu_percent} max={100} unit="%" color="blue" detail={`${t.perfBlock.sysLabel} ${sys.system_cpu_percent?.toFixed(0)}%`} />
+              <GaugeMeter label={t.perfBlock.memory} value={(sys.memory_mb ?? 0) / 1024} max={(sys.system_memory_total_mb ?? 32000) / 1024} unit="GB" color="purple" detail={`${((sys.memory_mb ?? 0) / 1024).toFixed(1)} / ${((sys.system_memory_total_mb ?? 0) / 1024).toFixed(1)} GB`} />
+              <GaugeMeter label={t.perfBlock.gpu} value={sys.gpu_percent} max={100} unit="%" color="emerald" detail={sys.gpu_vendor || 'N/A'} />
+              <GaugeMeter label={t.perfBlock.vram} value={((sys.vram_used_mb ?? 0) / 1024)} max={((sys.vram_total_mb ?? 8192) / 1024)} unit="GB" color="amber" detail={`${((sys.vram_used_mb ?? 0) / 1024).toFixed(1)} / ${((sys.vram_total_mb ?? 0) / 1024).toFixed(1)} GB`} />
             </>
           ) : (
             <div className="col-span-4 text-center text-sm text-slate-400 py-4">{t.perfBlock.waiting}</div>

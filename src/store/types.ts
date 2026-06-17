@@ -163,6 +163,19 @@ export interface DownloadGroup {
   files: DownloadProgress[]
 }
 
+export interface SystemMetrics {
+  cpu_percent: number
+  memory_mb: number
+  uptime_secs: number
+  gpu_percent: number | null
+  vram_used_mb: number | null
+  vram_total_mb: number | null
+  system_cpu_percent: number | null
+  system_memory_total_mb: number | null
+  system_memory_used_mb: number | null
+  gpu_vendor: string | null
+}
+
 export interface AppState {
   models: ModelInfo[]
   engines: EngineInfo[]

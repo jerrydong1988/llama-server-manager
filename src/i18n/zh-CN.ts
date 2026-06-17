@@ -1,5 +1,5 @@
 export const zhCN = {
-  nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', perf: '\u6027\u80FD\u76D1\u63A7', logs: '\u670D\u52A1\u5668\u65E5\u5FD7', dashboard: '\u603B\u89C8' },
+  nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', perf: '\u6027\u80FD\u76D1\u63A7', logs: '\u670D\u52A1\u5668\u65E5\u5FD7', dashboard: '\u603B\u89C8', up: '\u8FD0\u884C', down: '\u505C\u6B62' },
   instance: {
     title: '\u670D\u52A1\u5668\u5B9E\u4F8B', create: '\u521B\u5EFA\u5B9E\u4F8B', newInstance: '\u521B\u5EFA\u65B0\u5B9E\u4F8B',
     name: '\u5B9E\u4F8B\u540D\u79F0', namePlaceholder: '\u4F8B\u5982\uFF1ALlama-3-8B',
@@ -307,6 +307,11 @@ export const zhCN = {
     totalTime: '\u603B\u8017\u65F6',
     specGenTime: '\u63A8\u6D4B\u751F\u6210\u8017\u65F6',
     speedCurve: '\u901F\u5EA6\u66F2\u7EBF (t/s)',
+    waitingMetrics: '\u7B49\u5F85\u7CFB\u7EDF\u6307\u6807...',
+    procLabel: '\u8FDB\u7A0B',
+    sysLabel: '\u7CFB\u7EDF',
+    searchParams: '\u641C\u7D22\u53C2\u6570...',
+    gpu: 'GPU',
   },
   logs: {
     title: '\u670D\u52A1\u5668\u65E5\u5FD7', selectInstance: '\u67E5\u770B\u5B9E\u4F8B\u65E5\u5FD7\uFF1A', allInstances: '\u6240\u6709\u5B9E\u4F8B',

@@ -1,5 +1,5 @@
 export const enUS = {
-  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', downloads: 'Downloads', cluster: 'Cluster', perf: 'Performance', logs: 'Server Logs', dashboard: 'Dashboard' },
+  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', downloads: 'Downloads', cluster: 'Cluster', perf: 'Performance', logs: 'Server Logs', dashboard: 'Dashboard', up: 'up', down: 'down' },
   instance: {
     title: 'Server Instances', create: 'Create Instance', newInstance: 'New Instance',
     name: 'Instance Name', namePlaceholder: 'e.g. Llama-3-8B',
@@ -304,6 +304,11 @@ export const enUS = {
     totalTime: 'Total Time',
     specGenTime: 'Spec Gen Time',
     speedCurve: 'Speed Curve (t/s)',
+    waitingMetrics: 'Waiting for metrics...',
+    procLabel: 'Proc',
+    sysLabel: 'Sys',
+    searchParams: 'Search params...',
+    gpu: 'GPU',
   },
   logs: {
     title: 'Server Logs', selectInstance: 'View instance logs:', allInstances: 'All Instances',

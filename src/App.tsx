@@ -116,8 +116,8 @@ function AppInner() {
         </nav>
         <div className="flex items-center gap-1 shrink-0 pt-3 border-t border-gray-200 dark:border-gray-700">
           <div className="flex-1 flex items-center justify-between text-xs text-gray-500">
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> {instances.filter(i => i.status === 'running').length} up</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> {instances.filter(i => i.status !== 'running').length} down</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> {instances.filter(i => i.status === 'running').length} {t.nav.up || 'up'}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-400" /> {instances.filter(i => i.status !== 'running').length} {t.nav.down || 'down'}</span>
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">

@@ -1,7 +1,9 @@
 import type { Instance } from '../../store/types'
 import { useAppStore } from '../../store'
+import { useI18n } from '../../i18n'
 
 export default function InstanceRow({ instance }: { instance: Instance }) {
+  const { t } = useI18n()
   const { startInstance, stopInstance } = useAppStore()
   const isRunning = instance.status === 'running'
 
@@ -17,11 +19,11 @@ export default function InstanceRow({ instance }: { instance: Instance }) {
       <div className="flex items-center gap-2 shrink-0 ml-2">
         {isRunning ? (
           <button onClick={() => stopInstance(instance.id)} className="px-3 py-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors">
-            Stop
+            {t.instance.stop}
           </button>
         ) : (
           <button onClick={() => startInstance(instance.id)} className="px-3 py-1 text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-lg hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">
-            Start
+            {t.instance.start}
           </button>
         )}
       </div>

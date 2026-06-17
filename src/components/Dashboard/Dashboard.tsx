@@ -11,13 +11,16 @@ export default function Dashboard() {
   const { t } = useI18n()
   const { instances, models, engines, setActiveTab } = useAppStore()
   const [sysMetrics, setSysMetrics] = useState<any>(null)
+  const [metricInstance, setMetricInstance] = useState('')
 
   const runningInstances = instances.filter(i => i.status === 'running')
   const stoppedInstances = instances.filter(i => i.status !== 'running')
 
   useEffect(() => {
-    const unlisten = listen<{ system: any }>('metrics-update', (e) => {
+    const unlisten = listen<{ system: any; instanceId: string }>('metrics-update', (e) => {
       setSysMetrics(e.payload.system)
+      const inst = instances.find(i => i.id === e.payload.instanceId)
+      setMetricInstance(inst?.name || '')
     })
     return () => { unlisten.then(fn => fn()) }
   }, [])
@@ -35,7 +38,7 @@ export default function Dashboard() {
       </div>
 
       {/* 系统资源条 */}
-      <SysResourceBar metrics={sysMetrics} />
+      <SysResourceBar metrics={sysMetrics} showInstance={metricInstance || undefined} />
 
       {/* 运行中实例 */}
       {runningInstances.length > 0 ? (

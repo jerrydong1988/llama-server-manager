@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Settings, File, Image, X, FolderOpen, ChevronRight, ChevronDown } from 'lucide-react'
+import { Settings, File, Image, X, FolderOpen, ChevronRight, ChevronDown, Search } from 'lucide-react'
 import { useAppStore, type InstanceConfig, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
@@ -102,9 +102,9 @@ const ConfigPage = () => {
       {/* 参数搜索 */}
       <div className="relative">
         <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
-          placeholder={(t.configPage as any).searchParams || '搜索参数...'}
+          placeholder={(t.configPage as any).searchParams || t.perfBlock.searchParams}
           className="w-full pl-10 pr-4 py-2 border dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 text-sm" />
-        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
       </div>
 
       <div className="space-y-3">

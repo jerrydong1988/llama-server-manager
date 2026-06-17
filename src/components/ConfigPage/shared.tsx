@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
 import type { InstanceConfig } from '../../store'
 
@@ -8,11 +8,20 @@ export const chatTemplates = ['', 'bailing', 'chatglm3', 'chatglm4', 'chatml', '
 
 export const Section = ({ title, children, disabled, onToggle, toggled, defaultOpen, searchQuery }: { title: string; children: React.ReactNode; disabled?: boolean; onToggle?: (v: boolean) => void; toggled?: boolean; defaultOpen?: boolean; searchQuery?: string }) => {
   const [open, setOpen] = useState(defaultOpen || false)
+  const userToggled = useRef(false)
   const shouldOpen = searchQuery && title.toLowerCase().includes(searchQuery.toLowerCase())
-  const isOpen = shouldOpen || open
+
+  useEffect(() => { userToggled.current = false }, [searchQuery])
+
+  const handleToggle = () => {
+    userToggled.current = true
+    setOpen(!open)
+  }
+
+  const isOpen = (!userToggled.current && shouldOpen) || open
   return (
     <div className={`border dark:border-gray-700 rounded-lg overflow-hidden ${searchQuery && !shouldOpen && !open ? 'opacity-40' : ''}`}>
-      <button onClick={() => setOpen(!isOpen)} className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left dark:text-gray-200">
+      <button onClick={handleToggle} className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left dark:text-gray-200">
         {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
         <span className="text-sm font-medium">{title}</span>
         {disabled && <span className="text-xs text-gray-400 ml-1">{'\uD83D\uDED1'}</span>}
