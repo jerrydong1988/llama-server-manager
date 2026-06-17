@@ -73,11 +73,12 @@ export default function DownloadManager() {
     } finally { setBrowsing(false) }
   }
 
+  const saveDirPersist = (dir: string) => { setSaveDir(dir); try { localStorage.setItem('downloadSaveDir', dir) } catch {} }
   const handleBrowseSaveDir = async () => {
     try {
       const { open } = await import('@tauri-apps/plugin-dialog')
       const dir = await open({ directory: true, title: t.modelRepo.saveDir })
-      if (dir) setSaveDir(dir as string)
+      if (dir) saveDirPersist(dir as string)
     } catch (_) {}
   }
 
@@ -146,7 +147,7 @@ export default function DownloadManager() {
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg text-sm">{t.modelRepo.browseFiles}</button>
         </div>
         <div className="flex gap-2">
-          <input type="text" value={saveDir} onChange={e => { setSaveDir(e.target.value); try { localStorage.setItem('downloadSaveDir', e.target.value) } catch {} }}
+          <input type="text" value={saveDir} onChange={e => saveDirPersist(e.target.value)}
             placeholder={t.downloadPage.saveDirLabel}
             className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-sm" />
           <button onClick={handleBrowseSaveDir} className="px-3 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg">
