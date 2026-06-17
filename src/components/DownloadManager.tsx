@@ -3,7 +3,6 @@ import { Trash2, FolderOpen, X, Download } from 'lucide-react'
 import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
 import { useI18n } from '../i18n'
-import { invoke } from '@tauri-apps/api/core'
 import { pathJoin } from '../utils/path'
 
 type DownloadSource = 'modelscope' | 'huggingface'
@@ -51,20 +50,6 @@ export default function DownloadManager() {
       const result = source === 'modelscope' ? await browseModelscope(repoId.trim()) : await browseHuggingface(repoId.trim())
       setFiles(result)
       setStatus(result.length === 0 ? t.modelRepo.notFound : `${t.modelRepo.found} ${result.length} ${t.modelRepo.files}`)
-
-      // 检测本地已存在的文件（大小 ±1% 容差）
-      const tasks = { ...useAppStore.getState().downloadTasks }
-      for (const f of result) {
-        const resolvedDir = await invoke<string>('resolve_path', { path: saveDir })
-        const localPath = pathJoin(resolvedDir, repoId, f.name)
-        try {
-          const actualSize = await invoke<number | null>('check_local_file', { path: localPath })
-          if (actualSize != null && actualSize >= f.size * 0.99) {
-            tasks[f.name] = { fileName: f.name, repoId, source, downloaded: actualSize, total: f.size, speed: 0, status: 'completed', path: localPath }
-          }
-        } catch { /* file not found */ }
-      }
-      setDownloadTasks(tasks)
     } catch (e: any) {
       setStatus(`${t.modelRepo.queryFailed}${typeof e === 'string' ? e : t.modelRepo.networkError}`)
     } finally { setBrowsing(false) }
