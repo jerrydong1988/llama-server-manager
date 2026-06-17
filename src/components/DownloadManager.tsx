@@ -83,7 +83,10 @@ export default function DownloadManager() {
   }
 
   const handleDownloadFile = (f: MsFileEntry) => addToDownloadQueue({ repoId, source, files: [f], saveDir })
-  const handleDownloadAll = () => { if (files.length > 0) addToDownloadQueue({ repoId, source, files, saveDir }) }
+  const handleDownloadAll = () => {
+    const pending = files.filter(f => downloadTasks[f.name]?.status !== 'completed')
+    if (pending.length > 0) addToDownloadQueue({ repoId, source, files: pending, saveDir })
+  }
 
   const handlePause = (f: MsFileEntry) => {
     const task = downloadTasks[f.name]
@@ -163,7 +166,7 @@ export default function DownloadManager() {
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs text-gray-500">{status} · {fmtSize(files.reduce((s,f)=>s+f.size,0))}</div>
             <button onClick={handleDownloadAll} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs">
-              ⬇ {t.downloadPage.downloadAll} ({files.length} {t.downloadPage.files})
+              ⬇ {t.downloadPage.downloadAll} ({files.filter(f => downloadTasks[f.name]?.status !== 'completed').length} {t.downloadPage.files})
             </button>
           </div>
           <div className="border dark:border-gray-700 rounded-lg max-h-80 overflow-y-auto divide-y dark:divide-gray-700">
