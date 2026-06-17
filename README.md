@@ -22,16 +22,18 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 <img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/7a11d216-0748-45ef-9cb1-59cc46f4f134" />
 
 ### 性能监控 / Performance Monitoring
-- 实时 CPU/GPU/显存指标（AMD GPU 通过 ADLX 与 Adrenalin 同源数据）
+- 实时 CPU/GPU/显存指标（AMD GPU 通过 ADLX，NVIDIA GPU 通过 NVML）
+- 系统级 CPU/RAM 上下文（进程占用 / 系统总量对比）
 - 推理吞吐（tokens/s / 提示速度 / 排队深度 / 活跃槽位）
 - 累计 token 统计（提示+生成+总计）
-- 服务汇总进度条（上下文使用率 / 生成速度）
-- 自适应降级：ADLX → sysinfo → 静默回退
-- Real-time CPU/GPU/VRAM metrics (AMD GPU via ADLX, same data source as Adrenalin)
+- **性能分析面板**：日志驱动的每请求剖面（提示/生成阶段吞吐、推测解码接受率、速度曲线）
+- 自适应降级：ADLX → NVML → sysinfo → 静默回退
+- Real-time CPU/GPU/VRAM metrics (AMD via ADLX, NVIDIA via NVML)
+- System-level CPU/RAM context (process vs total)
 - Inference throughput (tokens/s, prompt speed, queue depth, busy slots)
 - Cumulative token stats (prompt + generation + total)
-- Summary progress bars (context usage, throughput gauge)
-- Graceful degradation: ADLX → sysinfo → silent fallback
+- **Performance Analysis panel**: per-request profiling from logs (prompt/gen throughput, spec decode acceptance rate, speed curve)
+- Graceful degradation: ADLX → NVML → sysinfo → silent fallback
 
 
 
@@ -43,13 +45,23 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - 多目录递归扫描，支持 LM Studio / NovaMax 等任意目录结构
 - GGUF 元信息自动解析（架构 / 上下文长度 / 量化类型）
 - 自适应递归树结构，按实际文件系统层级展示
-- 从 ModelScope（魔搭社区）直接下载模型，支持断点续传、独立文件下载/暂停/继续/取消
 - 一键在资源管理器中打开、从磁盘删除
 - Multi-directory recursive scanning, supports LM Studio/NovaMax
 - Automatic GGUF metadata parsing (architecture / context length / quantization)
 - Adaptive recursive tree matching actual filesystem hierarchy
-- Direct model download from ModelScope with resume, per-file download/pause/resume/cancel
 - Open in Explorer, delete from disk
+
+### 下载管理 / Download Manager
+- 独立的下载管理页面，统一管理所有模型下载任务
+- 支持 ModelScope（魔搭社区）和 HuggingFace 双源浏览和下载
+- 下载队列管理，最多 3 并发，支持暂停/继续/取消
+- 断点续传，500ms 限流进度推送，速度 + ETA 显示
+- 自动检测本地已下载文件，避免重复下载
+- Standalone download manager for all model download tasks
+- ModelScope + HuggingFace dual-source browsing and downloading
+- Download queue with 3 concurrent limit, pause/resume/cancel
+- Resume support with 500ms throttled progress, speed + ETA display
+- Auto-detect locally downloaded files to prevent re-download
 
 ### 引擎管理 / Engine Management
 - 多引擎递归扫描，自动识别子目录中的 `llama-server`
@@ -126,7 +138,7 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 | UI 样式 / Styling | Tailwind CSS |
 | 状态管理 / State | Zustand |
 | 图标 / Icons | Lucide React |
-| 系统监控 / System Metrics | sysinfo (CPU/RAM) + ADLX/ROCm FFI (GPU/VRAM) |
+| 系统监控 / System Metrics | sysinfo (CPU/RAM) + ADLX (AMD GPU) + NVML (NVIDIA GPU) |
 
 ---
 
@@ -175,8 +187,10 @@ xattr -cr /Applications/LlamaServerManager.app
 llama-server-manager/
 ├── src/                    # React 前端 / Frontend
 │   ├── components/
-│   │   ├── ConfigPage/     # 参数配置子组件 (shared + sections)
-│   │   ├── PerformancePage/ # 性能监控 (指标卡 + 槽位状态 + 汇总条)
+│   │   ├── ConfigPage/     # 参数配置子组件
+│   │   ├── PerformancePage/ # 性能监控 + 性能分析面板
+│   │   ├── ClusterPage/    # 集群管理
+│   │   ├── DownloadManager.tsx  # 下载管理
 │   │   ├── InstanceManager.tsx
 │   │   ├── ModelRepo.tsx
 │   │   ├── EngineManager.tsx
@@ -195,12 +209,17 @@ llama-server-manager/
 │   │   ├── models.rs       # 数据结构定义
 │   │   ├── utils.rs        # GGUF 解析 / 后端检测 / 路径
 │   │   ├── build.rs        # 构建脚本
-│   │   └── commands/       # 命令模块 (5 文件)
+│   │   └── commands/       # 命令模块 (11 文件)
 │   │       ├── config.rs   # 配置持久化 + 备份恢复
-│   │       ├── server.rs   # 命令生成 + 启停 + 健康检查 + 指标采集
+│   │       ├── server.rs   # 命令生成 + 启停 + 健康检查 + 指标采集 + 日志性能解析
 │   │       ├── scanner.rs  # 模型/引擎扫描
-│   │       ├── download.rs # ModelScope 下载
-│   │       └── adlx.rs     # ADLX GPU 指标采集 (AMD ROCm)
+│   │       ├── download.rs # ModelScope/HuggingFace 下载
+│   │       ├── adlx.rs     # ADLX GPU 指标采集 (AMD)
+│   │       ├── nvml.rs     # NVML GPU 指标采集 (NVIDIA)
+│   │       ├── cluster.rs  # 集群管理
+│   │       ├── cluster_network.rs
+│   │       ├── cluster_mdns.rs
+│   │       └── cluster_ssh.rs
 │   └── Cargo.toml
 ├── .github/workflows/      # CI/CD 三平台自动构建
 ├── package.json
