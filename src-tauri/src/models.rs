@@ -431,12 +431,6 @@ pub struct Usb4Adapter {
     pub ip: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ClusterState {
-    pub workers: Vec<WorkerInfo>,
-    pub usb4_adapters: Vec<Usb4Adapter>,
-}
-
 // ── 应用全局状态 ──────────────────────────────────────────────────
 pub struct AppState {
     pub models: Mutex<Vec<ModelInfo>>,

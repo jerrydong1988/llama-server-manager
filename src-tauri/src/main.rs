@@ -89,6 +89,7 @@ fn main() {
                                 global.engine_names = s.engine_names.lock().unwrap().clone();
                                 let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
                             }
+                            crate::commands::nvml::shutdown();
                             app.exit(0);
                         }
                         _ => {}
