@@ -430,5 +430,6 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     browseFiles: 'Browse Files', selectFromRepo: 'Select from Repository',
     default: 'Default', copySuccess: '\u2713 Copied!',
     appTitle: 'Llama Server Manager',
+    updateAvailable: 'New Version', clickToDownload: 'Click to Download',
   }
 }

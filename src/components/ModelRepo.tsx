@@ -16,9 +16,12 @@ const ModelRepo = () => {
   useEffect(() => { loadInitialData() }, [loadInitialData])
 
   useEffect(() => {
-    const fns: (() => void)[] = []
-    listen("download-complete", () => { scanModels(modelDirs) }).then(f => fns.push(f))
-    return () => { fns.forEach(fn => fn()) }
+    let unlisten: (() => void) | null = null
+    let cancelled = false
+    listen("download-complete", () => { scanModels(modelDirs) }).then(fn => {
+      if (cancelled) { fn() } else { unlisten = fn }
+    })
+    return () => { cancelled = true; unlisten?.() }
   }, [modelDirs, scanModels])
 
   interface TreeNode { name: string; path: string; isDir: boolean; children?: Map<string, TreeNode>; model?: typeof models[0] }
@@ -43,11 +46,16 @@ const ModelRepo = () => {
     return root
   }
   const trees = modelDirs.map(d => buildTree(d, models))
-  function countDir(node: TreeNode): { models: number; mmproj: number } {
-    if (!node.isDir) return node.model!.file_type === "mmproj" ? { models: 0, mmproj: 1 } : { models: 1, mmproj: 0 }
-    let m = 0, p = 0
-    if (node.children) for (const child of node.children.values()) { const c = countDir(child); m += c.models; p += c.mmproj }
-    return { models: m, mmproj: p }
+  function countDir(node: TreeNode): { models: number; mmproj: number; imatrix: number } {
+    if (!node.isDir) {
+      const ft = node.model!.file_type
+      if (ft === "mmproj") return { models: 0, mmproj: 1, imatrix: 0 }
+      if (ft === "imatrix") return { models: 0, mmproj: 0, imatrix: 1 }
+      return { models: 1, mmproj: 0, imatrix: 0 }
+    }
+    let m = 0, p = 0, x = 0
+    if (node.children) for (const child of node.children.values()) { const c = countDir(child); m += c.models; p += c.mmproj; x += c.imatrix }
+    return { models: m, mmproj: p, imatrix: x }
   }
   const formatSize = (bytes: number) => {
     if (bytes < 1024) return bytes + " B"
@@ -81,7 +89,7 @@ const ModelRepo = () => {
           {isCollapsed ? <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" /> : <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
           {depth === 0 ? <FolderOpen className="w-3.5 h-3.5 text-yellow-500 shrink-0" /> : <span className="text-xs text-gray-400 w-3.5 shrink-0">📁</span>}
           <span className="text-xs font-medium truncate flex-1">{node.name}</span>
-          <span className="text-xs text-gray-400 shrink-0">{cnt.models > 0 && cnt.models + " " + t.instance.model}{cnt.models > 0 && cnt.mmproj > 0 && " · "}{cnt.mmproj > 0 && cnt.mmproj + " " + t.modelRepo.mmprojCount}</span>
+          <span className="text-xs text-gray-400 shrink-0">{cnt.models > 0 && cnt.models + " " + t.modelRepo.typeModelShort}{cnt.models > 0 && cnt.mmproj > 0 && " · "}{cnt.mmproj > 0 && cnt.mmproj + " " + t.modelRepo.mmprojCount}{(cnt.models > 0 || cnt.mmproj > 0) && cnt.imatrix > 0 && " · "}{cnt.imatrix > 0 && cnt.imatrix + " " + t.modelRepo.typeImatrix}</span>
         </button>
         {!isCollapsed && node.children && <div>{[...node.children.values()].sort((a,b) => { if (a.isDir !== b.isDir) return a.isDir ? -1 : 1; return a.name.localeCompare(b.name) }).map(c => renderNode(c, depth + 1))}</div>}
       </div>)
@@ -90,7 +98,7 @@ const ModelRepo = () => {
     return (<div key={nodeKey} style={{ paddingLeft: pl + "px" }} className="flex items-center gap-2 py-1.5 pr-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
       {m.file_type === "mmproj" ? <Image className="w-3.5 h-3.5 text-purple-500 shrink-0" /> : <File className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
       <span className="text-xs truncate flex-1" title={m.name}>{m.name}</span>
-      <span className={"text-xs px-1 py-0.5 rounded shrink-0 " + (m.file_type === "mmproj" ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300" : "bg-blue-100 dark:bg-blue-900/30 text-blue-700")}>{m.file_type === "mmproj" ? t.modelRepo.typeMmprojShort : t.modelRepo.typeModelShort}</span>
+      <span className={"text-xs px-1 py-0.5 rounded shrink-0 " + (m.file_type === "mmproj" ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300" : m.file_type === "imatrix" ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300" : "bg-blue-100 dark:bg-blue-900/30 text-blue-700")}>{m.file_type === "mmproj" ? t.modelRepo.typeMmprojShort : m.file_type === "imatrix" ? t.modelRepo.typeImatrix : t.modelRepo.typeModelShort}</span>
       {m.quant_type && <span className="text-xs text-gray-400 shrink-0 w-14 text-right">{m.quant_type}</span>}
       <span className="text-xs text-gray-400 shrink-0 w-20 text-right">{formatSize(m.size)}</span>
       <div className="flex items-center gap-0.5 shrink-0">

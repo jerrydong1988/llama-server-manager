@@ -65,7 +65,7 @@ export default function PerformancePage() {
       unlisten.then(fn => fn())
       clearInterval(slotsInterval)
     }
-  }, [selectedId, interval, host, port])
+  }, [selectedId, interval, host, port, inst?.config.api_key])
 
   if (!running.length) {
     return (

@@ -433,5 +433,6 @@ export const zhCN = {
     browseFiles: '\u6D4F\u89C8\u6587\u4EF6', selectFromRepo: '\u4ECE\u6A21\u578B\u4ED3\u5E93\u9009\u62E9',
     default: '\u9ED8\u8BA4', copySuccess: '\u2713 \u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F',
     appTitle: 'Llama \u670D\u52A1\u5668\u7BA1\u7406\u5668',
+    updateAvailable: '\u65B0\u7248\u672C', clickToDownload: '\u70B9\u51FB\u4E0B\u8F7D',
   }
 }

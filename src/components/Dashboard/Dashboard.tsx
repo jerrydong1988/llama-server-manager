@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Server, Database, Cpu, BarChart3, ArrowRight } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -13,6 +13,8 @@ export default function Dashboard() {
   const { instances, models, engines, setActiveTab } = useAppStore()
   const [sysMetrics, setSysMetrics] = useState<any>(null)
   const [metricInstance, setMetricInstance] = useState('')
+  const instancesRef = useRef(instances)
+  instancesRef.current = instances
 
   const runningInstances = instances.filter(i => i.status === 'running')
   const stoppedInstances = instances.filter(i => i.status !== 'running')
@@ -33,7 +35,7 @@ export default function Dashboard() {
 
     const unlisten = listen<{ system: any; instanceId: string }>('metrics-update', (e) => {
       setSysMetrics(e.payload.system)
-      const inst = instances.find(i => i.id === e.payload.instanceId)
+      const inst = instancesRef.current.find(i => i.id === e.payload.instanceId)
       setMetricInstance(inst?.name || '')
     })
     return () => { unlisten.then(fn => fn()) }

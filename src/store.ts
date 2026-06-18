@@ -37,10 +37,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     const id = crypto.randomUUID()
     const fileNames = new Set(entry.files.map(f => f.name))
     
-    // 去重：已在队列或正在下载/已完成的不重复入队
-    const alreadyInQueue = s.downloadQueue.some(q => 
-      q.repoId === entry.repoId && q.source === entry.source && 
-      q.files.some(f => fileNames.has(f.name)))
+    // 去重：仅当新条目的所有文件都已在队列/下载中时才跳过
+    const alreadyInQueue = s.downloadQueue.some(q =>
+      q.repoId === entry.repoId && q.source === entry.source &&
+      entry.files.every(f => fileNames.has(f.name))) ||
+      entry.files.every(f => s.downloadTasks[f.name] && s.downloadTasks[f.name].status !== 'cancelled' && s.downloadTasks[f.name].status !== 'error')
     if (alreadyInQueue) return
 
     // 更新已存在条目的状态为 queued
@@ -93,6 +94,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     } catch {
       set({ processingQueue: false })
+      await get().processDownloadQueue!()
     }
   },
   setModels: (models) => set({ models }),
@@ -112,25 +114,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     instances: s.instances.filter((i) => i.id !== id),
   })),
 
-  moveInstance: (id, direction) => set((s) => {
+  moveInstance: (id, direction) => {
+    const s = get()
     const idx = s.instances.findIndex(i => i.id === id)
-    if (idx < 0) return s
+    if (idx < 0) return
     const target = direction === 'up' ? idx - 1 : idx + 1
-    if (target < 0 || target >= s.instances.length) return s
+    if (target < 0 || target >= s.instances.length) return
     const arr = [...s.instances];
     [arr[idx], arr[target]] = [arr[target], arr[idx]]
+    set({ instances: arr })
     get().saveConfig()
-    return { instances: arr }
-  }),
+  },
 
-  renameInstance: (id, name) => set((s) => {
+  renameInstance: (id, name) => {
+    const s = get()
     const inst = s.instances.find(i => i.id === id)
-    if (!inst) return s
+    if (!inst) return
     const newConfig = { ...inst.config, name }
     const updated = s.instances.map(i => i.id === id ? { ...i, name, config: newConfig } : i)
+    set({ instances: updated })
     get().saveConfig()
-    return { instances: updated }
-  }),
+  },
 
   addLog: (entry) => set((s) => {
     const existing = s.logs[entry.instanceId] || []
@@ -286,14 +290,11 @@ export const useAppStore = create<AppState>((set, get) => ({
           document.documentElement.classList.toggle('dark', global.dark_mode)
           set({ darkMode: !!global.dark_mode })
         }
-      // #4: succeed-first — 扫描失败或返回空时不覆盖已有数据
       invoke('scan_models', { paths: global.model_dirs || [] }).then((models) => {
-        const arr = models as any[]
-        if (arr && arr.length > 0) set({ models: arr })
+        set({ models: models as any[] })
       }).catch(() => {})
       invoke('scan_engines', { paths: global.engine_dirs || [] }).then((engines) => {
-        const arr = engines as any[]
-        if (arr && arr.length > 0) set({ engines: arr })
+        set({ engines: engines as any[] })
       }).catch(() => {})
     } catch (e) { console.error('load_config error:', e) }
   },
@@ -416,6 +417,10 @@ export function formatStartupCommand(cmdStr: string): string {
   return lines.join('\n')
 }
 
+const _g = globalThis as any
+if (!_g.__lsm_listeners_registered) {
+_g.__lsm_listeners_registered = true
+
 listen<{ instanceId: string; text: string }>('server-log', (event) => {
   useAppStore.getState().addLog({
     instanceId: event.payload.instanceId,
@@ -503,3 +508,5 @@ listen<{ fileName: string }>('download-removed', (e) => {
   delete tasks[e.payload.fileName]
   s.setDownloadTasks(tasks)
 }).catch(() => {})
+
+} // HMR-safe guard

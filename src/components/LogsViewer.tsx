@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useAppStore } from '../store'
 import { Trash2, ChevronDown, Pause, Play } from 'lucide-react'
 import { useI18n } from '../i18n'
@@ -14,7 +14,7 @@ const LogsViewer = () => {
   const logCountRef = useRef(0)
 
   const instanceLogs = selectedInstanceId ? (logs[selectedInstanceId] || []) : []
-  const allLogs = Object.values(logs).flat().sort((a, b) => a.timestamp - b.timestamp)
+  const allLogs = useMemo(() => Object.values(logs).flat().sort((a, b) => a.timestamp - b.timestamp), [logs])
   const displayLogs = selectedInstanceId ? instanceLogs : allLogs
 
   // Auto-scroll when new logs arrive (if autoScroll is enabled)
@@ -120,7 +120,7 @@ const LogsViewer = () => {
               else if (/listening|ready|ok|success|loaded/.test(lower)) colorClass = 'text-green-400'
               else if (/token|speed|t\/s/.test(lower)) colorClass = 'text-cyan-400'
               return (
-                <div key={idx} className={`${colorClass} whitespace-pre-wrap break-all`}>
+                <div key={`${entry.timestamp}-${idx}`} className={`${colorClass} whitespace-pre-wrap break-all`}>
                   {!selectedInstanceId && <span className="text-gray-500">[{time}] [{instName}] </span>}
                   {text}
                 </div>

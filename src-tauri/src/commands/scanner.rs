@@ -109,7 +109,7 @@ pub async fn get_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelIn
 
 #[tauri::command]
 pub async fn delete_model_file(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    let _ = std::fs::remove_file(&path);
+    std::fs::remove_file(&path).map_err(|e| format!("删除文件失败: {}", e))?;
     let mut models = state.models.lock().unwrap();
     models.retain(|m| m.path != path);
     Ok(())
@@ -241,6 +241,15 @@ pub async fn rename_engine(id: String, name: String, state: tauri::State<'_, App
         engine.name = name.clone();
     }
     state.engine_names.lock().unwrap().insert(id, name);
+    // Persist engine names immediately to survive crashes
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let path = config_dir.join("instances.json");
+    if let Ok(json) = std::fs::read_to_string(&path) {
+        if let Ok(mut global) = serde_json::from_str::<crate::models::GlobalConfig>(&json) {
+            global.engine_names = state.engine_names.lock().unwrap().clone();
+            let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
+        }
+    }
     Ok(())
 }
 

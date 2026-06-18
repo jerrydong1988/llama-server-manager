@@ -13,21 +13,21 @@ pub async fn save_config(
     dark_mode: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let mut stored = state.instances.lock().unwrap();
-    *stored = instances.clone();
     let running_snapshot = state.running.lock().unwrap().clone();
     let engine_names = state.engine_names.lock().unwrap().clone();
-    let global = GlobalConfig { instances, model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order, last_tab, dark_mode, engine_names };
+    let global = GlobalConfig { instances: instances.clone(), model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order, last_tab, dark_mode, engine_names };
     let config_dir = state.config_dir.lock().unwrap().clone();
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     let path = config_dir.join("instances.json");
     let json = serde_json::to_string_pretty(&global).map_err(|e| format!("{}", e))?;
-    // #2: 原子写入 — 先写临时文件再 rename，避免崩溃时损坏配置
+    // Write to disk first, THEN update in-memory state — prevents inconsistency if write fails
     let tmp = config_dir.join("instances.json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("保存失败: {}", e))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("保存失败: {}", e))?;
-    // 保留备份
     let _ = std::fs::copy(&path, config_dir.join("instances.json.bak"));
+    // Only update in-memory state after successful disk write
+    let mut stored = state.instances.lock().unwrap();
+    *stored = instances;
     Ok(())
 }
 

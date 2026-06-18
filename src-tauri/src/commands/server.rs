@@ -560,7 +560,12 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
             }
         }
     }
-    // 30 次全部失败，health check 线程自然退出
+    // All 60 attempts failed — emit fail status before exiting
+    if is_my_instance() {
+        let _ = app.emit("health-status", serde_json::json!({
+            "instanceId": instance_id, "status": "fail",
+        }));
+    }
 }
 
 #[tauri::command]

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Settings, File, Image, X, FolderOpen, ChevronRight, ChevronDown, Search } from 'lucide-react'
 import { useAppStore, type InstanceConfig, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
@@ -20,6 +20,8 @@ const ConfigPage = () => {
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
   const [searchQuery, setSearchQuery] = useState('')
+  const mountedRef = useRef(true)
+  useEffect(() => { return () => { mountedRef.current = false } }, [])
 
   useEffect(() => { if (inst) setLocal({ ...defaultInstanceConfig(), ...inst.config }); else setLocal(null) }, [activeConfigInstanceId])
 
@@ -62,7 +64,7 @@ const ConfigPage = () => {
     saveConfig()
     setSaved(true)
     setSaveWarnings(warnings)
-    setTimeout(() => { setSaved(false); setSaveWarnings([]) }, 6000)
+    setTimeout(() => { if (mountedRef.current) { setSaved(false); setSaveWarnings([]) } }, 6000)
   }
 
   const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => { setPickerTarget('model'); setShowPicker(true) }, onShowDraftPicker: () => { setPickerTarget('draft'); setShowPicker(true) }, activeParams: local ? getActiveParams(local, isEmbedding) : new Set() as Set<keyof InstanceConfig>, searchQuery }
@@ -162,7 +164,7 @@ const ConfigPage = () => {
                   if (m.file_type === 'mmproj') return (<div key={node.path} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex items-center gap-2 py-1 pr-2 text-xs text-gray-500"><Image className="w-3 h-3 text-purple-500 shrink-0" /><span className="truncate flex-1">{m.name}</span><span className="text-purple-400 shrink-0 text-xs">{t.modelRepo.typeMmprojShort}</span></div>)
                   return (<button key={node.path} onClick={() => pickModel(m.path)} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="w-full flex items-center gap-2 py-1 pr-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded text-left text-xs">
                     <File className="w-3 h-3 text-blue-500 shrink-0" /><span className="truncate flex-1">{m.name}</span><span className="text-gray-400 shrink-0">{m.quant_type || ''}</span>
-                    <span className="text-gray-400 shrink-0">{m.size > 1024 * 1024 * 1024 ? (m.size / 1024 / 1024 / 1024).toFixed(1) + ' GB' : m.size > 1024 * 1024 ? (m.size / 1024 / 1024).toFixed(1) + ' MB' : m.size > 1024 ? (m.size / 1024).toFixed(1) + ' KB' : m.size + ' B'}</span>
+                    <span className="text-gray-400 shrink-0">{m.size > 1024 * 1024 * 1024 ? (m.size / 1024 / 1024 / 1024).toFixed(2) + ' GB' : m.size > 1024 * 1024 ? (m.size / 1024 / 1024).toFixed(2) + ' MB' : m.size > 1024 ? (m.size / 1024).toFixed(2) + ' KB' : m.size + ' B'}</span>
                   </button>)
                 }
                 return modelDirs.map(d => buildTree(d)).map(t => renderNode(t, 0))

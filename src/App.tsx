@@ -60,7 +60,14 @@ function AppInner() {
       const current = version
       const l = latest.split('.').map(Number)
       const c = current.split('.').map(Number)
-      const has = l.some((v: number, i: number) => v > (c[i] || 0)) && !c.some((v: number, i: number) => v > (l[i] || 0))
+      const maxLen = Math.max(l.length, c.length)
+      let has = false
+      for (let i = 0; i < maxLen; i++) {
+        const lv = l[i] || 0
+        const cv = c[i] || 0
+        if (lv > cv) { has = true; break }
+        if (lv < cv) { has = false; break }
+      }
       if (has) setUpdateInfo({ latest_version: latest, url: json.html_url || '' })
     })
     .catch(() => {})
@@ -134,7 +141,7 @@ function AppInner() {
         {updateInfo && (
           <a href={updateInfo.url} target="_blank" rel="noreferrer"
             className="block mt-2 px-2 py-1.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 rounded text-xs text-center hover:bg-green-200 dark:hover:bg-green-900/50 transition-colors">
-            _ 新版本 v{updateInfo.latest_version} 可用 | 点击下载
+            {'\uD83D\uDD14'} {t.common.updateAvailable || '新版本'} v{updateInfo.latest_version} {t.common.clickToDownload || '点击下载'}
           </a>
         )}
       </div>
@@ -143,7 +150,6 @@ function AppInner() {
           <LogsViewer />
         ) : (
           <div className="max-w-7xl mx-auto p-6">
-            <h2 className="text-2xl font-bold mb-6">{navigation.find(n => n.id === activeTab)?.name}</h2>
             {renderTabContent(activeTab)}
           </div>
         )}

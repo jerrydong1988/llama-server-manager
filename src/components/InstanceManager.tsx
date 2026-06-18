@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Play, Square, Plus, Trash2, Copy, Globe, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { formatStartupCommand } from '../store'
@@ -23,10 +23,15 @@ const InstanceManager = () => {
   const [enginePickerForId, setEnginePickerForId] = useState('')
   const [portStatus, setPortStatus] = useState('')
   const portCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => { mountedRef.current = false; if (portCheckTimerRef.current) clearTimeout(portCheckTimerRef.current) }
+  }, [])
 
   const formatUptime = (startTime?: number) => {
-    if (!startTime) return '0 min'
+    if (!startTime) return ''
     const ms = Date.now() - startTime
+    if (ms < 0) return ''
     const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000)
     return h > 0 ? `${h}h ${m}m` : `${m}m`
   }
@@ -55,7 +60,7 @@ const InstanceManager = () => {
 
   const handleDelete = async (id: string) => { if (!await confirm(t.instance.confirmDelete, { title: t.instance.delete, kind: 'warning' })) return; deleteInstance(id); useAppStore.getState().saveConfig() }
   const [copyFeedback, setCopyFeedback] = useState(false)
-  const handleCopyCommand = async (text: string) => { try { await navigator.clipboard.writeText(text); setCopyFeedback(true); setTimeout(() => setCopyFeedback(false), 2000) } catch {} }
+  const handleCopyCommand = async (text: string) => { try { await navigator.clipboard.writeText(text); setCopyFeedback(true); setTimeout(() => { if (mountedRef.current) setCopyFeedback(false) }, 2000) } catch {} }
 
   const handleShowCommand = async (id: string) => {
     const inst = instances.find(i => i.id === id)
@@ -86,11 +91,13 @@ const InstanceManager = () => {
     setTestResults(s => ({ ...s, [inst.id]: '⏳' }))
     try {
       const result = await invoke('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
+      if (!mountedRef.current) return
       setTestResults(s => ({ ...s, [inst.id]: result as string }))
-      setTimeout(() => setTestResults(s => { const n = { ...s }; delete n[inst.id]; return n }), 5000)
+      setTimeout(() => { if (mountedRef.current) setTestResults(s => { const n = { ...s }; delete n[inst.id]; return n }) }, 5000)
     } catch (e: any) {
+      if (!mountedRef.current) return
       setTestResults(s => ({ ...s, [inst.id]: '✗ ' + (e?.toString() || 'Failed') }))
-      setTimeout(() => setTestResults(s => { const n = { ...s }; delete n[inst.id]; return n }), 5000)
+      setTimeout(() => { if (mountedRef.current) setTestResults(s => { const n = { ...s }; delete n[inst.id]; return n }) }, 5000)
     }
   }
 
@@ -139,7 +146,7 @@ const InstanceManager = () => {
                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBg(inst.status)}`}>
                     {inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error}
                   </span>
-                  {inst.status === 'running' && <span className="text-xs text-gray-500">{t.instance.uptime} {formatUptime(inst.startTime)}</span>}
+                  {inst.status === 'running' && inst.startTime && <span className="text-xs text-gray-500">{t.instance.uptime} {formatUptime(inst.startTime)}</span>}
               </div>
             </div>
             {healthIcon(inst)}

@@ -20,7 +20,14 @@ const I18nContext = createContext<I18nContextValue>({
 })
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [lang, setLang] = useState<Lang>('zh-CN')
+  const [lang, setLangState] = useState<Lang>(() => {
+    try { return (localStorage.getItem('lang') as Lang) || 'zh-CN' }
+    catch { return 'zh-CN' }
+  })
+  const setLang = (l: Lang) => {
+    setLangState(l)
+    try { localStorage.setItem('lang', l) } catch {}
+  }
   return <I18nContext.Provider value={{ lang, t: translations[lang], setLang }}>{children}</I18nContext.Provider>
 }
 
