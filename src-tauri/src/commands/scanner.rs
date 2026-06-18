@@ -80,6 +80,7 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) 
                     id: uuid::Uuid::new_v4().to_string(),
                     name, path: file_path, size, architecture, context_length, quant_type, has_mtp_head,
                     file_type: ftype.to_string(),
+                    is_shard: false,
                 });
             }
             if file_count == 0 { errors.push(format!("{} 中未找到 .gguf 模型文件", root_str)); }
@@ -92,10 +93,29 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) 
         }
     }).await.map_err(|e| format!("扫描线程失败: {}", e))?;
 
-    let models = match models {
+    let mut models = match models {
         Ok(m) => m,
         Err(errors) => return Err(errors.join("; ")),
     };
+
+    // ── 分片模型检测：按基础名分组，验证文件数是否等于声明的 N ──
+    {
+        use regex_lite::Regex;
+        let shard_re = Regex::new(r"(?i)^(.+)-(\d{5})-of-(\d{5})\.gguf$").unwrap();
+        let mut groups: std::collections::HashMap<String, (u32, Vec<usize>)> = std::collections::HashMap::new();
+        for (i, m) in models.iter().enumerate() {
+            if let Some(caps) = shard_re.captures(&m.name) {
+                let base = caps.get(1).unwrap().as_str().to_string();
+                let total: u32 = caps.get(3).unwrap().as_str().parse().unwrap_or(0);
+                groups.entry(base).or_insert_with(|| (total, Vec::new())).1.push(i);
+            }
+        }
+        for (expected_total, indices) in groups.values() {
+            if indices.len() as u32 == *expected_total && *expected_total > 1 {
+                for &idx in indices { models[idx].is_shard = true; }
+            }
+        }
+    }
 
     let mut state_models = state.models.lock().unwrap();
     *state_models = models.clone();

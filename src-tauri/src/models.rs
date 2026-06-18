@@ -14,6 +14,8 @@ pub struct ModelInfo {
     pub quant_type: Option<String>,
     pub has_mtp_head: bool,
     pub file_type: String,
+    #[serde(default)]
+    pub is_shard: bool,
 }
 
 // ── 引擎信息 ──────────────────────────────────────────────────────

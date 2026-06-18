@@ -51,6 +51,8 @@ const ModelRepo = () => {
       const ft = node.model!.file_type
       if (ft === "mmproj") return { models: 0, mmproj: 1, imatrix: 0 }
       if (ft === "imatrix") return { models: 0, mmproj: 0, imatrix: 1 }
+      // Sharded model files: show in tree but don't count toward model total
+      if (node.model!.is_shard) return { models: 0, mmproj: 0, imatrix: 0 }
       return { models: 1, mmproj: 0, imatrix: 0 }
     }
     let m = 0, p = 0, x = 0
@@ -95,8 +97,8 @@ const ModelRepo = () => {
       </div>)
     }
     const m = node.model!; const pl = depth * 16 + 16 + 20
-    return (<div key={nodeKey} style={{ paddingLeft: pl + "px" }} className="flex items-center gap-2 py-1.5 pr-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
-      {m.file_type === "mmproj" ? <Image className="w-3.5 h-3.5 text-purple-500 shrink-0" /> : <File className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
+    return (<div key={nodeKey} style={{ paddingLeft: pl + "px" }} className={`flex items-center gap-2 py-1.5 pr-4 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors ${m.is_shard ? 'opacity-60' : ''}`}>
+      {m.file_type === "mmproj" ? <Image className="w-3.5 h-3.5 text-purple-500 shrink-0" /> : <File className={`w-3.5 h-3.5 shrink-0 ${m.is_shard ? 'text-gray-400' : 'text-blue-500'}`} />}
       <span className="text-xs truncate flex-1" title={m.name}>{m.name}</span>
       <span className={"text-xs px-1 py-0.5 rounded shrink-0 " + (m.file_type === "mmproj" ? "bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300" : m.file_type === "imatrix" ? "bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300" : "bg-blue-100 dark:bg-blue-900/30 text-blue-700")}>{m.file_type === "mmproj" ? t.modelRepo.typeMmprojShort : m.file_type === "imatrix" ? t.modelRepo.typeImatrix : t.modelRepo.typeModelShort}</span>
       {m.quant_type && <span className="text-xs text-gray-400 shrink-0 w-14 text-right">{m.quant_type}</span>}

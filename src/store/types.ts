@@ -8,6 +8,7 @@ export interface ModelInfo {
   quant_type?: string
   has_mtp_head?: boolean
   file_type: string
+  is_shard?: boolean
 }
 
 export interface EngineInfo {
