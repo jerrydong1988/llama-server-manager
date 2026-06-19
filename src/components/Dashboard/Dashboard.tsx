@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { Server, Database, Cpu, BarChart3, ArrowRight } from 'lucide-react'
-import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
@@ -16,23 +15,12 @@ export default function Dashboard() {
   const runningInstances = instances.filter(i => i.status === 'running')
   const stoppedInstances = instances.filter(i => i.status !== 'running')
 
+  // Poll system health every 5s — no instance required
   useEffect(() => {
-    // 首次挂载时立即拉取一次数据，避免等待 5 秒事件
-    const fetchInitial = async () => {
-      const running = useAppStore.getState().instances.filter(i => i.status === 'running')
-      if (running.length > 0) {
-        try {
-          const m = await invoke<any>('get_system_metrics', { instanceId: running[0].id })
-          setSysMetrics(m)
-        } catch {}
-      }
-    }
-    fetchInitial()
-
-    const unlisten = listen<{ system: any; instanceId: string }>('metrics-update', (e) => {
-      setSysMetrics(e.payload.system)
-    })
-    return () => { unlisten.then(fn => fn()) }
+    const fetch = () => invoke<any>('get_system_health').then(setSysMetrics).catch(() => {})
+    fetch()
+    const timer = setInterval(fetch, 5000)
+    return () => clearInterval(timer)
   }, [])
 
   return (

@@ -678,6 +678,24 @@ pub async fn check_port(port: u16) -> Result<bool, String> {
 
 // ── 系统性能指标（sysinfo） ──────────────────────────────────
 
+/// Collect GPU + system-level metrics. Shared by get_system_health and get_system_metrics.
+fn collect_gpu_and_system(sys: &mut System) -> (Option<f32>, Option<f32>, Option<f64>, Option<f64>, Option<f64>, Option<String>, Option<f32>, Option<f64>, Option<f64>) {
+    sys.refresh_all();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(sys);
+
+    // AMD
+    if let Some(m) = adlx::collect_metrics() {
+        return (m.cpu_percent, m.gpu_percent, m.vram_used_mb, m.vram_total_mb, None, Some("AMD".into()), sys_cpu, sys_mem_total, sys_mem_used);
+    }
+    // NVIDIA
+    if let Some(m) = nvml::collect_metrics() {
+        return (None, m.gpu_percent, m.vram_used_mb, m.vram_total_mb, None, Some("NVIDIA".into()), sys_cpu, sys_mem_total, sys_mem_used);
+    }
+    // Fallback
+    (None, None, None, None, None, None, sys_cpu, sys_mem_total, sys_mem_used)
+}
+
 /// #6: 复用 System 实例，避免每次 new → refresh → sleep → refresh 的 300ms 阻塞
 fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
     sys.refresh_cpu_all();
@@ -716,59 +734,43 @@ pub async fn get_system_metrics(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap().as_secs() - start_time;
 
-    // System-level CPU/RAM (always collected, independent of GPU)
     let mut sys = System::new_all();
-    sys.refresh_all();
-    std::thread::sleep(std::time::Duration::from_millis(200));
-    let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(&mut sys);
+    let (adlx_cpu, gpu_pct, vram_u, vram_t, _mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
+        collect_gpu_and_system(&mut sys);
 
-    // ── GPU: ADLX → NVML → sysinfo fallback ──
-    // Try ADLX first (AMD)
-    if let Some(m) = adlx::collect_metrics() {
-        return Ok(SystemMetrics {
-            cpu_percent: m.cpu_percent.unwrap_or(0.0),
-            memory_mb: m.memory_mb.unwrap_or(0.0),
-            uptime_secs: uptime,
-            gpu_percent: m.gpu_percent,
-            vram_used_mb: m.vram_used_mb,
-            vram_total_mb: m.vram_total_mb,
-            system_cpu_percent: sys_cpu,
-            system_memory_total_mb: sys_mem_total,
-            system_memory_used_mb: sys_mem_used,
-            gpu_vendor: Some("AMD".into()),
-        });
-    }
-
-    // Try NVML (NVIDIA)
-    if let Some(m) = nvml::collect_metrics() {
-        let (cpu, mem) = get_process_metrics(&mut sys, pid);
-        return Ok(SystemMetrics {
-            cpu_percent: cpu,
-            memory_mb: (mem * 10.0).round() / 10.0,
-            uptime_secs: uptime,
-            gpu_percent: m.gpu_percent,
-            vram_used_mb: m.vram_used_mb,
-            vram_total_mb: m.vram_total_mb,
-            system_cpu_percent: sys_cpu,
-            system_memory_total_mb: sys_mem_total,
-            system_memory_used_mb: sys_mem_used,
-            gpu_vendor: Some("NVIDIA".into()),
-        });
-    }
-
-    // Fallback: sysinfo only
     let (cpu, mem) = get_process_metrics(&mut sys, pid);
     Ok(SystemMetrics {
-        cpu_percent: cpu,
-        memory_mb: (mem * 10.0).round() / 10.0,
+        cpu_percent: adlx_cpu.unwrap_or(cpu),
+        memory_mb: if adlx_cpu.is_some() { _mem.unwrap_or(mem) } else { (mem * 10.0).round() / 10.0 },
         uptime_secs: uptime,
-        gpu_percent: None,
-        vram_used_mb: None,
-        vram_total_mb: None,
+        gpu_percent: gpu_pct,
+        vram_used_mb: vram_u,
+        vram_total_mb: vram_t,
         system_cpu_percent: sys_cpu,
         system_memory_total_mb: sys_mem_total,
         system_memory_used_mb: sys_mem_used,
-        gpu_vendor: None,
+        gpu_vendor,
+    })
+}
+
+/// System health — no instance required. Used by Dashboard for the system resource bar.
+#[tauri::command]
+pub async fn get_system_health() -> Result<SystemMetrics, String> {
+    let mut sys = System::new_all();
+    let (adlx_cpu, gpu_pct, vram_u, vram_t, mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
+        collect_gpu_and_system(&mut sys);
+
+    Ok(SystemMetrics {
+        cpu_percent: adlx_cpu.unwrap_or(sys_cpu.unwrap_or(0.0)),
+        memory_mb: mem.unwrap_or(sys_mem_used.unwrap_or(0.0)),
+        uptime_secs: 0,
+        gpu_percent: gpu_pct,
+        vram_used_mb: vram_u,
+        vram_total_mb: vram_t,
+        system_cpu_percent: sys_cpu,
+        system_memory_total_mb: sys_mem_total,
+        system_memory_used_mb: sys_mem_used,
+        gpu_vendor,
     })
 }
 
