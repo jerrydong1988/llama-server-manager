@@ -22,12 +22,14 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 <img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/7a11d216-0748-45ef-9cb1-59cc46f4f134" />
 
 ### 性能监控 / Performance Monitoring
+- **系统健康仪表**：总览页启动即显示 CPU/内存/GPU/显存实时数据（不依赖运行实例）
 - 实时 CPU/GPU/显存指标（AMD GPU 通过 ADLX，NVIDIA GPU 通过 NVML）
 - 系统级 CPU/RAM 上下文（进程占用 / 系统总量对比）
 - 推理吞吐（tokens/s / 提示速度 / 排队深度 / 活跃槽位）
 - 累计 token 统计（提示+生成+总计）
 - **性能分析面板**：日志驱动的每请求剖面（提示/生成阶段吞吐、推测解码接受率、速度曲线）
 - 自适应降级：ADLX → NVML → sysinfo → 静默回退
+- **System health dashboard**: CPU/Memory/GPU/VRAM visible immediately on launch (no instance required)
 - Real-time CPU/GPU/VRAM metrics (AMD via ADLX, NVIDIA via NVML)
 - System-level CPU/RAM context (process vs total)
 - Inference throughput (tokens/s, prompt speed, queue depth, busy slots)
@@ -45,10 +47,12 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - 多目录递归扫描，支持 LM Studio / NovaMax 等任意目录结构
 - GGUF 元信息自动解析（架构 / 上下文长度 / 量化类型）
 - 自适应递归树结构，按实际文件系统层级展示
+- **分片模型智能检测**：自动识别 -NNNNN-of-NNNNN 分片文件，Dashboard 排除重复统计
 - 一键在资源管理器中打开、从磁盘删除
 - Multi-directory recursive scanning, supports LM Studio/NovaMax
 - Automatic GGUF metadata parsing (architecture / context length / quantization)
 - Adaptive recursive tree matching actual filesystem hierarchy
+- **Sharded model detection**: auto-identifies shard files, excludes from model count
 - Open in Explorer, delete from disk
 
 ### 下载管理 / Download Manager
@@ -93,13 +97,15 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - 统一参数配置页面，按实例关联
 - **159 个参数**完整覆盖 llama.cpp 最新主分支（71% 覆盖率，覆盖全部生成/采样/缓存/推测解码/服务核心场景），含 RoPE/YaRN 上下文缩放、推测解码、GPU 设备、多模型路由等全部参数
 - **智能参数校验**：保存时自动检测 26 条规则，分 high/medium/low 三级彩色横幅警告
+- **参数搜索**：输入参数名或 CLI 标志（如 -cms），自动展开分组、amber 高亮匹配字段、脉冲闪现 + 自动滚屏定位
 - 高级采样总开关 + 推测解码/专家设置子开关，一键启用/禁用相关参数
 - 向量模型自动检测，锁定不适用参数
 - 模型路径仓库树选择器，自动关联 mmproj
 - 所有参数带悬停提示说明（中英双语）
 - Unified config page associated per instance
-- **118 parameters** covering llama.cpp b9442, including RoPE/YaRN scaling, speculative decoding, GPU devices, multi-model routing
-- **Smart validation**: 25 rules auto-checked on save, high/medium/low severity color-coded banners
+- **159 parameters** covering llama.cpp latest master, including RoPE/YaRN scaling, speculative decoding, GPU devices, multi-model routing
+- **Smart validation**: 26 rules auto-checked on save, high/medium/low severity color-coded banners
+- **Parameter search**: type name or CLI flag, auto-expand sections, amber highlight + flash animation + auto-scroll
 - Advanced sampling master toggle + speculative decoding/expert settings sub-toggles
 - Embedding model auto-detection with irrelevant parameter locking
 - Model path tree picker with automatic mmproj association
