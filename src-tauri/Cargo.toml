@@ -1,6 +1,6 @@
 [package]
 name = "llama-server-manager"
-version = "2.9.15"
+version = "2.9.16"
 description = "现代化 Llama.cpp 服务器图形化管理器"
 authors = ["开发者"]
 license = "MIT"
