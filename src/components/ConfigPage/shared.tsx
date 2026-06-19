@@ -30,7 +30,7 @@ export const Section = ({ title, children, disabled, onToggle, toggled, defaultO
   // Search active: always expand to reveal matching fields
   const isOpen = hasSearch || (!userToggled.current && shouldOpen) || open
   return (
-    <div className={`border dark:border-gray-700 rounded-lg overflow-hidden ${searchQuery && !shouldOpen && !open ? 'opacity-40' : ''}`}>
+    <div className={`border dark:border-gray-700 rounded-lg overflow-hidden`}>
       <button onClick={handleToggle} className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left dark:text-gray-200">
         {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
         <span className="text-sm font-medium">{title}</span>
