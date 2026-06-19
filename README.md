@@ -23,10 +23,19 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 
 
 - 明暗主题切换（持久化）+ 窗口尺寸/位置记忆
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/321176a3-9bd5-4b37-bcb7-c465910f7f6b" />
 - 完整中英双语界面
 <img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/025c8056-22ca-4778-a24a-b74b3f010303" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/321176a3-9bd5-4b37-bcb7-c465910f7f6b" />
 
+
+
+
+
+
+
+---
+
+## 功能特性 / Features
 
 ### 性能监控 / Performance Monitoring
 - **系统健康仪表**：总览页启动即显示 CPU/内存/GPU/显存实时数据（不依赖运行实例）
@@ -43,13 +52,7 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 - Cumulative token stats (prompt + generation + total)
 - **Performance Analysis panel**: per-request profiling from logs (prompt/gen throughput, spec decode acceptance rate, speed curve)
 - Graceful degradation: ADLX → NVML → sysinfo → silent fallback
-
-
-
----
-
-## 功能特性 / Features
-
+  
 ### 模型仓库 / Model Repository
 - 多目录递归扫描，支持 LM Studio / NovaMax 等任意目录结构
 - GGUF 元信息自动解析（架构 / 上下文长度 / 量化类型）
