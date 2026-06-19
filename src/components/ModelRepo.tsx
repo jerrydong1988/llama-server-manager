@@ -21,7 +21,7 @@ const ModelRepo = () => {
     const unlisten = listen<{ total: number; groups: number; marked: number }>('scan-debug', (e) => {
       const { total, groups, marked } = e.payload
       if (marked > 0) {
-        setScanStats(`${total} 个文件，${groups} 组分片（${marked} 个文件），有效模型 ${total - marked} 个`)
+        setScanStats(`${total} 个文件，${groups} 组分片（${marked} 个文件），去重后 ${total - marked} 个有效文件（其中投影器/权重矩阵除外，模型总数见总览页）`)
       } else {
         setScanStats(`${total} 个文件`)
       }
