@@ -92,8 +92,13 @@ const LogsViewer = () => {
             </option>
           ))}
         </select>
-        {selectedInstanceId && (
+        {selectedInstanceId ? (
           <button onClick={async () => { if (!await confirm(t.logs.clearConfirm, { title: t.logs.clear, kind: 'warning' })) return; clearLogs(selectedInstanceId); logCountRef.current = 0; setAutoScroll(true) }}
+            className="flex items-center gap-1 px-3 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors text-sm">
+            <Trash2 className="w-4 h-4" /> {t.logs.clear}
+          </button>
+        ) : (
+          <button onClick={async () => { if (!await confirm(t.logs.clearAllConfirm || t.logs.clearConfirm, { title: t.logs.clear, kind: 'warning' })) return; for (const id of Object.keys(logs)) clearLogs(id); logCountRef.current = 0; setAutoScroll(true) }}
             className="flex items-center gap-1 px-3 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors text-sm">
             <Trash2 className="w-4 h-4" /> {t.logs.clear}
           </button>

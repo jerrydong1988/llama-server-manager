@@ -312,7 +312,7 @@ export const enUS = {
   },
   logs: {
     title: 'Server Logs', selectInstance: 'View instance logs:', allInstances: 'All Instances',
-    clear: 'Clear Logs', clearConfirm: 'Clear all logs for this instance?', noLogs: 'No log output',
+    clear: 'Clear Logs', clearConfirm: 'Clear all logs for this instance?', clearAllConfirm: 'Clear logs for ALL instances?', noLogs: 'No log output',
     runningTag: '(running)', noInstances: 'No running instances. Create and start an instance first.',
     noLogsForInstance: 'No logs for this instance',
     hint: 'Logs are displayed in real-time. Start an instance to capture output. Select an instance to view grouped logs.',
