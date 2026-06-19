@@ -101,20 +101,26 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) 
     // ── 分片模型检测：按基础名分组，验证文件数是否等于声明的 N ──
     {
         use regex_lite::Regex;
-        let shard_re = Regex::new(r"(?i)^(.+)-(\d{5})-of-(\d{5})\.gguf$").unwrap();
+        // [0-9] used instead of \d for regex_lite compatibility
+        let shard_re = Regex::new(r"(?i)^(.+)-([0-9]{5})-of-([0-9]{5})\.gguf$").unwrap();
         let mut groups: std::collections::HashMap<String, (u32, Vec<usize>)> = std::collections::HashMap::new();
+        let mut matched_count = 0u32;
         for (i, m) in models.iter().enumerate() {
             if let Some(caps) = shard_re.captures(&m.name) {
                 let base = caps.get(1).unwrap().as_str().to_string();
                 let total: u32 = caps.get(3).unwrap().as_str().parse().unwrap_or(0);
                 groups.entry(base).or_insert_with(|| (total, Vec::new())).1.push(i);
+                matched_count += 1;
             }
         }
-        for (expected_total, indices) in groups.values() {
+        let mut marked_count = 0u32;
+        for (_base, (expected_total, indices)) in &groups {
             if indices.len() as u32 == *expected_total && *expected_total > 1 {
-                for &idx in indices { models[idx].is_shard = true; }
+                for &idx in indices { models[idx].is_shard = true; marked_count += 1; }
             }
         }
+        eprintln!("[shard-detect] scanned {} files, regex matched {} files across {} groups, marked {} as shard",
+            models.len(), matched_count, groups.len(), marked_count);
     }
 
     let mut state_models = state.models.lock().unwrap();
