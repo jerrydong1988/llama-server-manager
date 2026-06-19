@@ -30,7 +30,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   downloadProgress: {},
   downloadTasks: {},
   downloadQueue: [],
-  processingQueue: false,
   setDownloadTasks: (tasks) => set({ downloadTasks: tasks }),
   addToDownloadQueue: (entry) => {
     const s = get()
@@ -60,42 +59,37 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeFromDownloadQueue: (id) => {
     set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== id) }))
   },
-  processDownloadQueue: async () => {
-    const s = get()
-    if (s.processingQueue) return
-    
+  processDownloadQueue: () => {
     const { downloadQueue, downloadTasks } = get()
     const activeCount = Object.values(downloadTasks).filter(t => t.status === 'active').length
     const MAX = 3
     if (activeCount >= MAX || downloadQueue.length === 0) return
 
-    set({ processingQueue: true })
-    try {
+    const next = downloadQueue[0]
+    set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== next.id) }))
 
-      const next = downloadQueue[0]
-      set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== next.id) }))
-      
-      // 标记为 active
-      const tasks = { ...get().downloadTasks }
-      for (const f of next.files) {
-        tasks[f.name] = { fileName: f.name, repoId: next.repoId, source: next.source, downloaded: 0, total: f.size, speed: 0, status: 'active' }
-      }
-      set({ downloadTasks: tasks })
+    // Mark as active
+    const tasks = { ...get().downloadTasks }
+    for (const f of next.files) {
+      tasks[f.name] = { fileName: f.name, repoId: next.repoId, source: next.source, downloaded: 0, total: f.size, speed: 0, status: 'active' }
+    }
+    set({ downloadTasks: tasks })
 
+    // Fire-and-forget — don't block, allows up to MAX concurrent downloads
+    ;(async () => {
       try {
         if (next.source === 'modelscope') {
           await invoke('download_modelscope_files', { repoId: next.repoId, files: next.files, saveDir: next.saveDir })
         } else {
           await invoke('download_huggingface_files', { repoId: next.repoId, files: next.files, saveDir: next.saveDir })
         }
-      } finally {
-        set({ processingQueue: false })
-        await get().processDownloadQueue!()
+      } catch { /* events handle error state */ } finally {
+        get().processDownloadQueue!()
       }
-    } catch {
-      set({ processingQueue: false })
-      await get().processDownloadQueue!()
-    }
+    })()
+
+    // Try to fill remaining concurrency slots immediately
+    get().processDownloadQueue!()
   },
   setModels: (models) => set({ models }),
   setEngines: (engines) => set({ engines }),

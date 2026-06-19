@@ -193,7 +193,6 @@ export interface AppState {
   clusterScanning: boolean
   downloadTasks: Record<string, DownloadProgress>
   downloadQueue: DownloadQueueEntry[]
-  processingQueue: boolean
   setActiveTab: (tab: string) => void
   setDarkMode: (dm: boolean) => void
   setActiveConfigInstanceId: (id: string | null) => void
@@ -240,7 +239,7 @@ export interface AppState {
   setDownloadTasks: (tasks: Record<string, DownloadProgress>) => void
   addToDownloadQueue: (entry: { repoId: string; source: 'modelscope' | 'huggingface'; files: MsFileEntry[]; saveDir: string }) => void
   removeFromDownloadQueue: (id: string) => void
-  processDownloadQueue: () => Promise<void>
+  processDownloadQueue: () => void
   // Cluster
   setWorkers: (workers: WorkerInfo[]) => void
   addWorker: (worker: WorkerInfo) => void
