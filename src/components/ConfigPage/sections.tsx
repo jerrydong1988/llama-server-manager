@@ -1,4 +1,5 @@
 ﻿import type { InstanceConfig } from '../../store'
+import { defaultInstanceConfig } from '../../store'
 import { Section, Input, Num, Switch, Select, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
 import WorkerSelector from './WorkerSelector'
 
@@ -91,18 +92,20 @@ export function PerformanceSection({ local, set, t, activeParams, searchQuery }:
 export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   const resetAll = () => {
-    for (const defaults of Object.values(RESET_MAP)) {
-      for (const [k, v] of Object.entries(defaults)) {
-        set(k as keyof InstanceConfig, v)
+    const cfg = defaultInstanceConfig()
+    for (const fieldMap of Object.values(RESET_MAP)) {
+      for (const k of Object.keys(fieldMap)) {
+        set(k as keyof InstanceConfig, (cfg as any)[k])
       }
     }
   }
 
   const resetGroup = (id: string) => {
-    const defaults = (RESET_MAP as any)[id]
-    if (defaults) {
-      for (const [k, v] of Object.entries(defaults)) {
-        set(k as keyof InstanceConfig, v)
+    const fieldMap = (RESET_MAP as any)[id]
+    if (fieldMap) {
+      const cfg = defaultInstanceConfig()
+      for (const k of Object.keys(fieldMap)) {
+        set(k as keyof InstanceConfig, (cfg as any)[k])
       }
     }
   }

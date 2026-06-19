@@ -113,8 +113,9 @@ export const CollapsibleGroup = ({ title, defaultOpen, onReset, children, disabl
 
 // ━━━━━━━━━━━━━━━━━━━━━━ RESET MAP ━━━━━━━━━━━━━━━━━━━━━━
 
-// Sentinel values for each advanced sub-group, sourced from store/defaults.ts
-// resetting to these values means the field won't appear in the generated command
+// Field registry for advanced sub-groups. Values are IGNORED — actual defaults
+// come from store/defaults.ts via defaultInstanceConfig(). Only field names matter.
+// Add new fields here to make them resettable; values auto-sync with defaults.
 export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedReasoningConfig: {
     reasoning_format: '', reasoning_effort: '', reasoning_budget: '', reasoning_budget_message: '',

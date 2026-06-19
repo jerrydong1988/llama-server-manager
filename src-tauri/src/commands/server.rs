@@ -249,13 +249,7 @@ pub async fn start_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    {
-        let running = state.running.lock().unwrap();
-        if running.contains_key(&instance_id) {
-            return Err("该实例已在运行中".to_string());
-        }
-    }
-
+    // Hold lock across check+insert to prevent TOCTOU race
     let cmd = generate_command(&config, &engine_exe);
     let cmd_str = cmd.join(" ");
 
@@ -266,7 +260,6 @@ pub async fn start_server(
     let log_path = log_dir.join(format!("{}.log", instance_id));
     let log_file = std::fs::File::create(&log_path)
         .map_err(|e| format!("无法创建日志文件: {}", e))?;
-    // clone 一份 handle 给 stderr（Stdio::from 会消耗 File）
     let log_stderr = log_file.try_clone()
         .map_err(|e| format!("无法复制文件句柄: {}", e))?;
 
@@ -282,13 +275,21 @@ pub async fn start_server(
 
     let pid = child.id();
 
-    state.running.lock().unwrap().insert(instance_id.clone(), RunningInstance {
-        instance_id: instance_id.clone(),
-        pid,
-        port: config.port,
-        host: config.host.clone(),
-        start_time: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
-    });
+    // Atomic check+insert — prevents starting same instance twice
+    {
+        let mut running = state.running.lock().unwrap();
+        if running.contains_key(&instance_id) {
+            let _ = child.kill();
+            return Err("该实例已在运行中".to_string());
+        }
+        running.insert(instance_id.clone(), RunningInstance {
+            instance_id: instance_id.clone(),
+            pid,
+            port: config.port,
+            host: config.host.clone(),
+            start_time: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+        });
+    }
 
     // 立即同步写 running 到磁盘
     {
@@ -510,7 +511,8 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
         guard.get(instance_id).map(|r| r.pid == expected_pid).unwrap_or(false)
     };
 
-    for _ in 0..30 {
+    // Fast initial health check: 10 × 1s = 10s
+    for _ in 0..10 {
         if !is_my_instance() { return; }
         if let Ok(resp) = health_req(2) {
             if resp.status().is_success() {
@@ -535,8 +537,8 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
-    // #10: 30 次失败后退出，避免无限循环
-    for _ in 0..30 {
+    // Slower retry after initial failures: 5 × 3s = 15s (total ~25s before fail)
+    for _ in 0..5 {
         std::thread::sleep(std::time::Duration::from_secs(3));
         if !is_my_instance() { return; }
         if let Ok(resp) = health_req(5) {
@@ -544,6 +546,7 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
                 let _ = app.emit("health-status", serde_json::json!({
                     "instanceId": instance_id, "status": "ok",
                 }));
+                // Enter stable monitoring loop
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     if !is_my_instance() { return; }
@@ -680,7 +683,8 @@ fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
     sys.refresh_cpu_all();
     if let Some(p) = sys.processes().values().find(|p| p.pid().as_u32() == pid) {
         let raw = p.cpu_usage();
-        let cpu = if raw > 100.0 { raw / sys.cpus().len() as f32 } else { raw };
+        // Always normalize by CPU count — sysinfo reports total across all cores
+        let cpu = raw / sys.cpus().len() as f32;
         (cpu, p.memory() as f64 / (1024.0 * 1024.0))
     } else {
         (0.0, 0.0)
