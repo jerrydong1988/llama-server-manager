@@ -1,7 +1,7 @@
 import type { SystemMetrics } from '../../store/types'
 import { useI18n } from '../../i18n'
 
-export default function SysResourceBar({ metrics, showInstance }: { metrics: SystemMetrics | null; showInstance?: string }) {
+export default function SysResourceBar({ metrics }: { metrics: SystemMetrics | null }) {
   const { t } = useI18n()
 
   if (!metrics) {
@@ -36,9 +36,8 @@ export default function SysResourceBar({ metrics, showInstance }: { metrics: Sys
   ]
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 space-y-3">
-      {showInstance && <div className="text-xs text-slate-400 mb-1">{showInstance}</div>}
-      {items.map(item => (
+      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5 space-y-3">
+        {items.map(item => (
         <div key={item.label} className="flex items-center gap-3">
           <span className="w-10 text-xs font-medium text-slate-500 dark:text-slate-400 shrink-0">{item.label}</span>
           <div className="flex-1 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { Server, Database, Cpu, BarChart3, ArrowRight } from 'lucide-react'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
@@ -12,9 +12,6 @@ export default function Dashboard() {
   const { t } = useI18n()
   const { instances, models, engines, setActiveTab } = useAppStore()
   const [sysMetrics, setSysMetrics] = useState<any>(null)
-  const [metricInstance, setMetricInstance] = useState('')
-  const instancesRef = useRef(instances)
-  instancesRef.current = instances
 
   const runningInstances = instances.filter(i => i.status === 'running')
   const stoppedInstances = instances.filter(i => i.status !== 'running')
@@ -27,7 +24,6 @@ export default function Dashboard() {
         try {
           const m = await invoke<any>('get_system_metrics', { instanceId: running[0].id })
           setSysMetrics(m)
-          setMetricInstance(running[0].name)
         } catch {}
       }
     }
@@ -35,8 +31,6 @@ export default function Dashboard() {
 
     const unlisten = listen<{ system: any; instanceId: string }>('metrics-update', (e) => {
       setSysMetrics(e.payload.system)
-      const inst = instancesRef.current.find(i => i.id === e.payload.instanceId)
-      setMetricInstance(inst?.name || '')
     })
     return () => { unlisten.then(fn => fn()) }
   }, [])
@@ -54,7 +48,7 @@ export default function Dashboard() {
       </div>
 
       {/* 系统资源条 */}
-      <SysResourceBar metrics={sysMetrics} showInstance={metricInstance || undefined} />
+      <SysResourceBar metrics={sysMetrics} />
 
       {/* 运行中实例 */}
       {runningInstances.length > 0 ? (
