@@ -11,7 +11,24 @@ const SearchCtx = createContext<string>('')
 const useSearchQuery = () => useContext(SearchCtx)
 const useLabelMatch = (label: string) => {
   const q = useSearchQuery()
-  return q && label.toLowerCase().includes(q.toLowerCase())
+  return !!(q && label.toLowerCase().includes(q.toLowerCase()))
+}
+
+// Module-level Set of matched DOM elements — ConfigPage triggers scrollIntoView on first match
+export const _matchedElements = new Set<HTMLElement>()
+
+function useSearchScroll(match: boolean) {
+  const ref = useRef<HTMLDivElement>(null)
+  const q = useSearchQuery()
+  useEffect(() => {
+    if (match && q && ref.current) {
+      _matchedElements.add(ref.current)
+    }
+    return () => {
+      if (ref.current) _matchedElements.delete(ref.current)
+    }
+  }, [match, q])
+  return ref
 }
 
 export const Section = ({ title, children, disabled, onToggle, toggled, defaultOpen, searchQuery }: { title: string; children: React.ReactNode; disabled?: boolean; onToggle?: (v: boolean) => void; toggled?: boolean; defaultOpen?: boolean; searchQuery?: string }) => {
@@ -53,19 +70,21 @@ export const Section = ({ title, children, disabled, onToggle, toggled, defaultO
 
 export const Input = ({ label, value, onChange, placeholder, type, title, disabled, active }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; active?: boolean }) => {
   const match = useLabelMatch(label)
+  const ref = useSearchScroll(match)
   return (
-  <div title={title}>
+  <div title={title} ref={ref}>
     <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
+    <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400 flash-match' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
   </div>
 )}
 
 export const Num = ({ label, value, onChange, min, max, step, title, disabled, active }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; active?: boolean }) => {
   const match = useLabelMatch(label)
+  const ref = useSearchScroll(match)
   return (
-  <div title={title}>
+  <div title={title} ref={ref}>
     <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <input type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
+    <input type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400 flash-match' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
   </div>
 )}
 
@@ -78,8 +97,9 @@ export const Toggle = ({ label, value, onChange, title, disabled }: { label: str
 
 export const Switch = ({ label, value, onChange, title, disabled, active }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; active?: boolean }) => {
   const match = useLabelMatch(label)
+  const ref = useSearchScroll(match)
   return (
-  <label className={`flex items-center gap-2.5 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${match ? 'ring-2 ring-amber-400 rounded-lg p-1 -m-1' : ''}`} title={title}>
+  <label className={`flex items-center gap-2.5 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${match ? 'ring-2 ring-amber-400 rounded-lg p-1 -m-1 flash-match' : ''}`} title={title} ref={ref as any}>
     <button
       type="button"
       role="switch"
@@ -96,10 +116,11 @@ export const Switch = ({ label, value, onChange, title, disabled, active }: { la
 
 export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, active }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; active?: boolean }) => {
   const match = useLabelMatch(label)
+  const ref = useSearchScroll(match)
   return (
-  <div title={title}>
+  <div title={title} ref={ref}>
     <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`select-custom w-full pl-3 pr-8 py-1.5 text-sm text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+    <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`select-custom w-full pl-3 pr-8 py-1.5 text-sm text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400 flash-match' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
     </select>
   </div>

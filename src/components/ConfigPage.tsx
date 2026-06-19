@@ -6,6 +6,7 @@ import { validateConfig, type Warning } from '../validators'
 import { BasicSection, ReasoningSection, PerformanceSection, AdvancedSection } from './ConfigPage/sections'
 import { getActiveParams } from './ConfigPage/activeParams'
 import { normalizePath, pathBasename, pathDirname, pathJoin } from '../utils/path'
+import { _matchedElements } from './ConfigPage/shared'
 
 const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
 
@@ -22,6 +23,22 @@ const ConfigPage = () => {
   const [searchQuery, setSearchQuery] = useState('')
   const mountedRef = useRef(true)
   useEffect(() => { return () => { mountedRef.current = false } }, [])
+  // Clear matched elements & scroll to first match on search
+  const prevQuery = useRef('')
+  if (searchQuery !== prevQuery.current) {
+    _matchedElements.clear()
+    prevQuery.current = searchQuery
+  }
+  useEffect(() => {
+    if (searchQuery) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const first = [..._matchedElements][0]
+          first?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        })
+      })
+    }
+  }, [searchQuery])
 
   useEffect(() => { if (inst) setLocal({ ...defaultInstanceConfig(), ...inst.config }); else setLocal(null) }, [activeConfigInstanceId])
 

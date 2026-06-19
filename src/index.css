@@ -50,3 +50,13 @@ html.dark {
 .dark .select-custom {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239ca3af' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
 }
+
+/* ── Config 参数搜索：脉冲闪现 + amber 边框 ── */
+@keyframes search-flash {
+  0%   { box-shadow: 0 0 0 0 rgba(251,191,36,0.7); }
+  40%  { box-shadow: 0 0 0 6px rgba(251,191,36,0.4); }
+  100% { box-shadow: 0 0 0 1px rgba(251,191,36,0); }
+}
+.flash-match {
+  animation: search-flash 0.8s ease-out;
+}
