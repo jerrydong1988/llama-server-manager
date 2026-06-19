@@ -3,9 +3,22 @@ name: Build
 on:
   push:
     branches: [master]
-    tags: ['v*']
+    paths-ignore:
+      - '*.md'
+      - 'GUIDE.md'
+      - 'README.md'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/ISSUE_TEMPLATE/**'
+  tags: ['v*']
   pull_request:
     branches: [master]
+    paths-ignore:
+      - '*.md'
+      - 'GUIDE.md'
+      - 'README.md'
+      - 'LICENSE'
+      - '.gitignore'
 
 permissions:
   contents: write
