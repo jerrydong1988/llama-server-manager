@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, createContext, useContext } from 'react'
 import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
 import type { InstanceConfig } from '../../store'
 
@@ -6,10 +6,19 @@ export const cacheTypes = ['', 'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq
 export const specTypes = ['', 'none', 'draft-mtp', 'draft-simple', 'draft-eagle3', 'ngram-cache', 'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod']
 export const chatTemplates = ['', 'bailing', 'chatglm3', 'chatglm4', 'chatml', 'command-r', 'deepseek', 'deepseek2', 'deepseek3', 'exaone3', 'gemma', 'gpt-oss', 'kimi-k2', 'llama2', 'llama3', 'llama4', 'mistral', 'openchat', 'phi3', 'phi4', 'vicuna', 'zephyr']
 
+// ── Search Context: injects searchQuery to all nested form fields without prop drilling ──
+const SearchCtx = createContext<string>('')
+const useSearchQuery = () => useContext(SearchCtx)
+const useLabelMatch = (label: string) => {
+  const q = useSearchQuery()
+  return q && label.toLowerCase().includes(q.toLowerCase())
+}
+
 export const Section = ({ title, children, disabled, onToggle, toggled, defaultOpen, searchQuery }: { title: string; children: React.ReactNode; disabled?: boolean; onToggle?: (v: boolean) => void; toggled?: boolean; defaultOpen?: boolean; searchQuery?: string }) => {
   const [open, setOpen] = useState(defaultOpen || false)
   const userToggled = useRef(false)
-  const shouldOpen = searchQuery && title.toLowerCase().includes(searchQuery.toLowerCase())
+  const shouldOpen = !!(searchQuery && title.toLowerCase().includes(searchQuery.toLowerCase()))
+  const hasSearch = !!searchQuery
 
   useEffect(() => { userToggled.current = false }, [searchQuery])
 
@@ -18,7 +27,8 @@ export const Section = ({ title, children, disabled, onToggle, toggled, defaultO
     setOpen(!open)
   }
 
-  const isOpen = (!userToggled.current && shouldOpen) || open
+  // Search active: always expand to reveal matching fields
+  const isOpen = hasSearch || (!userToggled.current && shouldOpen) || open
   return (
     <div className={`border dark:border-gray-700 rounded-lg overflow-hidden ${searchQuery && !shouldOpen && !open ? 'opacity-40' : ''}`}>
       <button onClick={handleToggle} className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left dark:text-gray-200">
@@ -32,24 +42,32 @@ export const Section = ({ title, children, disabled, onToggle, toggled, defaultO
           </label>
         )}
       </button>
-      {isOpen && <div className={`px-4 py-3 space-y-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>}
+      {isOpen && (
+        <SearchCtx.Provider value={searchQuery || ''}>
+          <div className={`px-4 py-3 space-y-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>
+        </SearchCtx.Provider>
+      )}
     </div>
   )
 }
 
-export const Input = ({ label, value, onChange, placeholder, type, title, disabled, active }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; active?: boolean }) => (
+export const Input = ({ label, value, onChange, placeholder, type, title, disabled, active }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; active?: boolean }) => {
+  const match = useLabelMatch(label)
+  return (
   <div title={title}>
-    <label className={`block text-xs font-medium mb-1 ${active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
+    <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
+    <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
   </div>
-)
+)}
 
-export const Num = ({ label, value, onChange, min, max, step, title, disabled, active }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; active?: boolean }) => (
+export const Num = ({ label, value, onChange, min, max, step, title, disabled, active }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; active?: boolean }) => {
+  const match = useLabelMatch(label)
+  return (
   <div title={title}>
-    <label className={`block text-xs font-medium mb-1 ${active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <input type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
+    <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
+    <input type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
   </div>
-)
+)}
 
 export const Toggle = ({ label, value, onChange, title, disabled }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean }) => (
   <label className={`flex items-center gap-2 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`} title={title}>
@@ -58,8 +76,10 @@ export const Toggle = ({ label, value, onChange, title, disabled }: { label: str
   </label>
 )
 
-export const Switch = ({ label, value, onChange, title, disabled, active }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; active?: boolean }) => (
-  <label className={`flex items-center gap-2.5 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`} title={title}>
+export const Switch = ({ label, value, onChange, title, disabled, active }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; active?: boolean }) => {
+  const match = useLabelMatch(label)
+  return (
+  <label className={`flex items-center gap-2.5 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${match ? 'ring-2 ring-amber-400 rounded-lg p-1 -m-1' : ''}`} title={title}>
     <button
       type="button"
       role="switch"
@@ -70,18 +90,20 @@ export const Switch = ({ label, value, onChange, title, disabled, active }: { la
     >
       <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
     </button>
-    <span className={`text-sm ${active ? 'text-green-600 dark:text-green-400' : ''}`}>{label}</span>
+    <span className={`text-sm ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : ''}`}>{label}</span>
   </label>
-)
+)}
 
-export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, active }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; active?: boolean }) => (
+export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, active }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; active?: boolean }) => {
+  const match = useLabelMatch(label)
+  return (
   <div title={title}>
-    <label className={`block text-xs font-medium mb-1 ${active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`select-custom w-full pl-3 pr-8 py-1.5 text-sm text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+    <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
+    <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`select-custom w-full pl-3 pr-8 py-1.5 text-sm text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
     </select>
   </div>
-)
+)}
 
 // ━━━━━━━━━━━━━━━━━━━━━━ NEW COMPONENTS ━━━━━━━━━━━━━━━━━━━━━━
 
@@ -98,15 +120,17 @@ export const ResetButton = ({ onClick, title }: { onClick: () => void; title?: s
 
 // Collapsible sub-group card (chevron toggle + optional reset button)
 export const CollapsibleGroup = ({ title, defaultOpen, onReset, children, disabled }: { title: string; defaultOpen?: boolean; onReset?: () => void; children: React.ReactNode; disabled?: boolean }) => {
+  const q = useSearchQuery()
   const [open, setOpen] = useState(defaultOpen || false)
+  const hasSearch = !!q
   return (
     <div className="border dark:border-gray-600 rounded-lg overflow-hidden">
       <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors text-left dark:text-gray-200">
-        {open ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+        {(hasSearch || open) ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
         <span className="text-xs font-medium">{title}</span>
         {onReset && <ResetButton onClick={onReset} />}
       </button>
-      {open && <div className={`px-3 py-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>}
+      {(hasSearch || open) && <div className={`px-3 py-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>}
     </div>
   )
 }
