@@ -22,7 +22,14 @@ pub(crate) const RPC_SERVER_NAME: &str = "rpc-server";
 // ═══════════════════════════════════════════════════════════════════
 
 fn workers_path() -> PathBuf {
-    utils::get_data_dir().join("workers.json")
+    let config_dir = utils::get_data_dir().join("configs");
+    // Migrate old workers.json from data_dir root to configs/
+    let old_path = utils::get_data_dir().join("workers.json");
+    let new_path = config_dir.join("workers.json");
+    if old_path.exists() && !new_path.exists() {
+        let _ = std::fs::rename(&old_path, &new_path);
+    }
+    new_path
 }
 
 pub(crate) fn load_workers() -> Vec<WorkerInfo> {
