@@ -11,15 +11,22 @@ A fully-featured desktop application for managing the `llama-server` lifecycle: 
 ---
 
 ## 界面预览 / Screenshots
-<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/3fabebe2-c494-40b5-8e80-57a02cae2c6e" />
-<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/eb4d8007-2308-41bf-922e-6eddfffa83e9" />
-<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/0b7bc1fe-bb81-4a6c-b282-383d7afac671" />
-<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/591390b2-5194-4f46-924b-ab88cd0bec43" />
-<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/c7d56b66-dffa-4594-9e54-6c97c07e3309" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/23ab9965-8939-44de-a0d5-c32043c31886" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/ce91cf93-d65e-4ca9-be42-f5e243090dab" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/d9fefe94-5221-4cf4-aad5-85b09bcaa16d" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/97700da9-3910-41e1-87a2-fc64060085f6" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/33e1d815-fbce-47bd-947e-8b0cb13ee0cc" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/488b1263-18e5-42bf-8e4c-02e021b233e1" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/c9692084-c6f4-4ccd-bc37-2b6f7656ec2b" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/06d17944-06ec-4139-bc81-e2f89bc59d3b" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/9618ded1-d360-4c94-8b81-b62a447d15e0" />
+
+
 - 明暗主题切换（持久化）+ 窗口尺寸/位置记忆
 - 完整中英双语界面
-<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/2a244df3-98e1-4d09-a7d5-c773c9c2d3b1" />
-<img width="1381" height="1390" alt="image" src="https://github.com/user-attachments/assets/7a11d216-0748-45ef-9cb1-59cc46f4f134" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/025c8056-22ca-4778-a24a-b74b3f010303" />
+<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/321176a3-9bd5-4b37-bcb7-c465910f7f6b" />
+
 
 ### 性能监控 / Performance Monitoring
 - **系统健康仪表**：总览页启动即显示 CPU/内存/GPU/显存实时数据（不依赖运行实例）
