@@ -11,15 +11,20 @@ const ModelRepo = () => {
   const { t } = useI18n()
   const [searchQuery, setSearchQuery] = useState("")
   const [scanError, setScanError] = useState("")
-  const [shardDebug, setShardDebug] = useState("")
+  const [scanStats, setScanStats] = useState("")
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
   useEffect(() => { loadInitialData() }, [loadInitialData])
 
-  // Listen for shard detection debug info
+  // Scan statistics listener — shows shard grouping summary after scan completes
   useEffect(() => {
-    const unlisten = listen<{ message: string; total: number; matched: number; groups: number; marked: number }>('scan-debug', (e) => {
-      setShardDebug(`${e.payload.message} | Dashboard expects ${e.payload.total - e.payload.marked} unique models`)
+    const unlisten = listen<{ total: number; matched: number; groups: number; marked: number }>('scan-debug', (e) => {
+      const { total, matched, groups, marked } = e.payload
+      if (marked > 0) {
+        setScanStats(`${total} 个文件，${groups} 组分片（${marked} 个文件），有效模型 ${total - marked} 个`)
+      } else {
+        setScanStats(`${total} 个文件`)
+      }
     })
     return () => { unlisten.then(fn => fn()).catch(() => {}) }
   }, [])
@@ -128,7 +133,7 @@ const ModelRepo = () => {
       </div>
     </div>
     {scanError && <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-lg text-sm">{scanError}</div>}
-    {shardDebug && <div className="mb-4 p-2 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg text-xs">{shardDebug}</div>}
+    {scanStats && <div className="mb-4 text-xs text-gray-500">{t.modelRepo.scanStats || '\u{1F4CA}'} {scanStats}</div>}
     {models.length === 0 ? (<div className="text-center text-gray-500 py-12">{t.modelRepo.noModels}</div>) : (<div>
       <div className="flex items-center gap-2 mb-2 text-gray-500 font-medium">{t.modelRepo.modelDirs}</div>
       {modelDirs.map(d => (<div key={d} className="flex items-center justify-between py-1 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700"><span className="text-xs truncate flex-1 mr-2">{d}</span><button onClick={() => handleRemoveDir(d)} className="p-0.5 text-red-400 hover:text-red-600 rounded" title={t.modelRepo.remove}><Trash2 className="w-3 h-3" /></button></div>))}

@@ -120,15 +120,12 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, 
                 for &idx in indices { models[idx].is_shard = true; marked_count += 1; }
             }
         }
-        // Emit debug info to frontend (eprintln! goes nowhere in Tauri GUI)
-        let msg = format!("[shard-detect] scanned {} files, regex matched {} files across {} groups, marked {} as shard",
-            models.len(), matched_count, groups.len(), marked_count);
+        // Emit scan statistics for frontend display
         let _ = app.emit("scan-debug", serde_json::json!({
             "total": models.len(),
             "matched": matched_count,
             "groups": groups.len(),
             "marked": marked_count,
-            "message": msg,
         }));
     }
 
