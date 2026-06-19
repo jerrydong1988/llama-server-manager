@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use crate::models::{AppState, EngineInfo, ModelInfo};
 use crate::utils;
+use tauri::Emitter;
 
 // ── 跨平台可执行文件名 ────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
 
 // ── 模型扫描 ──────────────────────────────────────────────────────
 #[tauri::command]
-pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
+pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<Vec<ModelInfo>, String> {
     let app_dir = utils::get_data_dir();
     let default_path = app_dir.join("models");
 
@@ -101,8 +102,8 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) 
     // ── 分片模型检测：按基础名分组，验证文件数是否等于声明的 N ──
     {
         use regex_lite::Regex;
-        // [0-9] used instead of \d for regex_lite compatibility
-        let shard_re = Regex::new(r"(?i)^(.+)-([0-9]{5})-of-([0-9]{5})\.gguf$").unwrap();
+        // [0-9] for regex_lite compat; .+? (lazy) avoids backtracking issues with names containing hyphens
+        let shard_re = Regex::new(r"(?i)^(.+?)-([0-9]{5})-of-([0-9]{5})\.gguf$").unwrap();
         let mut groups: std::collections::HashMap<String, (u32, Vec<usize>)> = std::collections::HashMap::new();
         let mut matched_count = 0u32;
         for (i, m) in models.iter().enumerate() {
@@ -119,8 +120,16 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>) 
                 for &idx in indices { models[idx].is_shard = true; marked_count += 1; }
             }
         }
-        eprintln!("[shard-detect] scanned {} files, regex matched {} files across {} groups, marked {} as shard",
+        // Emit debug info to frontend (eprintln! goes nowhere in Tauri GUI)
+        let msg = format!("[shard-detect] scanned {} files, regex matched {} files across {} groups, marked {} as shard",
             models.len(), matched_count, groups.len(), marked_count);
+        let _ = app.emit("scan-debug", serde_json::json!({
+            "total": models.len(),
+            "matched": matched_count,
+            "groups": groups.len(),
+            "marked": marked_count,
+            "message": msg,
+        }));
     }
 
     let mut state_models = state.models.lock().unwrap();
