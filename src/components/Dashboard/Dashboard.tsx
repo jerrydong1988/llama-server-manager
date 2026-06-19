@@ -48,7 +48,7 @@ export default function Dashboard() {
       {/* 统计卡片 */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard icon={<Server className="w-6 h-6" />} label={t.dashboard?.runningInstances || 'Running'} value={runningInstances.length} color="emerald" />
-        <StatCard icon={<Database className="w-6 h-6" />} label={t.dashboard?.totalModels || 'Models'} value={models.filter(m => !m.is_shard).length} color="blue" />
+        <StatCard icon={<Database className="w-6 h-6" />} label={t.dashboard?.totalModels || 'Models'} value={models.filter(m => !m.is_shard && m.file_type === 'model').length} color="blue" />
         <StatCard icon={<Cpu className="w-6 h-6" />} label={t.dashboard?.totalEngines || 'Engines'} value={engines.length} color="purple" />
         <StatCard icon={<BarChart3 className="w-6 h-6" />} label={t.dashboard?.totalInstances || 'Instances'} value={instances.length} color="slate" />
       </div>
