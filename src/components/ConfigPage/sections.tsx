@@ -330,6 +330,23 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
             <Input label={`${t.configPage.tools} (--tools)`} value={local.tools} onChange={v => set('tools', v)} title={t.configPage.toolsTip}  active={a('tools')} />
           </div>
         </CollapsibleGroup>
+
+        {/* 自定义启动参数 */}
+        <div className="border dark:border-gray-600 rounded-lg overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50">
+            <span className="text-xs font-medium dark:text-gray-200">{t.configPage.customArgs || '自定义参数'}</span>
+          </div>
+          <div className="px-3 py-2">
+            <input
+              type="text"
+              value={local.custom_args.join(' ')}
+              onChange={e => set('custom_args', e.target.value ? e.target.value.split(/\s+/).filter(Boolean) : [])}
+              placeholder="--no-kv-unified --verbose"
+              className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+              title={t.configPage.customArgsTip || '空格分隔多个参数'}
+            />
+          </div>
+        </div>
       </div>
     </Section>
   )
