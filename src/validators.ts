@@ -7,6 +7,61 @@ export interface Warning {
   key: string
 }
 
+// ── 已知 CLI 标志：从 server.rs generate_command() 完整统计 ──
+// 若自定义参数中出现这些标志，引导用户到对应配置界面修改
+export const KNOWN_FLAGS = new Set([
+  // Basic
+  '-m', '-a', '--alias', '--lora', '--lora-init-without-apply', '--lora-scaled',
+  '--mmproj', '--mmproj-url', '--mmproj-auto', '--no-mmproj', '--no-mmproj-offload',
+  '--chat-template', '--chat-template-file', '--skip-chat-parsing',
+  '--reasoning-format', '--reasoning', '--reasoning-budget', '--reasoning-budget-message',
+  '--chat-template-kwargs', '--jinja', '--grammar-file', '--grammar',
+  // Performance & Context
+  '-c', '-ngl', '-t', '-b', '-ub', '-np', '-cb', '--no-cache-prompt',
+  '--threads-batch', '--threads-http', '--keep', '--cache-reuse', '-cram', '--warmup',
+  '-ctxcp', '-cms', '--swa-full',
+  // RoPE / YaRN
+  '--rope-scaling', '--rope-scale', '--rope-freq-base', '--rope-freq-scale',
+  '--yarn-ext-factor', '--yarn-attn-factor', '--yarn-beta-slow', '--yarn-beta-fast', '--yarn-orig-ctx',
+  // Flash Attention & Memory
+  '-fa', '--n-cpu-moe', '--mlock', '--no-mmap', '--no-repack', '--numa',
+  '--check-tensors', '--perf', '--fit', '-fitt', '-fitc',
+  // KV Cache
+  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-offload', '--no-kv-unified', '--no-cache-idle-slots',
+  // GPU & Device
+  '-dev', '-sm', '-ts', '-mg', '--override-kv',
+  // Server & Network
+  '--host', '--port', '--api-key', '--api-key-file',
+  '--ssl-key-file', '--ssl-cert-file', '--path', '--api-prefix',
+  '--no-ui', '--offline', '--ui-config-file', '--ui-config', '--ui-mcp-proxy',
+  // Embedding & Generation
+  '--embedding', '--pooling', '--embd-normalize', '--reranking',
+  // Server features
+  '--metrics', '--props', '--no-slots', '--slot-save-path', '-sps', '--prefill-assistant',
+  '--rpc', '--sse-ping-interval', '--reuse-port',
+  // Multi-Model & Media
+  '--models-dir', '--models-preset', '--models-max', '--models-autoload',
+  '--image-min-tokens', '--image-max-tokens', '--tags', '--media-path', '--tools',
+  // Generation
+  '-n', '--ignore-eos', '--json-schema', '-jf',
+  '--temp', '--top-k', '--top-p', '--repeat-penalty', '--seed', '--min-p',
+  '--presence-penalty', '--frequency-penalty', '--repeat-last-n', '-r',
+  '-sp', '--spm-infill', '-bs',
+  // Advanced Sampling
+  '--mirostat', '--mirostat-lr', '--mirostat-ent',
+  '--xtc-probability', '--xtc-threshold',
+  '--dynatemp-range', '--dynatemp-exp', '--typical-p',
+  '--dry-multiplier', '--dry-base', '--dry-allowed-length', '--dry-penalty-last-n', '--dry-sequence-breaker',
+  '--adaptive-target', '--adaptive-decay', '--top-n-sigma', '-l',
+  '--samplers', '--sampler-seq',
+  // Speculative Decoding
+  '--spec-type', '-md', '-ngld', '--spec-draft-n-max', '--spec-draft-n-min',
+  '--spec-draft-p-min', '--spec-draft-p-split', '--spec-draft-device',
+  '-lcs', '-lcd', '--spec-default', '--no-spec-draft-backend-sampling', '-td', '-tbd',
+  // Misc
+  '-to', '--sleep-idle-seconds', '--context-shift', '-v',
+])
+
 const VISION_ARCHS = [
   'qwen2vl', 'qwen3vl', 'qwen2-vl', 'qwen3-vl',
   'llava', 'minicpmv', 'minicpm-v', 'internvl', 'intern-vl',
@@ -203,6 +258,17 @@ export function validateConfig(
   // C4: draft-mtp + 模型已有内置 MTP 头 + 额外设置了草稿模型（可能冗余）
   if (config.draft_model_path && config.spec_type?.includes('draft-mtp') && model?.has_mtp_head)
     w.push({ field: 'draft_model_path', severity: 'low', key: 'warnC4' })
+
+  // D1: 自定义参数与已知配置冲突
+  if (config.custom_args.length > 0) {
+    const conflicts: string[] = []
+    for (const arg of config.custom_args) {
+      if (KNOWN_FLAGS.has(arg)) conflicts.push(arg)
+    }
+    if (conflicts.length > 0) {
+      w.push({ field: 'custom_args', severity: 'medium', key: 'warnD1' })
+    }
+  }
 
   return w
 }

@@ -3,6 +3,7 @@ import { defaultInstanceConfig } from '../../store'
 import { useState } from 'react'
 import { Plus, X } from 'lucide-react'
 import { Section, Input, Num, Switch, Select, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
+import { KNOWN_FLAGS } from '../../validators'
 import WorkerSelector from './WorkerSelector'
 
 interface Props {
@@ -408,6 +409,9 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
               />
               <button onClick={addEntry} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded shrink-0" title="添加"><Plus className="w-4 h-4"/></button>
             </div>
+            {newName.trim().startsWith('-') && KNOWN_FLAGS.has(newName.trim()) && (
+              <div className="text-xs text-red-500">⚠ {t.configPage.warnD1 || '此参数已在配置界面中支持，请在对应位置修改'}</div>
+            )}
           </div>
         </div>
       </div>

@@ -270,6 +270,7 @@ export const enUS = {
     warnC1: 'Multimodal projector is set but model architecture does not appear to be a vision model',
     warnC4: 'Model already has built-in MTP heads — external draft model may be redundant. Ignore if intentional',
     warnC3: 'Unlimited generation (n_predict=-1) with ignore_eos=true — generation may never stop',
+    warnD1: 'Custom args contain flags already supported in config UI — modify there to avoid conflicts',
   },
   perfBlock: {
     noRunning: 'No running instances. Start an instance to monitor performance.',
