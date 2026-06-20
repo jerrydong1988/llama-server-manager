@@ -27,7 +27,7 @@ export const KNOWN_FLAGS = new Set([
   '-fa', '--n-cpu-moe', '--mlock', '--no-mmap', '--no-repack', '--numa',
   '--check-tensors', '--perf', '--fit', '-fitt', '-fitc',
   // KV Cache
-  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-offload', '--no-kv-unified', '--no-cache-idle-slots',
+  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-offload', '--no-cache-idle-slots',
   // GPU & Device
   '-dev', '-sm', '-ts', '-mg', '--override-kv',
   // Server & Network
