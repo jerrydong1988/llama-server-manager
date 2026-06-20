@@ -164,6 +164,16 @@ export interface DownloadGroup {
   files: DownloadProgress[]
 }
 
+export interface PersistedQueueEntry {
+  id: string
+  repo_id: string
+  source: string
+  files: MsFileEntry[]
+  save_dir: string
+  added_at: number
+  status: string
+}
+
 export interface SystemMetrics {
   cpu_percent: number
   memory_mb: number
@@ -240,6 +250,8 @@ export interface AppState {
   addToDownloadQueue: (entry: { repoId: string; source: 'modelscope' | 'huggingface'; files: MsFileEntry[]; saveDir: string }) => void
   removeFromDownloadQueue: (id: string) => void
   processDownloadQueue: () => void
+  restoreDownloadQueue: (entries: PersistedQueueEntry[]) => void
+  persistQueue: () => void
   // Cluster
   setWorkers: (workers: WorkerInfo[]) => void
   addWorker: (worker: WorkerInfo) => void

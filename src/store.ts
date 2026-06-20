@@ -53,6 +53,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (Object.keys(updated).length > 0) set({ downloadTasks: updated })
 
     set({ downloadQueue: [...s.downloadQueue, { ...entry, id, addedAt: Date.now() }] })
+    get().persistQueue()
     // 尝试立即处理队列
     get().processDownloadQueue!()
   },
@@ -290,6 +291,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       invoke('scan_engines', { paths: global.engine_dirs || [] }).then((engines) => {
         set({ engines: engines as any[] })
       }).catch(() => {})
+
+      // Restore persisted download queue
+      invoke<import('./store/types').PersistedQueueEntry[]>('restore_download_queue').then((queue) => {
+        if (queue?.length > 0) get().restoreDownloadQueue(queue)
+      }).catch(() => {})
     } catch (e) { console.error('load_config error:', e) }
   },
 
@@ -321,6 +327,64 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   cancelAndCleanupDownload: async (fileName: string, filePath: string) => {
     try { await invoke('cancel_and_cleanup_download', { fileName, filePath }) } catch (e) { console.error(e) }
+  },
+
+  // ── 下载队列持久化 ──────────────────────────────────────────
+  restoreDownloadQueue: (entries: import('./store/types').PersistedQueueEntry[]) => {
+    const s = get()
+    const now = Date.now()
+    let hasPending = false
+    for (const entry of entries) {
+      // 跳过已完成的
+      const allDone = entry.files.every(f => s.downloadTasks[f.name]?.status === 'completed')
+      if (allDone) continue
+
+      const id = entry.id || crypto.randomUUID()
+      const status = (entry.status === 'active' ? 'queued' : entry.status || 'queued') as 'queued' | 'active' | 'paused' | 'completed' | 'cancelled' | 'error'
+      set(st => ({
+        downloadQueue: [...st.downloadQueue, {
+          id, repoId: entry.repo_id,
+          source: entry.source as 'modelscope' | 'huggingface',
+          files: entry.files,
+          saveDir: entry.save_dir,
+          addedAt: entry.added_at || now,
+        }]
+      }))
+      const tasks = { ...get().downloadTasks }
+      for (const f of entry.files) {
+        tasks[f.name] = { fileName: f.name, repoId: entry.repo_id, source: entry.source, downloaded: 0, total: f.size, speed: 0, status }
+      }
+      set({ downloadTasks: tasks })
+      hasPending = true
+    }
+    if (hasPending) get().processDownloadQueue!()
+  },
+
+  persistQueue: () => {
+    const { downloadQueue, downloadTasks } = get()
+    const entries = downloadQueue.map(q => ({
+          id: q.id, repo_id: q.repoId, source: q.source as string,
+      files: q.files, save_dir: q.saveDir, added_at: q.addedAt,
+      status: downloadTasks[q.files[0]?.name]?.status || 'queued',
+    }))
+    // Also include active tasks not in queue
+    const active = Object.values(get().downloadTasks).filter(t => t.status === 'active')
+    if (active.length > 0 && !downloadQueue.some(q => q.files.some(f => active.some(a => a.fileName === f.name)))) {
+      const activeByRepo = new Map<string, typeof active>()
+      for (const t of active) {
+        const key = `${t.source}:${t.repoId}`
+        if (!activeByRepo.has(key)) activeByRepo.set(key, [])
+        activeByRepo.get(key)!.push(t)
+      }
+      for (const [, files] of activeByRepo) {
+        entries.push({
+          id: crypto.randomUUID(), repo_id: files[0].repoId, source: files[0].source,
+          files: files.map(f => ({ name: f.fileName, path: '', size: f.total, file_type: 'model' })),
+          save_dir: '', added_at: Date.now(), status: 'active',
+        })
+      }
+    }
+    invoke('persist_download_queue', { queue: entries }).catch(() => {})
   },
 
   // ── Cluster ──
@@ -478,6 +542,7 @@ listen<{ fileName: string; repoId: string; source: string; path: string }>('down
   const { fileName, repoId, source, path } = e.payload
   const prev = s.downloadTasks[fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { ...(prev || { fileName, repoId, source, downloaded: 0, total: 0, speed: 0 }), status: 'completed', path } })
+  s.persistQueue()
   useAppStore.getState().processDownloadQueue!()
 }).catch(() => {})
 
@@ -485,6 +550,7 @@ listen<{ fileName: string; repoId: string; source: string }>('download-cancelled
   const s = useAppStore.getState()
   const prev = s.downloadTasks[e.payload.fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'cancelled' } })
+  s.persistQueue()
   useAppStore.getState().processDownloadQueue!()
 }).catch(() => {})
 
@@ -492,6 +558,7 @@ listen<{ fileName: string; repoId: string; source: string; error: string }>('dow
   const s = useAppStore.getState()
   const prev = s.downloadTasks[e.payload.fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'error', error: e.payload.error } })
+  s.persistQueue()
   useAppStore.getState().processDownloadQueue!()
 }).catch(() => {})
 
@@ -501,6 +568,7 @@ listen<{ fileName: string }>('download-removed', (e) => {
   const tasks = { ...s.downloadTasks }
   delete tasks[e.payload.fileName]
   s.setDownloadTasks(tasks)
+  s.persistQueue()
 }).catch(() => {})
 
 } // HMR-safe guard

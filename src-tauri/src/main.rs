@@ -11,7 +11,7 @@ use crate::models::{AppState, WindowState};
 use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder};
 use crate::commands::config::{save_config, load_config, save_window_state, load_window_state, resolve_path};
 use crate::commands::server::{generate_server_command, start_server, stop_server, open_browser, test_connection, check_port, get_system_metrics, get_system_health, get_slots, get_metrics};
-use crate::commands::download::{browse_modelscope, download_modelscope_files, browse_huggingface, download_huggingface_files, cancel_file_download, pause_file_download, cancel_and_cleanup_download, check_local_file};
+use crate::commands::download::{browse_modelscope, download_modelscope_files, browse_huggingface, download_huggingface_files, cancel_file_download, pause_file_download, cancel_and_cleanup_download, check_local_file, persist_download_queue, restore_download_queue};
 use crate::commands::cluster::{scan_workers_tcp, test_worker, get_worker_info, add_worker, remove_worker, get_workers, find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics, stop_local_worker, is_local_host, start_local_rpc, get_local_host};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
@@ -128,6 +128,7 @@ fn main() {
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file,
             cancel_file_download, pause_file_download, cancel_and_cleanup_download,
+            persist_download_queue, restore_download_queue,
             test_connection, check_port,
             get_system_metrics, get_system_health, get_slots, get_metrics,
             save_window_state, load_window_state,

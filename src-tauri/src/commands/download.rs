@@ -369,3 +369,44 @@ pub async fn check_local_file(path: String) -> Result<Option<u64>, String> {
         Err(_) => Ok(None),
     }
 }
+
+// ── 下载队列持久化 ─────────────────────────────────────────────
+
+use crate::models::{DownloadState, PersistedQueueEntry};
+
+pub(crate) fn save_download_state(queue: &[PersistedQueueEntry], state: &AppState) {
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let _ = std::fs::create_dir_all(&config_dir);
+    let path = config_dir.join("downloads.json");
+    let ds = DownloadState { queue: queue.to_vec() };
+    if let Ok(json) = serde_json::to_string_pretty(&ds) {
+        let tmp = config_dir.join("downloads.json.tmp");
+        if std::fs::write(&tmp, &json).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+}
+
+pub(crate) fn load_download_state(state: &AppState) -> Vec<PersistedQueueEntry> {
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let path = config_dir.join("downloads.json");
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<DownloadState>(&s).ok())
+        .map(|ds| ds.queue)
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn persist_download_queue(
+    queue: Vec<PersistedQueueEntry>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    save_download_state(&queue, &state);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn restore_download_queue(state: tauri::State<'_, AppState>) -> Result<Vec<PersistedQueueEntry>, String> {
+    Ok(load_download_state(&state))
+}

@@ -465,7 +465,7 @@ pub struct GlobalConfig {
 }
 
 // ── 窗口状态 ─────────────────────────────────────────────────────
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct WindowState {
     pub x: i32,
     pub y: i32,
@@ -473,8 +473,26 @@ pub struct WindowState {
     pub height: u32,
 }
 
-// ── ModelScope 文件信息 ───────────────────────────────────────────
+// ── 下载队列持久化 ─────────────────────────────────────────────
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedQueueEntry {
+    pub id: String,
+    pub repo_id: String,
+    pub source: String,
+    pub files: Vec<MsFileEntry>,
+    pub save_dir: String,
+    pub added_at: u64,
+    #[serde(default)]
+    pub status: String,  // "queued" | "active" | "paused"
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct DownloadState {
+    pub queue: Vec<PersistedQueueEntry>,
+}
+
+// ── ModelScope 文件信息 ───────────────────────────────────────────
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MsFileEntry {
     pub name: String,
     pub path: String,

@@ -115,7 +115,7 @@ export default function DownloadManager() {
 
   const activeGroups = useMemo(() => {
     const map = new Map<string, DownloadProgress[]>()
-    for (const t of tasks.filter(t => t.status === 'active')) {
+    for (const t of tasks.filter(t => t.status === 'active' || t.status === 'paused')) {
       const key = `${t.source || ''}:${t.repoId || 'unknown'}`
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(t)
@@ -245,14 +245,25 @@ export default function DownloadManager() {
                     <div key={f.fileName} className="px-4 py-2.5 space-y-1">
                       <div className="flex items-center justify-between text-xs">
                         <span className="truncate flex-1">{f.fileName}</span>
-                        <button onClick={() => cancelFileDownload(f.fileName)} className="text-red-400 hover:text-red-600 ml-2"><X className="w-3 h-3" /></button>
+                        <div className="flex items-center gap-1 shrink-0 ml-2">
+                          {f.status === 'active' && (
+                            <button onClick={() => {
+                              setDownloadTasks({...downloadTasks, [f.fileName]: {...f, status: 'paused'}})
+                              pauseFileDownload(f.fileName)
+                            }} className="text-yellow-500 hover:text-yellow-700" title="暂停">⏸</button>
+                          )}
+                          {f.status === 'paused' && (
+                            <button onClick={() => handleDownloadFile({ name: f.fileName, path: '', size: f.total, file_type: 'model' })} className="text-green-500 hover:text-green-700" title="继续">▶</button>
+                          )}
+                          <button onClick={() => cancelFileDownload(f.fileName)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
+                        </div>
                       </div>
                       <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                        <div className="h-full rounded-full bg-blue-500" style={{width:`${f.total>0?Math.min(100,(f.downloaded/f.total)*100):0}%`}} />
+                        <div className={`h-full rounded-full ${f.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{width:`${f.total>0?Math.min(100,(f.downloaded/f.total)*100):0}%`}} />
                       </div>
                       <div className="flex justify-between text-xs text-gray-400">
                         <span>{fmtSize(f.downloaded)}/{fmtSize(f.total)}</span>
-                        <span>{fmtSpeed(f.speed||0)} · {fmtETA(f.downloaded,f.total,f.speed||0)}</span>
+                        {f.status === 'paused' ? <span className="text-yellow-500">已暂停</span> : <span>{fmtSpeed(f.speed||0)} · {fmtETA(f.downloaded,f.total,f.speed||0)}</span>}
                       </div>
                     </div>
                   ))}
