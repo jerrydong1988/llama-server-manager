@@ -57,18 +57,19 @@ export default function DownloadManager() {
     try {
       const result = source === 'modelscope' ? await browseModelscope(repoId.trim()) : await browseHuggingface(repoId.trim())
       setFiles(result)
-      setBrowsedRepoId(repoId.trim())
+      const rid = repoId.trim()
+      setBrowsedRepoId(rid)
       setStatus(result.length === 0 ? t.modelRepo.notFound : `${t.modelRepo.found} ${result.length} ${t.modelRepo.files}`)
 
       // Detect already-downloaded files on disk
       const tasks = { ...useAppStore.getState().downloadTasks }
       const resolvedDir = await invoke<string>('resolve_path', { path: saveDir })
       await Promise.all(result.map(async (f) => {
-        const localPath = pathJoin(resolvedDir, browsedRepoId, f.name)
+        const localPath = pathJoin(resolvedDir, rid, f.name)
         try {
           const actualSize = await invoke<number | null>('check_local_file', { path: localPath })
           if (actualSize != null && actualSize >= f.size * 0.99) {
-            tasks[f.name] = { fileName: f.name, repoId: browsedRepoId, source, downloaded: actualSize, total: f.size, speed: 0, status: 'completed', path: localPath }
+                tasks[f.name] = { fileName: f.name, repoId: rid, source, downloaded: actualSize, total: f.size, speed: 0, status: 'completed', path: localPath }
           }
         } catch { /* file not found */ }
       }))
