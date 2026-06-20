@@ -102,6 +102,21 @@ export default function DownloadManager() {
     cancelAndCleanupDownload(f.name, pathJoin(saveDir, browsedRepoId, f.name))
   }
 
+  // 恢复/取消持久化任务 — 使用任务自身元数据，不依赖组件 state
+  const handleResumePersisted = (f: DownloadProgress) => {
+    addToDownloadQueue({
+      repoId: f.repoId,
+      source: f.source as DownloadSource,
+      files: [{ name: f.fileName, path: '', size: f.total, file_type: 'model' }],
+      saveDir,
+    })
+  }
+  const handleCancelPersisted = (f: DownloadProgress) => {
+    const task = downloadTasks[f.fileName]
+    if (task) setDownloadTasks({ ...downloadTasks, [f.fileName]: { ...task, status: 'cancelled' } })
+    cancelAndCleanupDownload(f.fileName, pathJoin(saveDir, f.repoId, f.fileName))
+  }
+
   const clearCompleted = () => {
     const tasks = { ...downloadTasks }
     for (const k of Object.keys(tasks)) {
@@ -253,9 +268,13 @@ export default function DownloadManager() {
                             }} className="text-yellow-500 hover:text-yellow-700" title="暂停">⏸</button>
                           )}
                           {f.status === 'paused' && (
-                            <button onClick={() => handleDownloadFile({ name: f.fileName, path: '', size: f.total, file_type: 'model' })} className="text-green-500 hover:text-green-700" title="继续">▶</button>
+                            <button onClick={() => handleResumePersisted(f)} className="text-green-500 hover:text-green-700" title="继续">▶</button>
                           )}
-                          <button onClick={() => cancelFileDownload(f.fileName)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
+                          {f.status === 'paused' ? (
+                            <button onClick={() => handleCancelPersisted(f)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
+                          ) : (
+                            <button onClick={() => cancelFileDownload(f.fileName)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
+                          )}
                         </div>
                       </div>
                       <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
