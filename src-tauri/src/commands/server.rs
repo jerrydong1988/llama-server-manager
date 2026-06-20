@@ -537,9 +537,9 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
-    // Slower retry after initial failures: 5 × 3s = 15s (total ~25s before fail)
-    for _ in 0..5 {
-        std::thread::sleep(std::time::Duration::from_secs(3));
+    // Slower retry: keep trying indefinitely until server starts or instance stops
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(10));
         if !is_my_instance() { return; }
         if let Ok(resp) = health_req(5) {
             if resp.status().is_success() {
@@ -562,12 +562,6 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
                 }
             }
         }
-    }
-    // All 60 attempts failed — emit fail status before exiting
-    if is_my_instance() {
-        let _ = app.emit("health-status", serde_json::json!({
-            "instanceId": instance_id, "status": "fail",
-        }));
     }
 }
 
