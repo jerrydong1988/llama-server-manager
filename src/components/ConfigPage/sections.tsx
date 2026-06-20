@@ -1,5 +1,7 @@
 ﻿import type { InstanceConfig } from '../../store'
 import { defaultInstanceConfig } from '../../store'
+import { useState } from 'react'
+import { Plus, X } from 'lucide-react'
 import { Section, Input, Num, Switch, Select, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
 import WorkerSelector from './WorkerSelector'
 
@@ -108,6 +110,47 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         set(k as keyof InstanceConfig, (cfg as any)[k])
       }
     }
+  }
+
+  // ── 自定义参数：结构化键值对编辑器 ──
+  // Parse existing custom_args into entries on mount
+  const parseArgs = (args: string[]): { name: string; value: string }[] => {
+    const entries: { name: string; value: string }[] = []
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].startsWith('-')) {
+        const next = (i + 1 < args.length && !args[i + 1].startsWith('-')) ? args[i + 1] : ''
+        entries.push({ name: args[i], value: next })
+        if (next) i++
+      }
+    }
+    return entries
+  }
+  const serializeArgs = (entries: { name: string; value: string }[]): string[] => {
+    const result: string[] = []
+    for (const e of entries) {
+      if (!e.name) continue
+      result.push(e.name)
+      if (e.value) result.push(e.value)
+    }
+    return result
+  }
+  const [entries, setEntries] = useState<{ name: string; value: string }[]>(() => parseArgs(local.custom_args))
+  const [newName, setNewName] = useState('')
+  const [newVal, setNewVal] = useState('')
+
+  const addEntry = () => {
+    const name = newName.trim()
+    if (!name) return
+    const next = [...entries, { name, value: newVal.trim() }]
+    setEntries(next)
+    set('custom_args', serializeArgs(next))
+    setNewName('')
+    setNewVal('')
+  }
+  const removeEntry = (i: number) => {
+    const next = entries.filter((_, idx) => idx !== i)
+    setEntries(next)
+    set('custom_args', serializeArgs(next))
   }
   const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding
 
@@ -336,15 +379,35 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
           <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50">
             <span className="text-xs font-medium dark:text-gray-200">{t.configPage.customArgs || '自定义参数'}</span>
           </div>
-          <div className="px-3 py-2">
-            <input
-              type="text"
-              value={local.custom_args.join(' ')}
-              onChange={e => set('custom_args', e.target.value ? e.target.value.split(/\s+/).filter(Boolean) : [])}
-              placeholder="--no-kv-unified --verbose"
-              className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
-              title={t.configPage.customArgsTip || '空格分隔多个参数'}
-            />
+          <div className="px-3 py-2 space-y-2">
+            {/* 已添加的参数列表 */}
+            {entries.map((e, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <span className="flex-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-xs font-mono truncate" title={e.name}>{e.name}</span>
+                {e.value && <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-xs font-mono truncate" title={e.value}>{e.value}</span>}
+                <button onClick={() => removeEntry(i)} className="text-red-400 hover:text-red-600 shrink-0"><X className="w-3.5 h-3.5"/></button>
+              </div>
+            ))}
+            {/* 添加新参数行 */}
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addEntry() }}
+                placeholder="参数名"
+                className="flex-1 px-2 py-1.5 text-xs border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+              />
+              <input
+                type="text"
+                value={newVal}
+                onChange={e => setNewVal(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addEntry() }}
+                placeholder="参数值（可选）"
+                className="flex-1 px-2 py-1.5 text-xs border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+              />
+              <button onClick={addEntry} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded shrink-0" title="添加"><Plus className="w-4 h-4"/></button>
+            </div>
           </div>
         </div>
       </div>
