@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Play, Square, Plus, Trash2, Copy, Globe, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil } from 'lucide-react'
+import { Play, Square, Plus, Trash2, Copy, Globe, XCircle, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil, Clock } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { formatStartupCommand } from '../store'
 import { invoke } from '@tauri-apps/api/core'
@@ -138,6 +138,19 @@ const InstanceManager = () => {
                       <button onClick={() => { setEditingId(inst.id); setEditName(inst.name) }}
                         className="p-0.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded transition-colors" title="修改名称">
                         <Pencil className="w-3.5 h-3.5" />
+                      </button>
+                      <button onClick={() => {
+                        const s = useAppStore.getState()
+                        const idx = s.instances.findIndex(i => i.id === inst.id)
+                        if (idx < 0) return
+                        const newList = [...s.instances]
+                        newList[idx] = { ...newList[idx], config: { ...newList[idx].config, auto_start: !inst.config.auto_start } }
+                        useAppStore.setState({ instances: newList })
+                        useAppStore.getState().saveConfig()
+                      }}
+                        className={`p-0.5 rounded transition-colors ${inst.config.auto_start ? 'text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20' : 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700'}`}
+                        title={t.instance.autoStart || '开机自启动'}>
+                        <Clock className="w-3.5 h-3.5" />
                       </button>
                     </>
                   )}

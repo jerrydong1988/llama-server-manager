@@ -294,6 +294,8 @@ pub struct InstanceConfig {
     pub sse_ping_interval: u32,
     #[serde(default)]
     pub reuse_port: bool,
+    #[serde(default)]
+    pub auto_start: bool,
 }
 
 impl Default for InstanceConfig {
@@ -353,7 +355,7 @@ impl Default for InstanceConfig {
             adaptive_target: -1.0, adaptive_decay: 0.90, top_n_sigma: -1.0,
             logit_bias: String::new(), samplers: String::new(), sampler_seq: String::new(),
             timeout: 3600, sleep_idle: -1, verbose: false, custom_args: vec![],
-            rpc_servers: String::new(), sse_ping_interval: 30, reuse_port: false,
+            rpc_servers: String::new(), sse_ping_interval: 30, reuse_port: false, auto_start: false,
         }
     }
 }

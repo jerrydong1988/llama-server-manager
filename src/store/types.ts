@@ -84,6 +84,7 @@ export interface InstanceConfig {
   timeout: number; sleep_idle: number; verbose: boolean; custom_args: string[];
   // Server features (aligned with llama.cpp master)
   rpc_servers: string; sse_ping_interval: number; reuse_port: boolean;
+  auto_start?: boolean;
 }
 
 export interface Instance {

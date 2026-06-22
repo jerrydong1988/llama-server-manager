@@ -15,6 +15,7 @@ use crate::commands::download::{browse_modelscope, download_modelscope_files, br
 use crate::commands::cluster::{scan_workers_tcp, test_worker, get_worker_info, add_worker, remove_worker, get_workers, find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics, stop_local_worker, is_local_host, start_local_rpc, get_local_host};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
+use crate::commands::autostart::{enable_autostart, disable_autostart, is_autostart_enabled};
 use crate::commands::cluster_ssh::ssh_launch_rpc;
 
 fn main() {
@@ -140,6 +141,7 @@ fn main() {
             detect_usb4_adapters, get_usb4_adapters,
             start_mdns_discovery, stop_mdns_discovery,
             ssh_launch_rpc,
+            enable_autostart, disable_autostart, is_autostart_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

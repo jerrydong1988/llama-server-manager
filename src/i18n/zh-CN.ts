@@ -14,6 +14,7 @@ export const zhCN = {
     copyClipboard: '\u590D\u5236\u5230\u526A\u8D34\u677F', directStart: '\u76F4\u63A5\u542F\u52A8',
     configParams: '\u914D\u7F6E\u53C2\u6570', openBrowser: '\u5728\u6D4F\u89C8\u5668\u4E2D\u6253\u5F00', testConnection: '\u6D4B\u8BD5\u8FDE\u63A5',
     sysPath: '\u7CFB\u7EDF PATH', cancelCreate: '\u53D6\u6D88',
+    autoStart: '\u5F00\u673A\u81EA\u542F\u52A8',
   },
   modelRepo: {
     searchPlaceholder: '\u641C\u7D22\u6A21\u578B...', scan: '\u626B\u63CF\u6A21\u578B', addDir: '\u6DFB\u52A0\u6A21\u578B\u76EE\u5F55',
@@ -435,5 +436,6 @@ export const zhCN = {
     default: '\u9ED8\u8BA4', copySuccess: '\u2713 \u5DF2\u590D\u5236\u5230\u526A\u8D34\u677F',
     appTitle: 'Llama \u670D\u52A1\u5668\u7BA1\u7406\u5668',
     updateAvailable: '\u65B0\u7248\u672C', clickToDownload: '\u70B9\u51FB\u4E0B\u8F7D',
+    autoStart: '\u5F00\u673A\u81EA\u542F\u52A8',
   }
 }

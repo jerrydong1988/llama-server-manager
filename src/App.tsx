@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3 } from 'lucide-react'
+import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3, Clock } from 'lucide-react'
 import { version } from '../package.json'
+import { invoke } from '@tauri-apps/api/core'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
 import InstanceManager from './components/InstanceManager'
@@ -11,6 +12,7 @@ import ClusterPage from './components/ClusterPage/ClusterPage'
 import DownloadManager from './components/DownloadManager'
 import Dashboard from './components/Dashboard/Dashboard'
 import { useAppStore } from './store'
+import type { WorkerInfo } from './store'
 import { I18nProvider, useI18n } from './i18n'
 
 // Moved outside AppInner to avoid re-creation on each render
@@ -34,6 +36,11 @@ function AppInner() {
   const { activeTab, setActiveTab, loadConfig, instances, startInstance, stopInstance, saveConfig, darkMode, setDarkMode } = useAppStore()
   const { t, lang, setLang } = useI18n()
   const [updateInfo, setUpdateInfo] = useState<{latest_version: string; url: string} | null>(null)
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false)
+  const [autoStarted, setAutoStarted] = useState(false)
+
+  // 读取主程序自启动状态
+  useEffect(() => { invoke<boolean>('is_autostart_enabled').then(setAutoStartEnabled).catch(() => {}) }, [])
 
   const navigation = [
     { id: 'dashboard', name: t.nav.dashboard || 'Dashboard', icon: BarChart3 },
@@ -48,6 +55,43 @@ function AppInner() {
   ]
   // dark mode handled by store setDarkMode
   useEffect(() => { loadConfig() }, [loadConfig])
+
+  // 自动启动标记了 auto_start 的实例
+  useEffect(() => {
+    if (autoStarted || instances.length === 0) return
+    setAutoStarted(true)
+
+    const toBoot = instances.filter(i => i.config.auto_start && i.status !== 'running')
+    if (toBoot.length === 0) return
+
+    const boot = async () => {
+      // 集群实例：检查是否有匹配的 worker
+      const currentWorkers = useAppStore.getState().workers.length > 0
+        ? useAppStore.getState().workers
+        : await invoke<WorkerInfo[]>('get_workers').catch(() => [])
+
+      for (const inst of toBoot) {
+        // 集群实例 rpc_servers 检查
+        if (inst.config.rpc_servers) {
+          const configuredServers = inst.config.rpc_servers.split(/[, ]+/).filter(Boolean)
+          const hasMatchingWorker = currentWorkers.some(w =>
+            configuredServers.some(s => {
+              const [h, p] = s.includes(':') ? s.split(':') : [s, '50052']
+              return w.host === h && (w.port === parseInt(p) || w.port === 50052)
+            })
+          )
+          if (!hasMatchingWorker) {
+            console.warn(`实例 "${inst.name}" 配置了集群 worker 但无匹配记录，跳过自启动`)
+            continue
+          }
+        }
+
+        try { await startInstance(inst.id) } catch { /* skip failed start */ }
+        await new Promise(r => setTimeout(r, 3000))
+      }
+    }
+    boot()
+  }, [instances, autoStarted, startInstance])
 
   // 自动更新检查 (前端 fetch 走 Chromium 网络栈, 兼容TUN/Clash)
   useEffect(() => {
@@ -128,6 +172,14 @@ function AppInner() {
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          <button onClick={async () => {
+            const next = !autoStartEnabled
+            try { if (next) await invoke('enable_autostart'); else await invoke('disable_autostart'); setAutoStartEnabled(next) } catch {}
+          }}
+            className={`p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors ${autoStartEnabled ? 'text-blue-500' : 'text-gray-400'}`}
+            title={t.common.autoStart || '开机自启动'}>
+            <Clock className="w-4 h-4" />
+          </button>
           <button onClick={() => setLang(lang === 'zh-CN' ? 'en-US' : 'zh-CN')}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-xs">
             {lang === 'zh-CN' ? 'EN' : '中'}

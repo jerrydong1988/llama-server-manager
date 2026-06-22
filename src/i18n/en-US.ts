@@ -14,6 +14,7 @@ export const enUS = {
     copyClipboard: 'Copy to Clipboard', directStart: 'Start Directly',
     configParams: 'Configure', openBrowser: 'Open in Browser', testConnection: 'Test Connection',
     sysPath: 'System PATH', cancelCreate: 'Cancel',
+    autoStart: 'Auto Start',
   },
   modelRepo: {
     searchPlaceholder: 'Search models...', scan: 'Scan Models', addDir: 'Add Directory',
@@ -432,5 +433,6 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     default: 'Default', copySuccess: '\u2713 Copied!',
     appTitle: 'Llama Server Manager',
     updateAvailable: 'New Version', clickToDownload: 'Click to Download',
+    autoStart: 'Auto Start',
   }
 }
