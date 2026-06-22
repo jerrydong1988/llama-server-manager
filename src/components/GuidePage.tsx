@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { marked } from 'marked'
-import { driver, DriveStep } from 'driver.js'
+import { driver } from 'driver.js'
 import 'driver.js/dist/driver.css';
 import { useAppStore } from '../store'
 
@@ -69,62 +69,40 @@ export default function GuidePage() {
   }
 
   const startTour = async () => {
-    // Build driver steps with page-switching logic
-    const driverObj = driver({
-      showProgress: true,
-      showButtons: ['next', 'close'],
-      onDestroyed: () => { /* cleanup */ },
-    })
-
-    // Wait for first element before driving
-    await waitDOM(TOUR_STEPS[0].sel, 5000)
-      .catch(() => { /* timeout OK — element might already be mounted */ })
-
-    // Start tour on dashboard
-    setActiveTab('dashboard')
-    await new Promise(r => setTimeout(r, 800))
-
-    // Build array of promises for each step
+    // Step through each page, highlighting one element at a time
+    // Each step creates a fresh driver instance and waits for user to click "done"
     for (let i = 0; i < TOUR_STEPS.length; i++) {
       const step = TOUR_STEPS[i]
-      
-      // Switch to the page for this step (except first which was already switched)
-      if (i > 0) {
-        setActiveTab(step.tab)
-        await new Promise(r => setTimeout(r, 600))
-      }
+      setActiveTab(step.tab)
 
-      // Wait for the element to appear
+      // Wait for the target element to appear after page switch
       const el = await waitDOM(step.sel, 5000).catch(() => {})
       if (!el) continue // skip if element not found
 
-      // Highlight and show popover
-      const driveStep: DriveStep = {
-        element: el as HTMLElement,
-        popover: {
-          title: step.title,
-          description: step.desc,
-          nextBtnText: i < TOUR_STEPS.length - 1 ? `下一步: ${TOUR_STEPS[i + 1].title}` : '完成',
-        },
-      }
-
-      driverObj.setConfig({ steps: [driveStep] })
+      const isLast = i === TOUR_STEPS.length - 1
       await new Promise<void>(resolve => {
-        driverObj.setConfig({
-          onNextClick: () => { resolve() },
-          onCloseClick: () => { resolve() },
+        const d = driver({
+          animate: true,
+          showProgress: true,
+          steps: [{
+            element: el as HTMLElement,
+            popover: {
+              title: step.title,
+              description: step.desc,
+              doneBtnText: isLast ? '完成' : `下一步: ${TOUR_STEPS[i + 1]?.title || ''}`,
+            },
+          }],
+          onDestroyed: () => { resolve() },
         })
-        driverObj.drive()
+        d.drive()
       })
     }
-
-    driverObj.destroy()
   }
 
   return (
     <div className="flex flex-1 overflow-hidden h-full">
-      {/* Left TOC sidebar */}
-      <nav className="w-52 shrink-0 overflow-y-auto border-r border-gray-200 dark:border-gray-700 p-3 space-y-0.5 bg-gray-50 dark:bg-gray-800/50">
+      {/* Left TOC sidebar — sticky, independent scroll */}
+      <nav className="w-52 shrink-0 h-full overflow-y-auto border-r border-gray-200 dark:border-gray-700 p-3 space-y-0.5 bg-gray-50 dark:bg-gray-800/50">
         <button onClick={startTour}
           className="w-full px-3 py-2 mb-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-medium transition-colors">
           ▶ 开始交互式引导
