@@ -212,6 +212,8 @@ function AppInner() {
       <div className="flex-1 overflow-y-auto">
         {activeTab === 'logs' ? (
           <LogsViewer />
+        ) : activeTab === 'guide' ? (
+          <GuidePage />
         ) : (
           <div className="max-w-7xl mx-auto p-6">
             {renderTabContent(activeTab)}

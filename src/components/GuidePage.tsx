@@ -80,6 +80,14 @@ export default function GuidePage() {
       if (!el) continue // skip if element not found
 
       const isLast = i === TOUR_STEPS.length - 1
+
+      // Config page needs an active instance to show content
+      if (step.tab === 'config') {
+        const s = useAppStore.getState()
+        if (s.instances.length === 0) continue // skip if no instances
+        s.setActiveConfigInstanceId(s.instances[0].id)
+      }
+
       await new Promise<void>(resolve => {
         const d = driver({
           animate: true,
