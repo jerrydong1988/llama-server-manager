@@ -176,9 +176,13 @@ function AppInner() {
             type="button"
             role="switch"
             aria-checked={autoStartEnabled}
-            onClick={async () => {
+            onClick={() => {
               const next = !autoStartEnabled
-              try { if (next) await invoke('enable_autostart'); else await invoke('disable_autostart'); setAutoStartEnabled(next) } catch {}
+              setAutoStartEnabled(next)
+              ;(async () => {
+                try { if (next) await invoke('enable_autostart'); else await invoke('disable_autostart') }
+                catch { setAutoStartEnabled(!next) }
+              })()
             }}
             className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ${autoStartEnabled ? 'bg-blue-600' : 'bg-gray-300 dark:bg-gray-600'}`}
             title={t.common.autoStart || '开机自启动'}
