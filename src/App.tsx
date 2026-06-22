@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3, Clock } from 'lucide-react'
+import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3 } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
 import ModelRepo from './components/ModelRepo'
@@ -172,13 +172,18 @@ function AppInner() {
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">
-          <button onClick={async () => {
-            const next = !autoStartEnabled
-            try { if (next) await invoke('enable_autostart'); else await invoke('disable_autostart'); setAutoStartEnabled(next) } catch {}
-          }}
-            className={`p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors ${autoStartEnabled ? 'text-blue-500' : 'text-gray-400'}`}
-            title={t.common.autoStart || '开机自启动'}>
-            <Clock className="w-4 h-4" />
+          <button
+            type="button"
+            role="switch"
+            aria-checked={autoStartEnabled}
+            onClick={async () => {
+              const next = !autoStartEnabled
+              try { if (next) await invoke('enable_autostart'); else await invoke('disable_autostart'); setAutoStartEnabled(next) } catch {}
+            }}
+            className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ${autoStartEnabled ? 'bg-blue-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+            title={t.common.autoStart || '开机自启动'}
+          >
+            <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ${autoStartEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
           </button>
           <button onClick={() => setLang(lang === 'zh-CN' ? 'en-US' : 'zh-CN')}
             className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-xs">

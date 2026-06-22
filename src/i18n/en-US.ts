@@ -14,7 +14,7 @@ export const enUS = {
     copyClipboard: 'Copy to Clipboard', directStart: 'Start Directly',
     configParams: 'Configure', openBrowser: 'Open in Browser', testConnection: 'Test Connection',
     sysPath: 'System PATH', cancelCreate: 'Cancel',
-    autoStart: 'Auto Start',
+    autoStart: 'Auto-start when program launches',
   },
   modelRepo: {
     searchPlaceholder: 'Search models...', scan: 'Scan Models', addDir: 'Add Directory',

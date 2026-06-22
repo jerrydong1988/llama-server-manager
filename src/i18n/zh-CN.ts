@@ -14,7 +14,7 @@ export const zhCN = {
     copyClipboard: '\u590D\u5236\u5230\u526A\u8D34\u677F', directStart: '\u76F4\u63A5\u542F\u52A8',
     configParams: '\u914D\u7F6E\u53C2\u6570', openBrowser: '\u5728\u6D4F\u89C8\u5668\u4E2D\u6253\u5F00', testConnection: '\u6D4B\u8BD5\u8FDE\u63A5',
     sysPath: '\u7CFB\u7EDF PATH', cancelCreate: '\u53D6\u6D88',
-    autoStart: '\u5F00\u673A\u81EA\u542F\u52A8',
+    autoStart: '\u7A0B\u5E8F\u542F\u52A8\u65F6\u81EA\u52A8\u8FD0\u884C\u6B64\u5B9E\u4F8B',
   },
   modelRepo: {
     searchPlaceholder: '\u641C\u7D22\u6A21\u578B...', scan: '\u626B\u63CF\u6A21\u578B', addDir: '\u6DFB\u52A0\u6A21\u578B\u76EE\u5F55',
