@@ -113,7 +113,7 @@ const InstanceManager = () => {
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold">{t.instance.title} ({instances.length})</h3>
         <div className="flex items-center gap-4">
-          <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors">
+          <button onClick={() => setShowCreateModal(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors" data-guide="instance-create">
             <Plus className="w-4 h-4" /> {t.instance.create}
           </button>
         </div>

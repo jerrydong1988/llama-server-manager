@@ -161,7 +161,7 @@ export default function DownloadManager() {
           <button onClick={() => { setSource('huggingface'); setFiles([]); setStatus('') }}
             className={`px-3 py-1.5 rounded-lg text-sm font-medium ${source === 'huggingface' ? 'bg-blue-600 text-white' : 'bg-gray-100 dark:bg-gray-700'}`}>HuggingFace</button>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2" data-guide="download-source">
           <input type="text" value={repoId} onChange={e => setRepoId(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleBrowse()}
             placeholder={source === 'modelscope' ? t.modelRepo.repoIdPlaceholder : t.modelRepo.hfRepoIdPlaceholder}
             className="flex-1 px-3 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-sm" />

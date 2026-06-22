@@ -173,7 +173,7 @@ const ModelRepo = () => {
     <div className="flex items-center justify-between mb-6">
       <h2 className="text-2xl font-bold">{t.nav.modelRepo}</h2>
       <div className="flex items-center gap-2">
-        <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" /><input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={t.modelRepo.searchPlaceholder} className="pl-10 pr-4 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" /></div>
+        <div className="relative"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" /><input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder={t.modelRepo.searchPlaceholder} className="pl-10 pr-4 py-2 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" data-guide="model-search" /></div>
         <button onClick={handleScan} disabled={isLoading} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors"><RefreshCw className={"w-4 h-4 " + (isLoading ? "animate-spin" : "")} /> {t.modelRepo.scan}</button>
         <button onClick={handleAddDirectory} className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg transition-colors"><FolderOpen className="w-4 h-4" /> {t.modelRepo.addDir}</button>
       </div>

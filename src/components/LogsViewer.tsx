@@ -84,7 +84,7 @@ const LogsViewer = () => {
       <div className="flex items-center gap-4 p-4 shrink-0">
         <label className="text-sm font-medium">{t.logs.selectInstance}</label>
         <select value={selectedInstanceId} onChange={(e) => handleInstanceChange(e.target.value)}
-          className="select-custom pl-3 pr-8 py-2 text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 min-w-[250px]">
+          className="select-custom pl-3 pr-8 py-2 text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 min-w-[250px]" data-guide="logs-clear">
           <option value="">{t.logs.allInstances}</option>
           {instances.map((inst) => (
             <option key={inst.id} value={inst.id}>

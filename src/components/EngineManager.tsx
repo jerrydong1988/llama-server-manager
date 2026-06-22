@@ -56,8 +56,9 @@ useEffect(() => { loadInitialData() }, [loadInitialData])
     <div className="space-y-6">
       <h2 className="text-2xl font-bold">{t.nav.engine}</h2>
       <div className="flex items-center gap-4">
-        <button onClick={handleScan} disabled={isLoading}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors">
+          <button onClick={handleScan} disabled={isLoading}
+            data-guide="engine-scan"
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors">
           <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} /> {t.engineMgr.scan}
         </button>
         <button onClick={handleAddDirectory}

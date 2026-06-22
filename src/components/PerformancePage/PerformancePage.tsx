@@ -81,7 +81,7 @@ export default function PerformancePage() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold">{t.nav.perf}</h2>
         <div className="flex items-center gap-4">
-          <select value={selectedId} onChange={e => setSelectedId(e.target.value)}
+          <select value={selectedId} onChange={e => setSelectedId(e.target.value)} data-guide="perf-select"
             className="px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
             {running.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
           </select>

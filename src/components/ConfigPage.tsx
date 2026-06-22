@@ -94,7 +94,7 @@ const ConfigPage = () => {
           <span className="text-lg font-semibold">{t.configPage.title}</span>
           <span className="text-sm text-gray-500">{'\u2014'} {inst?.name}</span>
         </div>
-        <button onClick={save} disabled={!local || !inst} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors">{saved ? t.configPage.saved : t.configPage.save}</button>
+        <button onClick={save} disabled={!local || !inst} className="px-6 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded-lg transition-colors" data-guide="config-save">{saved ? t.configPage.saved : t.configPage.save}</button>
       </div>
       {saved && <div className="bg-green-50 dark:bg-green-900/20 rounded-lg p-3 text-sm text-green-600 dark:text-green-400">{t.configPage.savedMsg}{'\u300C'}{inst?.name}{'\u300D\u3002'}{t.configPage.savedHint}</div>}
       {isEmbedding && <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-sm text-blue-600 dark:text-blue-400">{t.configPage.embeddingBanner}</div>}

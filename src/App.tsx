@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3 } from 'lucide-react'
+import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3, BookOpen } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
 import ModelRepo from './components/ModelRepo'
@@ -11,6 +11,7 @@ import PerformancePage from './components/PerformancePage/PerformancePage'
 import ClusterPage from './components/ClusterPage/ClusterPage'
 import DownloadManager from './components/DownloadManager'
 import Dashboard from './components/Dashboard/Dashboard'
+import GuidePage from './components/GuidePage'
 import { useAppStore } from './store'
 import type { WorkerInfo } from './store'
 import { I18nProvider, useI18n } from './i18n'
@@ -26,6 +27,7 @@ const TAB_CONTENT: Record<string, () => JSX.Element> = {
   logs: () => <LogsViewer />,
   cluster: () => <ClusterPage />,
   downloads: () => <DownloadManager />,
+  guide: () => <GuidePage />,
 }
 const renderTabContent = (tabId: string) => {
   const Renderer = TAB_CONTENT[tabId]
@@ -52,6 +54,7 @@ function AppInner() {
     { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'perf', name: t.nav.perf, icon: Activity },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
+    { id: 'guide', name: '\uD83D\uDCD6 \u4F7F\u7528\u8BF4\u660E', icon: BookOpen, separator: true },
   ]
   // dark mode handled by store setDarkMode
   useEffect(() => { loadConfig() }, [loadConfig])
