@@ -62,7 +62,7 @@ function AppInner() {
   const _mountTime = performance.now()
   // Show window after React renders — eliminates black flash on startup
   useEffect(() => {
-    requestAnimationFrame(() => { requestAnimationFrame(() => { getCurrentWindow().show() }) })
+    setTimeout(() => { getCurrentWindow().show() }, 50)
   }, [])
   useEffect(() => {
     _startupTimings.push({ name: 'app-mount', ms: Math.round(performance.now() - _mountTime) })
