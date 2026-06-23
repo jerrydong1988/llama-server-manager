@@ -65,7 +65,16 @@ fn main() {
         })
         .setup(|app| {
             let _t0 = std::time::Instant::now();
-            eprintln!("[perf] setup-enter: {}ms", NATIVE_START.get().map(|t| t.elapsed().as_millis()).unwrap_or(0));
+            let log_timing = |label: &str| {
+                let elapsed = NATIVE_START.get().map(|t| t.elapsed().as_millis()).unwrap_or(0) as u64;
+                let line = format!("{}: {}ms\n", label, elapsed);
+                let dir = crate::utils::get_data_dir();
+                let path = dir.join("configs").join(".startup-log");
+                let _ = std::fs::create_dir_all(path.parent().unwrap());
+                let existing = std::fs::read_to_string(&path).unwrap_or_default();
+                let _ = std::fs::write(&path, existing + &line);
+            };
+            log_timing("setup-enter");
             use tauri::Emitter;
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -121,7 +130,7 @@ fn main() {
                 })
                 .build(app.handle())?;
             }
-            eprintln!("[perf] setup-tray-done: {}ms", NATIVE_START.get().map(|t| t.elapsed().as_millis()).unwrap_or(0));
+            log_timing("setup-tray-done");
             let _ = app.emit("startup-timing", serde_json::json!({
                 "name": "rust-setup", "ms": _t0.elapsed().as_millis()
             }));
