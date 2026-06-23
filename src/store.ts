@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { message } from '@tauri-apps/plugin-dialog'
 import { pathBasename } from './utils/path'
+import { startTransition } from 'react'
 
 // Re-exports from split modules
 export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState, WorkerInfo, WorkerDevice, WorkerStatus, Usb4Adapter } from './store/types'
@@ -284,17 +285,15 @@ export const useAppStore = create<AppState>((set, get) => ({
           document.documentElement.classList.toggle('dark', global.dark_mode)
           set({ darkMode: !!global.dark_mode })
         }
-      invoke('scan_models', { paths: global.model_dirs || [] }).then((models) => {
-        set({ models: models as any[] })
-      }).catch(() => {})
-      invoke('scan_engines', { paths: global.engine_dirs || [] }).then((engines) => {
-        set({ engines: engines as any[] })
-      }).catch(() => {})
-
-      // Restore persisted download queue
-      invoke<import('./store/types').PersistedQueueEntry[]>('restore_download_queue').then((queue) => {
-        if (queue?.length > 0) get().restoreDownloadQueue(queue)
-      }).catch(() => {})
+      // 延迟合并加载：单次 IPC + startTransition 避免渲染阻塞
+      setTimeout(() => {
+        invoke<[import('./store/types').ModelInfo[], import('./store/types').EngineInfo[], import('./store/types').PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
+          .then(([models, engines, queue]) => {
+            startTransition(() => { set({ models, engines }) })
+            if (queue?.length > 0) startTransition(() => { get().restoreDownloadQueue(queue) })
+          })
+          .catch(() => {})
+      }, 200)
     } catch (e) { console.error('load_config error:', e) }
   },
 

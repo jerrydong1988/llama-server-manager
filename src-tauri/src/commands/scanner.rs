@@ -134,6 +134,20 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, 
     Ok(models)
 }
 
+// ── 批量加载 — 一次 IPC 完成扫描+下载恢复 ──
+#[tauri::command]
+pub async fn load_app_data(
+    paths: Vec<String>,
+    engine_paths: Vec<String>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(Vec<ModelInfo>, Vec<EngineInfo>, Vec<crate::models::PersistedQueueEntry>), String> {
+    let models = scan_models(paths, state.clone(), app.clone()).await?;
+    let engines = scan_engines(engine_paths, state.clone()).await?;
+    let queue = crate::commands::download::load_download_state(&state);
+    Ok((models, engines, queue))
+}
+
 #[tauri::command]
 pub async fn get_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
     Ok(state.models.lock().unwrap().clone())

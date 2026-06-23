@@ -15,10 +15,10 @@ export default function Dashboard() {
   const runningInstances = instances.filter(i => i.status === 'running')
   const stoppedInstances = instances.filter(i => i.status !== 'running')
 
-  // Poll system health every 5s — no instance required
+  // Poll system health every 5s — delay first call to avoid startup storm
   useEffect(() => {
     const fetch = () => invoke<any>('get_system_health').then(setSysMetrics).catch(() => {})
-    fetch()
+    setTimeout(fetch, 500)
     const timer = setInterval(fetch, 5000)
     return () => clearInterval(timer)
   }, [])
