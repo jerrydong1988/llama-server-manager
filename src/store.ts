@@ -283,15 +283,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       }})
       // 按保存的顺序排列
       list.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
-        set({
-          instances: list,
-          modelDirs: global.model_dirs || [],
-          engineDirs: global.engine_dirs || [],
-          defaultEngineId: global.default_engine_id || null,
+        startTransition(() => {
+          set({
+            instances: list,
+            modelDirs: global.model_dirs || [],
+            engineDirs: global.engine_dirs || [],
+            defaultEngineId: global.default_engine_id || null,
+          })
         })
         if (global.dark_mode !== undefined) {
           document.documentElement.classList.toggle('dark', global.dark_mode)
-          set({ darkMode: !!global.dark_mode })
+          startTransition(() => { set({ darkMode: !!global.dark_mode }) })
         }
       // 延迟合并加载：单次 IPC + startTransition 避免渲染阻塞
       setTimeout(() => {
