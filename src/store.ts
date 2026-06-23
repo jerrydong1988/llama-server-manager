@@ -24,7 +24,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   modelDirs: [],
   engineDirs: [],
   activeConfigInstanceId: null,
-  activeTab: 'model-repo',
+  activeTab: (() => { try { return localStorage.getItem('lastTab') || 'dashboard' } catch { return 'dashboard' } })(),
   workers: [],
   clusterScanning: false,
   downloadProgress: {},
@@ -98,7 +98,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setEngineDirs: (dirs) => { set({ engineDirs: dirs }); get().saveConfig() },
   setDefaultEngineId: (id) => { set({ defaultEngineId: id }); get().saveConfig() },
   setActiveConfigInstanceId: (id) => set({ activeConfigInstanceId: id }),
-  setActiveTab: (tab) => { set({ activeTab: tab }); get().saveConfig() },
+  setActiveTab: (tab) => { set({ activeTab: tab }); try { localStorage.setItem('lastTab', tab) } catch {}; get().saveConfig() },
   setDarkMode: (dm) => { set({ darkMode: dm }); document.documentElement.classList.toggle('dark', dm); get().saveConfig() },
 
   addInstance: (instance) => { set((s) => ({ instances: [...s.instances, instance] })); get().saveConfig() },
