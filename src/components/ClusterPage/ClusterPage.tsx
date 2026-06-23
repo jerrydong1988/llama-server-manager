@@ -243,7 +243,7 @@ export default function ClusterPage() {
                {t.clusterPage.stopScan}
             </button>
           ) : (
-            <button onClick={handleScan} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs flex items-center gap-1">
+            <button onClick={handleScan} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs flex items-center gap-1" data-guide="cluster-scan">
               <RefreshCw className="w-3 h-3" />
               {t.clusterPage.scanLan}
             </button>
