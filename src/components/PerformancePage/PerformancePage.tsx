@@ -68,10 +68,19 @@ export default function PerformancePage() {
   }, [selectedId, interval, host, port, inst?.config.api_key])
 
   if (!running.length) {
+    // Render full page skeleton so interactive tour can find elements
     return (
-      <div className="flex-1 p-6">
-        <h2 className="text-2xl font-bold mb-6">{t.nav.perf}</h2>
-        <div className="text-center text-gray-500 py-12">{t.perfBlock.noRunning}</div>
+      <div className="flex-1 p-6 overflow-y-auto">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-bold">{t.nav.perf}</h2>
+          <div className="flex items-center gap-4">
+            <select value="" onChange={() => {}} data-guide="perf-select"
+              className="px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
+              <option value="">— {t.perfBlock.noRunning} —</option>
+            </select>
+          </div>
+        </div>
+        <div className="text-center text-gray-500 py-12">{t.perfBlock.waitingActivity || '启动实例后显示实时指标'}</div>
       </div>
     )
   }
