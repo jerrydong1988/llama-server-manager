@@ -194,7 +194,7 @@ const InstanceManager = () => {
                 </>
               )}
               <button onClick={() => handleShowCommand(inst.id)} className="p-2 text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors" title={t.instance.genCommand}><Terminal className="w-4 h-4" /></button>
-              <button onClick={() => { setActiveConfigInstanceId(inst.id); setActiveTab('config') }} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title={t.instance.configParams}><Settings className="w-4 h-4" /></button>
+              <button onClick={() => { setActiveConfigInstanceId(inst.id); setActiveTab('config') }} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" title={t.instance.configParams} data-guide="instance-config"><Settings className="w-4 h-4" /></button>
               <button onClick={() => handleDelete(inst.id)} className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors" title={t.instance.delete}><Trash2 className="w-4 h-4" /></button>
               {/* 排序箭头 */}
               <div className="flex flex-col gap-0.5 ml-1">

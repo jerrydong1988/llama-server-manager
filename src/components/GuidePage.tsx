@@ -47,7 +47,7 @@ const TOUR_STEPS: { sel: string; title: string; desc: string; tab: string }[] = 
   { sel: '[data-guide="download-source"]', title: '下载管理', desc: '选择 ModelScope 或 HuggingFace，输入仓库 ID 浏览并下载', tab: 'downloads' },
   { sel: '[data-guide="engine-scan"]', title: '引擎扫描', desc: '添加 llama-server 所在目录，点击扫描发现所有引擎', tab: 'engine' },
   { sel: '[data-guide="instance-create"]', title: '创建实例', desc: '点击创建，选择模型、引擎和端口，即可启动服务器', tab: 'instances' },
-  { sel: '[data-guide="config-save"]', title: '参数保存', desc: '配置完成后点击保存，支持 159 个参数和智能校验', tab: 'config' },
+  { sel: '[data-guide="instance-config"]', title: '参数配置', desc: '点击实例卡片上的 ⚙ 配置按钮进入参数配置页面，支持 159 个参数和智能校验', tab: 'instances' },
   { sel: '[data-guide="perf-select"]', title: '性能监控', desc: '选择运行中的实例查看 CPU/GPU/显存实时指标和推理性能', tab: 'perf' },
   { sel: '[data-guide="logs-clear"]', title: '服务器日志', desc: '选择实例查看实时输出，支持关键词高亮、暂停/跟随、清空', tab: 'logs' },
 ]
