@@ -65,6 +65,7 @@ fn main() {
         })
         .setup(|app| {
             let _t0 = std::time::Instant::now();
+            eprintln!("[perf] setup-enter: {}ms", NATIVE_START.get().map(|t| t.elapsed().as_millis()).unwrap_or(0));
             use tauri::Emitter;
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -120,6 +121,7 @@ fn main() {
                 })
                 .build(app.handle())?;
             }
+            eprintln!("[perf] setup-tray-done: {}ms", NATIVE_START.get().map(|t| t.elapsed().as_millis()).unwrap_or(0));
             let _ = app.emit("startup-timing", serde_json::json!({
                 "name": "rust-setup", "ms": _t0.elapsed().as_millis()
             }));
