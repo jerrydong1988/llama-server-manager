@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use crate::models::{AppState, GlobalConfig, InstanceConfig, WindowState};
+use tauri::Emitter;
 
 // ── 配置持久化 ────────────────────────────────────────────────────
 #[tauri::command]
@@ -33,6 +34,7 @@ pub async fn save_config(
 
 #[tauri::command]
 pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<GlobalConfig, String> {
+    let _t0 = std::time::Instant::now();
     let config_dir = state.config_dir.lock().unwrap().clone();
     let path = config_dir.join("instances.json");
 
@@ -130,6 +132,9 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
         // 日志 tail + 指标推送
         crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir, &api_key_reconnect, app2);
     }
+    let _ = app.emit("startup-timing", serde_json::json!({
+        "name": "load-config", "ms": _t0.elapsed().as_millis()
+    }));
     Ok(global)
 }
 
