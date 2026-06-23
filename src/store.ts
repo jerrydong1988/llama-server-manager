@@ -256,6 +256,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadConfig: async () => {
     const t0 = performance.now()
     try {
+      // Native init timing: elapsed from Rust main() start to loadConfig call
+      invoke<number>('get_startup_elapsed').then(ms => {
+        _startupTimings.push({ name: 'native-init', ms })
+      }).catch(() => {})
       const global = await invoke<{
         instances: Record<string, InstanceConfig>
         model_dirs: string[]

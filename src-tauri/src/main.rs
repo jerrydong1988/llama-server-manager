@@ -6,6 +6,7 @@ mod commands;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::time::Instant;
 use tauri::Manager;
 use crate::models::{AppState, WindowState};
 use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder, load_app_data};
@@ -17,8 +18,18 @@ use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
 use crate::commands::autostart::{enable_autostart, disable_autostart, is_autostart_enabled};
 use crate::commands::cluster_ssh::ssh_launch_rpc;
+use std::sync::OnceLock;
+
+static NATIVE_START: OnceLock<Instant> = OnceLock::new();
+
+#[tauri::command]
+fn get_startup_elapsed() -> u64 {
+    NATIVE_START.get().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0)
+}
 
 fn main() {
+    let native_start = std::time::Instant::now();
+    NATIVE_START.set(native_start).ok();
     let default_models: Vec<models::ModelInfo> = vec![];
     let default_engines: Vec<models::EngineInfo> = vec![];
 
@@ -148,6 +159,7 @@ fn main() {
             start_mdns_discovery, stop_mdns_discovery,
             ssh_launch_rpc,
             enable_autostart, disable_autostart, is_autostart_enabled,
+            get_startup_elapsed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
