@@ -279,7 +279,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           modelDirs: global.model_dirs || [],
           engineDirs: global.engine_dirs || [],
           defaultEngineId: global.default_engine_id || null,
-          activeTab: global.last_tab || 'model-repo',
         })
         if (global.dark_mode !== undefined) {
           document.documentElement.classList.toggle('dark', global.dark_mode)
