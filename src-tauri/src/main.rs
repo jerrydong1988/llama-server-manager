@@ -65,16 +65,9 @@ fn main() {
         })
         .setup(|app| {
             let _t0 = std::time::Instant::now();
-            let log_timing = |label: &str| {
-                let elapsed = NATIVE_START.get().map(|t| t.elapsed().as_millis()).unwrap_or(0) as u64;
-                let line = format!("{}: {}ms\n", label, elapsed);
-                let dir = crate::utils::get_data_dir();
-                let path = dir.join("configs").join(".startup-log");
-                let _ = std::fs::create_dir_all(path.parent().unwrap());
-                let existing = std::fs::read_to_string(&path).unwrap_or_default();
-                let _ = std::fs::write(&path, existing + &line);
-            };
-            log_timing("setup-enter");
+            let mut timings: Vec<(String, u64)> = Vec::new();
+            let now = || NATIVE_START.get().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
+            timings.push(("setup-enter".into(), now()));
             use tauri::Emitter;
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -130,7 +123,15 @@ fn main() {
                 })
                 .build(app.handle())?;
             }
-            log_timing("setup-tray-done");
+            timings.push(("setup-tray-done".into(), now()));
+            // Write accumulated timings in a single I/O operation
+            let log_dir = crate::utils::get_data_dir().join("configs");
+            let log_path = log_dir.join(".startup-log");
+            let _ = std::fs::create_dir_all(&log_dir);
+            let log_content = timings.iter()
+                .map(|(label, ms)| format!("{}: {}ms\n", label, ms))
+                .collect::<String>();
+            let _ = std::fs::write(&log_path, log_content);
             let _ = app.emit("startup-timing", serde_json::json!({
                 "name": "rust-setup", "ms": _t0.elapsed().as_millis()
             }));

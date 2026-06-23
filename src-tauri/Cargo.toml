@@ -18,7 +18,7 @@ tauri-plugin-single-instance = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1.8", features = ["v4", "serde"] }
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs", "process"] }
 reqwest = { version = "0.11", features = ["json", "stream", "blocking"] }
 walkdir = "2.0"
 bytes = "1.0"

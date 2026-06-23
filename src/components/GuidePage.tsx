@@ -24,7 +24,13 @@ function renderMD(md: string): string {
     const id = title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
     return `<h2 id="${id}">${title}</h2>`
   })
-  return marked.parse(processed, { async: false }) as string
+  const html = marked.parse(processed, { async: false }) as string
+  return sanitize(html)
+}
+
+function sanitize(html: string): string {
+  return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
 }
 
 // Wait for DOM element with timeout

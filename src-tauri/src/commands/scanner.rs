@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 use crate::models::{AppState, EngineInfo, ModelInfo};
 use crate::utils;
-use tauri::Emitter;
 
 // ── 跨平台可执行文件名 ────────────────────────────────────────────
 
@@ -34,7 +33,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
 
 // ── 模型扫描 ──────────────────────────────────────────────────────
 #[tauri::command]
-pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<Vec<ModelInfo>, String> {
+pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, _app: tauri::AppHandle) -> Result<Vec<ModelInfo>, String> {
     let app_dir = utils::get_data_dir();
     let default_path = app_dir.join("models");
 
@@ -105,28 +104,22 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, 
         // [0-9] for regex_lite compat; .+? (lazy) avoids backtracking issues with names containing hyphens
         let shard_re = Regex::new(r"(?i)^(.+?)-([0-9]{5})-of-([0-9]{5})\.gguf$").unwrap();
         let mut groups: std::collections::HashMap<String, (u32, Vec<usize>)> = std::collections::HashMap::new();
-        let mut matched_count = 0u32;
+        let mut _matched_count = 0u32;
         for (i, m) in models.iter().enumerate() {
             if let Some(caps) = shard_re.captures(&m.name) {
                 let base = caps.get(1).unwrap().as_str().to_string();
                 let total: u32 = caps.get(3).unwrap().as_str().parse().unwrap_or(0);
                 groups.entry(base).or_insert_with(|| (total, Vec::new())).1.push(i);
-                matched_count += 1;
+                _matched_count += 1;
             }
         }
-        let mut marked_count = 0u32;
+        let mut _marked_count = 0u32;
         for (_base, (expected_total, indices)) in &groups {
             if indices.len() as u32 == *expected_total && *expected_total > 1 {
-                for &idx in indices { models[idx].is_shard = true; marked_count += 1; }
+                for &idx in indices { models[idx].is_shard = true; _marked_count += 1; }
             }
         }
-        // Emit scan statistics for frontend display
-        let _ = app.emit("scan-debug", serde_json::json!({
-            "total": models.len(),
-            "matched": matched_count,
-            "groups": groups.len(),
-            "marked": marked_count,
-        }));
+
     }
 
     let mut state_models = state.models.lock().unwrap();
@@ -142,8 +135,12 @@ pub async fn load_app_data(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(Vec<ModelInfo>, Vec<EngineInfo>, Vec<crate::models::PersistedQueueEntry>), String> {
-    let models = scan_models(paths, state.clone(), app.clone()).await?;
-    let engines = scan_engines(engine_paths, state.clone()).await?;
+    let (models_result, engines_result) = tokio::join!(
+        scan_models(paths, state.clone(), app.clone()),
+        scan_engines(engine_paths, state.clone())
+    );
+    let models = models_result?;
+    let engines = engines_result?;
     let queue = crate::commands::download::load_download_state(&state);
     Ok((models, engines, queue))
 }

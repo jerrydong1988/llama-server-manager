@@ -127,27 +127,27 @@ export default function DownloadManager() {
   }
 
   // ── 进行中/已完成分组 ──
-  const tasks = Object.values(downloadTasks)
-
   const activeGroups = useMemo(() => {
     const map = new Map<string, DownloadProgress[]>()
+    const tasks = Object.values(downloadTasks)
     for (const t of tasks.filter(t => t.status === 'active' || t.status === 'paused')) {
       const key = `${t.source || ''}:${t.repoId || 'unknown'}`
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(t)
     }
     return Array.from(map.entries()).map(([key, files]) => ({ key, files }))
-  }, [tasks])
+  }, [downloadTasks])
 
   const completedGroups = useMemo(() => {
     const map = new Map<string, DownloadProgress[]>()
+    const tasks = Object.values(downloadTasks)
     for (const t of tasks.filter(t => t.status === 'completed' || t.status === 'cancelled' || t.status === 'error')) {
       const key = `${t.source || ''}:${t.repoId || 'unknown'}`
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(t)
     }
     return Array.from(map.entries()).map(([key, files]) => ({ key, files }))
-  }, [tasks])
+  }, [downloadTasks])
 
   return (
     <div className="flex-1 p-6 overflow-y-auto space-y-6">

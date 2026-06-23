@@ -1,17 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
 import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3, BookOpen } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
 import InstanceManager from './components/InstanceManager'
-import LogsViewer from './components/LogsViewer'
+const LogsViewer = lazy(() => import('./components/LogsViewer'))
 import ConfigPage from './components/ConfigPage'
-import PerformancePage from './components/PerformancePage/PerformancePage'
-import ClusterPage from './components/ClusterPage/ClusterPage'
-import DownloadManager from './components/DownloadManager'
+const PerformancePage = lazy(() => import('./components/PerformancePage/PerformancePage'))
+const ClusterPage = lazy(() => import('./components/ClusterPage/ClusterPage'))
+const DownloadManager = lazy(() => import('./components/DownloadManager'))
 import Dashboard from './components/Dashboard/Dashboard'
-import GuidePage from './components/GuidePage'
+const GuidePage = lazy(() => import('./components/GuidePage'))
 import { _startupTimings } from './store'
 import { useAppStore } from './store'
 import type { WorkerInfo } from './store'
@@ -24,11 +24,11 @@ const TAB_CONTENT: Record<string, () => JSX.Element> = {
   dashboard: () => <Dashboard />,
   engine: () => <EngineManager />,
   config: () => <ConfigPage />,
-  perf: () => <PerformancePage />,
-  logs: () => <LogsViewer />,
-  cluster: () => <ClusterPage />,
-  downloads: () => <DownloadManager />,
-  guide: () => <GuidePage />,
+  perf: () => <Suspense fallback={null}><PerformancePage /></Suspense>,
+  logs: () => <Suspense fallback={null}><LogsViewer /></Suspense>,
+  cluster: () => <Suspense fallback={null}><ClusterPage /></Suspense>,
+  downloads: () => <Suspense fallback={null}><DownloadManager /></Suspense>,
+  guide: () => <Suspense fallback={null}><GuidePage /></Suspense>,
 }
 const renderTabContent = (tabId: string) => {
   const Renderer = TAB_CONTENT[tabId]
@@ -36,7 +36,14 @@ const renderTabContent = (tabId: string) => {
 }
 
 function AppInner() {
-  const { activeTab, setActiveTab, loadConfig, instances, startInstance, stopInstance, saveConfig, darkMode, setDarkMode } = useAppStore()
+  const activeTab = useAppStore(s => s.activeTab)
+  const setActiveTab = useAppStore(s => s.setActiveTab)
+  const loadConfig = useAppStore(s => s.loadConfig)
+  const instances = useAppStore(s => s.instances)
+  const engines = useAppStore(s => s.engines)
+  const startInstance = useAppStore(s => s.startInstance)
+  const darkMode = useAppStore(s => s.darkMode)
+  const setDarkMode = useAppStore(s => s.setDarkMode)
   const { t, lang, setLang } = useI18n()
   const [updateInfo, setUpdateInfo] = useState<{latest_version: string; url: string} | null>(null)
   const [autoStartEnabled, setAutoStartEnabled] = useState(false)
@@ -45,18 +52,20 @@ function AppInner() {
   // 读取主程序自启动状态
   useEffect(() => { invoke<boolean>('is_autostart_enabled').then(setAutoStartEnabled).catch(() => {}) }, [])
 
-  const navigation = [
+  const upCount = useMemo(() => instances.filter(i => i.status === 'running').length, [instances])
+  const downCount = useMemo(() => instances.filter(i => i.status !== 'running').length, [instances])
+  const navigation = useMemo(() => [
     { id: 'dashboard', name: t.nav.dashboard || 'Dashboard', icon: BarChart3 },
     { id: 'model-repo', name: t.nav.modelRepo, icon: Database },
     { id: 'downloads', name: t.nav.downloads || 'Downloads', icon: Download },
     { id: 'engine', name: t.nav.engine, icon: Cpu },
-    { id: 'instances', name: t.nav.instances, icon: Server, badge: instances.filter(i => i.status === 'running').length },
+    { id: 'instances', name: t.nav.instances, icon: Server, badge: upCount },
     { id: 'config', name: t.nav.config, icon: Settings, separator: true },
     { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'perf', name: t.nav.perf, icon: Activity },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
     { id: 'guide', name: '\uD83D\uDCD6 \u4F7F\u7528\u8BF4\u660E', icon: BookOpen, separator: true },
-  ]
+  ], [t, upCount])
   // dark mode handled by store setDarkMode
   const _mountTime = performance.now()
   useEffect(() => {
@@ -64,13 +73,13 @@ function AppInner() {
     loadConfig()
   }, [loadConfig]) // eslint-disable-line
 
-  // 自动启动标记了 auto_start 的实例
+  // 自动启动标记了 auto_start 的实例 — 等待 engines 加载完毕再启动
   useEffect(() => {
     if (autoStarted || instances.length === 0) return
-    setAutoStarted(true)
-
     const toBoot = instances.filter(i => i.config.auto_start && i.status !== 'running')
-    if (toBoot.length === 0) return
+    if (toBoot.length === 0) { setAutoStarted(true); return }
+    if (engines.length === 0) return // engines 尚未加载，等待 load_app_data 完成
+    setAutoStarted(true)
 
     const boot = async () => {
       // 集群实例：检查是否有匹配的 worker
@@ -99,7 +108,7 @@ function AppInner() {
       }
     }
     boot()
-  }, [instances, autoStarted, startInstance])
+  }, [instances, engines, autoStarted, startInstance])
 
   // 自动更新检查 (前端 fetch 走 Chromium 网络栈, 兼容TUN/Clash)
   useEffect(() => {
@@ -125,13 +134,13 @@ function AppInner() {
     .catch(() => {})
   }, [])
 
-  // 键盘快捷键
+  // 键盘快捷键 — 使用 getState() 避免依赖频繁变化
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!e.ctrlKey) return
       if (e.key === 'Enter') {
         e.preventDefault()
-        // Ctrl+Enter: 实例页则启动第一个已停止的实例，或停止第一个运行中的实例
+        const { instances, startInstance, stopInstance } = useAppStore.getState()
         if (instances.length > 0) {
           const running = instances.find(i => i.status === 'running')
           const stopped = instances.find(i => i.status !== 'running')
@@ -141,12 +150,12 @@ function AppInner() {
       }
       if (e.key === 's' || e.key === 'S') {
         e.preventDefault()
-        saveConfig()
+        useAppStore.getState().saveConfig()
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [instances, startInstance, stopInstance, saveConfig])
+  }, [])
 
   return (
     <div className={`h-screen flex overflow-hidden ${darkMode ? 'dark bg-gray-900 text-gray-100' : 'bg-gray-50 text-gray-900'}`}>
@@ -175,8 +184,8 @@ function AppInner() {
         </nav>
         <div className="flex items-center gap-1 shrink-0 pt-3 border-t border-gray-200 dark:border-gray-700">
           <div className="flex-1 flex items-center justify-between text-xs text-gray-500">
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> {instances.filter(i => i.status === 'running').length} {t.nav.up || 'up'}</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-400" /> {instances.filter(i => i.status !== 'running').length} {t.nav.down || 'down'}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500" /> {upCount} {t.nav.up || 'up'}</span>
+            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-slate-400" /> {downCount} {t.nav.down || 'down'}</span>
           </div>
         </div>
         <div className="flex items-center gap-1 shrink-0">

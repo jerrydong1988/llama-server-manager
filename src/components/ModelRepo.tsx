@@ -24,7 +24,7 @@ const ModelRepo = () => {
       setCollapsed(savedCollapsed.current)
       savedCollapsed.current = new Set()
     }
-  }, [searchQuery])
+  }, [searchQuery, collapsed])
 
   useEffect(() => { loadInitialData() }, [loadInitialData])
 

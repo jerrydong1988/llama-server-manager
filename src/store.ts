@@ -102,7 +102,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setEngineDirs: (dirs) => { set({ engineDirs: dirs }); get().saveConfig() },
   setDefaultEngineId: (id) => { set({ defaultEngineId: id }); get().saveConfig() },
   setActiveConfigInstanceId: (id) => set({ activeConfigInstanceId: id }),
-  setActiveTab: (tab) => { set({ activeTab: tab }); try { localStorage.setItem('lastTab', tab) } catch {}; get().saveConfig() },
+  setActiveTab: (tab) => { set({ activeTab: tab }); try { localStorage.setItem('lastTab', tab) } catch {} },
   setDarkMode: (dm) => { set({ darkMode: dm }); document.documentElement.classList.toggle('dark', dm); get().saveConfig() },
 
   addInstance: (instance) => { set((s) => ({ instances: [...s.instances, instance] })); get().saveConfig() },
@@ -540,7 +540,11 @@ listen<{ instanceId: string; status: string }>('health-status', (event) => {
 }).catch(() => {})
 
 // ── 下载任务全局追踪 ──
+let _lastProgressUpdate = 0
 listen<{ fileName: string; repoId: string; source: string; downloaded: number; total: number; speed: number }>('download-progress', (e) => {
+  const now = Date.now()
+  if (now - _lastProgressUpdate < 200) return
+  _lastProgressUpdate = now
   const s = useAppStore.getState()
   const { fileName, repoId, source, downloaded, total, speed } = e.payload
   s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { fileName, repoId, source, downloaded, total, speed, status: 'active' } })

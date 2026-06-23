@@ -279,7 +279,7 @@ const InstanceManager = () => {
                 const pickForCreate = (m: typeof models[0]) => {
                   const dir = pathDirname(m.path)
                   const mmproj = models.find(x => pathDirname(x.path) === dir && x.file_type === 'mmproj')
-                  setNewInst({ ...newInst, modelId: m.id, modelPath: m.path, mmprojPath: mmproj?.path || '' })
+                  setNewInst(prev => ({ ...prev, modelId: m.id, modelPath: m.path, mmprojPath: mmproj?.path || '' }))
                   setShowCreatePicker(false)
                 }
                 function renderNode(node: TNode, depth: number): any {

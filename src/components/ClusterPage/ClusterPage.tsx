@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, Fragment } from 'react'
 import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square, Radio, Zap, StopCircle, Play } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
@@ -295,7 +295,7 @@ export default function ClusterPage() {
             </thead>
             <tbody>
               {workers.map(w => (
-                <>
+                <Fragment key={w.id}>
                   <tr key={w.id} data-testid="worker-row" className="border-t dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800/50">
                     <td className="px-4 py-2">
                       <button onClick={() => toggleExpand(w.id)} className="p-0.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded">
@@ -357,8 +357,9 @@ export default function ClusterPage() {
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               ))}
+
             </tbody>
           </table>
         </div>

@@ -1,6 +1,6 @@
 ﻿import type { InstanceConfig } from '../../store'
 import { defaultInstanceConfig } from '../../store'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Plus, X } from 'lucide-react'
 import { Section, Input, Num, Switch, Select, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
 import { KNOWN_FLAGS } from '../../validators'
@@ -138,6 +138,10 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
   const [entries, setEntries] = useState<{ name: string; value: string }[]>(() => parseArgs(local.custom_args))
   const [newName, setNewName] = useState('')
   const [newVal, setNewVal] = useState('')
+
+  useEffect(() => {
+    setEntries(parseArgs(local.custom_args))
+  }, [local.custom_args])
 
   const addEntry = () => {
     const name = newName.trim()

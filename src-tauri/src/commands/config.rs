@@ -76,35 +76,20 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
         if pb.is_relative() { app_dir.join(d).to_string_lossy().to_string() } else { d.clone() }
     }).collect();
 
-    let mut stored = state.instances.lock().unwrap();
-    *stored = global.instances.clone();
+    {
+        let mut stored = state.instances.lock().unwrap();
+        *stored = global.instances.clone();
+    }
     *state.engine_names.lock().unwrap() = global.engine_names.clone();
 
-    // 恢复仍在运行的后台进程
+    // 恢复仍在运行的后台进程 — 使用 sysinfo 替代 tasklist 子进程（<1ms vs 200-800ms per instance）
     let mut restored = HashMap::new();
-    for (id, ri) in &global.running {
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            let alive = std::process::Command::new("tasklist")
-                .args(["/FI", &format!("PID eq {}", ri.pid), "/NH"])
-                .creation_flags(0x08000000)
-                .output()
-                .map(|o| {
-                    let out = String::from_utf8_lossy(&o.stdout);
-                    // Check PID with word boundaries to avoid substring false match
-                    // (e.g., PID=12 must not match PID=123)
-                    let pid_str = ri.pid.to_string();
-                    out.contains(&format!(" {pid_str} "))
-                        || out.ends_with(&format!(" {pid_str}\r\n"))
-                        || out.ends_with(&format!(" {pid_str}\n"))
-                })
-                .unwrap_or(false);
-            if alive { restored.insert(id.clone(), ri.clone()); }
-        }
-        #[cfg(not(windows))]
-        {
-            let alive = std::process::Command::new("kill").arg("-0").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false);
+    {
+        use sysinfo::System;
+        let mut sys = System::new();
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+        for (id, ri) in &global.running {
+            let alive = sys.process(sysinfo::Pid::from_u32(ri.pid)).is_some();
             if alive { restored.insert(id.clone(), ri.clone()); }
         }
     }
@@ -122,14 +107,15 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
         let app2 = app.clone();
         let config_dir = config_dir.clone();
 
-        // 健康检查
-        let api_key_health = stored.get(&id_hc).and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key.clone()) }).unwrap_or_default();
+        let api_key_health = {
+            let stored = state.instances.lock().unwrap();
+            stored.get(&id_hc).and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key.clone()) }).unwrap_or_default()
+        };
         let api_key_reconnect = api_key_health.clone();
         std::thread::spawn(move || {
             crate::commands::server::health_check_loop(&id_hc, &host, port, pid, &api_key_health, app);
         });
 
-        // 日志 tail + 指标推送
         crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir, &api_key_reconnect, app2);
     }
     let _ = app.emit("startup-timing", serde_json::json!({

@@ -18,9 +18,9 @@ export default function Dashboard() {
   // Poll system health every 5s — delay first call to avoid startup storm
   useEffect(() => {
     const fetch = () => invoke<any>('get_system_health').then(setSysMetrics).catch(() => {})
-    setTimeout(fetch, 500)
+    const timeoutId = setTimeout(fetch, 500)
     const timer = setInterval(fetch, 5000)
-    return () => clearInterval(timer)
+    return () => { clearTimeout(timeoutId); clearInterval(timer) }
   }, [])
 
   return (
