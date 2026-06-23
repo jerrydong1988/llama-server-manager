@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Server, Database, Cpu, BarChart3, ArrowRight } from 'lucide-react'
-import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { useAppStore } from '../../store'
+import { _startupTimings } from '../../store'
 import { useI18n } from '../../i18n'
 import StatCard from './StatCard'
 import SysResourceBar from './SysResourceBar'
@@ -12,16 +12,6 @@ export default function Dashboard() {
   const { t } = useI18n()
   const { instances, models, engines, setActiveTab } = useAppStore()
   const [sysMetrics, setSysMetrics] = useState<any>(null)
-  const [startupTiming, setStartupTiming] = useState<{ name: string; ms: number }[]>([])
-
-  // Startup performance instrumentation
-  useEffect(() => {
-    const unlisten = listen<{ name: string; ms: number }>('startup-timing', (e) => {
-      setStartupTiming(prev => [...prev, e.payload])
-    })
-    return () => { unlisten.then(fn => fn()) }
-  }, [])
-
   const runningInstances = instances.filter(i => i.status === 'running')
   const stoppedInstances = instances.filter(i => i.status !== 'running')
 
@@ -85,17 +75,15 @@ export default function Dashboard() {
       )}
 
       {/* 启动耗时打点 */}
-      {startupTiming.length > 0 && (
-        <details className="mt-4 text-xs">
-          <summary className="text-gray-400 cursor-pointer hover:text-gray-600 dark:hover:text-gray-300">📊 启动耗时</summary>
-          <div className="mt-2 space-y-0.5 text-gray-500">
-            {startupTiming.map((t, i) => (
-              <div key={i}>{t.name}: {t.ms}ms</div>
-            ))}
-            <div className="text-gray-400">总计: {startupTiming.reduce((s, t) => s + t.ms, 0)}ms</div>
-          </div>
-        </details>
-      )}
+      <details className="mt-4 text-xs">
+        <summary className="text-gray-400 cursor-pointer hover:text-gray-600 dark:hover:text-gray-300">📊 启动耗时</summary>
+        <div className="mt-2 space-y-0.5 text-gray-500">
+          {_startupTimings.map((t, i) => (
+            <div key={i}>{t.name}: {t.ms}ms</div>
+          ))}
+          <div className="text-gray-400">总计: {_startupTimings.reduce((s, t) => s + t.ms, 0)}ms</div>
+        </div>
+      </details>
     </div>
   )
 }

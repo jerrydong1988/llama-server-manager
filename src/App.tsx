@@ -12,6 +12,7 @@ import ClusterPage from './components/ClusterPage/ClusterPage'
 import DownloadManager from './components/DownloadManager'
 import Dashboard from './components/Dashboard/Dashboard'
 import GuidePage from './components/GuidePage'
+import { _startupTimings } from './store'
 import { useAppStore } from './store'
 import type { WorkerInfo } from './store'
 import { I18nProvider, useI18n } from './i18n'
@@ -57,7 +58,11 @@ function AppInner() {
     { id: 'guide', name: '\uD83D\uDCD6 \u4F7F\u7528\u8BF4\u660E', icon: BookOpen, separator: true },
   ]
   // dark mode handled by store setDarkMode
-  useEffect(() => { loadConfig() }, [loadConfig])
+  const _mountTime = performance.now()
+  useEffect(() => {
+    _startupTimings.push({ name: 'app-mount', ms: Math.round(performance.now() - _mountTime) })
+    loadConfig()
+  }, [loadConfig]) // eslint-disable-line
 
   // 自动启动标记了 auto_start 的实例
   useEffect(() => {

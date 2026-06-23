@@ -5,6 +5,9 @@ import { message } from '@tauri-apps/plugin-dialog'
 import { pathBasename } from './utils/path'
 import { startTransition } from 'react'
 
+// ── 启动性能打点 — 模块级数组，Dashboard 直接读取 ──
+export const _startupTimings: { name: string; ms: number }[] = []
+
 // Re-exports from split modules
 export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState, WorkerInfo, WorkerDevice, WorkerStatus, Usb4Adapter } from './store/types'
 export { defaultInstanceConfig } from './store/defaults'
@@ -251,6 +254,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   loadConfig: async () => {
+    const t0 = performance.now()
     try {
       const global = await invoke<{
         instances: Record<string, InstanceConfig>
@@ -295,6 +299,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           .catch(() => {})
       }, 200)
     } catch (e) { console.error('load_config error:', e) }
+    _startupTimings.push({ name: 'loadConfig', ms: Math.round(performance.now() - t0) })
   },
 
   // ── ModelScope ──────────────────────────────────────────────────
