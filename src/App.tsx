@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3, BookOpen } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
 import InstanceManager from './components/InstanceManager'
@@ -59,6 +60,10 @@ function AppInner() {
   ]
   // dark mode handled by store setDarkMode
   const _mountTime = performance.now()
+  // Show window after React renders — eliminates black flash on startup
+  useEffect(() => {
+    requestAnimationFrame(() => { requestAnimationFrame(() => { getCurrentWindow().show() }) })
+  }, [])
   useEffect(() => {
     _startupTimings.push({ name: 'app-mount', ms: Math.round(performance.now() - _mountTime) })
     loadConfig()
