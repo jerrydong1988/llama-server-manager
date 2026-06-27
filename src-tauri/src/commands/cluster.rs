@@ -17,6 +17,14 @@ pub(crate) const RPC_SERVER_NAME: &str = "rpc-server.exe";
 #[cfg(not(target_os = "windows"))]
 pub(crate) const RPC_SERVER_NAME: &str = "rpc-server";
 
+const VIRTUAL_KEYWORDS: &[&str] = &[
+    "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
+    "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
+    "p2p", "rndis", "usb", "bluetooth", "loopback",
+    "mihomo", "clash", "cfw", "tunnel", "sing-box", "hysteria",
+    "wireguard", "zerotier", "tailscale", "nebula",
+];
+
 // ═══════════════════════════════════════════════════════════════════
 // 持久化
 // ═══════════════════════════════════════════════════════════════════
@@ -64,15 +72,7 @@ pub(crate) fn save_workers(workers: &[WorkerInfo]) {
 fn get_lan_prefixes() -> Vec<String> {
     let mut prefixes = Vec::new();
 
-    // 虚拟网卡名称关键字（不区分大小写）
-    let virtual_keywords = [
-        "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
-        "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
-        "p2p", "rndis", "usb", "bluetooth", "loopback",
-        "mihomo", "clash", "cfw", "tunnel", "sing-box", "hysteria",
-        "wireguard", "zerotier", "tailscale", "nebula",
-    ];
-
+    // 虚拟网卡名称关键字（不区分大小写）— 使用全局常量
     if let Ok(ifs) = if_addrs::get_if_addrs() {
         for iface in ifs {
             if iface.is_loopback() { continue; }
@@ -94,7 +94,7 @@ fn get_lan_prefixes() -> Vec<String> {
 
             // 排除虚拟网卡名
             let name_lower = iface.name.to_lowercase();
-            if virtual_keywords.iter().any(|k| name_lower.contains(k)) { continue; }
+            if VIRTUAL_KEYWORDS.iter().any(|k| name_lower.contains(k)) { continue; }
 
             let prefix = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
             if !prefixes.contains(&prefix) {
@@ -123,13 +123,7 @@ fn get_physical_ips() -> Vec<Ipv4Addr> {
         for iface in ifs {
             if iface.is_loopback() { continue; }
             let name_lower = iface.name.to_lowercase();
-            let is_virtual = [
-                "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
-                "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
-                "p2p", "rndis", "bluetooth", "loopback",
-                "mihomo", "clash", "cfw", "tunnel", "sing-box", "hysteria",
-                "wireguard", "zerotier", "tailscale", "nebula",
-            ].iter().any(|k| name_lower.contains(k));
+            let is_virtual = VIRTUAL_KEYWORDS.iter().any(|k| name_lower.contains(k));
             if is_virtual { continue; }
             if let IpAddr::V4(ipv4) = iface.addr.ip() {
                 let octets = ipv4.octets();
@@ -373,13 +367,7 @@ pub async fn get_local_host() -> Result<String, String> {
             if iface.is_loopback() { continue; }
             if let IpAddr::V4(ipv4) = iface.addr.ip() {
                 let name_lower = iface.name.to_lowercase();
-                let is_virtual = [
-                    "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
-                    "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
-                    "p2p", "rndis", "bluetooth", "loopback",
-                    "mihomo", "clash", "cfw", "tunnel", "sing-box", "hysteria",
-                    "wireguard", "zerotier", "tailscale", "nebula",
-                ].iter().any(|k| name_lower.contains(k));
+                let is_virtual = VIRTUAL_KEYWORDS.iter().any(|k| name_lower.contains(k));
                 if !is_virtual {
                     return Ok(ipv4.to_string());
                 }
@@ -588,18 +576,26 @@ pub async fn start_local_rpc(engine_dir: Option<String>, port: u16) -> Result<se
         }
         #[cfg(not(target_os = "windows"))]
         {
-            std::process::Command::new("sh")
-                .arg("-c")
-                .arg(&format!("nohup '{}' --host 0.0.0.0 --port {} > /dev/null 2>&1 &", binary, port))
+            let log_path = format!("/tmp/rpc-server-{}.log", port);
+            let log_file = std::fs::File::create(&log_path)
+                .map_err(|e| format!("无法创建日志文件: {}", e))?;
+            std::process::Command::new("nohup")
+                .arg(&binary)
+                .args(["--host", "0.0.0.0", "--port", &port.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(log_file))
+                .stderr(Stdio::null())
                 .spawn()
-                .map_err(|e| format!("无法启动: {}", e))?;
+                .map_err(|e| format!("无法启动 {}: {}", binary, e))?;
         }
 
         // 等待端口就绪
         std::thread::sleep(std::time::Duration::from_secs(2));
         let addr = format!("127.0.0.1:{}", port);
+        let sock_addr = addr.parse::<std::net::SocketAddr>()
+            .map_err(|e| format!("地址解析失败 ({}): {}", addr, e))?;
         match std::net::TcpStream::connect_timeout(
-            &addr.parse().unwrap(),
+            &sock_addr,
             std::time::Duration::from_secs(3),
         ) {
             Ok(_) => Ok(serde_json::json!({ "ok": true, "port": port })),

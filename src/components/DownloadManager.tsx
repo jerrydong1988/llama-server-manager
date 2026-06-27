@@ -5,13 +5,23 @@ import type { DownloadProgress } from '../store/types'
 import { useI18n } from '../i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { pathJoin } from '../utils/path'
+import { formatSize, formatSpeed, formatETA } from '../utils/format'
 
 type DownloadSource = 'modelscope' | 'huggingface'
 const DEFAULT_SAVE_DIR = 'models'
 
 export default function DownloadManager() {
   const { t } = useI18n()
-  const { downloadTasks, downloadQueue, setDownloadTasks, cancelFileDownload, cancelAndCleanupDownload, removeFromDownloadQueue, addToDownloadQueue, browseModelscope, browseHuggingface, pauseFileDownload } = useAppStore()
+  const downloadTasks = useAppStore(s => s.downloadTasks)
+  const downloadQueue = useAppStore(s => s.downloadQueue)
+  const setDownloadTasks = useAppStore(s => s.setDownloadTasks)
+  const cancelFileDownload = useAppStore(s => s.cancelFileDownload)
+  const cancelAndCleanupDownload = useAppStore(s => s.cancelAndCleanupDownload)
+  const removeFromDownloadQueue = useAppStore(s => s.removeFromDownloadQueue)
+  const addToDownloadQueue = useAppStore(s => s.addToDownloadQueue)
+  const browseModelscope = useAppStore(s => s.browseModelscope)
+  const browseHuggingface = useAppStore(s => s.browseHuggingface)
+  const pauseFileDownload = useAppStore(s => s.pauseFileDownload)
   const [source, setSource] = useState<DownloadSource>('modelscope')
   const [repoId, setRepoId] = useState('')
   const [files, setFiles] = useState<MsFileEntry[]>([])
@@ -22,27 +32,6 @@ export default function DownloadManager() {
     try { return localStorage.getItem('downloadSaveDir') || DEFAULT_SAVE_DIR }
     catch { return DEFAULT_SAVE_DIR }
   })
-
-  const fmtSize = (n: number) => {
-    if (n < 1024) return n + ' B'
-    if (n < 1024 * 1024) return (n / 1024).toFixed(2) + ' KB'
-    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(2) + ' MB'
-    return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
-  }
-
-  const fmtSpeed = (n: number) => {
-    if (n < 1024) return n.toFixed(0) + ' B/s'
-    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB/s'
-    return (n / 1024 / 1024).toFixed(1) + ' MB/s'
-  }
-
-  const fmtETA = (downloaded: number, total: number, speed: number) => {
-    if (speed <= 0 || total <= 0) return ''
-    const secs = Math.ceil((total - downloaded) / speed)
-    if (secs < 60) return `${secs}s`
-    if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`
-    return `${Math.floor(secs / 3600)}h ${Math.floor((secs % 3600) / 60)}m`
-  }
 
   const modelTypeLabel = (fileType: string) => {
     switch (fileType) { case 'mmproj': return t.modelRepo.typeMmproj; case 'imatrix': return t.modelRepo.typeImatrix; default: return t.modelRepo.typeModel }
@@ -183,7 +172,7 @@ export default function DownloadManager() {
       {files.length > 0 && (
         <div>
           <div className="flex items-center justify-between mb-2">
-            <div className="text-xs text-gray-500">{status} · {fmtSize(files.reduce((s,f)=>s+f.size,0))}</div>
+            <div className="text-xs text-gray-500">{status} · {formatSize(files.reduce((s,f)=>s+f.size,0))}</div>
             <button onClick={handleDownloadAll} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs">
               ⬇ {t.downloadPage.downloadAll} ({files.filter(f => downloadTasks[f.name]?.status !== 'completed').length} {t.downloadPage.files})
             </button>
@@ -195,7 +184,7 @@ export default function DownloadManager() {
                 <div key={f.path} className="px-4 py-2.5 space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-sm truncate flex-1 mr-2">{f.name}</span>
-                    <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ml-2 ${modelTypeColor(f.file_type)}`}>{modelTypeLabel(f.file_type)}</span> · {fmtSize(f.size)}
+                    <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ml-2 ${modelTypeColor(f.file_type)}`}>{modelTypeLabel(f.file_type)}</span> · {formatSize(f.size)}
                   </div>
                   {task && (task.status === 'active' || task.status === 'queued') && (
                     <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
@@ -205,13 +194,13 @@ export default function DownloadManager() {
                   <div className="flex items-center gap-2">
                     {task?.status === 'active' ? (
                       <>
-                        <span className="text-xs text-blue-500">{fmtSize(task.downloaded)}/{fmtSize(task.total)} · {fmtSpeed(task.speed||0)} · {fmtETA(task.downloaded,task.total,task.speed||0)}</span>
+                        <span className="text-xs text-blue-500">{formatSize(task.downloaded)}/{formatSize(task.total)} · {formatSpeed(task.speed||0)} · {formatETA(task.downloaded,task.total,task.speed||0)}</span>
                         <button onClick={() => handlePause(f)} className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
                         <button onClick={() => handleCancel(f)} className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                       </>
                     ) : task?.status === 'paused' ? (
                       <>
-                        <span className="text-xs text-yellow-500">{fmtSize(task.downloaded)}/{fmtSize(task.total)}</span>
+                        <span className="text-xs text-yellow-500">{formatSize(task.downloaded)}/{formatSize(task.total)}</span>
                         <button onClick={() => handleDownloadFile(f)} className="text-xs text-green-500 hover:text-green-700">{t.modelRepo.resume}</button>
                         <button onClick={() => handleCancel(f)} className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                       </>
@@ -240,7 +229,7 @@ export default function DownloadManager() {
             {downloadQueue.map(entry => (
               <div key={entry.id} className="flex items-center justify-between px-3 py-1.5 bg-gray-50 dark:bg-gray-800 rounded text-xs">
                 <span className="truncate flex-1">{entry.source}:{entry.repoId} · {entry.files.length} file{entry.files.length>1?'s':''}</span>
-                <span className="text-gray-400 mx-2">{fmtSize(entry.files.reduce((s,f)=>s+f.size,0))}</span>
+                <span className="text-gray-400 mx-2">{formatSize(entry.files.reduce((s,f)=>s+f.size,0))}</span>
                 <button onClick={() => removeFromDownloadQueue(entry.id)} className="text-red-400 hover:text-red-600 ml-1">✕</button>
               </div>
             ))}
@@ -255,7 +244,7 @@ export default function DownloadManager() {
           <div className="space-y-3">
             {activeGroups.map(g => (
               <div key={g.key} className="border dark:border-gray-700 rounded-lg overflow-hidden">
-                <div className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-sm font-medium">{g.key} · {g.files.length} files · {fmtSize(g.files.reduce((s,f)=>s+f.total,0))}</div>
+                <div className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-sm font-medium">{g.key} · {g.files.length} files · {formatSize(g.files.reduce((s,f)=>s+f.total,0))}</div>
                 <div className="divide-y dark:divide-gray-700">
                   {g.files.map(f => (
                     <div key={f.fileName} className="px-4 py-2.5 space-y-1">
@@ -282,8 +271,8 @@ export default function DownloadManager() {
                         <div className={`h-full rounded-full ${f.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{width:`${f.total>0?Math.min(100,(f.downloaded/f.total)*100):0}%`}} />
                       </div>
                       <div className="flex justify-between text-xs text-gray-400">
-                        <span>{fmtSize(f.downloaded)}/{fmtSize(f.total)}</span>
-                        {f.status === 'paused' ? <span className="text-yellow-500">已暂停</span> : <span>{fmtSpeed(f.speed||0)} · {fmtETA(f.downloaded,f.total,f.speed||0)}</span>}
+                        <span>{formatSize(f.downloaded)}/{formatSize(f.total)}</span>
+                        {f.status === 'paused' ? <span className="text-yellow-500">已暂停</span> : <span>{formatSpeed(f.speed||0)} · {formatETA(f.downloaded,f.total,f.speed||0)}</span>}
                       </div>
                     </div>
                   ))}
@@ -311,7 +300,7 @@ export default function DownloadManager() {
                       <div>
                         <span>{f.fileName}</span>
                         <span className={`ml-2 ${f.status==='completed'?'text-green-500':'text-gray-400'}`}>
-                          {f.status==='completed'?`✓ ${fmtSize(f.total)}`:`${t.modelRepo.cancelled} · ${fmtSize(f.downloaded)}/${fmtSize(f.total)}`}
+                          {f.status==='completed'?`✓ ${formatSize(f.total)}`:`${t.modelRepo.cancelled} · ${formatSize(f.downloaded)}/${formatSize(f.total)}`}
                         </span>
                       </div>
                       {f.path && (

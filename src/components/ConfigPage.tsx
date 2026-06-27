@@ -84,7 +84,7 @@ const ConfigPage = () => {
     setTimeout(() => { if (mountedRef.current) { setSaved(false); setSaveWarnings([]) } }, 6000)
   }
 
-  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => { setPickerTarget('model'); setShowPicker(true) }, onShowDraftPicker: () => { setPickerTarget('draft'); setShowPicker(true) }, activeParams: local ? getActiveParams(local, isEmbedding) : new Set() as Set<keyof InstanceConfig>, searchQuery }
+  const sectionProps = { local, set, t, isEmbedding, onShowPicker: () => { setPickerTarget('model'); setShowPicker(true) }, onShowDraftPicker: () => { setPickerTarget('draft'); setShowPicker(true) }, activeParams: local ? getActiveParams(local, isEmbedding) : new Set<keyof InstanceConfig>(), searchQuery }
 
   return (
     <div className="space-y-6">

@@ -23,22 +23,30 @@ fn detect_remote_os(host: &str, ssh_user: &str, ssh_key_path: Option<&str>, ssh_
     })
 }
 
+fn escape_shell_single_quote(s: &str) -> String {
+    s.replace('\'', "'\\''")
+}
+
 fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
     match remote_os {
-        "linux" | "macos" => format!(
-            "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
-            binary, port, port, port, port, port
-        ),
+        "linux" | "macos" => {
+            let safe_binary = escape_shell_single_quote(binary);
+            format!(
+                "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
+                safe_binary, port, port, port, port, port
+            )
+        },
         "windows" => format!(
-            // #2: PowerShell 单引号字符串内只需转义单引号自身（加倍），
-            // $ " ` ( ) 在单引号内均无特殊含义，此转义安全。
             "powershell -Command \"[Console]::OutputEncoding=[Text.Encoding]::UTF8; $tn='rpc-'+[System.Guid]::NewGuid().ToString('N').Substring(0,8); $a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-WindowStyle Hidden -NoLogo -NonInteractive -Command \"\"& ''{0}'' --host 0.0.0.0 --port {1}\"\"'; $t=New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(2); Register-ScheduledTask -TaskName $tn -Action $a -Trigger $t -Force|Out-Null; Start-ScheduledTask -TaskName $tn|Out-Null; Start-Sleep 5; $f=netstat -an 2>$null|Select-String ':{1} '; if($f){{Write-Output 'PORT-OK'}}else{{Write-Output 'PORT-NOT-FOUND'}}; Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue\"",
             binary.replace('\'', "''"), port
         ),
-        _ => format!(
-            "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
-            binary, port, port, port, port, port
-        ),
+        _ => {
+            let safe_binary = escape_shell_single_quote(binary);
+            format!(
+                "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
+                safe_binary, port, port, port, port, port
+            )
+        },
     }
 }
 
@@ -109,8 +117,10 @@ pub async fn ssh_launch_rpc(
         }
 
         // 远程验证通过 — 本地再做一次确认
+        let sock_addr = format!("{}:{}", host, rpc_port).parse::<std::net::SocketAddr>()
+            .map_err(|e| format!("地址解析失败 ({}:{}): {}", host, rpc_port, e))?;
         match TcpStream::connect_timeout(
-            &format!("{}:{}", host, rpc_port).parse().unwrap(),
+            &sock_addr,
             std::time::Duration::from_secs(5),
         ) {
             Ok(_) => Ok(serde_json::json!({ "ok": true, "host": host, "port": rpc_port, "remote_os": os })),

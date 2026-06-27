@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, lazy, Suspense } from 'react'
+import { useState, useEffect, useMemo, useRef, lazy, Suspense, Component, ReactNode } from 'react'
 import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3, BookOpen } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
@@ -17,8 +17,35 @@ import { useAppStore } from './store'
 import type { WorkerInfo } from './store'
 import { I18nProvider, useI18n } from './i18n'
 
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: ReactNode }) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error }
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+          <div className="text-center max-w-md p-6">
+            <h2 className="text-xl font-bold mb-2">页面渲染出错</h2>
+            <p className="text-sm text-gray-500 mb-4">{this.state.error?.message || '未知错误'}</p>
+            <button onClick={() => this.setState({ hasError: false, error: null })}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+              重试
+            </button>
+          </div>
+        </div>
+      )
+    }
+    return this.props.children
+  }
+}
+
 // Moved outside AppInner to avoid re-creation on each render
-const TAB_CONTENT: Record<string, () => JSX.Element> = {
+const TAB_CONTENT: Record<string, () => React.ReactElement> = {
   instances: () => <InstanceManager />,
   'model-repo': () => <ModelRepo />,
   dashboard: () => <Dashboard />,
@@ -67,11 +94,20 @@ function AppInner() {
     { id: 'guide', name: '\uD83D\uDCD6 \u4F7F\u7528\u8BF4\u660E', icon: BookOpen, separator: true },
   ], [t, upCount])
   // dark mode handled by store setDarkMode
-  const _mountTime = performance.now()
+  const mountTimeRef = useRef(performance.now())
+  const [configLoaded, setConfigLoaded] = useState(false)
+
+  // 窗口立即显示 — React 首次渲染骨架 UI 后就调用 show_window
+  // 不等 loadConfig，用户立即看到可拖动窗口 + 加载动画
+  const windowShownRef = useRef(false)
   useEffect(() => {
-    _startupTimings.push({ name: 'app-mount', ms: Math.round(performance.now() - _mountTime) })
-    loadConfig()
-  }, [loadConfig]) // eslint-disable-line
+    _startupTimings.push({ name: 'app-mount', ms: Math.round(performance.now() - mountTimeRef.current) })
+    if (!windowShownRef.current) {
+      windowShownRef.current = true
+      invoke('show_window').catch(() => {})
+    }
+    loadConfig().then(() => setConfigLoaded(true)).catch(() => setConfigLoaded(true))
+  }, [loadConfig])
 
   // 自动启动标记了 auto_start 的实例 — 等待 engines 加载完毕再启动
   useEffect(() => {
@@ -81,14 +117,14 @@ function AppInner() {
     if (engines.length === 0) return // engines 尚未加载，等待 load_app_data 完成
     setAutoStarted(true)
 
+    let cancelled = false
     const boot = async () => {
-      // 集群实例：检查是否有匹配的 worker
       const currentWorkers = useAppStore.getState().workers.length > 0
         ? useAppStore.getState().workers
         : await invoke<WorkerInfo[]>('get_workers').catch(() => [])
 
       for (const inst of toBoot) {
-        // 集群实例 rpc_servers 检查
+        if (cancelled) return
         if (inst.config.rpc_servers) {
           const configuredServers = inst.config.rpc_servers.split(/[, ]+/).filter(Boolean)
           const hasMatchingWorker = currentWorkers.some(w =>
@@ -108,12 +144,15 @@ function AppInner() {
       }
     }
     boot()
+    return () => { cancelled = true }
   }, [instances, engines, autoStarted, startInstance])
 
   // 自动更新检查 (前端 fetch 走 Chromium 网络栈, 兼容TUN/Clash)
   useEffect(() => {
+    const controller = new AbortController()
     fetch('https://api.github.com/repos/jerrydong1988/llama-server-manager/releases/latest', {
-      headers: { 'Accept': 'application/vnd.github+json' }
+      headers: { 'Accept': 'application/vnd.github+json' },
+      signal: controller.signal,
     })
     .then(r => r.json())
     .then(json => {
@@ -132,6 +171,7 @@ function AppInner() {
       if (has) setUpdateInfo({ latest_version: latest, url: json.html_url || '' })
     })
     .catch(() => {})
+    return () => controller.abort()
   }, [])
 
   // 键盘快捷键 — 使用 getState() 避免依赖频繁变化
@@ -224,7 +264,14 @@ function AppInner() {
         )}
       </div>
       <div className="flex-1 overflow-y-auto">
-        {activeTab === 'logs' ? (
+        {!configLoaded ? (
+          <div className="h-full flex items-center justify-center">
+            <div className="text-center">
+              <div className="w-10 h-10 border-3 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-3" style={{ borderWidth: '3px' }} />
+              <p className="text-sm text-gray-400">{t.common?.loading || '加载中...'}</p>
+            </div>
+          </div>
+        ) : activeTab === 'logs' ? (
           <Suspense fallback={null}><LogsViewer /></Suspense>
         ) : activeTab === 'guide' ? (
           <Suspense fallback={null}><GuidePage /></Suspense>
@@ -239,7 +286,7 @@ function AppInner() {
 }
 
 function App() {
-  return <I18nProvider><AppInner /></I18nProvider>
+  return <I18nProvider><ErrorBoundary><AppInner /></ErrorBoundary></I18nProvider>
 }
 
 export default App

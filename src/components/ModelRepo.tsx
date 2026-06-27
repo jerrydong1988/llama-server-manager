@@ -1,13 +1,21 @@
-﻿import { useState, useEffect, useRef } from "react"
+﻿import { useState, useEffect, useRef, useMemo } from "react"
 import { Search, FolderOpen, Trash2, RefreshCw, ChevronDown, ChevronRight, File, Image } from "lucide-react"
 import { useAppStore, type ModelInfo } from "../store"
 import { useI18n } from "../i18n"
 import { listen } from "@tauri-apps/api/event"
 import { confirm } from "@tauri-apps/plugin-dialog"
 import { normalizePath, pathJoin } from "../utils/path"
+import { formatSize } from "../utils/format"
 
 const ModelRepo = () => {
-  const { models, modelDirs, setModelDirs, scanModels, isLoading, loadInitialData, deleteModelFile, openModelFolder } = useAppStore()
+  const models = useAppStore(s => s.models)
+  const modelDirs = useAppStore(s => s.modelDirs)
+  const setModelDirs = useAppStore(s => s.setModelDirs)
+  const scanModels = useAppStore(s => s.scanModels)
+  const isLoading = useAppStore(s => s.isLoading)
+  const loadInitialData = useAppStore(s => s.loadInitialData)
+  const deleteModelFile = useAppStore(s => s.deleteModelFile)
+  const openModelFolder = useAppStore(s => s.openModelFolder)
   const { t } = useI18n()
   const [searchQuery, setSearchQuery] = useState("")
   const [scanError, setScanError] = useState("")
@@ -71,7 +79,7 @@ const ModelRepo = () => {
     }
     return root
   }
-  const trees = modelDirs.map(d => buildTree(d, models))
+  const trees = useMemo(() => modelDirs.map(d => buildTree(d, models)), [modelDirs, models])
   function countDir(node: TreeNode): { models: number; mmproj: number; imatrix: number } {
     if (!node.isDir) {
       const ft = node.model!.file_type
@@ -84,12 +92,6 @@ const ModelRepo = () => {
     let m = 0, p = 0, x = 0
     if (node.children) for (const child of node.children.values()) { const c = countDir(child); m += c.models; p += c.mmproj; x += c.imatrix }
     return { models: m, mmproj: p, imatrix: x }
-  }
-  const formatSize = (bytes: number) => {
-    if (bytes < 1024) return bytes + " B"
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + " KB"
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + " MB"
-    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + " GB"
   }
   const handleScan = async () => { const err = await scanModels(modelDirs); if (err) setScanError(err); else setScanError("") }
   const handleAddDirectory = async () => {

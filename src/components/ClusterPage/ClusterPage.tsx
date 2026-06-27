@@ -7,7 +7,14 @@ import { ask, open } from '@tauri-apps/plugin-dialog'
 
 export default function ClusterPage() {
   const { t } = useI18n()
-  const { workers, clusterScanning, setWorkers, removeWorker, setClusterScanning, updateWorker, engines, defaultEngineId } = useAppStore()
+  const workers = useAppStore(s => s.workers)
+  const clusterScanning = useAppStore(s => s.clusterScanning)
+  const setWorkers = useAppStore(s => s.setWorkers)
+  const removeWorker = useAppStore(s => s.removeWorker)
+  const setClusterScanning = useAppStore(s => s.setClusterScanning)
+  const updateWorker = useAppStore(s => s.updateWorker)
+  const engines = useAppStore(s => s.engines)
+  const defaultEngineId = useAppStore(s => s.defaultEngineId)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [formData, setFormData] = useState({ host: '', port: 50052, name: '' })

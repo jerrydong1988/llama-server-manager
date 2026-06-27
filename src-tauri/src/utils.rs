@@ -190,7 +190,6 @@ pub fn detect_backend(dir: &Path) -> String {
 
 // ── 获取应用目录 ──────────────────────────────────────────────────
 pub fn get_app_dir() -> PathBuf {
-    use std::path::PathBuf;
     std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("."))
         .parent()

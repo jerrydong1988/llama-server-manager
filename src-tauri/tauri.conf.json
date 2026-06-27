@@ -10,19 +10,9 @@
     "beforeBuildCommand": "vite build"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Llama服务器管理器",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1024,
-        "minHeight": 720,
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; connect-src 'self' https://modelscope.cn https://www.modelscope.cn https://huggingface.co https://api.github.com; frame-src 'none'; object-src 'none'"
     }
   },
   "bundle": {

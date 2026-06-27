@@ -9,7 +9,6 @@
     "core:event:allow-emit",
     "dialog:default",
     "dialog:allow-open",
-    "shell:default",
     "shell:allow-open"
   ]
 }

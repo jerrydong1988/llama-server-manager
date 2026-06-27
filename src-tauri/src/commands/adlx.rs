@@ -64,7 +64,7 @@ pub fn collect_metrics() -> Option<AdlxMetrics> {
         Err(e) => {
             let msg = if let Some(s) = e.downcast_ref::<String>() { s.clone() }
                 else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
-                else { "?" .into() };
+                else { "?".to_string() };
             eprintln!("[adlx] PANIC: {}", msg);
             None
         }

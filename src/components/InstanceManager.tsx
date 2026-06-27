@@ -8,7 +8,21 @@ import { useI18n } from '../i18n'
 import { normalizePath, pathJoin, pathDirname } from '../utils/path'
 
 const InstanceManager = () => {
-  const { instances, addInstance, deleteInstance, startInstance, stopInstance, openBrowser, generateCommand, models, modelDirs, engines, defaultEngineId, setActiveConfigInstanceId, setActiveTab, moveInstance, renameInstance } = useAppStore()
+  const instances = useAppStore(s => s.instances)
+  const addInstance = useAppStore(s => s.addInstance)
+  const deleteInstance = useAppStore(s => s.deleteInstance)
+  const startInstance = useAppStore(s => s.startInstance)
+  const stopInstance = useAppStore(s => s.stopInstance)
+  const openBrowser = useAppStore(s => s.openBrowser)
+  const generateCommand = useAppStore(s => s.generateCommand)
+  const models = useAppStore(s => s.models)
+  const modelDirs = useAppStore(s => s.modelDirs)
+  const engines = useAppStore(s => s.engines)
+  const defaultEngineId = useAppStore(s => s.defaultEngineId)
+  const setActiveConfigInstanceId = useAppStore(s => s.setActiveConfigInstanceId)
+  const setActiveTab = useAppStore(s => s.setActiveTab)
+  const moveInstance = useAppStore(s => s.moveInstance)
+  const renameInstance = useAppStore(s => s.renameInstance)
   const { t } = useI18n()
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCmdModal, setShowCmdModal] = useState('')

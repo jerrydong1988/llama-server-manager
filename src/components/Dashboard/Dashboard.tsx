@@ -10,7 +10,10 @@ import InstanceRow from './InstanceRow'
 
 export default function Dashboard() {
   const { t } = useI18n()
-  const { instances, models, engines, setActiveTab } = useAppStore()
+  const instances = useAppStore(s => s.instances)
+  const models = useAppStore(s => s.models)
+  const engines = useAppStore(s => s.engines)
+  const setActiveTab = useAppStore(s => s.setActiveTab)
   const [sysMetrics, setSysMetrics] = useState<any>(null)
   const runningInstances = instances.filter(i => i.status === 'running')
   const stoppedInstances = instances.filter(i => i.status !== 'running')
@@ -18,7 +21,7 @@ export default function Dashboard() {
   // Poll system health every 5s — delay first call to avoid startup storm
   useEffect(() => {
     const fetch = () => invoke<any>('get_system_health').then(setSysMetrics).catch(() => {})
-    const timeoutId = setTimeout(fetch, 500)
+    const timeoutId = setTimeout(fetch, 2000)
     const timer = setInterval(fetch, 5000)
     return () => { clearTimeout(timeoutId); clearInterval(timer) }
   }, [])

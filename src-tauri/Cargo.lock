@@ -2117,12 +2117,13 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "llama-server-manager"
-version = "2.9.18"
+version = "2.9.19"
 dependencies = [
  "bytes",
  "chrono",
  "futures-util",
  "if-addrs",
+ "libc",
  "libloading 0.8.9",
  "mdns-sd",
  "regex-lite",
@@ -2140,6 +2141,7 @@ dependencies = [
  "tokio-util",
  "uuid",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

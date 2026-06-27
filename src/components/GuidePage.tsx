@@ -29,8 +29,14 @@ function renderMD(md: string): string {
 }
 
 function sanitize(html: string): string {
-  return html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
+    .replace(/<embed\b[^>]*>/gi, '')
     .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+    .replace(/javascript:/gi, '')
+    .replace(/vbscript:/gi, '')
 }
 
 // Wait for DOM element with timeout
@@ -60,7 +66,7 @@ const TOUR_STEPS: { sel: string; title: string; desc: string; tab: string }[] = 
 ]
 
 export default function GuidePage() {
-  const { setActiveTab } = useAppStore()
+  const setActiveTab = useAppStore(s => s.setActiveTab)
   const [html, setHtml] = useState('')
   const [toc, setToc] = useState<{ id: string; title: string }[]>([])
   const contentRef = useRef<HTMLDivElement>(null)

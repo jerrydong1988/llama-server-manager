@@ -5,7 +5,17 @@ import { useI18n } from '../i18n'
 import { confirm } from '@tauri-apps/plugin-dialog'
 
 const EngineManager = () => {
-const { engines, scanEngines, loadInitialData, isLoading, deleteEngine, renameEngine, openEngineFolder, defaultEngineId, setDefaultEngineId, engineDirs, setEngineDirs } = useAppStore()
+const engines = useAppStore(s => s.engines)
+const scanEngines = useAppStore(s => s.scanEngines)
+const loadInitialData = useAppStore(s => s.loadInitialData)
+const isLoading = useAppStore(s => s.isLoading)
+const deleteEngine = useAppStore(s => s.deleteEngine)
+const renameEngine = useAppStore(s => s.renameEngine)
+const openEngineFolder = useAppStore(s => s.openEngineFolder)
+const defaultEngineId = useAppStore(s => s.defaultEngineId)
+const setDefaultEngineId = useAppStore(s => s.setDefaultEngineId)
+const engineDirs = useAppStore(s => s.engineDirs)
+const setEngineDirs = useAppStore(s => s.setEngineDirs)
 const { t } = useI18n()
 
 const [editingId, setEditingId] = useState<string | null>(null)

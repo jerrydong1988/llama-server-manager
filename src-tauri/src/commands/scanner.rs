@@ -152,7 +152,20 @@ pub async fn get_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelIn
 
 #[tauri::command]
 pub async fn delete_model_file(path: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    std::fs::remove_file(&path).map_err(|e| format!("删除文件失败: {}", e))?;
+    let p = std::path::Path::new(&path);
+    if p.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase()) != Some("gguf".to_string()) {
+        return Err("只能删除 .gguf 文件".to_string());
+    }
+    let canonical = std::fs::canonicalize(p).map_err(|e| format!("路径无效: {}", e))?;
+    let state_models = state.models.lock().unwrap();
+    let is_known = state_models.iter().any(|m| {
+        std::fs::canonicalize(&m.path).ok().as_ref() == Some(&canonical)
+    });
+    drop(state_models);
+    if !is_known {
+        return Err("文件不在已扫描的模型列表中".to_string());
+    }
+    std::fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
     let mut models = state.models.lock().unwrap();
     models.retain(|m| m.path != path);
     Ok(())
@@ -284,15 +297,10 @@ pub async fn rename_engine(id: String, name: String, state: tauri::State<'_, App
         engine.name = name.clone();
     }
     state.engine_names.lock().unwrap().insert(id, name);
-    // Persist engine names immediately to survive crashes
-    let config_dir = state.config_dir.lock().unwrap().clone();
-    let path = config_dir.join("instances.json");
-    if let Ok(json) = std::fs::read_to_string(&path) {
-        if let Ok(mut global) = serde_json::from_str::<crate::models::GlobalConfig>(&json) {
-            global.engine_names = state.engine_names.lock().unwrap().clone();
-            let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
-        }
-    }
+    // Persist engine names immediately — use unified atomic write to avoid race conditions
+    crate::commands::config::update_and_persist(&state, |global| {
+        global.engine_names = state.engine_names.lock().unwrap().clone();
+    })?;
     Ok(())
 }
 

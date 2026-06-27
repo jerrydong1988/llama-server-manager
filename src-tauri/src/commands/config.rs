@@ -2,7 +2,116 @@ use std::collections::HashMap;
 use crate::models::{AppState, GlobalConfig, InstanceConfig, WindowState};
 use tauri::Emitter;
 
+// ── 统一配置写入工具 ────────────────────────────────────────────
+
+/// 原子写入 instances.json — 所有配置写入操作都应走此函数以避免竞态
+pub fn persist_global_config(config_dir: &std::path::Path, global: &GlobalConfig) -> Result<(), String> {
+    let path = config_dir.join("instances.json");
+    let json = serde_json::to_string_pretty(global).map_err(|e| format!("序列化失败: {}", e))?;
+    let tmp = config_dir.join("instances.json.tmp");
+    std::fs::write(&tmp, &json).map_err(|e| format!("保存失败: {}", e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("保存失败: {}", e))?;
+    let _ = std::fs::copy(&path, config_dir.join("instances.json.bak"));
+    Ok(())
+}
+
+/// 读取现有配置，修改后原子写入 — 用于非 save_config 路径的写入
+pub fn update_and_persist<F>(state: &AppState, update_fn: F) -> Result<(), String>
+where
+    F: FnOnce(&mut GlobalConfig),
+{
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let path = config_dir.join("instances.json");
+    let json = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {}", e))?;
+    let mut global: GlobalConfig = serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
+    update_fn(&mut global);
+    persist_global_config(&config_dir, &global)
+}
+
+/// 轻量级进程存活检查 — 使用 Windows OpenProcess / Unix kill(0) 避免 sysinfo 全量刷新
+fn is_process_alive(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            CloseHandle(handle);
+            true
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        // kill(pid, 0) returns 0 if process exists, -1 with ESRCH if not
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+}
+
 // ── 配置持久化 ────────────────────────────────────────────────────
+
+/// 从磁盘读取配置并 resolve 路径 — 不依赖 AppState，供 main.rs setup() 提前调用
+pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
+    let path = config_dir.join("instances.json");
+
+    let load_json = || -> Result<String, String> {
+        if path.exists() {
+            return std::fs::read_to_string(&path).map_err(|e| format!("{}", e));
+        }
+        let bak = config_dir.join("instances.json.bak");
+        if bak.exists() {
+            let json = std::fs::read_to_string(&bak).map_err(|e| format!("{}", e))?;
+            let _ = std::fs::write(&path, &json);
+            return Ok(json);
+        }
+        Err("no config".into())
+    };
+
+    let json = match load_json() {
+        Ok(j) => j,
+        Err(_) => return GlobalConfig {
+            instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
+            default_engine_id: String::new(), running: HashMap::new(),
+            instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
+            engine_names: HashMap::new(),
+        },
+    };
+
+    let mut global: GlobalConfig = match serde_json::from_str(&json) {
+        Ok(g) => g,
+        Err(_) => return GlobalConfig {
+            instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
+            default_engine_id: String::new(), running: HashMap::new(),
+            instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
+            engine_names: HashMap::new(),
+        },
+    };
+
+    // resolve 相对路径
+    let app_dir = crate::utils::get_data_dir();
+    global.model_dirs = global.model_dirs.iter().map(|d| {
+        let pb = std::path::PathBuf::from(d);
+        if pb.is_relative() { app_dir.join(d).to_string_lossy().to_string() } else { d.clone() }
+    }).collect();
+    global.engine_dirs = global.engine_dirs.iter().map(|d| {
+        let pb = std::path::PathBuf::from(d);
+        if pb.is_relative() { app_dir.join(d).to_string_lossy().to_string() } else { d.clone() }
+    }).collect();
+
+    // 过滤已死的进程
+    let mut restored = HashMap::new();
+    for (id, ri) in &global.running {
+        if is_process_alive(ri.pid) {
+            restored.insert(id.clone(), ri.clone());
+        }
+    }
+    global.running = restored;
+
+    global
+}
+
 #[tauri::command]
 pub async fn save_config(
     instances: HashMap<String, InstanceConfig>,
@@ -19,14 +128,7 @@ pub async fn save_config(
     let global = GlobalConfig { instances: instances.clone(), model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order, last_tab, dark_mode, engine_names };
     let config_dir = state.config_dir.lock().unwrap().clone();
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
-    let path = config_dir.join("instances.json");
-    let json = serde_json::to_string_pretty(&global).map_err(|e| format!("{}", e))?;
-    // Write to disk first, THEN update in-memory state — prevents inconsistency if write fails
-    let tmp = config_dir.join("instances.json.tmp");
-    std::fs::write(&tmp, &json).map_err(|e| format!("保存失败: {}", e))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("保存失败: {}", e))?;
-    let _ = std::fs::copy(&path, config_dir.join("instances.json.bak"));
-    // Only update in-memory state after successful disk write
+    persist_global_config(&config_dir, &global)?;
     let mut stored = state.instances.lock().unwrap();
     *stored = instances;
     Ok(())
@@ -34,67 +136,19 @@ pub async fn save_config(
 
 #[tauri::command]
 pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<GlobalConfig, String> {
-    let _t0 = std::time::Instant::now();
+    let t0 = std::time::Instant::now();
     let config_dir = state.config_dir.lock().unwrap().clone();
-    let path = config_dir.join("instances.json");
 
-    // 尝试加载主配置，失败则尝试备份
-    let load_json = || -> Result<String, String> {
-        if path.exists() {
-            return std::fs::read_to_string(&path).map_err(|e| format!("{}", e));
-        }
-        let bak = config_dir.join("instances.json.bak");
-        if bak.exists() {
-            let json = std::fs::read_to_string(&bak).map_err(|e| format!("{}", e))?;
-            // 恢复备份
-            let _ = std::fs::write(&path, &json);
-            return Ok(json);
-        }
-        Err("no config".into())
-    };
+    // 读取配置（复用 read_config_from_disk，已含进程存活检查）
+    let global = read_config_from_disk(&config_dir);
 
-    let json = match load_json() {
-        Ok(j) => j,
-        Err(_) => return Ok(GlobalConfig {
-            instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
-            default_engine_id: String::new(), running: HashMap::new(),
-            instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
-            engine_names: HashMap::new(),
-        }),
-    };
-
-    let mut global: GlobalConfig = serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
-
-    // 将相对路径的模型/引擎目录 resolve 为绝对路径
-    let app_dir = crate::utils::get_data_dir();
-    global.model_dirs = global.model_dirs.iter().map(|d| {
-        let pb = std::path::PathBuf::from(d);
-        if pb.is_relative() { app_dir.join(d).to_string_lossy().to_string() } else { d.clone() }
-    }).collect();
-    global.engine_dirs = global.engine_dirs.iter().map(|d| {
-        let pb = std::path::PathBuf::from(d);
-        if pb.is_relative() { app_dir.join(d).to_string_lossy().to_string() } else { d.clone() }
-    }).collect();
-
+    // 更新 AppState
     {
         let mut stored = state.instances.lock().unwrap();
         *stored = global.instances.clone();
     }
     *state.engine_names.lock().unwrap() = global.engine_names.clone();
-
-    // 恢复仍在运行的后台进程 — 使用 sysinfo 替代 tasklist 子进程（<1ms vs 200-800ms per instance）
-    let mut restored = HashMap::new();
-    {
-        use sysinfo::System;
-        let mut sys = System::new();
-        sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-        for (id, ri) in &global.running {
-            let alive = sys.process(sysinfo::Pid::from_u32(ri.pid)).is_some();
-            if alive { restored.insert(id.clone(), ri.clone()); }
-        }
-    }
-    *state.running.lock().unwrap() = restored.clone();
-    global.running = restored.clone();
+    *state.running.lock().unwrap() = global.running.clone();
 
     // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
     for (id, ri) in &global.running {
@@ -118,13 +172,25 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
 
         crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir, &api_key_reconnect, app2);
     }
+
+    let t_total = t0.elapsed().as_millis();
     let _ = app.emit("startup-timing", serde_json::json!({
-        "name": "load-config", "ms": _t0.elapsed().as_millis()
+        "name": "load-config-rust", "ms": t_total
     }));
     Ok(global)
 }
 
 // ── 窗口状态 ─────────────────────────────────────────────────────
+
+/// 从磁盘读取窗口状态 — 供 main.rs setup() 直接调用
+pub fn read_window_state_from_disk(config_dir: &std::path::Path) -> Option<WindowState> {
+    let path = config_dir.join("window_state.json");
+    if path.exists() {
+        std::fs::read_to_string(&path).ok()
+            .and_then(|s| serde_json::from_str::<WindowState>(&s).ok())
+    } else { None }
+}
+
 #[tauri::command]
 pub fn save_window_state(x: i32, y: i32, width: u32, height: u32, state: tauri::State<'_, AppState>) {
     let config_dir = state.config_dir.lock().unwrap().clone();

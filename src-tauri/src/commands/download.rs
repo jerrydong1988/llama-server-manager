@@ -16,6 +16,27 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 
 // ── #9: 共享下载核心 ─────────────────────────────────────────────
 
+fn sanitize_repo_id(repo_id: &str) -> Result<String, String> {
+    if repo_id.is_empty() {
+        return Err("仓库 ID 不能为空".to_string());
+    }
+    if repo_id.contains("..") || repo_id.contains('\\') {
+        return Err(format!("无效的仓库 ID: {}", repo_id));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if repo_id.len() >= 2 && repo_id.as_bytes()[1] == b':' {
+            return Err(format!("无效的仓库 ID: {}", repo_id));
+        }
+    }
+    for c in repo_id.chars() {
+        if !c.is_alphanumeric() && c != '/' && c != '-' && c != '_' && c != '.' {
+            return Err(format!("仓库 ID 包含非法字符: {}", repo_id));
+        }
+    }
+    Ok(repo_id.to_string())
+}
+
 /// 下载单个文件的通用逻辑。
 async fn download_single_file(
     url: String,
@@ -184,6 +205,7 @@ pub async fn download_modelscope_files(
     save_dir: String,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let repo_id = sanitize_repo_id(&repo_id)?;
     let save_path = if Path::new(&save_dir).is_absolute() {
         PathBuf::from(&save_dir)
     } else {
@@ -309,6 +331,7 @@ pub async fn download_huggingface_files(
     use std::sync::Arc;
     use tokio::sync::Semaphore;
 
+    let repo_id = sanitize_repo_id(&repo_id)?;
     let save_path = if Path::new(&save_dir).is_absolute() {
         PathBuf::from(&save_dir)
     } else {

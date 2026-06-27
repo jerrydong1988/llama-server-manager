@@ -11,7 +11,7 @@ export const _startupTimings: { name: string; ms: number }[] = []
 // Re-exports from split modules
 export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState, WorkerInfo, WorkerDevice, WorkerStatus, Usb4Adapter } from './store/types'
 export { defaultInstanceConfig } from './store/defaults'
-import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry } from './store/types'
+import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry, PersistedQueueEntry } from './store/types'
 
 // ── Store 状态 ─────────────────────────────────────────────────
 // AppState interface is defined in ./store/types.ts
@@ -58,8 +58,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     set({ downloadQueue: [...s.downloadQueue, { ...entry, id, addedAt: Date.now() }] })
     get().persistQueue()
-    // 尝试立即处理队列
-    get().processDownloadQueue!()
+    get().processDownloadQueue()
   },
   removeFromDownloadQueue: (id) => {
     set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== id) }))
@@ -89,12 +88,12 @@ export const useAppStore = create<AppState>((set, get) => ({
           await invoke('download_huggingface_files', { repoId: next.repoId, files: next.files, saveDir: next.saveDir })
         }
       } catch { /* events handle error state */ } finally {
-        get().processDownloadQueue!()
+        get().processDownloadQueue()
       }
     })()
 
     // Try to fill remaining concurrency slots immediately
-    get().processDownloadQueue!()
+    get().processDownloadQueue()
   },
   setModels: (models) => set({ models }),
   setEngines: (engines) => set({ engines }),
@@ -255,12 +254,16 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   loadConfig: async () => {
     const t0 = performance.now()
+    set({ isLoading: true })
     try {
       // Native init timing: elapsed from Rust main() start to loadConfig call
       invoke<number>('get_startup_elapsed').then(ms => {
         _startupTimings.push({ name: 'native-init', ms })
       }).catch(() => {})
-      const global = await invoke<{
+
+      // 快速路径：initialization_script 注入的配置（绕过 IPC 冷启动）
+      // 慢速路径：IPC fallback（后续重载或热重载时用）
+      type GlobalConfigShape = {
         instances: Record<string, InstanceConfig>
         model_dirs: string[]
         engine_dirs: string[]
@@ -269,20 +272,31 @@ export const useAppStore = create<AppState>((set, get) => ({
         instance_order: string[]
         last_tab: string
         dark_mode: boolean
-      }>('load_config')
+      }
+      const injected = (window as any).__INITIAL_CONFIG__ as GlobalConfigShape | undefined
+      if (injected) {
+        ;(window as any).__INITIAL_CONFIG__ = null
+        _startupTimings.push({ name: 'config-source', ms: 0 })
+        processConfig(injected)
+      } else {
+        const t_ipc = performance.now()
+        const global = await invoke<GlobalConfigShape>('load_config')
+        _startupTimings.push({ name: 'config-source', ms: Math.round(performance.now() - t_ipc) })
+        processConfig(global)
+      }
 
-      const runningIds = new Set(Object.keys(global.running || {}))
-      const order = global.instance_order || Object.keys(global.instances)
-      let list: Instance[] = Object.entries(global.instances).map(([id, config]) => {
-        const st = global.running?.[id]?.start_time ?? 0
-        return {
-        id, name: config.name || '未命名实例', status: runningIds.has(id) ? 'running' as const : 'stopped' as const,
-        model: pathBasename(config.model_path),
-        port: config.port, healthCheck: runningIds.has(id) ? 'pending' as const : 'pending' as const, config,
-        startTime: st > 0 ? st * 1000 : undefined,
-      }})
-      // 按保存的顺序排列
-      list.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
+      function processConfig(global: GlobalConfigShape) {
+        const runningIds = new Set(Object.keys(global.running || {}))
+        const order = global.instance_order || Object.keys(global.instances)
+        let list: Instance[] = Object.entries(global.instances).map(([id, config]) => {
+          const st = global.running?.[id]?.start_time ?? 0
+          return {
+          id, name: config.name || '未命名实例', status: runningIds.has(id) ? 'running' as const : 'stopped' as const,
+          model: pathBasename(config.model_path),
+          port: config.port,         healthCheck: 'pending' as const, config,
+          startTime: st > 0 ? st * 1000 : undefined,
+        }})
+        list.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
         startTransition(() => {
           set({
             instances: list,
@@ -295,16 +309,16 @@ export const useAppStore = create<AppState>((set, get) => ({
           document.documentElement.classList.toggle('dark', global.dark_mode)
           startTransition(() => { set({ darkMode: !!global.dark_mode }) })
         }
-      // 延迟合并加载：单次 IPC + startTransition 避免渲染阻塞
-      setTimeout(() => {
-        invoke<[import('./store/types').ModelInfo[], import('./store/types').EngineInfo[], import('./store/types').PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
+        // 后台扫描模型/引擎 — IPC 此时已自然暖机
+        invoke<[ModelInfo[], EngineInfo[], PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
           .then(([models, engines, queue]) => {
             startTransition(() => { set({ models, engines }) })
             if (queue?.length > 0) startTransition(() => { get().restoreDownloadQueue(queue) })
           })
           .catch(() => {})
-      }, 200)
+      }
     } catch (e) { console.error('load_config error:', e) }
+    set({ isLoading: false })
     _startupTimings.push({ name: 'loadConfig', ms: Math.round(performance.now() - t0) })
   },
 
@@ -339,7 +353,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ── 下载队列持久化 ──────────────────────────────────────────
-  restoreDownloadQueue: (entries: import('./store/types').PersistedQueueEntry[]) => {
+  restoreDownloadQueue: (entries: PersistedQueueEntry[]) => {
     const s = get()
     const now = Date.now()
     let hasPending = false
@@ -366,7 +380,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ downloadTasks: tasks })
       hasPending = true
     }
-    if (hasPending) get().processDownloadQueue!()
+    if (hasPending) get().processDownloadQueue()
   },
 
   persistQueue: () => {
@@ -484,9 +498,18 @@ export function formatStartupCommand(cmdStr: string): string {
   return lines.join('\n')
 }
 
-const _g = globalThis as any
+declare global {
+  interface Window { __lsm_listeners_registered?: boolean }
+}
+
+const _g = window as Window & typeof globalThis
 if (!_g.__lsm_listeners_registered) {
 _g.__lsm_listeners_registered = true
+
+// ── 启动计时事件 (Rust 侧 emit) ──
+listen<{ name: string; ms: number }>('startup-timing', (event) => {
+  _startupTimings.push({ name: event.payload.name, ms: event.payload.ms })
+}).catch(() => {})
 
 listen<{ instanceId: string; text: string }>('server-log', (event) => {
   useAppStore.getState().addLog({
@@ -556,7 +579,7 @@ listen<{ fileName: string; repoId: string; source: string; path: string }>('down
   const prev = s.downloadTasks[fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { ...(prev || { fileName, repoId, source, downloaded: 0, total: 0, speed: 0 }), status: 'completed', path } })
   s.persistQueue()
-  useAppStore.getState().processDownloadQueue!()
+  useAppStore.getState().processDownloadQueue()
 }).catch(() => {})
 
 listen<{ fileName: string; repoId: string; source: string }>('download-cancelled', (e) => {
@@ -564,7 +587,7 @@ listen<{ fileName: string; repoId: string; source: string }>('download-cancelled
   const prev = s.downloadTasks[e.payload.fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'cancelled' } })
   s.persistQueue()
-  useAppStore.getState().processDownloadQueue!()
+  useAppStore.getState().processDownloadQueue()
 }).catch(() => {})
 
 listen<{ fileName: string; repoId: string; source: string; error: string }>('download-error', (e) => {
@@ -572,7 +595,7 @@ listen<{ fileName: string; repoId: string; source: string; error: string }>('dow
   const prev = s.downloadTasks[e.payload.fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'error', error: e.payload.error } })
   s.persistQueue()
-  useAppStore.getState().processDownloadQueue!()
+  useAppStore.getState().processDownloadQueue()
 }).catch(() => {})
 
 

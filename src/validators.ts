@@ -126,7 +126,7 @@ export function validateConfig(
         Math.abs(config.xtc_probability) > 0.001 || Math.abs(config.xtc_threshold - 0.1) > 0.001 ||
         config.dynatemp_range !== 0 || config.dynatemp_exp !== 1.0 ||
         config.typical_p !== 1.0 || config.dry_multiplier !== 0 ||
-        Math.abs(config.dry_base - 1.75) > 0.001 || config.dry_allowed_length !== 0) hasGenParam = true
+        Math.abs(config.dry_base - 1.75) > 0.001 || config.dry_allowed_length !== 2) hasGenParam = true
     if (hasGenParam)
       w.push({ field: 'embedding', severity: 'high', key: 'warnA2' })
   }

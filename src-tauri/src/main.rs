@@ -27,6 +27,14 @@ fn get_startup_elapsed() -> u64 {
     NATIVE_START.get().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0)
 }
 
+#[tauri::command]
+fn show_window(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 fn main() {
     let native_start = std::time::Instant::now();
     NATIVE_START.set(native_start).ok();
@@ -124,6 +132,70 @@ fn main() {
                 .build(app.handle())?;
             }
             timings.push(("setup-tray-done".into(), now()));
+
+            // ── 提前读取配置，通过 initialization_script 注入到前端 ──
+            // 绕过 IPC 冷启动延迟：前端 JS 第一行就能读到 window.__INITIAL_CONFIG__
+            let data_dir = crate::utils::get_data_dir();
+            let config_dir = data_dir.join("configs");
+            let config = crate::commands::config::read_config_from_disk(&config_dir);
+            let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
+            timings.push(("setup-config-read".into(), now()));
+
+            // 程序化创建窗口，注入配置数据
+            let init_script = format!(
+                "window.__INITIAL_CONFIG__ = {};\nif(window.__lsm_setInitialConfig)window.__lsm_setInitialConfig(window.__INITIAL_CONFIG__);",
+                config_json
+            );
+            let window_state = crate::commands::config::read_window_state_from_disk(&config_dir);
+            let mut window_builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+                .title("Llama服务器管理器")
+                .inner_size(1280.0, 800.0)
+                .min_inner_size(1024.0, 720.0)
+                .resizable(true)
+                .fullscreen(false)
+                .visible(false)
+                .background_color(tauri::utils::config::Color(26, 26, 46, 255))
+                .initialization_script(&init_script);
+
+            // 恢复窗口位置
+            if let Some(ws) = window_state {
+                window_builder = window_builder
+                    .position(ws.x as f64, ws.y as f64)
+                    .inner_size(ws.width as f64, ws.height as f64);
+            }
+
+            window_builder.build()?;
+            timings.push(("setup-window-built".into(), now()));
+
+            // 同步更新 AppState（进程恢复逻辑在 load_config IPC 中异步执行）
+            {
+                let st = app.state::<AppState>();
+                *st.instances.lock().unwrap() = config.instances.clone();
+                *st.engine_names.lock().unwrap() = config.engine_names.clone();
+                *st.running.lock().unwrap() = config.running.clone();
+            }
+
+            // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
+            for (id, ri) in &config.running {
+                let id_hc = id.clone();
+                let host = if ri.host == "0.0.0.0" { "localhost".to_string() } else { ri.host.clone() };
+                let host2 = host.clone();
+                let port = ri.port;
+                let pid = ri.pid;
+                let app_hc = app.handle().clone();
+                let app_reconnect = app.handle().clone();
+                let config_dir_clone = config_dir.clone();
+
+                let api_key_health = config.instances.get(&id_hc)
+                    .and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key.clone()) })
+                    .unwrap_or_default();
+                let api_key_reconnect = api_key_health.clone();
+                std::thread::spawn(move || {
+                    crate::commands::server::health_check_loop(&id_hc, &host, port, pid, &api_key_health, app_hc);
+                });
+                crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir_clone, &api_key_reconnect, app_reconnect);
+            }
+
             // Write accumulated timings in a single I/O operation
             let log_dir = crate::utils::get_data_dir().join("configs");
             let log_path = log_dir.join(".startup-log");
@@ -172,6 +244,7 @@ fn main() {
             ssh_launch_rpc,
             enable_autostart, disable_autostart, is_autostart_enabled,
             get_startup_elapsed,
+            show_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

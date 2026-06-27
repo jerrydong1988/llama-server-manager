@@ -5,7 +5,7 @@ import { enUS } from './en-US'
 type Lang = 'zh-CN' | 'en-US'
 type Translations = typeof enUS
 
-const translations: Record<Lang, Translations> = { 'zh-CN': zhCN as any, 'en-US': enUS }
+const translations: Record<Lang, Translations> = { 'zh-CN': zhCN as Translations, 'en-US': enUS }
 
 interface I18nContextValue {
   lang: Lang

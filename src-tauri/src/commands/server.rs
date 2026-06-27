@@ -7,6 +7,29 @@ use tauri::{Emitter, Manager};
 use sysinfo::System;
 
 // ── 生成 CLI 命令 ────────────────────────────────────────────────
+
+fn mask_api_key_in_cmd(cmd: &str) -> String {
+    let mut result = cmd.to_string();
+    if let Some(pos) = result.find("--api-key ") {
+        let rest = &result[pos + 10..];
+        if let Some(end) = rest.find(' ') {
+            let key_len = end;
+            if key_len > 0 {
+                let key = &rest[..end];
+                let masked = "*".repeat(key.len().min(8));
+                result = format!("{}--api-key {}{}", &result[..pos], masked, &rest[end..]);
+            }
+        } else {
+            let key = rest;
+            if !key.is_empty() {
+                let masked = "*".repeat(key.len().min(8));
+                result = format!("{}--api-key {}", &result[..pos], masked);
+            }
+        }
+    }
+    result
+}
+
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
     let exe = if engine_path.is_empty() { "llama-server".to_string() } else { engine_path.to_string() };
     let mut cmd = vec![exe, "-m".into(), config.model_path.clone()];
@@ -252,6 +275,7 @@ pub async fn start_server(
     // Hold lock across check+insert to prevent TOCTOU race
     let cmd = generate_command(&config, &engine_exe);
     let cmd_str = cmd.join(" ");
+    let cmd_display = mask_api_key_in_cmd(&cmd_str);
 
     // 创建日志文件 — llama-server 直接写到这里（不经过 pipe 中转）
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -275,6 +299,11 @@ pub async fn start_server(
 
     let pid = child.id();
 
+    let start_time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
     // Atomic check+insert — prevents starting same instance twice
     {
         let mut running = state.running.lock().unwrap();
@@ -287,19 +316,18 @@ pub async fn start_server(
             pid,
             port: config.port,
             host: config.host.clone(),
-            start_time: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            start_time,
         });
     }
 
-    // 立即同步写 running 到磁盘
+    // 立即同步写 running 到磁盘 — 使用统一原子写入避免竞态
     {
         let config_dir = state.config_dir.lock().unwrap().clone();
         let path = config_dir.join("instances.json");
-        let _ = std::fs::create_dir_all(&config_dir);
         if let Ok(json) = std::fs::read_to_string(&path) {
             if let Ok(mut global) = serde_json::from_str::<GlobalConfig>(&json) {
                 global.running = state.running.lock().unwrap().clone();
-                let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
+                let _ = crate::commands::config::persist_global_config(&config_dir, &global);
             }
         }
     }
@@ -308,7 +336,7 @@ pub async fn start_server(
         "instanceId": instance_id,
         "pid": pid,
         "port": config.port,
-        "command": cmd_str,
+        "command": cmd_display,
     })).ok();
 
     // ── 日志 tail 线程：读取 llama-server 直接写入的日志文件 ──
@@ -487,8 +515,8 @@ fn monitor_loop(
             "llama": llama_metrics,
             "ts": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
         }));
     }
 }
@@ -726,46 +754,52 @@ pub async fn get_system_metrics(
     };
     let uptime = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap().as_secs() - start_time;
+        .map(|d| d.as_secs())
+        .unwrap_or(0) - start_time;
 
-    let mut sys = System::new_all();
-    let (adlx_cpu, gpu_pct, vram_u, vram_t, _mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
-        collect_gpu_and_system(&mut sys);
-
-    let (cpu, mem) = get_process_metrics(&mut sys, pid);
-    Ok(SystemMetrics {
-        cpu_percent: adlx_cpu.unwrap_or(cpu),
-        memory_mb: if adlx_cpu.is_some() { _mem.unwrap_or(mem) } else { (mem * 10.0).round() / 10.0 },
-        uptime_secs: uptime,
-        gpu_percent: gpu_pct,
-        vram_used_mb: vram_u,
-        vram_total_mb: vram_t,
-        system_cpu_percent: sys_cpu,
-        system_memory_total_mb: sys_mem_total,
-        system_memory_used_mb: sys_mem_used,
-        gpu_vendor,
-    })
+    let result = tokio::task::spawn_blocking(move || {
+        let mut sys = System::new_all();
+        let (adlx_cpu, gpu_pct, vram_u, vram_t, _mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
+            collect_gpu_and_system(&mut sys);
+        let (cpu, mem) = get_process_metrics(&mut sys, pid);
+        SystemMetrics {
+            cpu_percent: adlx_cpu.unwrap_or(cpu),
+            memory_mb: if adlx_cpu.is_some() { _mem.unwrap_or(mem) } else { (mem * 10.0).round() / 10.0 },
+            uptime_secs: uptime,
+            gpu_percent: gpu_pct,
+            vram_used_mb: vram_u,
+            vram_total_mb: vram_t,
+            system_cpu_percent: sys_cpu,
+            system_memory_total_mb: sys_mem_total,
+            system_memory_used_mb: sys_mem_used,
+            gpu_vendor,
+        }
+    }).await.map_err(|e| format!("系统指标采集失败: {}", e))?;
+    Ok(result)
 }
 
 /// System health — no instance required. Used by Dashboard for the system resource bar.
 #[tauri::command]
 pub async fn get_system_health() -> Result<SystemMetrics, String> {
-    let mut sys = System::new_all();
-    let (adlx_cpu, gpu_pct, vram_u, vram_t, mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
-        collect_gpu_and_system(&mut sys);
-
-    Ok(SystemMetrics {
-        cpu_percent: adlx_cpu.unwrap_or(sys_cpu.unwrap_or(0.0)),
-        memory_mb: mem.unwrap_or(sys_mem_used.unwrap_or(0.0)),
-        uptime_secs: 0,
-        gpu_percent: gpu_pct,
-        vram_used_mb: vram_u,
-        vram_total_mb: vram_t,
-        system_cpu_percent: sys_cpu,
-        system_memory_total_mb: sys_mem_total,
-        system_memory_used_mb: sys_mem_used,
-        gpu_vendor,
-    })
+    // Offload blocking sysinfo + GPU metrics to a blocking thread
+    let result = tokio::task::spawn_blocking(|| {
+        let mut sys = System::new_all();
+        let (adlx_cpu, gpu_pct, vram_u, vram_t, mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
+            collect_gpu_and_system(&mut sys);
+        SystemMetrics {
+            cpu_percent: adlx_cpu.unwrap_or(sys_cpu.unwrap_or(0.0)),
+            memory_mb: mem.unwrap_or(sys_mem_used.unwrap_or(0.0)),
+            uptime_secs: 0,
+            gpu_percent: gpu_pct,
+            vram_used_mb: vram_u,
+            vram_total_mb: vram_t,
+            system_cpu_percent: sys_cpu,
+            system_memory_total_mb: sys_mem_total,
+            system_memory_used_mb: sys_mem_used,
+            gpu_vendor,
+        }
+    }).await.map_err(|e| format!("系统指标采集失败: {}", e))?;
+    Ok(result)
 }
 
 #[derive(serde::Serialize)]
