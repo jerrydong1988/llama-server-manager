@@ -133,7 +133,7 @@ export function validateConfig(
 
   // A3: spec_type 需要草稿模型但未设置（draft-mtp 有内置头时例外）
   if (config.spec_type && config.spec_type !== '' && config.spec_type !== 'none') {
-    const needsDraft = ['draft-simple', 'draft-eagle3', 'draft-mtp'].some(t => config.spec_type.includes(t))
+    const needsDraft = ['draft-simple', 'draft-eagle3', 'draft-dflash', 'draft-mtp'].some(t => config.spec_type.includes(t))
     if (needsDraft && !config.draft_model_path) {
       // draft-mtp with builtin MTP heads doesn't strictly need external draft model
       if (config.spec_type.includes('draft-mtp') && model?.has_mtp_head) {
