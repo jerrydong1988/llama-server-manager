@@ -579,7 +579,8 @@ listen<{ fileName: string; repoId: string; source: string; path: string }>('down
   const prev = s.downloadTasks[fileName]
   s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { ...(prev || { fileName, repoId, source, downloaded: 0, total: 0, speed: 0 }), status: 'completed', path } })
   s.persistQueue()
-  useAppStore.getState().processDownloadQueue()
+  useAppStore.getState().processDownloadQueue!()
+  useAppStore.getState().scanModels(useAppStore.getState().modelDirs)
 }).catch(() => {})
 
 listen<{ fileName: string; repoId: string; source: string }>('download-cancelled', (e) => {

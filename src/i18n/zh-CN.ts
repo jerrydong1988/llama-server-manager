@@ -437,5 +437,6 @@ export const zhCN = {
     appTitle: 'Llama \u670D\u52A1\u5668\u7BA1\u7406\u5668',
     updateAvailable: '\u65B0\u7248\u672C', clickToDownload: '\u70B9\u51FB\u4E0B\u8F7D',
     autoStart: '\u5F00\u673A\u81EA\u542F\u52A8',
+    loading: '\u52A0\u8F7D\u4E2D...',
   }
 }

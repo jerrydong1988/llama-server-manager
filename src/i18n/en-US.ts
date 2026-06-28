@@ -434,5 +434,6 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     appTitle: 'Llama Server Manager',
     updateAvailable: 'New Version', clickToDownload: 'Click to Download',
     autoStart: 'Auto Start',
+    loading: 'Loading...',
   }
 }

@@ -2,7 +2,6 @@
 import { Search, FolderOpen, Trash2, RefreshCw, ChevronDown, ChevronRight, File, Image } from "lucide-react"
 import { useAppStore, type ModelInfo } from "../store"
 import { useI18n } from "../i18n"
-import { listen } from "@tauri-apps/api/event"
 import { confirm } from "@tauri-apps/plugin-dialog"
 import { normalizePath, pathJoin } from "../utils/path"
 import { formatSize } from "../utils/format"
@@ -19,7 +18,6 @@ const ModelRepo = () => {
   const { t } = useI18n()
   const [searchQuery, setSearchQuery] = useState("")
   const [scanError, setScanError] = useState("")
-  const [scanStats, setScanStats] = useState("")
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const savedCollapsed = useRef<Set<string>>(new Set())
 
@@ -35,28 +33,6 @@ const ModelRepo = () => {
   }, [searchQuery, collapsed])
 
   useEffect(() => { loadInitialData() }, [loadInitialData])
-
-  // Scan statistics listener — shows shard grouping summary after scan completes
-  useEffect(() => {
-    const unlisten = listen<{ total: number; groups: number; marked: number }>('scan-debug', (e) => {
-      const { total, groups, marked } = e.payload
-      if (marked > 0) {
-        setScanStats(`${total} 个文件，${groups} 组分片（${marked} 个文件），去重后 ${total - marked} 个有效文件（其中投影器/权重矩阵除外，模型总数见总览页）`)
-      } else {
-        setScanStats(`${total} 个文件`)
-      }
-    })
-    return () => { unlisten.then(fn => fn()).catch(() => {}) }
-  }, [])
-
-  useEffect(() => {
-    let unlisten: (() => void) | null = null
-    let cancelled = false
-    listen("download-complete", () => { scanModels(modelDirs) }).then(fn => {
-      if (cancelled) { fn() } else { unlisten = fn }
-    })
-    return () => { cancelled = true; unlisten?.() }
-  }, [modelDirs, scanModels])
 
   interface TreeNode { name: string; path: string; isDir: boolean; children?: Map<string, TreeNode>; model?: typeof models[0] }
   function buildTree(rootDir: string, models: ModelInfo[]): TreeNode {
@@ -181,7 +157,6 @@ const ModelRepo = () => {
       </div>
     </div>
     {scanError && <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 rounded-lg text-sm">{scanError}</div>}
-    {scanStats && <div className="mb-4 text-xs text-gray-500">{'\u{1F4CA}'} {scanStats}</div>}
     {models.length === 0 ? (<div className="text-center text-gray-500 py-12">{t.modelRepo.noModels}</div>) : (<div>
       <div className="flex items-center gap-2 mb-2 text-gray-500 font-medium">{t.modelRepo.modelDirs}</div>
       {modelDirs.map(d => (<div key={d} className="flex items-center justify-between py-1 px-2 rounded hover:bg-gray-100 dark:hover:bg-gray-700"><span className="text-xs truncate flex-1 mr-2">{d}</span><button onClick={() => handleRemoveDir(d)} className="p-0.5 text-red-400 hover:text-red-600 rounded" title={t.modelRepo.remove}><Trash2 className="w-3 h-3" /></button></div>))}
