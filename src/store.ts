@@ -44,7 +44,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const alreadyInQueue = s.downloadQueue.some(q =>
       q.repoId === entry.repoId && q.source === entry.source &&
       entry.files.every(f => fileNames.has(f.name))) ||
-      entry.files.every(f => s.downloadTasks[f.name] && s.downloadTasks[f.name].status !== 'cancelled' && s.downloadTasks[f.name].status !== 'error')
+      entry.files.every(f => s.downloadTasks[f.name] && s.downloadTasks[f.name].status !== 'cancelled' && s.downloadTasks[f.name].status !== 'error' && s.downloadTasks[f.name].status !== 'paused')
     if (alreadyInQueue) return
 
     // 更新已存在条目的状态为 queued

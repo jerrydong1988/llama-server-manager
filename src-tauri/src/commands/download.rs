@@ -221,11 +221,12 @@ pub async fn download_modelscope_files(
     use tokio::sync::Semaphore;
     let semaphore = Arc::new(Semaphore::new(3));
 
-    // 清除本批次文件的 cancel_flags（避免上次暂停/取消的标记残留）
+    // 清除本批次文件的 cancel/pause flags（避免上次暂停/取消的标记残留）
     {
         let state = app.state::<AppState>();
         let mut flags = state.cancel_flags.lock().unwrap();
-        for file in &files { flags.remove(&file.name); }
+        let mut pause = state.pause_flags.lock().unwrap();
+        for file in &files { flags.remove(&file.name); pause.remove(&file.name); }
     }
 
     for file in files {
@@ -345,11 +346,12 @@ pub async fn download_huggingface_files(
     let semaphore = Arc::new(Semaphore::new(3));
     let mut handles = Vec::new();
 
-    // 清除本批次文件的 cancel_flags
+    // 清除本批次文件的 cancel/pause flags
     {
         let state = app.state::<AppState>();
         let mut flags = state.cancel_flags.lock().unwrap();
-        for file in &files { flags.remove(&file.name); }
+        let mut pause = state.pause_flags.lock().unwrap();
+        for file in &files { flags.remove(&file.name); pause.remove(&file.name); }
     }
 
     for file in files {
