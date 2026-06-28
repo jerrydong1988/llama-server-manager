@@ -50,8 +50,14 @@ export default function DownloadManager() {
       setBrowsedRepoId(rid)
       setStatus(result.length === 0 ? t.modelRepo.notFound : `${t.modelRepo.found} ${result.length} ${t.modelRepo.files}`)
 
-      // Detect already-downloaded files on disk
-      const tasks = { ...useAppStore.getState().downloadTasks }
+      // Detect already-downloaded files on disk — clear failed tasks for this repo on browse
+      const allTasks = useAppStore.getState().downloadTasks
+      const tasks: Record<string, DownloadProgress> = {}
+      for (const k of Object.keys(allTasks)) {
+        if (allTasks[k].status !== 'error' && allTasks[k].status !== 'cancelled') {
+          tasks[k] = allTasks[k]
+        }
+      }
       const resolvedDir = await invoke<string>('resolve_path', { path: saveDir })
       await Promise.all(result.map(async (f) => {
         const localPath = pathJoin(resolvedDir, rid, f.name)
@@ -209,7 +215,11 @@ export default function DownloadManager() {
                     ) : task?.status === 'queued' ? (
                       <span className="text-xs text-gray-400">{t.downloadPage.queued}</span>
                     ) : task?.status === 'error' ? (
-                      <span className="text-xs text-red-500">{task.error || t.modelRepo.failed}</span>
+                      <>
+                        <span className="text-xs text-red-400 truncate max-w-[200px]" title={task.error}>{task.error || t.modelRepo.failed}</span>
+                        <button onClick={() => handleDownloadFile(f)}
+                          className="text-xs text-blue-500 hover:text-blue-700 ml-auto shrink-0">{t.modelRepo.retry}</button>
+                      </>
                     ) : (
                       <button onClick={() => handleDownloadFile(f)} className="text-xs text-blue-500 hover:text-blue-700">{t.modelRepo.downloadBtn}</button>
                     )}

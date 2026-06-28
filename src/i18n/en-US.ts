@@ -25,7 +25,7 @@ export const enUS = {
     queryFailed: 'Query failed: ', notFound: 'No GGUF files found', found: 'Found',
     files: ' files', inputRepoId: 'Enter repo ID', querying: 'Querying...',
     networkError: 'Network error', selectFromRepo: 'Select from Repository',
-    downloadBtn: '\u2B07 Download', pause: '\u23F8 Pause', resume: '\u25B6 Resume',
+    downloadBtn: '\u2B07 Download', pause: '\u23F8 Pause', resume: '\u25B6 Resume', retry: '\u21BB Retry',
     cancel: '\u2715 Cancel', done: '\u2713 Done', failed: '\u2717 Failed', cancelled: 'Cancelled',
     noModels: 'No models found. Click "Scan Models" or "Add Directory".',
     delete: 'Delete', deleteConfirm: 'Delete this model? This cannot be undone!',
