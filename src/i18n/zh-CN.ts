@@ -1,4 +1,4 @@
-export const zhCN = {
+﻿export const zhCN = {
   nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', perf: '\u6027\u80FD\u76D1\u63A7', logs: '\u670D\u52A1\u5668\u65E5\u5FD7', dashboard: '\u603B\u89C8', up: '\u8FD0\u884C', down: '\u505C\u6B62' },
   instance: {
     title: '\u670D\u52A1\u5668\u5B9E\u4F8B', create: '\u521B\u5EFA\u5B9E\u4F8B', newInstance: '\u521B\u5EFA\u65B0\u5B9E\u4F8B',
@@ -167,7 +167,7 @@ export const zhCN = {
     numa: 'NUMA', numaTip: 'NUMA 感知优化，仅多路 CPU 服务器需要(双路 AMD EPYC 或 Intel Xeon)。[原理] 将线程绑定到特定 NUMA 节点以避免跨 socket 内存延迟。',
     perf: '性能计时', perfTip: '启用内部 libllama 性能计时。[场景] 调试推理瓶颈——显示各处理阶段耗时。[权衡] 有轻微运行时开销——生产环境请关闭。',
     checkTensors: '\u68C0\u67E5\u5F20\u91CF', checkTensorsTip: '加载前验证张量数据是否有无效值(NaN, Inf)。[场景] 调试模型质量问题时启用。[权衡] 加载略慢。',
-    fit: '\u5185\u5B58\u9002\u914D', fitTip: '估算内存需求并自动调参以适应可用 VRAM。[场景] 不确定模型能否放得下时启用。[原理] 不加载模型——计算后即退出。确认后取消勾选。',
+    fit: '\u5185\u5B58\u9002\u914D', fitTip: '开启时发射 --fit on：估算内存需求并自动调参。关闭时发射 --fit off：不做内存适配（llama.cpp 默认行为）。',
     fitTarget: '适配目标 (MiB)', fitTargetTip: '--fit 每个设备的目标内存余量(MiB)。逗号分隔值；单个值广播到所有设备。默认 1024。[场景] 为其他程序留更多显存余量时增大。',
     fitCtx: '适配最小上下文', fitCtxTip: '--fit 不会将上下文缩减到此值以下。默认 4096。[场景] 设置下限防止 --fit 过于激进地缩小上下文。',
     loraInitNoApply: 'LoRA \u4EC5\u521D\u59CB\u5316', loraInitNoApplyTip: '加载 LoRA 适配器权重但不应用。[场景] 预加载适配器，之后通过 POST /lora-adapters API 运行时动态切换。',

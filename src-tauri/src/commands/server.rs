@@ -107,6 +107,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.check_tensors { cmd.push("--check-tensors".into()); }
     if config.perf { cmd.push("--perf".into()); }
     if config.fit { cmd.extend_from_slice(&["--fit".into(), "on".into()]); }
+    else { cmd.extend_from_slice(&["--fit".into(), "off".into()]); }
     if !config.fit_target.is_empty() { cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]); }
     if config.fit_ctx != 4096 { cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]); }
 
