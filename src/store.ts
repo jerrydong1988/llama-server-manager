@@ -484,14 +484,19 @@ export function formatStartupCommand(cmdStr: string): string {
   }
 
   // 底部短路径: 完整命令(一行, 路径截断为文件名)
-  const shortCmd = tokens.map((t, i) => {
-    const s = t.replace(/^"|"$/g, '')
-    if (i > 0 && (s === '-m' || s === '-md' || s === '--mmproj' || s === '--lora' || s === '--lora-init-without-apply')) {
-      const next = tokens[i + 1]?.replace(/^"|"$/g, '')
-      return s + ' "' + ((next || '').split(/[\\/]/).pop() || next) + '"'
+  const pathFlags = new Set(['-m', '-md', '--mmproj', '--lora', '--lora-init-without-apply'])
+  const shortParts: string[] = []
+  for (let i = 1; i < tokens.length; i++) {
+    const s = tokens[i].replace(/^"|"$/g, '')
+    if (pathFlags.has(s) && i + 1 < tokens.length) {
+      const val = tokens[i + 1].replace(/^"|"$/g, '')
+      shortParts.push(s + ' "' + (val.split(/[\\/]/).pop() || val) + '"')
+      i++ // skip value token
+    } else {
+      shortParts.push(tokens[i])
     }
-    return t
-  }).slice(1).join(' ')
+  }
+  const shortCmd = shortParts.join(' ')
   lines.push('\u2502')
   lines.push(`\u2502 \u5B8C\u6574: ${shortCmd}`)
 
