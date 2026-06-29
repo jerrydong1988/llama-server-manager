@@ -350,6 +350,7 @@ pub async fn start_server(
     // ── 进程存活监控 + 退出清理 ──
     let id = instance_id.clone();
     let app_clone = app.clone();
+    let log_path_mon = log_path.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(1));
         match child.try_wait() {
@@ -357,6 +358,15 @@ pub async fn start_server(
                 let st = app_clone.state::<AppState>();
                 { let mut r = st.running.lock().unwrap();
                   if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) { r.remove(&id); } }
+                // Emit captured stderr/log content so errors are never lost on quick exit
+                if let Ok(log_content) = std::fs::read_to_string(&log_path_mon) {
+                    if !log_content.trim().is_empty() {
+                        let _ = app_clone.emit("server-log", serde_json::json!({
+                            "instanceId": id,
+                            "text": log_content,
+                        }));
+                    }
+                }
                 let _ = app_clone.emit("server-error", serde_json::json!({
                     "instanceId": id,
                     "error": format!("进程启动后立即退出 (exit code: {:?})", status.code()),
