@@ -25,19 +25,19 @@ export function BasicSection({ local, set, t, onShowPicker, activeParams, search
     <Section title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery}>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         <div title={t.configPage.modelPathTip}>
-          <label className="block text-xs font-medium mb-1 text-gray-500">{`${t.configPage.modelPath} (-m)`}</label>
+          <label className="block text-xs font-medium mb-1 text-gray-500">{`${t.configPage.modelPath} (--model, -m)`}</label>
           <div className="flex gap-1">
             <input type="text" value={local.model_path} onChange={e => set('model_path', e.target.value)} className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
             <button onClick={onShowPicker} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs" title={t.configPage.modelPathBtn}>{'\uD83D\uDCC2'}</button>
           </div>
         </div>
-        <Input label={`${t.configPage.alias} (-a)`} value={local.alias} onChange={v => set('alias', v)} title={t.configPage.aliasTip}  active={a('alias')} />
+        <Input label={`${t.configPage.alias} (--alias, -a)`} value={local.alias} onChange={v => set('alias', v)} title={t.configPage.aliasTip}  active={a('alias')} />
         <Select label={`${t.configPage.chatTemplate} (--chat-template)`} value={local.chat_template} onChange={v => set('chat_template', v)} options={chatTemplates} title={t.configPage.chatTemplateTip} defaultLabel={t.common.default}  active={a('chat_template')} />
         <Input label={`${t.configPage.host} (--host)`} value={local.host} onChange={v => set('host', v)} title={t.configPage.hostTip}  active={a('host')} />
         <Num label={`${t.configPage.portLabel} (--port)`} value={local.port} onChange={v => set('port', v)} min={1} max={65535} title={t.configPage.portLabelTip}  active={a('port')} />
-        <Num label={`${t.configPage.gpuLayers} (-ngl)`} value={local.gpu_layers} onChange={v => set('gpu_layers', v)} min={0} max={99} title={t.configPage.gpuLayersTip} disabled={local.gpu_layers_auto}  active={a('gpu_layers')} />
+        <Num label={`${t.configPage.gpuLayers} (--n-gpu-layers, -ngl)`} value={local.gpu_layers} onChange={v => set('gpu_layers', v)} min={0} max={99} title={t.configPage.gpuLayersTip} disabled={local.gpu_layers_auto}  active={a('gpu_layers')} />
         <Switch label={`${t.configPage.gpuLayersAuto}`} value={local.gpu_layers_auto} onChange={v => set('gpu_layers_auto', v)} title={t.configPage.gpuLayersAutoTip}  active={a('gpu_layers_auto')} />
-        <Num label={`${t.configPage.ctxSize} (-c)`} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} disabled={local.ctx_size_auto}  active={a('ctx_size')} />
+        <Num label={`${t.configPage.ctxSize} (--ctx-size, -c)`} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} disabled={local.ctx_size_auto}  active={a('ctx_size')} />
         <Switch label={`${t.configPage.ctxAuto}`} value={local.ctx_size_auto} onChange={v => set('ctx_size_auto', v)} title={t.configPage.ctxAutoTip}  active={a('ctx_size_auto')} />
         <Switch label={`${t.configPage.embedding} (--embedding)`} value={local.embedding} onChange={v => set('embedding', v)} title={t.configPage.embeddingTip}  active={a('embedding')} />
         <Select label={`${t.configPage.pooling} (--pooling)`} value={local.pooling} onChange={v => set('pooling', v)} options={['', 'none', 'mean', 'cls', 'last', 'rank']} title={t.configPage.poolingTip} defaultLabel={t.common.default}  active={a('pooling')} />
@@ -60,9 +60,9 @@ export function ReasoningSection({ local, set, t, isEmbedding, activeParams, sea
         <Num label={`${t.configPage.topK} (--top-k)`} value={local.top_k} onChange={v => set('top_k', v)} min={0} title={t.configPage.topKTip} disabled={isEmbedding}  active={a('top_k')} />
         <Num label={`${t.configPage.topP} (--top-p)`} value={local.top_p} onChange={v => set('top_p', v)} min={0} max={1} step={0.1} title={t.configPage.topPTip} disabled={isEmbedding}  active={a('top_p')} />
         <Num label={`${t.configPage.repeatPenalty} (--repeat-penalty)`} value={local.repeat_penalty} onChange={v => set('repeat_penalty', v)} min={0} max={2} step={0.1} title={t.configPage.repeatPenaltyTip} disabled={isEmbedding}  active={a('repeat_penalty')} />
-        <Num label={`${t.configPage.nPredict} (-n)`} value={local.n_predict} onChange={v => set('n_predict', v)} min={-1} title={t.configPage.nPredictTip} disabled={isEmbedding}  active={a('n_predict')} />
+        <Num label={`${t.configPage.nPredict} (--n-predict, -n)`} value={local.n_predict} onChange={v => set('n_predict', v)} min={-1} title={t.configPage.nPredictTip} disabled={isEmbedding}  active={a('n_predict')} />
         <Switch label={`${t.configPage.ignoreEos} (--ignore-eos)`} value={local.ignore_eos} onChange={v => set('ignore_eos', v)} title={t.configPage.ignoreEosTip} disabled={isEmbedding}  active={a('ignore_eos')} />
-        <Input label={`${t.configPage.reversePrompt} (-r)`} value={local.reverse_prompt} onChange={v => set('reverse_prompt', v)} title={t.configPage.reversePromptTip} disabled={isEmbedding}  active={a('reverse_prompt')} />
+        <Input label={`${t.configPage.reversePrompt} (--reverse-prompt, -r)`} value={local.reverse_prompt} onChange={v => set('reverse_prompt', v)} title={t.configPage.reversePromptTip} disabled={isEmbedding}  active={a('reverse_prompt')} />
       </div>
       </>); })()}
     </Section>
@@ -74,13 +74,13 @@ export function PerformanceSection({ local, set, t, activeParams, searchQuery }:
   return (
     <Section title={t.configPage.performance} defaultOpen={true} searchQuery={searchQuery}>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        <Num label={`${t.configPage.threads} (-t)`} value={local.threads} onChange={v => set('threads', v)} min={0} title={t.configPage.threadsTip}  active={a('threads')} />
+        <Num label={`${t.configPage.threads} (--threads, -t)`} value={local.threads} onChange={v => set('threads', v)} min={0} title={t.configPage.threadsTip}  active={a('threads')} />
         <Num label={`${t.configPage.threadsBatch} (--threads-batch)`} value={local.threads_batch} onChange={v => set('threads_batch', v)} min={0} title={t.configPage.threadsBatchTip}  active={a('threads_batch')} />
-        <Num label={`${t.configPage.batchSize} (-b)`} value={local.batch_size} onChange={v => set('batch_size', v)} min={1} title={t.configPage.batchSizeTip}  active={a('batch_size')} />
-        <Num label={`${t.configPage.ubatchSize} (-ub)`} value={local.ubatch_size} onChange={v => set('ubatch_size', v)} min={1} title={t.configPage.ubatchSizeTip}  active={a('ubatch_size')} />
-        <Num label={`${t.configPage.parallel} (-np)`} value={local.parallel} onChange={v => set('parallel', v)} min={-1} title={t.configPage.parallelTip}  active={a('parallel')} />
-        <Switch label={`${t.configPage.contBatching} (-cb)`} value={local.cont_batching} onChange={v => set('cont_batching', v)} title={t.configPage.contBatchingTip}  active={a('cont_batching')} />
-        <Select label={`${t.configPage.flashAttn} (-fa)`} value={local.flash_attn} onChange={v => set('flash_attn', v)} options={['auto', 'on', 'off']} title={t.configPage.flashAttnTip} defaultLabel={t.common.default}  active={a('flash_attn')} />
+        <Num label={`${t.configPage.batchSize} (--batch-size, -b)`} value={local.batch_size} onChange={v => set('batch_size', v)} min={1} title={t.configPage.batchSizeTip}  active={a('batch_size')} />
+        <Num label={`${t.configPage.ubatchSize} (--ubatch-size, -ub)`} value={local.ubatch_size} onChange={v => set('ubatch_size', v)} min={1} title={t.configPage.ubatchSizeTip}  active={a('ubatch_size')} />
+        <Num label={`${t.configPage.parallel} (--parallel, -np)`} value={local.parallel} onChange={v => set('parallel', v)} min={-1} title={t.configPage.parallelTip}  active={a('parallel')} />
+        <Switch label={`${t.configPage.contBatching} (--cont-batching, -cb)`} value={local.cont_batching} onChange={v => set('cont_batching', v)} title={t.configPage.contBatchingTip}  active={a('cont_batching')} />
+        <Select label={`${t.configPage.flashAttn} (--flash-attn, -fa)`} value={local.flash_attn} onChange={v => set('flash_attn', v)} options={['auto', 'on', 'off']} title={t.configPage.flashAttnTip} defaultLabel={t.common.default}  active={a('flash_attn')} />
         <Switch label={`${t.configPage.mlock} (--mlock)`} value={local.mlock} onChange={v => set('mlock', v)} title={t.configPage.mlockTip}  active={a('mlock')} />
         <Switch label={`${t.configPage.noMmap} (--no-mmap)`} value={local.no_mmap} onChange={v => set('no_mmap', v)} title={t.configPage.noMmapTip}  active={a('no_mmap')} />
       <Switch label={`${t.configPage.noRepack} (--no-repack)`} value={local.no_repack} onChange={v => set('no_repack', v)} title={t.configPage.noRepackTip}  active={a('no_repack')} />
@@ -212,7 +212,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
             <Num label={`${t.configPage.adaptiveTarget} (--adaptive-target)`} value={local.adaptive_target} onChange={v => set('adaptive_target', v)} min={0} max={10} step={0.1} title={t.configPage.adaptiveTargetTip}  active={a('adaptive_target')} />
             <Num label={`${t.configPage.adaptiveDecay} (--adaptive-decay)`} value={local.adaptive_decay} onChange={v => set('adaptive_decay', v)} min={0} max={1} step={0.01} title={t.configPage.adaptiveDecayTip}  active={a('adaptive_decay')} />
             <Num label={`${t.configPage.topNSigma} (--top-n-sigma)`} value={local.top_n_sigma} onChange={v => set('top_n_sigma', v)} min={-1} max={10} step={0.1} title={t.configPage.topNSigmaTip}  active={a('top_n_sigma')} />
-            <Input label={`${t.configPage.logitBias} (-l)`} value={local.logit_bias} onChange={v => set('logit_bias', v)} title={t.configPage.logitBiasTip}  active={a('logit_bias')} />
+            <Input label={`${t.configPage.logitBias} (--logit-bias, -l)`} value={local.logit_bias} onChange={v => set('logit_bias', v)} title={t.configPage.logitBiasTip}  active={a('logit_bias')} />
             <Input label={`${t.configPage.samplers} (--samplers)`} value={local.samplers} onChange={v => set('samplers', v)} title={t.configPage.samplersTip}  active={a('samplers')} />
             <Input label={`${t.configPage.samplerSeq} (--sampler-seq)`} value={local.sampler_seq} onChange={v => set('sampler_seq', v)} title={t.configPage.samplerSeqTip}  active={a('sampler_seq')} />
           </div>
@@ -226,11 +226,11 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
             <Num label={`${t.configPage.presencePenalty} (--presence-penalty)`} value={local.presence_penalty} onChange={v => set('presence_penalty', v)} min={0} max={2} step={0.1} title={t.configPage.presencePenaltyTip}  active={a('presence_penalty')} />
             <Num label={`${t.configPage.frequencyPenalty} (--frequency-penalty)`} value={local.frequency_penalty} onChange={v => set('frequency_penalty', v)} min={0} max={2} step={0.1} title={t.configPage.frequencyPenaltyTip}  active={a('frequency_penalty')} />
             <Num label={`${t.configPage.repeatLastN} (--repeat-last-n)`} value={local.repeat_last_n} onChange={v => set('repeat_last_n', v)} min={-1} title={t.configPage.repeatLastNTip}  active={a('repeat_last_n')} />
-            <Switch label={`${t.configPage.special} (-sp)`} value={local.special} onChange={v => set('special', v)} title={t.configPage.specialTip}  active={a('special')} />
+            <Switch label={`${t.configPage.special} (--special, -sp)`} value={local.special} onChange={v => set('special', v)} title={t.configPage.specialTip}  active={a('special')} />
             <Switch label={`${t.configPage.spmInfill} (--spm-infill)`} value={local.spm_infill} onChange={v => set('spm_infill', v)} title={t.configPage.spmInfillTip}  active={a('spm_infill')} />
-            <Switch label={`${t.configPage.backendSampling} (-bs)`} value={local.backend_sampling} onChange={v => set('backend_sampling', v)} title={t.configPage.backendSamplingTip}  active={a('backend_sampling')} />
+            <Switch label={`${t.configPage.backendSampling} (--sampling-backend, -bs)`} value={local.backend_sampling} onChange={v => set('backend_sampling', v)} title={t.configPage.backendSamplingTip}  active={a('backend_sampling')} />
             <Input label={`${t.configPage.jsonSchema} (--json-schema)`} value={local.json_schema} onChange={v => set('json_schema', v)} title={t.configPage.jsonSchemaTip}  active={a('json_schema')} />
-            <Input label={`${t.configPage.jsonSchemaFile} (-jf)`} value={local.json_schema_file} onChange={v => set('json_schema_file', v)} title={t.configPage.jsonSchemaFileTip}  active={a('json_schema_file')} />
+            <Input label={`${t.configPage.jsonSchemaFile} (--json-schema-file, -jf)`} value={local.json_schema_file} onChange={v => set('json_schema_file', v)} title={t.configPage.jsonSchemaFileTip}  active={a('json_schema_file')} />
           </div>
         </CollapsibleGroup>
 
@@ -239,24 +239,24 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
           {!specActive && <div className="bg-gray-50 dark:bg-gray-800/50 rounded px-3 py-2 text-xs text-gray-500 mb-2">{t.configPage.specDisabled}</div>}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <div title={t.configPage.draftModelTip}>
-              <label className={`block text-xs font-medium mb-1 ${a('draft_model_path') ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{`${t.configPage.draftModel} (-md)`}</label>
+              <label className={`block text-xs font-medium mb-1 ${a('draft_model_path') ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{`${t.configPage.draftModel} (--draft-model, -md)`}</label>
               <div className="flex gap-1">
                 <input type="text" value={local.draft_model_path} onChange={e => set('draft_model_path', e.target.value)} disabled={isEmbedding} className={`flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${isEmbedding ? 'opacity-50 cursor-not-allowed' : ''}`} />
                 <button onClick={onShowDraftPicker} disabled={isEmbedding} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs disabled:opacity-50 disabled:cursor-not-allowed" title={t.configPage.draftModelTip}>{'\uD83D\uDCC2'}</button>
               </div>
             </div>
-            <Num label={`${t.configPage.draftGpu} (-ngld)`} value={local.draft_gpu_layers} onChange={v => set('draft_gpu_layers', v)} min={0} max={99} title={t.configPage.draftGpuTip} disabled={isEmbedding}  active={a('draft_gpu_layers')} />
+            <Num label={`${t.configPage.draftGpu} (--draft-n-gpu-layers, -ngld)`} value={local.draft_gpu_layers} onChange={v => set('draft_gpu_layers', v)} min={0} max={99} title={t.configPage.draftGpuTip} disabled={isEmbedding}  active={a('draft_gpu_layers')} />
             <Num label={`${t.configPage.specDraftPMin} (--spec-draft-p-min)`} value={local.spec_draft_p_min} onChange={v => set('spec_draft_p_min', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPMinTip} disabled={isEmbedding}  active={a('spec_draft_p_min')} />
             <Num label={`${t.configPage.specDraftPSplit} (--spec-draft-p-split)`} value={local.spec_draft_p_split} onChange={v => set('spec_draft_p_split', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPSplitTip} disabled={isEmbedding}  active={a('spec_draft_p_split')} />
             <Input label={`${t.configPage.specDraftDevice} (--spec-draft-device)`} value={local.spec_draft_device} onChange={v => set('spec_draft_device', v)} title={t.configPage.specDraftDeviceTip} disabled={isEmbedding}  active={a('spec_draft_device')} />
-            <Input label={`${t.configPage.lookupCacheStatic} (-lcs)`} value={local.lookup_cache_static} onChange={v => set('lookup_cache_static', v)} title={t.configPage.lookupCacheStaticTip} disabled={isEmbedding}  active={a('lookup_cache_static')} />
-            <Input label={`${t.configPage.lookupCacheDynamic} (-lcd)`} value={local.lookup_cache_dynamic} onChange={v => set('lookup_cache_dynamic', v)} title={t.configPage.lookupCacheDynamicTip} disabled={isEmbedding}  active={a('lookup_cache_dynamic')} />
-            <Select label={`${t.configPage.cacheTypeDraftK} (-ctkd)`} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default}  active={a('cache_type_draft_k')} />
-            <Select label={`${t.configPage.cacheTypeDraftV} (-ctvd)`} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default}  active={a('cache_type_draft_v')} />
+            <Input label={`${t.configPage.lookupCacheStatic} (--lookup-cache-static, -lcs)`} value={local.lookup_cache_static} onChange={v => set('lookup_cache_static', v)} title={t.configPage.lookupCacheStaticTip} disabled={isEmbedding}  active={a('lookup_cache_static')} />
+            <Input label={`${t.configPage.lookupCacheDynamic} (--lookup-cache-dynamic, -lcd)`} value={local.lookup_cache_dynamic} onChange={v => set('lookup_cache_dynamic', v)} title={t.configPage.lookupCacheDynamicTip} disabled={isEmbedding}  active={a('lookup_cache_dynamic')} />
+            <Select label={`${t.configPage.cacheTypeDraftK} (--cache-type-draft-k, -ctkd)`} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default}  active={a('cache_type_draft_k')} />
+            <Select label={`${t.configPage.cacheTypeDraftV} (--cache-type-draft-v, -ctvd)`} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default}  active={a('cache_type_draft_v')} />
             <Switch label={`${t.configPage.specDefault} (--spec-default)`} value={local.spec_default} onChange={v => set('spec_default', v)} title={t.configPage.specDefaultTip} disabled={isEmbedding}  active={a('spec_default')} />
             <Switch label={`${t.configPage.specDraftBackendSampling} (--no-spec-draft-backend-sampling)`} value={!local.spec_draft_backend_sampling} onChange={v => set('spec_draft_backend_sampling', !v)} title={t.configPage.specDraftBackendSamplingTip} disabled={isEmbedding} />
-            <Num label={`${t.configPage.specDraftThreads} (-td)`} value={local.spec_draft_threads} onChange={v => set('spec_draft_threads', v)} min={0} title={t.configPage.specDraftThreadsTip} disabled={isEmbedding}  active={a('spec_draft_threads')} />
-            <Num label={`${t.configPage.specDraftThreadsBatch} (-tbd)`} value={local.spec_draft_threads_batch} onChange={v => set('spec_draft_threads_batch', v)} min={0} title={t.configPage.specDraftThreadsBatchTip} disabled={isEmbedding}  active={a('spec_draft_threads_batch')} />
+            <Num label={`${t.configPage.specDraftThreads} (--spec-draft-threads, -td)`} value={local.spec_draft_threads} onChange={v => set('spec_draft_threads', v)} min={0} title={t.configPage.specDraftThreadsTip} disabled={isEmbedding}  active={a('spec_draft_threads')} />
+            <Num label={`${t.configPage.specDraftThreadsBatch} (--spec-draft-threads-batch, -tbd)`} value={local.spec_draft_threads_batch} onChange={v => set('spec_draft_threads_batch', v)} min={0} title={t.configPage.specDraftThreadsBatchTip} disabled={isEmbedding}  active={a('spec_draft_threads_batch')} />
           </div>
         </CollapsibleGroup>
 
@@ -278,11 +278,11 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         {/* KV 缓存 (8) */}
         <CollapsibleGroup title={t.configPage.subAdvKvCache} onReset={() => resetGroup('advancedKvCache')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Select label={`${t.configPage.cacheTypeK} (-ctk)`} value={local.cache_type_k} onChange={v => set('cache_type_k', v)} options={cacheTypes} title={t.configPage.cacheTypeKTip} defaultLabel={t.common.default}  active={a('cache_type_k')} />
-            <Select label={`${t.configPage.cacheTypeV} (-ctv)`} value={local.cache_type_v} onChange={v => set('cache_type_v', v)} options={cacheTypes} title={t.configPage.cacheTypeVTip} defaultLabel={t.common.default}  active={a('cache_type_v')} />
+            <Select label={`${t.configPage.cacheTypeK} (--cache-type-k, -ctk)`} value={local.cache_type_k} onChange={v => set('cache_type_k', v)} options={cacheTypes} title={t.configPage.cacheTypeKTip} defaultLabel={t.common.default}  active={a('cache_type_k')} />
+            <Select label={`${t.configPage.cacheTypeV} (--cache-type-v, -ctv)`} value={local.cache_type_v} onChange={v => set('cache_type_v', v)} options={cacheTypes} title={t.configPage.cacheTypeVTip} defaultLabel={t.common.default}  active={a('cache_type_v')} />
             <Switch label={`${t.configPage.cachePrompt} (--no-cache-prompt)`} value={!local.cache_prompt} onChange={v => set('cache_prompt', !v)} title={t.configPage.cachePromptTip} />
             <Num label={`${t.configPage.cacheReuse} (--cache-reuse)`} value={local.cache_reuse} onChange={v => set('cache_reuse', v)} min={0} title={t.configPage.cacheReuseTip}  active={a('cache_reuse')} />
-            <Num label={`${t.configPage.cacheRam} (-cram)`} value={local.cache_ram} onChange={v => set('cache_ram', v)} min={-1} step={256} title={t.configPage.cacheRamTip}  active={a('cache_ram')} />
+            <Num label={`${t.configPage.cacheRam} (--cache-ram, -cram)`} value={local.cache_ram} onChange={v => set('cache_ram', v)} min={-1} step={256} title={t.configPage.cacheRamTip}  active={a('cache_ram')} />
             <Switch label={`${t.configPage.warmup} (--warmup)`} value={local.warmup} onChange={v => set('warmup', v)} title={t.configPage.warmupTip}  active={a('warmup')} />
             <Switch label={`${t.configPage.cacheIdleSlots} (--no-cache-idle-slots)`} value={!local.cache_idle_slots} onChange={v => set('cache_idle_slots', !v)} title={t.configPage.cacheIdleSlotsTip} />
             <Switch label={`${t.configPage.kvUnified} (--kv-unified)`} value={local.kv_unified} onChange={v => set('kv_unified', v)} title={t.configPage.kvUnifiedTip}  active={a('kv_unified')} />
@@ -293,8 +293,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         {/* 上下文管理 (6) */}
         <CollapsibleGroup title={t.configPage.subAdvContextMgmt} onReset={() => resetGroup('advancedContextMgmt')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Num label={`${t.configPage.ctxCheckpoints} (-ctxcp)`} value={local.ctx_checkpoints} onChange={v => set('ctx_checkpoints', v)} min={0} title={t.configPage.ctxCheckpointsTip}  active={a('ctx_checkpoints')} />
-            <Num label={`${t.configPage.checkpointMinStep} (-cms)`} value={local.checkpoint_min_step} onChange={v => set('checkpoint_min_step', v)} min={0} title={t.configPage.checkpointMinStepTip}  active={a('checkpoint_min_step')} />
+            <Num label={`${t.configPage.ctxCheckpoints} (--ctx-checkpoints, -ctxcp)`} value={local.ctx_checkpoints} onChange={v => set('ctx_checkpoints', v)} min={0} title={t.configPage.ctxCheckpointsTip}  active={a('ctx_checkpoints')} />
+            <Num label={`${t.configPage.checkpointMinStep} (--checkpoint-min-step, -cms)`} value={local.checkpoint_min_step} onChange={v => set('checkpoint_min_step', v)} min={0} title={t.configPage.checkpointMinStepTip}  active={a('checkpoint_min_step')} />
             <Switch label={`${t.configPage.contextShift} (--context-shift)`} value={local.context_shift} onChange={v => set('context_shift', v)} title={t.configPage.contextShiftTip} disabled={isEmbedding}  active={a('context_shift')} />
             <Switch label={`${t.configPage.swaFull} (--swa-full)`} value={local.swa_full} onChange={v => set('swa_full', v)} title={t.configPage.swaFullTip}  active={a('swa_full')} />
             <Num label={`${t.configPage.keep} (--keep)`} value={local.keep} onChange={v => set('keep', v)} min={0} title={t.configPage.keepTip}  active={a('keep')} />
@@ -306,15 +306,15 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         <CollapsibleGroup title={t.configPage.subAdvHardware} onReset={() => resetGroup('advancedHardware')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Num label={`${t.configPage.moeCpu} (--n-cpu-moe)`} value={local.moe_cpu_layers} onChange={v => set('moe_cpu_layers', v)} min={0} max={99} title={t.configPage.moeCpuTip} disabled={isEmbedding}  active={a('moe_cpu_layers')} />
-            <Input label={`${t.configPage.device} (-dev)`} value={local.device} onChange={v => set('device', v)} title={t.configPage.deviceTip}  active={a('device')} />
-            <Select label={`${t.configPage.splitMode} (-sm)`} value={local.split_mode} onChange={v => set('split_mode', v)} options={['', 'none', 'layer', 'row', 'tensor']} title={t.configPage.splitModeTip} defaultLabel={t.common.default}  active={a('split_mode')} />
-            <Input label={`${t.configPage.tensorSplit} (-ts)`} value={local.tensor_split} onChange={v => set('tensor_split', v)} title={t.configPage.tensorSplitTip}  active={a('tensor_split')} />
-            <Num label={`${t.configPage.mainGpu} (-mg)`} value={local.main_gpu} onChange={v => set('main_gpu', v)} min={0} max={9} title={t.configPage.mainGpuTip}  active={a('main_gpu')} />
+            <Input label={`${t.configPage.device} (--device, -dev)`} value={local.device} onChange={v => set('device', v)} title={t.configPage.deviceTip}  active={a('device')} />
+            <Select label={`${t.configPage.splitMode} (--split-mode, -sm)`} value={local.split_mode} onChange={v => set('split_mode', v)} options={['', 'none', 'layer', 'row', 'tensor']} title={t.configPage.splitModeTip} defaultLabel={t.common.default}  active={a('split_mode')} />
+            <Input label={`${t.configPage.tensorSplit} (--tensor-split, -ts)`} value={local.tensor_split} onChange={v => set('tensor_split', v)} title={t.configPage.tensorSplitTip}  active={a('tensor_split')} />
+            <Num label={`${t.configPage.mainGpu} (--main-gpu, -mg)`} value={local.main_gpu} onChange={v => set('main_gpu', v)} min={0} max={9} title={t.configPage.mainGpuTip}  active={a('main_gpu')} />
             <Switch label={`${t.configPage.perf} (--perf)`} value={local.perf} onChange={v => set('perf', v)} title={t.configPage.perfTip}  active={a('perf')} />
             <Switch label={`${t.configPage.checkTensors} (--check-tensors)`} value={local.check_tensors} onChange={v => set('check_tensors', v)} title={t.configPage.checkTensorsTip}  active={a('check_tensors')} />
             <Switch label={`${t.configPage.fit} (--fit)`} value={local.fit} onChange={v => set('fit', v)} title={t.configPage.fitTip}  active={a('fit')} />
-            <Input label={`${t.configPage.fitTarget} (-fitt)`} value={local.fit_target} onChange={v => set('fit_target', v)} title={t.configPage.fitTargetTip} disabled={!local.fit}  active={a('fit_target')} />
-            <Num label={`${t.configPage.fitCtx} (-fitc)`} value={local.fit_ctx} onChange={v => set('fit_ctx', v)} min={0} title={t.configPage.fitCtxTip} disabled={!local.fit}  active={a('fit_ctx')} />
+            <Input label={`${t.configPage.fitTarget} (--fit-target, -fitt)`} value={local.fit_target} onChange={v => set('fit_target', v)} title={t.configPage.fitTargetTip} disabled={!local.fit}  active={a('fit_target')} />
+            <Num label={`${t.configPage.fitCtx} (--fit-ctx, -fitc)`} value={local.fit_ctx} onChange={v => set('fit_ctx', v)} min={0} title={t.configPage.fitCtxTip} disabled={!local.fit}  active={a('fit_ctx')} />
             <Num label={`${t.configPage.threadsHttp} (--threads-http)`} value={local.threads_http} onChange={v => set('threads_http', v)} min={-1} title={t.configPage.threadsHttpTip}  active={a('threads_http')} />
           </div>
         </CollapsibleGroup>
@@ -328,9 +328,9 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
       <Switch label={`${t.configPage.offline} (--offline)`} value={local.offline} onChange={v => set('offline', v)} title={t.configPage.offlineTip}  active={a('offline')} />
             <Input label={`${t.configPage.pathPrefix} (--path)`} value={local.path_prefix} onChange={v => set('path_prefix', v)} title={t.configPage.pathPrefixTip}  active={a('path_prefix')} />
             <Input label={`${t.configPage.apiPrefix} (--api-prefix)`} value={local.api_prefix} onChange={v => set('api_prefix', v)} title={t.configPage.apiPrefixTip}  active={a('api_prefix')} />
-            <Num label={`${t.configPage.timeout} (-to)`} value={local.timeout} onChange={v => set('timeout', v)} min={1} title={t.configPage.timeoutTip}  active={a('timeout')} />
+            <Num label={`${t.configPage.timeout} (--timeout, -to)`} value={local.timeout} onChange={v => set('timeout', v)} min={1} title={t.configPage.timeoutTip}  active={a('timeout')} />
             <Num label={`${t.configPage.sleepIdle} (--sleep-idle-seconds)`} value={local.sleep_idle} onChange={v => set('sleep_idle', v)} min={-1} title={t.configPage.sleepIdleTip}  active={a('sleep_idle')} />
-            <Switch label={`${t.configPage.verbose} (-v)`} value={local.verbose} onChange={v => set('verbose', v)} title={t.configPage.verboseTip}  active={a('verbose')} />
+            <Switch label={`${t.configPage.verbose} (--verbose, -v)`} value={local.verbose} onChange={v => set('verbose', v)} title={t.configPage.verboseTip}  active={a('verbose')} />
           </div>
           <div className="grid grid-cols-2 gap-3 mt-3">
             <Input label={`${t.configPage.sslKey} (--ssl-key-file)`} value={local.ssl_key_file} onChange={v => set('ssl_key_file', v)} title={t.configPage.sslKeyTip}  active={a('ssl_key_file')} />
@@ -345,7 +345,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
             <Switch label={`${t.configPage.metrics} (--metrics)`} value={local.metrics} onChange={v => set('metrics', v)} title={t.configPage.metricsTip}  active={a('metrics')} />
             <Switch label={`${t.configPage.props} (--props)`} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip}  active={a('props')} />
             <Input label={`${t.configPage.slotSavePath} (--slot-save-path)`} value={local.slot_save_path} onChange={v => set('slot_save_path', v)} title={t.configPage.slotSavePathTip}  active={a('slot_save_path')} />
-            <Num label={`${t.configPage.slotPromptSimilarity} (-sps)`} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip}  active={a('slot_prompt_similarity')} />
+            <Num label={`${t.configPage.slotPromptSimilarity} (--slot-prompt-similarity, -sps)`} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip}  active={a('slot_prompt_similarity')} />
             <Switch label={`${t.configPage.prefillAssistant} (--prefill-assistant)`} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip}  active={a('prefill_assistant')} />
             <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip}  active={a('ui_config_file')} />
             <Input label={`${t.configPage.uiConfig} (--ui-config)`} value={local.ui_config} onChange={v => set('ui_config', v)} title={t.configPage.uiConfigTip}  active={a('ui_config')} />
