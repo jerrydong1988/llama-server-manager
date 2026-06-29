@@ -91,7 +91,7 @@ function AppInner() {
     { id: 'cluster', name: t.nav.cluster, icon: Network },
     { id: 'perf', name: t.nav.perf, icon: Activity },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
-    { id: 'guide', name: '\uD83D\uDCD6 \u4F7F\u7528\u8BF4\u660E', icon: BookOpen, separator: true },
+    { id: 'guide', name: '\u4F7F\u7528\u8BF4\u660E', icon: BookOpen, separator: true },
   ], [t, upCount])
   // dark mode handled by store setDarkMode
   const mountTimeRef = useRef(performance.now())
