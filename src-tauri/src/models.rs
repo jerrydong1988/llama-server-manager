@@ -231,6 +231,8 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub image_max_tokens: u32,
     #[serde(default)]
+    pub mtmd_batch_max_tokens: u32,
+    #[serde(default)]
     pub tags: String,
     #[serde(default)]
     pub media_path: String,
@@ -340,7 +342,7 @@ impl Default for InstanceConfig {
             metrics: true, props: false, slots_enabled: true,
             slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: true,
             models_dir: String::new(), models_preset: String::new(), models_max: 4, models_autoload: true,
-            mmproj_url: String::new(), mmproj_auto: false, no_mmproj: false, no_mmproj_offload: false, image_min_tokens: 0, image_max_tokens: 0,
+            mmproj_url: String::new(), mmproj_auto: false, no_mmproj: false, no_mmproj_offload: false, image_min_tokens: 0, image_max_tokens: 0, mtmd_batch_max_tokens: 1024,
             tags: String::new(), media_path: String::new(), tools: String::new(),
             n_predict: -1, ignore_eos: false, json_schema: String::new(), json_schema_file: String::new(),
             temp: 0.8, top_k: 40, top_p: 0.95, repeat_penalty: 1.0, seed: -1,

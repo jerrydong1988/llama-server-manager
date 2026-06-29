@@ -63,7 +63,7 @@ export interface InstanceConfig {
   slot_save_path: string; slot_prompt_similarity: number; prefill_assistant: boolean;
   // Multi-Model & Media
   models_dir: string; models_preset: string; models_max: number; models_autoload: boolean;
-  mmproj_url: string; mmproj_auto: boolean; no_mmproj: boolean; no_mmproj_offload: boolean; image_min_tokens: number; image_max_tokens: number;
+  mmproj_url: string; mmproj_auto: boolean; no_mmproj: boolean; no_mmproj_offload: boolean; image_min_tokens: number; image_max_tokens: number; mtmd_batch_max_tokens: number;
   tags: string; media_path: string; tools: string;
   // Generation
   n_predict: number; ignore_eos: boolean; json_schema: string; json_schema_file: string;

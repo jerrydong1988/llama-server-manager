@@ -242,6 +242,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.models_autoload { cmd.push("--models-autoload".into()); }
     if config.image_min_tokens > 0 { cmd.extend_from_slice(&["--image-min-tokens".into(), config.image_min_tokens.to_string()]); }
     if config.image_max_tokens > 0 { cmd.extend_from_slice(&["--image-max-tokens".into(), config.image_max_tokens.to_string()]); }
+    if config.mtmd_batch_max_tokens != 1024 { cmd.extend_from_slice(&["--mtmd-batch-max-tokens".into(), config.mtmd_batch_max_tokens.to_string()]); }
     if !config.tags.is_empty() { cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]); }
     if !config.media_path.is_empty() { cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]); }
     if !config.tools.is_empty() { cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]); }
