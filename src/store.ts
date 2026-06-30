@@ -220,7 +220,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const engine = engines.find(e => e.id === inst.config.engine_id)
         || engines.find(e => e.id === defaultEngineId)
         || engines[0]
-      if (!engine) { _startupTimings.push({ name: 'start:no-engine', ms: engines.length }); return }
+      if (!engine) { message('No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' }); return }
 
       await invoke('start_server', { instanceId: id, config: inst.config, engineExe: engine.exe, engineBackend: engine.backend })
       get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
@@ -310,19 +310,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
         invoke<[ModelInfo[], EngineInfo[], PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
           .then(([models, engines, queue]) => {
-            _startupTimings.push({ name: 'load_data:OK M', ms: models.length })
-            _startupTimings.push({ name: 'load_data:OK E', ms: engines.length })
             startTransition(() => { set({ models, engines }) })
             if (queue?.length > 0) startTransition(() => { get().restoreDownloadQueue(queue) })
           })
-          .catch((err) => {
-            _startupTimings.push({ name: 'load_data:FAIL', ms: typeof err === 'string' ? err.length : 0 })
+          .catch(() => {
             invoke<EngineInfo[]>('scan_engines', { paths: global.engine_dirs || [] })
-              .then(engines => {
-                _startupTimings.push({ name: 'scan_eng:OK E', ms: engines.length })
-                startTransition(() => { set({ engines }) })
-              })
-              .catch(e => _startupTimings.push({ name: 'scan_eng:FAIL', ms: typeof e === 'string' ? e.length : 0 }))
+              .then(engines => startTransition(() => { set({ engines }) }))
+              .catch(() => {})
           })
       }
     } catch (e) { console.error('load_config error:', e) }
