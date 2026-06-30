@@ -309,6 +309,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           document.documentElement.classList.toggle('dark', global.dark_mode)
           startTransition(() => { set({ darkMode: !!global.dark_mode }) })
         }
+        console.log('[loadConfig] model_dirs:', JSON.stringify(global.model_dirs), 'engine_dirs:', JSON.stringify(global.engine_dirs))
         invoke<[ModelInfo[], EngineInfo[], PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
           .then(([models, engines, queue]) => {
             startTransition(() => { set({ models, engines }) })
