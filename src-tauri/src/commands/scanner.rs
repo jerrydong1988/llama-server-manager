@@ -36,6 +36,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
 pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, _app: tauri::AppHandle) -> Result<Vec<ModelInfo>, String> {
     let app_dir = utils::get_data_dir();
     let default_path = app_dir.join("models");
+    let default_path_for_check = default_path.clone();
 
     let scan_paths: Vec<PathBuf> = if paths.is_empty() {
         vec![default_path]
@@ -54,7 +55,10 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, 
 
         for scan_root in &scan_paths {
             let root_str = scan_root.display().to_string();
-            if !scan_root.exists() { errors.push(format!("{} 不存在", root_str)); continue; }
+            if !scan_root.exists() { 
+                if *scan_root == default_path_for_check { continue; }
+                errors.push(format!("{} 不存在", root_str)); continue; 
+            }
             if !scan_root.is_dir() { errors.push(format!("{} 不是目录", root_str)); continue; }
 
             let mut file_count = 0;
