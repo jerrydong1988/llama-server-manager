@@ -217,12 +217,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { instances, engines, defaultEngineId } = get()
       const inst = instances.find(i => i.id === id)
       if (!inst) { message('Instance not found.', { title: 'Error', kind: 'error' }); return }
-      // 实例指定引擎 > 默认引擎 > 第一个引擎
       const engine = engines.find(e => e.id === inst.config.engine_id)
         || engines.find(e => e.id === defaultEngineId)
         || engines[0]
-      if (!engine) { message('No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' }); return }
+      if (!engine) { console.log('[startInstance] No engine found. engines count:', engines.length); message('No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' }); return }
 
+      console.log('[startInstance] Starting:', id, 'with engine:', engine.name)
       await invoke('start_server', { instanceId: id, config: inst.config, engineExe: engine.exe, engineBackend: engine.backend })
       get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
     } catch (e) {

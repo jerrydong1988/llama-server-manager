@@ -111,10 +111,13 @@ function AppInner() {
 
   // 自动启动标记了 auto_start 的实例 — 等待 engines 加载完毕再启动
   useEffect(() => {
+    console.log('[auto-start] evaluating: autoStarted=', autoStarted, 'instances=', instances.length, 'engines=', engines.length)
     if (autoStarted || instances.length === 0) return
     const toBoot = instances.filter(i => i.config.auto_start)
+    console.log('[auto-start] toBoot count:', toBoot.length, toBoot.map(i => i.name))
     if (toBoot.length === 0) { setAutoStarted(true); return }
-    if (engines.length === 0) return
+    if (engines.length === 0) { console.log('[auto-start] WAITING for engines'); return }
+    console.log('[auto-start] BOOTING instances...')
     setAutoStarted(true)
 
     let cancelled = false
@@ -140,7 +143,7 @@ function AppInner() {
           }
         }
 
-        try { await startInstance(inst.id) } catch { /* skip failed start */ }
+        try { console.log('[auto-start] starting instance:', inst.id, inst.name); await startInstance(inst.id); console.log('[auto-start] instance started:', inst.name) } catch (e) { console.log('[auto-start] instance start FAILED:', inst.name, e) }
         await new Promise(r => setTimeout(r, 3000))
       }
     }
