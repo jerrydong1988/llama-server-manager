@@ -118,7 +118,6 @@ function AppInner() {
     if (toBoot.length === 0) { setAutoStarted(true); return }
     if (engines.length === 0) { _startupTimings.push({ name: 'auto-start:wait-engines', ms: 0 }); return }
     _startupTimings.push({ name: 'auto-start:boot', ms: engines.length })
-    setAutoStarted(true)
 
     let cancelled = false
     const boot = async () => {
@@ -145,6 +144,7 @@ function AppInner() {
         try { _startupTimings.push({ name: 'auto-start:starting', ms: 0 }); await startInstance(inst.id); _startupTimings.push({ name: 'auto-start:ok', ms: 0 }) } catch (e) { _startupTimings.push({ name: 'auto-start:FAIL', ms: 1 }) }
         await new Promise(r => setTimeout(r, 3000))
       }
+      setAutoStarted(true)
     }
     boot()
     return () => { cancelled = true }
