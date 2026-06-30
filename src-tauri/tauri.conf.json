@@ -1,5 +1,5 @@
 {
-  "$schema": "https://schema.tauri.app/config/2.0.0-beta",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "LlamaServerManager",
   "version": "2.9.21",
   "identifier": "com.llama.manager",
@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "vite build"
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [],

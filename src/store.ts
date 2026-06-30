@@ -570,13 +570,14 @@ listen<{ instanceId: string; status: string }>('health-status', (event) => {
 }).catch(() => {})
 
 // ── 下载任务全局追踪 ──
-let _lastProgressUpdate = 0
+// 按文件名分别节流：避免多文件并发下载时共用一个全局闸门，导致部分文件进度被丢弃
+const _lastProgressUpdate: Record<string, number> = {}
 listen<{ fileName: string; repoId: string; source: string; downloaded: number; total: number; speed: number }>('download-progress', (e) => {
   const now = Date.now()
-  if (now - _lastProgressUpdate < 200) return
-  _lastProgressUpdate = now
-  const s = useAppStore.getState()
   const { fileName, repoId, source, downloaded, total, speed } = e.payload
+  if (now - (_lastProgressUpdate[fileName] || 0) < 200) return
+  _lastProgressUpdate[fileName] = now
+  const s = useAppStore.getState()
   s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { fileName, repoId, source, downloaded, total, speed, status: 'active' } })
 }).catch(() => {})
 

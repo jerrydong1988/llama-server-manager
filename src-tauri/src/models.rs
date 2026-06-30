@@ -32,9 +32,11 @@ pub struct EngineInfo {
 }
 
 // ── 实例配置 ──────────────────────────────────────────────────────
+// #[serde(default)] 容器级别：任何缺失字段都回退到 Default impl，
+// 防止旧版/手改配置因缺少单个字段导致全部实例反序列化失败。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct InstanceConfig {
-    #[serde(default)]
     pub id: String,
     pub name: String,
     #[serde(default)]

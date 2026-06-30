@@ -208,18 +208,18 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                         if parts.len() >= 2 {
                             let host = parts[0].to_string();
                             let worker_name = format!("Worker-{}", host.split('.').last().unwrap_or("?"));
-                            if let Ok(mut list) = discovered.try_lock() {
-                                list.push(WorkerInfo {
-                                    id: format!("auto-{}", host.replace('.', "-")),
-                                    host,
-                                    port,
-                                    name: worker_name,
-                                    devices: Vec::new(),
-                                    status: WorkerStatus::Online,
-                                    last_seen: Some(chrono::Utc::now().to_rfc3339()),
-                                    auto_discovered: true,
-                                });
-                            }
+                            // 使用 lock().await 而非 try_lock()，避免高并发下锁竞争导致已发现的 worker 被静默丢弃
+                            let mut list = discovered.lock().await;
+                            list.push(WorkerInfo {
+                                id: format!("auto-{}", host.replace('.', "-")),
+                                host,
+                                port,
+                                name: worker_name,
+                                devices: Vec::new(),
+                                status: WorkerStatus::Online,
+                                last_seen: Some(chrono::Utc::now().to_rfc3339()),
+                                auto_discovered: true,
+                            });
                         }
                     }
                 }
