@@ -312,13 +312,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         console.log('[loadConfig] model_dirs:', JSON.stringify(global.model_dirs), 'engine_dirs:', JSON.stringify(global.engine_dirs))
         invoke<[ModelInfo[], EngineInfo[], PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
           .then(([models, engines, queue]) => {
+            console.log('[load_app_data] OK models:', models.length, 'engines:', engines.length)
             startTransition(() => { set({ models, engines }) })
             if (queue?.length > 0) startTransition(() => { get().restoreDownloadQueue(queue) })
           })
-          .catch(() => {
+          .catch((err) => {
+            console.log('[load_app_data] FAILED:', err)
             invoke<EngineInfo[]>('scan_engines', { paths: global.engine_dirs || [] })
-              .then(engines => startTransition(() => { set({ engines }) }))
-              .catch(() => {})
+              .then(engines => {
+                console.log('[scan_engines fallback] OK engines:', engines.length)
+                startTransition(() => { set({ engines }) })
+              })
+              .catch(e => console.log('[scan_engines fallback] FAILED:', e))
           })
       }
     } catch (e) { console.error('load_config error:', e) }

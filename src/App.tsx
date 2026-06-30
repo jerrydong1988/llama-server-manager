@@ -112,9 +112,9 @@ function AppInner() {
   // 自动启动标记了 auto_start 的实例 — 等待 engines 加载完毕再启动
   useEffect(() => {
     if (autoStarted || instances.length === 0) return
-    const toBoot = instances.filter(i => i.config.auto_start && i.status !== 'running')
+    const toBoot = instances.filter(i => i.config.auto_start)
     if (toBoot.length === 0) { setAutoStarted(true); return }
-    if (engines.length === 0) return // engines 尚未加载，等待 load_app_data 完成
+    if (engines.length === 0) return
     setAutoStarted(true)
 
     let cancelled = false
@@ -125,6 +125,7 @@ function AppInner() {
 
       for (const inst of toBoot) {
         if (cancelled) return
+        if (inst.status === 'running') continue // 实际正在运行的跳过
         if (inst.config.rpc_servers) {
           const configuredServers = inst.config.rpc_servers.split(/[, ]+/).filter(Boolean)
           const hasMatchingWorker = currentWorkers.some(w =>
