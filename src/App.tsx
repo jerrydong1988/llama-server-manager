@@ -128,7 +128,6 @@ function AppInner() {
 
       for (const inst of toBoot) {
         if (cancelled) return
-        if (inst.status === 'running') continue // 实际正在运行的跳过
         if (inst.config.rpc_servers) {
           const configuredServers = inst.config.rpc_servers.split(/[, ]+/).filter(Boolean)
           const hasMatchingWorker = currentWorkers.some(w =>
