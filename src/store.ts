@@ -309,13 +309,16 @@ export const useAppStore = create<AppState>((set, get) => ({
           document.documentElement.classList.toggle('dark', global.dark_mode)
           startTransition(() => { set({ darkMode: !!global.dark_mode }) })
         }
-        // 后台扫描模型/引擎 — IPC 此时已自然暖机
         invoke<[ModelInfo[], EngineInfo[], PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
           .then(([models, engines, queue]) => {
             startTransition(() => { set({ models, engines }) })
             if (queue?.length > 0) startTransition(() => { get().restoreDownloadQueue(queue) })
           })
-          .catch(() => {})
+          .catch(() => {
+            invoke<EngineInfo[]>('scan_engines', { paths: global.engine_dirs || [] })
+              .then(engines => startTransition(() => { set({ engines }) }))
+              .catch(() => {})
+          })
       }
     } catch (e) { console.error('load_config error:', e) }
     set({ isLoading: false })

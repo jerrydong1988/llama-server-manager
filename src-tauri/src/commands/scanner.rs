@@ -139,8 +139,8 @@ pub async fn load_app_data(
         scan_models(paths, state.clone(), app.clone()),
         scan_engines(engine_paths, state.clone())
     );
-    let models = models_result?;
-    let engines = engines_result?;
+    let models = models_result.unwrap_or_else(|_| Vec::new());
+    let engines = engines_result.unwrap_or_else(|_| Vec::new());
     let queue = crate::commands::download::load_download_state(&state);
     Ok((models, engines, queue))
 }
