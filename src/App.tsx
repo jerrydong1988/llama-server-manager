@@ -111,13 +111,13 @@ function AppInner() {
 
   // 自动启动标记了 auto_start 的实例 — 等待 engines 加载完毕再启动
   useEffect(() => {
-    console.log('[auto-start] evaluating: autoStarted=', autoStarted, 'instances=', instances.length, 'engines=', engines.length)
+    _startupTimings.push({ name: 'auto-start:check', ms: instances.length })
     if (autoStarted || instances.length === 0) return
     const toBoot = instances.filter(i => i.config.auto_start)
-    console.log('[auto-start] toBoot count:', toBoot.length, toBoot.map(i => i.name))
+    _startupTimings.push({ name: 'auto-start:toBoot', ms: toBoot.length })
     if (toBoot.length === 0) { setAutoStarted(true); return }
-    if (engines.length === 0) { console.log('[auto-start] WAITING for engines'); return }
-    console.log('[auto-start] BOOTING instances...')
+    if (engines.length === 0) { _startupTimings.push({ name: 'auto-start:wait-engines', ms: 0 }); return }
+    _startupTimings.push({ name: 'auto-start:boot', ms: engines.length })
     setAutoStarted(true)
 
     let cancelled = false
@@ -143,7 +143,7 @@ function AppInner() {
           }
         }
 
-        try { console.log('[auto-start] starting instance:', inst.id, inst.name); await startInstance(inst.id); console.log('[auto-start] instance started:', inst.name) } catch (e) { console.log('[auto-start] instance start FAILED:', inst.name, e) }
+        try { _startupTimings.push({ name: 'auto-start:starting', ms: 0 }); await startInstance(inst.id); _startupTimings.push({ name: 'auto-start:ok', ms: 0 }) } catch (e) { _startupTimings.push({ name: 'auto-start:FAIL', ms: 1 }) }
         await new Promise(r => setTimeout(r, 3000))
       }
     }
