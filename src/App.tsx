@@ -113,7 +113,7 @@ function AppInner() {
   useEffect(() => {
     _startupTimings.push({ name: 'auto-start:check', ms: instances.length })
     if (autoStarted || instances.length === 0) return
-    const toBoot = instances.filter(i => i.config.auto_start)
+    const toBoot = instances.filter(i => i.config.auto_start && i.status !== 'running')
     _startupTimings.push({ name: 'auto-start:toBoot', ms: toBoot.length })
     if (toBoot.length === 0) { setAutoStarted(true); return }
     if (engines.length === 0) { _startupTimings.push({ name: 'auto-start:wait-engines', ms: 0 }); return }
