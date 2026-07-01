@@ -16,7 +16,9 @@ export function pathBasename(p: string): string {
 
 /** Get the parent directory path. Cross-platform equivalent of path.dirname(). */
 export function pathDirname(p: string): string {
-  return normalizePath(p).replace(/\/[^/]*$/, '');
+  const n = normalizePath(p)
+  if (n === '/' || n.endsWith(':/')) return n
+  return n.replace(/\/[^/]*$/, '') || '/'
 }
 
 /** Join path segments using forward slash. Strips leading/trailing slashes from intermediate segments. */

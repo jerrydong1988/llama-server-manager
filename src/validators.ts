@@ -24,8 +24,8 @@ export const KNOWN_FLAGS = new Set([
   '--rope-scaling', '--rope-scale', '--rope-freq-base', '--rope-freq-scale',
   '--yarn-ext-factor', '--yarn-attn-factor', '--yarn-beta-slow', '--yarn-beta-fast', '--yarn-orig-ctx',
   // Flash Attention & Memory
-  '-fa', '--n-cpu-moe', '--mlock', '--no-mmap', '--no-repack', '--numa',
-  '--check-tensors', '--perf', '--fit', '-fitt', '-fitc',
+  '-fa', '--n-cpu-moe', '--cpu-moe', '-cmoe', '--mlock', '--no-mmap', '--no-repack', '--numa',
+  '--check-tensors', '--perf', '--fit', '-fitt', '-fitc', '--direct-io', '-dio',
   // KV Cache
   '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-offload', '--no-cache-idle-slots',
   // GPU & Device
@@ -33,7 +33,7 @@ export const KNOWN_FLAGS = new Set([
   // Server & Network
   '--host', '--port', '--api-key', '--api-key-file',
   '--ssl-key-file', '--ssl-cert-file', '--path', '--api-prefix',
-  '--no-ui', '--offline', '--ui-config-file', '--ui-config', '--ui-mcp-proxy',
+  '--no-ui', '--offline', '--ui-config-file', '--ui-config', '--ui-mcp-proxy', '--agent', '-ag',
   // Embedding & Generation
   '--embedding', '--pooling', '--embd-normalize', '--reranking',
   // Server features
@@ -41,7 +41,7 @@ export const KNOWN_FLAGS = new Set([
   '--rpc', '--sse-ping-interval', '--reuse-port',
   // Multi-Model & Media
   '--models-dir', '--models-preset', '--models-max', '--models-autoload',
-  '--image-min-tokens', '--image-max-tokens', '--tags', '--media-path', '--tools',
+  '--image-min-tokens', '--image-max-tokens', '--mtmd-batch-max-tokens', '--tags', '--media-path', '--tools',
   // Generation
   '-n', '--ignore-eos', '--json-schema', '-jf',
   '--temp', '--top-k', '--top-p', '--repeat-penalty', '--seed', '--min-p',

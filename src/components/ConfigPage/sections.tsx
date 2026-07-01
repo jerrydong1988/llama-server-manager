@@ -306,6 +306,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         <CollapsibleGroup title={t.configPage.subAdvHardware} onReset={() => resetGroup('advancedHardware')}>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
             <Num label={`${t.configPage.moeCpu} (--n-cpu-moe)`} value={local.moe_cpu_layers} onChange={v => set('moe_cpu_layers', v)} min={0} max={99} title={t.configPage.moeCpuTip} disabled={isEmbedding}  active={a('moe_cpu_layers')} />
+            <Switch label={`${t.configPage.cpuMoe} (--cpu-moe)`} value={local.cpu_moe} onChange={v => set('cpu_moe', v)} title={t.configPage.cpuMoeTip}  active={a('cpu_moe')} />
             <Input label={`${t.configPage.device} (--device, -dev)`} value={local.device} onChange={v => set('device', v)} title={t.configPage.deviceTip}  active={a('device')} />
             <Select label={`${t.configPage.splitMode} (--split-mode, -sm)`} value={local.split_mode} onChange={v => set('split_mode', v)} options={['', 'none', 'layer', 'row', 'tensor']} title={t.configPage.splitModeTip} defaultLabel={t.common.default}  active={a('split_mode')} />
             <Input label={`${t.configPage.tensorSplit} (--tensor-split, -ts)`} value={local.tensor_split} onChange={v => set('tensor_split', v)} title={t.configPage.tensorSplitTip}  active={a('tensor_split')} />
@@ -350,6 +351,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
             <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip}  active={a('ui_config_file')} />
             <Input label={`${t.configPage.uiConfig} (--ui-config)`} value={local.ui_config} onChange={v => set('ui_config', v)} title={t.configPage.uiConfigTip}  active={a('ui_config')} />
             <Switch label={`${t.configPage.uiMcpProxy} (--ui-mcp-proxy)`} value={local.ui_mcp_proxy} onChange={v => set('ui_mcp_proxy', v)} title={t.configPage.uiMcpProxyTip}  active={a('ui_mcp_proxy')} />
+            <Switch label={`${t.configPage.agent} (--agent)`} value={local.agent} onChange={v => set('agent', v)} title={t.configPage.agentTip}  active={a('agent')} />
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
             <div className="col-span-2 md:col-span-3">

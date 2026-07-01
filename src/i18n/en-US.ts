@@ -158,6 +158,7 @@ export const enUS = {
     // ── Memory & Loading ──
     flashAttn: 'Flash Attn', flashAttnTip: 'Flash Attention acceleration. "on"=force, "off"=disable, "auto"=detect. [Principle] Flash Attention uses memory-efficient tiled attention — 2-4× faster, less VRAM. [Scene] "auto" for most cases; "on" requires GPU (CUDA/ROCm/Metal); "off" if Flash Attention causes errors.',
     moeCpu: 'MoE CPU Layers', moeCpuTip: 'Number of Mixture-of-Experts layers kept on CPU. [Scene] For MoE models (e.g., Mixtral, DeepSeek-V2) when GPU VRAM is insufficient — offloads expert layers to CPU RAM. [Trade-off] Slower inference but enables larger models.',
+    cpuMoe: 'All MoE CPU', cpuMoeTip: 'Keep all Mixture-of-Experts weights on CPU (not just first N layers). [Scene] When all MoE layers need to stay on CPU (more aggressive than --n-cpu-moe). [Trade-off] Significantly slower inference but minimal GPU VRAM usage.',
     mlock: 'Memory Lock', mlockTip: 'Prevents the OS from swapping model weights to disk (page file). [Scene] Enable on systems with limited RAM to avoid swap-induced latency spikes. [Principle] Uses mlock() syscall to pin memory.',
     noMmap: 'Disable mmap', noMmapTip: 'Disables memory-mapped model loading. [Scene] Useful when mmap causes issues or for debugging memory usage. [Trade-off] Slower load times (entire model read into memory at once instead of on-demand) but may reduce page faults.',
     noRepack: 'Disable Repack', noRepackTip: 'Skip weight repacking at load time. [Principle] Repacking optimizes weight layout for faster inference but takes time at startup. [Scene] Disable if startup time is critical — at the cost of ~5-10% slower inference.',
@@ -226,6 +227,7 @@ export const enUS = {
     uiConfigFile: 'UI Config File', uiConfigFileTip: 'JSON file with default WebUI settings (theme, layout, default model, etc.). [Scene] Pre-configure the WebUI for specific deployment needs.',
     uiConfig: 'UI Config (JSON)', uiConfigTip: 'Inline JSON string with default UI settings. Alternative to --ui-config-file. [Scene] Quick inline config without creating a file.',
     uiMcpProxy: 'MCP Proxy', uiMcpProxyTip: 'Enables MCP CORS proxy for the Web UI. [Scene] Allows the Web UI to access MCP servers from different origins. ⚠️ Do not enable in untrusted environments — bypasses CORS restrictions.',
+    agent: 'Agent Mode', agentTip: 'Enables CORS proxy and all built-in tools. [Scene] Quick setup for AI Agent functionality (equivalent to --tools all + CORS proxy). ⚠️ Do not enable in untrusted environments.',
     sslKey: 'SSL Key', sslKeyTip: 'PEM-encoded SSL private key file. [Scene] Enable HTTPS on the server. Requires ssl_cert_file. [Principle] cert+key pair for TLS encryption.',
     sslCert: 'SSL Certificate', sslCertTip: 'PEM-encoded SSL certificate file. [Scene] Self-signed cert for internal use; CA-signed cert for public deployment. Use with ssl_key_file.',
     metrics: 'Metrics', metricsTip: 'Enables Prometheus-compatible /metrics endpoint for monitoring. [Scene] Production deployments — monitor request rates, token throughput, cache hit rates.',

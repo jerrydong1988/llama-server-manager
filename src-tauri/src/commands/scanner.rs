@@ -171,7 +171,9 @@ pub async fn delete_model_file(path: String, state: tauri::State<'_, AppState>) 
     }
     std::fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
     let mut models = state.models.lock().unwrap();
-    models.retain(|m| m.path != path);
+    models.retain(|m| {
+        std::fs::canonicalize(&m.path).ok().as_ref() != Some(&canonical)
+    });
     Ok(())
 }
 

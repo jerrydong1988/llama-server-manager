@@ -87,6 +87,8 @@ async fn download_single_file(
         return;
     }
 
+    let is_partial = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
+    let resume_from = if is_partial { resume_from } else { 0 };
     let total = if resume_from > 0 {
         resp.content_length().unwrap_or(0) + resume_from
     } else {
@@ -99,7 +101,7 @@ async fn download_single_file(
 
     use std::io::Write;
     let mut file = match std::fs::OpenOptions::new()
-        .create(true).append(resume_from > 0).write(true)
+        .create(true).append(is_partial).truncate(!is_partial).write(true)
         .open(&dest) {
         Ok(f) => f,
         Err(e) => {
@@ -378,18 +380,7 @@ pub async fn download_huggingface_files(
 pub async fn check_local_file(path: String) -> Result<Option<u64>, String> {
     let p = std::path::Path::new(&path);
     match std::fs::metadata(p) {
-        Ok(m) if m.is_file() => {
-            if let Ok(mut f) = std::fs::File::open(p) {
-                use std::io::Read;
-                let mut magic = [0u8; 4];
-                if f.read_exact(&mut magic).is_ok() && &magic == b"GGUF" {
-                    return Ok(Some(m.len()));
-                }
-                Ok(Some(m.len()))
-            } else {
-                Ok(Some(m.len()))
-            }
-        }
+        Ok(m) if m.is_file() => Ok(Some(m.len())),
         Ok(_) => Ok(None),
         Err(_) => Ok(None),
     }

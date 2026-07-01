@@ -72,9 +72,11 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
 
   // ── Memory & Loading ──
   if (config.moe_cpu_layers > 0) a.add('moe_cpu_layers')
+  if (config.cpu_moe) a.add('cpu_moe')
   if (config.mlock) a.add('mlock')
   if (config.no_mmap) a.add('no_mmap')
   if (config.no_repack) a.add('no_repack')
+  if (config.direct_io) a.add('direct_io')
   if (config.numa) a.add('numa')
   if (config.perf) a.add('perf')
   if (config.check_tensors) a.add('check_tensors')
@@ -127,7 +129,8 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
    if (config.api_prefix) a.add('api_prefix')
    if (config.ui_config_file) a.add('ui_config_file')
    if (config.ui_config) a.add('ui_config')
-   if (config.ui_mcp_proxy) a.add('ui_mcp_proxy')
+    if (config.ui_mcp_proxy) a.add('ui_mcp_proxy')
+    if (config.agent) a.add('agent')
    // New server params
    if (config.rpc_servers) a.add('rpc_servers')
    if (Math.abs(config.sse_ping_interval - 30) > 0.001) a.add('sse_ping_interval')

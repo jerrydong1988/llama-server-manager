@@ -10,14 +10,19 @@ use sysinfo::System;
 
 fn mask_api_key_in_cmd(cmd: &str) -> String {
     let mut result = cmd.to_string();
-    if let Some(pos) = result.find("--api-key ") {
+    let mut search_from = 0;
+    while let Some(pos) = result[search_from..].find("--api-key ") {
+        let pos = search_from + pos;
         let rest = &result[pos + 10..];
         if let Some(end) = rest.find(' ') {
-            let key_len = end;
-            if key_len > 0 {
-                let key = &rest[..end];
+            let key = &rest[..end];
+            if !key.is_empty() {
                 let masked = "*".repeat(key.len().min(8));
-                result = format!("{}--api-key {}{}", &result[..pos], masked, &rest[end..]);
+                let tail = &rest[end..];
+                result = format!("{}--api-key {}{}", &result[..pos], masked, tail);
+                search_from = pos + 10 + masked.len();
+            } else {
+                search_from = pos + 10;
             }
         } else {
             let key = rest;
@@ -25,6 +30,7 @@ fn mask_api_key_in_cmd(cmd: &str) -> String {
                 let masked = "*".repeat(key.len().min(8));
                 result = format!("{}--api-key {}", &result[..pos], masked);
             }
+            break;
         }
     }
     result
@@ -100,9 +106,11 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
 
     // ── Memory & Loading ──
     if config.moe_cpu_layers > 0 { cmd.extend_from_slice(&["--n-cpu-moe".into(), config.moe_cpu_layers.to_string()]); }
+    if config.cpu_moe { cmd.push("--cpu-moe".into()); }
     if config.mlock { cmd.push("--mlock".into()); }
     if config.no_mmap { cmd.push("--no-mmap".into()); }
     if config.no_repack { cmd.push("--no-repack".into()); }
+    if config.direct_io { cmd.push("--direct-io".into()); }
     if config.numa { cmd.extend_from_slice(&["--numa".into(), "distribute".into()]); }
     if config.check_tensors { cmd.push("--check-tensors".into()); }
     if config.perf { cmd.push("--perf".into()); }
@@ -159,6 +167,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.ui_config_file.is_empty() { cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]); }
     if !config.ui_config.is_empty() { cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]); }
     if config.ui_mcp_proxy { cmd.push("--ui-mcp-proxy".into()); }
+    if config.agent { cmd.push("--agent".into()); }
 
     // ── Embedding / Generation ──
     if config.embedding {
@@ -652,8 +661,9 @@ pub async fn stop_server(
             }
             #[cfg(target_os = "linux")]
             {
-                let _ = Command::new("fuser").args(["-k", &format!("{}/tcp", ri.port)]).status();
-                killed = true;
+                if let Ok(out) = Command::new("fuser").args(["-k", &format!("{}/tcp", ri.port)]).status() {
+                    killed = out.success() || killed;
+                }
             }
         }
     }
@@ -736,7 +746,7 @@ fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
     if let Some(p) = sys.processes().values().find(|p| p.pid().as_u32() == pid) {
         let raw = p.cpu_usage();
         // Always normalize by CPU count — sysinfo reports total across all cores
-        let cpu = raw / sys.cpus().len() as f32;
+        let cpu = if sys.cpus().is_empty() { 0.0 } else { raw / sys.cpus().len() as f32 };
         (cpu, p.memory() as f64 / (1024.0 * 1024.0))
     } else {
         (0.0, 0.0)

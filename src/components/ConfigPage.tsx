@@ -25,10 +25,12 @@ const ConfigPage = () => {
   useEffect(() => { return () => { mountedRef.current = false } }, [])
   // Clear matched elements & scroll to first match on search
   const prevQuery = useRef('')
-  if (searchQuery !== prevQuery.current) {
-    _matchedElements.clear()
-    prevQuery.current = searchQuery
-  }
+  useEffect(() => {
+    if (searchQuery !== prevQuery.current) {
+      _matchedElements.clear()
+      prevQuery.current = searchQuery
+    }
+  }, [searchQuery])
   useEffect(() => {
     if (searchQuery) {
       requestAnimationFrame(() => {

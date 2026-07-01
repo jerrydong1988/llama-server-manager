@@ -34,6 +34,7 @@ const InstanceManager = () => {
   const [testResults, setTestResults] = useState<Record<string, string>>({})
   const [editingId, setEditingId] = useState('')
   const [editName, setEditName] = useState('')
+  const editingCanceledRef = useRef(false)
   const [enginePickerForId, setEnginePickerForId] = useState('')
   const [portStatus, setPortStatus] = useState('')
   const portCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -142,8 +143,8 @@ const InstanceManager = () => {
                   {editingId === inst.id ? (
                     <input type="text" value={editName}
                       onChange={e => setEditName(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') { renameInstance(inst.id, editName); setEditingId('') } if (e.key === 'Escape') setEditingId('') }}
-                      onBlur={() => { renameInstance(inst.id, editName); setEditingId('') }}
+                      onKeyDown={e => { if (e.key === 'Enter') { renameInstance(inst.id, editName); setEditingId('') } if (e.key === 'Escape') { editingCanceledRef.current = true; setEditingId('') } }}
+                      onBlur={() => { if (editingCanceledRef.current) { editingCanceledRef.current = false; return } renameInstance(inst.id, editName); setEditingId('') }}
                       autoFocus
                       className="font-semibold text-lg bg-transparent border-b border-blue-500 outline-none px-1 w-48 dark:text-white" />
                   ) : (

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { RefreshCw, FolderOpen, Trash2, Plus, Cpu, Pencil } from 'lucide-react'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
@@ -20,6 +20,7 @@ const { t } = useI18n()
 
 const [editingId, setEditingId] = useState<string | null>(null)
 const [editName, setEditName] = useState('')
+const editingCanceledRef = useRef(false)
 
 useEffect(() => { loadInitialData() }, [loadInitialData])
 
@@ -103,8 +104,8 @@ useEffect(() => { loadInitialData() }, [loadInitialData])
                   {editingId === engine.id ? (
                     <input type="text" value={editName}
                       onChange={e => setEditName(e.target.value)}
-                      onKeyDown={e => { if (e.key === 'Enter') { renameEngine(engine.id, editName); setEditingId(null) } if (e.key === 'Escape') setEditingId(null) }}
-                      onBlur={() => { renameEngine(engine.id, editName); setEditingId(null) }}
+                      onKeyDown={e => { if (e.key === 'Enter') { renameEngine(engine.id, editName); setEditingId(null) } if (e.key === 'Escape') { editingCanceledRef.current = true; setEditingId(null) } }}
+                      onBlur={() => { if (editingCanceledRef.current) { editingCanceledRef.current = false; return } renameEngine(engine.id, editName); setEditingId(null) }}
                       autoFocus
                       className="font-semibold bg-transparent border-b border-blue-500 outline-none px-1 w-40 dark:text-white" />
                   ) : (

@@ -41,18 +41,24 @@ fn workers_path() -> PathBuf {
 }
 
 pub(crate) fn load_workers() -> Vec<WorkerInfo> {
-    let path = workers_path();
+    load_workers_from(&workers_path())
+}
+
+fn load_workers_from(path: &std::path::Path) -> Vec<WorkerInfo> {
     if !path.exists() {
         return Vec::new();
     }
-    std::fs::read_to_string(&path)
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<Vec<WorkerInfo>>(&s).ok())
         .unwrap_or_default()
 }
 
 pub(crate) fn save_workers(workers: &[WorkerInfo]) {
-    let path = workers_path();
+    save_workers_to(&workers_path(), workers)
+}
+
+fn save_workers_to(path: &std::path::Path, workers: &[WorkerInfo]) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -60,7 +66,9 @@ pub(crate) fn save_workers(workers: &[WorkerInfo]) {
     let tmp = path.with_extension("json.tmp");
     if let Ok(json) = serde_json::to_string_pretty(workers) {
         if std::fs::write(&tmp, json).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
+            if std::fs::rename(&tmp, path).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
         }
     }
 }
@@ -233,7 +241,11 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
 
     match tokio_timeout(overall_timeout, scan_future).await {
         Ok(results) => {
-            let mut existing = load_workers();
+            let mut existing = if let Ok(w) = state.workers.lock() {
+                if w.is_empty() { load_workers() } else { w.clone() }
+            } else {
+                load_workers()
+            };
             for d in &results {
                 if let Some(e) = existing.iter_mut().find(|w| w.host == d.host && w.port == d.port) {
                     e.status = WorkerStatus::Online;
@@ -291,7 +303,7 @@ pub async fn test_worker(host: String, port: u16, state: State<'_, AppState>) ->
 }
 
 #[tauri::command]
-pub async fn get_worker_info(host: String, port: u16) -> Result<Vec<WorkerDevice>, String> {
+pub async fn get_worker_info(host: String, _port: u16) -> Result<Vec<WorkerDevice>, String> {
     // 检查是否为本地 worker
     let is_local = host == "127.0.0.1" || host == "localhost" || host == "::1"
         || is_local_ip(&host);
@@ -304,6 +316,7 @@ pub async fn get_worker_info(host: String, port: u16) -> Result<Vec<WorkerDevice
     let binary = find_rpc_server_binary_internal().unwrap_or_else(|| RPC_SERVER_NAME.to_string());
 
     // 用临时端口启动 rpc-server，抓取启动输出中的设备信息，然后立即杀掉
+    let devices = tokio::task::spawn_blocking(move || -> Result<Vec<WorkerDevice>, String> {
     let mut child = Command::new(&binary)
         .args(["--host", "127.0.0.1", "--port", "0"])
         .stdout(Stdio::piped())
@@ -340,7 +353,9 @@ pub async fn get_worker_info(host: String, port: u16) -> Result<Vec<WorkerDevice
 
     let _ = child.kill();
     let _ = child.wait();
-    let _ = (host, port);
+    Ok(devices)
+    }).await.map_err(|e| format!("任务执行失败: {}", e))??;
+
     Ok(devices)
 }
 
@@ -470,6 +485,16 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
             let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !out.is_empty() {
                 let _ = std::process::Command::new("kill").arg(&out).output();
+                // 同时杀子进程
+                let _ = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(&format!("ps --ppid {} -o pid= 2>/dev/null", out))
+                    .output()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout).lines().for_each(|p| {
+                            let _ = std::process::Command::new("kill").arg(p).output();
+                        });
+                    });
                 return Ok(true);
             }
         }
@@ -611,7 +636,10 @@ mod tests {
 
     #[test]
     fn test_workers_persistence() {
-        // 确保测试不影响生产数据
+        let dir = std::env::temp_dir().join("lsm_test_workers");
+        let _ = std::fs::create_dir_all(&dir);
+        let test_path = dir.join("workers.json");
+
         let test_workers = vec![WorkerInfo {
             id: "test-1".into(),
             host: "192.168.1.10".into(),
@@ -623,17 +651,24 @@ mod tests {
             auto_discovered: false,
         }];
 
-        // 注意：此测试会修改 workers.json，在 CI 环境隔离
-        save_workers(&test_workers);
-        let loaded = load_workers();
+        save_workers_to(&test_path, &test_workers);
+        let loaded = load_workers_from(&test_path);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].host, "192.168.1.10");
+
+        // 清理临时文件
+        let _ = std::fs::remove_file(&test_path);
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]
     fn test_load_empty() {
-        // 不保存时 load 返回空
-        // 此测试依赖 workers.json 不存在，仅在 CI 隔离环境运行
+        let dir = std::env::temp_dir().join("lsm_test_empty");
+        let _ = std::fs::create_dir_all(&dir);
+        let test_path = dir.join("nonexistent.json");
+        let loaded = load_workers_from(&test_path);
+        assert!(loaded.is_empty());
+        let _ = std::fs::remove_dir(&dir);
     }
 
     #[test]

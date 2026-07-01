@@ -57,16 +57,22 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
     let path = config_dir.join("instances.json");
 
     let load_json = || -> Result<String, String> {
-        if path.exists() {
-            return std::fs::read_to_string(&path).map_err(|e| format!("{}", e));
+        let primary_result = std::fs::read_to_string(&path);
+        if let Ok(json) = primary_result {
+            return Ok(json);
         }
+        // 主文件读取失败（可能被锁定），尝试 .bak 回退
         let bak = config_dir.join("instances.json.bak");
         if bak.exists() {
             let json = std::fs::read_to_string(&bak).map_err(|e| format!("{}", e))?;
-            let _ = std::fs::write(&path, &json);
             return Ok(json);
         }
-        Err("no config".into())
+        // 如果主文件存在但读不了且 .bak 也不存在，返回主文件的错误
+        if path.exists() {
+            primary_result.map_err(|e| format!("{}", e))
+        } else {
+            Err("no config".into())
+        }
     };
 
     let json = match load_json() {

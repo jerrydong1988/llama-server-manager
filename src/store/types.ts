@@ -40,8 +40,8 @@ export interface InstanceConfig {
   rope_scaling: string; rope_scale: number; rope_freq_base: number; rope_freq_scale: number;
   yarn_ext_factor: number; yarn_attn_factor: number; yarn_beta_slow: number; yarn_beta_fast: number; yarn_orig_ctx: number;
   // Memory & KV Cache
-  flash_attn: string; moe_cpu_layers: number; mlock: boolean;
-  no_mmap: boolean; no_repack: boolean; numa: boolean; context_shift: boolean;
+  flash_attn: string; moe_cpu_layers: number; cpu_moe: boolean; mlock: boolean;
+  no_mmap: boolean; no_repack: boolean; direct_io: boolean; numa: boolean; context_shift: boolean;
   perf: boolean; check_tensors: boolean; fit: boolean; fit_target: string; fit_ctx: number; kv_unified: boolean; cache_idle_slots: boolean; no_kv_offload: boolean;
   cache_type_k: string; cache_type_v: string;
   cache_type_draft_k: string; cache_type_draft_v: string;
@@ -57,7 +57,7 @@ export interface InstanceConfig {
   // Server & Network
   host: string; port: number; api_key: string; api_key_file: string;
   ssl_key_file: string; ssl_cert_file: string; path_prefix: string; api_prefix: string;
-  no_ui: boolean; offline: boolean; ui_config_file: string; ui_config: string; ui_mcp_proxy: boolean;
+  no_ui: boolean; offline: boolean; ui_config_file: string; ui_config: string; ui_mcp_proxy: boolean; agent: boolean;
   embedding: boolean; pooling: string; embd_normalize: number; reranking: boolean;
   metrics: boolean; props: boolean; slots_enabled: boolean;
   slot_save_path: string; slot_prompt_similarity: number; prefill_assistant: boolean;

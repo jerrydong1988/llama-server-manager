@@ -21,7 +21,7 @@ export function formatSpeed(bytesPerSec: number): string {
  * Format estimated time of arrival (ETA) for downloads.
  */
 export function formatETA(downloaded: number, total: number, speed: number): string {
-  if (speed <= 0 || total <= 0) return ''
+  if (speed <= 0 || total <= 0 || downloaded >= total) return ''
   const secs = Math.ceil((total - downloaded) / speed)
   if (secs < 60) return `${secs}s`
   if (secs < 3600) return `${Math.floor(secs / 60)}m ${secs % 60}s`

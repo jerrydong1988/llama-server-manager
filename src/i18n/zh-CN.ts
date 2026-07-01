@@ -161,6 +161,7 @@
     // Memory & Loading
     flashAttn: 'Flash Attn', flashAttnTip: 'Flash Attention 加速。on=强制，off=禁用，auto=检测。[原理] 使用内存高效的分块注意力——2-4 倍更快，更少 VRAM。[场景] auto对多数情况最优；on需GPU；出错时用off。',
     moeCpu: 'MoE CPU \u5C42\u6570', moeCpuTip: '保留在 CPU 上的 Mixture-of-Experts 层数。[场景] MoE 模型(如 Mixtral、DeepSeek-V2)GPU VRAM 不足时将专家层卸载到 CPU RAM。[权衡] 推理变慢但能运行更大模型。',
+    cpuMoe: '\u5168 MoE CPU', cpuMoeTip: '\u5C06\u6240\u6709 MoE \u6743\u91CD\u4FDD\u6301\u5728 CPU \u4E2D(\u800C\u975E\u4EC5\u524D N \u5C42)\u3002[\u573A\u666F] \u6240\u6709 MoE \u5C42\u90FD\u9700\u5728 CPU \u65F6\u4F7F\u7528(\u6BD4 --n-cpu-moe \u66F4\u5F7B\u5E95)\u3002[\u6743\u8861] \u63A8\u7406\u663E\u8457\u53D8\u6162\u4F46 GPU VRAM \u5360\u7528\u6700\u5C0F\u3002',
     mlock: '\u5185\u5B58\u9501\u5B9A', mlockTip: '防操作系统将模型权重交换到磁盘(页面文件)。[场景] 内存有限系统上启用以避免交换致延迟尖峰。[原理] 使用 mlock() 系统调用锁定内存。',
     noMmap: '\u7981\u7528 mmap', noMmapTip: '禁用内存映射模型加载。[场景] mmap 导致问题或调试内存使用时。[权衡] 较慢加载(整个模型一次读入)但可能减少页面错误。',
   noRepack: '\u7981\u7528\u91CD\u6253\u5305', noRepackTip: '跳过加载时的权重重打包。[原理] 重打包优化权重布局以获更快推理但消耗启动时间。[场景] 启动时间至关重要时禁用——代价是推理慢 5-10%。',
@@ -229,6 +230,7 @@
     uiConfigFile: 'UI \u914D\u7F6E\u6587\u4EF6', uiConfigFileTip: 'WebUI \u914D\u7F6E\u6587\u4EF6\u8DEF\u5F84',
     uiConfig: 'UI \u914D\u7F6E (JSON)', uiConfigTip: '\u5185\u8054 JSON \u5B57\u7B26\u4E32 UI \u914D\u7F6E\u3002--ui-config-file \u7684\u66FF\u4EE3\u65B9\u6848\u3002[\u573A\u666F] \u65E0\u9700\u521B\u5EFA\u6587\u4EF6\u5373\u53EF\u5FEB\u901F\u5185\u8054\u914D\u7F6E\u3002',
     uiMcpProxy: 'MCP \u4EE3\u7406', uiMcpProxyTip: '\u542F\u7528 MCP CORS \u4EE3\u7406\u3002[\u573A\u666F] \u5141\u8BB8 Web UI \u8DE8\u57DF\u8BBF\u95EE MCP \u670D\u52A1\u5668\u3002\u26A0\uFE0F \u53EF\u4FE1\u73AF\u5883\u5916\u8BF7\u52FF\u542F\u7528\u2014\u2014\u4F1A\u7ED5\u8FC7 CORS \u9650\u5236\u3002',
+    agent: '\u4EE3\u7406\u6A21\u5F0F', agentTip: '\u542F\u7528 CORS \u4EE3\u7406\u548C\u6240\u6709\u5185\u7F6E\u5DE5\u5177\u3002[\u573A\u666F] \u5FEB\u901F\u542F\u7528 AI Agent \u529F\u80FD\uFF08\u7B49\u540C\u4E8E --tools all + CORs proxy\uFF09\u3002\u26A0\uFE0F \u53EF\u4FE1\u73AF\u5883\u5916\u8BF7\u52FF\u542F\u7528\u3002',
     sslKey: 'SSL \u79C1\u94A5', sslKeyTip: 'SSL \u79C1\u94A5\u6587\u4EF6\u8DEF\u5F84\uFF08\u542F\u7528 HTTPS\uFF09',
     sslCert: 'SSL \u8BC1\u4E66', sslCertTip: 'SSL \u8BC1\u4E66\u6587\u4EF6\u8DEF\u5F84',
     metrics: '\u6307\u6807', metricsTip: '\u542F\u7528 Prometheus \u6307\u6807\u7AEF\u70B9 /metrics',

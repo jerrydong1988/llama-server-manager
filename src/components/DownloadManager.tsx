@@ -91,7 +91,7 @@ export default function DownloadManager() {
 
   const handlePause = (f: MsFileEntry) => {
     const task = downloadTasks[f.name]
-    if (task) { setDownloadTasks({ ...downloadTasks, [f.name]: { ...task, status: 'paused' } }); pauseFileDownload(f.name) }
+    if (task) { const s = useAppStore.getState(); setDownloadTasks({ ...s.downloadTasks, [f.name]: { ...task, status: 'paused' } }); pauseFileDownload(f.name) }
   }
 
   const handleCancel = (f: MsFileEntry) => {
@@ -261,11 +261,11 @@ export default function DownloadManager() {
                       <div className="flex items-center justify-between text-xs">
                         <span className="truncate flex-1">{f.fileName}</span>
                         <div className="flex items-center gap-1 shrink-0 ml-2">
-                          {f.status === 'active' && (
-                            <button onClick={() => {
-                              setDownloadTasks({...downloadTasks, [f.fileName]: {...f, status: 'paused'}})
-                              pauseFileDownload(f.fileName)
-                            }} className="text-yellow-500 hover:text-yellow-700" title="暂停">⏸</button>
+                           {f.status === 'active' && (
+                             <button onClick={() => {
+                               const s = useAppStore.getState(); setDownloadTasks({...s.downloadTasks, [f.fileName]: {...f, status: 'paused'}})
+                               pauseFileDownload(f.fileName)
+                             }} className="text-yellow-500 hover:text-yellow-700" title="暂停">⏸</button>
                           )}
                           {f.status === 'paused' && (
                             <button onClick={() => handleResumePersisted(f)} className="text-green-500 hover:text-green-700" title="继续">▶</button>

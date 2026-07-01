@@ -27,14 +27,17 @@ pub fn enable_autostart() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
+        let quoted = format!("\"{}\"", exe);
         std::process::Command::new("reg")
             .args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                   "/v", APP_NAME, "/t", "REG_SZ", "/d", &exe, "/f"])
+                   "/v", APP_NAME, "/t", "REG_SZ", "/d", &quoted, "/f"])
             .output().map_err(|e| format!("注册表写入失败: {}", e))?;
     }
 
     #[cfg(target_os = "macos")]
     {
+        let escaped = exe.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+            .replace('"', "&quot;").replace('\'', "&apos;");
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -43,7 +46,7 @@ pub fn enable_autostart() -> Result<(), String> {
     <key>ProgramArguments</key><array><string>{}</string></array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><false/>
-</dict></plist>"#, exe);
+</dict></plist>"#, escaped);
         let agents = home_dir()?.join("Library/LaunchAgents");
         std::fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
         std::fs::write(agents.join("com.llama-server-manager.plist"), plist)

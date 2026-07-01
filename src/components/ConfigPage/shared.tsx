@@ -207,8 +207,9 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     keep: 0, override_kv: '',
   },
   advancedHardware: {
-    moe_cpu_layers: 0, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
+    moe_cpu_layers: 0, cpu_moe: false, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
     perf: false, check_tensors: false, fit: false, fit_target: '', fit_ctx: 4096,
+    direct_io: false,
     threads_http: -1,
   },
   advancedServerBasic: {
@@ -219,7 +220,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedServerExt: {
     slots_enabled: true, metrics: false, props: false,
     slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
-    ui_config_file: '', ui_config: '', ui_mcp_proxy: false,
+    ui_config_file: '', ui_config: '', ui_mcp_proxy: false, agent: false,
     rpc_servers: '', sse_ping_interval: 30, reuse_port: false,
   },
   advancedMulti: {

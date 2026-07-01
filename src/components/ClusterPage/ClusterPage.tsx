@@ -383,7 +383,7 @@ export default function ClusterPage() {
             <div className="p-6 space-y-3">
               <div>
                 <label className="block text-xs font-medium mb-1 text-gray-500">Host (IP)</label>
-                <input type="text" value={formData.host} onChange={e => setFormData({ ...formData, host: e.target.value })} placeholder="192.168.1.10" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                <input type="text" value={formData.host} onChange={e => setFormData({ ...formData, host: e.target.value })} placeholder="192.168.x.x" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
               </div>
               <div>
                 <label className="block text-xs font-medium mb-1 text-gray-500">Port</label>
@@ -417,7 +417,7 @@ export default function ClusterPage() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">Worker IP / Host</label>
-                    <input type="text" value={launchForm.host} onChange={e => setLaunchForm({ ...launchForm, host: e.target.value })} placeholder="192.168.1.10" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                    <input type="text" value={launchForm.host} onChange={e => setLaunchForm({ ...launchForm, host: e.target.value })} placeholder="192.168.x.x" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
                   </div>
                   <div>
                     <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.rpcPort}</label>

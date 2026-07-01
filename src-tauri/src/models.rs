@@ -113,10 +113,14 @@ pub struct InstanceConfig {
     pub yarn_orig_ctx: u32,
     pub flash_attn: String,
     pub moe_cpu_layers: u32,
+    #[serde(default)]
+    pub cpu_moe: bool,
     pub mlock: bool,
     pub no_mmap: bool,
     #[serde(default)]
     pub no_repack: bool,
+    #[serde(default)]
+    pub direct_io: bool,
     pub numa: bool,
     pub context_shift: bool,
     #[serde(default)]
@@ -195,6 +199,8 @@ pub struct InstanceConfig {
     pub ui_config: String,
     #[serde(default)]
     pub ui_mcp_proxy: bool,
+    #[serde(default)]
+    pub agent: bool,
     pub embedding: bool,
     pub pooling: String,
     #[serde(default)]
@@ -320,8 +326,8 @@ impl Default for InstanceConfig {
             warmup: true, ctx_checkpoints: 32, checkpoint_min_step: 256, swa_full: false,
             rope_scaling: String::new(), rope_scale: 0.0, rope_freq_base: 0.0, rope_freq_scale: 0.0,
             yarn_ext_factor: -1.0, yarn_attn_factor: -1.0, yarn_beta_slow: -1.0,             yarn_beta_fast: -1.0, yarn_orig_ctx: 0,
-            flash_attn: "auto".into(), moe_cpu_layers: 0, mlock: false,
-            no_mmap: false, no_repack: false, numa: false, context_shift: false,
+            flash_attn: "auto".into(), moe_cpu_layers: 0, cpu_moe: false, mlock: false,
+            no_mmap: false, no_repack: false, direct_io: false, numa: false, context_shift: false,
             perf: false, check_tensors: false, fit: false, fit_target: String::new(), fit_ctx: 4096,
             kv_unified: false, cache_idle_slots: true, no_kv_offload: false,
             cache_type_k: String::new(), cache_type_v: String::new(),
@@ -339,7 +345,7 @@ impl Default for InstanceConfig {
             ssl_key_file: String::new(), ssl_cert_file: String::new(),
             path_prefix: String::new(), api_prefix: String::new(),
             no_ui: false, offline: false, ui_config_file: String::new(),
-            ui_config: String::new(), ui_mcp_proxy: false,
+            ui_config: String::new(), ui_mcp_proxy: false, agent: false,
             embedding: false, pooling: String::new(), embd_normalize: 2, reranking: false,
             metrics: true, props: false, slots_enabled: true,
             slot_save_path: String::new(), slot_prompt_similarity: 0.1, prefill_assistant: true,

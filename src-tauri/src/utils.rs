@@ -96,7 +96,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<(Option<String>, Option<u32>, 
                     }
                 }
             }
-            _ => {}
+            _ => break,
         }
     }
 

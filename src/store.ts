@@ -38,23 +38,25 @@ export const useAppStore = create<AppState>((set, get) => ({
   addToDownloadQueue: (entry) => {
     const s = get()
     const id = crypto.randomUUID()
-    const fileNames = new Set(entry.files.map(f => f.name))
+    const newNames = new Set(entry.files.map(f => f.name))
     
-    // 去重：仅当新条目的所有文件都已在队列/下载中时才跳过
+    // 去重：检查新条目的每个文件是否已在队列/下载中
     const alreadyInQueue = s.downloadQueue.some(q =>
       q.repoId === entry.repoId && q.source === entry.source &&
-      entry.files.every(f => fileNames.has(f.name))) ||
+      q.files.some(f => newNames.has(f.name))) ||
       entry.files.every(f => s.downloadTasks[f.name] && s.downloadTasks[f.name].status !== 'cancelled' && s.downloadTasks[f.name].status !== 'error' && s.downloadTasks[f.name].status !== 'paused')
     if (alreadyInQueue) return
 
     // 更新已存在条目的状态为 queued
     const updated = { ...s.downloadTasks }
+    let changed = false
     for (const f of entry.files) {
       if (updated[f.name]) {
         updated[f.name] = { ...updated[f.name], status: 'queued' as const }
+        changed = true
       }
     }
-    if (Object.keys(updated).length > 0) set({ downloadTasks: updated })
+    if (changed) set({ downloadTasks: updated })
 
     set({ downloadQueue: [...s.downloadQueue, { ...entry, id, addedAt: Date.now() }] })
     get().persistQueue()
@@ -197,7 +199,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   renameEngine: (id, name) => {
-    invoke('rename_engine', { id, name })
+    invoke('rename_engine', { id, name }).catch(() => {})
     set((s) => ({
       engines: s.engines.map(e => e.id === id ? { ...e, name, custom_name: name } : e)
     }))
@@ -387,11 +389,19 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   persistQueue: () => {
     const { downloadQueue, downloadTasks } = get()
-    const entries = downloadQueue.map(q => ({
-          id: q.id, repo_id: q.repoId, source: q.source as string,
-      files: q.files, save_dir: q.saveDir, added_at: q.addedAt,
-      status: downloadTasks[q.files[0]?.name]?.status || 'queued',
-    }))
+    const entries = downloadQueue.map(q => {
+      const statuses = q.files.map(f => downloadTasks[f.name]?.status)
+      const status = statuses.includes('active') ? 'active'
+        : statuses.includes('error') ? 'error'
+        : statuses.includes('paused') ? 'paused'
+        : statuses.every(s => s === 'completed') ? 'completed'
+        : 'queued'
+      return {
+        id: q.id, repo_id: q.repoId, source: q.source as string,
+        files: q.files, save_dir: q.saveDir, added_at: q.addedAt,
+        status,
+      }
+    })
     // Also include active tasks not in queue
     const active = Object.values(get().downloadTasks).filter(t => t.status === 'active')
     if (active.length > 0 && !downloadQueue.some(q => q.files.some(f => active.some(a => a.fileName === f.name)))) {
@@ -572,6 +582,7 @@ listen<{ instanceId: string; status: string }>('health-status', (event) => {
 // ── 下载任务全局追踪 ──
 // 按文件名分别节流：避免多文件并发下载时共用一个全局闸门，导致部分文件进度被丢弃
 const _lastProgressUpdate: Record<string, number> = {}
+let scanModelDebounce: ReturnType<typeof setTimeout> | null = null
 listen<{ fileName: string; repoId: string; source: string; downloaded: number; total: number; speed: number }>('download-progress', (e) => {
   const now = Date.now()
   const { fileName, repoId, source, downloaded, total, speed } = e.payload
@@ -588,7 +599,8 @@ listen<{ fileName: string; repoId: string; source: string; path: string }>('down
   s.setDownloadTasks({ ...s.downloadTasks, [fileName]: { ...(prev || { fileName, repoId, source, downloaded: 0, total: 0, speed: 0 }), status: 'completed', path } })
   s.persistQueue()
   useAppStore.getState().processDownloadQueue!()
-  useAppStore.getState().scanModels(useAppStore.getState().modelDirs)
+  // 防抖扫描：同一下载组完成后延迟 2s 只触发一次扫描
+  ;(scanModelDebounce || (scanModelDebounce = setTimeout(() => { scanModelDebounce = null; useAppStore.getState().scanModels(useAppStore.getState().modelDirs) }, 2000)))
 }).catch(() => {})
 
 listen<{ fileName: string; repoId: string; source: string }>('download-cancelled', (e) => {
