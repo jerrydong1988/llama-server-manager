@@ -40,3 +40,6 @@ src-tauri/configs/
 *.tmp
 .n.omo/
 .omo/
+
+# Codebase memory index (auto-generated, large binary)
+.codebase-memory/graph.db.zst
