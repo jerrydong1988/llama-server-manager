@@ -163,7 +163,7 @@
     moeCpu: 'MoE CPU \u5C42\u6570', moeCpuTip: '保留在 CPU 上的 Mixture-of-Experts 层数。[场景] MoE 模型(如 Mixtral、DeepSeek-V2)GPU VRAM 不足时将专家层卸载到 CPU RAM。[权衡] 推理变慢但能运行更大模型。',
     cpuMoe: '\u5168 MoE CPU', cpuMoeTip: '\u5C06\u6240\u6709 MoE \u6743\u91CD\u4FDD\u6301\u5728 CPU \u4E2D(\u800C\u975E\u4EC5\u524D N \u5C42)\u3002[\u573A\u666F] \u6240\u6709 MoE \u5C42\u90FD\u9700\u5728 CPU \u65F6\u4F7F\u7528(\u6BD4 --n-cpu-moe \u66F4\u5F7B\u5E95)\u3002[\u6743\u8861] \u63A8\u7406\u663E\u8457\u53D8\u6162\u4F46 GPU VRAM \u5360\u7528\u6700\u5C0F\u3002',
     mlock: '\u5185\u5B58\u9501\u5B9A', mlockTip: '防操作系统将模型权重交换到磁盘(页面文件)。[场景] 内存有限系统上启用以避免交换致延迟尖峰。[原理] 使用 mlock() 系统调用锁定内存。',
-    noMmap: '\u7981\u7528 mmap', noMmapTip: '禁用内存映射模型加载。[场景] mmap 导致问题或调试内存使用时。[权衡] 较慢加载(整个模型一次读入)但可能减少页面错误。',
+    noMmap: '\u7981\u7528 mmap', noMmapTip: '\u6A21\u578B\u9884\u52A0\u8F7D\u5230\u5185\u5B58\u3002\u5173\u95ED\u65F6\uFF1A\u6A21\u578B\u4ECE\u78C1\u76D8\u76F4\u63A5\u9001\u5165\u663E\u5B58\uFF0C\u4E0D\u5360\u5185\u5B58\uFF0C\u542F\u52A8\u5FEB\u3002[\u5F00\u542F] \u5148\u628A\u6574\u4E2A\u6A21\u578B\u8BFB\u5165\u5185\u5B58 RAM\uFF0C\u518D\u4F20\u7ED9\u663E\u5B58 VRAM\u3002[\u4EE3\u4EF7] \u591A\u5360\u51E0\u5341GB\u5185\u5B58\uFF0C\u542F\u52A8\u6162\u6570\u79D2\u3002\u9ED8\u8BA4\u5173\u95ED\u5373\u53EF\u3002',
   noRepack: '\u7981\u7528\u91CD\u6253\u5305', noRepackTip: '跳过加载时的权重重打包。[原理] 重打包优化权重布局以获更快推理但消耗启动时间。[场景] 启动时间至关重要时禁用——代价是推理慢 5-10%。',
     numa: 'NUMA', numaTip: 'NUMA 感知优化，仅多路 CPU 服务器需要(双路 AMD EPYC 或 Intel Xeon)。[原理] 将线程绑定到特定 NUMA 节点以避免跨 socket 内存延迟。',
     perf: '性能计时', perfTip: '启用内部 libllama 性能计时。[场景] 调试推理瓶颈——显示各处理阶段耗时。[权衡] 有轻微运行时开销——生产环境请关闭。',
@@ -179,7 +179,7 @@
     cacheTypeDraftK: '\u8349\u7A3FK\u7F13\u5B58', cacheTypeDraftKTip: '推测解码草稿模型的 KV 缓存 Key 类型。[场景] 草稿模型通常可用更重量化(需较低精度)。',
     cacheTypeDraftV: '\u8349\u7A3FV\u7F13\u5B58', cacheTypeDraftVTip: '推测解码草稿模型的 KV 缓存 Value 类型。[场景] 草稿模型较小——可用更重量化。',
     kvUnified: 'KV \u7EDF\u4E00', kvUnifiedTip: '所有槽位共享单一 KV 缓冲区。[原理] 而非每槽独立 KV 缓存，所有槽共享一个池——内存效率大幅提升。[场景] slots=auto 时默认启用。',
-  noKvOffload: '\u7981\u7528 KV \u5378\u8F7D', noKvOffloadTip: '禁用 KV 缓存 GPU 卸载。开启后所有 KV 数据强制留在 GPU VRAM。[场景] GPU VRAM 紧张时启用——卸载将不活跃的 KV 数据移至 CPU RAM 为 GPU 腾空间。[原理] 像 KV 缓存的虚拟内存：GPU 是工作集，CPU 是交换空间。[权衡] RAM 访问 KV 比 VRAM 慢约 30 倍。',
+  noKvOffload: '\u7981\u7528 KV \u5378\u8F7D', noKvOffloadTip: 'KV \u7F13\u5B58\u5B58\u653E\u4F4D\u7F6E\u3002\u5173\u95ED\u65F6\uFF1AKV \u7F13\u5B58\u653E\u5728\u663E\u5B58 VRAM \u4E2D\uFF0C\u63A8\u7406\u5FEB\u3002[\u5F00\u542F] KV \u7F13\u5B58\u653E\u5728\u5185\u5B58 RAM \u4E2D\u3002[\u573A\u666F] \u663E\u5B58\u4E0D\u8DB3\u65F6\u5F00\u542F\uFF0C\u7ED9\u6A21\u578B\u6743\u91CD\u817E\u7A7A\u95F4\u3002[\u4EE3\u4EF7] \u6BCF\u79D2\u5C11\u8DD1 20-30 \u4E2A token\u3002\u9ED8\u8BA4\u5173\u95ED\u3002',
     cacheIdleSlots: '\u7981\u7528\u7A7A\u95F2\u69FD\u7F13\u5B58', cacheIdleSlotsTip: '勾选后空闲槽位缓存被禁用。[原理] 正常情况下空闲槽保存 KV 缓存到 RAM 以便快速重用。[场景] 禁用以释放 RAM；启用以加速槽重用。需统一 KV + cache-ram。',
     // Speculative Decoding
     draftModel: '\u8349\u7A3F\u6A21\u578B', draftModelTip: '\u63A8\u6D4B\u89E3\u7801\u7528\u7684\u8349\u7A3F\u6A21\u578B\u8DEF\u5F84',

@@ -34,7 +34,7 @@ export function defaultInstanceConfig(): InstanceConfig {
     ssl_key_file: '', ssl_cert_file: '', path_prefix: '', api_prefix: '',
     no_ui: false, offline: false, ui_config_file: '', ui_config: '', ui_mcp_proxy: false, agent: false,
     embedding: false, pooling: '', embd_normalize: 2, reranking: false,
-    metrics: false, props: false, slots_enabled: true,
+    metrics: true, props: true, slots_enabled: true,
     slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: true,
     models_dir: '', models_preset: '', models_max: 4, models_autoload: true,
     mmproj_url: '', mmproj_auto: false, no_mmproj: false, no_mmproj_offload: false, image_min_tokens: 0, image_max_tokens: 0, mtmd_batch_max_tokens: 1024,
