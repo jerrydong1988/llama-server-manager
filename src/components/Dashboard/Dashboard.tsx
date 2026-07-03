@@ -1,6 +1,4 @@
-import { useState, useEffect } from 'react'
 import { Server, Database, Cpu, BarChart3, ArrowRight } from 'lucide-react'
-import { invoke } from '@tauri-apps/api/core'
 import { useAppStore } from '../../store'
 import { _startupTimings } from '../../store'
 import { useI18n } from '../../i18n'
@@ -13,18 +11,10 @@ export default function Dashboard() {
   const instances = useAppStore(s => s.instances)
   const models = useAppStore(s => s.models)
   const engines = useAppStore(s => s.engines)
+  const sysMetrics = useAppStore(s => s.sysMetrics)
   const setActiveTab = useAppStore(s => s.setActiveTab)
-  const [sysMetrics, setSysMetrics] = useState<any>(null)
   const runningInstances = instances.filter(i => i.status === 'running')
   const stoppedInstances = instances.filter(i => i.status !== 'running')
-
-  // Poll system health every 5s — delay first call to avoid startup storm
-  useEffect(() => {
-    const fetch = () => invoke<any>('get_system_health').then(setSysMetrics).catch(() => {})
-    const timeoutId = setTimeout(fetch, 2000)
-    const timer = setInterval(fetch, 5000)
-    return () => { clearTimeout(timeoutId); clearInterval(timer) }
-  }, [])
 
   return (
     <div className="flex-1 p-6 overflow-y-auto space-y-6">

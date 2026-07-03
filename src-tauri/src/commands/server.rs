@@ -1,5 +1,6 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics};
 use crate::commands::adlx;
 use crate::commands::nvml;
@@ -722,10 +723,14 @@ pub async fn check_port(port: u16) -> Result<bool, String> {
 
 // ── 系统性能指标（sysinfo） ──────────────────────────────────
 
-/// Collect GPU + system-level metrics. Shared by get_system_health and get_system_metrics.
-fn collect_gpu_and_system(sys: &mut System) -> (Option<f32>, Option<f32>, Option<f64>, Option<f64>, Option<f64>, Option<String>, Option<f32>, Option<f64>, Option<f64>) {
-    sys.refresh_all();
-    std::thread::sleep(std::time::Duration::from_millis(200));
+static SYSINFO_CACHE: Mutex<Option<System>> = Mutex::new(None);
+
+/// Collect GPU + system-level metrics. Uses cached System instance, no sleep.
+fn collect_gpu_and_system() -> (Option<f32>, Option<f32>, Option<f64>, Option<f64>, Option<f64>, Option<String>, Option<f32>, Option<f64>, Option<f64>) {
+    let mut guard = SYSINFO_CACHE.lock().unwrap();
+    let sys = guard.get_or_insert_with(|| System::new_all());
+    sys.refresh_cpu_all();
+    sys.refresh_memory();
     let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(sys);
 
     // AMD
@@ -780,10 +785,10 @@ pub async fn get_system_metrics(
         .unwrap_or(0) - start_time;
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut sys = System::new_all();
         let (adlx_cpu, gpu_pct, vram_u, vram_t, _mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
-            collect_gpu_and_system(&mut sys);
-        let (cpu, mem) = get_process_metrics(&mut sys, pid);
+            collect_gpu_and_system();
+        let mut proc_sys = System::new_all();
+        let (cpu, mem) = get_process_metrics(&mut proc_sys, pid);
         SystemMetrics {
             cpu_percent: adlx_cpu.unwrap_or(cpu),
             memory_mb: if adlx_cpu.is_some() { _mem.unwrap_or(mem) } else { (mem * 10.0).round() / 10.0 },
@@ -803,11 +808,9 @@ pub async fn get_system_metrics(
 /// System health — no instance required. Used by Dashboard for the system resource bar.
 #[tauri::command]
 pub async fn get_system_health() -> Result<SystemMetrics, String> {
-    // Offload blocking sysinfo + GPU metrics to a blocking thread
     let result = tokio::task::spawn_blocking(|| {
-        let mut sys = System::new_all();
         let (adlx_cpu, gpu_pct, vram_u, vram_t, mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
-            collect_gpu_and_system(&mut sys);
+            collect_gpu_and_system();
         SystemMetrics {
             cpu_percent: adlx_cpu.unwrap_or(sys_cpu.unwrap_or(0.0)),
             memory_mb: mem.unwrap_or(sys_mem_used.unwrap_or(0.0)),

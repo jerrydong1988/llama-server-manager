@@ -9,9 +9,9 @@ import { startTransition } from 'react'
 export const _startupTimings: { name: string; ms: number }[] = []
 
 // Re-exports from split modules
-export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState, WorkerInfo, WorkerDevice, WorkerStatus, Usb4Adapter } from './store/types'
+export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState, SystemMetrics, WorkerInfo, WorkerDevice, WorkerStatus, Usb4Adapter } from './store/types'
 export { defaultInstanceConfig } from './store/defaults'
-import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry, PersistedQueueEntry } from './store/types'
+import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry, PersistedQueueEntry, SystemMetrics } from './store/types'
 
 // ── Store 状态 ─────────────────────────────────────────────────
 // AppState interface is defined in ./store/types.ts
@@ -34,6 +34,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   downloadProgress: {},
   downloadTasks: {},
   downloadQueue: [],
+  sysMetrics: null as SystemMetrics | null,
+  setSysMetrics: (m) => set({ sysMetrics: m }),
   setDownloadTasks: (tasks) => set({ downloadTasks: tasks }),
   addToDownloadQueue: (entry) => {
     const s = get()
@@ -627,5 +629,16 @@ listen<{ fileName: string }>('download-removed', (e) => {
   s.setDownloadTasks(tasks)
   s.persistQueue()
 }).catch(() => {})
+
+// ── 系统指标 app 级轮询 — 始终存活，Dashboard 切回时立即有数据
+let _sysMetricsTimer: ReturnType<typeof setInterval> | null = null;
+(function startSysMetricsPolling() {
+  if (_sysMetricsTimer) return
+  const fetchSysMetrics = () => invoke<SystemMetrics>('get_system_health').then(m => {
+    useAppStore.getState().setSysMetrics(m)
+  }).catch(() => {})
+  fetchSysMetrics()
+  _sysMetricsTimer = setInterval(fetchSysMetrics, 5000)
+})()
 
 } // HMR-safe guard

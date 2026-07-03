@@ -204,9 +204,11 @@ export interface AppState {
   clusterScanning: boolean
   downloadTasks: Record<string, DownloadProgress>
   downloadQueue: DownloadQueueEntry[]
+  sysMetrics: SystemMetrics | null
   setActiveTab: (tab: string) => void
   setDarkMode: (dm: boolean) => void
   setActiveConfigInstanceId: (id: string | null) => void
+  setSysMetrics: (m: SystemMetrics | null) => void
 
   setModels: (models: ModelInfo[]) => void
   setEngines: (engines: EngineInfo[]) => void
