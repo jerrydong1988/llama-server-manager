@@ -1,6 +1,69 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use crate::models::{AppState, EngineInfo, ModelInfo};
 use crate::utils;
+
+// ── 扫描缓存 ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CachedModel {
+    mtime: u64,
+    size: u64,
+    architecture: Option<String>,
+    context_length: Option<u32>,
+    quant_type: Option<String>,
+    has_mtp_head: bool,
+    file_type: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CachedEngine {
+    exe_mtime: u64,
+    name: String,
+    version: String,
+    backend: String,
+    dir: String,
+    exe: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ScanCache {
+    models: HashMap<String, (String, CachedModel)>,     // canonical_path -> (id, cached)
+    engines: HashMap<String, CachedEngine>,              // canonical_dir -> cached
+}
+
+fn cache_path() -> PathBuf {
+    utils::get_data_dir().join("scan_cache.json")
+}
+
+fn load_scan_cache() -> ScanCache {
+    let p = cache_path();
+    if p.exists() {
+        if let Ok(data) = std::fs::read_to_string(&p) {
+            if let Ok(c) = serde_json::from_str::<ScanCache>(&data) {
+                return c;
+            }
+        }
+    }
+    ScanCache { models: HashMap::new(), engines: HashMap::new() }
+}
+
+fn save_scan_cache(cache: &ScanCache) {
+    let p = cache_path();
+    if let Some(parent) = p.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(cache) {
+        let _ = std::fs::write(&p, json);
+    }
+}
+
+fn file_mtime(path: &Path) -> u64 {
+    path.metadata().and_then(|m| m.modified()).ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
 
 // ── 跨平台可执行文件名 ────────────────────────────────────────────
 
@@ -48,16 +111,19 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, 
     };
 
     // Offload heavy disk I/O + GGUF parsing to a blocking thread
-    let models = tokio::task::spawn_blocking(move || -> Result<Vec<ModelInfo>, Vec<String>> {
+    let result = tokio::task::spawn_blocking(move || -> Result<(Vec<ModelInfo>, ScanCache), Vec<String>> {
+        let mut cache = load_scan_cache();
         let mut models: Vec<ModelInfo> = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let mut errors = Vec::new();
+        // 收集需要新鲜解析的文件路径（mtime 变更或缓存未命中）
+        let mut fresh_files: Vec<(PathBuf, String, u64)> = Vec::new(); // (path, canonical_key, size)
 
         for scan_root in &scan_paths {
             let root_str = scan_root.display().to_string();
-            if !scan_root.exists() { 
+            if !scan_root.exists() {
                 if *scan_root == default_path_for_check { continue; }
-                errors.push(format!("{} 不存在", root_str)); continue; 
+                errors.push(format!("{} 不存在", root_str)); continue;
             }
             if !scan_root.is_dir() { errors.push(format!("{} 不是目录", root_str)); continue; }
 
@@ -71,18 +137,41 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, 
                 if fname.starts_with('.') { continue; }
 
                 let name = fname.to_string();
+                let mtime = file_mtime(path);
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
                 let ftype = utils::classify_gguf_file(path);
                 let file_path = path.to_string_lossy().to_string();
                 if !seen.insert(file_path.clone()) { continue; }
 
-                let (architecture, context_length, quant_type, has_mtp_head) =
-                    utils::parse_gguf_metadata(path).unwrap_or_else(|_| (None, None, None, false));
+                let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+                let cache_key = canonical.to_string_lossy().to_string();
+
+                // mtime 匹配 → 缓存命中，跳过 GGUF 解析
+                if let Some((cached_id, cm)) = cache.models.get(&cache_key) {
+                    if cm.mtime == mtime && cm.size == size {
+                        file_count += 1;
+                        models.push(ModelInfo {
+                            id: cached_id.clone(),
+                            name, path: file_path, size,
+                            architecture: cm.architecture.clone(),
+                            context_length: cm.context_length,
+                            quant_type: cm.quant_type.clone(),
+                            has_mtp_head: cm.has_mtp_head,
+                            file_type: cm.file_type.clone(),
+                            is_shard: false,
+                        });
+                        continue;
+                    }
+                }
 
                 file_count += 1;
+                fresh_files.push((path.to_path_buf(), cache_key, size));
+                // 占位先入 models，之后用解析结果回填
+                let _idx = models.len();
                 models.push(ModelInfo {
                     id: uuid::Uuid::new_v4().to_string(),
-                    name, path: file_path, size, architecture, context_length, quant_type, has_mtp_head,
+                    name, path: file_path, size,
+                    architecture: None, context_length: None, quant_type: None, has_mtp_head: false,
                     file_type: ftype.to_string(),
                     is_shard: false,
                 });
@@ -90,15 +179,68 @@ pub async fn scan_models(paths: Vec<String>, state: tauri::State<'_, AppState>, 
             if file_count == 0 { errors.push(format!("{} 中未找到 .gguf 模型文件", root_str)); }
         }
 
+        // ── 并行 GGUF 解析：对需要新鲜解析的文件分线程批量处理 ──
+        if !fresh_files.is_empty() {
+            let chunk_size = (fresh_files.len() / std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4).max(1)).max(1);
+            let results: Vec<Vec<(usize, Option<String>, Option<u32>, Option<String>, bool)>> =
+                std::thread::scope(|s| {
+                    let mut handles = Vec::new();
+                    for chunk in fresh_files.chunks(chunk_size) {
+                        let chunk: Vec<_> = chunk.to_vec();
+                        handles.push(s.spawn(move || {
+                            chunk.iter().enumerate().map(|(i, (p, _key, _sz))| {
+                                let (arch, ctx, qt, mtp) =
+                                    utils::parse_gguf_metadata(p).unwrap_or_else(|_| (None, None, None, false));
+                                (i, arch, ctx, qt, mtp)
+                            }).collect::<Vec<_>>()
+                        }));
+                    }
+                    handles.into_iter().map(|h| h.join().unwrap_or_default()).collect()
+                });
+
+            // 回填解析结果 + 更新缓存
+            let base_idx = models.len() - fresh_files.len();
+            for (chunk_idx, chunk_results) in results.iter().enumerate() {
+                for (i, arch, ctx, qt, mtp) in chunk_results {
+                    let global_i = base_idx + chunk_idx * chunk_size + i;
+                    if global_i < models.len() {
+                        let m = &mut models[global_i];
+                        m.architecture = arch.clone();
+                        m.context_length = *ctx;
+                        m.quant_type = qt.clone();
+                        m.has_mtp_head = *mtp;
+                    }
+                    if chunk_idx * chunk_size + i < fresh_files.len() {
+                        let (_, cache_key, size) = &fresh_files[chunk_idx * chunk_size + i];
+                        let mpath = std::path::Path::new(cache_key);
+                        let mtime = file_mtime(mpath);
+                        if global_i < models.len() {
+                            let cached_id = models[global_i].id.clone();
+                            cache.models.insert(cache_key.clone(), (cached_id, CachedModel {
+                                mtime, size: *size,
+                                architecture: arch.clone(),
+                                context_length: *ctx,
+                                quant_type: qt.clone(),
+                                has_mtp_head: *mtp,
+                                file_type: models[global_i].file_type.clone(),
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+
+        save_scan_cache(&cache);
+
         if models.is_empty() && !errors.is_empty() {
             Err(errors)
         } else {
-            Ok(models)
+            Ok((models, cache))
         }
-    }).await.map_err(|e| format!("扫描线程失败: {}", e))?;
+    }).await.map_err(|e| format!("扫描线程失败: {:?}", e))?;
 
-    let mut models = match models {
-        Ok(m) => m,
+    let mut models = match result {
+        Ok((m, _cache)) => m,
         Err(errors) => return Err(errors.join("; ")),
     };
 
@@ -149,6 +291,63 @@ pub async fn load_app_data(
     Ok((models, engines, queue))
 }
 
+/// 从磁盘缓存读取扫描结果，用于启动时立即展示数据（无需等待全量扫描）
+#[tauri::command]
+pub async fn get_cached_scan(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<(Vec<ModelInfo>, Vec<EngineInfo>)>, String> {
+    let cache = load_scan_cache();
+    if cache.models.is_empty() && cache.engines.is_empty() {
+        return Ok(None);
+    }
+
+    let mut models: Vec<ModelInfo> = Vec::new();
+    for (path, (id, cm)) in &cache.models {
+        models.push(ModelInfo {
+            id: id.clone(),
+            name: std::path::Path::new(path).file_name()
+                .and_then(|s| s.to_str()).unwrap_or("").to_string(),
+            path: path.clone(),
+            size: cm.size,
+            architecture: cm.architecture.clone(),
+            context_length: cm.context_length,
+            quant_type: cm.quant_type.clone(),
+            has_mtp_head: cm.has_mtp_head,
+            file_type: cm.file_type.clone(),
+            is_shard: false,
+        });
+    }
+
+    let mut engines: Vec<EngineInfo> = Vec::new();
+    for (dir, ce) in &cache.engines {
+        let saved_names = state.engine_names.lock().unwrap();
+        let mut info = EngineInfo {
+            id: dir.clone(),
+            name: ce.name.clone(),
+            dir: ce.dir.clone(),
+            exe: ce.exe.clone(),
+            version: ce.version.clone(),
+            backend: ce.backend.clone(),
+            custom_name: None,
+        };
+        if let Some(cn) = saved_names.get(dir) {
+            info.custom_name = Some(cn.clone());
+            info.name = cn.clone();
+        }
+        engines.push(info);
+    }
+
+    // 写入 state 以便其他组件立即可用
+    {
+        let mut state_models = state.models.lock().unwrap();
+        *state_models = models.clone();
+        let mut state_engines = state.engines.lock().unwrap();
+        *state_engines = engines.clone();
+    }
+
+    Ok(Some((models, engines)))
+}
+
 #[tauri::command]
 pub async fn get_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
     Ok(state.models.lock().unwrap().clone())
@@ -197,11 +396,48 @@ pub async fn read_gguf_metadata(path: String) -> Result<(Option<String>, Option<
 // ── 引擎扫描 ──────────────────────────────────────────────────────
 #[tauri::command]
 pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>) -> Result<Vec<EngineInfo>, String> {
-    // #9: 卸载到阻塞线程，避免阻塞 async runtime
     let mut engines = tokio::task::spawn_blocking(move || -> Result<Vec<EngineInfo>, String> {
+    let mut cache = load_scan_cache();
     let mut engines: Vec<EngineInfo> = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let app_dir = utils::get_data_dir();
+
+    // 辅助：尝试从缓存还原引擎信息
+    let mut try_cache = |dir: &Path, exe: &Path, source: &str| {
+        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+        let cache_key = canonical.to_string_lossy().to_string();
+        let exe_mtime = file_mtime(exe);
+
+        if let Some(ce) = cache.engines.get(&cache_key) {
+            if ce.exe_mtime == exe_mtime {
+                let info = EngineInfo {
+                    id: cache_key.clone(),
+                    name: ce.name.clone(),
+                    dir: ce.dir.clone(),
+                    exe: ce.exe.clone(),
+                    version: ce.version.clone(),
+                    backend: ce.backend.clone(),
+                    custom_name: None,
+                };
+                engines.push(info);
+                return;
+            }
+        }
+
+        if let Some(info) = build_engine_info(dir, exe, source) {
+            let canonical2 = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+            let ck = canonical2.to_string_lossy().to_string();
+            cache.engines.insert(ck, CachedEngine {
+                exe_mtime,
+                name: info.name.clone(),
+                version: info.version.clone(),
+                backend: info.backend.clone(),
+                dir: info.dir.clone(),
+                exe: info.exe.clone(),
+            });
+            engines.push(info);
+        }
+    };
 
     let engines_dir = app_dir.join("engines");
     if engines_dir.exists() {
@@ -212,9 +448,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
             if exe.exists() {
                 let norm = dir.to_string_lossy().to_lowercase();
                 if seen.insert(norm) {
-                        if let Some(info) = build_engine_info(&dir, &exe, "本地") {
-                        engines.push(info);
-                    }
+                    try_cache(&dir, &exe, "本地");
                 }
             }
         }
@@ -227,9 +461,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
         if direct_exe.exists() {
             let norm = root.to_string_lossy().to_lowercase();
             if seen.insert(norm) {
-                if let Some(info) = build_engine_info(&root, &direct_exe, "自定义") {
-                    engines.push(info);
-                }
+                try_cache(&root, &direct_exe, "自定义");
             }
         }
         if let Ok(entries) = std::fs::read_dir(&root) {
@@ -240,9 +472,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
                 if exe.exists() {
                     let norm = sub.to_string_lossy().to_lowercase();
                     if seen.insert(norm) {
-                        if let Some(info) = build_engine_info(&sub, &exe, "自定义") {
-                            engines.push(info);
-                        }
+                        try_cache(&sub, &exe, "自定义");
                     }
                 }
                 if let Ok(sub_entries) = std::fs::read_dir(&sub) {
@@ -253,9 +483,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
                         if exe2.exists() {
                             let norm = sub2.to_string_lossy().to_lowercase();
                             if seen.insert(norm) {
-                                if let Some(info) = build_engine_info(&sub2, &exe2, "自定义") {
-                                    engines.push(info);
-                                }
+                                try_cache(&sub2, &exe2, "自定义");
                             }
                         }
                     }
@@ -264,6 +492,7 @@ pub async fn scan_engines(paths: Vec<String>, state: tauri::State<'_, AppState>)
         }
     }
 
+    save_scan_cache(&cache);
     Ok(engines)
     }).await.map_err(|e| format!("扫描线程失败: {}", e))??;
 

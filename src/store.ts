@@ -277,18 +277,22 @@ export const useAppStore = create<AppState>((set, get) => ({
         dark_mode: boolean
       }
       const injected = (window as any).__INITIAL_CONFIG__ as GlobalConfigShape | undefined
+      // 从磁盘缓存预热模型+引擎列表，UI 秒开无需等待全量扫描
+      invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan').then(data => {
+        if (data) { startTransition(() => { set({ models: data[0], engines: data[1] }) }) }
+      }).catch(() => {})
       if (injected) {
         ;(window as any).__INITIAL_CONFIG__ = null
         _startupTimings.push({ name: 'config-source', ms: 0 })
-        processConfig(injected)
+        await processConfig(injected)
       } else {
         const t_ipc = performance.now()
         const global = await invoke<GlobalConfigShape>('load_config')
         _startupTimings.push({ name: 'config-source', ms: Math.round(performance.now() - t_ipc) })
-        processConfig(global)
+        await processConfig(global)
       }
 
-      function processConfig(global: GlobalConfigShape) {
+      async function processConfig(global: GlobalConfigShape) {
         const runningIds = new Set(Object.keys(global.running || {}))
         const order = global.instance_order || Object.keys(global.instances)
         let list: Instance[] = Object.entries(global.instances).map(([id, config]) => {
@@ -312,7 +316,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           document.documentElement.classList.toggle('dark', global.dark_mode)
           startTransition(() => { set({ darkMode: !!global.dark_mode }) })
         }
-        invoke<[ModelInfo[], EngineInfo[], PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
+        await invoke<[ModelInfo[], EngineInfo[], PersistedQueueEntry[]]>('load_app_data', { paths: global.model_dirs || [], enginePaths: global.engine_dirs || [] })
           .then(([models, engines, queue]) => {
             startTransition(() => { set({ models, engines }) })
             if (queue?.length > 0) startTransition(() => { get().restoreDownloadQueue(queue) })
