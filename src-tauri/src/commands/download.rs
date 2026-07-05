@@ -37,16 +37,44 @@ fn sanitize_repo_id(repo_id: &str) -> Result<String, String> {
     Ok(repo_id.to_string())
 }
 
+fn sanitize_file_name(name: &str) -> Result<String, String> {
+    if name.is_empty() { return Err("文件名不能为空".into()); }
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return Err(format!("文件名包含非法路径字符: {}", name));
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if name.len() >= 2 && name.as_bytes()[1] == b':' {
+            return Err(format!("文件名包含非法路径字符: {}", name));
+        }
+    }
+    // 确保 name 是纯文件名（不含路径分隔符）
+    let path = Path::new(name);
+    if path.file_name().and_then(|s| s.to_str()) != Some(name) {
+        return Err(format!("文件名包含路径分隔符: {}", name));
+    }
+    Ok(name.to_string())
+}
+
 /// 下载单个文件的通用逻辑。
 async fn download_single_file(
     url: String,
     save_path: PathBuf,
-    file_name: String,
+    raw_file_name: String,
     file_size: u64,
     repo_id: String,
     source: String,
     app: tauri::AppHandle,
 ) {
+    let file_name = match sanitize_file_name(&raw_file_name) {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = app.emit("download-error", serde_json::json!({
+                "fileName": raw_file_name, "error": e, "repoId": repo_id, "source": source,
+            }));
+            return;
+        }
+    };
     let shared = app.state::<AppState>();
 
     if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
@@ -117,6 +145,8 @@ async fn download_single_file(
         if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
             if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
                 let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id, "source": source }));
+            } else {
+                let _ = app.emit("download-paused", serde_json::json!({ "fileName": file_name, "repoId": repo_id, "source": source, "downloaded": downloaded, "total": total }));
             }
             return;
         }
@@ -267,10 +297,18 @@ pub async fn pause_file_download(file_name: String, state: tauri::State<'_, AppS
 
 #[tauri::command]
 pub async fn cancel_and_cleanup_download(file_name: String, file_path: String, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+    let _ = sanitize_file_name(&file_name)?;
+    // Canonicalize + verify the path is within a managed download directory
+    let managed = state.config_dir.lock().unwrap();
+    let root = managed.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let cpath = std::fs::canonicalize(Path::new(&file_path)).unwrap_or_else(|_| Path::new(&file_path).to_path_buf());
+    let croot = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
+    if !cpath.starts_with(&croot) {
+        return Err("文件不在受管目录内".into());
+    }
     state.cancel_flags.lock().unwrap().insert(file_name.clone(), true);
     state.pause_flags.lock().unwrap().remove(&file_name);
-    // File may not exist (download never started or already cleaned up) — that's OK
-    let _ = std::fs::remove_file(&file_path);
+    let _ = std::fs::remove_file(&cpath);
     let _ = app.emit("download-removed", serde_json::json!({ "fileName": file_name }));
     Ok(())
 }

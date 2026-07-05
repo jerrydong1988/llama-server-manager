@@ -543,12 +543,13 @@ pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_js
     let online: Vec<&WorkerInfo> = workers.iter().filter(|w| w.status == WorkerStatus::Online).collect();
 
     let mut worker_metrics = Vec::new();
+    let mut reachable_count = 0u32;
     for w in &online {
         let addr = format!("{}:{}", w.host, w.port);
-        // #7: 避免 parse().unwrap() panic
         let reachable = addr.parse::<std::net::SocketAddr>().ok()
             .and_then(|a| std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_millis(500)).ok())
             .is_some();
+        if reachable { reachable_count += 1; }
 
         worker_metrics.push(serde_json::json!({
             "host": w.host,
@@ -566,7 +567,7 @@ pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_js
 
     Ok(serde_json::json!({
         "total_workers": workers.len(),
-        "online_workers": online.len(),
+        "online_workers": reachable_count,
         "worker_metrics": worker_metrics,
     }))
 }

@@ -617,6 +617,13 @@ listen<{ fileName: string; repoId: string; source: string }>('download-cancelled
   useAppStore.getState().processDownloadQueue()
 }).catch(() => {})
 
+listen<{ fileName: string; repoId: string; source: string; downloaded: number; total: number }>('download-paused', (e) => {
+  const s = useAppStore.getState()
+  const prev = s.downloadTasks[e.payload.fileName]
+  s.setDownloadTasks({ ...s.downloadTasks, [e.payload.fileName]: { ...(prev || { fileName: e.payload.fileName, repoId: e.payload.repoId, source: e.payload.source, downloaded: 0, total: 0, speed: 0 }), status: 'paused', downloaded: e.payload.downloaded, total: e.payload.total } })
+  s.persistQueue()
+}).catch(() => {})
+
 listen<{ fileName: string; repoId: string; source: string; error: string }>('download-error', (e) => {
   const s = useAppStore.getState()
   const prev = s.downloadTasks[e.payload.fileName]

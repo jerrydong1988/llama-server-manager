@@ -74,13 +74,13 @@ const ConfigPage = () => {
     }
     setShowPicker(false)
   }
-  const save = () => {
+  const save = async () => {
     if (!local || !inst) return
     const model = models.find(m => m.path === local.model_path)
     const engine = engines.find(e => e.id === (local.engine_id || defaultEngineId || '')) || engines[0]
     const warnings = validateConfig(local, model, engine)
     updateInstance(inst.id, { config: local })
-    saveConfig()
+    await saveConfig()
     setSaved(true)
     setSaveWarnings(warnings)
     setTimeout(() => { if (mountedRef.current) { setSaved(false); setSaveWarnings([]) } }, 6000)

@@ -116,7 +116,6 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.check_tensors { cmd.push("--check-tensors".into()); }
     if config.perf { cmd.push("--perf".into()); }
     if config.fit { cmd.extend_from_slice(&["--fit".into(), "on".into()]); }
-    else { cmd.extend_from_slice(&["--fit".into(), "off".into()]); }
     if !config.fit_target.is_empty() { cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]); }
     if config.fit_ctx != 4096 { cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]); }
 
@@ -441,49 +440,25 @@ fn monitor_loop(
     let client = reqwest::blocking::Client::new();
     let metrics_url = format!("http://{}:{}/metrics", host, port);
 
-    // #5: 记录启动时间用于计算 uptime
+    // 启动时间用于计算 uptime
     let start_instant = std::time::Instant::now();
 
-    // #6: 复用 System 实例，只创建一次
-    let mut sys = System::new_all();
-
-    // #7: 缓存 GPU vendor 字符串，但持续采集实时数据
-    let mut cached_gpu_vendor: Option<String> = None;
+    // 进程级指标专用 System（系统级 GPU 指标复用 SYSINFO_CACHE 单例）
+    let mut proc_sys = System::new_all();
 
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
         if !is_my_instance() { break; }
 
-        // ── 系统指标 ──
-        sys.refresh_all();
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(&mut sys);
+        // ── 系统级 + GPU 指标 — 复用 collect_gpu_and_system 单例缓存
+        let (adlx_cpu, gpu_pct, vram_u, vram_t, _mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
+            collect_gpu_and_system();
 
         // 进程级指标
-        let (cpu, mem) = get_process_metrics(&mut sys, expected_pid);
-        let mut cpu_pct = cpu;
-        let mut mem_mb = (mem * 10.0).round() / 10.0;
-
-        // GPU: ADLX → NVML（实时采集，vendor 字符串只取第一次）
-        let mut gpu_pct: Option<f32> = None;
-        let mut vram_u: Option<f64> = None;
-        let mut vram_t: Option<f64> = None;
-        let mut gpu_vendor: Option<String> = None;
-        if let Some(m) = adlx::collect_metrics() {
-            if let Some(c) = m.cpu_percent { cpu_pct = c; }
-            if let Some(mb) = m.memory_mb { mem_mb = mb; }
-            gpu_pct = m.gpu_percent;
-            vram_u = m.vram_used_mb;
-            vram_t = m.vram_total_mb;
-            if cached_gpu_vendor.is_none() { cached_gpu_vendor = Some("AMD".into()); }
-            gpu_vendor = cached_gpu_vendor.clone();
-        } else if let Some(m) = nvml::collect_metrics() {
-            gpu_pct = m.gpu_percent;
-            vram_u = m.vram_used_mb;
-            vram_t = m.vram_total_mb;
-            if cached_gpu_vendor.is_none() { cached_gpu_vendor = Some("NVIDIA".into()); }
-            gpu_vendor = cached_gpu_vendor.clone();
-        }
+        proc_sys.refresh_cpu_all();
+        let (cpu, mem) = get_process_metrics(&mut proc_sys, expected_pid);
+        let cpu_pct = adlx_cpu.unwrap_or(cpu);
+        let mem_mb = if adlx_cpu.is_some() { _mem.unwrap_or(mem) } else { (mem * 10.0).round() / 10.0 };
 
         let sys_metrics = serde_json::json!({
             "cpu_percent": cpu_pct,
@@ -569,17 +544,27 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
                 let _ = app.emit("health-status", serde_json::json!({
                     "instanceId": instance_id, "status": "ok",
                 }));
+                let mut fail_count = 0u32;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     if !is_my_instance() { return; }
                     if let Ok(resp) = health_req(5) {
                         if !resp.status().is_success() {
-                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            fail_count += 1;
                         } else {
+                            fail_count = 0;
                             let _ = app.emit("health-status", serde_json::json!({
                                 "instanceId": instance_id, "status": "ok",
                             }));
                         }
+                    } else {
+                        fail_count += 1;
+                    }
+                    if fail_count >= 3 {
+                        let _ = app.emit("health-status", serde_json::json!({
+                            "instanceId": instance_id, "status": "fail",
+                        }));
+                        fail_count = 0;
                     }
                 }
             }
@@ -597,17 +582,27 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
                     "instanceId": instance_id, "status": "ok",
                 }));
                 // Enter stable monitoring loop
+                let mut fail_count = 0u32;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     if !is_my_instance() { return; }
                     if let Ok(resp) = health_req(5) {
                         if !resp.status().is_success() {
-                            std::thread::sleep(std::time::Duration::from_secs(3));
+                            fail_count += 1;
                         } else {
+                            fail_count = 0;
                             let _ = app.emit("health-status", serde_json::json!({
                                 "instanceId": instance_id, "status": "ok",
                             }));
                         }
+                    } else {
+                        fail_count += 1;
+                    }
+                    if fail_count >= 3 {
+                        let _ = app.emit("health-status", serde_json::json!({
+                            "instanceId": instance_id, "status": "fail",
+                        }));
+                        fail_count = 0;
                     }
                 }
             }

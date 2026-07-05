@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 use tauri::Manager;
 use crate::models::{AppState, WindowState};
-use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder, load_app_data};
+use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder, load_app_data, get_cached_scan};
 use crate::commands::config::{save_config, load_config, save_window_state, load_window_state, resolve_path};
 use crate::commands::server::{generate_server_command, start_server, stop_server, open_browser, test_connection, check_port, get_system_metrics, get_system_health, get_slots, get_metrics};
 use crate::commands::download::{browse_modelscope, download_modelscope_files, browse_huggingface, download_huggingface_files, cancel_file_download, pause_file_download, cancel_and_cleanup_download, check_local_file, persist_download_queue, restore_download_queue};
@@ -224,7 +224,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata,
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
-            load_app_data,
+            load_app_data, get_cached_scan,
             generate_server_command, start_server, stop_server, open_browser,
             save_config, load_config,
             browse_modelscope, download_modelscope_files,
