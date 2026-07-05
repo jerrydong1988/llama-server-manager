@@ -218,6 +218,7 @@ fn main() {
             config_dir: Mutex::new(config_dir),
             cancel_flags: Mutex::new(HashMap::new()),
             pause_flags: Mutex::new(HashMap::new()),
+            active_downloads: Mutex::new(std::collections::HashSet::new()),
             workers: Mutex::new(Vec::new()),
             usb4_adapters: Mutex::new(Vec::new()),
         })

@@ -76,10 +76,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     const next = downloadQueue[0]
     set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== next.id) }))
 
-    // Mark as active
+    // Mark as active — preserve downloaded count if task was previously paused
     const tasks = { ...get().downloadTasks }
     for (const f of next.files) {
-      tasks[f.name] = { fileName: f.name, repoId: next.repoId, source: next.source, downloaded: 0, total: f.size, speed: 0, status: 'active' }
+      const prev = downloadTasks[f.name]
+      const already = prev?.status === 'paused' ? (prev.downloaded ?? 0) : 0
+      tasks[f.name] = { fileName: f.name, repoId: next.repoId, source: next.source, downloaded: already, total: f.size, speed: 0, status: 'active' }
     }
     set({ downloadTasks: tasks })
 
@@ -368,12 +370,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     const now = Date.now()
     let hasPending = false
     for (const entry of entries) {
-      // 跳过已完成的
       const allDone = entry.files.every(f => s.downloadTasks[f.name]?.status === 'completed')
       if (allDone) continue
 
       const id = entry.id || crypto.randomUUID()
       const status = (entry.status === 'active' ? 'queued' : entry.status || 'queued') as 'queued' | 'active' | 'paused' | 'completed' | 'cancelled' | 'error'
+      // paused 任务不进队列，仅在 downloadTasks 中恢复展示
+      if (status === 'paused') {
+        const tasks = { ...get().downloadTasks }
+        for (const f of entry.files) {
+          tasks[f.name] = { fileName: f.name, repoId: entry.repo_id, source: entry.source, downloaded: f.size > 0 ? f.size : 0, total: f.size, speed: 0, status: 'paused' }
+        }
+        set({ downloadTasks: tasks })
+        continue
+      }
       set(st => ({
         downloadQueue: [...st.downloadQueue, {
           id, repoId: entry.repo_id,
@@ -408,20 +418,23 @@ export const useAppStore = create<AppState>((set, get) => ({
         status,
       }
     })
-    // Also include active tasks not in queue
-    const active = Object.values(get().downloadTasks).filter(t => t.status === 'active')
-    if (active.length > 0 && !downloadQueue.some(q => q.files.some(f => active.some(a => a.fileName === f.name)))) {
-      const activeByRepo = new Map<string, typeof active>()
-      for (const t of active) {
+    // 兜底：持久化队列外但仍在 active/paused 状态的任务（避免数据丢失）
+    const orphanTasks = Object.values(get().downloadTasks).filter(
+      t => (t.status === 'active' || t.status === 'paused') &&
+        !downloadQueue.some(q => q.files.some(f => f.name === t.fileName))
+    )
+    if (orphanTasks.length > 0) {
+      const byRepo = new Map<string, typeof orphanTasks>()
+      for (const t of orphanTasks) {
         const key = `${t.source}:${t.repoId}`
-        if (!activeByRepo.has(key)) activeByRepo.set(key, [])
-        activeByRepo.get(key)!.push(t)
+        if (!byRepo.has(key)) byRepo.set(key, [])
+        byRepo.get(key)!.push(t)
       }
-      for (const [, files] of activeByRepo) {
+      for (const [, files] of byRepo) {
         entries.push({
           id: crypto.randomUUID(), repo_id: files[0].repoId, source: files[0].source,
           files: files.map(f => ({ name: f.fileName, path: '', size: f.total, file_type: 'model' })),
-          save_dir: '', added_at: Date.now(), status: 'active',
+          save_dir: '', added_at: Date.now(), status: files[0].status,
         })
       }
     }

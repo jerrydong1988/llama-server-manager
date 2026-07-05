@@ -56,6 +56,17 @@ fn sanitize_file_name(name: &str) -> Result<String, String> {
     Ok(name.to_string())
 }
 
+/// RAII guard: removes file_name from active_downloads on drop (all exit paths including panic)
+struct ActiveDownloadGuard {
+    app: tauri::AppHandle,
+    file_name: String,
+}
+impl Drop for ActiveDownloadGuard {
+    fn drop(&mut self) {
+        self.app.state::<AppState>().active_downloads.lock().unwrap().remove(&self.file_name);
+    }
+}
+
 /// 下载单个文件的通用逻辑。
 async fn download_single_file(
     url: String,
@@ -76,6 +87,16 @@ async fn download_single_file(
         }
     };
     let shared = app.state::<AppState>();
+
+    {
+        let mut active = shared.active_downloads.lock().unwrap();
+        if !active.insert(file_name.clone()) {
+            // 该文件已有活跃下载任务，跳过（避免两个任务同时写同一个文件）
+            return;
+        }
+    }
+    // RAII guard: 函数退出时自动从 active_downloads 中移除
+    let _guard = ActiveDownloadGuard { app: app.clone(), file_name: file_name.clone() };
 
     if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
         if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
@@ -290,8 +311,10 @@ pub async fn cancel_file_download(file_name: String, state: tauri::State<'_, App
 
 #[tauri::command]
 pub async fn pause_file_download(file_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.pause_flags.lock().unwrap().insert(file_name.clone(), true);
-    state.cancel_flags.lock().unwrap().insert(file_name, true);
+    let mut pause = state.pause_flags.lock().unwrap();
+    let mut cancel = state.cancel_flags.lock().unwrap();
+    pause.insert(file_name.clone(), true);
+    cancel.insert(file_name, true);
     Ok(())
 }
 

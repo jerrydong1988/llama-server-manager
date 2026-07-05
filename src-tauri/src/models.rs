@@ -455,6 +455,7 @@ pub struct AppState {
     pub config_dir: Mutex<PathBuf>,
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,
+    pub active_downloads: Mutex<std::collections::HashSet<String>>,
     pub workers: Mutex<Vec<WorkerInfo>>,
     pub usb4_adapters: Mutex<Vec<Usb4Adapter>>,
 }
