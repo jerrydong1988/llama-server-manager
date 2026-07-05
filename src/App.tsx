@@ -81,10 +81,14 @@ function AppInner() {
 
   const upCount = useMemo(() => instances.filter(i => i.status === 'running').length, [instances])
   const downCount = useMemo(() => instances.filter(i => i.status !== 'running').length, [instances])
+  const downloadTasks = useAppStore(s => s.downloadTasks)
+  const activeDownloadCount = useMemo(() =>
+    Object.values(downloadTasks).filter(t => t.status === 'active' || t.status === 'paused').length,
+  [downloadTasks])
   const navigation = useMemo(() => [
     { id: 'dashboard', name: t.nav.dashboard || 'Dashboard', icon: BarChart3 },
     { id: 'model-repo', name: t.nav.modelRepo, icon: Database },
-    { id: 'downloads', name: t.nav.downloads || 'Downloads', icon: Download },
+    { id: 'downloads', name: t.nav.downloads || 'Downloads', icon: Download, badge: activeDownloadCount },
     { id: 'engine', name: t.nav.engine, icon: Cpu },
     { id: 'instances', name: t.nav.instances, icon: Server, badge: upCount },
     { id: 'config', name: t.nav.config, icon: Settings, separator: true },
@@ -92,7 +96,7 @@ function AppInner() {
     { id: 'perf', name: t.nav.perf, icon: Activity },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
     { id: 'guide', name: '\u4F7F\u7528\u8BF4\u660E', icon: BookOpen, separator: true },
-  ], [t, upCount])
+  ], [t, upCount, activeDownloadCount])
   // dark mode handled by store setDarkMode
   const mountTimeRef = useRef(performance.now())
   const [configLoaded, setConfigLoaded] = useState(false)
