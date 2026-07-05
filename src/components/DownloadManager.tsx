@@ -33,6 +33,13 @@ export default function DownloadManager() {
     catch { return DEFAULT_SAVE_DIR }
   })
 
+  const taskForFile = (f: MsFileEntry) => Object.values(downloadTasks).find(t =>
+    t.source === source &&
+    t.repoId === browsedRepoId &&
+    t.remotePath === (f.path || f.name) &&
+    t.saveDir === saveDir
+  )
+
   const modelTypeLabel = (fileType: string) => {
     switch (fileType) { case 'mmproj': return t.modelRepo.typeMmproj; case 'imatrix': return t.modelRepo.typeImatrix; default: return t.modelRepo.typeModel }
   }
@@ -64,7 +71,23 @@ export default function DownloadManager() {
         try {
           const actualSize = await invoke<number | null>('check_local_file', { path: localPath })
           if (actualSize != null && actualSize >= f.size * 0.99) {
-                tasks[f.name] = { fileName: f.name, repoId: rid, source, downloaded: actualSize, total: f.size, speed: 0, status: 'completed', path: localPath }
+                const existing = Object.values(tasks).find(t => t.source === source && t.repoId === rid && t.remotePath === (f.path || f.name) && t.saveDir === saveDir)
+                const id = existing?.id || crypto.randomUUID()
+                tasks[id] = {
+                  id,
+                  fileName: f.name,
+                  remotePath: f.path || f.name,
+                  fileType: f.file_type,
+                  saveDir,
+                  repoId: rid,
+                  source,
+                  downloaded: actualSize,
+                  total: f.size,
+                  speed: 0,
+                  status: 'completed',
+                  path: localPath,
+                  version: existing?.version ?? 0,
+                }
           }
         } catch { /* file not found */ }
       }))
@@ -85,17 +108,18 @@ export default function DownloadManager() {
 
   const handleDownloadFile = (f: MsFileEntry) => addToDownloadQueue({ repoId: browsedRepoId, source, files: [f], saveDir })
   const handleDownloadAll = () => {
-    const pending = files.filter(f => downloadTasks[f.name]?.status !== 'completed')
+    const pending = files.filter(f => taskForFile(f)?.status !== 'completed')
     if (pending.length > 0) addToDownloadQueue({ repoId: browsedRepoId, source, files: pending, saveDir })
   }
 
   const handlePause = (f: MsFileEntry) => {
-    const task = downloadTasks[f.name]
-    if (task) { const s = useAppStore.getState(); setDownloadTasks({ ...s.downloadTasks, [f.name]: { ...task, status: 'paused' } }); pauseFileDownload(f.name) }
+    const task = taskForFile(f)
+    if (task) { const s = useAppStore.getState(); setDownloadTasks({ ...s.downloadTasks, [task.id]: { ...task, status: 'pausing' } }); pauseFileDownload(task.id, task.runId) }
   }
 
   const handleCancel = (f: MsFileEntry) => {
-    cancelAndCleanupDownload(f.name, pathJoin(saveDir, browsedRepoId, f.name))
+    const task = taskForFile(f)
+    if (task) cancelAndCleanupDownload(task.id, f.name, pathJoin(task.saveDir, browsedRepoId, f.name), task.runId)
   }
 
   // 恢复/取消持久化任务 — 使用任务自身元数据，不依赖组件 state
@@ -103,14 +127,14 @@ export default function DownloadManager() {
     addToDownloadQueue({
       repoId: f.repoId,
       source: f.source as DownloadSource,
-      files: [{ name: f.fileName, path: '', size: f.total, file_type: 'model' }],
-      saveDir,
+      files: [{ name: f.fileName, path: f.remotePath, size: f.total, file_type: f.fileType || 'model', task_id: f.id, downloaded: f.downloaded }],
+      saveDir: f.saveDir,
     })
   }
   const handleCancelPersisted = (f: DownloadProgress) => {
-    const task = downloadTasks[f.fileName]
-    if (task) setDownloadTasks({ ...downloadTasks, [f.fileName]: { ...task, status: 'cancelled' } })
-    cancelAndCleanupDownload(f.fileName, pathJoin(saveDir, f.repoId, f.fileName))
+    const task = downloadTasks[f.id]
+    if (task) setDownloadTasks({ ...downloadTasks, [f.id]: { ...task, status: 'cancelled' } })
+    cancelAndCleanupDownload(f.id, f.fileName, pathJoin(f.saveDir, f.repoId, f.fileName), f.runId)
   }
 
   const clearCompleted = () => {
@@ -125,7 +149,7 @@ export default function DownloadManager() {
   const activeGroups = useMemo(() => {
     const map = new Map<string, DownloadProgress[]>()
     const tasks = Object.values(downloadTasks)
-    for (const t of tasks.filter(t => t.status === 'active' || t.status === 'paused')) {
+    for (const t of tasks.filter(t => t.status === 'active' || t.status === 'paused' || t.status === 'pausing')) {
       const key = `${t.source || ''}:${t.repoId || 'unknown'}`
       if (!map.has(key)) map.set(key, [])
       map.get(key)!.push(t)
@@ -180,28 +204,30 @@ export default function DownloadManager() {
           <div className="flex items-center justify-between mb-2">
             <div className="text-xs text-gray-500">{status} · {formatSize(files.reduce((s,f)=>s+f.size,0))}</div>
             <button onClick={handleDownloadAll} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs">
-              ⬇ {t.downloadPage.downloadAll} ({files.filter(f => downloadTasks[f.name]?.status !== 'completed').length} {t.downloadPage.files})
+              ⬇ {t.downloadPage.downloadAll} ({files.filter(f => taskForFile(f)?.status !== 'completed').length} {t.downloadPage.files})
             </button>
           </div>
           <div className="border dark:border-gray-700 rounded-lg max-h-80 overflow-y-auto divide-y dark:divide-gray-700">
             {files.map((f) => {
-              const task = downloadTasks[f.name]
+              const task = taskForFile(f)
               return (
                 <div key={f.path} className="px-4 py-2.5 space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-sm truncate flex-1 mr-2">{f.name}</span>
                     <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ml-2 ${modelTypeColor(f.file_type)}`}>{modelTypeLabel(f.file_type)}</span> · {formatSize(f.size)}
                   </div>
-                  {task && (task.status === 'active' || task.status === 'queued') && (
+                  {task && (task.status === 'active' || task.status === 'pausing' || task.status === 'queued') && (
                     <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
                       <div className="h-full rounded-full bg-blue-500" style={{width:`${task.total>0?(task.downloaded/task.total)*100:0}%`}} />
                     </div>
                   )}
                   <div className="flex items-center gap-2">
-                    {task?.status === 'active' ? (
+                    {task?.status === 'active' || task?.status === 'pausing' ? (
                       <>
                         <span className="text-xs text-blue-500">{formatSize(task.downloaded)}/{formatSize(task.total)} · {formatSpeed(task.speed||0)} · {formatETA(task.downloaded,task.total,task.speed||0)}</span>
-                        <button onClick={() => handlePause(f)} className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
+                        {task.status === 'active'
+                          ? <button onClick={() => handlePause(f)} className="text-xs text-yellow-500 hover:text-yellow-700">{t.modelRepo.pause}</button>
+                          : <span className="text-xs text-yellow-500">{t.modelRepo.pause}</span>}
                         <button onClick={() => handleCancel(f)} className="text-xs text-red-500 hover:text-red-700 ml-auto">{t.modelRepo.cancel}</button>
                       </>
                     ) : task?.status === 'paused' ? (
@@ -257,14 +283,14 @@ export default function DownloadManager() {
                 <div className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-sm font-medium">{g.key} · {g.files.length} files · {formatSize(g.files.reduce((s,f)=>s+f.total,0))}</div>
                 <div className="divide-y dark:divide-gray-700">
                   {g.files.map(f => (
-                    <div key={f.fileName} className="px-4 py-2.5 space-y-1">
+                    <div key={f.id} className="px-4 py-2.5 space-y-1">
                       <div className="flex items-center justify-between text-xs">
                         <span className="truncate flex-1">{f.fileName}</span>
                         <div className="flex items-center gap-1 shrink-0 ml-2">
                            {f.status === 'active' && (
                              <button onClick={() => {
-                               const s = useAppStore.getState(); setDownloadTasks({...s.downloadTasks, [f.fileName]: {...f, status: 'paused'}})
-                               pauseFileDownload(f.fileName)
+                               const s = useAppStore.getState(); setDownloadTasks({...s.downloadTasks, [f.id]: {...f, status: 'pausing'}})
+                               pauseFileDownload(f.id, f.runId)
                              }} className="text-yellow-500 hover:text-yellow-700" title="暂停">⏸</button>
                           )}
                           {f.status === 'paused' && (
@@ -273,12 +299,12 @@ export default function DownloadManager() {
                           {f.status === 'paused' ? (
                             <button onClick={() => handleCancelPersisted(f)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
                           ) : (
-                            <button onClick={() => cancelFileDownload(f.fileName)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
+                            <button onClick={() => cancelFileDownload(f.id, f.runId)} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
                           )}
                         </div>
                       </div>
                       <div className="h-1.5 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${f.status === 'paused' ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{width:`${f.total>0?Math.min(100,(f.downloaded/f.total)*100):0}%`}} />
+                        <div className={`h-full rounded-full ${f.status === 'paused' || f.status === 'pausing' ? 'bg-yellow-500' : 'bg-blue-500'}`} style={{width:`${f.total>0?Math.min(100,(f.downloaded/f.total)*100):0}%`}} />
                       </div>
                       <div className="flex justify-between text-xs text-gray-400">
                         <span>{formatSize(f.downloaded)}/{formatSize(f.total)}</span>
@@ -306,7 +332,7 @@ export default function DownloadManager() {
                 <div className="px-4 py-2 bg-gray-100 dark:bg-gray-800 text-sm font-medium">{g.key} · {g.files.length} files</div>
                 <div className="divide-y dark:divide-gray-700">
                   {g.files.map(f => (
-                    <div key={f.fileName} className="px-4 py-2.5 flex items-center justify-between text-xs">
+                    <div key={f.id} className="px-4 py-2.5 flex items-center justify-between text-xs">
                       <div>
                         <span>{f.fileName}</span>
                         <span className={`ml-2 ${f.status==='completed'?'text-green-500':'text-gray-400'}`}>
@@ -314,7 +340,7 @@ export default function DownloadManager() {
                         </span>
                       </div>
                       {f.path && (
-                        <button onClick={() => cancelAndCleanupDownload(f.fileName, f.path!)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
+                        <button onClick={() => cancelAndCleanupDownload(f.id, f.fileName, f.path!, f.runId)} className="text-red-400 hover:text-red-600"><Trash2 className="w-3 h-3" /></button>
                       )}
                     </div>
                   ))}

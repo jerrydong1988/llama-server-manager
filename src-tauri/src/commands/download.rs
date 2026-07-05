@@ -59,29 +59,33 @@ fn sanitize_file_name(name: &str) -> Result<String, String> {
 /// RAII guard: removes file_name from active_downloads on drop (all exit paths including panic)
 struct ActiveDownloadGuard {
     app: tauri::AppHandle,
-    file_name: String,
+    task_id: String,
 }
 impl Drop for ActiveDownloadGuard {
     fn drop(&mut self) {
-        self.app.state::<AppState>().active_downloads.lock().unwrap().remove(&self.file_name);
+        self.app.state::<AppState>().active_downloads.lock().unwrap().remove(&self.task_id);
     }
 }
 
 /// 下载单个文件的通用逻辑。
 async fn download_single_file(
+    task_id: String,
+    run_id: String,
     url: String,
     save_path: PathBuf,
     raw_file_name: String,
     file_size: u64,
     repo_id: String,
     source: String,
+    remote_path: String,
     app: tauri::AppHandle,
 ) {
     let file_name = match sanitize_file_name(&raw_file_name) {
         Ok(n) => n,
         Err(e) => {
             let _ = app.emit("download-error", serde_json::json!({
-                "fileName": raw_file_name, "error": e, "repoId": repo_id, "source": source,
+                "taskId": &task_id, "runId": &run_id, "fileName": raw_file_name, "error": e,
+                "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
             }));
             return;
         }
@@ -90,17 +94,25 @@ async fn download_single_file(
 
     {
         let mut active = shared.active_downloads.lock().unwrap();
-        if !active.insert(file_name.clone()) {
+        if !active.insert(task_id.clone()) {
             // 该文件已有活跃下载任务，跳过（避免两个任务同时写同一个文件）
+            let _ = app.emit("download-error", serde_json::json!({
+                "taskId": &task_id, "runId": &run_id, "fileName": &file_name,
+                "error": "Download task is already active",
+                "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
+            }));
             return;
         }
     }
     // RAII guard: 函数退出时自动从 active_downloads 中移除
-    let _guard = ActiveDownloadGuard { app: app.clone(), file_name: file_name.clone() };
+    let _guard = ActiveDownloadGuard { app: app.clone(), task_id: task_id.clone() };
 
-    if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-        if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-            let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id, "source": source }));
+    if shared.cancel_flags.lock().unwrap().get(&run_id).copied().unwrap_or(false) {
+        if !shared.pause_flags.lock().unwrap().get(&run_id).copied().unwrap_or(false) {
+            let _ = app.emit("download-cancelled", serde_json::json!({
+                "taskId": &task_id, "runId": &run_id, "fileName": &file_name,
+                "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
+            }));
         }
         return;
     }
@@ -117,7 +129,8 @@ async fn download_single_file(
         Ok(r) => r,
         Err(e) => {
             let _ = app.emit("download-error", serde_json::json!({
-                "fileName": file_name, "error": e.to_string(), "repoId": repo_id, "source": source,
+                "taskId": &task_id, "runId": &run_id, "fileName": &file_name, "error": e.to_string(),
+                "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
             }));
             return;
         }
@@ -131,7 +144,8 @@ async fn download_single_file(
             code => &format!("HTTP {}", code),
         };
         let _ = app.emit("download-error", serde_json::json!({
-            "fileName": file_name, "error": msg, "repoId": repo_id, "source": source,
+            "taskId": &task_id, "runId": &run_id, "fileName": &file_name, "error": msg,
+            "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
         }));
         return;
     }
@@ -155,7 +169,8 @@ async fn download_single_file(
         Ok(f) => f,
         Err(e) => {
             let _ = app.emit("download-error", serde_json::json!({
-                "fileName": file_name, "error": format!("文件创建失败: {}", e), "repoId": repo_id, "source": source,
+                "taskId": &task_id, "runId": &run_id, "fileName": &file_name, "error": format!("File create/write failed: {}", e),
+                "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
             }));
             return;
         }
@@ -163,11 +178,18 @@ async fn download_single_file(
 
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        if shared.cancel_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-            if !shared.pause_flags.lock().unwrap().get(&file_name).copied().unwrap_or(false) {
-                let _ = app.emit("download-cancelled", serde_json::json!({ "fileName": file_name, "repoId": repo_id, "source": source }));
+        if shared.cancel_flags.lock().unwrap().get(&run_id).copied().unwrap_or(false) {
+            if !shared.pause_flags.lock().unwrap().get(&run_id).copied().unwrap_or(false) {
+                let _ = app.emit("download-cancelled", serde_json::json!({
+                    "taskId": &task_id, "runId": &run_id, "fileName": &file_name,
+                    "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
+                }));
             } else {
-                let _ = app.emit("download-paused", serde_json::json!({ "fileName": file_name, "repoId": repo_id, "source": source, "downloaded": downloaded, "total": total }));
+                let _ = app.emit("download-paused", serde_json::json!({
+                    "taskId": &task_id, "runId": &run_id, "fileName": &file_name,
+                    "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
+                    "downloaded": downloaded, "total": total,
+                }));
             }
             return;
         }
@@ -176,7 +198,8 @@ async fn download_single_file(
                 let len = bytes.len() as u64;
                 if let Err(e) = file.write_all(&bytes) {
                         let _ = app.emit("download-error", serde_json::json!({
-                            "fileName": file_name, "error": format!("写入失败: {}", e), "repoId": repo_id, "source": source,
+                            "taskId": &task_id, "runId": &run_id, "fileName": &file_name, "error": format!("File create/write failed: {}", e),
+                "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                         }));
                     return;
                 }
@@ -196,21 +219,23 @@ async fn download_single_file(
                 if last_emit.elapsed().as_millis() >= 500 {
                     last_emit = now;
                     let _ = app.emit("download-progress", serde_json::json!({
-                        "fileName": file_name, "downloaded": downloaded,
-                        "total": total, "speed": speed, "repoId": repo_id, "source": source,
+                        "taskId": &task_id, "runId": &run_id, "fileName": &file_name, "downloaded": downloaded,
+                        "total": total, "speed": speed, "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                     }));
                 }
             }
             Err(e) => {
                 let _ = app.emit("download-error", serde_json::json!({
-                    "fileName": file_name, "error": e.to_string(), "repoId": repo_id, "source": source,
+                    "taskId": &task_id, "runId": &run_id, "fileName": &file_name, "error": e.to_string(),
+                    "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                 }));
                 return;
             }
         }
     }
     let _ = app.emit("download-complete", serde_json::json!({
-        "fileName": file_name, "path": dest.to_string_lossy(), "repoId": repo_id, "source": source,
+        "taskId": &task_id, "runId": &run_id, "fileName": &file_name, "path": dest.to_string_lossy(),
+        "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
     }));
 }
 
@@ -238,6 +263,9 @@ pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, Stri
             name,
             path: f.get("Path")?.as_str()?.to_string(),
             size: f.get("Size")?.as_u64().unwrap_or(0),
+            task_id: None,
+            run_id: None,
+            downloaded: None,
         })
     }).collect();
 
@@ -279,19 +307,27 @@ pub async fn download_modelscope_files(
         let state = app.state::<AppState>();
         let mut flags = state.cancel_flags.lock().unwrap();
         let mut pause = state.pause_flags.lock().unwrap();
-        for file in &files { flags.remove(&file.name); pause.remove(&file.name); }
+        for file in &files {
+            if let Some(run_id) = &file.run_id {
+                flags.remove(run_id);
+                pause.remove(run_id);
+            }
+        }
     }
 
     for file in files {
         let url = format!("https://modelscope.cn/models/{}/resolve/master/{}", repo_id, file.path);
         let dest_dir = save_path.clone();
         let rid = repo_id.clone();
+        let task_id = file.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let run_id = file.run_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let remote_path = file.path.clone();
         let handle = tokio::spawn({
             let app = app.clone();
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                download_single_file(url, dest_dir, file.name.clone(), file.size, rid, "modelscope".into(), app).await;
+                download_single_file(task_id, run_id, url, dest_dir, file.name.clone(), file.size, rid, "modelscope".into(), remote_path, app).await;
             }
         });
         handles.push(handle);
@@ -304,22 +340,24 @@ pub async fn download_modelscope_files(
 // ── 下载控制 ─────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn cancel_file_download(file_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.cancel_flags.lock().unwrap().insert(file_name, true);
+pub async fn cancel_file_download(task_id: String, run_id: Option<String>, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let key = run_id.unwrap_or(task_id);
+    state.cancel_flags.lock().unwrap().insert(key, true);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn pause_file_download(file_name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn pause_file_download(task_id: String, run_id: Option<String>, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let key = run_id.unwrap_or(task_id);
     let mut pause = state.pause_flags.lock().unwrap();
     let mut cancel = state.cancel_flags.lock().unwrap();
-    pause.insert(file_name.clone(), true);
-    cancel.insert(file_name, true);
+    pause.insert(key.clone(), true);
+    cancel.insert(key, true);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn cancel_and_cleanup_download(file_name: String, file_path: String, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn cancel_and_cleanup_download(task_id: String, file_name: String, file_path: String, run_id: Option<String>, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
     let _ = sanitize_file_name(&file_name)?;
     // Canonicalize + verify the path is within a managed download directory
     let managed = state.config_dir.lock().unwrap();
@@ -329,10 +367,11 @@ pub async fn cancel_and_cleanup_download(file_name: String, file_path: String, s
     if !cpath.starts_with(&croot) {
         return Err("文件不在受管目录内".into());
     }
-    state.cancel_flags.lock().unwrap().insert(file_name.clone(), true);
-    state.pause_flags.lock().unwrap().remove(&file_name);
+    let key = run_id.unwrap_or_else(|| task_id.clone());
+    state.cancel_flags.lock().unwrap().insert(key.clone(), true);
+    state.pause_flags.lock().unwrap().remove(&key);
     let _ = std::fs::remove_file(&cpath);
-    let _ = app.emit("download-removed", serde_json::json!({ "fileName": file_name }));
+    let _ = app.emit("download-removed", serde_json::json!({ "taskId": task_id, "fileName": file_name }));
     Ok(())
 }
 
@@ -372,6 +411,9 @@ pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, Str
             name,
             path: e.path.clone(),
             size,
+            task_id: None,
+            run_id: None,
+            downloaded: None,
         })
     }).collect();
 
@@ -414,19 +456,27 @@ pub async fn download_huggingface_files(
         let state = app.state::<AppState>();
         let mut flags = state.cancel_flags.lock().unwrap();
         let mut pause = state.pause_flags.lock().unwrap();
-        for file in &files { flags.remove(&file.name); pause.remove(&file.name); }
+        for file in &files {
+            if let Some(run_id) = &file.run_id {
+                flags.remove(run_id);
+                pause.remove(run_id);
+            }
+        }
     }
 
     for file in files {
         let url = format!("https://huggingface.co/{}/resolve/main/{}", repo_id, file.path);
         let dest_dir = save_path.clone();
         let rid = repo_id.clone();
+        let task_id = file.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let run_id = file.run_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let remote_path = file.path.clone();
         let handle = tokio::spawn({
             let app = app.clone();
             let permit = semaphore.clone().acquire_owned();
             async move {
                 let _permit = permit.await;
-                download_single_file(url, dest_dir, file.name.clone(), file.size, rid, "huggingface".into(), app).await;
+                download_single_file(task_id, run_id, url, dest_dir, file.name.clone(), file.size, rid, "huggingface".into(), remote_path, app).await;
             }
         });
         handles.push(handle);

@@ -83,7 +83,7 @@ function AppInner() {
   const downCount = useMemo(() => instances.filter(i => i.status !== 'running').length, [instances])
   const downloadTasks = useAppStore(s => s.downloadTasks)
   const activeDownloadCount = useMemo(() =>
-    Object.values(downloadTasks).filter(t => t.status === 'active' || t.status === 'paused').length,
+    Object.values(downloadTasks).filter(t => t.status === 'active' || t.status === 'paused' || t.status === 'pausing').length,
   [downloadTasks])
   const navigation = useMemo(() => [
     { id: 'dashboard', name: t.nav.dashboard || 'Dashboard', icon: BarChart3 },

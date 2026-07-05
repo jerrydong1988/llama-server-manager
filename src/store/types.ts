@@ -109,6 +109,9 @@ export interface MsFileEntry {
   path: string
   size: number
   file_type: string
+  task_id?: string
+  run_id?: string
+  downloaded?: number
 }
 
 export interface WorkerDevice {
@@ -140,15 +143,21 @@ export interface Usb4Adapter {
 }
 
 export interface DownloadProgress {
+  id: string
+  runId?: string
   fileName: string
+  remotePath: string
+  fileType: string
+  saveDir: string
   downloaded: number
   total: number
   speed: number
   repoId: string
   source: string
-  status: 'active' | 'completed' | 'cancelled' | 'error' | 'paused' | 'queued'
+  status: 'active' | 'completed' | 'cancelled' | 'error' | 'paused' | 'pausing' | 'queued'
   path?: string
   error?: string
+  version?: number
 }
 
 export interface DownloadQueueEntry {
@@ -246,9 +255,9 @@ export interface AppState {
   downloadModelscopeFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>
   browseHuggingface: (repoId: string) => Promise<MsFileEntry[]>
   downloadHuggingfaceFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>
-  cancelFileDownload: (fileName: string) => Promise<void>
-  pauseFileDownload: (fileName: string) => Promise<void>
-  cancelAndCleanupDownload: (fileName: string, filePath: string) => Promise<void>
+  cancelFileDownload: (taskId: string, runId?: string) => Promise<void>
+  pauseFileDownload: (taskId: string, runId?: string) => Promise<void>
+  cancelAndCleanupDownload: (taskId: string, fileName: string, filePath: string, runId?: string) => Promise<void>
   setDownloadTasks: (tasks: Record<string, DownloadProgress>) => void
   addToDownloadQueue: (entry: { repoId: string; source: 'modelscope' | 'huggingface'; files: MsFileEntry[]; saveDir: string }) => void
   removeFromDownloadQueue: (id: string) => void

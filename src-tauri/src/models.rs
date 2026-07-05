@@ -511,6 +511,12 @@ pub struct MsFileEntry {
     pub path: String,
     pub size: u64,
     pub file_type: String,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub downloaded: Option<u64>,
 }
 
 fn default_true() -> bool { true }
