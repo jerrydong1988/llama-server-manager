@@ -11,7 +11,7 @@ export const _startupTimings: { name: string; ms: number }[] = []
 // Re-exports from split modules
 export type { ModelInfo, EngineInfo, InstanceConfig, Instance, LogEntry, MsFileEntry, DownloadProgress, AppState, SystemMetrics, WorkerInfo, WorkerDevice, WorkerStatus, Usb4Adapter } from './store/types'
 export { defaultInstanceConfig } from './store/defaults'
-import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry, DownloadProgress, PersistedQueueEntry, SystemMetrics } from './store/types'
+import type { AppState, ModelInfo, EngineInfo, InstanceConfig, Instance, MsFileEntry, DownloadProgress, PersistedQueueEntry, SystemMetrics, DownloadManagerSnapshot } from './store/types'
 
 // ── Store 状态 ─────────────────────────────────────────────────
 // AppState interface is defined in ./store/types.ts
@@ -44,6 +44,23 @@ const queueHasTask = (
   q.saveDir === saveDir &&
   q.files.some(f => (f.task_id && f.task_id === file.task_id) || taskRemotePath(f) === taskRemotePath(file))
 )
+
+const toPersistedQueueEntry = (entry: {
+  id: string
+  repoId: string
+  source: 'modelscope' | 'huggingface'
+  files: MsFileEntry[]
+  saveDir: string
+  addedAt: number
+}, status = 'queued'): PersistedQueueEntry => ({
+  id: entry.id,
+  repo_id: entry.repoId,
+  source: entry.source,
+  files: entry.files,
+  save_dir: entry.saveDir,
+  added_at: entry.addedAt,
+  status,
+})
 
 export const useAppStore = create<AppState>((set, get) => ({
   models: [],
@@ -101,63 +118,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     if (files.length === 0) return
 
-    set({ downloadTasks: updated, downloadQueue: [...s.downloadQueue, { ...entry, files, id, addedAt: Date.now() }] })
-    get().persistQueue()
-    get().processDownloadQueue()
+    const queuedEntry = { ...entry, files, id, addedAt: Date.now() }
+    set({ downloadTasks: updated, downloadQueue: [...s.downloadQueue, queuedEntry] })
+    invoke('enqueue_download_queue', { entry: toPersistedQueueEntry(queuedEntry) }).catch(() => {})
   },
   removeFromDownloadQueue: (id) => {
     set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== id) }))
+    invoke('remove_download_queue_entry', { id }).catch(() => {})
   },
   processDownloadQueue: () => {
-    const { downloadQueue, downloadTasks } = get()
-    const activeCount = Object.values(downloadTasks).filter(t => t.status === 'active' || t.status === 'pausing').length
-    const MAX = 3
-    if (activeCount >= MAX || downloadQueue.length === 0) return
-
-    const next = downloadQueue[0]
-    set(s => ({ downloadQueue: s.downloadQueue.filter(e => e.id !== next.id) }))
-
-    const tasks = { ...get().downloadTasks }
-    for (const f of next.files) {
-      const taskId = f.task_id || crypto.randomUUID()
-      const prev = tasks[taskId]
-      const already = prev?.downloaded ?? f.downloaded ?? 0
-      const runId = f.run_id || crypto.randomUUID()
-      f.task_id = taskId
-      f.run_id = runId
-      f.downloaded = already
-      tasks[taskId] = {
-        ...(prev || {}),
-        id: taskId,
-        runId,
-        fileName: f.name,
-        remotePath: taskRemotePath(f),
-        fileType: f.file_type,
-        saveDir: next.saveDir,
-        repoId: next.repoId,
-        source: next.source,
-        downloaded: already,
-        total: f.size,
-        speed: 0,
-        status: 'active',
-        version: prev?.version ?? 0,
-      }
-    }
-    set({ downloadTasks: tasks })
-
-    ;(async () => {
-      try {
-        if (next.source === 'modelscope') {
-          await invoke('download_modelscope_files', { repoId: next.repoId, files: next.files, saveDir: next.saveDir })
-        } else {
-          await invoke('download_huggingface_files', { repoId: next.repoId, files: next.files, saveDir: next.saveDir })
-        }
-      } catch { /* events handle error state */ } finally {
-        get().processDownloadQueue()
-      }
-    })()
-
-    get().processDownloadQueue()
+    invoke('process_download_queue').catch(() => {})
   },
   setModels: (models) => set({ models }),
   setEngines: (engines) => set({ engines }),
@@ -386,6 +356,48 @@ export const useAppStore = create<AppState>((set, get) => ({
               .then(engines => startTransition(() => { set({ engines }) }))
               .catch(() => {})
           })
+        // Sync server-side download state
+        invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')
+          .then(snapshot => {
+            if (snapshot && snapshot.queue && snapshot.queue.length > 0) {
+              const existing = { ...get().downloadTasks }
+              for (const entry of snapshot.queue) {
+                const source = entry.source as 'modelscope' | 'huggingface'
+                const saveDir = entry.save_dir || 'models'
+                for (const f of entry.files) {
+                  const taskId = f.task_id || crypto.randomUUID()
+                  if (existing[taskId]) continue
+                  existing[taskId] = {
+                    id: taskId,
+                    fileName: f.name,
+                    remotePath: f.path || f.name,
+                    fileType: f.file_type,
+                    saveDir,
+                    repoId: entry.repo_id,
+                    source,
+                    runId: f.run_id,
+                    downloaded: f.downloaded ?? 0,
+                    total: f.size,
+                    speed: 0,
+                    status: (entry.status === 'active' || entry.status === 'queued') ? 'queued'
+                      : entry.status === 'pausing' ? 'paused'
+                      : (entry.status as DownloadProgress['status']) || 'queued',
+                    version: 0,
+                  }
+                }
+              }
+              startTransition(() => { set({ downloadTasks: existing }) })
+            }
+            if (snapshot) {
+              // Persist snapshot metadata via a private store key pattern
+              ;(window as any).__downloadSnapshotMeta = {
+                active_count: snapshot.active_count,
+                max_concurrent: snapshot.max_concurrent,
+                resume_policy: snapshot.resume_policy,
+              }
+            }
+          })
+          .catch(() => {})
       }
     } catch (e) { console.error('load_config error:', e) }
     set({ isLoading: false })
@@ -424,26 +436,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // ── 下载队列持久化 ──────────────────────────────────────────
   restoreDownloadQueue: (entries: PersistedQueueEntry[]) => {
-    const now = Date.now()
-    let hasPending = false
+    const tasks = { ...get().downloadTasks }
     for (const entry of entries) {
       const source = entry.source as 'modelscope' | 'huggingface'
-      const status = (entry.status === 'active' ? 'queued' : entry.status === 'pausing' ? 'paused' : entry.status || 'queued') as 'queued' | 'active' | 'paused' | 'pausing' | 'completed' | 'cancelled' | 'error'
       const saveDir = entry.save_dir || 'models'
-      const files = entry.files.map(f => ({
-        ...f,
-        path: taskRemotePath(f),
-        task_id: f.task_id || crypto.randomUUID(),
-        run_id: f.run_id,
-        downloaded: f.downloaded ?? 0,
-      }))
-      const tasks = { ...get().downloadTasks }
-      const allDone = files.every(f => tasks[f.task_id!]?.status === 'completed')
-      if (allDone) continue
-
-      for (const f of files) {
-        const taskId = f.task_id!
-        const downloaded = status === 'completed' ? f.size : (f.downloaded ?? 0)
+      for (const f of entry.files) {
+        const taskId = f.task_id || crypto.randomUUID()
+        if (tasks[taskId]?.status === 'completed') continue
         tasks[taskId] = {
           id: taskId,
           fileName: f.name,
@@ -453,30 +452,17 @@ export const useAppStore = create<AppState>((set, get) => ({
           repoId: entry.repo_id,
           source,
           runId: f.run_id,
-          downloaded,
+          downloaded: f.downloaded ?? 0,
           total: f.size,
           speed: 0,
-          status: status === 'active' ? 'queued' : status,
+          status: (entry.status === 'active' || entry.status === 'queued') ? 'queued'
+            : entry.status === 'pausing' ? 'paused'
+            : (entry.status as DownloadProgress['status']) || 'queued',
           version: 0,
         }
       }
-      set({ downloadTasks: tasks })
-
-      if (status !== 'paused' && status !== 'pausing' && status !== 'completed' && status !== 'cancelled') {
-        set(st => ({
-          downloadQueue: [...st.downloadQueue, {
-            id: entry.id || crypto.randomUUID(),
-            repoId: entry.repo_id,
-            source,
-            files,
-            saveDir,
-            addedAt: entry.added_at || now,
-          }]
-        }))
-        hasPending = true
-      }
     }
-    if (hasPending) get().processDownloadQueue()
+    set({ downloadTasks: tasks })
   },
 
   persistQueue: () => {
@@ -537,6 +523,86 @@ export const useAppStore = create<AppState>((set, get) => ({
     invoke('persist_download_queue', { queue: entries }).catch(() => {})
   },
 
+  // ── 批量操作 ────────────────────────────────────────────────
+  resumeAllDownloads: async () => {
+    try { await invoke('resume_all_downloads') } catch (e) { console.error(e) }
+    const tasks = { ...get().downloadTasks }
+    for (const id of Object.keys(tasks)) {
+      if (tasks[id].status === 'paused' || tasks[id].status === 'pausing') {
+        tasks[id] = { ...tasks[id], status: 'queued' as const, speed: 0 }
+      }
+    }
+    set({ downloadTasks: tasks })
+  },
+  pauseAllDownloads: async () => {
+    try { await invoke('pause_all_downloads') } catch (e) { console.error(e) }
+    const tasks = { ...get().downloadTasks }
+    for (const id of Object.keys(tasks)) {
+      if (tasks[id].status === 'active') {
+        tasks[id] = { ...tasks[id], status: 'pausing' as const }
+      }
+    }
+    set({ downloadTasks: tasks })
+  },
+  cancelAllDownloads: async () => {
+    try { await invoke('cancel_all_downloads') } catch (e) { console.error(e) }
+    const tasks = { ...get().downloadTasks }
+    for (const id of Object.keys(tasks)) {
+      if (tasks[id].status === 'active' || tasks[id].status === 'paused' || tasks[id].status === 'pausing' || tasks[id].status === 'queued') {
+        tasks[id] = { ...tasks[id], status: 'cancelled' as const, speed: 0 }
+      }
+    }
+    set({ downloadTasks: tasks, downloadQueue: [] })
+  },
+  clearCompletedDownloadTasks: () => {
+    const tasks = { ...get().downloadTasks }
+    for (const k of Object.keys(tasks)) {
+      if (tasks[k].status === 'completed' || tasks[k].status === 'cancelled') delete tasks[k]
+    }
+    set({ downloadTasks: tasks })
+  },
+  clearFailedDownloadTasks: () => {
+    const tasks = { ...get().downloadTasks }
+    for (const k of Object.keys(tasks)) {
+      if (tasks[k].status === 'error') delete tasks[k]
+    }
+    set({ downloadTasks: tasks })
+  },
+  retryFailedDownload: (taskId: string) => {
+    const task = get().downloadTasks[taskId]
+    if (!task || task.status !== 'error') return
+    get().addToDownloadQueue({
+      repoId: task.repoId,
+      source: task.source as 'modelscope' | 'huggingface',
+      files: [{ name: task.fileName, path: task.remotePath, size: task.total, file_type: task.fileType || 'model', task_id: taskId, downloaded: task.downloaded }],
+      saveDir: task.saveDir,
+    })
+  },
+  redownloadFile: (taskId: string) => {
+    const task = get().downloadTasks[taskId]
+    if (!task || task.status !== 'error') return
+    invoke('reset_download_for_redownload', { taskId, fileName: task.fileName, saveDir: task.saveDir }).catch(() => {})
+    const tasks = { ...get().downloadTasks }
+    delete tasks[taskId]
+    set({ downloadTasks: tasks })
+    get().addToDownloadQueue({
+      repoId: task.repoId,
+      source: task.source as 'modelscope' | 'huggingface',
+      files: [{ name: task.fileName, path: task.remotePath, size: task.total, file_type: task.fileType || 'model', downloaded: 0 }],
+      saveDir: task.saveDir,
+    })
+  },
+  moveQueueEntry: (id: string, direction: 'up' | 'down') => {
+    const s = get()
+    const idx = s.downloadQueue.findIndex(e => e.id === id)
+    if (idx < 0) return
+    const target = direction === 'up' ? idx - 1 : idx + 1
+    if (target < 0 || target >= s.downloadQueue.length) return
+    const arr = [...s.downloadQueue];
+    [arr[idx], arr[target]] = [arr[target], arr[idx]]
+    set({ downloadQueue: arr })
+    get().persistQueue()
+  },
   // Cluster
   setWorkers: (workers) => set({ workers }),
   addWorker: (worker) => set(s => ({ workers: [...s.workers, worker] })),
@@ -698,7 +764,7 @@ listen<{ instanceId: string; status: string }>('health-status', (event) => {
 // 按文件名分别节流：避免多文件并发下载时共用一个全局闸门，导致部分文件进度被丢弃
 const _lastProgressUpdate: Record<string, number> = {}
 let scanModelDebounce: ReturnType<typeof setTimeout> | null = null
-type DownloadEventPayload = { taskId?: string; runId?: string; fileName: string; repoId: string; source: string; remotePath?: string; downloaded?: number; total?: number; speed?: number; path?: string; error?: string }
+type DownloadEventPayload = { queueId?: string; taskId?: string; runId?: string; fileName: string; repoId: string; source: string; remotePath?: string; downloaded?: number; total?: number; speed?: number; path?: string; error?: string }
 
 const runMatches = (payload: DownloadEventPayload, task: DownloadProgress) =>
   payload.runId ? task.runId === payload.runId : !task.runId
@@ -706,14 +772,17 @@ const runMatches = (payload: DownloadEventPayload, task: DownloadProgress) =>
 const taskIdFromEvent = (payload: DownloadEventPayload, tasks: Record<string, DownloadProgress>) => {
   if (payload.taskId) {
     const task = tasks[payload.taskId]
-    return task && runMatches(payload, task) ? payload.taskId : undefined
+    if (!task) return undefined
+    // 任务尚未分配 runId（首次 download-started 事件），直接接受
+    if (!task.runId || runMatches(payload, task)) return payload.taskId
+    return undefined
   }
   return Object.values(tasks).find(t =>
     t.fileName === payload.fileName &&
     t.repoId === payload.repoId &&
     t.source === payload.source &&
     (!payload.remotePath || t.remotePath === payload.remotePath) &&
-    runMatches(payload, t)
+    (!t.runId || runMatches(payload, t))
   )?.id
 }
 
@@ -743,6 +812,23 @@ const applyDownloadPatch = (payload: DownloadEventPayload, patch: Partial<Downlo
   s.setDownloadTasks({ ...s.downloadTasks, [taskId]: next })
   return next
 }
+
+listen<DownloadEventPayload>('download-started', (e) => {
+  const applied = applyDownloadPatch(e.payload, {
+    status: 'active',
+    downloaded: e.payload.downloaded ?? 0,
+    total: e.payload.total ?? 0,
+    speed: 0,
+    remoteChanged: false,
+  })
+  if (!applied) return
+  const s = useAppStore.getState()
+  const queue = e.payload.queueId
+    ? s.downloadQueue.filter(entry => entry.id !== e.payload.queueId)
+    : s.downloadQueue.filter(entry => !entry.files.some(f => f.task_id === e.payload.taskId))
+  useAppStore.setState({ downloadQueue: queue })
+  useAppStore.getState().persistQueue()
+}).catch(() => {})
 
 listen<DownloadEventPayload>('download-progress', (e) => {
   const now = Date.now()
@@ -793,6 +879,23 @@ listen<DownloadEventPayload>('download-error', (e) => {
   const s = useAppStore.getState()
   s.persistQueue()
   s.processDownloadQueue()
+}).catch(() => {})
+
+listen<DownloadEventPayload>('download-restarted', (e) => {
+  applyDownloadPatch(e.payload, { downloaded: 0, speed: 0, remoteChanged: false })
+}).catch(() => {})
+
+listen<{ taskId?: string; fileName: string; repoId: string; source: string; remotePath?: string }>('download-remote-changed', (e) => {
+  const s = useAppStore.getState()
+  const taskId = e.payload.taskId || Object.values(s.downloadTasks).find(t =>
+    t.fileName === e.payload.fileName &&
+    t.repoId === e.payload.repoId &&
+    t.source === e.payload.source
+  )?.id
+  if (!taskId) return
+  const prev = s.downloadTasks[taskId]
+  if (!prev) return
+  s.setDownloadTasks({ ...s.downloadTasks, [taskId]: { ...prev, downloaded: 0, speed: 0, remoteChanged: true } })
 }).catch(() => {})
 
 listen<{ taskId?: string; fileName: string }>('download-removed', (e) => {

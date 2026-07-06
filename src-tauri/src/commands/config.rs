@@ -82,6 +82,7 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
             default_engine_id: String::new(), running: HashMap::new(),
             instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
             engine_names: HashMap::new(),
+            download_resume_policy: "manual".into(),
         },
     };
 
@@ -92,6 +93,7 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
             default_engine_id: String::new(), running: HashMap::new(),
             instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
             engine_names: HashMap::new(),
+            download_resume_policy: "manual".into(),
         },
     };
 
@@ -131,8 +133,9 @@ pub async fn save_config(
 ) -> Result<(), String> {
     let running_snapshot = state.running.lock().unwrap().clone();
     let engine_names = state.engine_names.lock().unwrap().clone();
-    let global = GlobalConfig { instances: instances.clone(), model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order, last_tab, dark_mode, engine_names };
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let existing = read_config_from_disk(&config_dir);
+    let global = GlobalConfig { instances: instances.clone(), model_dirs, engine_dirs, default_engine_id, running: running_snapshot, instance_order, last_tab, dark_mode, engine_names, download_resume_policy: existing.download_resume_policy };
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     persist_global_config(&config_dir, &global)?;
     let mut stored = state.instances.lock().unwrap();

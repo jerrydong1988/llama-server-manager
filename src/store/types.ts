@@ -158,6 +158,7 @@ export interface DownloadProgress {
   path?: string
   error?: string
   version?: number
+  remoteChanged?: boolean
 }
 
 export interface DownloadQueueEntry {
@@ -182,6 +183,13 @@ export interface PersistedQueueEntry {
   save_dir: string
   added_at: number
   status: string
+}
+
+export interface DownloadManagerSnapshot {
+  queue: PersistedQueueEntry[]
+  active_count: number
+  max_concurrent: number
+  resume_policy: string
 }
 
 export interface SystemMetrics {
@@ -264,6 +272,14 @@ export interface AppState {
   processDownloadQueue: () => void
   restoreDownloadQueue: (entries: PersistedQueueEntry[]) => void
   persistQueue: () => void
+  resumeAllDownloads: () => Promise<void>
+  pauseAllDownloads: () => Promise<void>
+  cancelAllDownloads: () => Promise<void>
+  clearCompletedDownloadTasks: () => void
+  clearFailedDownloadTasks: () => void
+  retryFailedDownload: (taskId: string) => void
+  redownloadFile: (taskId: string) => void
+  moveQueueEntry: (id: string, direction: 'up' | 'down') => void
   // Cluster
   setWorkers: (workers: WorkerInfo[]) => void
   addWorker: (worker: WorkerInfo) => void

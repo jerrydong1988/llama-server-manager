@@ -456,6 +456,10 @@ pub struct AppState {
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,
     pub active_downloads: Mutex<std::collections::HashSet<String>>,
+    pub download_queue: Mutex<Vec<PersistedQueueEntry>>,
+    pub download_active_batches: Mutex<std::collections::HashSet<String>>,
+    pub download_active_entries: Mutex<HashMap<String, PersistedQueueEntry>>,
+    pub download_max_concurrent: Mutex<usize>,
     pub workers: Mutex<Vec<WorkerInfo>>,
     pub usb4_adapters: Mutex<Vec<Usb4Adapter>>,
 }
@@ -475,6 +479,8 @@ pub struct GlobalConfig {
     pub dark_mode: bool,
     #[serde(default)]
     pub engine_names: HashMap<String, String>,
+    #[serde(default = "default_download_resume_policy")]
+    pub download_resume_policy: String,
 }
 
 // ── 窗口状态 ─────────────────────────────────────────────────────
@@ -497,6 +503,12 @@ pub struct PersistedQueueEntry {
     pub added_at: u64,
     #[serde(default)]
     pub status: String,  // "queued" | "active" | "paused"
+    #[serde(default)]
+    pub retries: u32,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    #[serde(default)]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -519,5 +531,24 @@ pub struct MsFileEntry {
     pub downloaded: Option<u64>,
 }
 
+// ── 下载工件状态 ──────────────────────────────────────────────────
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct DownloadArtifactState {
+    pub task_id: String,
+    pub run_id: String,
+    pub repo_id: String,
+    pub source: String,
+    pub remote_path: String,
+    pub final_path: String,
+    pub temp_path: String,
+    pub expected_size: u64,
+    pub downloaded_size: u64,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub updated_at: u64,
+}
+
 fn default_true() -> bool { true }
 fn default_fit_ctx() -> u32 { 4096 }
+fn default_max_retries() -> u32 { 3 }
+fn default_download_resume_policy() -> String { "manual".into() }

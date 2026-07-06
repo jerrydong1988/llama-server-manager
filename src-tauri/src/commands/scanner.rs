@@ -287,7 +287,7 @@ pub async fn load_app_data(
     );
     let models = models_result.unwrap_or_else(|_| Vec::new());
     let engines = engines_result.unwrap_or_else(|_| Vec::new());
-    let queue = crate::commands::download::load_download_state(&state);
+    let queue = crate::commands::download::restore_runtime_queue_from_disk(&state, &app);
     Ok((models, engines, queue))
 }
 
