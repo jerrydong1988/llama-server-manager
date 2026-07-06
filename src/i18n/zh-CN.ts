@@ -416,7 +416,7 @@
     saveDirLabel: '\u4FDD\u5B58\u76EE\u5F55',
     browse: '\u6D4F\u89C8',
     downloadAll: '\u4E0B\u8F7D\u5168\u90E8',
-    queue: 'Queue',
+    queue: '\u961F\u5217',
     queueCount: '\u7B49\u5F85\u4E2D',
     active: '\u8FDB\u884C\u4E2D',
     paused: '\u5DF2\u6682\u505C',

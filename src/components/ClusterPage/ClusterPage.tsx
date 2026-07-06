@@ -1,29 +1,40 @@
-import { useState, useEffect, useRef, Fragment } from 'react'
-import { Network, Plus, Trash2, RefreshCw, Copy, Check, X, ChevronDown, ChevronRight, Square, Radio, Zap, StopCircle, Play } from 'lucide-react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { ask, open } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
+import { Check, Copy, Network, Play, Plus, Radio, RefreshCw, Server, Square, StopCircle, Trash2, X, Zap } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
-import { invoke } from '@tauri-apps/api/core'
-import { ask, open } from '@tauri-apps/plugin-dialog'
+import { Badge, Button, InsetSurface, MetricCard, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
 
 export default function ClusterPage() {
-  const { t } = useI18n()
-  const workers = useAppStore(s => s.workers)
-  const clusterScanning = useAppStore(s => s.clusterScanning)
-  const setWorkers = useAppStore(s => s.setWorkers)
-  const removeWorker = useAppStore(s => s.removeWorker)
-  const setClusterScanning = useAppStore(s => s.setClusterScanning)
-  const updateWorker = useAppStore(s => s.updateWorker)
-  const engines = useAppStore(s => s.engines)
-  const defaultEngineId = useAppStore(s => s.defaultEngineId)
+  const { t, lang } = useI18n()
+  const zh = lang === 'zh-CN'
+  const workers = useAppStore(state => state.workers)
+  const clusterScanning = useAppStore(state => state.clusterScanning)
+  const setWorkers = useAppStore(state => state.setWorkers)
+  const removeWorker = useAppStore(state => state.removeWorker)
+  const setClusterScanning = useAppStore(state => state.setClusterScanning)
+  const updateWorker = useAppStore(state => state.updateWorker)
+  const engines = useAppStore(state => state.engines)
+  const defaultEngineId = useAppStore(state => state.defaultEngineId)
+
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [formData, setFormData] = useState({ host: '', port: 50052, name: '' })
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const scanCancelled = useRef(false)
   const [mdnsActive, setMdnsActive] = useState(false)
   const [showLaunchWizard, setShowLaunchWizard] = useState(false)
-  const [launchStep, setLaunchStep] = useState(0) // 0=host, 1=ssh, 2=confirm
-  const [launchForm, setLaunchForm] = useState({ host: '', user: '', keyPath: '', password: '', port: 50052, rpcPath: '', sshPort: 22, remoteOs: 'auto' })
+  const [launchStep, setLaunchStep] = useState(0)
+  const [launchForm, setLaunchForm] = useState({
+    host: '',
+    user: '',
+    keyPath: '',
+    password: '',
+    port: 50052,
+    rpcPath: '',
+    sshPort: 22,
+    remoteOs: 'auto',
+  })
   const [localHosts, setLocalHosts] = useState<Set<string>>(new Set(['127.0.0.1', 'localhost', '::1']))
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState('')
@@ -31,18 +42,18 @@ export default function ClusterPage() {
   const [localPort, setLocalPort] = useState(50052)
   const [localEngine, setLocalEngine] = useState('')
   const [localMode, setLocalMode] = useState<'engine' | 'custom'>('engine')
+  const scanCancelled = useRef(false)
 
-  // Auto-scan on mount
   useEffect(() => {
-    loadWorkers()
+    void loadWorkers()
   }, [])
 
   const loadWorkers = async () => {
     try {
-      const w: WorkerInfo[] = await invoke('get_workers')
-      setWorkers(w)
-    } catch (e) {
-      console.error('Failed to load workers:', e)
+      const result: WorkerInfo[] = await invoke('get_workers')
+      setWorkers(result)
+    } catch (error) {
+      console.error('Failed to load workers:', error)
     }
   }
 
@@ -54,9 +65,9 @@ export default function ClusterPage() {
       if (!scanCancelled.current) {
         setWorkers(discovered)
       }
-    } catch (e) {
+    } catch (error) {
       if (!scanCancelled.current) {
-        console.error('Scan failed:', e)
+        console.error('Scan failed:', error)
       }
     } finally {
       setClusterScanning(false)
@@ -68,32 +79,36 @@ export default function ClusterPage() {
     setClusterScanning(false)
   }
 
-  const isLocalWorker = (host: string) => {
-    return localHosts.has(host)
-  }
+  const isLocalWorker = (host: string) => localHosts.has(host)
 
-  // 启动时批量检查所有 worker 是否本机
   useEffect(() => {
-    const check = async () => {
+    const checkLocalHosts = async () => {
       const hosts = new Set(['127.0.0.1', 'localhost', '::1'])
-      for (const w of workers) {
-        if (hosts.has(w.host)) continue
+      for (const worker of workers) {
+        if (hosts.has(worker.host)) {
+          continue
+        }
         try {
-          const isLocal: boolean = await invoke('is_local_host', { host: w.host })
-          if (isLocal) hosts.add(w.host)
-        } catch {}
+          const isLocal: boolean = await invoke('is_local_host', { host: worker.host })
+          if (isLocal) {
+            hosts.add(worker.host)
+          }
+        } catch {
+          // ignore
+        }
       }
       setLocalHosts(hosts)
     }
-    check()
+
+    void checkLocalHosts()
   }, [workers])
 
   const handleStopWorker = async (worker: WorkerInfo) => {
     try {
       await invoke('stop_local_worker', { port: worker.port })
       updateWorker(worker.id, { status: 'Offline' })
-    } catch (e) {
-      console.error('Failed to stop worker:', e)
+    } catch (error) {
+      console.error('Failed to stop worker:', error)
     }
   }
 
@@ -101,17 +116,17 @@ export default function ClusterPage() {
     setLaunching(true)
     setLaunchError('')
     try {
-      let engineDir = localEngine || engines.find(e => e.id === defaultEngineId)?.dir || ''
+      const engineDir = localEngine || engines.find(engine => engine.id === defaultEngineId)?.dir || ''
       const result: any = await invoke('start_local_rpc', { engineDir: engineDir || null, port: localPort })
       if (result?.ok) {
         const localHost: string = await invoke('get_local_host')
-        await invoke('add_worker', { host: localHost, port: localPort, name: 'Local-' + localPort })
+        await invoke('add_worker', { host: localHost, port: localPort, name: `Local-${localPort}` })
         const all: WorkerInfo[] = await invoke('get_workers')
         setWorkers(all)
         setShowLocalLaunch(false)
       }
-    } catch (e: any) {
-      setLaunchError(typeof e === 'string' ? e : (e?.message || String(e)))
+    } catch (error: any) {
+      setLaunchError(typeof error === 'string' ? error : (error?.message || String(error)))
     } finally {
       setLaunching(false)
     }
@@ -150,402 +165,561 @@ export default function ClusterPage() {
       } else {
         setLaunchError(result?.error || t.clusterPage.launchErrorDefault)
       }
-    } catch (e: any) {
-      setLaunchError(typeof e === 'string' ? e : (e?.message || String(e)))
+    } catch (error: any) {
+      setLaunchError(typeof error === 'string' ? error : (error?.message || String(error)))
     } finally {
       setLaunching(false)
     }
   }
 
   const handleTest = async (host: string, port: number) => {
-    const w = workers.find(wr => wr.host === host && wr.port === port)
-    if (!w) return
-    updateWorker(w.id, { status: 'Testing' })
+    const worker = workers.find(item => item.host === host && item.port === port)
+    if (!worker) {
+      return
+    }
+    updateWorker(worker.id, { status: 'Testing' })
     try {
       const result: any = await invoke('test_worker', { host, port })
-      updateWorker(w.id, { status: result.ok ? 'Online' : 'Offline' })
+      updateWorker(worker.id, { status: result.ok ? 'Online' : 'Offline' })
     } catch {
-      updateWorker(w.id, { status: 'Offline' })
+      updateWorker(worker.id, { status: 'Offline' })
     }
   }
 
   const handleAdd = async () => {
-    if (!formData.host.trim()) return
+    if (!formData.host.trim()) {
+      return
+    }
     try {
       await invoke('add_worker', { host: formData.host, port: formData.port, name: formData.name })
       const all: WorkerInfo[] = await invoke('get_workers')
       setWorkers(all)
       setShowAddDialog(false)
-      handleTest(formData.host, formData.port)
-    } catch (e) {
-      console.error('Failed to add worker:', e)
+      await handleTest(formData.host, formData.port)
+    } catch (error) {
+      console.error('Failed to add worker:', error)
     }
   }
 
   const handleDelete = async (worker: WorkerInfo) => {
     const confirmed = await ask(t.clusterPage.confirmDelete, { kind: 'warning' })
-    if (!confirmed) return
+    if (!confirmed) {
+      return
+    }
     try {
       await invoke('remove_worker', { id: worker.id })
       removeWorker(worker.id)
-    } catch (e) {
-      console.error('Failed to remove:', e)
+    } catch (error) {
+      console.error('Failed to remove worker:', error)
     }
   }
 
   const handleCopyCmd = async () => {
     try {
-      const cmd: string = await invoke('generate_rpc_launch_cmd', { port: 50052 })
-      await navigator.clipboard.writeText(cmd)
+      const command: string = await invoke('generate_rpc_launch_cmd', { port: 50052 })
+      await navigator.clipboard.writeText(command)
       setCopiedId('cmd')
       setTimeout(() => setCopiedId(null), 2000)
-    } catch (e) {
-      console.error('Copy failed:', e)
+    } catch (error) {
+      console.error('Copy failed:', error)
     }
   }
 
   const toggleExpand = (id: string) => {
-    const n = new Set(expanded)
-    if (n.has(id)) n.delete(id); else n.add(id)
-    setExpanded(n)
+    const next = new Set(expanded)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+    }
+    setExpanded(next)
   }
 
-  const statusColor = (status: string) => {
+  const statusTone = (status: string) => {
     switch (status) {
-      case 'Online': return 'text-green-500'
-      case 'Offline': return 'text-red-500'
-      case 'Testing': return 'text-yellow-500'
-      default: return 'text-gray-400'
+      case 'Online':
+        return 'bg-emerald-400'
+      case 'Offline':
+        return 'bg-red-400'
+      case 'Testing':
+        return 'bg-amber-400'
+      default:
+        return 'bg-slate-500'
     }
   }
 
-  const statusLabel = (status: string) => {
+  const statusText = (status: string) => {
     switch (status) {
-      case 'Online': return t.clusterPage.online
-      case 'Offline': return t.clusterPage.offline
-      case 'Testing': return t.clusterPage.testing
-      default: return t.clusterPage.unknown
+      case 'Online':
+        return t.clusterPage.online
+      case 'Offline':
+        return t.clusterPage.offline
+      case 'Testing':
+        return t.clusterPage.testing
+      default:
+        return t.clusterPage.unknown
     }
   }
 
-  const totalVRAM = workers.reduce((sum, w) => sum + w.devices.reduce((s, d) => s + d.vram_mb, 0), 0)
+  const totalVRAM = workers.reduce((sum, worker) => sum + worker.devices.reduce((deviceSum, device) => deviceSum + device.vram_mb, 0), 0)
+  const onlineWorkers = workers.filter(worker => worker.status === 'Online').length
+  const localWorkers = workers.filter(worker => isLocalWorker(worker.host)).length
+  const totalDevices = workers.reduce((sum, worker) => sum + worker.devices.length, 0)
+  const workersSorted = useMemo(
+    () => [...workers].sort((left, right) => left.name.localeCompare(right.name)),
+    [workers],
+  )
+  const labels = {
+    workers: zh ? '\u8282\u70b9' : 'workers',
+    subtitle: zh
+      ? '\u5728\u4e00\u4e2a\u754c\u9762\u4e2d\u53d1\u73b0 LAN rpc worker\u3001\u6ce8\u518c\u8fdc\u7a0b\u8282\u70b9\uff0c\u5e76\u542f\u52a8\u672c\u5730\u6216 SSH \u7b97\u529b\u3002'
+      : 'Discover rpc workers on the LAN, register remote nodes, and bootstrap local or SSH-launched capacity from one place.',
+    workerListDesc: zh
+      ? '\u76f4\u63a5\u6d4b\u8bd5\u8fde\u63a5\u3001\u67e5\u770b\u8bbe\u5907\u6e05\u5355\uff0c\u5e76\u7ba1\u7406\u672c\u5730 worker\u3002'
+      : 'Test connectivity, inspect device inventory, and stop local workers directly from the registry.',
+    hideDetails: zh ? '\u6536\u8d77\u8be6\u60c5' : 'Hide Details',
+    showDetails: zh ? '\u67e5\u770b\u8be6\u60c5' : 'Show Details',
+    clusterNotes: zh ? '\u96c6\u7fa4\u63d0\u793a' : 'Cluster Notes',
+    clusterNotesDesc: zh ? '\u7ba1\u7406 worker \u5bb9\u91cf\u65f6\uff0c\u4fdd\u6301\u53d1\u73b0\u72b6\u6001\u548c\u542f\u52a8\u6307\u5f15\u53ef\u89c1\u3002' : 'Keep discovery state and launch guidance visible while you manage worker capacity.',
+    auto: zh ? '\u81ea\u52a8' : 'auto',
+    devices: zh ? '\u8bbe\u5907' : 'devices',
+    host: zh ? '\u4e3b\u673a (IP)' : 'Host (IP)',
+    port: zh ? '\u7aef\u53e3' : 'Port',
+    workerHost: zh ? 'Worker IP / \u4e3b\u673a' : 'Worker IP / Host',
+  }
 
   return (
-    <div className="space-y-4" data-testid="cluster-page">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Network className="w-5 h-5 text-blue-500" />
-          <span className="text-lg font-semibold">{t.clusterPage.title}</span>
-          {workers.length > 0 && <span className="text-sm text-gray-400">({workers.length} workers)</span>}
+    <div className="flex-1 overflow-y-auto p-6" data-testid="cluster-page">
+      <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+        <div className="space-y-3">
+          <div className="flex items-center gap-3">
+            <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-3 text-cyan-300">
+              <Network className="h-5 w-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-3xl font-semibold tracking-tight text-slate-50">{t.clusterPage.title}</h1>
+                <Badge tone="slate">
+                  {workers.length} {labels.workers}
+                </Badge>
+              </div>
+              <p className="text-sm text-slate-400">{labels.subtitle}</p>
+            </div>
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={handleCopyCmd} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs flex items-center gap-1" title={t.clusterPage.copyLaunchCmd}>
-            {copiedId === 'cmd' ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+
+        <div className="flex flex-wrap items-center gap-3">
+          <Button
+            onClick={handleCopyCmd}
+            title={t.clusterPage.copyLaunchCmd}
+            icon={copiedId === 'cmd' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+          >
             {t.clusterPage.copyLaunchCmd}
-          </button>
+          </Button>
+
           {clusterScanning ? (
-            <button onClick={handleCancelScan} className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs flex items-center gap-1">
-              <Square className="w-3 h-3" />
-               {t.clusterPage.stopScan}
-            </button>
+            <Button
+              onClick={handleCancelScan}
+              variant="danger"
+              icon={<Square className="h-4 w-4" />}
+            >
+              {t.clusterPage.stopScan}
+            </Button>
           ) : (
-            <button onClick={handleScan} className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs flex items-center gap-1" data-guide="cluster-scan">
-              <RefreshCw className="w-3 h-3" />
+            <Button
+              onClick={handleScan}
+              variant="success"
+              data-guide="cluster-scan"
+              icon={<RefreshCw className="h-4 w-4" />}
+            >
               {t.clusterPage.scanLan}
-            </button>
+            </Button>
           )}
-          <button onClick={() => setShowAddDialog(true)} className="px-3 py-1.5 bg-gray-600 hover:bg-gray-700 text-white rounded-lg text-xs flex items-center gap-1">
-            <Plus className="w-3 h-3" />
+
+          <Button
+            onClick={() => setShowAddDialog(true)}
+            icon={<Plus className="h-4 w-4" />}
+          >
             {t.clusterPage.addWorker}
-          </button>
-          <button onClick={handleMdnsToggle} className={`px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 ${mdnsActive ? 'bg-blue-600 hover:bg-blue-700 text-white' : 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300'}`}>
-            <Radio className="w-3 h-3" />
+          </Button>
+
+          <Button
+            onClick={handleMdnsToggle}
+            variant={mdnsActive ? 'primary' : 'secondary'}
+            icon={<Radio className="h-4 w-4" />}
+          >
             {t.clusterPage.discoverMode}
-          </button>
-          <button onClick={() => { setShowLaunchWizard(true); setLaunchStep(0) }} className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs flex items-center gap-1">
-            <Zap className="w-3 h-3" />
+          </Button>
+
+          <Button
+            onClick={() => { setShowLaunchWizard(true); setLaunchStep(0) }}
+            variant="violet"
+            icon={<Zap className="h-4 w-4" />}
+          >
             {t.clusterPage.oneClickLaunch}
-          </button>
-          <button onClick={() => { setShowLocalLaunch(true); setLaunchError('') }} className="px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs flex items-center gap-1">
-            <Play className="w-3 h-3" />
-             {t.clusterPage.localLaunch}
-          </button>
+          </Button>
+
+          <Button
+            onClick={() => { setShowLocalLaunch(true); setLaunchError('') }}
+            variant="cyan"
+            icon={<Play className="h-4 w-4" />}
+          >
+            {t.clusterPage.localLaunch}
+          </Button>
         </div>
       </div>
 
-      {/* Summary */}
-      {workers.length > 0 && (
-        <div className="flex gap-4 text-xs text-gray-500 bg-gray-50 dark:bg-gray-800/50 rounded-lg px-4 py-2">
-          <span>{t.clusterPage.selectedWorkers}: {workers.filter(w => w.status === 'Online').length}</span>
-          <span>{t.clusterPage.totalVRAM}: {(totalVRAM / 1024).toFixed(1)} GB</span>
-        </div>
-      )}
+      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {[
+          { label: t.clusterPage.online, value: onlineWorkers, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
+          { label: t.clusterPage.localWorker, value: localWorkers, tone: 'text-cyan-300 bg-cyan-500/10 border-cyan-500/20' },
+          { label: t.clusterPage.deviceType, value: totalDevices, tone: 'text-violet-300 bg-violet-500/10 border-violet-500/20' },
+          { label: t.clusterPage.totalVRAM, value: `${(totalVRAM / 1024).toFixed(1)} GB`, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
+        ].map(card => (
+          <MetricCard key={card.label} label={card.label} value={card.value} tone={card.tone} />
+        ))}
+      </div>
 
-      {/* Worker List */}
-      {workers.length === 0 && !clusterScanning ? (
-        <div className="text-center py-12 text-gray-400">
-          <Network className="w-10 h-10 mx-auto mb-3 opacity-50" />
-          <p>{t.clusterPage.noWorkers}</p>
-        </div>
-      ) : (
-        <div className="border dark:border-gray-700 rounded-lg overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100 dark:bg-gray-800 text-left">
-              <tr>
-                <th className="px-4 py-2 w-8"></th>
-                <th className="px-4 py-2">{t.clusterPage.testConnection}</th>
-                <th className="px-4 py-2">{t.clusterPage.workerList}</th>
-                <th className="px-4 py-2 hidden md:table-cell">{t.clusterPage.deviceType}</th>
-                <th className="px-4 py-2 w-20"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {workers.map(w => (
-                <Fragment key={w.id}>
-                  <tr key={w.id} data-testid="worker-row" className="border-t dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800/50">
-                    <td className="px-4 py-2">
-                      <button onClick={() => toggleExpand(w.id)} className="p-0.5 hover:bg-gray-200 dark:hover:bg-gray-600 rounded">
-                        {expanded.has(w.id) ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                      </button>
-                    </td>
-                    <td className="px-4 py-2">
-                      <button onClick={() => handleTest(w.host, w.port)} className="px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded text-xs hover:bg-blue-200">
-                        {t.clusterPage.testConnection}
-                      </button>
-                    </td>
-                    <td className="px-4 py-2">
-                      <div className="flex items-center gap-2">
-                        <span className={`inline-block w-2 h-2 rounded-full ${statusColor(w.status)}`} title={statusLabel(w.status)} />
-                        <span className="font-medium">{w.name}</span>
-                        <span className="text-gray-400">{w.host}:{w.port}</span>
-                        {w.auto_discovered && <span className="text-gray-400 text-xs">[auto]</span>}
-                        {isLocalWorker(w.host) && <span className="text-xs bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300 px-1.5 py-0.5 rounded">{t.clusterPage.localWorker}</span>}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr),320px]">
+        <Surface as="section" className="overflow-hidden">
+          <div className="border-b border-slate-800 bg-slate-950/90 px-5 py-4">
+            <SectionHeader title={t.clusterPage.workerList} description={labels.workerListDesc} />
+          </div>
+
+          {workers.length === 0 && !clusterScanning ? (
+            <div className="flex min-h-[420px] flex-col items-center justify-center p-10 text-center">
+              <Server className="mb-4 h-12 w-12 text-slate-700" />
+              <p className="text-base text-slate-300">{t.clusterPage.noWorkers}</p>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-800 bg-slate-950/30">
+              {workersSorted.map(worker => (
+                <Fragment key={worker.id}>
+                  <div className="px-5 py-4 transition hover:bg-slate-900/70">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`inline-block h-2.5 w-2.5 rounded-full ${statusTone(worker.status)}`} title={statusText(worker.status)} />
+                          <p className="text-sm font-medium text-slate-100">{worker.name}</p>
+                          <span className="text-xs text-slate-500">{worker.host}:{worker.port}</span>
+                          {worker.auto_discovered && (
+                            <Badge tone="slate" className="px-2 py-0.5 text-[11px]">{labels.auto}</Badge>
+                          )}
+                          {isLocalWorker(worker.host) && (
+                            <Badge tone="emerald" className="px-2 py-0.5 text-[11px]">
+                              {t.clusterPage.localWorker}
+                            </Badge>
+                          )}
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-slate-500">
+                          <span>{statusText(worker.status)}</span>
+                          <span>{worker.devices.length} {labels.devices}</span>
+                          <span>{(worker.devices.reduce((sum, device) => sum + device.vram_mb, 0) / 1024).toFixed(1)} GB VRAM</span>
+                        </div>
                       </div>
-                    </td>
-                    <td className="px-4 py-2 text-gray-400 hidden md:table-cell">
-                      {w.devices.length > 0 ? `${w.devices.length} devices` : statusLabel(w.status)}
-                    </td>
-                    <td className="px-4 py-2">
-                      {isLocalWorker(w.host) && w.status === 'Online' && (
-                        <button onClick={() => handleStopWorker(w)} className="p-1 text-red-400 hover:text-red-600 rounded mr-1" title={t.clusterPage.stopLocalWorker}>
-                          <StopCircle className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                      <button onClick={() => handleDelete(w)} className="p-1 text-gray-400 hover:text-red-500 rounded" title={t.clusterPage.deleteWorker}>
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                  {expanded.has(w.id) && (
-                    <tr key={`${w.id}-detail`}>
-                      <td colSpan={5} className="px-8 py-3 bg-gray-50 dark:bg-gray-800/30">
-                        {w.devices.length === 0 ? (
-                          <span className="text-xs text-gray-400">{t.clusterPage.noDevices}</span>
-                        ) : (
-                          <div className="space-y-2">
-                            {w.devices.map((d, i) => {
-                              const pct = d.vram_mb > 0 ? ((d.vram_mb - d.free_mb) / d.vram_mb * 100) : 0
-                              return (
-                                <div key={i} className="flex items-center gap-3 text-xs">
-                                  <span className="w-16 text-gray-500">{d.device_type}</span>
-                                  <span className="font-medium">{d.name}</span>
-                                  <div className="flex-1 max-w-xs">
-                                    <div className="bg-gray-200 dark:bg-gray-600 rounded-full h-2">
-                                      <div className="bg-blue-500 rounded-full h-2" style={{ width: `${pct.toFixed(0)}%` }} />
-                                    </div>
-                                  </div>
-                                  <span className="text-gray-400">{((d.vram_mb - d.free_mb) / 1024).toFixed(1)} / {(d.vram_mb / 1024).toFixed(1)} GB</span>
-                                </div>
-                              )
-                            })}
-                          </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          onClick={() => void handleTest(worker.host, worker.port)}
+                          variant="primary"
+                          size="sm"
+                        >
+                          {t.clusterPage.testConnection}
+                        </Button>
+                        <Button
+                          onClick={() => toggleExpand(worker.id)}
+                          size="sm"
+                        >
+                          {expanded.has(worker.id) ? labels.hideDetails : labels.showDetails}
+                        </Button>
+                        {isLocalWorker(worker.host) && worker.status === 'Online' && (
+                          <Button
+                            onClick={() => void handleStopWorker(worker)}
+                            variant="danger"
+                            size="sm"
+                            title={t.clusterPage.stopLocalWorker}
+                            icon={<StopCircle className="h-3.5 w-3.5" />}
+                          >
+                            {t.clusterPage.stopLocalWorker}
+                          </Button>
                         )}
-                      </td>
-                    </tr>
+                        <Button
+                          onClick={() => void handleDelete(worker)}
+                          variant="danger"
+                          size="sm"
+                          title={t.clusterPage.deleteWorker}
+                          icon={<Trash2 className="h-3.5 w-3.5" />}
+                        >
+                          {t.clusterPage.deleteWorker}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {expanded.has(worker.id) && (
+                    <div className="bg-slate-950/70 px-5 py-4">
+                      {worker.devices.length === 0 ? (
+                        <span className="text-sm text-slate-500">{t.clusterPage.noDevices}</span>
+                      ) : (
+                        <div className="space-y-3">
+                          {worker.devices.map((device, index) => {
+                            const usedPct = device.vram_mb > 0 ? ((device.vram_mb - device.free_mb) / device.vram_mb) * 100 : 0
+                            return (
+                              <div key={index} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                                <div className="mb-2 flex items-center justify-between gap-4">
+                                  <div>
+                                    <p className="text-sm font-medium text-slate-100">{device.name}</p>
+                                    <p className="mt-1 text-xs text-slate-500">{device.device_type}</p>
+                                  </div>
+                                  <div className="text-right text-xs text-slate-500">
+                                    {((device.vram_mb - device.free_mb) / 1024).toFixed(1)} / {(device.vram_mb / 1024).toFixed(1)} GB
+                                  </div>
+                                </div>
+                                <div className="h-2 rounded-full bg-slate-800">
+                                  <div className="h-2 rounded-full bg-blue-500" style={{ width: `${usedPct.toFixed(0)}%` }} />
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </Fragment>
               ))}
+            </div>
+          )}
+        </Surface>
 
-            </tbody>
-          </table>
-        </div>
-      )}
+        <Surface as="aside" className="h-fit p-5">
+          <div className="mb-5">
+            <SectionHeader title={labels.clusterNotes} description={labels.clusterNotesDesc} />
+          </div>
 
-      {/* Add Worker Dialog */}
+          <div className="space-y-4">
+            <InsetSurface className="p-4">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-sm text-slate-500">{t.clusterPage.discoverMode}</span>
+                <Badge tone={mdnsActive ? 'blue' : 'slate'}>
+                  {mdnsActive ? t.clusterPage.online : t.clusterPage.offline}
+                </Badge>
+              </div>
+            </InsetSurface>
+
+            <InsetSurface className="p-4">
+              <p className="text-sm font-medium text-slate-100">{t.clusterPage.clusterThroughput}</p>
+              <div className="mt-3 space-y-3">
+                {workers.length === 0 ? (
+                  <div className="text-sm text-slate-500">{t.clusterPage.noWorkers}</div>
+                ) : (
+                  workersSorted.slice(0, 5).map(worker => (
+                    <div key={worker.id} className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm text-slate-200">{worker.name}</p>
+                        <p className="mt-1 truncate text-xs text-slate-500">{worker.host}:{worker.port}</p>
+                      </div>
+                      <span className={`rounded-full px-2 py-1 text-[11px] ${worker.status === 'Online' ? 'bg-emerald-500/10 text-emerald-300' : worker.status === 'Testing' ? 'bg-amber-500/10 text-amber-300' : 'bg-slate-800 text-slate-400'}`}>
+                        {statusText(worker.status)}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </InsetSurface>
+
+            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
+              {t.clusterPage.sshWarning}
+            </div>
+          </div>
+        </Surface>
+      </div>
+
       {showAddDialog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-md">
-            <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
-              <h3 className="font-semibold">{t.clusterPage.addWorker}</h3>
-              <button onClick={() => setShowAddDialog(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-4 h-4" /></button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+              <h3 className="font-semibold text-slate-50">{t.clusterPage.addWorker}</h3>
+              <Button onClick={() => setShowAddDialog(false)} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
             </div>
-            <div className="p-6 space-y-3">
+            <div className="space-y-3 p-6">
               <div>
-                <label className="block text-xs font-medium mb-1 text-gray-500">Host (IP)</label>
-                <input type="text" value={formData.host} onChange={e => setFormData({ ...formData, host: e.target.value })} placeholder="192.168.x.x" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                <label className="mb-1 block text-xs font-medium text-slate-400">{labels.host}</label>
+                <TextInput type="text" value={formData.host} onChange={event => setFormData({ ...formData, host: event.target.value })} placeholder="192.168.x.x" className="h-10" />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1 text-gray-500">Port</label>
-                <input type="number" value={formData.port} onChange={e => setFormData({ ...formData, port: parseInt(e.target.value) || 50052 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                <label className="mb-1 block text-xs font-medium text-slate-400">{labels.port}</label>
+                <TextInput type="number" value={formData.port} onChange={event => setFormData({ ...formData, port: parseInt(event.target.value, 10) || 50052 })} className="h-10" />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.editWorker} ({t.common.default})</label>
-                <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })} placeholder={formData.host || 'Worker'} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.editWorker}</label>
+                <TextInput type="text" value={formData.name} onChange={event => setFormData({ ...formData, name: event.target.value })} placeholder={formData.host || 'Worker'} className="h-10" />
               </div>
             </div>
-            <div className="flex justify-end gap-2 px-6 py-4 border-t dark:border-gray-700">
-              <button onClick={() => setShowAddDialog(false)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.common.cancel}</button>
-              <button onClick={handleAdd} className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg">{t.common.save}</button>
+            <div className="flex justify-end gap-2 border-t border-slate-800 px-6 py-4">
+              <Button onClick={() => setShowAddDialog(false)} variant="subtle">{t.common.cancel}</Button>
+              <Button onClick={() => void handleAdd()} variant="primary">{t.common.save}</Button>
             </div>
           </div>
         </div>
       )}
-      {/* SSH Launch Wizard */}
+
       {showLaunchWizard && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-lg">
-            <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
-              <h3 className="font-semibold">{t.clusterPage.launchWizard}</h3>
-              <button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-4 h-4" /></button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+              <h3 className="font-semibold text-slate-50">{t.clusterPage.launchWizard}</h3>
+              <Button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
             </div>
-            <div className="p-6 space-y-4">
+            <div className="space-y-4 p-6">
               {launchStep === 0 && (
                 <>
-                  <div className="p-2 mb-2 bg-yellow-50 dark:bg-yellow-900/20 rounded text-xs text-yellow-700 dark:text-yellow-400">
-                    {t.clusterPage.sshWarning}
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">{t.clusterPage.sshWarning}</div>
+                  <div>
+                    <label className="mb-1 block text-xs font-medium text-slate-400">{labels.workerHost}</label>
+                    <TextInput type="text" value={launchForm.host} onChange={event => setLaunchForm({ ...launchForm, host: event.target.value })} placeholder="192.168.x.x" className="h-10" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">Worker IP / Host</label>
-                    <input type="text" value={launchForm.host} onChange={e => setLaunchForm({ ...launchForm, host: e.target.value })} placeholder="192.168.x.x" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.rpcPort}</label>
+                    <TextInput type="number" value={launchForm.port} onChange={event => setLaunchForm({ ...launchForm, port: parseInt(event.target.value, 10) || 50052 })} className="h-10" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.rpcPort}</label>
-                    <input type="number" value={launchForm.port} onChange={e => setLaunchForm({ ...launchForm, port: parseInt(e.target.value) || 50052 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshPort}</label>
+                    <TextInput type="number" value={launchForm.sshPort} onChange={event => setLaunchForm({ ...launchForm, sshPort: parseInt(event.target.value, 10) || 22 })} className="h-10" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.sshPort}</label>
-                    <input type="number" value={launchForm.sshPort} onChange={e => setLaunchForm({ ...launchForm, sshPort: parseInt(e.target.value) || 22 })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
-                  </div>
-                  <div>
-<label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.remoteOS}</label>
-        <select value={launchForm.remoteOs} onChange={e => setLaunchForm({ ...launchForm, remoteOs: e.target.value })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-          <option value="auto">{t.clusterPage.autoDetect}</option>
+                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.remoteOS}</label>
+                    <SelectInput value={launchForm.remoteOs} onChange={event => setLaunchForm({ ...launchForm, remoteOs: event.target.value })} className="h-10 w-full">
+                      <option value="auto">{t.clusterPage.autoDetect}</option>
                       <option value="linux">Linux</option>
                       <option value="macos">macOS</option>
                       <option value="windows">Windows</option>
-                  </select>
+                    </SelectInput>
                   </div>
                   <div>
-<label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.remoteRpcPath}</label>
-        <input type="text" value={launchForm.rpcPath} onChange={e => setLaunchForm({ ...launchForm, rpcPath: e.target.value })} placeholder={t.clusterPage.rpcPathPlaceholder} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.remoteRpcPath}</label>
+                    <TextInput type="text" value={launchForm.rpcPath} onChange={event => setLaunchForm({ ...launchForm, rpcPath: event.target.value })} placeholder={t.clusterPage.rpcPathPlaceholder} className="h-10" />
                   </div>
                 </>
               )}
+
               {launchStep === 1 && (
                 <>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.sshUser}</label>
-                    <input type="text" value={launchForm.user} onChange={e => setLaunchForm({ ...launchForm, user: e.target.value })} placeholder="root" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshUser}</label>
+                    <TextInput type="text" value={launchForm.user} onChange={event => setLaunchForm({ ...launchForm, user: event.target.value })} placeholder="root" className="h-10" />
                   </div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.sshKeyPath}</label>
-                    <input type="text" value={launchForm.keyPath} onChange={e => setLaunchForm({ ...launchForm, keyPath: e.target.value })} placeholder="~/.ssh/id_rsa" className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshKeyPath}</label>
+                    <TextInput type="text" value={launchForm.keyPath} onChange={event => setLaunchForm({ ...launchForm, keyPath: event.target.value })} placeholder="~/.ssh/id_rsa" className="h-10" />
                   </div>
-                  <div className="text-xs text-gray-400">— {t.common.default} —</div>
+                  <div className="text-xs text-slate-500">Optional: provide a password only when key-based auth is unavailable.</div>
                   <div>
-                    <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.sshPassword}</label>
-                    <input type="password" value={launchForm.password} onChange={e => setLaunchForm({ ...launchForm, password: e.target.value })} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshPassword}</label>
+                    <TextInput type="password" value={launchForm.password} onChange={event => setLaunchForm({ ...launchForm, password: event.target.value })} className="h-10" />
                   </div>
                 </>
               )}
+
               {launchStep === 2 && (
-                <div className="text-sm space-y-2">
-                  <div className="flex justify-between"><span className="text-gray-500">Worker:</span><span>{launchForm.host}:{launchForm.port}</span></div>
-                  <div className="flex justify-between"><span className="text-gray-500">SSH:</span><span>{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
-                  <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded text-xs text-blue-600 dark:text-blue-400">
-                    {t.clusterPage.cmdPreview}: {launchForm.rpcPath || 'rpc-server'} --host 0.0.0.0 --port {launchForm.port}
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between"><span className="text-slate-500">Worker</span><span className="text-slate-200">{launchForm.host}:{launchForm.port}</span></div>
+                  <div className="flex justify-between"><span className="text-slate-500">SSH</span><span className="text-slate-200">{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
+                  <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-blue-200">
+                    {t.clusterPage.cmdPreview}: {(launchForm.rpcPath || 'rpc-server')} --host 0.0.0.0 --port {launchForm.port}
                   </div>
                   {launchError && (
-                    <div className="p-3 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-600 dark:text-red-400 whitespace-pre-wrap">
-                      {'\u26A0'} {launchError}
+                    <div className="whitespace-pre-wrap rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">
+                      {launchError}
                     </div>
                   )}
                 </div>
               )}
             </div>
-            <div className="flex justify-between px-6 py-4 border-t dark:border-gray-700">
+            <div className="flex justify-between border-t border-slate-800 px-6 py-4">
               <div>
                 {launchStep > 0 && (
-                  <button onClick={() => setLaunchStep(s => s - 1)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.clusterPage.prevStep}</button>
+                  <Button onClick={() => setLaunchStep(step => step - 1)} variant="subtle">{t.clusterPage.prevStep}</Button>
                 )}
               </div>
               <div className="flex gap-2">
-                <button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.common.cancel}</button>
+                <Button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} variant="subtle">{t.common.cancel}</Button>
                 {launchStep < 2 ? (
-                  <button onClick={() => setLaunchStep(s => s + 1)} className="px-4 py-1.5 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded-lg">{t.clusterPage.nextStep}</button>
+                  <Button onClick={() => setLaunchStep(step => step + 1)} variant="primary">{t.clusterPage.nextStep}</Button>
                 ) : (
-                  <button onClick={handleSshLaunch} disabled={launching} className="px-4 py-1.5 text-sm bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white rounded-lg">
+                  <Button onClick={() => void handleSshLaunch()} disabled={launching} variant="violet">
                     {launching ? t.clusterPage.launching : t.clusterPage.launchWorker}
-                  </button>
+                  </Button>
                 )}
               </div>
             </div>
           </div>
         </div>
       )}
-      {/* Local Launch Dialog */}
+
       {showLocalLaunch && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-gray-800 rounded-lg w-full max-w-sm">
-            <div className="flex items-center justify-between px-6 py-4 border-b dark:border-gray-700">
-              <h3 className="font-semibold">{t.clusterPage.localLaunchTitle}</h3>
-              <button onClick={() => setShowLocalLaunch(false)} className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"><X className="w-4 h-4" /></button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+              <h3 className="font-semibold text-slate-50">{t.clusterPage.localLaunchTitle}</h3>
+              <Button onClick={() => setShowLocalLaunch(false)} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
             </div>
-            <div className="p-6 space-y-3">
+            <div className="space-y-3 p-6">
               <div>
-                <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.rpcPort}</label>
-                <input type="number" value={localPort} onChange={e => setLocalPort(parseInt(e.target.value) || 50052)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
+                <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.rpcPort}</label>
+                <TextInput type="number" value={localPort} onChange={event => setLocalPort(parseInt(event.target.value, 10) || 50052)} className="h-10" />
               </div>
               <div>
-                <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.engineDir}</label>
-                <div className="flex items-center gap-2 mb-2">
-                  <label className={`flex items-center gap-1 cursor-pointer text-xs ${localMode === 'engine' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400'}`}>
-                    <input type="radio" name="localMode" checked={localMode === 'engine'} onChange={() => setLocalMode('engine')} className="w-3 h-3" />
-                     {t.clusterPage.engineMode}
-                   </label>
-                   <label className={`flex items-center gap-1 cursor-pointer text-xs ${localMode === 'custom' ? 'text-blue-600 dark:text-blue-400 font-medium' : 'text-gray-400'}`}>
-                     <input type="radio" name="localMode" checked={localMode === 'custom'} onChange={() => setLocalMode('custom')} className="w-3 h-3" />
-                     {t.clusterPage.customMode}
-                   </label>
-                 </div>
-                 {localMode === 'engine' ? (
-                   <select value={localEngine} onChange={e => setLocalEngine(e.target.value)} className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900">
-                     {engines.map(e => (
-                       <option key={e.id} value={e.dir}>{e.name}{e.id === defaultEngineId ? t.clusterPage.defaultEngineLabel : ''}</option>
-                     ))}
-                   </select>
-                 ) : (
-                   <div className="flex gap-1">
-                     <input type="text" value={localEngine} onChange={e => setLocalEngine(e.target.value)} placeholder={t.clusterPage.engineDirPlaceholder} className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
-                    <button onClick={async () => {
-                      try {
-                        const selected = await open({ directory: true, multiple: false })
-                        if (selected && typeof selected === 'string') setLocalEngine(selected)
-                      } catch {}
-                    }} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs shrink-0" title={t.clusterPage.selectEngineDir}>📂</button>
+                <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.engineDir}</label>
+                <div className="mb-2 flex items-center gap-3">
+                  <label className={`flex items-center gap-2 text-xs ${localMode === 'engine' ? 'text-blue-300' : 'text-slate-500'}`}>
+                    <input type="radio" name="localMode" checked={localMode === 'engine'} onChange={() => setLocalMode('engine')} className="h-3 w-3" />
+                    {t.clusterPage.engineMode}
+                  </label>
+                  <label className={`flex items-center gap-2 text-xs ${localMode === 'custom' ? 'text-blue-300' : 'text-slate-500'}`}>
+                    <input type="radio" name="localMode" checked={localMode === 'custom'} onChange={() => setLocalMode('custom')} className="h-3 w-3" />
+                    {t.clusterPage.customMode}
+                  </label>
+                </div>
+                {localMode === 'engine' ? (
+                  <SelectInput value={localEngine} onChange={event => setLocalEngine(event.target.value)} className="h-10 w-full">
+                    {engines.map(engine => (
+                      <option key={engine.id} value={engine.dir}>
+                        {engine.name}{engine.id === defaultEngineId ? t.clusterPage.defaultEngineLabel : ''}
+                      </option>
+                    ))}
+                  </SelectInput>
+                ) : (
+                  <div className="flex gap-2">
+                    <TextInput type="text" value={localEngine} onChange={event => setLocalEngine(event.target.value)} placeholder={t.clusterPage.engineDirPlaceholder} className="h-10 flex-1" />
+                    <Button
+                      onClick={async () => {
+                        try {
+                          const selected = await open({ directory: true, multiple: false })
+                          if (selected && typeof selected === 'string') {
+                            setLocalEngine(selected)
+                          }
+                        } catch {
+                          // ignore
+                        }
+                      }}
+                      variant="primary"
+                      size="sm"
+                      title={t.clusterPage.selectEngineDir}
+                    >
+                      {t.common.browse}
+                    </Button>
                   </div>
                 )}
               </div>
               {launchError && (
-                <div className="p-2 bg-red-50 dark:bg-red-900/20 rounded text-xs text-red-600 dark:text-red-400">{launchError}</div>
+                <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{launchError}</div>
               )}
             </div>
-            <div className="flex justify-end gap-2 px-6 py-4 border-t dark:border-gray-700">
-              <button onClick={() => setShowLocalLaunch(false)} className="px-4 py-1.5 text-sm text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg">{t.common.cancel}</button>
-              <button onClick={handleLocalLaunch} disabled={launching} className="px-4 py-1.5 text-sm bg-teal-600 hover:bg-teal-700 disabled:bg-gray-400 text-white rounded-lg">
+            <div className="flex justify-end gap-2 border-t border-slate-800 px-6 py-4">
+              <Button onClick={() => setShowLocalLaunch(false)} variant="subtle">{t.common.cancel}</Button>
+              <Button onClick={() => void handleLocalLaunch()} disabled={launching} variant="cyan">
                 {launching ? t.clusterPage.launching : t.instance.start}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

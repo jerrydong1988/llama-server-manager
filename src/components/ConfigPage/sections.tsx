@@ -1,10 +1,97 @@
 ﻿import type { InstanceConfig } from '../../store'
 import { defaultInstanceConfig } from '../../store'
 import { useState, useEffect } from 'react'
-import { Plus, X } from 'lucide-react'
+import { FolderOpen, Plus, X } from 'lucide-react'
 import { Section, Input, Num, Switch, Select, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
 import { KNOWN_FLAGS } from '../../validators'
 import WorkerSelector from './WorkerSelector'
+import { Button, TextInput } from '../ui'
+
+const formGridClassName = 'grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3'
+const wideGridClassName = 'grid grid-cols-1 gap-3 md:grid-cols-2'
+
+export const BASIC_CONFIG_KEYS: Array<keyof InstanceConfig> = [
+  'model_path',
+  'alias',
+  'chat_template',
+  'host',
+  'port',
+  'gpu_layers',
+  'gpu_layers_auto',
+  'ctx_size',
+  'ctx_size_auto',
+  'embedding',
+  'pooling',
+]
+
+export const REASONING_CONFIG_KEYS: Array<keyof InstanceConfig> = [
+  'reasoning',
+  'spec_type',
+  'draft_tokens',
+  'spec_draft_n_min',
+  'temp',
+  'top_k',
+  'top_p',
+  'repeat_penalty',
+  'n_predict',
+  'ignore_eos',
+  'reverse_prompt',
+]
+
+export const PERFORMANCE_CONFIG_KEYS: Array<keyof InstanceConfig> = [
+  'threads',
+  'threads_batch',
+  'batch_size',
+  'ubatch_size',
+  'parallel',
+  'cont_batching',
+  'flash_attn',
+  'mlock',
+  'no_mmap',
+  'no_repack',
+  'numa',
+]
+
+export const ADVANCED_GROUP_CONFIG_KEYS: Record<string, Array<keyof InstanceConfig>> = {
+  advancedReasoningConfig: Object.keys(RESET_MAP.advancedReasoningConfig) as Array<keyof InstanceConfig>,
+  advancedModelAdapt: [
+    ...Object.keys(RESET_MAP.advancedModelAdapt),
+    'lora_scaled',
+  ] as Array<keyof InstanceConfig>,
+  advancedSampling: Object.keys(RESET_MAP.advancedSampling) as Array<keyof InstanceConfig>,
+  advancedSamplingExt: Object.keys(RESET_MAP.advancedSamplingExt) as Array<keyof InstanceConfig>,
+  advancedSpec: Object.keys(RESET_MAP.advancedSpec) as Array<keyof InstanceConfig>,
+  advancedRope: [
+    ...Object.keys(RESET_MAP.advancedRope),
+    'yarn_orig_ctx',
+  ] as Array<keyof InstanceConfig>,
+  advancedKvCache: [
+    ...Object.keys(RESET_MAP.advancedKvCache),
+    'no_kv_offload',
+  ] as Array<keyof InstanceConfig>,
+  advancedContextMgmt: Object.keys(RESET_MAP.advancedContextMgmt) as Array<keyof InstanceConfig>,
+  advancedHardware: Object.keys(RESET_MAP.advancedHardware) as Array<keyof InstanceConfig>,
+  advancedServerBasic: [
+    ...Object.keys(RESET_MAP.advancedServerBasic),
+    'offline',
+  ] as Array<keyof InstanceConfig>,
+  advancedServerExt: Object.keys(RESET_MAP.advancedServerExt) as Array<keyof InstanceConfig>,
+  advancedMulti: [
+    ...Object.keys(RESET_MAP.advancedMulti),
+    'no_mmproj',
+    'no_mmproj_offload',
+    'mtmd_batch_max_tokens',
+  ] as Array<keyof InstanceConfig>,
+  customArgs: ['custom_args'],
+}
+
+export const ADVANCED_CONFIG_KEYS = Array.from(new Set(Object.values(ADVANCED_GROUP_CONFIG_KEYS).flat())) as Array<keyof InstanceConfig>
+
+const countActive = (activeParams: Set<keyof InstanceConfig>, keys: Array<keyof InstanceConfig>) =>
+  keys.filter(key => activeParams.has(key)).length
+
+const countSummary = (count: number) =>
+  count > 0 ? <span className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-emerald-300">{count}</span> : undefined
 
 interface Props {
   local: InstanceConfig
@@ -22,13 +109,13 @@ interface Props {
 export function BasicSection({ local, set, t, onShowPicker, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   return (
-    <Section title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery}>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+    <Section id="config-basic" title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery} summary={countSummary(countActive(activeParams, BASIC_CONFIG_KEYS))}>
+      <div className={formGridClassName}>
         <div title={t.configPage.modelPathTip}>
-          <label className="block text-xs font-medium mb-1 text-gray-500">{`${t.configPage.modelPath} (--model, -m)`}</label>
+          <label className={`mb-1 block text-xs font-medium ${a('model_path') ? 'text-emerald-300' : 'text-slate-400'}`}>{`${t.configPage.modelPath} (--model, -m)`}</label>
           <div className="flex gap-1">
-            <input type="text" value={local.model_path} onChange={e => set('model_path', e.target.value)} className="flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900" />
-            <button onClick={onShowPicker} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs" title={t.configPage.modelPathBtn}>{'\uD83D\uDCC2'}</button>
+            <TextInput type="text" value={local.model_path} onChange={e => set('model_path', e.target.value)} className="h-10 flex-1" />
+            <Button onClick={onShowPicker} variant="primary" size="icon" title={t.configPage.modelPathBtn}><FolderOpen className="h-4 w-4" /></Button>
           </div>
         </div>
         <Input label={`${t.configPage.alias} (--alias, -a)`} value={local.alias} onChange={v => set('alias', v)} title={t.configPage.aliasTip}  active={a('alias')} />
@@ -49,9 +136,9 @@ export function BasicSection({ local, set, t, onShowPicker, activeParams, search
 export function ReasoningSection({ local, set, t, isEmbedding, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   return (
-    <Section title={t.configPage.reasoning} defaultOpen={true} searchQuery={searchQuery}>
+    <Section id="config-reasoning" title={t.configPage.reasoning} defaultOpen={true} searchQuery={searchQuery} summary={countSummary(countActive(activeParams, REASONING_CONFIG_KEYS))}>
       {(() => { const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding; return (<>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div className={formGridClassName}>
         <Select label={`${t.configPage.reasoningSwitch} (--reasoning)`} value={local.reasoning} onChange={v => set('reasoning', v)} options={['', 'on', 'off', 'auto']} title={t.configPage.reasoningTip} disabled={isEmbedding} defaultLabel={t.common.default}  active={a('reasoning')} />
         <Select label={`${t.configPage.specType} (--spec-type)`} value={local.spec_type} onChange={v => set('spec_type', v)} options={specTypes} title={t.configPage.specTypeTip} disabled={isEmbedding} defaultLabel={t.common.default}  active={a('spec_type')} />
         <Num label={`${t.configPage.draftTokens} (--spec-draft-n-max)`} value={local.draft_tokens} onChange={v => set('draft_tokens', v)} min={0} title={t.configPage.draftTokensTip} disabled={!specActive}  active={a('draft_tokens')} />
@@ -72,8 +159,8 @@ export function ReasoningSection({ local, set, t, isEmbedding, activeParams, sea
 export function PerformanceSection({ local, set, t, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   return (
-    <Section title={t.configPage.performance} defaultOpen={true} searchQuery={searchQuery}>
-      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+    <Section id="config-performance" title={t.configPage.performance} defaultOpen={true} searchQuery={searchQuery} summary={countSummary(countActive(activeParams, PERFORMANCE_CONFIG_KEYS))}>
+      <div className={formGridClassName}>
         <Num label={`${t.configPage.threads} (--threads, -t)`} value={local.threads} onChange={v => set('threads', v)} min={0} title={t.configPage.threadsTip}  active={a('threads')} />
         <Num label={`${t.configPage.threadsBatch} (--threads-batch)`} value={local.threads_batch} onChange={v => set('threads_batch', v)} min={0} title={t.configPage.threadsBatchTip}  active={a('threads_batch')} />
         <Num label={`${t.configPage.batchSize} (--batch-size, -b)`} value={local.batch_size} onChange={v => set('batch_size', v)} min={1} title={t.configPage.batchSizeTip}  active={a('batch_size')} />
@@ -160,15 +247,15 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
   const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding
 
   return (
-    <Section title={t.configPage.advSectionTitle} defaultOpen={false} searchQuery={searchQuery}>
+    <Section id="config-advanced" title={t.configPage.advSectionTitle} defaultOpen={true} searchQuery={searchQuery} summary={countSummary(countActive(activeParams, ADVANCED_CONFIG_KEYS))}>
       <div className="flex items-center justify-end mb-2">
-        <span className="text-xs text-gray-400 mr-2">{t.configPage.advSectionReset}</span>
+        <span className="mr-2 text-xs text-slate-500">{t.configPage.advSectionReset}</span>
         <ResetButton onClick={resetAll} title={t.configPage.advSectionReset} />
       </div>
       <div className="space-y-2">
         {/* 推理配置 (6) */}
-        <CollapsibleGroup title={t.configPage.subAdvReasoning} onReset={() => resetGroup('advancedReasoningConfig')} disabled={isEmbedding}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-reasoning" title={t.configPage.subAdvReasoning} onReset={() => resetGroup('advancedReasoningConfig')} disabled={isEmbedding} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedReasoningConfig))}>
+          <div className={formGridClassName}>
             <Select label={`${t.configPage.reasoningFormat} (--reasoning-format)`} value={local.reasoning_format} onChange={v => set('reasoning_format', v)} options={['', 'none', 'deepseek', 'deepseek-legacy']} title={t.configPage.reasoningFormatTip} defaultLabel={t.common.default}  active={a('reasoning_format')} />
             <Select label={`${t.configPage.reasoningEffort} (--chat-template-kwargs)`} value={local.reasoning_effort} onChange={v => set('reasoning_effort', v)} options={['', 'low', 'medium', 'high']} title={t.configPage.reasoningEffortTip} defaultLabel={t.common.default}  active={a('reasoning_effort')} />
             <Num label={`${t.configPage.reasoningBudget} (--reasoning-budget)`} value={local.reasoning_budget ? parseInt(local.reasoning_budget) : 0} onChange={v => set('reasoning_budget', v.toString())} min={0} max={65536} step={256} title={t.configPage.reasoningBudgetTip} />
@@ -179,8 +266,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 模型适配 (8) */}
-        <CollapsibleGroup title={t.configPage.subAdvModelAdapt} onReset={() => resetGroup('advancedModelAdapt')}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-model" title={t.configPage.subAdvModelAdapt} onReset={() => resetGroup('advancedModelAdapt')} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt))}>
+          <div className={formGridClassName}>
             <Input label={`${t.configPage.chatTemplateFile} (--chat-template-file)`} value={local.chat_template_file} onChange={v => set('chat_template_file', v)} title={t.configPage.chatTemplateFileTip}  active={a('chat_template_file')} />
             <Input label={`${t.configPage.lora} (--lora)`} value={local.lora_path} onChange={v => set('lora_path', v)} title={t.configPage.loraTip}  active={a('lora_path')} />
             <Switch label={`${t.configPage.loraInitNoApply} (--lora-init-without-apply)`} value={local.lora_init_without_apply} onChange={v => set('lora_init_without_apply', v)} title={t.configPage.loraInitNoApplyTip}  active={a('lora_init_without_apply')} />
@@ -194,8 +281,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 高级采样 (19) */}
-        <CollapsibleGroup title={t.configPage.subAdvSampling} onReset={() => resetGroup('advancedSampling')} disabled={isEmbedding}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-sampling" title={t.configPage.subAdvSampling} onReset={() => resetGroup('advancedSampling')} disabled={isEmbedding} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSampling))}>
+          <div className={formGridClassName}>
             <Select label={`${t.configPage.mirostat} (--mirostat)`} value={local.mirostat.toString()} onChange={v => set('mirostat', parseInt(v))} options={['0', '1', '2']} title={t.configPage.mirostatTip} defaultLabel={t.common.default} />
             <Num label={`${t.configPage.mirostatLr} (--mirostat-lr)`} value={local.mirostat_lr} onChange={v => set('mirostat_lr', v)} min={0} max={1} step={0.001} title={t.configPage.mirostatLrTip}  active={a('mirostat_lr')} />
             <Num label={`${t.configPage.mirostatEnt} (--mirostat-ent)`} value={local.mirostat_ent} onChange={v => set('mirostat_ent', v)} min={0} max={10} step={0.1} title={t.configPage.mirostatEntTip}  active={a('mirostat_ent')} />
@@ -219,8 +306,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 采样参数扩展 (9) */}
-        <CollapsibleGroup title={t.configPage.subAdvSamplingExt} onReset={() => resetGroup('advancedSamplingExt')} disabled={isEmbedding}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-sampling-ext" title={t.configPage.subAdvSamplingExt} onReset={() => resetGroup('advancedSamplingExt')} disabled={isEmbedding} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSamplingExt))}>
+          <div className={formGridClassName}>
             <Num label={`${t.configPage.seed} (--seed)`} value={local.seed} onChange={v => set('seed', v)} min={-1} title={t.configPage.seedTip}  active={a('seed')} />
             <Num label={`${t.configPage.minP} (--min-p)`} value={local.min_p} onChange={v => set('min_p', v)} min={0} max={1} step={0.05} title={t.configPage.minPTip}  active={a('min_p')} />
             <Num label={`${t.configPage.presencePenalty} (--presence-penalty)`} value={local.presence_penalty} onChange={v => set('presence_penalty', v)} min={0} max={2} step={0.1} title={t.configPage.presencePenaltyTip}  active={a('presence_penalty')} />
@@ -235,14 +322,14 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 推测解码 (9) */}
-        <CollapsibleGroup title={t.configPage.subAdvSpec} onReset={() => resetGroup('advancedSpec')} disabled={!specActive}>
-          {!specActive && <div className="bg-gray-50 dark:bg-gray-800/50 rounded px-3 py-2 text-xs text-gray-500 mb-2">{t.configPage.specDisabled}</div>}
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-spec" title={t.configPage.subAdvSpec} onReset={() => resetGroup('advancedSpec')} disabled={!specActive} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSpec))}>
+          {!specActive && <div className="mb-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-500">{t.configPage.specDisabled}</div>}
+          <div className={formGridClassName}>
             <div title={t.configPage.draftModelTip}>
-              <label className={`block text-xs font-medium mb-1 ${a('draft_model_path') ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{`${t.configPage.draftModel} (--draft-model, -md)`}</label>
+              <label className={`mb-1 block text-xs font-medium ${a('draft_model_path') ? 'text-emerald-300' : 'text-slate-400'}`}>{`${t.configPage.draftModel} (--draft-model, -md)`}</label>
               <div className="flex gap-1">
-                <input type="text" value={local.draft_model_path} onChange={e => set('draft_model_path', e.target.value)} disabled={isEmbedding} className={`flex-1 px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${isEmbedding ? 'opacity-50 cursor-not-allowed' : ''}`} />
-                <button onClick={onShowDraftPicker} disabled={isEmbedding} className="px-2 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs disabled:opacity-50 disabled:cursor-not-allowed" title={t.configPage.draftModelTip}>{'\uD83D\uDCC2'}</button>
+                <TextInput type="text" value={local.draft_model_path} onChange={e => set('draft_model_path', e.target.value)} disabled={isEmbedding} className="h-10 flex-1" />
+                <Button onClick={onShowDraftPicker} disabled={isEmbedding} variant="primary" size="icon" title={t.configPage.draftModelTip}><FolderOpen className="h-4 w-4" /></Button>
               </div>
             </div>
             <Num label={`${t.configPage.draftGpu} (--draft-n-gpu-layers, -ngld)`} value={local.draft_gpu_layers} onChange={v => set('draft_gpu_layers', v)} min={0} max={99} title={t.configPage.draftGpuTip} disabled={isEmbedding}  active={a('draft_gpu_layers')} />
@@ -261,8 +348,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 上下文缩放 / RoPE · YaRN (8) */}
-        <CollapsibleGroup title={t.configPage.subAdvRope} onReset={() => resetGroup('advancedRope')}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-rope" title={t.configPage.subAdvRope} onReset={() => resetGroup('advancedRope')} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedRope))}>
+          <div className={formGridClassName}>
             <Select label={`${t.configPage.ropeScaling} (--rope-scaling)`} value={local.rope_scaling} onChange={v => set('rope_scaling', v)} options={['', 'none', 'linear', 'yarn']} title={t.configPage.ropeScalingTip} defaultLabel={t.common.default}  active={a('rope_scaling')} />
             <Num label={`${t.configPage.ropeScale} (--rope-scale)`} value={local.rope_scale} onChange={v => set('rope_scale', v)} min={0} max={10} step={0.1} title={t.configPage.ropeScaleTip}  active={a('rope_scale')} />
             <Num label={`${t.configPage.ropeFreqBase} (--rope-freq-base)`} value={local.rope_freq_base} onChange={v => set('rope_freq_base', v)} min={0} title={t.configPage.ropeFreqBaseTip}  active={a('rope_freq_base')} />
@@ -276,8 +363,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* KV 缓存 (8) */}
-        <CollapsibleGroup title={t.configPage.subAdvKvCache} onReset={() => resetGroup('advancedKvCache')}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-kv" title={t.configPage.subAdvKvCache} onReset={() => resetGroup('advancedKvCache')} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedKvCache))}>
+          <div className={formGridClassName}>
             <Select label={`${t.configPage.cacheTypeK} (--cache-type-k, -ctk)`} value={local.cache_type_k} onChange={v => set('cache_type_k', v)} options={cacheTypes} title={t.configPage.cacheTypeKTip} defaultLabel={t.common.default}  active={a('cache_type_k')} />
             <Select label={`${t.configPage.cacheTypeV} (--cache-type-v, -ctv)`} value={local.cache_type_v} onChange={v => set('cache_type_v', v)} options={cacheTypes} title={t.configPage.cacheTypeVTip} defaultLabel={t.common.default}  active={a('cache_type_v')} />
             <Switch label={`${t.configPage.cachePrompt} (--no-cache-prompt)`} value={!local.cache_prompt} onChange={v => set('cache_prompt', !v)} title={t.configPage.cachePromptTip} />
@@ -291,8 +378,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 上下文管理 (6) */}
-        <CollapsibleGroup title={t.configPage.subAdvContextMgmt} onReset={() => resetGroup('advancedContextMgmt')}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-context" title={t.configPage.subAdvContextMgmt} onReset={() => resetGroup('advancedContextMgmt')} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedContextMgmt))}>
+          <div className={formGridClassName}>
             <Num label={`${t.configPage.ctxCheckpoints} (--ctx-checkpoints, -ctxcp)`} value={local.ctx_checkpoints} onChange={v => set('ctx_checkpoints', v)} min={0} title={t.configPage.ctxCheckpointsTip}  active={a('ctx_checkpoints')} />
             <Num label={`${t.configPage.checkpointMinStep} (--checkpoint-min-step, -cms)`} value={local.checkpoint_min_step} onChange={v => set('checkpoint_min_step', v)} min={0} title={t.configPage.checkpointMinStepTip}  active={a('checkpoint_min_step')} />
             <Switch label={`${t.configPage.contextShift} (--context-shift)`} value={local.context_shift} onChange={v => set('context_shift', v)} title={t.configPage.contextShiftTip} disabled={isEmbedding}  active={a('context_shift')} />
@@ -303,8 +390,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 硬件配置 (9) */}
-        <CollapsibleGroup title={t.configPage.subAdvHardware} onReset={() => resetGroup('advancedHardware')}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-hardware" title={t.configPage.subAdvHardware} onReset={() => resetGroup('advancedHardware')} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedHardware))}>
+          <div className={formGridClassName}>
             <Num label={`${t.configPage.moeCpu} (--n-cpu-moe)`} value={local.moe_cpu_layers} onChange={v => set('moe_cpu_layers', v)} min={0} max={99} title={t.configPage.moeCpuTip} disabled={isEmbedding}  active={a('moe_cpu_layers')} />
             <Switch label={`${t.configPage.cpuMoe} (--cpu-moe)`} value={local.cpu_moe} onChange={v => set('cpu_moe', v)} title={t.configPage.cpuMoeTip}  active={a('cpu_moe')} />
             <Input label={`${t.configPage.device} (--device, -dev)`} value={local.device} onChange={v => set('device', v)} title={t.configPage.deviceTip}  active={a('device')} />
@@ -321,8 +408,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 服务基础 (10) */}
-        <CollapsibleGroup title={t.configPage.subAdvServer} onReset={() => resetGroup('advancedServerBasic')}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-server" title={t.configPage.subAdvServer} onReset={() => resetGroup('advancedServerBasic')} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic))}>
+          <div className={formGridClassName}>
             <Input label={`${t.configPage.apiKey} (--api-key)`} value={local.api_key} onChange={v => set('api_key', v)} type="password" title={t.configPage.apiKeyTip}  active={a('api_key')} />
             <Input label={`${t.configPage.apiKeyFile} (--api-key-file)`} value={local.api_key_file} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip}  active={a('api_key_file')} />
             <Switch label={`${t.configPage.noUi} (--no-ui)`} value={local.no_ui} onChange={v => set('no_ui', v)} title={t.configPage.noUiTip}  active={a('no_ui')} />
@@ -333,15 +420,15 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
             <Num label={`${t.configPage.sleepIdle} (--sleep-idle-seconds)`} value={local.sleep_idle} onChange={v => set('sleep_idle', v)} min={-1} title={t.configPage.sleepIdleTip}  active={a('sleep_idle')} />
             <Switch label={`${t.configPage.verbose} (--verbose, -v)`} value={local.verbose} onChange={v => set('verbose', v)} title={t.configPage.verboseTip}  active={a('verbose')} />
           </div>
-          <div className="grid grid-cols-2 gap-3 mt-3">
+          <div className={`${wideGridClassName} mt-3`}>
             <Input label={`${t.configPage.sslKey} (--ssl-key-file)`} value={local.ssl_key_file} onChange={v => set('ssl_key_file', v)} title={t.configPage.sslKeyTip}  active={a('ssl_key_file')} />
             <Input label={`${t.configPage.sslCert} (--ssl-cert-file)`} value={local.ssl_cert_file} onChange={v => set('ssl_cert_file', v)} title={t.configPage.sslCertTip}  active={a('ssl_cert_file')} />
           </div>
         </CollapsibleGroup>
 
         {/* 服务扩展 (7) */}
-        <CollapsibleGroup title={t.configPage.subAdvServerExt} onReset={() => resetGroup('advancedServerExt')}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-server-ext" title={t.configPage.subAdvServerExt} onReset={() => resetGroup('advancedServerExt')} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt))}>
+          <div className={formGridClassName}>
             <Switch label={`${t.configPage.slotsEnabled} (--no-slots)`} value={!local.slots_enabled} onChange={v => set('slots_enabled', !v)} title={t.configPage.slotsEnabledTip} />
             <Switch label={`${t.configPage.metrics} (--metrics)`} value={local.metrics} onChange={v => set('metrics', v)} title={t.configPage.metricsTip}  active={a('metrics')} />
             <Switch label={`${t.configPage.props} (--props)`} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip}  active={a('props')} />
@@ -353,8 +440,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
             <Switch label={`${t.configPage.uiMcpProxy} (--ui-mcp-proxy)`} value={local.ui_mcp_proxy} onChange={v => set('ui_mcp_proxy', v)} title={t.configPage.uiMcpProxyTip}  active={a('ui_mcp_proxy')} />
             <Switch label={`${t.configPage.agent} (--agent)`} value={local.agent} onChange={v => set('agent', v)} title={t.configPage.agentTip}  active={a('agent')} />
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3">
-            <div className="col-span-2 md:col-span-3">
+          <div className={`${formGridClassName} mt-3`}>
+            <div className="md:col-span-2 2xl:col-span-3">
               <WorkerSelector value={local.rpc_servers} onChange={v => set('rpc_servers', v)} t={t} />
             </div>
             <Num label={`${t.configPage.ssePingInterval} (--sse-ping-interval)`} value={local.sse_ping_interval} onChange={v => set('sse_ping_interval', v)} min={0} title={t.configPage.ssePingIntervalTip}  active={a('sse_ping_interval')} />
@@ -363,8 +450,8 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
         </CollapsibleGroup>
 
         {/* 多模型/专家 (11) */}
-        <CollapsibleGroup title={t.configPage.subAdvMulti} onReset={() => resetGroup('advancedMulti')}>
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <CollapsibleGroup id="config-advanced-multi" title={t.configPage.subAdvMulti} onReset={() => resetGroup('advancedMulti')} summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti))}>
+          <div className={formGridClassName}>
             <Input label={`${t.configPage.modelsDir} (--models-dir)`} value={local.models_dir} onChange={v => set('models_dir', v)} title={t.configPage.modelsDirTip}  active={a('models_dir')} />
             <Input label={`${t.configPage.modelsPreset} (--models-preset)`} value={local.models_preset} onChange={v => set('models_preset', v)} title={t.configPage.modelsPresetTip}  active={a('models_preset')} />
             <Num label={`${t.configPage.modelsMax} (--models-max)`} value={local.models_max} onChange={v => set('models_max', v)} min={1} max={99} title={t.configPage.modelsMaxTip}  active={a('models_max')} />
@@ -382,45 +469,46 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
           </div>
         </CollapsibleGroup>
 
-        {/* 自定义启动参数 */}
-        <div className="border dark:border-gray-600 rounded-lg overflow-hidden">
-          <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50">
-            <span className="text-xs font-medium dark:text-gray-200">{t.configPage.customArgs || '自定义参数'}</span>
-          </div>
-          <div className="px-3 py-2 space-y-2">
+        <CollapsibleGroup
+          id="config-advanced-custom"
+          title={t.configPage.customArgs || 'Custom arguments'}
+          defaultOpen={entries.length > 0}
+          summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs))}
+        >
+          <div className="space-y-2">
             {/* 已添加的参数列表 */}
             {entries.map((e, i) => (
               <div key={i} className="flex items-center gap-2">
-                <span className="flex-1 px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-xs font-mono truncate" title={e.name}>{e.name}</span>
-                {e.value && <span className="px-2 py-1 bg-gray-100 dark:bg-gray-700 rounded text-xs font-mono truncate" title={e.value}>{e.value}</span>}
-                <button onClick={() => removeEntry(i)} className="text-red-400 hover:text-red-600 shrink-0"><X className="w-3.5 h-3.5"/></button>
+                <span className="min-w-0 flex-1 truncate rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200" title={e.name}>{e.name}</span>
+                {e.value && <span className="max-w-[40%] truncate rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-400" title={e.value}>{e.value}</span>}
+                <Button onClick={() => removeEntry(i)} variant="danger" size="icon" className="h-7 w-7 shrink-0"><X className="w-3.5 h-3.5"/></Button>
               </div>
             ))}
             {/* 添加新参数行 */}
             <div className="flex items-center gap-2">
-              <input
+              <TextInput
                 type="text"
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addEntry() }}
-                placeholder="参数名"
-                className="flex-1 px-2 py-1.5 text-xs border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                placeholder="Parameter name"
+                className="h-9 flex-1 text-xs"
               />
-              <input
+              <TextInput
                 type="text"
                 value={newVal}
                 onChange={e => setNewVal(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addEntry() }}
-                placeholder="参数值（可选）"
-                className="flex-1 px-2 py-1.5 text-xs border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+                placeholder="Value (optional)"
+                className="h-9 flex-1 text-xs"
               />
-              <button onClick={addEntry} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded shrink-0" title="添加"><Plus className="w-4 h-4"/></button>
+              <Button onClick={addEntry} variant="primary" size="icon" className="h-9 w-9 shrink-0" title="Add"><Plus className="w-4 h-4"/></Button>
             </div>
             {newName.trim().startsWith('-') && KNOWN_FLAGS.has(newName.trim()) && (
-              <div className="text-xs text-red-500">⚠ {t.configPage.warnD1 || '此参数已在配置界面中支持，请在对应位置修改'}</div>
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">! {t.configPage.warnD1 || 'This flag is already supported in the form.'}</div>
             )}
           </div>
-        </div>
+        </CollapsibleGroup>
       </div>
     </Section>
   )

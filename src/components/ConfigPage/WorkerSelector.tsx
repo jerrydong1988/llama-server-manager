@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useAppStore } from '../../store'
+import { Button, TextInput, InsetSurface } from '../ui'
 
 interface Props {
   value: string
@@ -65,22 +66,24 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
   if (manualMode) {
     return (
       <div>
-        <label className="block text-xs font-medium mb-1 text-gray-500">{`${t.configPage.rpcServers} (--rpc)`}</label>
-        <input
+        <label className="mb-1 block text-xs font-medium text-slate-400">{`${t.configPage.rpcServers} (--rpc)`}</label>
+        <TextInput
           type="text"
           value={manualValue}
           onChange={e => handleManualChange(e.target.value)}
-          className="w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900"
+          className="h-10"
           title={t.configPage.rpcServersTip}
         />
-        <button
+        <Button
           onClick={() => { setManualMode(false); setManualValue(value) }}
-          className="text-xs text-blue-500 hover:text-blue-600 mt-1"
+          variant="subtle"
+          size="sm"
+          className="mt-1"
         >
           {t.clusterPage.switchToVisual}
-        </button>
+        </Button>
         {value && (
-          <div className="mt-1 text-xs text-gray-400 font-mono">
+          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-500">
             {t.clusterPage.cmdPreview}: --rpc {value}
           </div>
         )}
@@ -90,21 +93,21 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
 
   return (
     <div>
-      <label className="block text-xs font-medium mb-1 text-gray-500">{t.clusterPage.workerSelector} (--rpc)</label>
+      <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.workerSelector} (--rpc)</label>
 
       {onlineWorkers.length === 0 ? (
-        <div className="text-xs text-gray-400 py-2">
+        <InsetSurface className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-slate-500">
           {t.clusterPage.noWorkers}
-          <button onClick={syncFromCluster} className="ml-2 text-blue-500 hover:text-blue-600">{t.clusterPage.syncFromCluster}</button>
-        </div>
+          <Button onClick={syncFromCluster} variant="subtle" size="sm">{t.clusterPage.syncFromCluster}</Button>
+        </InsetSurface>
       ) : (
-        <div className="space-y-1 max-h-40 overflow-y-auto border dark:border-gray-700 rounded-lg p-2 bg-white dark:bg-gray-900">
+        <InsetSurface className="max-h-40 space-y-1 overflow-y-auto p-2">
           {onlineWorkers.map(w => {
             const addr = `${w.host}:${w.port}`
             const isChecked = selected.has(addr)
-            const statusColor = w.status === 'Online' ? 'text-green-500' : 'text-gray-400'
+            const statusColor = w.status === 'Online' ? 'bg-emerald-400' : 'bg-slate-500'
             return (
-              <label key={w.id} className="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 rounded px-1">
+              <label key={w.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-slate-200 transition hover:bg-slate-900">
                 <input
                   type="checkbox"
                   checked={isChecked}
@@ -112,42 +115,43 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
                   className="w-3.5 h-3.5 rounded"
                 />
                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${statusColor}`} />
-                <span className="text-xs flex-1">{w.name}</span>
-                <span className="text-xs text-gray-400">{addr}</span>
+                <span className="min-w-0 flex-1 truncate text-xs">{w.name}</span>
+                <span className="text-xs text-slate-500">{addr}</span>
               </label>
             )
           })}
-        </div>
+        </InsetSurface>
       )}
 
       {/* Selected chips */}
       {selectedList.length > 0 && (
-        <div className="flex flex-wrap gap-1 mt-2">
+        <div className="mt-2 flex flex-wrap gap-1">
           {selectedList.map(s => (
-            <span key={s.addr} className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full text-xs">
+            <span key={s.addr} className="inline-flex items-center gap-1 rounded-md border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-xs text-blue-300">
               {s.name}
-              <button onClick={() => toggleWorker(s.host, parseInt(s.port))} className="hover:text-red-500">&times;</button>
+              <Button onClick={() => toggleWorker(s.host, parseInt(s.port))} variant="subtle" size="sm" className="h-5 px-1 py-0 text-blue-300 hover:text-red-300">&times;</Button>
             </span>
           ))}
         </div>
       )}
 
       {/* Controls */}
-      <div className="flex gap-2 mt-1">
-        <button onClick={syncFromCluster} className="text-xs text-blue-500 hover:text-blue-600">
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Button onClick={syncFromCluster} variant="subtle" size="sm">
           {t.clusterPage.syncFromCluster}
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={() => { setManualMode(true); setManualValue(value) }}
-          className="text-xs text-gray-400 hover:text-gray-600"
+          variant="subtle"
+          size="sm"
         >
           {t.clusterPage.switchToManual}
-        </button>
+        </Button>
       </div>
 
       {/* Command preview */}
       {value && (
-        <div className="mt-1 text-xs text-gray-400 font-mono">
+        <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-500">
           {t.clusterPage.cmdPreview}: --rpc {value}
         </div>
       )}

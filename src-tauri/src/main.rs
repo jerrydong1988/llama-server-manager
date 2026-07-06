@@ -12,7 +12,7 @@ use crate::models::{AppState, WindowState};
 use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder, load_app_data, get_cached_scan};
 use crate::commands::config::{save_config, load_config, save_window_state, load_window_state, resolve_path};
 use crate::commands::server::{generate_server_command, start_server, stop_server, open_browser, test_connection, check_port, get_system_metrics, get_system_health, get_slots, get_metrics};
-use crate::commands::download::{browse_modelscope, download_modelscope_files, browse_huggingface, download_huggingface_files, enqueue_download_queue, remove_download_queue_entry, process_download_queue, cancel_file_download, pause_file_download, cancel_and_cleanup_download, reset_download_for_redownload, check_local_file, persist_download_queue, restore_download_queue, flush_download_manager_state, get_download_resume_policy, set_download_resume_policy, resume_all_downloads, pause_all_downloads, cancel_all_downloads, set_download_concurrency, get_download_concurrency, get_download_manager_snapshot};
+use crate::commands::download::{browse_modelscope, download_modelscope_files, browse_huggingface, download_huggingface_files, enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue, cancel_file_download, pause_file_download, cancel_and_cleanup_download, reset_download_for_redownload, check_local_file, persist_download_queue, restore_download_queue, flush_download_manager_state, get_download_resume_policy, set_download_resume_policy, resume_download_task, resume_all_downloads, pause_all_downloads, cancel_all_downloads, set_download_concurrency, get_download_concurrency, get_download_manager_snapshot};
 use crate::commands::cluster::{scan_workers_tcp, test_worker, get_worker_info, add_worker, remove_worker, get_workers, find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics, stop_local_worker, is_local_host, start_local_rpc, get_local_host};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
@@ -43,6 +43,7 @@ fn main() {
 
     let data_dir = crate::utils::get_data_dir();
     let config_dir = data_dir.join("configs");
+    let initial_config = crate::commands::config::read_config_from_disk(&config_dir);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -108,7 +109,7 @@ fn main() {
                                         instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
                                         default_engine_id: String::new(), running: HashMap::new(),
                                         instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
-                                        engine_names: HashMap::new(), download_resume_policy: "manual".into(),
+                                        engine_names: HashMap::new(), download_resume_policy: "manual".into(), download_max_concurrent: 1,
                                     });
                                 global.running = s.running.lock().unwrap().clone();
                                 global.engine_names = s.engine_names.lock().unwrap().clone();
@@ -223,7 +224,7 @@ fn main() {
             download_queue: Mutex::new(Vec::new()),
             download_active_batches: Mutex::new(std::collections::HashSet::new()),
             download_active_entries: Mutex::new(HashMap::new()),
-            download_max_concurrent: Mutex::new(1),
+            download_max_concurrent: Mutex::new(initial_config.download_max_concurrent.max(1)),
             workers: Mutex::new(Vec::new()),
             usb4_adapters: Mutex::new(Vec::new()),
         })
@@ -235,10 +236,10 @@ fn main() {
             save_config, load_config,
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file,
-            enqueue_download_queue, remove_download_queue_entry, process_download_queue,
+            enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue,
             cancel_file_download, pause_file_download, cancel_and_cleanup_download, reset_download_for_redownload,
             persist_download_queue, restore_download_queue,
-            get_download_resume_policy, set_download_resume_policy, resume_all_downloads,
+            get_download_resume_policy, set_download_resume_policy, resume_download_task, resume_all_downloads,
             pause_all_downloads, cancel_all_downloads,
             set_download_concurrency, get_download_concurrency,
             get_download_manager_snapshot,

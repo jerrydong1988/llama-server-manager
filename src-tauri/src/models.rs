@@ -481,6 +481,8 @@ pub struct GlobalConfig {
     pub engine_names: HashMap<String, String>,
     #[serde(default = "default_download_resume_policy")]
     pub download_resume_policy: String,
+    #[serde(default = "default_download_max_concurrent")]
+    pub download_max_concurrent: usize,
 }
 
 // ── 窗口状态 ─────────────────────────────────────────────────────
@@ -529,6 +531,12 @@ pub struct MsFileEntry {
     pub run_id: Option<String>,
     #[serde(default)]
     pub downloaded: Option<u64>,
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 // ── 下载工件状态 ──────────────────────────────────────────────────
@@ -552,3 +560,4 @@ fn default_true() -> bool { true }
 fn default_fit_ctx() -> u32 { 4096 }
 fn default_max_retries() -> u32 { 3 }
 fn default_download_resume_policy() -> String { "manual".into() }
+fn default_download_max_concurrent() -> usize { 1 }

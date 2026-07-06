@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { useI18n } from '../../i18n'
 
@@ -7,7 +7,7 @@ interface TaskPerfState {
   task_id: number
   n_decoded: number
   tg: number
-  history: [number, number][]  // (n_decoded, tg)
+  history: [number, number][]
   prompt_tokens: number | null
   prompt_time_ms: number | null
   prompt_tps: number | null
@@ -35,71 +35,70 @@ export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
   const [lastCompleted, setLastCompleted] = useState<TaskPerfState | null>(null)
 
   useEffect(() => {
-    const unlisten = listen<PerfUpdate>('perf-update', (event) => {
-      if (event.payload.instanceId !== instanceId) return
+    const unlisten = listen<PerfUpdate>('perf-update', event => {
+      if (event.payload.instanceId !== instanceId) {
+        return
+      }
       setTasks(event.payload.tasks || [])
       if (event.payload.lastCompleted) {
         setLastCompleted(event.payload.lastCompleted)
       }
     })
-    return () => { unlisten.then(fn => fn()) }
+
+    return () => {
+      unlisten.then(fn => fn())
+    }
   }, [instanceId])
 
   if (tasks.length === 0 && !lastCompleted) {
     return (
-      <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mt-4">
-        <div className="text-xs text-gray-500 mb-3">{t.perfBlock.perfTitle}</div>
-        <div className="text-sm text-gray-400 text-center py-6">
-          {t.perfBlock.waitingActivity}
-        </div>
+      <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.35)]">
+        <div className="mb-3 text-xs uppercase tracking-[0.14em] text-slate-500">{t.perfBlock.perfTitle}</div>
+        <div className="py-6 text-center text-sm text-slate-400">{t.perfBlock.waitingActivity}</div>
       </div>
     )
   }
 
   return (
-    <div className="space-y-4 mt-4">
-      {/* Active tasks */}
+    <div className="mt-6 space-y-4">
       {tasks.map(task => (
-        <div key={task.task_id} className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-xs text-gray-500">
+        <div key={task.task_id} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.35)]">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="text-xs text-slate-500">
               {t.perfBlock.task} {task.task_id} · {t.perfBlock.slot} {task.slot_id}
-              <span className="ml-2 inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+              <span className="ml-2 inline-block h-2 w-2 rounded-full bg-green-500 animate-pulse" />
             </div>
-            <div className="text-xs font-mono text-orange-500 font-medium">
-              tg {task.tg.toFixed(1)} t/s
-            </div>
+            <div className="text-xs font-mono font-medium text-orange-400">tg {task.tg.toFixed(1)} t/s</div>
           </div>
 
-          {/* Progress bar */}
           {task.gen_tokens != null && task.gen_tokens > 0 ? (
             <div className="mb-3">
-              <div className="flex justify-between text-xs text-gray-400 mb-1">
-                <span>{t.perfBlock.generated}: {task.n_decoded.toLocaleString()} / ~{task.gen_tokens.toLocaleString()} {t.perfBlock.tokens}</span>
+              <div className="mb-1 flex justify-between text-xs text-slate-400">
+                <span>
+                  {t.perfBlock.generated}: {task.n_decoded.toLocaleString()} / ~{task.gen_tokens.toLocaleString()} {t.perfBlock.tokens}
+                </span>
                 <span>{((task.n_decoded / task.gen_tokens) * 100).toFixed(1)}%</span>
               </div>
-              <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                <div className="h-full rounded-full bg-gradient-to-r from-blue-400 to-blue-600 transition-all duration-700"
-                  style={{ width: `${Math.min(100, (task.n_decoded / task.gen_tokens) * 100)}%` }} />
+              <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-blue-400 to-blue-600 transition-all duration-700"
+                  style={{ width: `${Math.min(100, (task.n_decoded / task.gen_tokens) * 100)}%` }}
+                />
               </div>
             </div>
           ) : (
-            <div className="mb-3 text-xs text-gray-400">
+            <div className="mb-3 text-xs text-slate-400">
               {t.perfBlock.generated}: {task.n_decoded.toLocaleString()} {t.perfBlock.tokens}
             </div>
           )}
 
-          {/* Speed curve */}
-          {task.history.length >= 3 && (
-            <SpeedCurve history={task.history} title={t.perfBlock.speedCurve} />
-          )}
+          {task.history.length >= 3 && <SpeedCurve history={task.history} title={t.perfBlock.speedCurve} />}
 
-          {/* Spec decode */}
           {task.spec_accept_rate != null && (
-            <div className="text-xs text-indigo-500 mt-2">
+            <div className="mt-2 text-xs text-indigo-300">
               {t.perfBlock.specAccept}: {(task.spec_accept_rate * 100).toFixed(1)}%
               {task.spec_accepted != null && task.spec_generated != null && (
-                <span className="text-gray-400 ml-1">
+                <span className="ml-1 text-slate-500">
                   ({task.spec_accepted.toLocaleString()}/{task.spec_generated.toLocaleString()})
                 </span>
               )}
@@ -108,21 +107,22 @@ export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
         </div>
       ))}
 
-      {/* Last completed summary */}
       {lastCompleted && (
-        <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4">
-          <div className="text-xs text-gray-500 mb-3">{t.perfBlock.lastCompleted} · {t.perfBlock.task} {lastCompleted.task_id}</div>
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.35)]">
+          <div className="mb-3 text-xs uppercase tracking-[0.14em] text-slate-500">
+            {t.perfBlock.lastCompleted} · {t.perfBlock.task} {lastCompleted.task_id}
+          </div>
           <div className="grid grid-cols-2 gap-2 text-xs">
             {lastCompleted.prompt_tokens != null && (
               <>
                 <Stat label={t.perfBlock.prompt} value={`${lastCompleted.prompt_tokens.toLocaleString()} ${t.perfBlock.tokens}`} />
-                <Stat label={t.perfBlock.promptSpeed} value={`${lastCompleted.prompt_tps?.toFixed(1) || '—'} t/s`} color="text-amber-500" />
+                <Stat label={t.perfBlock.promptSpeed} value={`${lastCompleted.prompt_tps?.toFixed(1) || '--'} t/s`} color="text-amber-300" />
               </>
             )}
             {lastCompleted.gen_tokens != null && (
               <>
                 <Stat label={t.perfBlock.generated} value={`${lastCompleted.gen_tokens.toLocaleString()} ${t.perfBlock.tokens}`} />
-                <Stat label={t.perfBlock.genSpeed} value={`${lastCompleted.gen_tps?.toFixed(1) || '—'} t/s`} color="text-orange-500" />
+                <Stat label={t.perfBlock.genSpeed} value={`${lastCompleted.gen_tps?.toFixed(1) || '--'} t/s`} color="text-orange-300" />
               </>
             )}
             {lastCompleted.total_tokens != null && (
@@ -132,7 +132,7 @@ export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
               <Stat label={t.perfBlock.totalTime} value={fmtMs(lastCompleted.total_time_ms)} />
             )}
             {lastCompleted.spec_accept_rate != null && (
-              <Stat label={t.perfBlock.specAccept} value={`${(lastCompleted.spec_accept_rate * 100).toFixed(1)}%`} color="text-indigo-500" />
+              <Stat label={t.perfBlock.specAccept} value={`${(lastCompleted.spec_accept_rate * 100).toFixed(1)}%`} color="text-indigo-300" />
             )}
             {lastCompleted.spec_gen_time_ms != null && (
               <Stat label={t.perfBlock.specGenTime} value={fmtMs(lastCompleted.spec_gen_time_ms)} />
@@ -145,28 +145,31 @@ export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
 }
 
 function SpeedCurve({ history, title }: { history: [number, number][]; title: string }) {
-  const width = 320; const height = 70
+  const width = 320
+  const height = 70
   const pad = { top: 8, right: 4, bottom: 14, left: 4 }
-  const pw = width - pad.left - pad.right; const ph = height - pad.top - pad.bottom
+  const plotWidth = width - pad.left - pad.right
+  const plotHeight = height - pad.top - pad.bottom
 
-  const tgs = history.map(h => h[1])
-  const min = Math.min(...tgs); const max = Math.max(...tgs)
+  const speeds = history.map(item => item[1])
+  const min = Math.min(...speeds)
+  const max = Math.max(...speeds)
   const range = max - min || 1
 
-  const points = history.map(([n, tg]) => {
-    const x = pad.left + (n / history[history.length - 1][0]) * pw
-    const y = pad.top + ph - ((tg - min) / range) * ph
+  const points = history.map(([decoded, speed]) => {
+    const x = pad.left + (decoded / history[history.length - 1][0]) * plotWidth
+    const y = pad.top + plotHeight - ((speed - min) / range) * plotHeight
     return `${x},${y}`
   }).join(' ')
 
   return (
     <div>
-      <div className="text-xs text-gray-500 mb-1">{title}</div>
+      <div className="mb-1 text-xs text-slate-500">{title}</div>
       <svg viewBox={`0 0 ${width} ${height}`} className="w-full" style={{ maxWidth: width }}>
-        <line x1={pad.left} y1={pad.top + ph} x2={pad.left + pw} y2={pad.top + ph} stroke="#e5e7eb" strokeWidth="0.5" className="dark:stroke-gray-700" />
+        <line x1={pad.left} y1={pad.top + plotHeight} x2={pad.left + plotWidth} y2={pad.top + plotHeight} stroke="#334155" strokeWidth="0.5" />
         <polyline points={points} fill="none" stroke="#f97316" strokeWidth="1.5" strokeLinejoin="round" />
-        <text x={pad.left} y={pad.top + 3} className="fill-gray-400" fontSize="8">{max.toFixed(0)}</text>
-        <text x={pad.left} y={height - 2} className="fill-gray-400" fontSize="8">{min.toFixed(0)}</text>
+        <text x={pad.left} y={pad.top + 3} className="fill-slate-500" fontSize="8">{max.toFixed(0)}</text>
+        <text x={pad.left} y={height - 2} className="fill-slate-500" fontSize="8">{min.toFixed(0)}</text>
       </svg>
     </div>
   )
@@ -174,9 +177,9 @@ function SpeedCurve({ history, title }: { history: [number, number][]; title: st
 
 function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="text-center">
-      <div className="text-gray-400">{label}</div>
-      <div className={`font-bold ${color || ''}`}>{value}</div>
+    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-center">
+      <div className="text-slate-500">{label}</div>
+      <div className={`font-bold text-slate-100 ${color || ''}`}>{value}</div>
     </div>
   )
 }

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, createContext, useContext } from 'react'
 import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
 import type { InstanceConfig } from '../../store'
+import { SelectInput, TextInput, surfaceClassName } from '../ui'
 
 export const cacheTypes = ['', 'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq4_nl', 'q5_0', 'q5_1']
 export const specTypes = ['', 'none', 'draft-mtp', 'draft-simple', 'draft-eagle3', 'draft-dflash', 'ngram-cache', 'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod']
@@ -31,7 +32,27 @@ function useSearchScroll(match: boolean) {
   return ref
 }
 
-export const Section = ({ title, children, disabled, onToggle, toggled, defaultOpen, searchQuery }: { title: string; children: React.ReactNode; disabled?: boolean; onToggle?: (v: boolean) => void; toggled?: boolean; defaultOpen?: boolean; searchQuery?: string }) => {
+export const Section = ({
+  title,
+  children,
+  disabled,
+  onToggle,
+  toggled,
+  defaultOpen,
+  searchQuery,
+  id,
+  summary,
+}: {
+  title: string
+  children: React.ReactNode
+  disabled?: boolean
+  onToggle?: (v: boolean) => void
+  toggled?: boolean
+  defaultOpen?: boolean
+  searchQuery?: string
+  id?: string
+  summary?: React.ReactNode
+}) => {
   const [open, setOpen] = useState(defaultOpen || false)
   const userToggled = useRef(false)
   const shouldOpen = !!(searchQuery && title.toLowerCase().includes(searchQuery.toLowerCase()))
@@ -47,24 +68,25 @@ export const Section = ({ title, children, disabled, onToggle, toggled, defaultO
   // Search active: always expand to reveal matching fields
   const isOpen = hasSearch || (!userToggled.current && shouldOpen) || open
   return (
-    <div className={`border dark:border-gray-700 rounded-lg overflow-hidden`}>
-      <button onClick={handleToggle} className="w-full flex items-center gap-2 px-4 py-2.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-left dark:text-gray-200">
-        {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+    <section id={id} className={`${surfaceClassName} scroll-mt-6 overflow-hidden p-0`}>
+      <button onClick={handleToggle} className="flex w-full items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-4 py-3 text-left text-slate-100 transition hover:bg-slate-900">
+        {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />}
         <span className="text-sm font-medium">{title}</span>
-        {disabled && <span className="text-xs text-gray-400 ml-1">{'\uD83D\uDED1'}</span>}
+        {disabled && <span className="ml-1 text-xs text-slate-500">{'\uD83D\uDED1'}</span>}
+        {summary && <span className="ml-auto text-xs text-slate-500">{summary}</span>}
         {onToggle !== undefined && (
-          <label className="ml-auto flex items-center gap-1 cursor-pointer shrink-0" onClick={e => e.stopPropagation()}>
-            <span className="text-xs text-gray-400">{toggled ? 'On' : 'Off'}</span>
+          <label className={`${summary ? 'ml-2' : 'ml-auto'} flex items-center gap-1 cursor-pointer shrink-0`} onClick={e => e.stopPropagation()}>
+            <span className="text-xs text-slate-500">{toggled ? 'On' : 'Off'}</span>
             <input type="checkbox" checked={toggled} onChange={e => { e.stopPropagation(); onToggle(e.target.checked) }} className="w-3.5 h-3.5 rounded" />
           </label>
         )}
       </button>
       {isOpen && (
         <SearchCtx.Provider value={searchQuery || ''}>
-          <div className={`px-4 py-3 space-y-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>
+          <div className={`space-y-4 px-4 py-4 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>{children}</div>
         </SearchCtx.Provider>
       )}
-    </div>
+    </section>
   )
 }
 
@@ -73,8 +95,8 @@ export const Input = ({ label, value, onChange, placeholder, type, title, disabl
   const ref = useSearchScroll(match)
   return (
   <div title={title} ref={ref}>
-    <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <input type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400 flash-match' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
+    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : active ? 'text-emerald-300' : 'text-slate-400'}`}>{label}</label>
+    <TextInput type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`h-10 ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`} />
   </div>
 )}
 
@@ -83,8 +105,8 @@ export const Num = ({ label, value, onChange, min, max, step, title, disabled, a
   const ref = useSearchScroll(match)
   return (
   <div title={title} ref={ref}>
-    <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <input type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`w-full px-3 py-1.5 text-sm border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400 flash-match' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`} />
+    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : active ? 'text-emerald-300' : 'text-slate-400'}`}>{label}</label>
+    <TextInput type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`h-10 ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`} />
   </div>
 )}
 
@@ -106,11 +128,11 @@ export const Switch = ({ label, value, onChange, title, disabled, active }: { la
       aria-checked={value}
       onClick={() => onChange(!value)}
       disabled={disabled}
-      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${value ? 'bg-blue-600' : 'bg-gray-300 dark:bg-gray-600'}`}
+      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${value ? 'bg-blue-600' : 'bg-slate-700'}`}
     >
       <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
     </button>
-    <span className={`text-sm ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : ''}`}>{label}</span>
+    <span className={`text-sm ${match ? 'text-amber-300' : active ? 'text-emerald-300' : 'text-slate-200'}`}>{label}</span>
   </label>
 )}
 
@@ -119,10 +141,10 @@ export const Select = ({ label, value, onChange, options, title, disabled, defau
   const ref = useSearchScroll(match)
   return (
   <div title={title} ref={ref}>
-    <label className={`block text-xs font-medium mb-1 ${match ? 'text-amber-600 dark:text-amber-400' : active ? 'text-green-600 dark:text-green-400' : 'text-gray-500'}`}>{label}</label>
-    <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`select-custom w-full pl-3 pr-8 py-1.5 text-sm text-gray-900 dark:text-gray-100 border dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 ${match ? 'ring-2 ring-amber-400 border-amber-400 flash-match' : ''} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
+    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : active ? 'text-emerald-300' : 'text-slate-400'}`}>{label}</label>
+    <SelectInput value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`h-10 w-full ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`}>
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
-    </select>
+    </SelectInput>
   </div>
 )}
 
@@ -133,25 +155,42 @@ export const ResetButton = ({ onClick, title }: { onClick: () => void; title?: s
   <button
     onClick={e => { e.stopPropagation(); onClick() }}
     title={title || 'Reset to defaults'}
-    className="ml-auto p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30 text-gray-400 hover:text-red-500 transition-colors shrink-0"
+    className="ml-auto shrink-0 rounded-lg p-1 text-slate-500 transition hover:bg-red-500/10 hover:text-red-300"
   >
     <RotateCcw className="w-3.5 h-3.5" />
   </button>
 )
 
 // Collapsible sub-group card (chevron toggle + optional reset button)
-export const CollapsibleGroup = ({ title, defaultOpen, onReset, children, disabled }: { title: string; defaultOpen?: boolean; onReset?: () => void; children: React.ReactNode; disabled?: boolean }) => {
+export const CollapsibleGroup = ({
+  title,
+  defaultOpen,
+  onReset,
+  children,
+  disabled,
+  id,
+  summary,
+}: {
+  title: string
+  defaultOpen?: boolean
+  onReset?: () => void
+  children: React.ReactNode
+  disabled?: boolean
+  id?: string
+  summary?: React.ReactNode
+}) => {
   const q = useSearchQuery()
   const [open, setOpen] = useState(defaultOpen || false)
   const hasSearch = !!q
   return (
-    <div className="border dark:border-gray-600 rounded-lg overflow-hidden">
-      <button onClick={() => setOpen(!open)} className="w-full flex items-center gap-2 px-3 py-2 bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors text-left dark:text-gray-200">
-        {(hasSearch || open) ? <ChevronDown className="w-3.5 h-3.5 text-gray-400 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />}
+    <div id={id} className="scroll-mt-6 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/50">
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2.5 text-left text-slate-200 transition hover:bg-slate-900">
+        {(hasSearch || open) ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
         <span className="text-xs font-medium">{title}</span>
+        {summary && <span className="ml-auto text-xs text-slate-500">{summary}</span>}
         {onReset && <ResetButton onClick={onReset} />}
       </button>
-      {(hasSearch || open) && <div className={`px-3 py-3 ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>{children}</div>}
+      {(hasSearch || open) && <div className={`px-3 py-3 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>{children}</div>}
     </div>
   )
 }

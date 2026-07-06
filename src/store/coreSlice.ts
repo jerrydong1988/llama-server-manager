@@ -1,0 +1,112 @@
+import { invoke } from '@tauri-apps/api/core'
+import type { AppStoreGet, AppStoreSet } from './helpers'
+import type { AppState, EngineInfo, ModelInfo } from './types'
+
+export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
+  AppState,
+  | 'setSysMetrics'
+  | 'setModels'
+  | 'setEngines'
+  | 'setModelDirs'
+  | 'setEngineDirs'
+  | 'setDefaultEngineId'
+  | 'setActiveConfigInstanceId'
+  | 'setActiveTab'
+  | 'setDarkMode'
+  | 'loadInitialData'
+  | 'scanModels'
+  | 'deleteModelFile'
+  | 'openModelFolder'
+  | 'readGgufMetadata'
+  | 'scanEngines'
+  | 'deleteEngine'
+  | 'renameEngine'
+  | 'openEngineFolder'
+> {
+  return {
+    setSysMetrics: (metrics) => set({ sysMetrics: metrics }),
+    setModels: (models) => set({ models }),
+    setEngines: (engines) => set({ engines }),
+    setModelDirs: (dirs) => {
+      set({ modelDirs: dirs })
+      get().saveConfig()
+    },
+    setEngineDirs: (dirs) => {
+      set({ engineDirs: dirs })
+      get().saveConfig()
+    },
+    setDefaultEngineId: (id) => {
+      set({ defaultEngineId: id })
+      get().saveConfig()
+    },
+    setActiveConfigInstanceId: (id) => set({ activeConfigInstanceId: id }),
+    setActiveTab: (tab) => {
+      set({ activeTab: tab })
+      try {
+        localStorage.setItem('lastTab', tab)
+      } catch {}
+    },
+    setDarkMode: (darkMode) => {
+      set({ darkMode })
+      document.documentElement.classList.toggle('dark', darkMode)
+      get().saveConfig()
+    },
+    loadInitialData: async () => {
+      set({ isLoading: true })
+      try {
+        const [models, engines] = await Promise.all([
+          invoke<ModelInfo[]>('get_models').catch(() => [] as ModelInfo[]),
+          invoke<EngineInfo[]>('get_engines').catch(() => [] as EngineInfo[]),
+        ])
+        set({ models, engines, isLoading: false })
+      } catch {
+        set({ isLoading: false })
+      }
+    },
+    scanModels: async (paths) => {
+      set({ isLoading: true })
+      try {
+        const models = await invoke<ModelInfo[]>('scan_models', { paths })
+        set({ models, modelDirs: paths, isLoading: false })
+        return null
+      } catch (error: any) {
+        console.error('scan_models error:', error)
+        set({ isLoading: false })
+        return error?.message || error?.toString() || 'Scan failed'
+      }
+    },
+    deleteModelFile: async (path) => {
+      await invoke('delete_model_file', { path })
+      set((state) => ({ models: state.models.filter((model) => model.path !== path) }))
+    },
+    openModelFolder: async (path) => {
+      await invoke('open_model_folder', { path })
+    },
+    readGgufMetadata: async (path) => invoke<[string | null, number | null, string | null]>('read_gguf_metadata', { path }),
+    scanEngines: async (paths) => {
+      set({ isLoading: true })
+      try {
+        const engines = await invoke<EngineInfo[]>('scan_engines', { paths })
+        set({ engines, engineDirs: paths, isLoading: false })
+      } catch (error) {
+        console.error('scan_engines error:', error)
+        set({ isLoading: false })
+      }
+    },
+    deleteEngine: async (id) => {
+      await invoke('delete_engine', { id })
+      set((state) => ({ engines: state.engines.filter((engine) => engine.id !== id) }))
+    },
+    renameEngine: (id, name) => {
+      invoke('rename_engine', { id, name }).catch(() => {})
+      set((state) => ({
+        engines: state.engines.map((engine) => (
+          engine.id === id ? { ...engine, name, custom_name: name } : engine
+        )),
+      }))
+    },
+    openEngineFolder: async (dir) => {
+      await invoke('open_engine_folder', { dir })
+    },
+  }
+}

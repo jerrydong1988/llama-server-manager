@@ -112,6 +112,9 @@ export interface MsFileEntry {
   task_id?: string
   run_id?: string
   downloaded?: number
+  version?: number
+  status?: string
+  error?: string
 }
 
 export interface WorkerDevice {
@@ -265,7 +268,8 @@ export interface AppState {
   downloadHuggingfaceFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>
   cancelFileDownload: (taskId: string, runId?: string) => Promise<void>
   pauseFileDownload: (taskId: string, runId?: string) => Promise<void>
-  cancelAndCleanupDownload: (taskId: string, fileName: string, filePath: string, runId?: string) => Promise<void>
+  cancelAndCleanupDownload: (taskId: string, fileName: string, filePath: string, runId?: string, version?: number) => Promise<void>
+  resumeDownloadTask: (taskId: string) => Promise<void>
   setDownloadTasks: (tasks: Record<string, DownloadProgress>) => void
   addToDownloadQueue: (entry: { repoId: string; source: 'modelscope' | 'huggingface'; files: MsFileEntry[]; saveDir: string }) => void
   removeFromDownloadQueue: (id: string) => void
