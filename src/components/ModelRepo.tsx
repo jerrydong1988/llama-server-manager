@@ -5,7 +5,7 @@ import { useAppStore, type ModelInfo } from '../store'
 import { useI18n } from '../i18n'
 import { normalizePath, pathJoin } from '../utils/path'
 import { formatSize } from '../utils/format'
-import { Button, InsetSurface, MetricCard, Surface, TextInput } from './ui'
+import { Button, InsetSurface, MetricCard, PathText, Surface, TextInput } from './ui'
 
 interface TreeNode {
   name: string
@@ -333,7 +333,7 @@ const ModelRepo = () => {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
+    <div className="space-y-5">
       <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
@@ -391,7 +391,7 @@ const ModelRepo = () => {
         ))}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[280px,minmax(0,1.45fr),280px]">
+      <div className="grid gap-6 2xl:grid-cols-[280px,minmax(0,1.45fr),280px]">
         <Surface as="aside" className="p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
@@ -497,7 +497,7 @@ const ModelRepo = () => {
                     <p className="truncate text-sm font-medium text-slate-100" title={selectedModel.name}>
                       {selectedModel.name}
                     </p>
-                    <p className="mt-1 text-xs text-slate-500 break-all">{selectedModel.path}</p>
+                    <PathText value={selectedModel.path} maxLength={58} className="mt-1 text-slate-500" />
                   </div>
                 </div>
               </InsetSurface>

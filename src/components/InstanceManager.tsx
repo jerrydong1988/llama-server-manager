@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil, Search } from 'lucide-react'
+import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { formatStartupCommand } from '../store'
 import { invoke } from '@tauri-apps/api/core'
@@ -138,6 +138,7 @@ const InstanceManager = () => {
     moveUp: lang === 'zh-CN' ? '\u4e0a\u79fb' : 'Move up',
     moveDown: lang === 'zh-CN' ? '\u4e0b\u79fb' : 'Move down',
     checking: lang === 'zh-CN' ? '\u6d4b\u8bd5\u4e2d...' : 'Checking...',
+    more: lang === 'zh-CN' ? '\u66f4\u591a' : 'More',
   }
 
   const schedulePortCheck = (port: number) => {
@@ -264,12 +265,14 @@ const InstanceManager = () => {
     const status = testResults[instId]
     if (!status) return null
     if (status === 'checking') {
-      return <span className="text-xs text-blue-500">{labels.checking}</span>
+      return <span className="max-w-[180px] truncate text-xs text-blue-500">{labels.checking}</span>
     }
     if (status.startsWith('ok:')) {
-      return <span className="text-xs text-emerald-500">{status.slice(3)}</span>
+      const text = status.slice(3)
+      return <span className="max-w-[180px] truncate text-xs text-emerald-500" title={text}>{text}</span>
     }
-    return <span className="text-xs text-rose-500">{status.slice(6)}</span>
+    const text = status.slice(6)
+    return <span className="max-w-[180px] truncate text-xs text-rose-500" title={text}>{text}</span>
   }
 
   return (
@@ -365,27 +368,37 @@ const InstanceManager = () => {
           <EmptyState icon={<Play className="h-10 w-10" />} title={t.instance.noInstances} className="rounded-none border-0 shadow-none" />
         ) : (
           <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-950/60">
-                <tr className="text-left text-slate-400">
-                  <th className="px-5 py-3 font-medium">{labels.name}</th>
-                  <th className="px-5 py-3 font-medium">{t.instance.model}</th>
-                  <th className="px-5 py-3 font-medium">{t.instance.engine}</th>
-                  <th className="px-5 py-3 font-medium">{labels.status}</th>
-                  <th className="px-5 py-3 font-medium">{labels.health}</th>
-                  <th className="px-5 py-3 font-medium">{t.instance.port}</th>
-                  <th className="px-5 py-3 font-medium">{labels.uptime}</th>
-                  <th className="px-5 py-3 font-medium">{labels.actions}</th>
+            <table className="min-w-[1210px] table-fixed text-sm">
+              <colgroup>
+                <col className="w-[220px]" />
+                <col className="w-[200px]" />
+                <col className="w-[140px]" />
+                <col className="w-[90px]" />
+                <col className="w-[95px]" />
+                <col className="w-[65px]" />
+                <col className="w-[80px]" />
+                <col className="w-[320px]" />
+              </colgroup>
+              <thead className="bg-slate-950/70">
+                <tr className="h-10 text-left text-[11px] uppercase tracking-wide text-slate-500">
+                  <th className="px-4 font-semibold">{labels.name}</th>
+                  <th className="px-4 font-semibold">{t.instance.model}</th>
+                  <th className="px-4 font-semibold">{t.instance.engine}</th>
+                  <th className="px-4 font-semibold">{labels.status}</th>
+                  <th className="px-4 font-semibold">{labels.health}</th>
+                  <th className="px-4 font-semibold">{t.instance.port}</th>
+                  <th className="px-4 font-semibold">{labels.uptime}</th>
+                  <th className="px-3 text-right font-semibold">{labels.actions}</th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                 {filteredInstances.map((inst, index) => (
-                  <tr key={inst.id} className="border-t border-slate-200 align-top dark:border-slate-800">
-                    <td className="px-5 py-4">
-                      <div className="flex items-start gap-3">
-                        <div className={`mt-2 h-2.5 w-2.5 rounded-full ${inst.status === 'running' ? 'bg-emerald-500' : inst.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'}`} />
+                  <tr key={inst.id} className="h-[72px] align-middle transition-colors hover:bg-slate-950/35">
+                    <td className="px-3 py-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${inst.status === 'running' ? 'bg-emerald-500' : inst.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'}`} />
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
+                          <div className="flex min-w-0 items-center gap-2">
                             {editingId === inst.id ? (
                               <input
                                 type="text"
@@ -403,15 +416,16 @@ const InstanceManager = () => {
                                   commitRename(inst)
                                 }}
                                 autoFocus
-                                className="w-48 border-b border-blue-500 bg-transparent px-1 text-sm font-medium text-slate-900 outline-none dark:text-slate-100"
+                                className="min-w-0 flex-1 border-b border-blue-500 bg-transparent px-1 text-sm font-medium text-slate-900 outline-none dark:text-slate-100"
                               />
                             ) : (
                               <>
-                                <div className="truncate font-medium text-slate-900 dark:text-slate-100">{inst.name}</div>
+                                <div className="min-w-0 truncate font-medium text-slate-900 dark:text-slate-100" title={inst.name}>{inst.name}</div>
                                 <Button
                                   onClick={() => { setEditingId(inst.id); setEditName(inst.name) }}
                                   variant="subtle"
                                   size="icon"
+                                  className="h-7 w-7 shrink-0 rounded-md"
                                   title={labels.rename}
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
@@ -429,44 +443,51 @@ const InstanceManager = () => {
                               <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ${inst.config.auto_start ? 'translate-x-4' : 'translate-x-0'}`} />
                             </button>
                           </div>
-                          <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            {inst.config.host}:{inst.config.port}
+                          <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span className="shrink-0 tabular-nums">{inst.config.host}:{inst.config.port}</span>
+                            {renderTestResult(inst.id)}
                           </div>
-                          <div className="mt-2">{renderTestResult(inst.id)}</div>
                         </div>
                       </div>
                     </td>
-                    <td className="px-5 py-4">
-                      <div className="max-w-[280px] truncate text-slate-700 dark:text-slate-200" title={inst.config.model_path}>{inst.model}</div>
+                    <td className="px-4 py-3">
+                      <div className="min-w-0 truncate text-slate-700 dark:text-slate-200" title={inst.config.model_path}>{inst.model}</div>
                     </td>
-                    <td className="px-5 py-4">
+                    <td className="px-4 py-3">
                       <Button
                         onClick={() => setEnginePickerForId(inst.id)}
                         size="sm"
+                        className="h-8 max-w-full justify-start px-2"
+                        title={engineNameFor(inst)}
                       >
-                        {engineNameFor(inst)}
+                        <span className="min-w-0 truncate">{engineNameFor(inst)}</span>
                       </Button>
                     </td>
-                    <td className="px-5 py-4">
+                    <td className="px-4 py-3">
                       <Badge tone={inst.status === 'running' ? 'emerald' : inst.status === 'error' ? 'red' : 'slate'}>
                         {statusText(inst)}
                       </Badge>
                     </td>
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-2">
-                        <span className={`h-2.5 w-2.5 rounded-full ${healthDotClass(inst)}`} />
-                        <span className="text-slate-700 dark:text-slate-200">{healthText(inst)}</span>
+                    <td className="px-4 py-3">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${healthDotClass(inst)}`} />
+                        <span className="truncate text-slate-700 dark:text-slate-200">{healthText(inst)}</span>
                       </div>
                     </td>
-                    <td className="px-5 py-4 text-slate-700 dark:text-slate-200">{inst.config.port}</td>
-                    <td className="px-5 py-4 text-slate-700 dark:text-slate-200">{inst.status === 'running' ? `${t.instance.uptime} ${formatUptime(inst.startTime)}` : '--'}</td>
-                    <td className="px-5 py-4">
-                      <div className="flex flex-wrap items-center gap-2">
+                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">
+                      <span className="tabular-nums">{inst.config.port}</span>
+                    </td>
+                    <td className="px-4 py-3 text-slate-700 dark:text-slate-200">
+                      <span className="whitespace-nowrap tabular-nums">{inst.status === 'running' ? formatUptime(inst.startTime) : '--'}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-1.5 whitespace-nowrap">
                         {inst.status !== 'running' ? (
                           <Button
                             onClick={() => startInstance(inst.id)}
                             variant="success"
                             size="sm"
+                            className="h-8 w-[78px]"
                             icon={<Play className="h-3.5 w-3.5" />}
                           >
                             <span>{t.instance.start}</span>
@@ -476,78 +497,91 @@ const InstanceManager = () => {
                             onClick={() => stopInstance(inst.id)}
                             variant="danger"
                             size="sm"
+                            className="h-8 w-[78px]"
                             icon={<Square className="h-3.5 w-3.5" />}
                           >
                             <span>{t.instance.stop}</span>
                           </Button>
                         )}
 
-                        {inst.status === 'running' && (
-                          <>
-                            <Button
-                              onClick={() => openBrowser(inst.config.host, inst.config.port)}
-                              variant="subtle"
-                              size="icon"
-                              title={t.instance.openBrowser}
-                            >
-                              <Globe className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              onClick={() => handleTestConnection(inst)}
-                              variant="subtle"
-                              size="icon"
-                              title={t.instance.testConnection}
-                            >
-                              <Wifi className="h-4 w-4" />
-                            </Button>
-                          </>
-                        )}
-
-                        <Button
-                          onClick={() => handleShowCommand(inst.id)}
-                          variant="subtle"
-                          size="icon"
-                          title={t.instance.genCommand}
-                        >
-                          <Terminal className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          onClick={() => { setActiveConfigInstanceId(inst.id); setActiveTab('config') }}
-                          variant="subtle"
-                          size="icon"
-                          title={t.instance.configParams}
-                          data-guide="instance-config"
-                        >
-                          <Settings className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          onClick={() => handleDelete(inst.id)}
-                          variant="danger"
-                          size="icon"
-                          title={t.instance.delete}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-950/35 p-0.5">
                           <Button
-                            onClick={() => moveInstance(inst.id, 'up')}
-                            disabled={index === 0}
+                            onClick={() => openBrowser(inst.config.host, inst.config.port)}
+                            disabled={inst.status !== 'running'}
                             variant="subtle"
                             size="icon"
-                            title={labels.moveUp}
+                            className="h-8 w-8 rounded-md"
+                            title={t.instance.openBrowser}
                           >
-                            <ArrowUp className="h-3.5 w-3.5" />
+                            <Globe className="h-4 w-4" />
                           </Button>
                           <Button
-                            onClick={() => moveInstance(inst.id, 'down')}
-                            disabled={index === filteredInstances.length - 1}
+                            onClick={() => handleTestConnection(inst)}
+                            disabled={inst.status !== 'running'}
                             variant="subtle"
                             size="icon"
-                            title={labels.moveDown}
+                            className="h-8 w-8 rounded-md"
+                            title={t.instance.testConnection}
                           >
-                            <ArrowDown className="h-3.5 w-3.5" />
+                            <Wifi className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            onClick={() => handleShowCommand(inst.id)}
+                            variant="subtle"
+                            size="icon"
+                            className="h-8 w-8 rounded-md"
+                            title={t.instance.genCommand}
+                          >
+                            <Terminal className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            onClick={() => { setActiveConfigInstanceId(inst.id); setActiveTab('config') }}
+                            variant="subtle"
+                            size="icon"
+                            className="h-8 w-8 rounded-md"
+                            title={t.instance.configParams}
+                            data-guide="instance-config"
+                          >
+                            <Settings className="h-4 w-4" />
                           </Button>
                         </div>
+                        <details className="group relative">
+                          <summary
+                            className="flex h-8 w-8 cursor-pointer list-none items-center justify-center rounded-lg border border-transparent text-slate-400 transition hover:bg-slate-800 hover:text-white [&::-webkit-details-marker]:hidden"
+                            title={labels.more}
+                            aria-label={labels.more}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </summary>
+                          <div className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-lg border border-slate-800 bg-slate-950 py-1 text-sm shadow-xl">
+                            <button
+                              type="button"
+                              onClick={() => moveInstance(inst.id, 'up')}
+                              disabled={index === 0}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
+                            >
+                              <ArrowUp className="h-3.5 w-3.5" />
+                              <span>{labels.moveUp}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => moveInstance(inst.id, 'down')}
+                              disabled={index === filteredInstances.length - 1}
+                              className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-45"
+                            >
+                              <ArrowDown className="h-3.5 w-3.5" />
+                              <span>{labels.moveDown}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(inst.id)}
+                              className="flex w-full items-center gap-2 border-t border-slate-800 px-3 py-2 text-left text-red-300 hover:bg-red-500/10"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span>{t.instance.delete}</span>
+                            </button>
+                          </div>
+                        </details>
                       </div>
                     </td>
                   </tr>

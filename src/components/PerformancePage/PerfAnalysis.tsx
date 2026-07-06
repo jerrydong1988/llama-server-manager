@@ -52,7 +52,7 @@ export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
 
   if (tasks.length === 0 && !lastCompleted) {
     return (
-      <div className="mt-6 rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.35)]">
+      <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-5">
         <div className="mb-3 text-xs uppercase tracking-[0.14em] text-slate-500">{t.perfBlock.perfTitle}</div>
         <div className="py-6 text-center text-sm text-slate-400">{t.perfBlock.waitingActivity}</div>
       </div>
@@ -60,9 +60,9 @@ export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
   }
 
   return (
-    <div className="mt-6 space-y-4">
+    <div className="space-y-4">
       {tasks.map(task => (
-        <div key={task.task_id} className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.35)]">
+        <div key={task.task_id} className="rounded-lg border border-slate-800 bg-slate-900/70 p-5">
           <div className="mb-3 flex items-center justify-between">
             <div className="text-xs text-slate-500">
               {t.perfBlock.task} {task.task_id} · {t.perfBlock.slot} {task.slot_id}
@@ -108,7 +108,7 @@ export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
       ))}
 
       {lastCompleted && (
-        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-[0_20px_60px_rgba(15,23,42,0.35)]">
+        <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-5">
           <div className="mb-3 text-xs uppercase tracking-[0.14em] text-slate-500">
             {t.perfBlock.lastCompleted} · {t.perfBlock.task} {lastCompleted.task_id}
           </div>
@@ -177,7 +177,7 @@ function SpeedCurve({ history, title }: { history: [number, number][]; title: st
 
 function Stat({ label, value, color }: { label: string; value: string; color?: string }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 text-center">
+    <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-center">
       <div className="text-slate-500">{label}</div>
       <div className={`font-bold text-slate-100 ${color || ''}`}>{value}</div>
     </div>

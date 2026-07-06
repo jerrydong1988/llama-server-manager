@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense, Component, ReactNode } from 'react'
-import { Server, Database, Cpu, Terminal, Sun, Moon, Zap, Settings, Activity, Network, Download, BarChart3, BookOpen, ArrowUpRight, Languages } from 'lucide-react'
+import { Server, Database, Cpu, Terminal, Settings, Activity, Network, Download, BarChart3, BookOpen } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
 import ModelRepo from './components/ModelRepo'
@@ -16,7 +16,8 @@ import { _startupTimings } from './store'
 import { useAppStore } from './store'
 import type { WorkerInfo } from './store'
 import { I18nProvider, useI18n } from './i18n'
-import { Badge, Button } from './components/ui'
+import { Button } from './components/ui'
+import { AppShell, type ShellStatusChip } from './components/shell/AppShell'
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -241,14 +242,12 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const activeNavItem = navigation.find(item => item.id === activeTab) || navigation[0]
-  const ActivePageIcon = activeNavItem?.icon || BarChart3
   const layoutWide = activeTab === 'logs' || activeTab === 'guide'
-  const statusChips = [
+  const statusChips: ShellStatusChip[] = [
     { label: t.nav.up || 'up', value: upCount, tone: 'emerald' },
     { label: t.nav.down || 'down', value: downCount, tone: 'slate' },
     { label: t.nav.downloads || 'Downloads', value: activeDownloadCount, tone: 'blue' },
-  ] as const
+  ]
   const pageContext: Record<string, string> = {
     dashboard: 'System overview and current llama-server activity',
     'model-repo': 'Browse local and remote model assets',
@@ -261,182 +260,49 @@ function AppInner() {
     logs: 'Runtime logs and diagnostic output',
     guide: 'Reference material and operating notes',
   }
+  const handleAutoStartChange = (next: boolean) => {
+    setAutoStartEnabled(next)
+    ;(async () => {
+      try {
+        if (next) await invoke('enable_autostart')
+        else await invoke('disable_autostart')
+      } catch {
+        setAutoStartEnabled(!next)
+      }
+    })()
+  }
 
   return (
-    <div className={darkMode ? 'dark' : ''}>
-      <div className="flex h-screen flex-col overflow-hidden bg-slate-100 text-slate-900 dark:bg-slate-950 dark:text-slate-100 lg:flex-row">
-        <aside className="flex shrink-0 flex-col border-b border-slate-200 bg-white/90 px-4 py-4 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90 lg:h-screen lg:w-[272px] lg:border-b-0 lg:border-r">
-          <div className="mb-4 flex items-center gap-3 px-2 lg:mb-5">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-blue-600 text-white shadow-sm shadow-blue-600/25">
-              <Zap className="h-5 w-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold">{t.common.appTitle}</div>
-              <div className="text-xs text-slate-500 dark:text-slate-400">v{version}</div>
-            </div>
-          </div>
-
-          <nav className="overflow-x-auto overflow-y-hidden pb-1 lg:flex-1 lg:overflow-y-auto lg:pr-1">
-            <div className="flex min-w-max gap-1 lg:block lg:min-w-0 lg:space-y-1">
-              {navigation.map(item => {
-                const Icon = item.icon
-                const active = activeTab === item.id
-                return (
-                  <div key={item.id}>
-                    {item.separator && <div className="mx-2 h-9 border-l border-slate-200 dark:border-slate-800 lg:my-3 lg:h-auto lg:border-l-0 lg:border-t" />}
-                    <button
-                      onClick={() => setActiveTab(item.id)}
-                      className={`flex w-full items-center gap-3 whitespace-nowrap rounded-lg px-3 py-2.5 text-sm transition ${
-                        active
-                          ? 'bg-slate-900 text-white shadow-sm dark:bg-slate-100 dark:text-slate-900'
-                          : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white'
-                      }`}
-                    >
-                      <Icon className="h-4 w-4 shrink-0" />
-                      <span className="min-w-0 flex-1 truncate text-left">{item.name}</span>
-                      {item.badge != null && item.badge > 0 && (
-                        <span
-                          className={`rounded-md px-1.5 py-0.5 text-[11px] font-medium ${
-                            active
-                              ? 'bg-white/15 text-white dark:bg-slate-900/10 dark:text-slate-900'
-                              : 'bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300'
-                          }`}
-                        >
-                          {item.badge}
-                        </span>
-                      )}
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-          </nav>
-
-          <div className="mt-3 hidden rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-900 sm:block lg:mt-4">
-            <div className="mb-3 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-              <span>{t.common.autoStart || 'Auto Start'}</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={autoStartEnabled}
-                onClick={() => {
-                  const next = !autoStartEnabled
-                  setAutoStartEnabled(next)
-                  ;(async () => {
-                    try {
-                      if (next) await invoke('enable_autostart')
-                      else await invoke('disable_autostart')
-                    } catch {
-                      setAutoStartEnabled(!next)
-                    }
-                  })()
-                }}
-                className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ${autoStartEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}
-                title={t.common.autoStart || 'Auto Start'}
-              >
-                <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ${autoStartEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
-              </button>
-            </div>
-            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-              <div className="rounded-lg bg-white px-2 py-2 dark:bg-slate-950">
-                <div className="font-semibold text-emerald-600 dark:text-emerald-400">{upCount}</div>
-                <div className="mt-1 text-slate-500 dark:text-slate-400">{t.nav.up || 'up'}</div>
-              </div>
-              <div className="rounded-lg bg-white px-2 py-2 dark:bg-slate-950">
-                <div className="font-semibold text-slate-700 dark:text-slate-200">{downCount}</div>
-                <div className="mt-1 text-slate-500 dark:text-slate-400">{t.nav.down || 'down'}</div>
-              </div>
-              <div className="rounded-lg bg-white px-2 py-2 dark:bg-slate-950">
-                <div className="font-semibold text-blue-600 dark:text-blue-400">{activeDownloadCount}</div>
-                <div className="mt-1 text-slate-500 dark:text-slate-400">{t.nav.downloads || 'Downloads'}</div>
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header className="sticky top-0 z-20 border-b border-slate-200 bg-slate-100/90 backdrop-blur dark:border-slate-800 dark:bg-slate-950/90">
-            <div className="flex flex-col gap-3 px-4 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
-              <div className="flex min-w-0 items-start gap-3">
-                <div className="mt-0.5 hidden h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 sm:flex">
-                  <ActivePageIcon className="h-5 w-5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                    <h1 className="truncate text-lg font-semibold leading-7">{activeNavItem?.name || t.common.appTitle}</h1>
-                    <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
-                      {t.common.appTitle} v{version}
-                    </span>
-                  </div>
-                  <p className="mt-0.5 truncate text-sm text-slate-500 dark:text-slate-400">
-                    {pageContext[activeTab] || 'Manage local llama-server runtime state'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-500">
-                    Status
-                  </span>
-                  {statusChips.map(chip => (
-                    <Badge key={chip.label} tone={chip.tone}>
-                      <span className="font-semibold">{chip.value}</span>
-                      <span>{chip.label}</span>
-                    </Badge>
-                  ))}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {updateInfo && (
-                    <a
-                      href={updateInfo.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-700 transition hover:bg-emerald-500/15 dark:text-emerald-200"
-                    >
-                      <span>{t.common.updateAvailable || 'New Version'} v{updateInfo.latest_version}</span>
-                      <ArrowUpRight className="h-4 w-4" />
-                    </a>
-                  )}
-                  <Button
-                    onClick={() => setLang(lang === 'zh-CN' ? 'en-US' : 'zh-CN')}
-                    size="md"
-                    title={lang === 'zh-CN' ? 'Switch to English' : '\u5207\u6362\u4E3A\u4E2D\u6587'}
-                    icon={<Languages className="h-4 w-4" />}
-                  >
-                    {lang === 'zh-CN' ? 'EN' : '\u4E2D\u6587'}
-                  </Button>
-                  <Button
-                    onClick={() => setDarkMode(!darkMode)}
-                    size="icon"
-                    title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                  >
-                    {darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </header>
-
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            {!configLoaded ? (
-              <div className="flex h-full items-center justify-center px-6">
-                <PageFallback label={t.common?.loading || 'Loading...'} />
-              </div>
-            ) : (
-              <div className={layoutWide ? 'px-4 py-4' : 'px-6 py-6'}>
-                <div className={layoutWide ? '' : 'mx-auto max-w-[1440px]'}>
-                  <Suspense fallback={<PageFallback label={t.common?.loading || 'Loading...'} />}>
-                    {renderTabContent(activeTab)}
-                  </Suspense>
-                </div>
-              </div>
-            )}
-          </div>
-        </main>
-      </div>
-    </div>
+    <AppShell
+      appTitle={t.common.appTitle}
+      version={version}
+      navigation={navigation}
+      activeId={activeTab}
+      onNavigate={setActiveTab}
+      pageDescription={pageContext[activeTab] || 'Manage local llama-server runtime state'}
+      statusChips={statusChips}
+      updateInfo={updateInfo}
+      autoStartLabel={t.common.autoStart || 'Auto Start'}
+      autoStartEnabled={autoStartEnabled}
+      onAutoStartChange={handleAutoStartChange}
+      darkMode={darkMode}
+      onToggleDarkMode={() => setDarkMode(!darkMode)}
+      darkModeTitle={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+      languageLabel={lang === 'zh-CN' ? 'EN' : '\u4E2D\u6587'}
+      languageTitle={lang === 'zh-CN' ? 'Switch to English' : '\u5207\u6362\u4E3A\u4E2D\u6587'}
+      onToggleLanguage={() => setLang(lang === 'zh-CN' ? 'en-US' : 'zh-CN')}
+      wideContent={layoutWide}
+    >
+      {!configLoaded ? (
+        <div className="flex min-h-[calc(100vh-160px)] items-center justify-center px-6">
+          <PageFallback label={t.common?.loading || 'Loading...'} />
+        </div>
+      ) : (
+        <Suspense fallback={<PageFallback label={t.common?.loading || 'Loading...'} />}>
+          {renderTabContent(activeTab)}
+        </Suspense>
+      )}
+    </AppShell>
   )
 }
 

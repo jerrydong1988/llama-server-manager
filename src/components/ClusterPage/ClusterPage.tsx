@@ -289,87 +289,101 @@ export default function ClusterPage() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6" data-testid="cluster-page">
-      <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+    <div className="space-y-5" data-testid="cluster-page">
+      <div className="flex flex-col gap-5 2xl:flex-row 2xl:items-end 2xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
-            <div className="rounded-2xl border border-cyan-500/20 bg-cyan-500/10 p-3 text-cyan-300">
+            <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/10 p-3 text-cyan-300">
               <Network className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-semibold tracking-tight text-slate-50">{t.clusterPage.title}</h1>
+                <h1 className="text-2xl font-semibold tracking-tight text-slate-50">{t.clusterPage.title}</h1>
                 <Badge tone="slate">
                   {workers.length} {labels.workers}
                 </Badge>
               </div>
-              <p className="text-sm text-slate-400">{labels.subtitle}</p>
+              <p className="mt-1 max-w-3xl text-sm text-slate-400">{labels.subtitle}</p>
             </div>
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            onClick={handleCopyCmd}
-            title={t.clusterPage.copyLaunchCmd}
-            icon={copiedId === 'cmd' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-          >
-            {t.clusterPage.copyLaunchCmd}
-          </Button>
+        <div className="grid w-full gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] 2xl:w-auto 2xl:min-w-[680px]">
+          <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
+            {clusterScanning ? (
+              <Button
+                onClick={handleCancelScan}
+                variant="danger"
+                className="min-w-0 whitespace-nowrap"
+                icon={<Square className="h-4 w-4" />}
+              >
+                {t.clusterPage.stopScan}
+              </Button>
+            ) : (
+              <Button
+                onClick={handleScan}
+                variant="success"
+                data-guide="cluster-scan"
+                className="min-w-0 whitespace-nowrap"
+                icon={<RefreshCw className="h-4 w-4" />}
+              >
+                {t.clusterPage.scanLan}
+              </Button>
+            )}
 
-          {clusterScanning ? (
             <Button
-              onClick={handleCancelScan}
-              variant="danger"
-              icon={<Square className="h-4 w-4" />}
+              onClick={() => setShowAddDialog(true)}
+              className="min-w-0 whitespace-nowrap"
+              icon={<Plus className="h-4 w-4" />}
             >
-              {t.clusterPage.stopScan}
+              {t.clusterPage.addWorker}
             </Button>
-          ) : (
+          </div>
+
+          <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
             <Button
-              onClick={handleScan}
-              variant="success"
-              data-guide="cluster-scan"
-              icon={<RefreshCw className="h-4 w-4" />}
+              onClick={() => { setShowLocalLaunch(true); setLaunchError('') }}
+              variant="cyan"
+              className="min-w-0 whitespace-nowrap"
+              icon={<Play className="h-4 w-4" />}
             >
-              {t.clusterPage.scanLan}
+              {t.clusterPage.localLaunch}
             </Button>
-          )}
 
-          <Button
-            onClick={() => setShowAddDialog(true)}
-            icon={<Plus className="h-4 w-4" />}
-          >
-            {t.clusterPage.addWorker}
-          </Button>
+            <Button
+              onClick={() => { setShowLaunchWizard(true); setLaunchStep(0) }}
+              variant="violet"
+              className="min-w-0 whitespace-nowrap"
+              icon={<Zap className="h-4 w-4" />}
+            >
+              {t.clusterPage.oneClickLaunch}
+            </Button>
+          </div>
 
-          <Button
-            onClick={handleMdnsToggle}
-            variant={mdnsActive ? 'primary' : 'secondary'}
-            icon={<Radio className="h-4 w-4" />}
-          >
-            {t.clusterPage.discoverMode}
-          </Button>
+          <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
+            <Button
+              onClick={handleCopyCmd}
+              size="icon"
+              title={t.clusterPage.copyLaunchCmd}
+              aria-label={t.clusterPage.copyLaunchCmd}
+            >
+              {copiedId === 'cmd' ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            </Button>
 
-          <Button
-            onClick={() => { setShowLaunchWizard(true); setLaunchStep(0) }}
-            variant="violet"
-            icon={<Zap className="h-4 w-4" />}
-          >
-            {t.clusterPage.oneClickLaunch}
-          </Button>
-
-          <Button
-            onClick={() => { setShowLocalLaunch(true); setLaunchError('') }}
-            variant="cyan"
-            icon={<Play className="h-4 w-4" />}
-          >
-            {t.clusterPage.localLaunch}
-          </Button>
+            <Button
+              onClick={handleMdnsToggle}
+              variant={mdnsActive ? 'primary' : 'secondary'}
+              size="icon"
+              title={t.clusterPage.discoverMode}
+              aria-label={t.clusterPage.discoverMode}
+            >
+              <Radio className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           { label: t.clusterPage.online, value: onlineWorkers, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
           { label: t.clusterPage.localWorker, value: localWorkers, tone: 'text-cyan-300 bg-cyan-500/10 border-cyan-500/20' },
@@ -380,7 +394,7 @@ export default function ClusterPage() {
         ))}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr),320px]">
+      <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <Surface as="section" className="overflow-hidden">
           <div className="border-b border-slate-800 bg-slate-950/90 px-5 py-4">
             <SectionHeader title={t.clusterPage.workerList} description={labels.workerListDesc} />
@@ -396,7 +410,7 @@ export default function ClusterPage() {
               {workersSorted.map(worker => (
                 <Fragment key={worker.id}>
                   <div className="px-5 py-4 transition hover:bg-slate-900/70">
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={`inline-block h-2.5 w-2.5 rounded-full ${statusTone(worker.status)}`} title={statusText(worker.status)} />
@@ -418,40 +432,48 @@ export default function ClusterPage() {
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex w-full shrink-0 items-center justify-end gap-2 overflow-x-auto pb-1 xl:w-[420px] xl:overflow-visible xl:pb-0">
                         <Button
                           onClick={() => void handleTest(worker.host, worker.port)}
                           variant="primary"
                           size="sm"
+                          className="w-[108px] shrink-0 whitespace-nowrap"
                         >
                           {t.clusterPage.testConnection}
                         </Button>
                         <Button
                           onClick={() => toggleExpand(worker.id)}
                           size="sm"
+                          className="w-[108px] shrink-0 whitespace-nowrap"
                         >
                           {expanded.has(worker.id) ? labels.hideDetails : labels.showDetails}
                         </Button>
-                        {isLocalWorker(worker.host) && worker.status === 'Online' && (
+                        <div className="flex w-[88px] shrink-0 items-center justify-end gap-2">
+                          {isLocalWorker(worker.host) && worker.status === 'Online' ? (
+                            <Button
+                              onClick={() => void handleStopWorker(worker)}
+                              variant="danger"
+                              size="icon"
+                              className="h-8 w-8"
+                              title={t.clusterPage.stopLocalWorker}
+                              aria-label={t.clusterPage.stopLocalWorker}
+                            >
+                              <StopCircle className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : (
+                            <span className="h-8 w-8" aria-hidden="true" />
+                          )}
                           <Button
-                            onClick={() => void handleStopWorker(worker)}
+                            onClick={() => void handleDelete(worker)}
                             variant="danger"
-                            size="sm"
-                            title={t.clusterPage.stopLocalWorker}
-                            icon={<StopCircle className="h-3.5 w-3.5" />}
+                            size="icon"
+                            className="h-8 w-8"
+                            title={t.clusterPage.deleteWorker}
+                            aria-label={t.clusterPage.deleteWorker}
                           >
-                            {t.clusterPage.stopLocalWorker}
+                            <Trash2 className="h-3.5 w-3.5" />
                           </Button>
-                        )}
-                        <Button
-                          onClick={() => void handleDelete(worker)}
-                          variant="danger"
-                          size="sm"
-                          title={t.clusterPage.deleteWorker}
-                          icon={<Trash2 className="h-3.5 w-3.5" />}
-                        >
-                          {t.clusterPage.deleteWorker}
-                        </Button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -465,7 +487,7 @@ export default function ClusterPage() {
                           {worker.devices.map((device, index) => {
                             const usedPct = device.vram_mb > 0 ? ((device.vram_mb - device.free_mb) / device.vram_mb) * 100 : 0
                             return (
-                              <div key={index} className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4">
+                              <div key={index} className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
                                 <div className="mb-2 flex items-center justify-between gap-4">
                                   <div>
                                     <p className="text-sm font-medium text-slate-100">{device.name}</p>
@@ -527,7 +549,7 @@ export default function ClusterPage() {
               </div>
             </InsetSurface>
 
-            <div className="rounded-2xl border border-amber-500/20 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
               {t.clusterPage.sshWarning}
             </div>
           </div>
@@ -536,7 +558,7 @@ export default function ClusterPage() {
 
       {showAddDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+          <div className="w-full max-w-md rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
             <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
               <h3 className="font-semibold text-slate-50">{t.clusterPage.addWorker}</h3>
               <Button onClick={() => setShowAddDialog(false)} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
@@ -565,7 +587,7 @@ export default function ClusterPage() {
 
       {showLaunchWizard && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+          <div className="w-full max-w-lg rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
             <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
               <h3 className="font-semibold text-slate-50">{t.clusterPage.launchWizard}</h3>
               <Button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
@@ -573,7 +595,7 @@ export default function ClusterPage() {
             <div className="space-y-4 p-6">
               {launchStep === 0 && (
                 <>
-                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">{t.clusterPage.sshWarning}</div>
+                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">{t.clusterPage.sshWarning}</div>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-400">{labels.workerHost}</label>
                     <TextInput type="text" value={launchForm.host} onChange={event => setLaunchForm({ ...launchForm, host: event.target.value })} placeholder="192.168.x.x" className="h-10" />
@@ -624,11 +646,11 @@ export default function ClusterPage() {
                 <div className="space-y-3 text-sm">
                   <div className="flex justify-between"><span className="text-slate-500">Worker</span><span className="text-slate-200">{launchForm.host}:{launchForm.port}</span></div>
                   <div className="flex justify-between"><span className="text-slate-500">SSH</span><span className="text-slate-200">{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
-                  <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-blue-200">
+                  <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-blue-200">
                     {t.clusterPage.cmdPreview}: {(launchForm.rpcPath || 'rpc-server')} --host 0.0.0.0 --port {launchForm.port}
                   </div>
                   {launchError && (
-                    <div className="whitespace-pre-wrap rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">
+                    <div className="whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">
                       {launchError}
                     </div>
                   )}
@@ -658,7 +680,7 @@ export default function ClusterPage() {
 
       {showLocalLaunch && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+          <div className="w-full max-w-sm rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
             <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
               <h3 className="font-semibold text-slate-50">{t.clusterPage.localLaunchTitle}</h3>
               <Button onClick={() => setShowLocalLaunch(false)} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
@@ -712,7 +734,7 @@ export default function ClusterPage() {
                 )}
               </div>
               {launchError && (
-                <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{launchError}</div>
+                <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{launchError}</div>
               )}
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-800 px-6 py-4">

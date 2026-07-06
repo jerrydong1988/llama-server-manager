@@ -17,7 +17,7 @@ import {
 import { getActiveParams } from './ConfigPage/activeParams'
 import { normalizePath, pathBasename, pathDirname, pathJoin } from '../utils/path'
 import { _matchedElements } from './ConfigPage/shared'
-import { Badge, Button, EmptyState, InsetSurface, MetricCard, SectionHeader, Surface, TextInput } from './ui'
+import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
 
 const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
 
@@ -153,7 +153,7 @@ const ConfigPage = () => {
 
   if (!local) {
     return (
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="space-y-5">
         <EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} />
       </div>
     )
@@ -162,6 +162,9 @@ const ConfigPage = () => {
   const activeParams = getActiveParams(local, isEmbedding)
   const currentModel = models.find(model => model.path === local.model_path) ?? null
   const currentEngine = engines.find(engine => engine.id === (local.engine_id || defaultEngineId || '')) ?? engines[0] ?? null
+  const primaryModelPath = currentModel?.path || local.model_path || ''
+  const draftModelPath = local.draft_model_path || ''
+  const endpoint = `${local.host || '127.0.0.1'}:${local.port}`
   const warningCounts = {
     high: saveWarnings.filter(warning => warning.severity === 'high').length,
     medium: saveWarnings.filter(warning => warning.severity === 'medium').length,
@@ -236,6 +239,8 @@ const ConfigPage = () => {
     configContextDesc: zh ? '\u5feb\u901f\u67e5\u770b\u6b64\u5b9e\u4f8b\u5f53\u524d\u5c06\u5982\u4f55\u542f\u52a8\u3002' : 'A quick read on what this instance will launch with right now.',
     primaryModel: zh ? '\u4e3b\u6a21\u578b' : 'Primary model',
     draftModel: zh ? '\u8349\u7a3f\u6a21\u578b' : 'Draft model',
+    enginePath: zh ? '\u5f15\u64ce\u8def\u5f84' : 'Engine path',
+    endpoint: zh ? '\u7aef\u70b9' : 'Endpoint',
     embeddingMode: zh ? '\u5d4c\u5165\u6a21\u5f0f' : 'Embedding mode',
     modifiedParams: zh ? '\u5df2\u4fee\u6539\u53c2\u6570' : 'Modified params',
     validationSummary: zh ? '\u6821\u9a8c\u6458\u8981' : 'Validation Summary',
@@ -281,55 +286,51 @@ const ConfigPage = () => {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-blue-300">
+    <div className="space-y-5">
+      <Surface as="section">
+        <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-300">
               <SlidersHorizontal className="h-5 w-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-semibold tracking-tight text-slate-50">{t.configPage.title}</h1>
-                <Badge tone="slate">
+            <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <h1 className="truncate text-xl font-semibold text-slate-50">{t.configPage.title}</h1>
+                <Badge tone="slate" className="max-w-[220px] truncate">
                   {inst?.name}
                 </Badge>
-                {isEmbedding && (
-                  <Badge tone="blue">
-                    Embedding
-                  </Badge>
-                )}
+                {isEmbedding && <Badge tone="blue">Embedding</Badge>}
               </div>
-              <p className="text-sm text-slate-400">{labels.subtitle}</p>
+              <p className="mt-1 max-w-3xl truncate text-sm text-slate-400">{labels.subtitle}</p>
             </div>
           </div>
+
+          <Button
+            onClick={save}
+            disabled={!inst}
+            variant="primary"
+            data-guide="config-save"
+            icon={saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+            className="shrink-0"
+          >
+            {saved ? t.configPage.saved : t.configPage.save}
+          </Button>
         </div>
+      </Surface>
 
-        <Button
-          onClick={save}
-          disabled={!inst}
-          variant="primary"
-          size="lg"
-          data-guide="config-save"
-          icon={saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-        >
-          {saved ? t.configPage.saved : t.configPage.save}
-        </Button>
-      </div>
-
-      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           { label: labels.activeParams, value: activeParams.size, icon: SlidersHorizontal, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
           { label: labels.warnings, value: saveWarnings.length, icon: AlertTriangle, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
           { label: labels.model, value: currentModel ? pathBasename(currentModel.path) : '--', icon: File, tone: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/20' },
           { label: labels.engine, value: currentEngine?.name || '--', icon: Cpu, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
         ].map(card => (
-          <MetricCard key={card.label} label={card.label} value={card.value} icon={<card.icon className="h-5 w-5" />} tone={card.tone} valueClassName="text-2xl" />
+          <MetricCard key={card.label} label={card.label} value={card.value} icon={<card.icon className="h-5 w-5" />} tone={card.tone} valueClassName="text-xl leading-7" />
         ))}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[240px,minmax(0,1fr),320px]">
-        <Surface as="aside" className="h-fit p-4 xl:sticky xl:top-6">
+      <div className="grid gap-5 xl:grid-cols-[220px,minmax(0,1fr)] 2xl:grid-cols-[220px,minmax(0,1fr)_320px]">
+        <Surface as="aside" className="h-fit p-4 xl:sticky xl:top-4">
           <SectionHeader title={labels.parameterGroups} />
           <nav className="mt-4 space-y-1">
             {directoryGroups.map(group => (
@@ -401,37 +402,43 @@ const ConfigPage = () => {
           <AdvancedSection {...sectionProps} />
         </div>
 
-        <Surface as="aside" className="h-fit p-5 xl:sticky xl:top-6">
+        <Surface as="aside" className="h-fit p-5 xl:col-span-2 2xl:sticky 2xl:top-4 2xl:col-span-1">
           <div className="mb-5">
             <SectionHeader title={labels.configContext} description={labels.configContextDesc} />
           </div>
 
-          <div className="space-y-4">
+          <div className="grid gap-4 lg:grid-cols-3 2xl:block 2xl:space-y-4">
             <InsetSurface className="p-4">
               <div className="flex items-start gap-3">
                 <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 text-slate-300">
                   <Settings className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-100">{inst?.name}</p>
-                  <p className="mt-1 text-xs text-slate-500">Port {local.port} - {local.host || '127.0.0.1'}</p>
+                  <p className="truncate text-sm font-medium text-slate-100" title={inst?.name}>{inst?.name}</p>
+                  <PathText value={endpoint} maxLength={36} className="mt-1 text-slate-500" />
                 </div>
               </div>
             </InsetSurface>
 
             <InsetSurface className="space-y-3 p-4">
               {[
-                [labels.primaryModel, currentModel ? pathBasename(currentModel.path) : '--'],
-                [labels.draftModel, local.draft_model_path ? pathBasename(local.draft_model_path) : '--'],
-                [labels.engine, currentEngine?.name || '--'],
-                [labels.embeddingMode, isEmbedding ? labels.on : labels.off],
-                [labels.modifiedParams, String(activeParams.size)],
-              ].map(([label, value]) => (
-                <div key={label} className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-slate-500">{label}</span>
-                  <span className="max-w-[180px] truncate text-right text-sm text-slate-200" title={value}>
-                    {value}
-                  </span>
+                { label: labels.primaryModel, value: primaryModelPath || '--', path: !!primaryModelPath },
+                { label: labels.draftModel, value: draftModelPath || '--', path: !!draftModelPath },
+                { label: labels.engine, value: currentEngine?.name || '--' },
+                { label: labels.enginePath, value: currentEngine?.dir || '--', path: !!currentEngine?.dir },
+                { label: labels.endpoint, value: endpoint },
+                { label: labels.embeddingMode, value: isEmbedding ? labels.on : labels.off },
+                { label: labels.modifiedParams, value: String(activeParams.size) },
+              ].map(row => (
+                <div key={row.label} className="grid min-w-0 grid-cols-[96px_minmax(0,1fr)] items-start gap-3">
+                  <span className="truncate text-sm text-slate-500" title={row.label}>{row.label}</span>
+                  {row.path ? (
+                    <PathText value={row.value} maxLength={44} className="text-right text-slate-200" />
+                  ) : (
+                    <span className="min-w-0 truncate text-right text-sm text-slate-200" title={row.value}>
+                      {row.value}
+                    </span>
+                  )}
                 </div>
               ))}
             </InsetSurface>
@@ -475,12 +482,12 @@ const ConfigPage = () => {
       </div>
 
       {showPicker && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
           <div className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
-            <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/90 px-6 py-4">
-              <div>
+            <div className="flex items-center justify-between gap-4 border-b border-slate-800 bg-slate-950/90 px-5 py-4">
+              <div className="min-w-0">
                 <h3 className="text-lg font-semibold text-slate-50">{t.modelRepo.selectFromRepo}</h3>
-                <p className="mt-1 text-sm text-slate-400">
+                <p className="mt-1 truncate text-sm text-slate-400">
                   {zh ? `${labels.pickDesc}${pickerTarget === 'model' ? labels.pickPrimary : labels.pickDraft}` : `${labels.pickDesc} ${pickerTarget === 'model' ? labels.pickPrimary : labels.pickDraft}.`}
                 </p>
               </div>
@@ -494,8 +501,8 @@ const ConfigPage = () => {
               </Button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4">
-              <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="min-w-0 space-y-2 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
                 {pickerTrees.map(tree => {
                   const renderNode = (node: PickerNode, depth: number): JSX.Element => {
                     if (node.isDir) {
@@ -517,7 +524,11 @@ const ConfigPage = () => {
                           >
                             {isCollapsed ? <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
                             <FolderOpen className="h-4 w-4 shrink-0 text-amber-400" />
-                            <span className="truncate">{node.name}</span>
+                            {depth === 0 ? (
+                              <PathText value={node.path} maxLength={78} className="flex-1 text-slate-200" />
+                            ) : (
+                              <span className="min-w-0 flex-1 truncate" title={node.name}>{node.name}</span>
+                            )}
                           </button>
                           {!isCollapsed && node.children && [...node.children.values()]
                             .sort((left, right) => {

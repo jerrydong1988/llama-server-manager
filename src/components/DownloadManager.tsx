@@ -6,7 +6,7 @@ import { useI18n } from '../i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { pathJoin } from '../utils/path'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
-import { surfaceClassName } from './ui'
+import { PathText, surfaceClassName } from './ui'
 
 type DownloadSource = 'modelscope' | 'huggingface'
 type ResumePolicy = 'manual' | 'auto_on_launch'
@@ -38,10 +38,10 @@ function MetricTile({
   }
 
   return (
-    <div className={`${surfaceClassName} px-4 py-4`}>
+    <div className={`${surfaceClassName} min-w-0 px-4 py-4`}>
       <div className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${tones[tone]}`}>{label}</div>
-      <div className="mt-3 text-2xl font-semibold text-slate-900 dark:text-slate-100">{value}</div>
-      {detail && <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{detail}</div>}
+      <div className="mt-3 truncate text-2xl font-semibold text-slate-900 dark:text-slate-100" title={String(value)}>{value}</div>
+      {detail && <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={detail}>{detail}</div>}
     </div>
   )
 }
@@ -80,19 +80,19 @@ function SectionPanel({
   children: ReactNode
 }) {
   return (
-    <section className={surfaceClassName}>
+    <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
       <button
         type="button"
         onClick={onToggle}
         className="flex w-full items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 text-left dark:border-slate-800"
       >
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</span>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</span>
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
             {count}
           </span>
         </div>
-        <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+        <div className="flex shrink-0 items-center gap-2" onClick={e => e.stopPropagation()}>
           {extra}
           {collapsed ? <ChevronDown className="h-4 w-4 text-slate-400" /> : <ChevronUp className="h-4 w-4 text-slate-400" />}
         </div>
@@ -461,8 +461,8 @@ export default function DownloadManager() {
           : 'bg-emerald-500'
 
     return (
-      <div key={task.id} className="border-b border-slate-200 px-4 py-4 last:border-b-0 dark:border-slate-800">
-        <div className="flex items-start justify-between gap-3">
+      <div key={task.id} className="min-w-0 border-b border-slate-200 px-4 py-4 last:border-b-0 dark:border-slate-800">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <StatusBadge status={task.status} label={taskStatusLabel(task)} />
@@ -475,13 +475,16 @@ export default function DownloadManager() {
             <div className="mt-2 truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={task.fileName}>
               {task.fileName}
             </div>
-            <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500 dark:text-slate-400">
-              <span>{sourceName(task.source)}</span>
-              <span>{task.repoId}</span>
+            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+              <span className="shrink-0">{sourceName(task.source)}</span>
+              <span className="min-w-0 max-w-full truncate" title={task.repoId}>{task.repoId}</span>
             </div>
+            {task.remotePath && task.remotePath !== task.fileName && (
+              <PathText value={task.remotePath} maxLength={88} className="mt-1 max-w-full text-slate-400 dark:text-slate-500" />
+            )}
           </div>
 
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 flex-wrap items-center gap-1 sm:justify-end">
             {task.status === 'active' && (
               <>
                 <button
@@ -561,10 +564,10 @@ export default function DownloadManager() {
           <div className={`h-full rounded-full ${barColor} transition-all duration-300`} style={{ width: `${pct}%` }} />
         </div>
 
-        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <span>{formatSize(task.downloaded)} / {formatSize(task.total)}</span>
+        <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <span className="shrink-0">{formatSize(task.downloaded)} / {formatSize(task.total)}</span>
           {task.status === 'active' ? (
-            <span>{formatSpeed(task.speed || 0)} &middot; {formatETA(task.downloaded, task.total, task.speed || 0)}</span>
+            <span className="truncate">{formatSpeed(task.speed || 0)} &middot; {formatETA(task.downloaded, task.total, task.speed || 0)}</span>
           ) : task.status === 'paused' || task.status === 'pausing' ? (
             <span className="text-amber-600 dark:text-amber-400">{t.downloadPage.paused}</span>
           ) : task.status === 'error' && task.error ? (
@@ -587,17 +590,20 @@ export default function DownloadManager() {
     const pct = task && task.total > 0 ? (task.downloaded / task.total) * 100 : 0
 
     return (
-      <div key={file.path} className="border-b border-slate-200 px-4 py-4 last:border-b-0 dark:border-slate-800">
-        <div className="flex items-start justify-between gap-3">
+      <div key={file.path} className="min-w-0 border-b border-slate-200 px-4 py-4 last:border-b-0 dark:border-slate-800">
+        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{file.name}</div>
+            <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={file.name}>{file.name}</div>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
               <span className={`rounded-full px-2 py-1 ${modelTypeColor(file.file_type)}`}>{modelTypeLabel(file.file_type)}</span>
               <span>{formatSize(file.size)}</span>
             </div>
+            {file.path && file.path !== file.name && (
+              <PathText value={file.path} maxLength={88} className="mt-1 max-w-full text-slate-400 dark:text-slate-500" />
+            )}
           </div>
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
             {!task && (
               <button
                 onClick={() => handleDownloadFile(file)}
@@ -671,9 +677,9 @@ export default function DownloadManager() {
         )}
 
         {task && (
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
             {task.status === 'active' || task.status === 'pausing' ? (
-              <span>{formatSize(task.downloaded)} / {formatSize(task.total)} &middot; {formatSpeed(task.speed || 0)} &middot; {formatETA(task.downloaded, task.total, task.speed || 0)}</span>
+              <span className="truncate">{formatSize(task.downloaded)} / {formatSize(task.total)} &middot; {formatSpeed(task.speed || 0)} &middot; {formatETA(task.downloaded, task.total, task.speed || 0)}</span>
             ) : task.status === 'paused' ? (
               <span>{formatSize(task.downloaded)} / {formatSize(task.total)}</span>
             ) : task.status === 'completed' ? (
@@ -701,7 +707,7 @@ export default function DownloadManager() {
             </div>
           ))}
         </div>
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_360px]">
+        <div className="grid gap-5 2xl:grid-cols-[minmax(0,1.65fr)_380px]">
           <div className={`${surfaceClassName} h-[520px] animate-pulse bg-slate-100 dark:bg-slate-900`} />
           <div className="space-y-5">
             <div className={`${surfaceClassName} h-[220px] animate-pulse bg-slate-100 dark:bg-slate-900`} />
@@ -721,8 +727,8 @@ export default function DownloadManager() {
         <MetricTile label={t.downloadPage.completed} value={completedTasks.length} detail={completedBytes > 0 ? formatSize(completedBytes) : t.downloadPage.noCompleted} tone="emerald" />
       </div>
 
-      <div className={`${surfaceClassName} overflow-hidden`}>
-        <div className="flex flex-col gap-3 px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+      <div className={`${surfaceClassName} min-w-0 overflow-hidden`}>
+        <div className="flex flex-col gap-3 px-4 py-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.batchTools}</span>
@@ -738,7 +744,7 @@ export default function DownloadManager() {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 2xl:justify-end">
             <button
               onClick={() => pauseAllDownloads()}
               disabled={!hasActive}
@@ -767,12 +773,12 @@ export default function DownloadManager() {
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.65fr)_360px]">
-        <section className={surfaceClassName}>
+      <div className="grid min-w-0 gap-5 2xl:grid-cols-[minmax(0,1.65fr)_380px]">
+        <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-4 dark:border-slate-800">
-            <div>
+            <div className="min-w-0">
               <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{sourceName(source)}</div>
-              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={browsedRepoId || status || t.downloadPage.repoLabel}>
                 {browsedRepoId || status || t.downloadPage.repoLabel}
               </div>
             </div>
@@ -788,61 +794,67 @@ export default function DownloadManager() {
           </div>
 
           <div className="space-y-4 px-4 py-4">
-            <div className="inline-flex rounded-lg bg-slate-100 p-1 dark:bg-slate-800" data-guide="download-source">
-              <button
-                onClick={() => { setSource('modelscope'); setFiles([]); setStatus('') }}
-                className={`rounded-md px-3 py-2 text-sm font-medium transition ${source === 'modelscope' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-              >
-                ModelScope
-              </button>
-              <button
-                onClick={() => { setSource('huggingface'); setFiles([]); setStatus('') }}
-                className={`rounded-md px-3 py-2 text-sm font-medium transition ${source === 'huggingface' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-              >
-                HuggingFace
-              </button>
-            </div>
+            <div className="flex min-w-0 flex-col gap-4 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.55fr)]">
+              <div className="space-y-3">
+                <div className="inline-flex max-w-full rounded-lg bg-slate-100 p-1 dark:bg-slate-800" data-guide="download-source">
+                  <button
+                    onClick={() => { setSource('modelscope'); setFiles([]); setStatus('') }}
+                    className={`rounded-md px-3 py-2 text-sm font-medium transition ${source === 'modelscope' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                  >
+                    ModelScope
+                  </button>
+                  <button
+                    onClick={() => { setSource('huggingface'); setFiles([]); setStatus('') }}
+                    className={`rounded-md px-3 py-2 text-sm font-medium transition ${source === 'huggingface' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                  >
+                    HuggingFace
+                  </button>
+                </div>
 
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={repoId}
-                onChange={e => setRepoId(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && handleBrowse()}
-                placeholder={source === 'modelscope' ? t.modelRepo.repoIdPlaceholder : t.modelRepo.hfRepoIdPlaceholder}
-                className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
-              />
-              <button
-                onClick={handleBrowse}
-                disabled={browsing}
-                className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
-              >
-                <Download className="h-4 w-4" />
-                <span>{t.modelRepo.browseFiles}</span>
-              </button>
-            </div>
-
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={saveDir}
-                onChange={e => saveDirPersist(e.target.value)}
-                placeholder={t.downloadPage.saveDirLabel}
-                className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
-              />
-              <button
-                onClick={handleBrowseSaveDir}
-                className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white"
-              >
-                <FolderOpen className="h-4 w-4" />
-              </button>
-            </div>
-
-            {status && (
-              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-950 dark:text-slate-400">
-                {status}
+                <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+                  <input
+                    type="text"
+                    value={repoId}
+                    onChange={e => setRepoId(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleBrowse()}
+                    placeholder={source === 'modelscope' ? t.modelRepo.repoIdPlaceholder : t.modelRepo.hfRepoIdPlaceholder}
+                    className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                  <button
+                    onClick={handleBrowse}
+                    disabled={browsing}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                  >
+                    <Download className="h-4 w-4" />
+                    <span>{t.modelRepo.browseFiles}</span>
+                  </button>
+                </div>
               </div>
-            )}
+
+              <div className="space-y-3">
+                <div className="flex min-w-0 gap-2">
+                  <input
+                    type="text"
+                    value={saveDir}
+                    onChange={e => saveDirPersist(e.target.value)}
+                    placeholder={t.downloadPage.saveDirLabel}
+                    className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
+                  />
+                  <button
+                    onClick={handleBrowseSaveDir}
+                    className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white"
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </button>
+                </div>
+
+                {status && (
+                  <div className="truncate rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-950 dark:text-slate-400" title={status}>
+                    {status}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div className="max-h-[560px] overflow-y-auto border-t border-slate-200 dark:border-slate-800">
@@ -856,8 +868,8 @@ export default function DownloadManager() {
           </div>
         </section>
 
-        <div className="space-y-5">
-          <section className={surfaceClassName}>
+        <div className="min-w-0 space-y-5">
+          <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
             <button
               type="button"
               onClick={() => setDlSettingsOpen(!dlSettingsOpen)}
@@ -970,7 +982,7 @@ export default function DownloadManager() {
 
                 <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
                   <div className="flex items-start justify-between gap-3">
-                    <div>
+                    <div className="min-w-0">
                       <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{ui.lowPriorityThrottle}</div>
                       <div className="mt-1 text-[11px] leading-5 text-slate-400">{ui.throttleHelp}</div>
                     </div>
@@ -1016,7 +1028,7 @@ export default function DownloadManager() {
                           <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                             {sourceName(group.entry.source)}
                           </span>
-                          <span className="truncate text-sm font-medium text-slate-900 dark:text-slate-100">{group.entry.repoId}</span>
+                          <span className="min-w-0 max-w-full truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={group.entry.repoId}>{group.entry.repoId}</span>
                         </div>
                         <div className="mt-2 text-xs text-slate-500 dark:text-slate-400">
                           {group.files.length} {t.downloadPage.files} &middot; {formatSize(group.files.reduce((sum, file) => sum + file.size, 0))}
@@ -1047,7 +1059,7 @@ export default function DownloadManager() {
                     </div>
                     <div className="mt-3 space-y-1 text-xs text-slate-500 dark:text-slate-400">
                       {group.files.slice(0, 4).map(file => (
-                        <div key={file.task_id || file.name} className="truncate">{file.name}</div>
+                        <div key={file.task_id || file.name} className="truncate" title={file.path || file.name}>{file.name}</div>
                       ))}
                       {group.files.length > 4 && (
                         <div>{lang === 'zh-CN' ? `\u8FD8\u6709 ${group.files.length - 4} \u4E2A\u6587\u4EF6` : `${group.files.length - 4} more files`}</div>
@@ -1061,7 +1073,7 @@ export default function DownloadManager() {
         </div>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
+      <div className="grid min-w-0 gap-5 2xl:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
         <SectionPanel
           title={t.downloadPage.active}
           count={activeTasks.length}
@@ -1093,7 +1105,7 @@ export default function DownloadManager() {
         </SectionPanel>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-2">
+      <div className="grid min-w-0 gap-5 2xl:grid-cols-2">
         <SectionPanel
           title={t.downloadPage.failed}
           count={failedTasks.length}

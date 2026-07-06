@@ -107,28 +107,28 @@ export default function PerformancePage() {
 
   if (!running.length) {
     return (
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="space-y-5">
         <EmptyState icon={<BarChart3 className="h-10 w-10" />} title={t.nav.perf} description={t.perfBlock.noRunning} />
       </div>
     )
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+    <div className="space-y-5">
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
-            <div className="rounded-2xl border border-violet-500/20 bg-violet-500/10 p-3 text-violet-300">
+            <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3 text-violet-300">
               <Gauge className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-semibold tracking-tight text-slate-50">{t.nav.perf}</h1>
+                <h1 className="text-2xl font-semibold tracking-tight text-slate-50">{t.nav.perf}</h1>
                 <Badge tone="slate">
                   {running.length} {t.nav.up}
                 </Badge>
               </div>
-              <p className="text-sm text-slate-400">{labels.subtitle}</p>
+              <p className="mt-1 max-w-3xl text-sm text-slate-400">{labels.subtitle}</p>
             </div>
           </div>
         </div>
@@ -159,7 +159,7 @@ export default function PerformancePage() {
         </div>
       </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           { label: t.perfBlock.cpu, value: sys ? `${Math.round(sys.cpu_percent ?? 0)}%` : '--', icon: Cpu, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
           { label: t.perfBlock.memory, value: sys ? `${((sys.memory_mb ?? 0) / 1024).toFixed(1)} GB` : '--', icon: Activity, tone: 'text-purple-300 bg-purple-500/10 border-purple-500/20' },
@@ -170,11 +170,11 @@ export default function PerformancePage() {
         ))}
       </div>
 
-      <div className="mb-6 grid gap-6 xl:grid-cols-[minmax(0,1fr),320px]">
+      <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <Surface as="section" className="p-5">
-          <div className="mb-5 flex items-center justify-between">
-            <SectionHeader title={labels.realtimeMetrics} description={labels.realtimeMetricsDesc} />
-            <div className="inline-flex rounded-xl border border-slate-700 bg-slate-950 p-1">
+            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <SectionHeader title={labels.realtimeMetrics} description={labels.realtimeMetricsDesc} />
+            <div className="inline-flex rounded-lg border border-slate-700 bg-slate-950 p-1">
               <Button
                 onClick={() => setViewMode('overview')}
                 variant={viewMode === 'overview' ? 'primary' : 'subtle'}
@@ -200,7 +200,7 @@ export default function PerformancePage() {
                 { label: t.perfBlock.gpu, value: sys ? `${Math.round(sys.gpu_percent ?? 0)}%` : t.perfBlock.waiting, detail: sys?.gpu_vendor || 'N/A' },
                 { label: t.perfBlock.vram, value: sys ? `${((sys.vram_used_mb ?? 0) / 1024).toFixed(1)} GB` : t.perfBlock.waiting, detail: sys ? `${((sys.vram_total_mb ?? 0) / 1024).toFixed(1)} GB ${labels.total}` : '' },
               ].map(card => (
-                <div key={card.label} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                <div key={card.label} className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
                   <p className="text-sm text-slate-400">{card.label}</p>
                   <p className="mt-3 text-2xl font-semibold text-slate-50">{card.value}</p>
                   <p className="mt-2 text-xs text-slate-500">{card.detail}</p>
@@ -231,7 +231,7 @@ export default function PerformancePage() {
           <div className="space-y-4">
             <InsetSurface className="p-4">
               <div className="flex items-start gap-3">
-                <div className="rounded-2xl border border-slate-700 bg-slate-900 p-3 text-slate-300">
+                <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 text-slate-300">
                   <Server className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
@@ -327,7 +327,7 @@ function ClusterThroughput({ t, labels }: { t: any; labels: { online: string; de
       </div>
       <div className="space-y-3 p-5">
         {metrics.worker_metrics?.map((worker: any, index: number) => (
-          <div key={index} className="rounded-2xl border border-slate-800 bg-slate-950/50 p-4">
+          <div key={index} className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">

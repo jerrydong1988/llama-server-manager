@@ -152,21 +152,21 @@ const LogsViewer = () => {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+    <div className="space-y-5">
+      <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
-            <div className="rounded-2xl border border-sky-500/20 bg-sky-500/10 p-3 text-sky-300">
+            <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 p-3 text-sky-300">
               <Activity className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-semibold tracking-tight text-slate-50">{t.logs.title}</h1>
+                <h1 className="text-2xl font-semibold tracking-tight text-slate-50">{t.logs.title}</h1>
                 <span className="rounded-full border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400">
                   {sourceLogs.length} {t.logs.entries}
                 </span>
               </div>
-              <p className="text-sm text-slate-400">{labels.subtitle}</p>
+              <p className="mt-1 max-w-3xl text-sm text-slate-400">{labels.subtitle}</p>
             </div>
           </div>
         </div>
@@ -189,7 +189,7 @@ const LogsViewer = () => {
         </div>
       </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           { label: labels.visible, value: displayLogs.length, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
           { label: labels.errors, value: stats.error, tone: 'text-red-300 bg-red-500/10 border-red-500/20' },
@@ -200,7 +200,7 @@ const LogsViewer = () => {
         ))}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[320px,minmax(0,1fr)]">
+      <div className="grid gap-6 2xl:grid-cols-[320px,minmax(0,1fr)]">
         <Surface as="aside" className="h-fit p-5">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-slate-50">{labels.logScope}</h2>
@@ -248,7 +248,7 @@ const LogsViewer = () => {
           <p className="mt-4 text-xs leading-6 text-slate-500">{t.logs.hint}</p>
         </Surface>
 
-        <Surface as="section" className="min-h-[680px] overflow-hidden">
+        <Surface as="section" className="overflow-hidden">
           <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/90 px-5 py-3">
             <div>
               <h2 className="text-lg font-semibold text-slate-50">{labels.liveConsole}</h2>
@@ -271,7 +271,7 @@ const LogsViewer = () => {
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="relative h-[620px] overflow-y-auto bg-[#050816] px-5 py-4 font-mono text-sm leading-7"
+            className="relative h-[560px] overflow-y-auto bg-[#050816] px-5 py-4 font-mono text-sm leading-7"
           >
             {!hasLogs ? (
               <div className="flex h-full flex-col items-center justify-center text-center">
@@ -300,7 +300,7 @@ const LogsViewer = () => {
                   }
 
                   return (
-                    <div key={`${entry.timestamp}-${index}`} className="grid grid-cols-[84px,180px,minmax(0,1fr)] gap-4 rounded-lg px-2 py-1 hover:bg-white/5">
+                    <div key={`${entry.timestamp}-${index}`} className="grid grid-cols-[84px,minmax(120px,180px),minmax(0,1fr)] gap-4 rounded-lg px-2 py-1 hover:bg-white/5">
                       <span className="text-xs text-slate-600">{time}</span>
                       <span className="truncate text-xs text-slate-500">{instanceName}</span>
                       <span className={`${tone} whitespace-pre-wrap break-all`}>{text}</span>

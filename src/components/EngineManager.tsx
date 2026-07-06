@@ -3,7 +3,7 @@ import { Cpu, FolderOpen, Pencil, Plus, RefreshCw, Search, Star, Trash2 } from '
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
-import { Button, InsetSurface, MetricCard, SelectInput, Surface, TextInput } from './ui'
+import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
 const backendTone = (backend: string) => {
   switch (backend) {
@@ -132,7 +132,7 @@ const EngineManager = () => {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-6">
+    <div className="space-y-5">
       <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
@@ -184,7 +184,7 @@ const EngineManager = () => {
         ))}
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[280px,minmax(0,1.45fr),280px]">
+      <div className="grid gap-6 2xl:grid-cols-[280px,minmax(0,1.45fr),280px]">
         <Surface as="aside" className="p-5">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-slate-50">{zh ? '\u626B\u63CF\u6839\u76EE\u5F55' : 'Scan Roots'}</h2>
@@ -419,7 +419,7 @@ const EngineManager = () => {
                   </div>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-slate-100">{selectedEngine.name}</p>
-                    <p className="mt-1 text-xs text-slate-500 break-all">{selectedEngine.dir}</p>
+                    <PathText value={selectedEngine.dir} maxLength={58} className="mt-1 text-slate-500" />
                   </div>
                 </div>
               </InsetSurface>
@@ -433,7 +433,11 @@ const EngineManager = () => {
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between gap-3">
                     <span className="text-sm text-slate-500">{label}</span>
-                    <span className="text-sm text-slate-200">{value}</span>
+                    <span className="min-w-0 text-right text-sm text-slate-200">
+                      {label === (zh ? '\u626B\u63CF\u6839\u76EE\u5F55' : 'Scan root') && value !== '--'
+                        ? <PathText value={String(value)} maxLength={32} className="justify-end text-slate-200" />
+                        : value}
+                    </span>
                   </div>
                 ))}
               </InsetSurface>

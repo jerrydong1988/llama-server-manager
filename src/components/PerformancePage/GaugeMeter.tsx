@@ -7,7 +7,7 @@ export default function GaugeMeter({ label, value, max, unit, color, detail }: {
   const radius = 40; const circ = 2 * Math.PI * radius
 
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
       <div className="flex flex-col items-center">
       <div className="relative w-24 h-24">
         <svg className="w-24 h-24 transform -rotate-90" viewBox="0 0 96 96">
