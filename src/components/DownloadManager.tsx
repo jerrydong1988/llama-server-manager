@@ -173,7 +173,14 @@ export default function DownloadManager() {
   })
   const ui = useMemo(() => lang === 'zh-CN' ? {
     strategyTitle: '\u4E0B\u8F7D\u7B56\u7565',
-    strategySub: '\u540E\u7AEF\u652F\u6301\u7684\u9879\u76EE\u4F1A\u7ACB\u5373\u751F\u6548, \u6807\u6CE8\u4E3A\u672C\u5730\u7684\u9879\u76EE\u4EC5\u4FDD\u5B58 UI \u72B6\u6001',
+    strategySub: '\u6062\u590D\u7B56\u7565\u4E0E\u5E76\u53D1\u6570\u5DF2\u63A5\u5165\u540E\u7AEF; \u5E26\u5BBD\u548C\u4F4E\u4F18\u5148\u7EA7\u7B56\u7565\u6682\u4F5C\u672C\u5730\u504F\u597D',
+    addTaskTitle: '\u6DFB\u52A0\u4E0B\u8F7D\u4EFB\u52A1',
+    addTaskSub: '\u9009\u62E9\u6A21\u578B\u6765\u6E90\u5E76\u6D4F\u89C8\u4ED3\u5E93\u6587\u4EF6',
+    sourceSection: '\u6A21\u578B\u6765\u6E90',
+    sourceHelp: '\u8F93\u5165\u4ED3\u5E93 ID \u540E\u6D4F\u89C8\u53EF\u4E0B\u8F7D\u6587\u4EF6',
+    storageSection: '\u4E0B\u8F7D\u5B58\u50A8\u8DEF\u5F84',
+    storageHelp: '\u4E0B\u8F7D\u6587\u4EF6\u5C06\u4FDD\u5B58\u5230\u6B64\u76EE\u5F55\u4E0B\u7684\u4ED3\u5E93\u5B50\u76EE\u5F55',
+    chooseFolder: '\u9009\u62E9\u76EE\u5F55',
     batchTools: '\u6279\u91CF\u5DE5\u5177',
     totalSpeed: '\u5F53\u524D\u901F\u5EA6',
     controllable: '\u53EF\u64CD\u4F5C',
@@ -187,14 +194,23 @@ export default function DownloadManager() {
     displayUnit: '\u663E\u793A\u5355\u4F4D',
     unlimited: '\u4E0D\u9650',
     limitHelp: '0 \u8868\u793A\u4E0D\u9650\u901F',
-    lowPriorityThrottle: '\u4F4E\u4F18\u5148\u7EA7\u8282\u6D41',
-    throttleHelp: '\u5F53\u524D\u4EC5\u4F5C\u4E3A UI \u9884\u8BBE, \u7B49\u5F85\u540E\u7AEF\u547D\u4EE4\u63A5\u5165',
+    localPreference: '\u672C\u5730\u504F\u597D',
+    backendPending: '\u5F85\u540E\u7AEF\u63A5\u5165',
+    lowPriorityThrottle: '\u4F4E\u4F18\u5148\u7EA7\u4EFB\u52A1\u9884\u8BBE',
+    throttleHelp: '\u4EC5\u8BB0\u5F55\u4E3A\u672C\u5730\u504F\u597D, \u5F53\u524D\u4E0D\u4F1A\u5F71\u54CD\u5B9E\u9645\u4E0B\u8F7D\u901F\u7387',
     resetDefaults: '\u91CD\u7F6E\u9ED8\u8BA4',
     noActionable: '\u6682\u65E0\u53EF\u64CD\u4F5C\u4E0B\u8F7D',
     localPreset: '\u672C\u5730\u9884\u8BBE',
   } : {
     strategyTitle: 'Download strategy',
-    strategySub: 'Backend-supported options apply immediately; local items only save UI state',
+    strategySub: 'Resume policy and concurrency are backend-backed; bandwidth and low-priority options are local preferences for now',
+    addTaskTitle: 'Add download task',
+    addTaskSub: 'Choose a model source and browse repository files',
+    sourceSection: 'Model source',
+    sourceHelp: 'Enter a repository ID, then browse downloadable files',
+    storageSection: 'Download storage path',
+    storageHelp: 'Files are saved under this directory, grouped by repository',
+    chooseFolder: 'Choose folder',
     batchTools: 'Bulk tools',
     totalSpeed: 'Current speed',
     controllable: 'Controllable',
@@ -208,8 +224,10 @@ export default function DownloadManager() {
     displayUnit: 'Display unit',
     unlimited: 'Unlimited',
     limitHelp: '0 means unlimited',
-    lowPriorityThrottle: 'Low-priority throttle',
-    throttleHelp: 'UI preset only until a backend command is available',
+    localPreference: 'Local preference',
+    backendPending: 'Backend pending',
+    lowPriorityThrottle: 'Low-priority task preset',
+    throttleHelp: 'Stored locally only; it does not affect actual download speed yet',
     resetDefaults: 'Reset defaults',
     noActionable: 'No actionable downloads',
     localPreset: 'Local preset',
@@ -777,9 +795,9 @@ export default function DownloadManager() {
         <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-4 dark:border-slate-800">
             <div className="min-w-0">
-              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{sourceName(source)}</div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.addTaskTitle}</div>
               <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={browsedRepoId || status || t.downloadPage.repoLabel}>
-                {browsedRepoId || status || t.downloadPage.repoLabel}
+                {browsedRepoId ? `${sourceName(source)} · ${browsedRepoId}` : ui.addTaskSub}
               </div>
             </div>
             {files.length > 0 && (
@@ -794,21 +812,27 @@ export default function DownloadManager() {
           </div>
 
           <div className="space-y-4 px-4 py-4">
-            <div className="flex min-w-0 flex-col gap-4 xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.55fr)]">
-              <div className="space-y-3">
-                <div className="inline-flex max-w-full rounded-lg bg-slate-100 p-1 dark:bg-slate-800" data-guide="download-source">
-                  <button
-                    onClick={() => { setSource('modelscope'); setFiles([]); setStatus('') }}
-                    className={`rounded-md px-3 py-2 text-sm font-medium transition ${source === 'modelscope' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-                  >
-                    ModelScope
-                  </button>
-                  <button
-                    onClick={() => { setSource('huggingface'); setFiles([]); setStatus('') }}
-                    className={`rounded-md px-3 py-2 text-sm font-medium transition ${source === 'huggingface' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-                  >
-                    HuggingFace
-                  </button>
+            <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.62fr)]">
+              <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/35">
+                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">{ui.sourceSection}</div>
+                    <div className="mt-1 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.sourceHelp}</div>
+                  </div>
+                  <div className="inline-flex max-w-full shrink-0 rounded-lg bg-slate-200/70 p-1 dark:bg-slate-800" data-guide="download-source">
+                    <button
+                      onClick={() => { setSource('modelscope'); setFiles([]); setStatus('') }}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'modelscope' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                    >
+                      ModelScope
+                    </button>
+                    <button
+                      onClick={() => { setSource('huggingface'); setFiles([]); setStatus('') }}
+                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'huggingface' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                    >
+                      HuggingFace
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
@@ -831,17 +855,25 @@ export default function DownloadManager() {
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <div className="flex min-w-0 gap-2">
+              <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50/70 p-3 dark:border-slate-800 dark:bg-slate-950/35">
+                <div className="mb-3 min-w-0">
+                  <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">{ui.storageSection}</div>
+                  <div className="mt-1 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.storageHelp}</div>
+                </div>
+
+                <div className="flex min-w-0 gap-2" data-guide="download-save-dir">
                   <input
                     type="text"
                     value={saveDir}
                     onChange={e => saveDirPersist(e.target.value)}
-                    placeholder={t.downloadPage.saveDirLabel}
+                    placeholder={ui.storageSection}
+                    aria-label={ui.storageSection}
                     className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
                   />
                   <button
                     onClick={handleBrowseSaveDir}
+                    title={ui.chooseFolder}
+                    aria-label={ui.chooseFolder}
                     className="inline-flex h-[42px] w-[42px] shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white"
                   >
                     <FolderOpen className="h-4 w-4" />
@@ -849,7 +881,7 @@ export default function DownloadManager() {
                 </div>
 
                 {status && (
-                  <div className="truncate rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:bg-slate-950 dark:text-slate-400" title={status}>
+                  <div className="mt-3 truncate rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400" title={status}>
                     {status}
                   </div>
                 )}
@@ -954,8 +986,8 @@ export default function DownloadManager() {
                 <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
                   <div className="flex items-center justify-between gap-3">
                     <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{ui.bandwidth}</label>
-                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-                      {ui.localOnly}
+                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                      {ui.backendPending}
                     </span>
                   </div>
                   <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2">
@@ -977,13 +1009,18 @@ export default function DownloadManager() {
                       <option value="KiB/s">KiB/s</option>
                     </select>
                   </div>
-                  <div className="text-[11px] text-slate-400">{ui.limitHelp} &middot; {ui.localPreset}</div>
+                  <div className="text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.limitHelp} · {ui.localPreference}</div>
                 </div>
 
                 <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{ui.lowPriorityThrottle}</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{ui.lowPriorityThrottle}</div>
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
+                          {ui.backendPending}
+                        </span>
+                      </div>
                       <div className="mt-1 text-[11px] leading-5 text-slate-400">{ui.throttleHelp}</div>
                     </div>
                     <button

@@ -74,6 +74,80 @@ html.dark body {
   color: #e2e8f0;
 }
 
+:not(.dark) > .app-shell {
+  color-scheme: light;
+}
+
+:not(.dark) > .app-shell .bg-slate-950:not(.text-white),
+:not(.dark) > .app-shell .bg-slate-950\/95,
+:not(.dark) > .app-shell .bg-slate-950\/90,
+:not(.dark) > .app-shell .bg-slate-950\/80,
+:not(.dark) > .app-shell .bg-slate-950\/70,
+:not(.dark) > .app-shell .bg-slate-950\/60,
+:not(.dark) > .app-shell .bg-slate-950\/50,
+:not(.dark) > .app-shell .bg-slate-950\/40,
+:not(.dark) > .app-shell .bg-slate-950\/35,
+:not(.dark) > .app-shell .bg-slate-950\/30,
+:not(.dark) > .app-shell .bg-slate-900,
+:not(.dark) > .app-shell .bg-slate-900\/95,
+:not(.dark) > .app-shell .bg-slate-900\/90,
+:not(.dark) > .app-shell .bg-slate-900\/80,
+:not(.dark) > .app-shell .bg-slate-900\/70,
+:not(.dark) > .app-shell .bg-slate-900\/60 {
+  background-color: #ffffff;
+}
+
+:not(.dark) > .app-shell .bg-slate-800,
+:not(.dark) > .app-shell .bg-slate-800\/80,
+:not(.dark) > .app-shell .bg-slate-800\/70,
+:not(.dark) > .app-shell .bg-slate-800\/60 {
+  background-color: #f1f5f9;
+}
+
+:not(.dark) > .app-shell .hover\:bg-slate-950:hover,
+:not(.dark) > .app-shell .hover\:bg-slate-950\/35:hover,
+:not(.dark) > .app-shell .hover\:bg-slate-900:hover,
+:not(.dark) > .app-shell .hover\:bg-slate-900\/80:hover,
+:not(.dark) > .app-shell .hover\:bg-slate-800:hover,
+:not(.dark) > .app-shell .hover\:bg-slate-800\/80:hover {
+  background-color: #f8fafc;
+}
+
+:not(.dark) > .app-shell .border-slate-800,
+:not(.dark) > .app-shell .border-slate-800\/80,
+:not(.dark) > .app-shell .border-slate-700,
+:not(.dark) > .app-shell .border-slate-700\/80 {
+  border-color: #cbd5e1;
+}
+
+:not(.dark) > .app-shell .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #e2e8f0;
+}
+
+:not(.dark) > .app-shell .text-slate-50,
+:not(.dark) > .app-shell .text-slate-100 {
+  color: #0f172a;
+}
+
+:not(.dark) > .app-shell .text-slate-200,
+:not(.dark) > .app-shell .text-slate-300 {
+  color: #334155;
+}
+
+:not(.dark) > .app-shell .text-slate-400 {
+  color: #64748b;
+}
+
+:not(.dark) > .app-shell .hover\:text-slate-100:hover,
+:not(.dark) > .app-shell .hover\:text-slate-200:hover,
+:not(.dark) > .app-shell .hover\:text-white:hover {
+  color: #0f172a;
+}
+
+:not(.dark) > .app-shell .ring-blue-500\/40 {
+  --tw-ring-color: rgb(37 99 235 / 0.24);
+}
+
 .select-custom {
   appearance: none;
   -webkit-appearance: none;

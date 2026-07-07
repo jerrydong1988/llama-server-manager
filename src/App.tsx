@@ -249,16 +249,16 @@ function AppInner() {
     { label: t.nav.downloads || 'Downloads', value: activeDownloadCount, tone: 'blue' },
   ]
   const pageContext: Record<string, string> = {
-    dashboard: 'System overview and current llama-server activity',
-    'model-repo': 'Browse local and remote model assets',
-    downloads: 'Model transfer queue and active tasks',
-    engine: 'Runtime binaries and execution backends',
-    instances: 'Server instances, ports, and process state',
-    config: 'Application defaults and runtime preferences',
-    cluster: 'Distributed workers and network availability',
-    perf: 'Performance telemetry and resource signals',
-    logs: 'Runtime logs and diagnostic output',
-    guide: 'Reference material and operating notes',
+    dashboard: lang === 'zh-CN' ? '系统总览与 llama-server 实例活动' : 'System overview and current llama-server activity',
+    'model-repo': lang === 'zh-CN' ? '浏览本地与远程模型资源' : 'Browse local and remote model assets',
+    downloads: lang === 'zh-CN' ? '模型传输队列与活动任务' : 'Model transfer queue and active tasks',
+    engine: lang === 'zh-CN' ? '运行时二进制与执行后端' : 'Runtime binaries and execution backends',
+    instances: lang === 'zh-CN' ? '服务实例、端口与进程状态' : 'Server instances, ports, and process state',
+    config: lang === 'zh-CN' ? '应用默认值与运行时偏好' : 'Application defaults and runtime preferences',
+    cluster: lang === 'zh-CN' ? '分布式 worker 与网络可用性' : 'Distributed workers and network availability',
+    perf: lang === 'zh-CN' ? '性能遥测与资源信号' : 'Performance telemetry and resource signals',
+    logs: lang === 'zh-CN' ? '运行日志与诊断输出' : 'Runtime logs and diagnostic output',
+    guide: lang === 'zh-CN' ? '参考资料与操作说明' : 'Reference material and operating notes',
   }
   const handleAutoStartChange = (next: boolean) => {
     setAutoStartEnabled(next)
@@ -279,7 +279,7 @@ function AppInner() {
       navigation={navigation}
       activeId={activeTab}
       onNavigate={setActiveTab}
-      pageDescription={pageContext[activeTab] || 'Manage local llama-server runtime state'}
+      pageDescription={pageContext[activeTab] || (lang === 'zh-CN' ? '管理本地 llama-server 运行状态' : 'Manage local llama-server runtime state')}
       statusChips={statusChips}
       updateInfo={updateInfo}
       autoStartLabel={t.common.autoStart || 'Auto Start'}

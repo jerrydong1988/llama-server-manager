@@ -1,8 +1,8 @@
 import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 
-export const surfaceClassName = 'rounded-lg border border-slate-800/80 bg-slate-900/70 shadow-[0_16px_48px_rgba(15,23,42,0.28)] backdrop-blur'
-export const insetSurfaceClassName = 'rounded-lg border border-slate-800 bg-slate-950/70'
-export const controlClassName = 'rounded-lg border border-slate-700 bg-slate-950 text-sm text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50'
+export const surfaceClassName = 'rounded-lg border border-slate-200 bg-white text-slate-900 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/70 dark:text-slate-100 dark:shadow-[0_16px_48px_rgba(15,23,42,0.28)]'
+export const insetSurfaceClassName = 'rounded-lg border border-slate-200 bg-slate-50 text-slate-900 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-100'
+export const controlClassName = 'rounded-lg border border-slate-300 bg-white text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500'
 
 export function joinClassNames(...items: Array<string | false | null | undefined>) {
   return items.filter(Boolean).join(' ')
@@ -48,17 +48,17 @@ export function MetricCard({
     <Surface className="p-5">
       <div className="flex items-start justify-between">
         <div className="min-w-0">
-          <p className="text-sm text-slate-400">{label}</p>
-          <p className={`mt-3 truncate font-semibold text-slate-50 ${valueClassName}`} title={typeof value === 'string' ? value : undefined}>
+          <p className="text-sm text-slate-600 dark:text-slate-400">{label}</p>
+          <p className={`mt-3 truncate font-semibold text-slate-950 dark:text-slate-50 ${valueClassName}`} title={typeof value === 'string' ? value : undefined}>
             {value}
           </p>
         </div>
         {icon ? (
-          <div className={`rounded-lg border p-3 ${tone || 'border-slate-700 bg-slate-800 text-slate-300'}`}>
+          <div className={`rounded-lg border p-3 ${tone || 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
             {icon}
           </div>
         ) : (
-          <div className={`rounded-lg border px-3 py-2 text-xs ${tone || 'border-slate-700 bg-slate-800 text-slate-300'}`}>
+          <div className={`rounded-lg border px-3 py-2 text-xs ${tone || 'border-slate-200 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300'}`}>
             {label}
           </div>
         )}
@@ -79,8 +79,8 @@ export function SectionHeader({
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0">
-        <h2 className="text-lg font-semibold text-slate-50">{title}</h2>
-        {description ? <p className="mt-1 text-sm leading-6 text-slate-400">{description}</p> : null}
+        <h2 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{title}</h2>
+        {description ? <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{description}</p> : null}
       </div>
       {action ? <div className="shrink-0">{action}</div> : null}
     </div>
@@ -100,19 +100,19 @@ export function EmptyState({
 }) {
   return (
     <Surface className={`flex min-h-[360px] flex-col items-center justify-center p-10 text-center ${className}`}>
-      <div className="mb-4 rounded-lg border border-slate-700 bg-slate-950/70 p-4 text-slate-300">{icon}</div>
-      <h2 className="text-2xl font-semibold text-slate-50">{title}</h2>
-      {description ? <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">{description}</p> : null}
+      <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-slate-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-300">{icon}</div>
+      <h2 className="text-2xl font-semibold text-slate-950 dark:text-slate-50">{title}</h2>
+      {description ? <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-500 dark:text-slate-400">{description}</p> : null}
     </Surface>
   )
 }
 
 const buttonVariants = {
   primary: 'border border-blue-500/20 bg-blue-600 text-white hover:bg-blue-500',
-  secondary: 'border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 hover:bg-slate-800',
-  subtle: 'border border-transparent text-slate-400 hover:bg-slate-800 hover:text-white',
-  danger: 'border border-red-500/20 bg-red-500/10 text-red-200 hover:bg-red-500/15',
-  success: 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/15',
+  secondary: 'border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-800',
+  subtle: 'border border-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white',
+  danger: 'border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15',
+  success: 'border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200 dark:hover:bg-emerald-500/15',
   cyan: 'border border-cyan-500/20 bg-cyan-600 text-white hover:bg-cyan-500',
   violet: 'border border-violet-500/20 bg-violet-600 text-white hover:bg-violet-500',
 } as const
@@ -164,12 +164,12 @@ export function Badge({
   className?: string
 }) {
   const tones = {
-    slate: 'border-slate-700 bg-slate-800 text-slate-300',
-    blue: 'border-blue-500/20 bg-blue-500/10 text-blue-300',
-    emerald: 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300',
-    amber: 'border-amber-500/20 bg-amber-500/10 text-amber-300',
-    red: 'border-red-500/20 bg-red-500/10 text-red-300',
-    violet: 'border-violet-500/20 bg-violet-500/10 text-violet-300',
+    slate: 'border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
+    blue: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300',
+    emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300',
+    amber: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-300',
+    red: 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-300',
+    violet: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-300',
   }
 
   return <span className={joinClassNames('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs', tones[tone], className)}>{children}</span>
@@ -328,7 +328,7 @@ export function IconButton({
       aria-label={label}
       title={title || label}
       className={joinClassNames(
-        'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-200 transition hover:border-slate-600 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50',
+        'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:bg-slate-800',
         className,
       )}
       {...props}
