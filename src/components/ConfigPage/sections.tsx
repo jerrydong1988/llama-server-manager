@@ -471,12 +471,17 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
 
         <CollapsibleGroup
           id="config-advanced-custom"
-          title={t.configPage.customArgs || 'Custom arguments'}
+          title={t.configPage.customArgs}
           defaultOpen={entries.length > 0}
           summary={countSummary(countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs))}
         >
           <div className="space-y-2">
             {/* 已添加的参数列表 */}
+            {entries.length === 0 && (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-500">
+                {t.configPage.customArgEmpty}
+              </div>
+            )}
             {entries.map((e, i) => (
               <div key={i} className="flex items-center gap-2">
                 <span className="min-w-0 flex-1 truncate rounded-lg border border-slate-800 bg-slate-900 px-2 py-1 font-mono text-xs text-slate-200" title={e.name}>{e.name}</span>
@@ -491,7 +496,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addEntry() }}
-                placeholder="Parameter name"
+                placeholder={t.configPage.customArgName}
                 className="h-9 flex-1 text-xs"
               />
               <TextInput
@@ -499,13 +504,13 @@ export function AdvancedSection({ local, set, t, isEmbedding, onShowDraftPicker,
                 value={newVal}
                 onChange={e => setNewVal(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addEntry() }}
-                placeholder="Value (optional)"
+                placeholder={t.configPage.customArgValue}
                 className="h-9 flex-1 text-xs"
               />
-              <Button onClick={addEntry} variant="primary" size="icon" className="h-9 w-9 shrink-0" title="Add"><Plus className="w-4 h-4"/></Button>
+              <Button onClick={addEntry} variant="primary" size="icon" className="h-9 w-9 shrink-0" title={t.configPage.customArgAdd}><Plus className="w-4 h-4"/></Button>
             </div>
             {newName.trim().startsWith('-') && KNOWN_FLAGS.has(newName.trim()) && (
-              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">! {t.configPage.warnD1 || 'This flag is already supported in the form.'}</div>
+              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">! {t.configPage.warnD1}</div>
             )}
           </div>
         </CollapsibleGroup>

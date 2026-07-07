@@ -71,6 +71,11 @@
     subAdvRope: '\u4E0A\u4E0B\u6587\u7F29\u653E / RoPE \u00B7 YaRN', subAdvKvCache: 'KV \u7F13\u5B58', subAdvContextMgmt: '\u4E0A\u4E0B\u6587\u7BA1\u7406',
     subAdvHardware: '\u786C\u4EF6\u914D\u7F6E', subAdvServer: '\u670D\u52A1\u57FA\u7840', subAdvServerExt: '\u670D\u52A1\u6269\u5C55',
     subAdvMulti: '\u591A\u6A21\u578B / \u4E13\u5BB6',
+    customArgs: '\u81EA\u5B9A\u4E49\u53C2\u6570',
+    customArgName: '\u53C2\u6570\u540D\u79F0',
+    customArgValue: '\u53C2\u6570\u503C\uFF08\u53EF\u9009\uFF09',
+    customArgAdd: '\u6DFB\u52A0\u53C2\u6570',
+    customArgEmpty: '\u6682\u65E0\u81EA\u5B9A\u4E49\u53C2\u6570',
     // Basic
     modelPath: '\u6A21\u578B\u8DEF\u5F84', modelPathTip: 'GGUF 模型文件的路径。llama-server 将加载并提供该模型的 API 服务。必填参数。',
     modelPathBtn: '\u4ECE\u6A21\u578B\u4ED3\u5E93\u4E2D\u9009\u62E9',

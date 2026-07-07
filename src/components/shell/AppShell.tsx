@@ -64,6 +64,8 @@ export function AppShell({
   const runningChip = statusChips[0]
   const secondaryChips = statusChips.slice(1)
   const activeNavRef = useRef<HTMLButtonElement | null>(null)
+  const topControlClassName = 'h-9 rounded-lg'
+  const topStatusChipClassName = 'h-9 min-w-[72px] justify-center rounded-lg px-3 text-[12px]'
 
   useEffect(() => {
     activeNavRef.current?.scrollIntoView({ block: 'nearest', inline: 'center' })
@@ -175,7 +177,7 @@ export function AppShell({
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
                 <div className="flex flex-wrap items-center gap-2">
                   {secondaryChips.map(chip => (
-                    <Badge key={String(chip.label)} tone={chip.tone || 'slate'}>
+                    <Badge key={String(chip.label)} tone={chip.tone || 'slate'} className={topStatusChipClassName}>
                       <span className="font-semibold">{chip.value}</span>
                       <span>{chip.label}</span>
                     </Badge>
@@ -188,7 +190,10 @@ export function AppShell({
                       href={updateInfo.url}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex h-10 items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 text-sm font-medium text-emerald-700 transition hover:bg-emerald-500/15 dark:text-emerald-200"
+                      className={joinClassNames(
+                        'inline-flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/10 px-3 text-sm font-medium text-emerald-700 transition hover:bg-emerald-500/15 dark:text-emerald-200',
+                        topControlClassName,
+                      )}
                     >
                       <span className="max-w-[150px] truncate">v{updateInfo.latest_version}</span>
                       <ArrowUpRight className="h-4 w-4 shrink-0" />
@@ -199,7 +204,7 @@ export function AppShell({
                     size="md"
                     title={languageTitle}
                     icon={<Languages className="h-4 w-4" />}
-                    className="h-10 px-3"
+                    className={joinClassNames('min-w-[82px] px-3 text-[12px]', topControlClassName)}
                   >
                     {languageLabel}
                   </Button>
@@ -208,6 +213,7 @@ export function AppShell({
                     title={darkModeTitle}
                     onClick={onToggleDarkMode}
                     icon={darkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                    className={joinClassNames('w-9', topControlClassName)}
                   />
                 </div>
               </div>

@@ -245,8 +245,8 @@ export default function Dashboard() {
     transfer: zh ? '传输' : 'Transfer',
     recentDownloads: zh ? '近期下载' : 'Recent Downloads',
     noDownloads: zh ? '暂无下载任务' : 'No download tasks',
-    inventory: zh ? '库存' : 'Inventory',
-    operations: zh ? '操作上下文' : 'Operations',
+    inventory: zh ? '资源统计' : 'Resource Summary',
+    operations: zh ? '快捷操作' : 'Quick Actions',
     openDownloads: zh ? '打开下载' : 'Downloads',
     openPerformance: zh ? '性能监控' : 'Performance',
     openLogs: zh ? '查看日志' : 'Logs',
@@ -472,20 +472,18 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1120px] table-fixed text-sm">
+              <table className="w-full min-w-[860px] table-fixed text-sm">
                 <colgroup>
-                  <col className="w-[18%]" />
-                  <col className="w-[25%]" />
-                  <col className="w-[14%]" />
-                  <col className="w-[10%]" />
-                  <col className="w-[10%]" />
+                  <col className="w-[22%]" />
+                  <col className="w-[16%]" />
                   <col className="w-[12%]" />
-                  <col className="w-[11%]" />
+                  <col className="w-[13%]" />
+                  <col className="w-[17%]" />
+                  <col className="w-[20%]" />
                 </colgroup>
                 <thead className="bg-slate-50 dark:bg-slate-950/70">
                   <tr className="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-500">
                     <th className="px-5 py-3 font-medium">{labels.name}</th>
-                    <th className="px-5 py-3 font-medium">{labels.model}</th>
                     <th className="px-5 py-3 font-medium">{labels.engine}</th>
                     <th className="px-5 py-3 font-medium">{labels.status}</th>
                     <th className="px-5 py-3 font-medium">{labels.health}</th>
@@ -505,12 +503,6 @@ export default function Dashboard() {
                           <div className="min-w-0">
                             <div className="truncate font-medium text-slate-950 dark:text-slate-100" title={instance.name}>{instance.name}</div>
                             <div className="mt-1 text-xs text-slate-500 dark:text-slate-500">{labels.uptime} {formatUptime(instance.startTime)}</div>
-                          </div>
-                        </td>
-                        <td className="px-5 py-3 align-middle">
-                          <div className="min-w-0">
-                            <div className="truncate text-slate-700 dark:text-slate-300" title={instance.model}>{instance.model}</div>
-                            <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-600" title={instance.config.model_path}>{instance.config.model_path || instance.model}</div>
                           </div>
                         </td>
                         <td className="px-5 py-3 align-middle">

@@ -69,6 +69,11 @@ export const enUS = {
     subAdvRope: 'Context Scaling / RoPE \u00B7 YaRN', subAdvKvCache: 'KV Cache', subAdvContextMgmt: 'Context Management',
     subAdvHardware: 'Hardware', subAdvServer: 'Server Basics', subAdvServerExt: 'Server Extensions',
     subAdvMulti: 'Multi-Model / Expert',
+    customArgs: 'Custom Arguments',
+    customArgName: 'Parameter name',
+    customArgValue: 'Value (optional)',
+    customArgAdd: 'Add parameter',
+    customArgEmpty: 'No custom arguments',
     // ── Basic ──
     modelPath: 'Model Path', modelPathTip: 'Path to GGUF model file. This is the primary model that llama-server will load and serve. Required parameter.',
     modelPathBtn: 'Select from model repository',

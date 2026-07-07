@@ -243,7 +243,7 @@ const ConfigPage = () => {
     endpoint: zh ? '\u7aef\u70b9' : 'Endpoint',
     embeddingMode: zh ? '\u5d4c\u5165\u6a21\u5f0f' : 'Embedding mode',
     modifiedParams: zh ? '\u5df2\u4fee\u6539\u53c2\u6570' : 'Modified params',
-    validationSummary: zh ? '\u6821\u9a8c\u6458\u8981' : 'Validation Summary',
+    validationSummary: zh ? '\u914d\u7f6e\u68c0\u67e5' : 'Configuration Check',
     high: zh ? '\u9ad8' : 'High',
     medium: zh ? '\u4e2d' : 'Medium',
     low: zh ? '\u4f4e' : 'Low',
@@ -276,7 +276,7 @@ const ConfigPage = () => {
         { id: 'config-advanced-server', title: t.configPage.subAdvServer, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
         { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
         { id: 'config-advanced-multi', title: t.configPage.subAdvMulti, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) },
-        { id: 'config-advanced-custom', title: (t.configPage as any).customArgs || 'Custom arguments', count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
+        { id: 'config-advanced-custom', title: t.configPage.customArgs, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
       ],
     },
   ]
