@@ -31,14 +31,41 @@ function renderMD(markdown: string): string {
 }
 
 function sanitize(html: string): string {
-  return html
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
-    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
-    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
-    .replace(/<embed\b[^>]*>/gi, '')
-    .replace(/\bon\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
-    .replace(/javascript:/gi, '')
-    .replace(/vbscript:/gi, '')
+  const allowedTags = new Set([
+    'A', 'B', 'BLOCKQUOTE', 'BR', 'CODE', 'DIV', 'EM', 'H1', 'H2', 'H3', 'H4',
+    'HR', 'I', 'IMG', 'LI', 'OL', 'P', 'PRE', 'SPAN', 'STRONG', 'TABLE',
+    'TBODY', 'TD', 'TH', 'THEAD', 'TR', 'UL',
+  ])
+  const allowedAttrs = new Set(['href', 'src', 'alt', 'title', 'id', 'class'])
+  const template = document.createElement('template')
+  template.innerHTML = html
+
+  const cleanNode = (node: Node) => {
+    for (const child of Array.from(node.childNodes)) {
+      if (child.nodeType !== Node.ELEMENT_NODE) {
+        continue
+      }
+
+      const element = child as HTMLElement
+      if (!allowedTags.has(element.tagName)) {
+        element.remove()
+        continue
+      }
+
+      for (const attr of Array.from(element.attributes)) {
+        const name = attr.name.toLowerCase()
+        const value = attr.value.trim().toLowerCase()
+        if (!allowedAttrs.has(name) || name.startsWith('on') || value.startsWith('javascript:') || value.startsWith('vbscript:')) {
+          element.removeAttribute(attr.name)
+        }
+      }
+
+      cleanNode(element)
+    }
+  }
+
+  cleanNode(template.content)
+  return template.innerHTML
 }
 
 function waitDOM(selector: string, timeout: number): Promise<Element> {

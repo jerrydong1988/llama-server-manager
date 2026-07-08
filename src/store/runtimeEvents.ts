@@ -266,7 +266,7 @@ export function registerGlobalStoreListeners(
     })
   }).catch(() => {})
 
-  listen<{ taskId?: string; fileName: string; repoId: string; source: string; remotePath?: string; version?: number }>('download-remote-changed', (event) => {
+  listen<DownloadEventPayload>('download-remote-changed', (event) => {
     const state = store.getState()
     const taskId = event.payload.taskId || Object.values(state.downloadTasks).find((task) => (
       task.fileName === event.payload.fileName
@@ -278,6 +278,8 @@ export function registerGlobalStoreListeners(
 
     const prev = state.downloadTasks[taskId]
     if (!prev) return
+    if (!versionMatches(event.payload, prev)) return
+    if (prev.runId && !runMatches(event.payload, prev)) return
 
     state.setDownloadTasks({
       ...state.downloadTasks,

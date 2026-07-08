@@ -221,9 +221,13 @@ export default function ProxyPage() {
     noRoutes: zh ? '\u5c1a\u672a\u914d\u7f6e\u8def\u7531\uff0c\u8bf7\u6c42\u5c06\u843d\u5230\u9ed8\u8ba4\u5b9e\u4f8b\u3002' : 'No routes configured. Requests will fall through to the default target.',
     noTargets: zh ? '\u6682\u65e0\u53ef\u7528\u76ee\u6807\u3002' : 'No targets available.',
     publicKey: zh ? '\u4ee3\u7406 API Key\uff08\u53ef\u9009\uff09' : 'Proxy API Key (optional)',
+    publicKeyRequired: zh ? '\u76d1\u542c\u975e\u672c\u673a\u5730\u5740\u65f6\u5fc5\u987b\u8bbe\u7f6e\u4ee3\u7406 API Key\u3002' : 'A proxy API key is required when listening on a non-local address.',
     timeout: zh ? '\u8d85\u65f6\uff08\u6beb\u79d2\uff09' : 'Timeout (ms)',
     lastError: zh ? '\u6700\u8fd1\u9519\u8bef' : 'Last Error',
   }
+
+  const isLocalHost = (host: string) => ['', 'localhost', '127.0.0.1', '::1', '[::1]'].includes(host.trim())
+  const requiresPublicKey = !isLocalHost(draft.host) && !draft.publicApiKey.trim()
 
   const fallbackTargets = useMemo<ProxyTarget[]>(() => instances.map(instance => ({
     instanceId: instance.id,
@@ -390,7 +394,7 @@ export default function ProxyPage() {
                 {labels.stop}
               </Button>
             ) : (
-              <Button onClick={() => setProxyRunning('start')} disabled={busyAction !== null} variant="success" icon={<Zap className="h-4 w-4" />}>
+              <Button onClick={() => setProxyRunning('start')} disabled={busyAction !== null || requiresPublicKey} variant="success" icon={<Zap className="h-4 w-4" />}>
                 {labels.start}
               </Button>
             )}
@@ -467,7 +471,13 @@ export default function ProxyPage() {
             <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
               <label className="min-w-0">
                 <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.publicKey}</span>
-                <TextInput value={draft.publicApiKey} onChange={event => updateDraft({ publicApiKey: event.target.value })} />
+                <TextInput type="password" autoComplete="off" value={draft.publicApiKey} onChange={event => updateDraft({ publicApiKey: event.target.value })} />
+                {requiresPublicKey ? (
+                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{labels.publicKeyRequired}</span>
+                  </div>
+                ) : null}
               </label>
               <label className="min-w-0">
                 <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.timeout}</span>

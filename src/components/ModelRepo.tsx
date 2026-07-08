@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Database, File, FolderOpen, FolderTree, HardDrive, Image, RefreshCw, Search, Trash2 } from 'lucide-react'
-import { confirm } from '@tauri-apps/plugin-dialog'
+import { confirm, open } from '@tauri-apps/plugin-dialog'
 import { useAppStore, type ModelInfo } from '../store'
 import { useI18n } from '../i18n'
 import { normalizePath, pathJoin } from '../utils/path'
@@ -202,7 +202,6 @@ const ModelRepo = () => {
 
   const handleAddDirectory = async () => {
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog')
       const dir = await open({ directory: true, title: t.modelRepo.addDir })
       if (!dir) {
         return

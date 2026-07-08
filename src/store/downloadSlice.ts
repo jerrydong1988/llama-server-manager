@@ -297,6 +297,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         await invoke('pause_all_downloads')
       } catch (error) {
         console.error(error)
+        return
       }
 
       const tasks = { ...get().downloadTasks }
@@ -312,6 +313,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         await invoke('cancel_all_downloads')
       } catch (error) {
         console.error(error)
+        return
       }
 
       const tasks = { ...get().downloadTasks }

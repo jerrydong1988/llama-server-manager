@@ -1,7 +1,7 @@
-use tokio::sync::Mutex;
-use tauri::State;
-use crate::models::{WorkerInfo, WorkerStatus, AppState};
 use crate::commands::cluster::{load_workers, save_workers};
+use crate::models::{AppState, WorkerInfo, WorkerStatus};
+use tauri::State;
+use tokio::sync::Mutex;
 
 static DISCOVERY_ACTIVE: Mutex<bool> = Mutex::const_new(false);
 
@@ -33,13 +33,17 @@ pub async fn stop_mdns_discovery() -> Result<String, String> {
 
 async fn run_mdns_discovery() -> Result<(), String> {
     let mdns = mdns_sd::ServiceDaemon::new().map_err(|e| format!("mdns init: {}", e))?;
-    let receiver = mdns.browse("_rpc._tcp.local.").map_err(|e| format!("mdns browse: {}", e))?;
+    let receiver = mdns
+        .browse("_rpc._tcp.local.")
+        .map_err(|e| format!("mdns browse: {}", e))?;
 
     while *DISCOVERY_ACTIVE.lock().await {
         match tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv_async()).await {
             Ok(Ok(event)) => {
                 if let mdns_sd::ServiceEvent::ServiceResolved(info) = event {
-                    let host = info.get_addresses().iter()
+                    let host = info
+                        .get_addresses()
+                        .iter()
                         .find(|a| a.is_ipv4())
                         .map(|a| a.to_string())
                         .unwrap_or_else(|| info.get_hostname().to_string());
@@ -51,7 +55,10 @@ async fn run_mdns_discovery() -> Result<(), String> {
                             id: format!("mdns-{}", host.replace('.', "-")),
                             host,
                             port,
-                            name: info.get_fullname().trim_end_matches("._rpc._tcp.local.").to_string(),
+                            name: info
+                                .get_fullname()
+                                .trim_end_matches("._rpc._tcp.local.")
+                                .to_string(),
                             devices: Vec::new(),
                             status: WorkerStatus::Online,
                             last_seen: Some(chrono::Utc::now().to_rfc3339()),

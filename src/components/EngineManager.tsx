@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Cpu, FolderOpen, Pencil, Plus, RefreshCw, Search, Star, Trash2 } from 'lucide-react'
-import { confirm } from '@tauri-apps/plugin-dialog'
+import { confirm, open } from '@tauri-apps/plugin-dialog'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
 import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
@@ -89,7 +89,6 @@ const EngineManager = () => {
 
   const handleAddDirectory = async () => {
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog')
       const dir = await open({ directory: true, title: t.engineMgr.addDirTitle })
       if (!dir) return
 

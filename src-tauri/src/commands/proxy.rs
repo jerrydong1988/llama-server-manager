@@ -9,13 +9,14 @@ use axum::{
 use futures_util::TryStreamExt;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 use crate::commands::config::update_and_persist;
 use crate::commands::telemetry::{record_proxy_request, ProxyRequestRecord};
 use crate::models::{AppState, InstanceConfig, ProxyConfig, ProxyStatus, ProxyTarget};
 
-static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(1_000_000_000);
+static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 struct ResolvedProxyTarget {
     public: ProxyTarget,
@@ -26,6 +27,27 @@ struct ResolvedProxyTarget {
 
 fn proxy_bound_addr(config: &ProxyConfig) -> String {
     format!("{}:{}", config.host, config.port)
+}
+
+fn next_proxy_task_id() -> u32 {
+    let existing = PROXY_TASK_COUNTER.load(Ordering::Relaxed);
+    if existing == 0 {
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u32)
+            .unwrap_or(1)
+            | 0x8000_0000;
+        let seed = seed.max(1);
+        let _ = PROXY_TASK_COUNTER.compare_exchange(0, seed, Ordering::Relaxed, Ordering::Relaxed);
+    }
+    PROXY_TASK_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+fn is_local_bind_host(host: &str) -> bool {
+    matches!(
+        host.trim(),
+        "" | "localhost" | "127.0.0.1" | "::1" | "[::1]"
+    )
 }
 
 fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
@@ -138,7 +160,12 @@ fn resolve_proxy_target(
 fn requested_model_from_body(body: &[u8]) -> Option<String> {
     serde_json::from_slice::<serde_json::Value>(body)
         .ok()
-        .and_then(|value| value.get("model").and_then(|model| model.as_str()).map(|s| s.to_string()))
+        .and_then(|value| {
+            value
+                .get("model")
+                .and_then(|model| model.as_str())
+                .map(|s| s.to_string())
+        })
 }
 
 fn is_proxy_authorized(config: &ProxyConfig, headers: &HeaderMap) -> bool {
@@ -161,17 +188,28 @@ fn is_proxy_authorized(config: &ProxyConfig, headers: &HeaderMap) -> bool {
 }
 
 fn target_url(target: &ResolvedProxyTarget, uri: &Uri) -> String {
-    let original_path = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or(uri.path());
+    let original_path = uri
+        .path_and_query()
+        .map(|pq| pq.as_str())
+        .unwrap_or(uri.path());
     let prefix = target.api_prefix.trim_matches('/');
     if prefix.is_empty() {
-        format!("http://{}:{}{}", target.public.host, target.public.port, original_path)
+        format!(
+            "http://{}:{}{}",
+            target.public.host, target.public.port, original_path
+        )
+    } else if original_path == format!("/{}", prefix)
+        || original_path.starts_with(&format!("/{}/", prefix))
+        || original_path.starts_with(&format!("/{}?", prefix))
+    {
+        format!(
+            "http://{}:{}{}",
+            target.public.host, target.public.port, original_path
+        )
     } else {
         format!(
             "http://{}:{}/{}{}",
-            target.public.host,
-            target.public.port,
-            prefix,
-            original_path
+            target.public.host, target.public.port, prefix, original_path
         )
     }
 }
@@ -251,28 +289,45 @@ async fn proxy_openai(
     let requested_model = requested_model_from_body(&body);
     let target = match resolve_proxy_target(&state, requested_model.as_deref()) {
         Some(target) => target,
-        None => return plain_response(StatusCode::BAD_GATEWAY, "no running instance matches the requested model"),
+        None => {
+            return plain_response(
+                StatusCode::BAD_GATEWAY,
+                "no running instance matches the requested model",
+            )
+        }
     };
     let started_at = std::time::Instant::now();
-    let proxy_task_id = PROXY_TASK_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let proxy_task_id = next_proxy_task_id();
 
     let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(proxy_config.timeout_ms.max(1_000)))
+        .timeout(std::time::Duration::from_millis(
+            proxy_config.timeout_ms.max(1_000),
+        ))
         .build()
     {
         Ok(client) => client,
-        Err(err) => return plain_response(StatusCode::INTERNAL_SERVER_ERROR, &format!("proxy client error: {}", err)),
+        Err(err) => {
+            return plain_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("proxy client error: {}", err),
+            )
+        }
     };
 
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
         Ok(method) => method,
-        Err(err) => return plain_response(StatusCode::BAD_REQUEST, &format!("invalid method: {}", err)),
+        Err(err) => {
+            return plain_response(StatusCode::BAD_REQUEST, &format!("invalid method: {}", err))
+        }
     };
 
     let mut request = client.request(reqwest_method, target_url(&target, &uri));
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_ascii_lowercase();
-        if matches!(lower.as_str(), "host" | "content-length" | "connection" | "authorization") {
+        if matches!(
+            lower.as_str(),
+            "host" | "content-length" | "connection" | "authorization"
+        ) {
             continue;
         }
         request = request.header(name.as_str(), value.as_bytes());
@@ -295,11 +350,15 @@ async fn proxy_openai(
                     error_text: Some(err.to_string()),
                 },
             );
-            return plain_response(StatusCode::BAD_GATEWAY, &format!("upstream request failed: {}", err));
+            return plain_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("upstream request failed: {}", err),
+            );
         }
     };
 
-    let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let _ = record_proxy_request(
         target.telemetry_session_id.as_deref(),
         &ProxyRequestRecord {
@@ -308,13 +367,20 @@ async fn proxy_openai(
             target_instance_id: target.public.instance_id.clone(),
             http_status: Some(status.as_u16()),
             duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
-            error_text: if status.is_success() { None } else { Some(format!("upstream returned {}", status.as_u16())) },
+            error_text: if status.is_success() {
+                None
+            } else {
+                Some(format!("upstream returned {}", status.as_u16()))
+            },
         },
     );
     let mut builder = Response::builder().status(status);
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
-        if matches!(lower.as_str(), "connection" | "content-length" | "transfer-encoding") {
+        if matches!(
+            lower.as_str(),
+            "connection" | "content-length" | "transfer-encoding"
+        ) {
             continue;
         }
         if let (Ok(header_name), Ok(header_value)) = (
@@ -330,7 +396,12 @@ async fn proxy_openai(
         .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err));
     builder
         .body(Body::from_stream(stream))
-        .unwrap_or_else(|err| plain_response(StatusCode::BAD_GATEWAY, &format!("proxy response error: {}", err)))
+        .unwrap_or_else(|err| {
+            plain_response(
+                StatusCode::BAD_GATEWAY,
+                &format!("proxy response error: {}", err),
+            )
+        })
 }
 
 fn proxy_router(app: tauri::AppHandle) -> Router {
@@ -350,7 +421,10 @@ pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<Proxy
 }
 
 #[tauri::command]
-pub async fn save_proxy_config(config: ProxyConfig, state: tauri::State<'_, AppState>) -> Result<ProxyConfig, String> {
+pub async fn save_proxy_config(
+    config: ProxyConfig,
+    state: tauri::State<'_, AppState>,
+) -> Result<ProxyConfig, String> {
     *state.proxy_config.lock().unwrap() = config.clone();
     update_and_persist(&state, |global| {
         global.proxy_config = config.clone();
@@ -364,7 +438,9 @@ pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<Proxy
 }
 
 #[tauri::command]
-pub async fn list_proxy_targets(state: tauri::State<'_, AppState>) -> Result<Vec<ProxyTarget>, String> {
+pub async fn list_proxy_targets(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<ProxyTarget>, String> {
     Ok(list_proxy_targets_inner(&state))
 }
 
@@ -386,6 +462,11 @@ pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, S
 
     let mut config = state.proxy_config.lock().unwrap().clone();
     config.enabled = true;
+    if !is_local_bind_host(&config.host) && config.public_api_key.trim().is_empty() {
+        let msg = "代理监听非本机地址时必须设置公开 API Key".to_string();
+        *state.proxy_last_error.lock().unwrap() = Some(msg.clone());
+        return Err(msg);
+    }
     let bind_addr = proxy_bound_addr(&config);
     let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
         Ok(listener) => listener,
@@ -414,7 +495,8 @@ pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, S
             .await;
         if let Err(err) = result {
             if let Some(state) = app_for_server.try_state::<AppState>() {
-                *state.proxy_last_error.lock().unwrap() = Some(format!("proxy server error: {}", err));
+                *state.proxy_last_error.lock().unwrap() =
+                    Some(format!("proxy server error: {}", err));
                 *state.proxy_shutdown.lock().unwrap() = None;
                 *state.proxy_bound_addr.lock().unwrap() = None;
             }

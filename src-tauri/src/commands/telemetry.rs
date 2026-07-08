@@ -259,9 +259,6 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
 
         CREATE INDEX IF NOT EXISTS idx_inference_requests_session_completed
             ON inference_requests(session_id, completed_at DESC);
-        CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
-            ON inference_requests(source, completed_at DESC);
-
         CREATE TABLE IF NOT EXISTS slot_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
@@ -280,6 +277,12 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
     migrate_inference_request_columns(conn)?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
+            ON inference_requests(source, completed_at DESC)",
+        [],
+    )
+    .map_err(|e| format!("无法创建推理请求来源索引: {}", e))?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("无法写入遥测 schema 版本: {}", e))?;
     Ok(())
@@ -304,8 +307,14 @@ fn migrate_inference_request_columns(conn: &Connection) -> Result<(), String> {
     ];
     for (name, definition) in additions {
         if !columns.iter().any(|column| column == name) {
-            conn.execute(&format!("ALTER TABLE inference_requests ADD COLUMN {} {}", name, definition), [])
-                .map_err(|e| format!("failed to migrate inference request schema: {}", e))?;
+            conn.execute(
+                &format!(
+                    "ALTER TABLE inference_requests ADD COLUMN {} {}",
+                    name, definition
+                ),
+                [],
+            )
+            .map_err(|e| format!("failed to migrate inference request schema: {}", e))?;
         }
     }
     Ok(())
@@ -589,7 +598,9 @@ pub async fn get_telemetry_overview() -> Result<TelemetryOverview, String> {
 }
 
 #[tauri::command]
-pub async fn list_telemetry_sessions(limit: Option<u32>) -> Result<Vec<TelemetrySessionSummary>, String> {
+pub async fn list_telemetry_sessions(
+    limit: Option<u32>,
+) -> Result<Vec<TelemetrySessionSummary>, String> {
     let limit = limit.unwrap_or(20).clamp(1, 200);
     tokio::task::spawn_blocking(move || {
         let conn = open_connection()?;
@@ -688,7 +699,7 @@ pub async fn get_telemetry_session_analysis(
                     COALESCE(AVG(total_time_ms), 0),
                     COALESCE(MAX(total_tokens), 0)
                  FROM inference_requests
-                 WHERE session_id = ?1",
+                 WHERE session_id = ?1 AND source = 'log'",
                 params![session_id],
                 |row| {
                     Ok((
@@ -790,7 +801,7 @@ fn query_session_analysis(
                 COALESCE(AVG(total_time_ms), 0),
                 COALESCE(MAX(total_tokens), 0)
              FROM inference_requests
-             WHERE session_id = ?1",
+             WHERE session_id = ?1 AND source = 'log'",
             params![session_id],
             |row| {
                 Ok((

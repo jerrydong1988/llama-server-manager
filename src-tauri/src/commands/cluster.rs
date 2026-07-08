@@ -1,15 +1,15 @@
 use std::collections::HashSet;
-use std::net::{TcpStream, SocketAddr, IpAddr, Ipv4Addr};
-use std::time::Duration;
-use std::path::PathBuf;
-use std::sync::Arc;
 use std::io::{BufRead, BufReader};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::time::Duration;
 
 use tauri::State;
 use tokio::time::timeout as tokio_timeout;
 
-use crate::models::{WorkerInfo, WorkerDevice, WorkerStatus, AppState};
+use crate::models::{AppState, WorkerDevice, WorkerInfo, WorkerStatus};
 use crate::utils;
 
 #[cfg(target_os = "windows")]
@@ -18,11 +18,33 @@ pub(crate) const RPC_SERVER_NAME: &str = "rpc-server.exe";
 pub(crate) const RPC_SERVER_NAME: &str = "rpc-server";
 
 const VIRTUAL_KEYWORDS: &[&str] = &[
-    "docker", "veth", "br-", "vmnet", "virtualbox", "vbox",
-    "hyper-v", "vethernet", "wsl", "vpn", "tap-", "tun",
-    "p2p", "rndis", "usb", "bluetooth", "loopback",
-    "mihomo", "clash", "cfw", "tunnel", "sing-box", "hysteria",
-    "wireguard", "zerotier", "tailscale", "nebula",
+    "docker",
+    "veth",
+    "br-",
+    "vmnet",
+    "virtualbox",
+    "vbox",
+    "hyper-v",
+    "vethernet",
+    "wsl",
+    "vpn",
+    "tap-",
+    "tun",
+    "p2p",
+    "rndis",
+    "usb",
+    "bluetooth",
+    "loopback",
+    "mihomo",
+    "clash",
+    "cfw",
+    "tunnel",
+    "sing-box",
+    "hysteria",
+    "wireguard",
+    "zerotier",
+    "tailscale",
+    "nebula",
 ];
 
 // ═══════════════════════════════════════════════════════════════════
@@ -83,26 +105,35 @@ fn get_lan_prefixes() -> Vec<String> {
     // 虚拟网卡名称关键字（不区分大小写）— 使用全局常量
     if let Ok(ifs) = if_addrs::get_if_addrs() {
         for iface in ifs {
-            if iface.is_loopback() { continue; }
+            if iface.is_loopback() {
+                continue;
+            }
             let ip = iface.addr.ip();
-            if !ip.is_ipv4() { continue; }
+            if !ip.is_ipv4() {
+                continue;
+            }
             let octets = match ip {
                 std::net::IpAddr::V4(ipv4) => ipv4.octets(),
                 _ => continue,
             };
 
             // 排除已知虚拟子网
-            let is_virtual_subnet = matches!((octets[0], octets[1]),
+            let is_virtual_subnet = matches!(
+                (octets[0], octets[1]),
                 (198, 18) | (198, 19) |           // benchmarking
                 (169, 254) |                       // link-local
                 (172, 17..=31) |                   // Docker default range
-                (100, 64..=127)                    // carrier-grade NAT
+                (100, 64..=127) // carrier-grade NAT
             );
-            if is_virtual_subnet { continue; }
+            if is_virtual_subnet {
+                continue;
+            }
 
             // 排除虚拟网卡名
             let name_lower = iface.name.to_lowercase();
-            if VIRTUAL_KEYWORDS.iter().any(|k| name_lower.contains(k)) { continue; }
+            if VIRTUAL_KEYWORDS.iter().any(|k| name_lower.contains(k)) {
+                continue;
+            }
 
             let prefix = format!("{}.{}.{}.", octets[0], octets[1], octets[2]);
             if !prefixes.contains(&prefix) {
@@ -129,13 +160,22 @@ fn get_physical_ips() -> Vec<Ipv4Addr> {
     let mut ips = Vec::new();
     if let Ok(ifs) = if_addrs::get_if_addrs() {
         for iface in ifs {
-            if iface.is_loopback() { continue; }
+            if iface.is_loopback() {
+                continue;
+            }
             let name_lower = iface.name.to_lowercase();
             let is_virtual = VIRTUAL_KEYWORDS.iter().any(|k| name_lower.contains(k));
-            if is_virtual { continue; }
+            if is_virtual {
+                continue;
+            }
             if let IpAddr::V4(ipv4) = iface.addr.ip() {
                 let octets = ipv4.octets();
-                if matches!((octets[0], octets[1]), (169, 254) | (198, 18) | (198, 19) | (100, 64..=127)) { continue; }
+                if matches!(
+                    (octets[0], octets[1]),
+                    (169, 254) | (198, 18) | (198, 19) | (100, 64..=127)
+                ) {
+                    continue;
+                }
                 ips.push(ipv4);
             }
         }
@@ -191,7 +231,9 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                         tokio::time::timeout(
                             connect_timeout,
                             tokio::net::TcpStream::connect(socket_addr),
-                        ).await.ok()
+                        )
+                        .await
+                        .ok()
                         .map(|_| ()) // discard stream, just check reachability
                     } else {
                         // 绑定物理网卡：spawn_blocking 处理 socket2
@@ -199,23 +241,31 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                             physical_ips.iter().find_map(|bind_ip| {
                                 let bind_addr = SocketAddr::new(IpAddr::V4(*bind_ip), 0);
                                 let sock_addr = socket2::SockAddr::from(socket_addr);
-                                socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
-                                    .ok()
-                                    .and_then(|s| {
-                                        s.bind(&bind_addr.into()).ok()?;
-                                        s.connect_timeout(&sock_addr, connect_timeout).ok()?;
-                                        s.set_nonblocking(false).ok()?;
-                                        Some(())
-                                    })
+                                socket2::Socket::new(
+                                    socket2::Domain::IPV4,
+                                    socket2::Type::STREAM,
+                                    None,
+                                )
+                                .ok()
+                                .and_then(|s| {
+                                    s.bind(&bind_addr.into()).ok()?;
+                                    s.connect_timeout(&sock_addr, connect_timeout).ok()?;
+                                    s.set_nonblocking(false).ok()?;
+                                    Some(())
+                                })
                             })
-                        }).await.ok().flatten()
+                        })
+                        .await
+                        .ok()
+                        .flatten()
                     };
 
                     if connected.is_some() {
                         let parts: Vec<&str> = addr.split(':').collect();
                         if parts.len() >= 2 {
                             let host = parts[0].to_string();
-                            let worker_name = format!("Worker-{}", host.split('.').last().unwrap_or("?"));
+                            let worker_name =
+                                format!("Worker-{}", host.split('.').last().unwrap_or("?"));
                             // 使用 lock().await 而非 try_lock()，避免高并发下锁竞争导致已发现的 worker 被静默丢弃
                             let mut list = discovered.lock().await;
                             list.push(WorkerInfo {
@@ -234,7 +284,9 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
             });
             handles.push(handle);
         }
-        for h in handles { let _ = h.await; }
+        for h in handles {
+            let _ = h.await;
+        }
         let discovered = discovered.lock().await;
         discovered.clone()
     };
@@ -242,12 +294,19 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
     match tokio_timeout(overall_timeout, scan_future).await {
         Ok(results) => {
             let mut existing = if let Ok(w) = state.workers.lock() {
-                if w.is_empty() { load_workers() } else { w.clone() }
+                if w.is_empty() {
+                    load_workers()
+                } else {
+                    w.clone()
+                }
             } else {
                 load_workers()
             };
             for d in &results {
-                if let Some(e) = existing.iter_mut().find(|w| w.host == d.host && w.port == d.port) {
+                if let Some(e) = existing
+                    .iter_mut()
+                    .find(|w| w.host == d.host && w.port == d.port)
+                {
                     e.status = WorkerStatus::Online;
                     e.last_seen = Some(chrono::Utc::now().to_rfc3339());
                 } else {
@@ -255,7 +314,9 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                 }
             }
             save_workers(&existing);
-            if let Ok(mut w) = state.workers.lock() { *w = existing.clone(); }
+            if let Ok(mut w) = state.workers.lock() {
+                *w = existing.clone();
+            }
             Ok(existing)
         }
         Err(_) => {
@@ -267,7 +328,11 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
 }
 
 #[tauri::command]
-pub async fn test_worker(host: String, port: u16, state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+pub async fn test_worker(
+    host: String,
+    port: u16,
+    state: State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
     let addr = format!("{}:{}", host, port);
     let timeout = Duration::from_secs(3);
 
@@ -277,22 +342,32 @@ pub async fn test_worker(host: String, port: u16, state: State<'_, AppState>) ->
                 Ok(_) => {
                     // 更新 worker 状态
                     let mut workers = load_workers();
-                    if let Some(w) = workers.iter_mut().find(|w| w.host == host && w.port == port) {
+                    if let Some(w) = workers
+                        .iter_mut()
+                        .find(|w| w.host == host && w.port == port)
+                    {
                         w.status = WorkerStatus::Online;
                         w.last_seen = Some(chrono::Utc::now().to_rfc3339());
                     }
                     save_workers(&workers);
-                    if let Ok(mut w) = state.workers.lock() { *w = workers; }
+                    if let Ok(mut w) = state.workers.lock() {
+                        *w = workers;
+                    }
 
                     Ok(serde_json::json!({ "ok": true }))
                 }
                 Err(e) => {
                     let mut workers = load_workers();
-                    if let Some(w) = workers.iter_mut().find(|w| w.host == host && w.port == port) {
+                    if let Some(w) = workers
+                        .iter_mut()
+                        .find(|w| w.host == host && w.port == port)
+                    {
                         w.status = WorkerStatus::Offline;
                     }
                     save_workers(&workers);
-                    if let Ok(mut w) = state.workers.lock() { *w = workers; }
+                    if let Ok(mut w) = state.workers.lock() {
+                        *w = workers;
+                    }
 
                     Ok(serde_json::json!({ "ok": false, "error": e.to_string() }))
                 }
@@ -305,8 +380,8 @@ pub async fn test_worker(host: String, port: u16, state: State<'_, AppState>) ->
 #[tauri::command]
 pub async fn get_worker_info(host: String, _port: u16) -> Result<Vec<WorkerDevice>, String> {
     // 检查是否为本地 worker
-    let is_local = host == "127.0.0.1" || host == "localhost" || host == "::1"
-        || is_local_ip(&host);
+    let is_local =
+        host == "127.0.0.1" || host == "localhost" || host == "::1" || is_local_ip(&host);
 
     if !is_local {
         // 远程 worker — rpc-server 不暴露设备查询接口
@@ -317,44 +392,62 @@ pub async fn get_worker_info(host: String, _port: u16) -> Result<Vec<WorkerDevic
 
     // 用临时端口启动 rpc-server，抓取启动输出中的设备信息，然后立即杀掉
     let devices = tokio::task::spawn_blocking(move || -> Result<Vec<WorkerDevice>, String> {
-    let mut child = Command::new(&binary)
-        .args(["--host", "127.0.0.1", "--port", "0"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("无法启动 rpc-server: {}", e))?;
+        let mut child = Command::new(&binary)
+            .args(["--host", "127.0.0.1", "--port", "0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("无法启动 rpc-server: {}", e))?;
 
-    let stdout = child.stdout.take().ok_or("无法读取 rpc-server 输出")?;
-    let reader = BufReader::new(stdout);
-    let mut devices = Vec::new();
-    let mut in_devices = false;
+        let stdout = child.stdout.take().ok_or("无法读取 rpc-server 输出")?;
+        let reader = BufReader::new(stdout);
+        let mut devices = Vec::new();
+        let mut in_devices = false;
 
-    for line in reader.lines().flatten() {
-        if line.starts_with("Devices:") { in_devices = true; continue; }
-        if in_devices && line.starts_with("Starting RPC server") { break; }
-        if in_devices {
-            if let Some(colon_pos) = line.find(':') {
-                let device_type = line[..colon_pos].trim().to_string();
-                let rest = line[colon_pos + 1..].trim();
-                let (name, vram_info) = if let Some(paren_open) = rest.rfind('(') {
-                    let name = rest[..paren_open].trim().to_string();
-                    let inside = rest[paren_open + 1..].trim_end_matches(')').to_string();
-                    (name, inside)
-                } else {
-                    (rest.to_string(), String::new())
-                };
-                let parts: Vec<&str> = vram_info.split(',').collect();
-                let total = parts.first().and_then(|s| s.trim().split_whitespace().next()?.parse::<u64>().ok()).unwrap_or(0);
-                let free = parts.get(1).and_then(|s| s.trim().split_whitespace().next()?.parse::<u64>().ok()).unwrap_or(0);
-                devices.push(WorkerDevice { device_type, name, vram_mb: total, free_mb: free });
+        for line in reader.lines().flatten() {
+            if line.starts_with("Devices:") {
+                in_devices = true;
+                continue;
+            }
+            if in_devices && line.starts_with("Starting RPC server") {
+                break;
+            }
+            if in_devices {
+                if let Some(colon_pos) = line.find(':') {
+                    let device_type = line[..colon_pos].trim().to_string();
+                    let rest = line[colon_pos + 1..].trim();
+                    let (name, vram_info) = if let Some(paren_open) = rest.rfind('(') {
+                        let name = rest[..paren_open].trim().to_string();
+                        let inside = rest[paren_open + 1..].trim_end_matches(')').to_string();
+                        (name, inside)
+                    } else {
+                        (rest.to_string(), String::new())
+                    };
+                    let parts: Vec<&str> = vram_info.split(',').collect();
+                    let total = parts
+                        .first()
+                        .and_then(|s| s.trim().split_whitespace().next()?.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    let free = parts
+                        .get(1)
+                        .and_then(|s| s.trim().split_whitespace().next()?.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    devices.push(WorkerDevice {
+                        device_type,
+                        name,
+                        vram_mb: total,
+                        free_mb: free,
+                    });
+                }
             }
         }
-    }
 
-    let _ = child.kill();
-    let _ = child.wait();
-    Ok(devices)
-    }).await.map_err(|e| format!("任务执行失败: {}", e))??;
+        let _ = child.kill();
+        let _ = child.wait();
+        Ok(devices)
+    })
+    .await
+    .map_err(|e| format!("任务执行失败: {}", e))??;
 
     Ok(devices)
 }
@@ -379,7 +472,9 @@ pub async fn is_local_host(host: String) -> Result<bool, String> {
 pub async fn get_local_host() -> Result<String, String> {
     if let Ok(ifs) = if_addrs::get_if_addrs() {
         for iface in ifs {
-            if iface.is_loopback() { continue; }
+            if iface.is_loopback() {
+                continue;
+            }
             if let IpAddr::V4(ipv4) = iface.addr.ip() {
                 let name_lower = iface.name.to_lowercase();
                 let is_virtual = VIRTUAL_KEYWORDS.iter().any(|k| name_lower.contains(k));
@@ -393,15 +488,27 @@ pub async fn get_local_host() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn add_worker(host: String, port: u16, name: String, state: State<'_, AppState>) -> Result<WorkerInfo, String> {
+pub async fn add_worker(
+    host: String,
+    port: u16,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<WorkerInfo, String> {
     let mut workers = load_workers();
 
-    if let Some(existing) = workers.iter_mut().find(|w| w.host == host && w.port == port) {
-        if !name.is_empty() { existing.name = name; }
+    if let Some(existing) = workers
+        .iter_mut()
+        .find(|w| w.host == host && w.port == port)
+    {
+        if !name.is_empty() {
+            existing.name = name;
+        }
         let result = existing.clone();
         let _ = existing; // 释放可变借用
         save_workers(&workers);
-        if let Ok(mut w) = state.workers.lock() { *w = workers.clone(); }
+        if let Ok(mut w) = state.workers.lock() {
+            *w = workers.clone();
+        }
         return Ok(result);
     }
 
@@ -418,7 +525,9 @@ pub async fn add_worker(host: String, port: u16, name: String, state: State<'_, 
 
     workers.push(worker.clone());
     save_workers(&workers);
-    if let Ok(mut w) = state.workers.lock() { *w = workers; }
+    if let Ok(mut w) = state.workers.lock() {
+        *w = workers;
+    }
 
     Ok(worker)
 }
@@ -428,14 +537,18 @@ pub async fn remove_worker(id: String, state: State<'_, AppState>) -> Result<(),
     let mut workers = load_workers();
     workers.retain(|w| w.id != id);
     save_workers(&workers);
-    if let Ok(mut w) = state.workers.lock() { *w = workers; }
+    if let Ok(mut w) = state.workers.lock() {
+        *w = workers;
+    }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_workers(state: State<'_, AppState>) -> Result<Vec<WorkerInfo>, String> {
     let workers = load_workers();
-    if let Ok(mut w) = state.workers.lock() { *w = workers.clone(); }
+    if let Ok(mut w) = state.workers.lock() {
+        *w = workers.clone();
+    }
     Ok(workers)
 }
 
@@ -465,7 +578,12 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
             let pid_re = regex_lite::Regex::new(r"LISTENING\s+(\d+)$").ok();
             for line in out.lines() {
                 if line.contains(&format!(":{}", port)) && line.contains("LISTENING") {
-                    if let Some(pid) = pid_re.as_ref().and_then(|re| re.captures(line)).and_then(|c| c.get(1)).map(|m| m.as_str()) {
+                    if let Some(pid) = pid_re
+                        .as_ref()
+                        .and_then(|re| re.captures(line))
+                        .and_then(|c| c.get(1))
+                        .map(|m| m.as_str())
+                    {
                         let _ = std::process::Command::new("taskkill")
                             .args(["/PID", pid, "/F", "/T"])
                             .output();
@@ -479,7 +597,10 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
             // #11: 避免 grep -P (PCRE)，改用 sed 兼容精简 Linux
             let output = std::process::Command::new("sh")
                 .arg("-c")
-                .arg(&format!("ss -tlnp | grep ':{}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'", port))
+                .arg(&format!(
+                    "ss -tlnp | grep ':{}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'",
+                    port
+                ))
                 .output()
                 .map_err(|e| format!("ss 失败: {}", e))?;
             let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -511,7 +632,8 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
             }
         }
         Ok(false)
-    }).await
+    })
+    .await
     .map_err(|e| format!("停止 Worker 失败: {}", e))?
 }
 
@@ -524,14 +646,21 @@ pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
     let exe = std::env::current_exe().unwrap_or_default();
     let exe_dir = exe.parent().unwrap_or(std::path::Path::new("."));
 
-    for dir in [exe_dir, exe_dir.parent().unwrap_or(std::path::Path::new("."))] {
+    for dir in [
+        exe_dir,
+        exe_dir.parent().unwrap_or(std::path::Path::new(".")),
+    ] {
         let candidate = dir.join(RPC_SERVER_NAME);
-        if candidate.exists() { return Some(candidate.to_string_lossy().to_string()); }
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
     }
     if let Ok(paths) = std::env::var("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join(RPC_SERVER_NAME);
-            if candidate.exists() { return Some(candidate.to_string_lossy().to_string()); }
+            if candidate.exists() {
+                return Some(candidate.to_string_lossy().to_string());
+            }
         }
     }
     None
@@ -540,16 +669,25 @@ pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
 #[tauri::command]
 pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_json::Value, String> {
     let workers = load_workers();
-    let online: Vec<&WorkerInfo> = workers.iter().filter(|w| w.status == WorkerStatus::Online).collect();
+    let online: Vec<&WorkerInfo> = workers
+        .iter()
+        .filter(|w| w.status == WorkerStatus::Online)
+        .collect();
 
     let mut worker_metrics = Vec::new();
     let mut reachable_count = 0u32;
     for w in &online {
         let addr = format!("{}:{}", w.host, w.port);
-        let reachable = addr.parse::<std::net::SocketAddr>().ok()
-            .and_then(|a| std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_millis(500)).ok())
+        let reachable = addr
+            .parse::<std::net::SocketAddr>()
+            .ok()
+            .and_then(|a| {
+                std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_millis(500)).ok()
+            })
             .is_some();
-        if reachable { reachable_count += 1; }
+        if reachable {
+            reachable_count += 1;
+        }
 
         worker_metrics.push(serde_json::json!({
             "host": w.host,
@@ -573,7 +711,10 @@ pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_js
 }
 
 #[tauri::command]
-pub async fn start_local_rpc(engine_dir: Option<String>, port: u16) -> Result<serde_json::Value, String> {
+pub async fn start_local_rpc(
+    engine_dir: Option<String>,
+    port: u16,
+) -> Result<serde_json::Value, String> {
     tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let binary = if let Some(ref dir) = engine_dir {
             let path = std::path::Path::new(dir);
@@ -581,7 +722,9 @@ pub async fn start_local_rpc(engine_dir: Option<String>, port: u16) -> Result<se
             let exe = path.join("rpc-server.exe");
             #[cfg(not(target_os = "windows"))]
             let exe = path.join("rpc-server");
-            if exe.exists() { exe.to_string_lossy().to_string() } else {
+            if exe.exists() {
+                exe.to_string_lossy().to_string()
+            } else {
                 return Err(format!("引擎目录下未找到 rpc-server: {}", dir));
             }
         } else {
@@ -603,8 +746,8 @@ pub async fn start_local_rpc(engine_dir: Option<String>, port: u16) -> Result<se
         #[cfg(not(target_os = "windows"))]
         {
             let log_path = format!("/tmp/rpc-server-{}.log", port);
-            let log_file = std::fs::File::create(&log_path)
-                .map_err(|e| format!("无法创建日志文件: {}", e))?;
+            let log_file =
+                std::fs::File::create(&log_path).map_err(|e| format!("无法创建日志文件: {}", e))?;
             std::process::Command::new("nohup")
                 .arg(&binary)
                 .args(["--host", "0.0.0.0", "--port", &port.to_string()])
@@ -618,16 +761,15 @@ pub async fn start_local_rpc(engine_dir: Option<String>, port: u16) -> Result<se
         // 等待端口就绪
         std::thread::sleep(std::time::Duration::from_secs(2));
         let addr = format!("127.0.0.1:{}", port);
-        let sock_addr = addr.parse::<std::net::SocketAddr>()
+        let sock_addr = addr
+            .parse::<std::net::SocketAddr>()
             .map_err(|e| format!("地址解析失败 ({}): {}", addr, e))?;
-        match std::net::TcpStream::connect_timeout(
-            &sock_addr,
-            std::time::Duration::from_secs(3),
-        ) {
+        match std::net::TcpStream::connect_timeout(&sock_addr, std::time::Duration::from_secs(3)) {
             Ok(_) => Ok(serde_json::json!({ "ok": true, "port": port })),
             Err(e) => Err(format!("rpc-server 启动后无法连接: {}", e)),
         }
-    }).await
+    })
+    .await
     .map_err(|e| format!("启动失败: {}", e))?
 }
 

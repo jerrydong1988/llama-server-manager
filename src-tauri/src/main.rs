@@ -1,32 +1,66 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod commands;
 mod models;
 mod utils;
-mod commands;
 
+use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
+use crate::commands::cluster::{
+    add_worker, find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics,
+    get_local_host, get_worker_info, get_workers, is_local_host, remove_worker, scan_workers_tcp,
+    start_local_rpc, stop_local_worker, test_worker,
+};
+use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
+use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
+use crate::commands::cluster_ssh::ssh_launch_rpc;
+use crate::commands::config::{
+    load_config, load_window_state, persist_global_config, resolve_path, save_config,
+    save_window_state,
+};
+use crate::commands::download::{
+    browse_huggingface, browse_modelscope, cancel_all_downloads, cancel_and_cleanup_download,
+    cancel_file_download, check_local_file, clear_download_tasks_by_status,
+    download_huggingface_files, download_modelscope_files, enqueue_download_queue,
+    flush_download_manager_state, get_download_bandwidth_limit, get_download_concurrency,
+    get_download_low_priority_throttle, get_download_manager_snapshot, get_download_resume_policy,
+    pause_all_downloads, pause_file_download, persist_download_queue, process_download_queue,
+    remove_download_queue_entry, reset_download_for_redownload, restore_download_queue,
+    resume_all_downloads, resume_download_task, set_download_bandwidth_limit,
+    set_download_concurrency, set_download_low_priority_throttle, set_download_resume_policy,
+};
+use crate::commands::proxy::{
+    get_proxy_config, get_proxy_status, list_proxy_targets, restart_proxy, save_proxy_config,
+    start_proxy, stop_proxy, test_proxy_route,
+};
+use crate::commands::scanner::{
+    delete_engine, delete_model_file, get_cached_scan, get_engines, get_models, load_app_data,
+    open_engine_folder, open_model_folder, read_gguf_metadata, rename_engine, scan_engines,
+    scan_models,
+};
+use crate::commands::server::{
+    check_port, generate_server_command, get_metrics, get_slots, get_system_health,
+    get_system_metrics, open_browser, start_server, stop_server, test_connection,
+};
+use crate::commands::telemetry::{
+    get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_diagnostics,
+    get_telemetry_session_samples, list_inference_requests, list_telemetry_sessions,
+    prune_telemetry,
+};
+use crate::models::{AppState, WindowState};
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tauri::Manager;
-use crate::models::{AppState, WindowState};
-use crate::commands::scanner::{scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata, scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder, load_app_data, get_cached_scan};
-use crate::commands::config::{save_config, load_config, save_window_state, load_window_state, resolve_path};
-use crate::commands::server::{generate_server_command, start_server, stop_server, open_browser, test_connection, check_port, get_system_metrics, get_system_health, get_slots, get_metrics};
-use crate::commands::download::{browse_modelscope, download_modelscope_files, browse_huggingface, download_huggingface_files, enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue, cancel_file_download, pause_file_download, cancel_and_cleanup_download, reset_download_for_redownload, check_local_file, persist_download_queue, restore_download_queue, flush_download_manager_state, get_download_resume_policy, set_download_resume_policy, resume_download_task, resume_all_downloads, pause_all_downloads, cancel_all_downloads, set_download_concurrency, get_download_concurrency, set_download_bandwidth_limit, get_download_bandwidth_limit, set_download_low_priority_throttle, get_download_low_priority_throttle, get_download_manager_snapshot};
-use crate::commands::cluster::{scan_workers_tcp, test_worker, get_worker_info, add_worker, remove_worker, get_workers, find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics, stop_local_worker, is_local_host, start_local_rpc, get_local_host};
-use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
-use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
-use crate::commands::autostart::{enable_autostart, disable_autostart, is_autostart_enabled};
-use crate::commands::cluster_ssh::ssh_launch_rpc;
-use crate::commands::telemetry::{get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry};
-use crate::commands::proxy::{get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy};
-use std::sync::OnceLock;
 
 static NATIVE_START: OnceLock<Instant> = OnceLock::new();
 
 #[tauri::command]
 fn get_startup_elapsed() -> u64 {
-    NATIVE_START.get().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0)
+    NATIVE_START
+        .get()
+        .map(|t| t.elapsed().as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[tauri::command]
@@ -103,22 +137,12 @@ fn main() {
                         "quit" => {
                             if let Some(s) = app.try_state::<AppState>() {
                                 let config_dir = s.config_dir.lock().unwrap().clone();
-                                let path = config_dir.join("instances.json");
                                 let _ = std::fs::create_dir_all(&config_dir);
-                                let mut global = std::fs::read_to_string(&path).ok()
-                                    .and_then(|j| serde_json::from_str::<models::GlobalConfig>(&j).ok())
-                                    .unwrap_or(models::GlobalConfig {
-                                        instances: HashMap::new(), model_dirs: vec![], engine_dirs: vec![],
-                                        default_engine_id: String::new(), running: HashMap::new(),
-                                        instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
-                                        engine_names: HashMap::new(), download_resume_policy: "manual".into(), download_max_concurrent: 1,
-                                        download_bandwidth_limit_bytes_per_sec: 0, download_low_priority_throttle: false,
-                                        proxy_config: models::ProxyConfig::default(),
-                                    });
+                                let mut global = crate::commands::config::read_config_from_disk(&config_dir);
                                 global.running = s.running.lock().unwrap().clone();
                                 global.engine_names = s.engine_names.lock().unwrap().clone();
                                 global.proxy_config = s.proxy_config.lock().unwrap().clone();
-                                let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
+                                let _ = persist_global_config(&config_dir, &global);
                             }
                             flush_download_manager_state(&app);
                             crate::commands::nvml::shutdown();
@@ -185,6 +209,9 @@ fn main() {
 
             // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
             for (id, ri) in &config.running {
+                if !crate::commands::server::register_restored_runtime_instance(app.handle(), id, ri.pid) {
+                    continue;
+                }
                 let id_hc = id.clone();
                 let host = if ri.host == "0.0.0.0" { "localhost".to_string() } else { ri.host.clone() };
                 let host2 = host.clone();
@@ -247,6 +274,7 @@ fn main() {
             proxy_shutdown: Mutex::new(None),
             proxy_bound_addr: Mutex::new(None),
             proxy_last_error: Mutex::new(None),
+            restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
         })
         .invoke_handler(tauri::generate_handler![
             scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata,
@@ -288,8 +316,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::InstanceConfig;
     use crate::commands::server::generate_command;
+    use crate::models::InstanceConfig;
 
     fn cfg() -> InstanceConfig {
         let mut c = InstanceConfig::default();

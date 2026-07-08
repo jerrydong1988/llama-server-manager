@@ -1,12 +1,14 @@
+use crate::models::{AppState, Usb4Adapter};
 use tauri::State;
-use crate::models::{Usb4Adapter, AppState};
 
 #[tauri::command]
 pub async fn detect_usb4_adapters(state: State<'_, AppState>) -> Result<Vec<Usb4Adapter>, String> {
     #[cfg(target_os = "windows")]
     {
         let adapters = detect_usb4_windows().unwrap_or_default();
-        if let Ok(mut a) = state.usb4_adapters.lock() { *a = adapters.clone(); }
+        if let Ok(mut a) = state.usb4_adapters.lock() {
+            *a = adapters.clone();
+        }
         return Ok(adapters);
     }
 
@@ -57,17 +59,28 @@ $adapters | ConvertTo-Json -Compress
 
     let raw: Vec<RawAdapter> = serde_json::from_str(stdout.trim()).unwrap_or_default();
 
-    let include_keyword = regex_lite::Regex::new(r"(?i)(usb|rndis|remote.ndis|usb.ethernet|thunderbolt|usb4|p2p.network)").ok();
-    let exclude_keyword = regex_lite::Regex::new(r"(?i)(vmware|hyper-v|loopback|bluetooth|wireless|wi-fi|wlan|tap|vpn|virtualbox)").ok();
+    let include_keyword = regex_lite::Regex::new(
+        r"(?i)(usb|rndis|remote.ndis|usb.ethernet|thunderbolt|usb4|p2p.network)",
+    )
+    .ok();
+    let exclude_keyword = regex_lite::Regex::new(
+        r"(?i)(vmware|hyper-v|loopback|bluetooth|wireless|wi-fi|wlan|tap|vpn|virtualbox)",
+    )
+    .ok();
 
-    let filtered: Vec<Usb4Adapter> = raw.into_iter()
+    let filtered: Vec<Usb4Adapter> = raw
+        .into_iter()
         .filter(|a| {
             let desc = a.description.as_deref().unwrap_or("");
             if let Some(inc) = &include_keyword {
-                if !inc.is_match(desc) { return false; }
+                if !inc.is_match(desc) {
+                    return false;
+                }
             }
             if let Some(exc) = &exclude_keyword {
-                if exc.is_match(desc) { return false; }
+                if exc.is_match(desc) {
+                    return false;
+                }
             }
             a.status.as_deref() != Some("Disabled")
         })

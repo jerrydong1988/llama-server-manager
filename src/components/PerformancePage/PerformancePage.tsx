@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Activity, BarChart3, ChevronDown, Database, Gauge, HardDrive, RefreshCw, Server } from 'lucide-react'
@@ -73,11 +73,13 @@ export default function PerformancePage() {
   const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [loading, setLoading] = useState(false)
+  const lastTelemetryRefreshRef = useRef(0)
 
   const selectedInstance = instances.find(instance => instance.id === selectedInstanceId)
   const selectedSession = sessions.find(session => session.id === selectedSessionId)
 
   const refreshTelemetry = useCallback(async () => {
+    lastTelemetryRefreshRef.current = Date.now()
     setLoading(true)
     try {
       const [nextOverview, nextSessions] = await Promise.all([
@@ -118,7 +120,9 @@ export default function PerformancePage() {
       }
       setLiveSystem(event.payload.system)
       setLiveLlama(event.payload.llama || null)
-      void refreshTelemetry()
+      if (Date.now() - lastTelemetryRefreshRef.current > 10000) {
+        void refreshTelemetry()
+      }
     })
 
     return () => {
@@ -511,7 +515,9 @@ export default function PerformancePage() {
                               <td className="px-3 py-2">{formatTokenCount(request.prompt_tokens)}</td>
                               <td className="px-3 py-2">{formatTokenCount(request.generated_tokens)}</td>
                               <td className="px-3 py-2">{formatRate(request.generation_tps)}</td>
-                              <td className="px-3 py-2">{formatMs(request.total_time_ms)}</td>
+                              <td className="px-3 py-2">
+                                {request.source === 'proxy' ? `${labels.firstResponse} ${formatMs(request.total_time_ms)}` : formatMs(request.total_time_ms)}
+                              </td>
                               <td className="px-3 py-2">{formatPercent(request.spec_accept_rate)}</td>
                             </tr>
                           ))}
@@ -908,6 +914,7 @@ function getLabels(zh: boolean) {
     generated: zh ? '\u751f\u6210' : 'Generated',
     generationSpeed: zh ? '\u751f\u6210\u901f\u5ea6' : 'Gen Speed',
     totalTime: zh ? '\u603b\u8017\u65f6' : 'Total Time',
+    firstResponse: zh ? '\u9996\u54cd' : 'First byte',
     specAccept: zh ? '\u63a8\u6d4b\u63a5\u53d7' : 'Spec Accept',
     avgGenerationSpeed: zh ? '\u5e73\u5747\u751f\u6210\u901f\u5ea6' : 'Avg Gen Speed',
     avgTotalTime: zh ? '\u5e73\u5747\u603b\u8017\u65f6' : 'Avg Total Time',

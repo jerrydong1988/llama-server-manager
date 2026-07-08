@@ -4,6 +4,7 @@ import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
 import { useI18n } from '../i18n'
 import { invoke } from '@tauri-apps/api/core'
+import { open } from '@tauri-apps/plugin-dialog'
 import { pathJoin } from '../utils/path'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
 import { PathText, surfaceClassName } from './ui'
@@ -469,7 +470,6 @@ export default function DownloadManager() {
 
   const handleBrowseSaveDir = async () => {
     try {
-      const { open } = await import('@tauri-apps/plugin-dialog')
       const dir = await open({ directory: true, title: t.modelRepo.saveDir })
       if (dir) saveDirPersist(dir as string)
     } catch {

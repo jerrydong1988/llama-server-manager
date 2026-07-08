@@ -22,28 +22,37 @@ const NVML_DLL: &str = "nvml.dll";
 const NVML_DLL: &str = "libnvidia-ml.so.1";
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-fn ensure_loaded() -> bool { false }
+fn ensure_loaded() -> bool {
+    false
+}
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn ensure_loaded() -> bool {
     let mut state = NVML_STATE.lock().unwrap();
-    if state.is_some() { return true; }
-    let lib = unsafe { match libloading::Library::new(NVML_DLL) {
-        Ok(l) => Box::leak(Box::new(l)),
-        Err(_) => {
-            #[cfg(target_os = "linux")]
-            {
-                let lib2 = libloading::Library::new("libnvidia-ml.so");
-                match lib2 {
-                    Ok(l) => Box::leak(Box::new(l)),
-                    Err(_) => return false,
+    if state.is_some() {
+        return true;
+    }
+    let lib = unsafe {
+        match libloading::Library::new(NVML_DLL) {
+            Ok(l) => Box::leak(Box::new(l)),
+            Err(_) => {
+                #[cfg(target_os = "linux")]
+                {
+                    let lib2 = libloading::Library::new("libnvidia-ml.so");
+                    match lib2 {
+                        Ok(l) => Box::leak(Box::new(l)),
+                        Err(_) => return false,
+                    }
                 }
+                #[cfg(not(target_os = "linux"))]
+                return false;
             }
-            #[cfg(not(target_os = "linux"))]
-            return false;
         }
-    } };
-    *state = Some(NvmlState { lib, initialized: false });
+    };
+    *state = Some(NvmlState {
+        lib,
+        initialized: false,
+    });
     true
 }
 
@@ -68,14 +77,21 @@ pub struct NvmlMetrics {
 
 /// Collect GPU metrics via NVML. Returns None if NVIDIA driver/GPU not available.
 pub fn collect_metrics() -> Option<NvmlMetrics> {
-    if !ensure_loaded() { return None; }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { try_collect() }));
+    if !ensure_loaded() {
+        return None;
+    }
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { try_collect() }));
     match result {
         Ok(r) => r,
         Err(e) => {
-            let msg = if let Some(s) = e.downcast_ref::<String>() { s.clone() }
-                else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
-                else { "?" .into() };
+            let msg = if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else {
+                "?".into()
+            };
             eprintln!("[nvml] PANIC: {}", msg);
             None
         }
@@ -107,7 +123,8 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
 
     // ── Get device handle for GPU 0 ──
     type GetHandleFn = unsafe extern "system" fn(u32, *mut *mut c_void) -> NvmlResult;
-    let get_handle: libloading::Symbol<GetHandleFn> = lib.get(b"nvmlDeviceGetHandleByIndex_v2\0").ok()?;
+    let get_handle: libloading::Symbol<GetHandleFn> =
+        lib.get(b"nvmlDeviceGetHandleByIndex_v2\0").ok()?;
 
     let mut device: *mut c_void = std::ptr::null_mut();
     if get_handle(0, &mut device) != NVML_SUCCESS || device.is_null() {
@@ -123,7 +140,8 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
     if !device.is_null() {
         // ── Utilization ──
         type GetUtilFn = unsafe extern "system" fn(*mut c_void, *mut NvmlUtilization) -> NvmlResult;
-        let get_util: libloading::Symbol<GetUtilFn> = lib.get(b"nvmlDeviceGetUtilizationRates\0").ok()?;
+        let get_util: libloading::Symbol<GetUtilFn> =
+            lib.get(b"nvmlDeviceGetUtilizationRates\0").ok()?;
 
         let mut util: NvmlUtilization = NvmlUtilization { gpu: 0, memory: 0 };
         if get_util(device, &mut util) == NVML_SUCCESS {
@@ -134,7 +152,11 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
         type GetMemFn = unsafe extern "system" fn(*mut c_void, *mut NvmlMemory) -> NvmlResult;
         let get_mem: libloading::Symbol<GetMemFn> = lib.get(b"nvmlDeviceGetMemoryInfo\0").ok()?;
 
-        let mut mem: NvmlMemory = NvmlMemory { total: 0, free: 0, used: 0 };
+        let mut mem: NvmlMemory = NvmlMemory {
+            total: 0,
+            free: 0,
+            used: 0,
+        };
         if get_mem(device, &mut mem) == NVML_SUCCESS {
             m.vram_total_mb = Some((mem.total as f64) / (1024.0 * 1024.0));
             m.vram_used_mb = Some((mem.used as f64) / (1024.0 * 1024.0));

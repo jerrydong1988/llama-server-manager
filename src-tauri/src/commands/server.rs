@@ -1,13 +1,13 @@
+use crate::commands::adlx;
+use crate::commands::nvml;
+use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
-use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics};
-use crate::commands::adlx;
-use crate::commands::nvml;
-use tauri::{Emitter, Manager};
 use sysinfo::System;
+use tauri::{Emitter, Manager};
 
 // ── 生成 CLI 命令 ────────────────────────────────────────────────
 
@@ -41,228 +41,611 @@ fn mask_api_key_in_cmd(cmd: &str) -> String {
 
 fn telemetry_config_hash(config: &InstanceConfig) -> String {
     let mut hasher = DefaultHasher::new();
-    serde_json::to_string(config).unwrap_or_default().hash(&mut hasher);
+    serde_json::to_string(config)
+        .unwrap_or_default()
+        .hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
-    let exe = if engine_path.is_empty() { "llama-server".to_string() } else { engine_path.to_string() };
+    let exe = if engine_path.is_empty() {
+        "llama-server".to_string()
+    } else {
+        engine_path.to_string()
+    };
     let mut cmd = vec![exe, "-m".into(), config.model_path.clone()];
     let is_emb = config.embedding;
 
     // ── Basic ──
-    if !config.alias.is_empty() { cmd.extend_from_slice(&["-a".into(), config.alias.clone()]); }
+    if !config.alias.is_empty() {
+        cmd.extend_from_slice(&["-a".into(), config.alias.clone()]);
+    }
     if !is_emb {
-        if !config.lora_path.is_empty() { cmd.extend_from_slice(&["--lora".into(), config.lora_path.clone()]); }
-        if config.lora_init_without_apply { cmd.push("--lora-init-without-apply".into()); }
-        if !config.lora_scaled.is_empty() { cmd.extend_from_slice(&["--lora-scaled".into(), config.lora_scaled.clone()]); }
-        if !config.mmproj_path.is_empty() { cmd.extend_from_slice(&["--mmproj".into(), config.mmproj_path.clone()]); }
-        if !config.mmproj_url.is_empty() { cmd.extend_from_slice(&["--mmproj-url".into(), config.mmproj_url.clone()]); }
-        if config.mmproj_auto { cmd.push("--mmproj-auto".into()); }
-        if config.no_mmproj { cmd.push("--no-mmproj".into()); }
-        if config.no_mmproj_offload { cmd.push("--no-mmproj-offload".into()); }
-        if !config.chat_template.is_empty() { cmd.extend_from_slice(&["--chat-template".into(), config.chat_template.clone()]); }
-        if !config.chat_template_file.is_empty() { cmd.extend_from_slice(&["--chat-template-file".into(), config.chat_template_file.clone()]); }
-        if config.skip_chat_parsing { cmd.push("--skip-chat-parsing".into()); }
-        if !config.reasoning_format.is_empty() { cmd.extend_from_slice(&["--reasoning-format".into(), config.reasoning_format.clone()]); }
-        if !config.reasoning.is_empty() { cmd.extend_from_slice(&["--reasoning".into(), config.reasoning.clone()]); }
-        if !config.reasoning_budget.is_empty() { cmd.extend_from_slice(&["--reasoning-budget".into(), config.reasoning_budget.clone()]); }
-        if !config.reasoning_budget_message.is_empty() { cmd.extend_from_slice(&["--reasoning-budget-message".into(), config.reasoning_budget_message.clone()]); }
+        if !config.lora_path.is_empty() {
+            cmd.extend_from_slice(&["--lora".into(), config.lora_path.clone()]);
+        }
+        if config.lora_init_without_apply {
+            cmd.push("--lora-init-without-apply".into());
+        }
+        if !config.lora_scaled.is_empty() {
+            cmd.extend_from_slice(&["--lora-scaled".into(), config.lora_scaled.clone()]);
+        }
+        if !config.mmproj_path.is_empty() {
+            cmd.extend_from_slice(&["--mmproj".into(), config.mmproj_path.clone()]);
+        }
+        if !config.mmproj_url.is_empty() {
+            cmd.extend_from_slice(&["--mmproj-url".into(), config.mmproj_url.clone()]);
+        }
+        if config.mmproj_auto {
+            cmd.push("--mmproj-auto".into());
+        }
+        if config.no_mmproj {
+            cmd.push("--no-mmproj".into());
+        }
+        if config.no_mmproj_offload {
+            cmd.push("--no-mmproj-offload".into());
+        }
+        if !config.chat_template.is_empty() {
+            cmd.extend_from_slice(&["--chat-template".into(), config.chat_template.clone()]);
+        }
+        if !config.chat_template_file.is_empty() {
+            cmd.extend_from_slice(&[
+                "--chat-template-file".into(),
+                config.chat_template_file.clone(),
+            ]);
+        }
+        if config.skip_chat_parsing {
+            cmd.push("--skip-chat-parsing".into());
+        }
+        if !config.reasoning_format.is_empty() {
+            cmd.extend_from_slice(&["--reasoning-format".into(), config.reasoning_format.clone()]);
+        }
+        if !config.reasoning.is_empty() {
+            cmd.extend_from_slice(&["--reasoning".into(), config.reasoning.clone()]);
+        }
+        if !config.reasoning_budget.is_empty() {
+            cmd.extend_from_slice(&["--reasoning-budget".into(), config.reasoning_budget.clone()]);
+        }
+        if !config.reasoning_budget_message.is_empty() {
+            cmd.extend_from_slice(&[
+                "--reasoning-budget-message".into(),
+                config.reasoning_budget_message.clone(),
+            ]);
+        }
         if !config.reasoning_effort.is_empty() {
             let re = format!("{{\"reasoning_effort\": \"{}\"}}", config.reasoning_effort);
             cmd.extend_from_slice(&["--chat-template-kwargs".into(), re]);
         }
-        if config.jinja { cmd.push("--jinja".into()); }
-        if !config.grammar_file.is_empty() { cmd.extend_from_slice(&["--grammar-file".into(), config.grammar_file.clone()]); }
-        if !config.grammar.is_empty() { cmd.extend_from_slice(&["--grammar".into(), config.grammar.clone()]); }
+        if config.jinja {
+            cmd.push("--jinja".into());
+        }
+        if !config.grammar_file.is_empty() {
+            cmd.extend_from_slice(&["--grammar-file".into(), config.grammar_file.clone()]);
+        }
+        if !config.grammar.is_empty() {
+            cmd.extend_from_slice(&["--grammar".into(), config.grammar.clone()]);
+        }
     }
 
     // ── Performance & Context ──
-    if !config.ctx_size_auto { cmd.extend_from_slice(&["-c".into(), config.ctx_size.to_string()]); }
-    if !config.gpu_layers_auto { cmd.extend_from_slice(&["-ngl".into(), config.gpu_layers.to_string()]); }
-    if config.threads > 0 { cmd.extend_from_slice(&["-t".into(), config.threads.to_string()]); }
-    if config.batch_size > 0 { cmd.extend_from_slice(&["-b".into(), config.batch_size.to_string()]); }
-    if config.ubatch_size > 0 { cmd.extend_from_slice(&["-ub".into(), config.ubatch_size.to_string()]); }
-    if config.parallel > 0 || config.parallel == -1 { cmd.extend_from_slice(&["-np".into(), config.parallel.to_string()]); }
-    if config.cont_batching { cmd.push("-cb".into()); }
-    if !config.cache_prompt { cmd.push("--no-cache-prompt".into()); }
-    if config.threads_batch > 0 { cmd.extend_from_slice(&["--threads-batch".into(), config.threads_batch.to_string()]); }
-    if config.threads_http >= 0 { cmd.extend_from_slice(&["--threads-http".into(), config.threads_http.to_string()]); }
-    if config.keep > 0 { cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]); }
-    if config.cache_reuse > 0 { cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]); }
-    if config.cache_ram > 0 { cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]); }
-    if config.warmup { cmd.push("--warmup".into()); }
-    if config.ctx_checkpoints != 32 { cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]); }
-    if config.checkpoint_min_step > 0 { cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]); }
-    if config.swa_full { cmd.push("--swa-full".into()); }
+    if !config.ctx_size_auto {
+        cmd.extend_from_slice(&["-c".into(), config.ctx_size.to_string()]);
+    }
+    if !config.gpu_layers_auto {
+        cmd.extend_from_slice(&["-ngl".into(), config.gpu_layers.to_string()]);
+    }
+    if config.threads > 0 {
+        cmd.extend_from_slice(&["-t".into(), config.threads.to_string()]);
+    }
+    if config.batch_size > 0 {
+        cmd.extend_from_slice(&["-b".into(), config.batch_size.to_string()]);
+    }
+    if config.ubatch_size > 0 {
+        cmd.extend_from_slice(&["-ub".into(), config.ubatch_size.to_string()]);
+    }
+    if config.parallel > 0 || config.parallel == -1 {
+        cmd.extend_from_slice(&["-np".into(), config.parallel.to_string()]);
+    }
+    if config.cont_batching {
+        cmd.push("-cb".into());
+    }
+    if !config.cache_prompt {
+        cmd.push("--no-cache-prompt".into());
+    }
+    if config.threads_batch > 0 {
+        cmd.extend_from_slice(&["--threads-batch".into(), config.threads_batch.to_string()]);
+    }
+    if config.threads_http >= 0 {
+        cmd.extend_from_slice(&["--threads-http".into(), config.threads_http.to_string()]);
+    }
+    if config.keep > 0 {
+        cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
+    }
+    if config.cache_reuse > 0 {
+        cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
+    }
+    if config.cache_ram > 0 {
+        cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
+    }
+    if config.warmup {
+        cmd.push("--warmup".into());
+    }
+    if config.ctx_checkpoints != 32 {
+        cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
+    }
+    if config.checkpoint_min_step > 0 {
+        cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
+    }
+    if config.swa_full {
+        cmd.push("--swa-full".into());
+    }
 
     // ── RoPE / YaRN ──
-    if !config.rope_scaling.is_empty() { cmd.extend_from_slice(&["--rope-scaling".into(), config.rope_scaling.clone()]); }
-    if config.rope_scale > 0.0 { cmd.extend_from_slice(&["--rope-scale".into(), config.rope_scale.to_string()]); }
-    if config.rope_freq_base > 0.0 { cmd.extend_from_slice(&["--rope-freq-base".into(), config.rope_freq_base.to_string()]); }
-    if config.rope_freq_scale > 0.0 { cmd.extend_from_slice(&["--rope-freq-scale".into(), config.rope_freq_scale.to_string()]); }
-    if config.yarn_ext_factor >= 0.0 { cmd.extend_from_slice(&["--yarn-ext-factor".into(), config.yarn_ext_factor.to_string()]); }
-    if config.yarn_attn_factor != -1.0 { cmd.extend_from_slice(&["--yarn-attn-factor".into(), config.yarn_attn_factor.to_string()]); }
-    if config.yarn_beta_slow > 0.0 { cmd.extend_from_slice(&["--yarn-beta-slow".into(), config.yarn_beta_slow.to_string()]); }
-    if config.yarn_beta_fast != -1.0 { cmd.extend_from_slice(&["--yarn-beta-fast".into(), config.yarn_beta_fast.to_string()]); }
-    if config.yarn_orig_ctx > 0 { cmd.extend_from_slice(&["--yarn-orig-ctx".into(), config.yarn_orig_ctx.to_string()]); }
+    if !config.rope_scaling.is_empty() {
+        cmd.extend_from_slice(&["--rope-scaling".into(), config.rope_scaling.clone()]);
+    }
+    if config.rope_scale > 0.0 {
+        cmd.extend_from_slice(&["--rope-scale".into(), config.rope_scale.to_string()]);
+    }
+    if config.rope_freq_base > 0.0 {
+        cmd.extend_from_slice(&["--rope-freq-base".into(), config.rope_freq_base.to_string()]);
+    }
+    if config.rope_freq_scale > 0.0 {
+        cmd.extend_from_slice(&[
+            "--rope-freq-scale".into(),
+            config.rope_freq_scale.to_string(),
+        ]);
+    }
+    if config.yarn_ext_factor >= 0.0 {
+        cmd.extend_from_slice(&[
+            "--yarn-ext-factor".into(),
+            config.yarn_ext_factor.to_string(),
+        ]);
+    }
+    if config.yarn_attn_factor != -1.0 {
+        cmd.extend_from_slice(&[
+            "--yarn-attn-factor".into(),
+            config.yarn_attn_factor.to_string(),
+        ]);
+    }
+    if config.yarn_beta_slow > 0.0 {
+        cmd.extend_from_slice(&["--yarn-beta-slow".into(), config.yarn_beta_slow.to_string()]);
+    }
+    if config.yarn_beta_fast != -1.0 {
+        cmd.extend_from_slice(&["--yarn-beta-fast".into(), config.yarn_beta_fast.to_string()]);
+    }
+    if config.yarn_orig_ctx > 0 {
+        cmd.extend_from_slice(&["--yarn-orig-ctx".into(), config.yarn_orig_ctx.to_string()]);
+    }
 
     // ── Flash Attention ──
     if !is_emb {
         let fa = config.flash_attn.as_str();
-        if fa != "auto" && !fa.is_empty() { cmd.extend_from_slice(&["-fa".into(), fa.to_string()]); }
+        if fa != "auto" && !fa.is_empty() {
+            cmd.extend_from_slice(&["-fa".into(), fa.to_string()]);
+        }
     }
 
     // ── Memory & Loading ──
-    if config.moe_cpu_layers > 0 { cmd.extend_from_slice(&["--n-cpu-moe".into(), config.moe_cpu_layers.to_string()]); }
-    if config.cpu_moe { cmd.push("--cpu-moe".into()); }
-    if config.mlock { cmd.push("--mlock".into()); }
-    if config.no_mmap { cmd.push("--no-mmap".into()); }
-    if config.no_repack { cmd.push("--no-repack".into()); }
-    if config.direct_io { cmd.push("--direct-io".into()); }
-    if config.numa { cmd.extend_from_slice(&["--numa".into(), "distribute".into()]); }
-    if config.check_tensors { cmd.push("--check-tensors".into()); }
-    if config.perf { cmd.push("--perf".into()); }
-    if config.fit { cmd.extend_from_slice(&["--fit".into(), "on".into()]); }
-    if !config.fit_target.is_empty() { cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]); }
-    if config.fit_ctx != 4096 { cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]); }
+    if config.moe_cpu_layers > 0 {
+        cmd.extend_from_slice(&["--n-cpu-moe".into(), config.moe_cpu_layers.to_string()]);
+    }
+    if config.cpu_moe {
+        cmd.push("--cpu-moe".into());
+    }
+    if config.mlock {
+        cmd.push("--mlock".into());
+    }
+    if config.no_mmap {
+        cmd.push("--no-mmap".into());
+    }
+    if config.no_repack {
+        cmd.push("--no-repack".into());
+    }
+    if config.direct_io {
+        cmd.push("--direct-io".into());
+    }
+    if config.numa {
+        cmd.extend_from_slice(&["--numa".into(), "distribute".into()]);
+    }
+    if config.check_tensors {
+        cmd.push("--check-tensors".into());
+    }
+    if config.perf {
+        cmd.push("--perf".into());
+    }
+    if config.fit {
+        cmd.extend_from_slice(&["--fit".into(), "on".into()]);
+    }
+    if !config.fit_target.is_empty() {
+        cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]);
+    }
+    if config.fit_ctx != 4096 {
+        cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
+    }
 
     // ── KV Cache ──
-    if !config.cache_type_k.is_empty() { cmd.extend_from_slice(&["-ctk".into(), config.cache_type_k.clone()]); }
-    if !config.cache_type_v.is_empty() { cmd.extend_from_slice(&["-ctv".into(), config.cache_type_v.clone()]); }
-    if !config.cache_type_draft_k.is_empty() { cmd.extend_from_slice(&["-ctkd".into(), config.cache_type_draft_k.clone()]); }
-    if !config.cache_type_draft_v.is_empty() { cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]); }
-    if config.kv_unified { cmd.push("--kv-unified".into()); }
-    if config.no_kv_offload { cmd.push("--no-kv-offload".into()); }
-    if !config.cache_idle_slots { cmd.push("--no-cache-idle-slots".into()); }
+    if !config.cache_type_k.is_empty() {
+        cmd.extend_from_slice(&["-ctk".into(), config.cache_type_k.clone()]);
+    }
+    if !config.cache_type_v.is_empty() {
+        cmd.extend_from_slice(&["-ctv".into(), config.cache_type_v.clone()]);
+    }
+    if !config.cache_type_draft_k.is_empty() {
+        cmd.extend_from_slice(&["-ctkd".into(), config.cache_type_draft_k.clone()]);
+    }
+    if !config.cache_type_draft_v.is_empty() {
+        cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]);
+    }
+    if config.kv_unified {
+        cmd.push("--kv-unified".into());
+    }
+    if config.no_kv_offload {
+        cmd.push("--no-kv-offload".into());
+    }
+    if !config.cache_idle_slots {
+        cmd.push("--no-cache-idle-slots".into());
+    }
 
     // ── GPU & Device ──
-    if !config.device.is_empty() { cmd.extend_from_slice(&["-dev".into(), config.device.clone()]); }
-    if !config.split_mode.is_empty() { cmd.extend_from_slice(&["-sm".into(), config.split_mode.clone()]); }
-    if !config.tensor_split.is_empty() { cmd.extend_from_slice(&["-ts".into(), config.tensor_split.clone()]); }
-    if config.main_gpu > 0 { cmd.extend_from_slice(&["-mg".into(), config.main_gpu.to_string()]); }
-    if !config.override_kv.is_empty() { cmd.extend_from_slice(&["--override-kv".into(), config.override_kv.clone()]); }
+    if !config.device.is_empty() {
+        cmd.extend_from_slice(&["-dev".into(), config.device.clone()]);
+    }
+    if !config.split_mode.is_empty() {
+        cmd.extend_from_slice(&["-sm".into(), config.split_mode.clone()]);
+    }
+    if !config.tensor_split.is_empty() {
+        cmd.extend_from_slice(&["-ts".into(), config.tensor_split.clone()]);
+    }
+    if config.main_gpu > 0 {
+        cmd.extend_from_slice(&["-mg".into(), config.main_gpu.to_string()]);
+    }
+    if !config.override_kv.is_empty() {
+        cmd.extend_from_slice(&["--override-kv".into(), config.override_kv.clone()]);
+    }
 
     // ── Speculative Decoding ──
     let spec_active = !is_emb && !config.spec_type.is_empty() && config.spec_type != "none";
     if spec_active {
-        if !config.draft_model_path.is_empty() { cmd.extend_from_slice(&["-md".into(), config.draft_model_path.clone()]); }
-        if config.draft_gpu_layers > 0 && config.draft_gpu_layers < 99 { cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]); }
-        if config.draft_tokens > 0 { cmd.extend_from_slice(&["--spec-draft-n-max".into(), config.draft_tokens.to_string()]); }
-        if config.spec_draft_n_min > 0 { cmd.extend_from_slice(&["--spec-draft-n-min".into(), config.spec_draft_n_min.to_string()]); }
+        if !config.draft_model_path.is_empty() {
+            cmd.extend_from_slice(&["-md".into(), config.draft_model_path.clone()]);
+        }
+        if config.draft_gpu_layers > 0 && config.draft_gpu_layers < 99 {
+            cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]);
+        }
+        if config.draft_tokens > 0 {
+            cmd.extend_from_slice(&["--spec-draft-n-max".into(), config.draft_tokens.to_string()]);
+        }
+        if config.spec_draft_n_min > 0 {
+            cmd.extend_from_slice(&[
+                "--spec-draft-n-min".into(),
+                config.spec_draft_n_min.to_string(),
+            ]);
+        }
         cmd.extend_from_slice(&["--spec-type".into(), config.spec_type.clone()]);
-        if config.spec_draft_p_min > 0.0 { cmd.extend_from_slice(&["--spec-draft-p-min".into(), config.spec_draft_p_min.to_string()]); }
-        if config.spec_draft_p_split != 0.1 { cmd.extend_from_slice(&["--spec-draft-p-split".into(), config.spec_draft_p_split.to_string()]); }
-        if !config.spec_draft_device.is_empty() { cmd.extend_from_slice(&["--spec-draft-device".into(), config.spec_draft_device.clone()]); }
-        if !config.lookup_cache_static.is_empty() { cmd.extend_from_slice(&["-lcs".into(), config.lookup_cache_static.clone()]); }
-        if !config.lookup_cache_dynamic.is_empty() { cmd.extend_from_slice(&["-lcd".into(), config.lookup_cache_dynamic.clone()]); }
-        if config.spec_default { cmd.push("--spec-default".into()); }
-        if !config.spec_draft_backend_sampling { cmd.push("--no-spec-draft-backend-sampling".into()); }
-        if config.spec_draft_threads > 0 { cmd.extend_from_slice(&["-td".into(), config.spec_draft_threads.to_string()]); }
-        if config.spec_draft_threads_batch > 0 { cmd.extend_from_slice(&["-tbd".into(), config.spec_draft_threads_batch.to_string()]); }
+        if config.spec_draft_p_min > 0.0 {
+            cmd.extend_from_slice(&[
+                "--spec-draft-p-min".into(),
+                config.spec_draft_p_min.to_string(),
+            ]);
+        }
+        if config.spec_draft_p_split != 0.1 {
+            cmd.extend_from_slice(&[
+                "--spec-draft-p-split".into(),
+                config.spec_draft_p_split.to_string(),
+            ]);
+        }
+        if !config.spec_draft_device.is_empty() {
+            cmd.extend_from_slice(&[
+                "--spec-draft-device".into(),
+                config.spec_draft_device.clone(),
+            ]);
+        }
+        if !config.lookup_cache_static.is_empty() {
+            cmd.extend_from_slice(&["-lcs".into(), config.lookup_cache_static.clone()]);
+        }
+        if !config.lookup_cache_dynamic.is_empty() {
+            cmd.extend_from_slice(&["-lcd".into(), config.lookup_cache_dynamic.clone()]);
+        }
+        if config.spec_default {
+            cmd.push("--spec-default".into());
+        }
+        if !config.spec_draft_backend_sampling {
+            cmd.push("--no-spec-draft-backend-sampling".into());
+        }
+        if config.spec_draft_threads > 0 {
+            cmd.extend_from_slice(&["-td".into(), config.spec_draft_threads.to_string()]);
+        }
+        if config.spec_draft_threads_batch > 0 {
+            cmd.extend_from_slice(&["-tbd".into(), config.spec_draft_threads_batch.to_string()]);
+        }
     }
 
     // ── Network ──
-    cmd.extend_from_slice(&["--host".into(), config.host.clone(), "--port".into(), config.port.to_string()]);
-    if !config.api_key.is_empty() { cmd.extend_from_slice(&["--api-key".into(), config.api_key.clone()]); }
-    if !config.api_key_file.is_empty() { cmd.extend_from_slice(&["--api-key-file".into(), config.api_key_file.clone()]); }
-    if !config.ssl_key_file.is_empty() { cmd.extend_from_slice(&["--ssl-key-file".into(), config.ssl_key_file.clone()]); }
-    if !config.ssl_cert_file.is_empty() { cmd.extend_from_slice(&["--ssl-cert-file".into(), config.ssl_cert_file.clone()]); }
-    if config.no_ui { cmd.push("--no-ui".into()); }
-    if config.offline { cmd.push("--offline".into()); }
-    if !config.path_prefix.is_empty() { cmd.extend_from_slice(&["--path".into(), config.path_prefix.clone()]); }
-    if !config.api_prefix.is_empty() { cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]); }
-    if !config.ui_config_file.is_empty() { cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]); }
-    if !config.ui_config.is_empty() { cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]); }
-    if config.ui_mcp_proxy { cmd.push("--ui-mcp-proxy".into()); }
-    if config.agent { cmd.push("--agent".into()); }
+    cmd.extend_from_slice(&[
+        "--host".into(),
+        config.host.clone(),
+        "--port".into(),
+        config.port.to_string(),
+    ]);
+    if !config.api_key.is_empty() {
+        cmd.extend_from_slice(&["--api-key".into(), config.api_key.clone()]);
+    }
+    if !config.api_key_file.is_empty() {
+        cmd.extend_from_slice(&["--api-key-file".into(), config.api_key_file.clone()]);
+    }
+    if !config.ssl_key_file.is_empty() {
+        cmd.extend_from_slice(&["--ssl-key-file".into(), config.ssl_key_file.clone()]);
+    }
+    if !config.ssl_cert_file.is_empty() {
+        cmd.extend_from_slice(&["--ssl-cert-file".into(), config.ssl_cert_file.clone()]);
+    }
+    if config.no_ui {
+        cmd.push("--no-ui".into());
+    }
+    if config.offline {
+        cmd.push("--offline".into());
+    }
+    if !config.path_prefix.is_empty() {
+        cmd.extend_from_slice(&["--path".into(), config.path_prefix.clone()]);
+    }
+    if !config.api_prefix.is_empty() {
+        cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]);
+    }
+    if !config.ui_config_file.is_empty() {
+        cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]);
+    }
+    if !config.ui_config.is_empty() {
+        cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]);
+    }
+    if config.ui_mcp_proxy {
+        cmd.push("--ui-mcp-proxy".into());
+    }
+    if config.agent {
+        cmd.push("--agent".into());
+    }
 
     // ── Embedding / Generation ──
     if config.embedding {
         cmd.push("--embedding".into());
-        if !config.pooling.is_empty() { cmd.extend_from_slice(&["--pooling".into(), config.pooling.clone()]); }
-        if config.embd_normalize != 2 { cmd.extend_from_slice(&["--embd-normalize".into(), config.embd_normalize.to_string()]); }
-        if config.reranking { cmd.push("--reranking".into()); }
+        if !config.pooling.is_empty() {
+            cmd.extend_from_slice(&["--pooling".into(), config.pooling.clone()]);
+        }
+        if config.embd_normalize != 2 {
+            cmd.extend_from_slice(&["--embd-normalize".into(), config.embd_normalize.to_string()]);
+        }
+        if config.reranking {
+            cmd.push("--reranking".into());
+        }
     } else {
-        if config.n_predict > 0 { cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]); }
-        else if config.n_predict == 0 {} else { cmd.extend_from_slice(&["-n".into(), "-1".into()]); }
-        if config.ignore_eos { cmd.push("--ignore-eos".into()); }
-        if !config.json_schema.is_empty() { cmd.extend_from_slice(&["--json-schema".into(), config.json_schema.clone()]); }
-        if !config.json_schema_file.is_empty() { cmd.extend_from_slice(&["-jf".into(), config.json_schema_file.clone()]); }
-        if config.temp > 0.0 { cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]); }
-        if config.top_k > 0 { cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]); }
-        if config.top_p > 0.0 { cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]); }
-        if config.repeat_penalty > 0.0 { cmd.extend_from_slice(&["--repeat-penalty".into(), config.repeat_penalty.to_string()]); }
-        if config.seed >= 0 { cmd.extend_from_slice(&["--seed".into(), config.seed.to_string()]); }
-        if config.min_p > 0.0 { cmd.extend_from_slice(&["--min-p".into(), config.min_p.to_string()]); }
-        if config.presence_penalty > 0.0 { cmd.extend_from_slice(&["--presence-penalty".into(), config.presence_penalty.to_string()]); }
-        if config.frequency_penalty > 0.0 { cmd.extend_from_slice(&["--frequency-penalty".into(), config.frequency_penalty.to_string()]); }
-        if config.repeat_last_n > 0 { cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]); }
-        if !config.reverse_prompt.is_empty() { cmd.extend_from_slice(&["-r".into(), config.reverse_prompt.clone()]); }
-        if config.special { cmd.push("-sp".into()); }
-        if config.spm_infill { cmd.push("--spm-infill".into()); }
-        if config.backend_sampling { cmd.push("-bs".into()); }
+        if config.n_predict > 0 {
+            cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]);
+        } else if config.n_predict == 0 {
+        } else {
+            cmd.extend_from_slice(&["-n".into(), "-1".into()]);
+        }
+        if config.ignore_eos {
+            cmd.push("--ignore-eos".into());
+        }
+        if !config.json_schema.is_empty() {
+            cmd.extend_from_slice(&["--json-schema".into(), config.json_schema.clone()]);
+        }
+        if !config.json_schema_file.is_empty() {
+            cmd.extend_from_slice(&["-jf".into(), config.json_schema_file.clone()]);
+        }
+        if config.temp > 0.0 {
+            cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]);
+        }
+        if config.top_k > 0 {
+            cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]);
+        }
+        if config.top_p > 0.0 {
+            cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]);
+        }
+        if config.repeat_penalty > 0.0 {
+            cmd.extend_from_slice(&["--repeat-penalty".into(), config.repeat_penalty.to_string()]);
+        }
+        if config.seed >= 0 {
+            cmd.extend_from_slice(&["--seed".into(), config.seed.to_string()]);
+        }
+        if config.min_p > 0.0 {
+            cmd.extend_from_slice(&["--min-p".into(), config.min_p.to_string()]);
+        }
+        if config.presence_penalty > 0.0 {
+            cmd.extend_from_slice(&[
+                "--presence-penalty".into(),
+                config.presence_penalty.to_string(),
+            ]);
+        }
+        if config.frequency_penalty > 0.0 {
+            cmd.extend_from_slice(&[
+                "--frequency-penalty".into(),
+                config.frequency_penalty.to_string(),
+            ]);
+        }
+        if config.repeat_last_n > 0 {
+            cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]);
+        }
+        if !config.reverse_prompt.is_empty() {
+            cmd.extend_from_slice(&["-r".into(), config.reverse_prompt.clone()]);
+        }
+        if config.special {
+            cmd.push("-sp".into());
+        }
+        if config.spm_infill {
+            cmd.push("--spm-infill".into());
+        }
+        if config.backend_sampling {
+            cmd.push("-bs".into());
+        }
 
         // Advanced sampling
         if config.mirostat > 0 {
             cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]);
-            if config.mirostat_lr > 0.0 { cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]); }
-            if config.mirostat_ent > 0.0 { cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]); }
+            if config.mirostat_lr > 0.0 {
+                cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]);
+            }
+            if config.mirostat_ent > 0.0 {
+                cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]);
+            }
         }
         if config.xtc_probability > 0.0 {
-            cmd.extend_from_slice(&["--xtc-probability".into(), config.xtc_probability.to_string()]);
-            if config.xtc_threshold > 0.0 { cmd.extend_from_slice(&["--xtc-threshold".into(), config.xtc_threshold.to_string()]); }
+            cmd.extend_from_slice(&[
+                "--xtc-probability".into(),
+                config.xtc_probability.to_string(),
+            ]);
+            if config.xtc_threshold > 0.0 {
+                cmd.extend_from_slice(&[
+                    "--xtc-threshold".into(),
+                    config.xtc_threshold.to_string(),
+                ]);
+            }
         }
         if config.dynatemp_range > 0.0 {
             cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]);
-            if config.dynatemp_exp > 0.0 { cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]); }
+            if config.dynatemp_exp > 0.0 {
+                cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]);
+            }
         }
-        if config.typical_p < 1.0 && config.typical_p > 0.0 { cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]); }
+        if config.typical_p < 1.0 && config.typical_p > 0.0 {
+            cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]);
+        }
         if config.dry_multiplier > 0.0 {
             cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]);
-            if config.dry_base > 0.0 { cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]); }
-            if config.dry_allowed_length > 0 { cmd.extend_from_slice(&["--dry-allowed-length".into(), config.dry_allowed_length.to_string()]); }
-            if config.dry_penalty_last_n > 0 { cmd.extend_from_slice(&["--dry-penalty-last-n".into(), config.dry_penalty_last_n.to_string()]); }
-            if !config.dry_sequence_breaker.is_empty() { cmd.extend_from_slice(&["--dry-sequence-breaker".into(), config.dry_sequence_breaker.clone()]); }
+            if config.dry_base > 0.0 {
+                cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]);
+            }
+            if config.dry_allowed_length > 0 {
+                cmd.extend_from_slice(&[
+                    "--dry-allowed-length".into(),
+                    config.dry_allowed_length.to_string(),
+                ]);
+            }
+            if config.dry_penalty_last_n > 0 {
+                cmd.extend_from_slice(&[
+                    "--dry-penalty-last-n".into(),
+                    config.dry_penalty_last_n.to_string(),
+                ]);
+            }
+            if !config.dry_sequence_breaker.is_empty() {
+                cmd.extend_from_slice(&[
+                    "--dry-sequence-breaker".into(),
+                    config.dry_sequence_breaker.clone(),
+                ]);
+            }
         }
         if config.adaptive_target > 0.0 {
-            cmd.extend_from_slice(&["--adaptive-target".into(), config.adaptive_target.to_string()]);
-            if config.adaptive_decay > 0.0 { cmd.extend_from_slice(&["--adaptive-decay".into(), config.adaptive_decay.to_string()]); }
+            cmd.extend_from_slice(&[
+                "--adaptive-target".into(),
+                config.adaptive_target.to_string(),
+            ]);
+            if config.adaptive_decay > 0.0 {
+                cmd.extend_from_slice(&[
+                    "--adaptive-decay".into(),
+                    config.adaptive_decay.to_string(),
+                ]);
+            }
         }
-        if config.top_n_sigma >= 0.0 { cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]); }
-        if !config.logit_bias.is_empty() { cmd.extend_from_slice(&["-l".into(), config.logit_bias.clone()]); }
-        if !config.samplers.is_empty() { cmd.extend_from_slice(&["--samplers".into(), config.samplers.clone()]); }
-        if !config.sampler_seq.is_empty() { cmd.extend_from_slice(&["--sampler-seq".into(), config.sampler_seq.clone()]); }
+        if config.top_n_sigma >= 0.0 {
+            cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]);
+        }
+        if !config.logit_bias.is_empty() {
+            cmd.extend_from_slice(&["-l".into(), config.logit_bias.clone()]);
+        }
+        if !config.samplers.is_empty() {
+            cmd.extend_from_slice(&["--samplers".into(), config.samplers.clone()]);
+        }
+        if !config.sampler_seq.is_empty() {
+            cmd.extend_from_slice(&["--sampler-seq".into(), config.sampler_seq.clone()]);
+        }
     }
 
     // ── Server features ──
-    if config.timeout > 0 { cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]); }
-    if config.sleep_idle >= 0 { cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]); }
-    if config.context_shift { cmd.push("--context-shift".into()); }
-    if config.verbose { cmd.push("-v".into()); }
-    if config.metrics { cmd.push("--metrics".into()); }
-    if config.props { cmd.push("--props".into()); }
-    if !config.slots_enabled { cmd.push("--no-slots".into()); }
-    if !config.slot_save_path.is_empty() { cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]); }
-    if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON { cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]); }
-    if config.prefill_assistant { cmd.push("--prefill-assistant".into()); }
+    if config.timeout > 0 {
+        cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]);
+    }
+    if config.sleep_idle >= 0 {
+        cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]);
+    }
+    if config.context_shift {
+        cmd.push("--context-shift".into());
+    }
+    if config.verbose {
+        cmd.push("-v".into());
+    }
+    if config.metrics {
+        cmd.push("--metrics".into());
+    }
+    if config.props {
+        cmd.push("--props".into());
+    }
+    if !config.slots_enabled {
+        cmd.push("--no-slots".into());
+    }
+    if !config.slot_save_path.is_empty() {
+        cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]);
+    }
+    if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON {
+        cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
+    }
+    if config.prefill_assistant {
+        cmd.push("--prefill-assistant".into());
+    }
 
     // ── New server features (aligned with llama.cpp master) ──
-    if !config.rpc_servers.is_empty() { cmd.extend_from_slice(&["--rpc".into(), config.rpc_servers.clone()]); }
-    if config.sse_ping_interval != 30 { cmd.extend_from_slice(&["--sse-ping-interval".into(), config.sse_ping_interval.to_string()]); }
-    if config.reuse_port { cmd.push("--reuse-port".into()); }
+    if !config.rpc_servers.is_empty() {
+        cmd.extend_from_slice(&["--rpc".into(), config.rpc_servers.clone()]);
+    }
+    if config.sse_ping_interval != 30 {
+        cmd.extend_from_slice(&[
+            "--sse-ping-interval".into(),
+            config.sse_ping_interval.to_string(),
+        ]);
+    }
+    if config.reuse_port {
+        cmd.push("--reuse-port".into());
+    }
 
     // ── Multi-Model & Media ──
-    if !config.models_dir.is_empty() { cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]); }
-    if !config.models_preset.is_empty() { cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]); }
-    if config.models_max != 4 { cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]); }
-    if config.models_autoload { cmd.push("--models-autoload".into()); }
-    if config.image_min_tokens > 0 { cmd.extend_from_slice(&["--image-min-tokens".into(), config.image_min_tokens.to_string()]); }
-    if config.image_max_tokens > 0 { cmd.extend_from_slice(&["--image-max-tokens".into(), config.image_max_tokens.to_string()]); }
-    if config.mtmd_batch_max_tokens != 1024 { cmd.extend_from_slice(&["--mtmd-batch-max-tokens".into(), config.mtmd_batch_max_tokens.to_string()]); }
-    if !config.tags.is_empty() { cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]); }
-    if !config.media_path.is_empty() { cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]); }
-    if !config.tools.is_empty() { cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]); }
+    if !config.models_dir.is_empty() {
+        cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]);
+    }
+    if !config.models_preset.is_empty() {
+        cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]);
+    }
+    if config.models_max != 4 {
+        cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
+    }
+    if config.models_autoload {
+        cmd.push("--models-autoload".into());
+    }
+    if config.image_min_tokens > 0 {
+        cmd.extend_from_slice(&[
+            "--image-min-tokens".into(),
+            config.image_min_tokens.to_string(),
+        ]);
+    }
+    if config.image_max_tokens > 0 {
+        cmd.extend_from_slice(&[
+            "--image-max-tokens".into(),
+            config.image_max_tokens.to_string(),
+        ]);
+    }
+    if config.mtmd_batch_max_tokens != 1024 {
+        cmd.extend_from_slice(&[
+            "--mtmd-batch-max-tokens".into(),
+            config.mtmd_batch_max_tokens.to_string(),
+        ]);
+    }
+    if !config.tags.is_empty() {
+        cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]);
+    }
+    if !config.media_path.is_empty() {
+        cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]);
+    }
+    if !config.tools.is_empty() {
+        cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]);
+    }
 
     // Custom args（#13: 支持双引号包裹参数）
     for arg in &config.custom_args {
@@ -301,19 +684,24 @@ pub async fn start_server(
     let log_dir = config_dir.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join(format!("{}.log", instance_id));
-    let log_file = std::fs::File::create(&log_path)
-        .map_err(|e| format!("无法创建日志文件: {}", e))?;
-    let log_stderr = log_file.try_clone()
+    let log_file =
+        std::fs::File::create(&log_path).map_err(|e| format!("无法创建日志文件: {}", e))?;
+    let log_stderr = log_file
+        .try_clone()
         .map_err(|e| format!("无法复制文件句柄: {}", e))?;
 
     let mut child = {
         let mut c = Command::new(&cmd[0]);
         c.args(&cmd[1..])
-         .stdout(Stdio::from(log_file))
-         .stderr(Stdio::from(log_stderr));
+            .stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(log_stderr));
         #[cfg(windows)]
-        { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
-        c.spawn().map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_str))?
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000);
+        }
+        c.spawn()
+            .map_err(|e| format!("启动服务器失败: {}\n命令: {}", e, cmd_display))?
     };
 
     let pid = child.id();
@@ -345,14 +733,17 @@ pub async fn start_server(
             );
             return Err("该实例已在运行中".to_string());
         }
-        running.insert(instance_id.clone(), RunningInstance {
-            instance_id: instance_id.clone(),
-            pid,
-            port: config.port,
-            host: config.host.clone(),
-            start_time,
-            telemetry_session_id: telemetry_session_id.clone(),
-        });
+        running.insert(
+            instance_id.clone(),
+            RunningInstance {
+                instance_id: instance_id.clone(),
+                pid,
+                port: config.port,
+                host: config.host.clone(),
+                start_time,
+                telemetry_session_id: telemetry_session_id.clone(),
+            },
+        );
     }
 
     // 立即同步写 running 到磁盘 — 使用统一原子写入避免竞态
@@ -367,12 +758,16 @@ pub async fn start_server(
         }
     }
 
-    app.emit("server-started", serde_json::json!({
-        "instanceId": instance_id,
-        "pid": pid,
-        "port": config.port,
-        "command": cmd_display,
-    })).ok();
+    app.emit(
+        "server-started",
+        serde_json::json!({
+            "instanceId": instance_id,
+            "pid": pid,
+            "port": config.port,
+            "command": cmd_display,
+        }),
+    )
+    .ok();
 
     // ── 日志 tail 线程：读取 llama-server 直接写入的日志文件 ──
     let app_tail = app.clone();
@@ -393,8 +788,16 @@ pub async fn start_server(
         match child.try_wait() {
             Ok(Some(status)) if !status.success() => {
                 let st = app_clone.state::<AppState>();
-                { let mut r = st.running.lock().unwrap();
-                  if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) { r.remove(&id); } }
+                {
+                    let mut r = st.running.lock().unwrap();
+                    if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
+                        r.remove(&id);
+                    }
+                }
+                {
+                    let mut restored = st.restored_runtime_instances.lock().unwrap();
+                    restored.remove(&format!("{}:{}", id, pid));
+                }
                 let _ = crate::commands::telemetry::finish_run_session(
                     telemetry_session_monitor.as_deref(),
                     status.code(),
@@ -403,16 +806,22 @@ pub async fn start_server(
                 // Emit captured stderr/log content so errors are never lost on quick exit
                 if let Ok(log_content) = std::fs::read_to_string(&log_path_mon) {
                     if !log_content.trim().is_empty() {
-                        let _ = app_clone.emit("server-log", serde_json::json!({
-                            "instanceId": id,
-                            "text": log_content,
-                        }));
+                        let _ = app_clone.emit(
+                            "server-log",
+                            serde_json::json!({
+                                "instanceId": id,
+                                "text": log_content,
+                            }),
+                        );
                     }
                 }
-                let _ = app_clone.emit("server-error", serde_json::json!({
-                    "instanceId": id,
-                    "error": format!("进程启动后立即退出 (exit code: {:?})", status.code()),
-                }));
+                let _ = app_clone.emit(
+                    "server-error",
+                    serde_json::json!({
+                        "instanceId": id,
+                        "error": format!("进程启动后立即退出 (exit code: {:?})", status.code()),
+                    }),
+                );
                 return;
             }
             Ok(None) => {}
@@ -421,21 +830,31 @@ pub async fn start_server(
 
         let exit_code = child.wait().ok().and_then(|status| status.code());
         let st2 = app_clone.state::<AppState>();
-        { let mut r = st2.running.lock().unwrap();
-          if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
-            r.remove(&id);
-            let _ = crate::commands::telemetry::finish_run_session(
-                telemetry_session_monitor.as_deref(),
-                exit_code,
-                "process-exited",
-            );
-            let _ = app_clone.emit("server-stopped", serde_json::json!({ "instanceId": id }));
-        } }
+        {
+            let mut r = st2.running.lock().unwrap();
+            if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
+                r.remove(&id);
+                {
+                    let mut restored = st2.restored_runtime_instances.lock().unwrap();
+                    restored.remove(&format!("{}:{}", id, pid));
+                }
+                let _ = crate::commands::telemetry::finish_run_session(
+                    telemetry_session_monitor.as_deref(),
+                    exit_code,
+                    "process-exited",
+                );
+                let _ = app_clone.emit("server-stopped", serde_json::json!({ "instanceId": id }));
+            }
+        }
     });
 
     let id = instance_id.clone();
     let app_for_health = app.clone();
-    let host = if config.host == "0.0.0.0" { "localhost".to_string() } else { config.host.clone() };
+    let host = if config.host == "0.0.0.0" {
+        "localhost".to_string()
+    } else {
+        config.host.clone()
+    };
     let port = config.port;
     let api_key_health = config.api_key.clone();
     std::thread::spawn(move || {
@@ -445,12 +864,24 @@ pub async fn start_server(
     // P1/P2: 后台指标推送 + 历史记录线程
     let id_metrics = instance_id.clone();
     let app_metrics = app.clone();
-    let host_metrics = if config.host == "0.0.0.0" { "localhost".to_string() } else { config.host.clone() };
+    let host_metrics = if config.host == "0.0.0.0" {
+        "localhost".to_string()
+    } else {
+        config.host.clone()
+    };
     let port_metrics = config.port;
     let api_key_metrics = config.api_key.clone();
     let telemetry_session_metrics = telemetry_session_id.clone();
     std::thread::spawn(move || {
-        monitor_loop(&id_metrics, pid, &host_metrics, port_metrics, &api_key_metrics, telemetry_session_metrics, app_metrics);
+        monitor_loop(
+            &id_metrics,
+            pid,
+            &host_metrics,
+            port_metrics,
+            &api_key_metrics,
+            telemetry_session_metrics,
+            app_metrics,
+        );
     });
 
     Ok(())
@@ -472,7 +903,10 @@ fn monitor_loop(
     let is_my_instance = || {
         let st = app.state::<AppState>();
         let guard = st.running.lock().unwrap();
-        guard.get(instance_id).map(|r| r.pid == expected_pid).unwrap_or(false)
+        guard
+            .get(instance_id)
+            .map(|r| r.pid == expected_pid)
+            .unwrap_or(false)
     };
 
     let client = reqwest::blocking::Client::new();
@@ -487,17 +921,32 @@ fn monitor_loop(
 
     loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        if !is_my_instance() { break; }
+        if !is_my_instance() {
+            break;
+        }
 
         // ── 系统级 + GPU 指标 — 复用 collect_gpu_and_system 单例缓存
-        let (adlx_cpu, gpu_pct, vram_u, vram_t, _mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
-            collect_gpu_and_system();
+        let (
+            adlx_cpu,
+            gpu_pct,
+            vram_u,
+            vram_t,
+            _mem,
+            gpu_vendor,
+            sys_cpu,
+            sys_mem_total,
+            sys_mem_used,
+        ) = collect_gpu_and_system();
 
         // 进程级指标
         proc_sys.refresh_cpu_all();
         let (cpu, mem) = get_process_metrics(&mut proc_sys, expected_pid);
         let cpu_pct = adlx_cpu.unwrap_or(cpu);
-        let mem_mb = if adlx_cpu.is_some() { _mem.unwrap_or(mem) } else { (mem * 10.0).round() / 10.0 };
+        let mem_mb = if adlx_cpu.is_some() {
+            _mem.unwrap_or(mem)
+        } else {
+            (mem * 10.0).round() / 10.0
+        };
 
         let sys_metrics = SystemMetrics {
             cpu_percent: cpu_pct,
@@ -519,10 +968,7 @@ fn monitor_loop(
         if !api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", api_key));
         }
-        if let Ok(resp) = req
-            .timeout(std::time::Duration::from_secs(2))
-            .send()
-        {
+        if let Ok(resp) = req.timeout(std::time::Duration::from_secs(2)).send() {
             if resp.status().is_success() {
                 if let Ok(body) = resp.text() {
                     let extract = |key: &str| -> f64 {
@@ -568,10 +1014,7 @@ fn monitor_loop(
         if !api_key.is_empty() {
             slots_req = slots_req.header("Authorization", format!("Bearer {}", api_key));
         }
-        if let Ok(resp) = slots_req
-            .timeout(std::time::Duration::from_secs(2))
-            .send()
-        {
+        if let Ok(resp) = slots_req.timeout(std::time::Duration::from_secs(2)).send() {
             if resp.status().is_success() {
                 if let Ok(values) = resp.json::<Vec<serde_json::Value>>() {
                     let slots: Vec<crate::commands::telemetry::SlotSnapshotRecord> = values
@@ -581,7 +1024,8 @@ fn monitor_loop(
                             let slot_id = value
                                 .get("id")
                                 .and_then(|item| item.as_u64())
-                                .unwrap_or(index as u64) as u32;
+                                .unwrap_or(index as u64)
+                                as u32;
                             let is_processing = value
                                 .get("is_processing")
                                 .and_then(|item| item.as_bool())
@@ -611,19 +1055,29 @@ fn monitor_loop(
             }
         }
 
-        let _ = app.emit("metrics-update", serde_json::json!({
-            "instanceId": instance_id,
-            "system": sys_metrics,
-            "llama": llama_metrics,
-            "ts": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
-        }));
+        let _ = app.emit(
+            "metrics-update",
+            serde_json::json!({
+                "instanceId": instance_id,
+                "system": sys_metrics,
+                "llama": llama_metrics,
+                "ts": std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            }),
+        );
     }
 }
 
-pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid: u32, api_key: &str, app: tauri::AppHandle) {
+pub fn health_check_loop(
+    instance_id: &str,
+    host: &str,
+    port: u16,
+    expected_pid: u32,
+    api_key: &str,
+    app: tauri::AppHandle,
+) {
     let url = format!("http://{}:{}/health", host, port);
     let client = reqwest::blocking::Client::new();
 
@@ -632,43 +1086,60 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
         if !api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", api_key));
         }
-        req.timeout(std::time::Duration::from_secs(timeout_secs)).send()
+        req.timeout(std::time::Duration::from_secs(timeout_secs))
+            .send()
     };
 
     let is_my_instance = || {
         let st = app.state::<AppState>();
         let guard = st.running.lock().unwrap();
-        guard.get(instance_id).map(|r| r.pid == expected_pid).unwrap_or(false)
+        guard
+            .get(instance_id)
+            .map(|r| r.pid == expected_pid)
+            .unwrap_or(false)
     };
 
     // Fast initial health check: 10 × 1s = 10s
     for _ in 0..10 {
-        if !is_my_instance() { return; }
+        if !is_my_instance() {
+            return;
+        }
         if let Ok(resp) = health_req(2) {
             if resp.status().is_success() {
-                let _ = app.emit("health-status", serde_json::json!({
-                    "instanceId": instance_id, "status": "ok",
-                }));
+                let _ = app.emit(
+                    "health-status",
+                    serde_json::json!({
+                        "instanceId": instance_id, "status": "ok",
+                    }),
+                );
                 let mut fail_count = 0u32;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
-                    if !is_my_instance() { return; }
+                    if !is_my_instance() {
+                        return;
+                    }
                     if let Ok(resp) = health_req(5) {
                         if !resp.status().is_success() {
                             fail_count += 1;
                         } else {
                             fail_count = 0;
-                            let _ = app.emit("health-status", serde_json::json!({
-                                "instanceId": instance_id, "status": "ok",
-                            }));
+                            let _ = app.emit(
+                                "health-status",
+                                serde_json::json!({
+                                    "instanceId": instance_id, "status": "ok",
+                                }),
+                            );
                         }
                     } else {
                         fail_count += 1;
                     }
                     if fail_count >= 3 {
-                        let _ = app.emit("health-status", serde_json::json!({
-                            "instanceId": instance_id, "status": "fail",
-                        }));
+                        let _ = app.emit(
+                            "health-status",
+                            serde_json::json!({
+                                "instanceId": instance_id, "status": "fail",
+                            }),
+                        );
                         fail_count = 0;
                     }
                 }
@@ -680,33 +1151,46 @@ pub fn health_check_loop(instance_id: &str, host: &str, port: u16, expected_pid:
     // Slower retry: keep trying indefinitely until server starts or instance stops
     loop {
         std::thread::sleep(std::time::Duration::from_secs(10));
-        if !is_my_instance() { return; }
+        if !is_my_instance() {
+            return;
+        }
         if let Ok(resp) = health_req(5) {
             if resp.status().is_success() {
-                let _ = app.emit("health-status", serde_json::json!({
-                    "instanceId": instance_id, "status": "ok",
-                }));
+                let _ = app.emit(
+                    "health-status",
+                    serde_json::json!({
+                        "instanceId": instance_id, "status": "ok",
+                    }),
+                );
                 // Enter stable monitoring loop
                 let mut fail_count = 0u32;
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
-                    if !is_my_instance() { return; }
+                    if !is_my_instance() {
+                        return;
+                    }
                     if let Ok(resp) = health_req(5) {
                         if !resp.status().is_success() {
                             fail_count += 1;
                         } else {
                             fail_count = 0;
-                            let _ = app.emit("health-status", serde_json::json!({
-                                "instanceId": instance_id, "status": "ok",
-                            }));
+                            let _ = app.emit(
+                                "health-status",
+                                serde_json::json!({
+                                    "instanceId": instance_id, "status": "ok",
+                                }),
+                            );
                         }
                     } else {
                         fail_count += 1;
                     }
                     if fail_count >= 3 {
-                        let _ = app.emit("health-status", serde_json::json!({
-                            "instanceId": instance_id, "status": "fail",
-                        }));
+                        let _ = app.emit(
+                            "health-status",
+                            serde_json::json!({
+                                "instanceId": instance_id, "status": "fail",
+                            }),
+                        );
                         fail_count = 0;
                     }
                 }
@@ -729,13 +1213,21 @@ pub async fn stop_server(
         #[cfg(target_os = "windows")]
         {
             let r = std::os::windows::process::CommandExt::creation_flags(
-                &mut Command::new("taskkill"), 0x08000000)
-                .args(["/F", "/T", "/PID", &ri.pid.to_string()])
-                .output();
+                &mut Command::new("taskkill"),
+                0x08000000,
+            )
+            .args(["/F", "/T", "/PID", &ri.pid.to_string()])
+            .output();
             killed = r.map(|o| o.status.success()).unwrap_or(false);
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        { killed = Command::new("kill").arg(ri.pid.to_string()).status().map(|s| s.success()).unwrap_or(false); }
+        {
+            killed = Command::new("kill")
+                .arg(ri.pid.to_string())
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+        }
     }
 
     if !killed {
@@ -744,15 +1236,22 @@ pub async fn stop_server(
             {
                 let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
                 let r = std::os::windows::process::CommandExt::creation_flags(
-                    &mut Command::new("powershell"), 0x08000000)
-                    .args(["-NoProfile", "-Command", &cmd])
-                    .output();
-                killed = r.map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty()).unwrap_or(false);
+                    &mut Command::new("powershell"),
+                    0x08000000,
+                )
+                .args(["-NoProfile", "-Command", &cmd])
+                .output();
+                killed = r
+                    .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+                    .unwrap_or(false);
             }
             #[cfg(target_os = "macos")]
             {
                 let port_str = ri.port.to_string();
-                if let Ok(out) = Command::new("lsof").args(["-ti", &format!(":{}", port_str)]).output() {
+                if let Ok(out) = Command::new("lsof")
+                    .args(["-ti", &format!(":{}", port_str)])
+                    .output()
+                {
                     let pids = String::from_utf8_lossy(&out.stdout);
                     for pid in pids.lines() {
                         let _ = Command::new("kill").arg("-9").arg(pid).status();
@@ -762,7 +1261,10 @@ pub async fn stop_server(
             }
             #[cfg(target_os = "linux")]
             {
-                if let Ok(out) = Command::new("fuser").args(["-k", &format!("{}/tcp", ri.port)]).status() {
+                if let Ok(out) = Command::new("fuser")
+                    .args(["-k", &format!("{}/tcp", ri.port)])
+                    .status()
+                {
                     killed = out.success() || killed;
                 }
             }
@@ -771,14 +1273,24 @@ pub async fn stop_server(
 
     if killed {
         state.running.lock().unwrap().remove(&instance_id);
+        {
+            let mut restored = state.restored_runtime_instances.lock().unwrap();
+            let prefix = format!("{}:", instance_id);
+            restored.retain(|key| !key.starts_with(&prefix));
+        }
         let _ = crate::commands::telemetry::finish_run_session(
-            ri.as_ref().and_then(|item| item.telemetry_session_id.as_deref()),
+            ri.as_ref()
+                .and_then(|item| item.telemetry_session_id.as_deref()),
             None,
             "manual-stop",
         );
-        app.emit("server-stopped", serde_json::json!({
-            "instanceId": instance_id,
-        })).ok();
+        app.emit(
+            "server-stopped",
+            serde_json::json!({
+                "instanceId": instance_id,
+            }),
+        )
+        .ok();
         Ok(())
     } else {
         // 进程仍在运行，不发射 server-stopped，前端保持 running 状态
@@ -789,23 +1301,59 @@ pub async fn stop_server(
 
 #[tauri::command]
 pub async fn open_browser(host: String, port: u16) -> Result<(), String> {
-    let host = if host == "0.0.0.0" { "localhost" } else { &host };
+    let host = if host == "0.0.0.0" {
+        "localhost"
+    } else {
+        &host
+    };
     let url = format!("http://{}:{}", host, port);
     #[cfg(target_os = "windows")]
-    { std::os::windows::process::CommandExt::creation_flags(
-        &mut std::process::Command::new("cmd"), 0x08000000)
-        .args(["/c", "start", &url]).spawn().map_err(|e| format!("{}", e))?; }
+    {
+        std::os::windows::process::CommandExt::creation_flags(
+            &mut std::process::Command::new("cmd"),
+            0x08000000,
+        )
+        .args(["/c", "start", &url])
+        .spawn()
+        .map_err(|e| format!("{}", e))?;
+    }
     #[cfg(target_os = "macos")]
-    { std::process::Command::new("open").arg(&url).spawn().map_err(|e| format!("{}", e))?; }
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("{}", e))?;
+    }
     #[cfg(target_os = "linux")]
-    { std::process::Command::new("xdg-open").arg(&url).spawn().map_err(|e| format!("{}", e))?; }
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("{}", e))?;
+    }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn test_connection(host: String, port: u16, api_key: Option<String>) -> Result<String, String> {
-    let url = format!("http://{}:{}/health", if host == "0.0.0.0" { "localhost" } else { &host }, port);
-    match http_get(&url, api_key.as_deref()).timeout(std::time::Duration::from_secs(3)).send().await {
+pub async fn test_connection(
+    host: String,
+    port: u16,
+    api_key: Option<String>,
+) -> Result<String, String> {
+    let url = format!(
+        "http://{}:{}/health",
+        if host == "0.0.0.0" {
+            "localhost"
+        } else {
+            &host
+        },
+        port
+    );
+    match http_get(&url, api_key.as_deref())
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+    {
         Ok(resp) => {
             if resp.status().is_success() {
                 Ok("✓ 连接成功，服务正常".into())
@@ -813,7 +1361,7 @@ pub async fn test_connection(host: String, port: u16, api_key: Option<String>) -
                 Err(format!("服务返回 HTTP {}", resp.status()))
             }
         }
-        Err(e) => Err(format!("无法连接: {}", e))
+        Err(e) => Err(format!("无法连接: {}", e)),
     }
 }
 
@@ -831,7 +1379,17 @@ pub async fn check_port(port: u16) -> Result<bool, String> {
 static SYSINFO_CACHE: Mutex<Option<System>> = Mutex::new(None);
 
 /// Collect GPU + system-level metrics. Uses cached System instance, no sleep.
-fn collect_gpu_and_system() -> (Option<f32>, Option<f32>, Option<f64>, Option<f64>, Option<f64>, Option<String>, Option<f32>, Option<f64>, Option<f64>) {
+fn collect_gpu_and_system() -> (
+    Option<f32>,
+    Option<f32>,
+    Option<f64>,
+    Option<f64>,
+    Option<f64>,
+    Option<String>,
+    Option<f32>,
+    Option<f64>,
+    Option<f64>,
+) {
     let mut guard = SYSINFO_CACHE.lock().unwrap();
     let sys = guard.get_or_insert_with(|| System::new_all());
     sys.refresh_cpu_all();
@@ -840,14 +1398,44 @@ fn collect_gpu_and_system() -> (Option<f32>, Option<f32>, Option<f64>, Option<f6
 
     // AMD
     if let Some(m) = adlx::collect_metrics() {
-        return (m.cpu_percent, m.gpu_percent, m.vram_used_mb, m.vram_total_mb, None, Some("AMD".into()), sys_cpu, sys_mem_total, sys_mem_used);
+        return (
+            m.cpu_percent,
+            m.gpu_percent,
+            m.vram_used_mb,
+            m.vram_total_mb,
+            None,
+            Some("AMD".into()),
+            sys_cpu,
+            sys_mem_total,
+            sys_mem_used,
+        );
     }
     // NVIDIA
     if let Some(m) = nvml::collect_metrics() {
-        return (None, m.gpu_percent, m.vram_used_mb, m.vram_total_mb, None, Some("NVIDIA".into()), sys_cpu, sys_mem_total, sys_mem_used);
+        return (
+            None,
+            m.gpu_percent,
+            m.vram_used_mb,
+            m.vram_total_mb,
+            None,
+            Some("NVIDIA".into()),
+            sys_cpu,
+            sys_mem_total,
+            sys_mem_used,
+        );
     }
     // Fallback
-    (None, None, None, None, None, None, sys_cpu, sys_mem_total, sys_mem_used)
+    (
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        sys_cpu,
+        sys_mem_total,
+        sys_mem_used,
+    )
 }
 
 /// #6: 复用 System 实例，避免每次 new → refresh → sleep → refresh 的 300ms 阻塞
@@ -856,7 +1444,11 @@ fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
     if let Some(p) = sys.processes().values().find(|p| p.pid().as_u32() == pid) {
         let raw = p.cpu_usage();
         // Always normalize by CPU count — sysinfo reports total across all cores
-        let cpu = if sys.cpus().is_empty() { 0.0 } else { raw / sys.cpus().len() as f32 };
+        let cpu = if sys.cpus().is_empty() {
+            0.0
+        } else {
+            raw / sys.cpus().len() as f32
+        };
         (cpu, p.memory() as f64 / (1024.0 * 1024.0))
     } else {
         (0.0, 0.0)
@@ -867,7 +1459,11 @@ fn get_system_level_metrics(sys: &mut System) -> (Option<f32>, Option<f64>, Opti
     sys.refresh_memory();
     let cpu = {
         let usage = sys.global_cpu_usage();
-        if usage > 0.0 { Some(usage) } else { None }
+        if usage > 0.0 {
+            Some(usage)
+        } else {
+            None
+        }
     };
     let total_mb = Some(sys.total_memory() as f64 / (1024.0 * 1024.0));
     let used_mb = Some(sys.used_memory() as f64 / (1024.0 * 1024.0));
@@ -887,16 +1483,30 @@ pub async fn get_system_metrics(
     let uptime = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0) - start_time;
+        .unwrap_or(0)
+        - start_time;
 
     let result = tokio::task::spawn_blocking(move || {
-        let (adlx_cpu, gpu_pct, vram_u, vram_t, _mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
-            collect_gpu_and_system();
+        let (
+            adlx_cpu,
+            gpu_pct,
+            vram_u,
+            vram_t,
+            _mem,
+            gpu_vendor,
+            sys_cpu,
+            sys_mem_total,
+            sys_mem_used,
+        ) = collect_gpu_and_system();
         let mut proc_sys = System::new_all();
         let (cpu, mem) = get_process_metrics(&mut proc_sys, pid);
         SystemMetrics {
             cpu_percent: adlx_cpu.unwrap_or(cpu),
-            memory_mb: if adlx_cpu.is_some() { _mem.unwrap_or(mem) } else { (mem * 10.0).round() / 10.0 },
+            memory_mb: if adlx_cpu.is_some() {
+                _mem.unwrap_or(mem)
+            } else {
+                (mem * 10.0).round() / 10.0
+            },
             uptime_secs: uptime,
             gpu_percent: gpu_pct,
             vram_used_mb: vram_u,
@@ -906,7 +1516,9 @@ pub async fn get_system_metrics(
             system_memory_used_mb: sys_mem_used,
             gpu_vendor,
         }
-    }).await.map_err(|e| format!("系统指标采集失败: {}", e))?;
+    })
+    .await
+    .map_err(|e| format!("系统指标采集失败: {}", e))?;
     Ok(result)
 }
 
@@ -914,8 +1526,17 @@ pub async fn get_system_metrics(
 #[tauri::command]
 pub async fn get_system_health() -> Result<SystemMetrics, String> {
     let result = tokio::task::spawn_blocking(|| {
-        let (adlx_cpu, gpu_pct, vram_u, vram_t, mem, gpu_vendor, sys_cpu, sys_mem_total, sys_mem_used) =
-            collect_gpu_and_system();
+        let (
+            adlx_cpu,
+            gpu_pct,
+            vram_u,
+            vram_t,
+            mem,
+            gpu_vendor,
+            sys_cpu,
+            sys_mem_total,
+            sys_mem_used,
+        ) = collect_gpu_and_system();
         SystemMetrics {
             cpu_percent: adlx_cpu.unwrap_or(sys_cpu.unwrap_or(0.0)),
             memory_mb: mem.unwrap_or(sys_mem_used.unwrap_or(0.0)),
@@ -928,7 +1549,9 @@ pub async fn get_system_health() -> Result<SystemMetrics, String> {
             system_memory_used_mb: sys_mem_used,
             gpu_vendor,
         }
-    }).await.map_err(|e| format!("系统指标采集失败: {}", e))?;
+    })
+    .await
+    .map_err(|e| format!("系统指标采集失败: {}", e))?;
     Ok(result)
 }
 
@@ -950,16 +1573,34 @@ fn http_get(url: &str, api_key: Option<&str>) -> reqwest::RequestBuilder {
 }
 
 #[tauri::command]
-pub async fn get_slots(host: String, port: u16, api_key: Option<String>) -> Result<Vec<SlotInfo>, String> {
-    let h = if host == "0.0.0.0" { "localhost" } else { &host };
+pub async fn get_slots(
+    host: String,
+    port: u16,
+    api_key: Option<String>,
+) -> Result<Vec<SlotInfo>, String> {
+    let h = if host == "0.0.0.0" {
+        "localhost"
+    } else {
+        &host
+    };
     let url = format!("http://{}:{}/slots", h, port);
-    let resp = http_get(&url, api_key.as_deref()).send().await.map_err(|e| format!("请求失败: {}", e))?;
+    let resp = http_get(&url, api_key.as_deref())
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
     let arr: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
-    Ok(arr.iter().enumerate().map(|(i, v)| SlotInfo {
-        id: v.get("id").and_then(|s| s.as_u64()).unwrap_or(i as u64) as u32,
-        is_processing: v.get("is_processing").and_then(|s| s.as_bool()).unwrap_or(false),
-        n_ctx: v.get("n_ctx").and_then(|s| s.as_u64()).unwrap_or(0) as u32,
-    }).collect())
+    Ok(arr
+        .iter()
+        .enumerate()
+        .map(|(i, v)| SlotInfo {
+            id: v.get("id").and_then(|s| s.as_u64()).unwrap_or(i as u64) as u32,
+            is_processing: v
+                .get("is_processing")
+                .and_then(|s| s.as_bool())
+                .unwrap_or(false),
+            n_ctx: v.get("n_ctx").and_then(|s| s.as_u64()).unwrap_or(0) as u32,
+        })
+        .collect())
 }
 
 #[derive(serde::Serialize)]
@@ -975,8 +1616,16 @@ pub struct MetricsInfo {
 }
 
 #[tauri::command]
-pub async fn get_metrics(host: String, port: u16, api_key: Option<String>) -> Result<Option<MetricsInfo>, String> {
-    let h = if host == "0.0.0.0" { "localhost" } else { &host };
+pub async fn get_metrics(
+    host: String,
+    port: u16,
+    api_key: Option<String>,
+) -> Result<Option<MetricsInfo>, String> {
+    let h = if host == "0.0.0.0" {
+        "localhost"
+    } else {
+        &host
+    };
     let url = format!("http://{}:{}/metrics", h, port);
     let resp = match http_get(&url, api_key.as_deref()).send().await {
         Ok(r) if r.status().is_success() => r,
@@ -1007,6 +1656,17 @@ pub async fn get_metrics(host: String, port: u16, api_key: Option<String>) -> Re
 /// 应用重启后，为已运行的实例重新建立日志捕获和指标推送。
 /// stdout/stderr 管道已不可用，改为从日志文件读取（tail 模式）。
 /// 同时创建新的 history session 继续记录。
+pub fn register_restored_runtime_instance(
+    app: &tauri::AppHandle,
+    instance_id: &str,
+    pid: u32,
+) -> bool {
+    let restore_key = format!("{}:{}", instance_id, pid);
+    let state = app.state::<AppState>();
+    let mut restored = state.restored_runtime_instances.lock().unwrap();
+    restored.insert(restore_key)
+}
+
 pub fn reconnect_running_instance(
     instance_id: &str,
     pid: u32,
@@ -1022,7 +1682,9 @@ pub fn reconnect_running_instance(
     {
         let app_log = app.clone();
         let id_log = instance_id.to_string();
-        let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log).ok().flatten();
+        let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log)
+            .ok()
+            .flatten();
         std::thread::spawn(move || {
             tail_log_file(&log_path, &id_log, telemetry_session_id, app_log);
         });
@@ -1032,11 +1694,25 @@ pub fn reconnect_running_instance(
     {
         let app_metrics = app.clone();
         let id_metrics = instance_id.to_string();
-        let host_m = if host == "0.0.0.0" { "localhost".to_string() } else { host.to_string() };
+        let host_m = if host == "0.0.0.0" {
+            "localhost".to_string()
+        } else {
+            host.to_string()
+        };
         let ak = api_key.to_string();
-        let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_metrics).ok().flatten();
+        let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_metrics)
+            .ok()
+            .flatten();
         std::thread::spawn(move || {
-            monitor_loop(&id_metrics, pid, &host_m, port, &ak, telemetry_session_id, app_metrics);
+            monitor_loop(
+                &id_metrics,
+                pid,
+                &host_m,
+                port,
+                &ak,
+                telemetry_session_id,
+                app_metrics,
+            );
         });
     }
 }
@@ -1107,8 +1783,12 @@ impl PerfParser {
         })
     }
 
-    fn is_launch(&self, line: &str) -> bool { self.re_launch.is_match(line) }
-    fn is_release(&self, line: &str) -> bool { self.re_release.is_match(line) }
+    fn is_launch(&self, line: &str) -> bool {
+        self.re_launch.is_match(line)
+    }
+    fn is_release(&self, line: &str) -> bool {
+        self.re_release.is_match(line)
+    }
 }
 
 /// 解析一行日志，更新任务性能状态。返回是否需要发射 perf-update。
@@ -1118,20 +1798,35 @@ fn parse_perf_line(
     tasks: &mut HashMap<u32, TaskPerfState>,
     last_completed: &mut Option<TaskPerfState>,
 ) -> bool {
-    let Some((slot_id, task_id)) = parser.extract_ids(line) else { return false };
+    let Some((slot_id, task_id)) = parser.extract_ids(line) else {
+        return false;
+    };
 
     // ── 任务创建 ──
     if parser.is_launch(line) {
-        tasks.insert(task_id, TaskPerfState {
-            slot_id, task_id,
-            n_decoded: 0, tg: 0.0, history: Vec::new(),
-            prompt_tokens: None, prompt_time_ms: None, prompt_tps: None,
-            gen_tokens: None, gen_time_ms: None, gen_tps: None,
-            total_tokens: None, total_time_ms: None,
-            spec_accept_rate: None, spec_accepted: None, spec_generated: None,
-            spec_gen_time_ms: None,
-            completed: false,
-        });
+        tasks.insert(
+            task_id,
+            TaskPerfState {
+                slot_id,
+                task_id,
+                n_decoded: 0,
+                tg: 0.0,
+                history: Vec::new(),
+                prompt_tokens: None,
+                prompt_time_ms: None,
+                prompt_tps: None,
+                gen_tokens: None,
+                gen_time_ms: None,
+                gen_tps: None,
+                total_tokens: None,
+                total_time_ms: None,
+                spec_accept_rate: None,
+                spec_accepted: None,
+                spec_generated: None,
+                spec_gen_time_ms: None,
+                completed: false,
+            },
+        );
         return true;
     }
 
@@ -1142,7 +1837,10 @@ fn parse_perf_line(
 
     // ── 进度更新 ──
     if let Some(c) = parser.re_decoded.captures(line) {
-        if let (Ok(n), Ok(tg)) = (c.get(1).unwrap().as_str().parse::<u64>(), c.get(2).unwrap().as_str().parse::<f64>()) {
+        if let (Ok(n), Ok(tg)) = (
+            c.get(1).unwrap().as_str().parse::<u64>(),
+            c.get(2).unwrap().as_str().parse::<f64>(),
+        ) {
             task.n_decoded = n;
             task.tg = tg;
             if task.history.len() < 500 {
@@ -1185,9 +1883,13 @@ fn parse_perf_line(
 
     // ── draft-mtp 详细统计 ──
     if let Some(c) = parser.re_stats.captures(line) {
-        task.spec_generated = c.get(1).and_then(|m| m.as_str().parse::<u64>().ok())
+        task.spec_generated = c
+            .get(1)
+            .and_then(|m| m.as_str().parse::<u64>().ok())
             .or(task.spec_generated);
-        task.spec_accepted = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok())
+        task.spec_accepted = c
+            .get(2)
+            .and_then(|m| m.as_str().parse::<u64>().ok())
             .or(task.spec_accepted);
         task.spec_gen_time_ms = c.get(3).and_then(|m| m.as_str().parse::<f64>().ok());
         return true;
@@ -1248,26 +1950,40 @@ fn tail_log_file(
         *recorded = Some(task.task_id);
     };
 
-    let emit_perf = |app: &tauri::AppHandle, tasks: &HashMap<u32, TaskPerfState>, last: &Option<TaskPerfState>| {
+    let emit_perf = |app: &tauri::AppHandle,
+                     tasks: &HashMap<u32, TaskPerfState>,
+                     last: &Option<TaskPerfState>| {
         let active: Vec<&TaskPerfState> = tasks.values().filter(|t| !t.completed).collect();
-        let _ = app.emit("perf-update", serde_json::json!({
-            "instanceId": instance_id,
-            "tasks": active,
-            "lastCompleted": last,
-        }));
+        let _ = app.emit(
+            "perf-update",
+            serde_json::json!({
+                "instanceId": instance_id,
+                "tasks": active,
+                "lastCompleted": last,
+            }),
+        );
     };
 
     // ── 阶段 1: 回放已有内容（最后 2000 行，覆盖前端 1000 条上限） ──
     if log_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&log_path) {
             let lines: Vec<&str> = content.lines().collect();
-            let start = if lines.len() > 2000 { lines.len() - 2000 } else { 0 };
+            let start = if lines.len() > 2000 {
+                lines.len() - 2000
+            } else {
+                0
+            };
             for line in &lines[start..] {
-                if line.trim().is_empty() { continue; }
-                let _ = app.emit("server-log", serde_json::json!({
-                    "instanceId": instance_id,
-                    "text": format!("{}\n", line),
-                }));
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let _ = app.emit(
+                    "server-log",
+                    serde_json::json!({
+                        "instanceId": instance_id,
+                        "text": format!("{}\n", line),
+                    }),
+                );
                 if parse_perf_line(&parser, line, &mut tasks, &mut last_completed) {
                     record_completed(&last_completed, &mut last_recorded_task_id);
                 }
@@ -1291,7 +2007,9 @@ fn tail_log_file(
         {
             let st = app.state::<AppState>();
             let guard = st.running.lock().unwrap();
-            if !guard.contains_key(instance_id) { break; }
+            if !guard.contains_key(instance_id) {
+                break;
+            }
         }
 
         // 检查文件状态
@@ -1312,11 +2030,16 @@ fn tail_log_file(
                     let reader = BufReader::new(file);
                     for line in reader.lines() {
                         if let Ok(text) = line {
-                            if text.trim().is_empty() { continue; }
-                            let _ = app.emit("server-log", serde_json::json!({
-                                "instanceId": instance_id,
-                                "text": format!("{}\n", text),
-                            }));
+                            if text.trim().is_empty() {
+                                continue;
+                            }
+                            let _ = app.emit(
+                                "server-log",
+                                serde_json::json!({
+                                    "instanceId": instance_id,
+                                    "text": format!("{}\n", text),
+                                }),
+                            );
                             if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
                                 perf_changed = true;
                                 record_completed(&last_completed, &mut last_recorded_task_id);
@@ -1355,4 +2078,3 @@ fn split_args(input: &str) -> Vec<String> {
     }
     args
 }
-

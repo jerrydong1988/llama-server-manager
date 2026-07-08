@@ -2,7 +2,6 @@
 /// Windows: 注册表 HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 /// macOS:   ~/Library/LaunchAgents/com.llama-server-manager.plist
 /// Linux:   ~/.config/autostart/llama-server-manager.desktop
-
 use std::path::PathBuf;
 
 const APP_NAME: &str = "LlamaServerManager";
@@ -29,15 +28,29 @@ pub fn enable_autostart() -> Result<(), String> {
     {
         let quoted = format!("\"{}\"", exe);
         std::process::Command::new("reg")
-            .args(["add", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                   "/v", APP_NAME, "/t", "REG_SZ", "/d", &quoted, "/f"])
-            .output().map_err(|e| format!("注册表写入失败: {}", e))?;
+            .args([
+                "add",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                APP_NAME,
+                "/t",
+                "REG_SZ",
+                "/d",
+                &quoted,
+                "/f",
+            ])
+            .output()
+            .map_err(|e| format!("注册表写入失败: {}", e))?;
     }
 
     #[cfg(target_os = "macos")]
     {
-        let escaped = exe.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
-            .replace('"', "&quot;").replace('\'', "&apos;");
+        let escaped = exe
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;");
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -46,7 +59,9 @@ pub fn enable_autostart() -> Result<(), String> {
     <key>ProgramArguments</key><array><string>{}</string></array>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><false/>
-</dict></plist>"#, escaped);
+</dict></plist>"#,
+            escaped
+        );
         let agents = home_dir()?.join("Library/LaunchAgents");
         std::fs::create_dir_all(&agents).map_err(|e| e.to_string())?;
         std::fs::write(agents.join("com.llama-server-manager.plist"), plist)
@@ -57,7 +72,9 @@ pub fn enable_autostart() -> Result<(), String> {
     {
         let desktop = format!(
             "[Desktop Entry]\nType=Application\nName=Llama Server Manager\nExec={}\n\
-             Hidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n", exe);
+             Hidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
+            exe
+        );
         let dir = home_dir()?.join(".config/autostart");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         std::fs::write(dir.join("llama-server-manager.desktop"), desktop)
@@ -72,24 +89,31 @@ pub fn disable_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("reg")
-            .args(["delete", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                   "/v", APP_NAME, "/f"])
-            .output().map_err(|e| format!("注册表删除失败: {}", e))?;
+            .args([
+                "delete",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                APP_NAME,
+                "/f",
+            ])
+            .output()
+            .map_err(|e| format!("注册表删除失败: {}", e))?;
     }
 
     #[cfg(target_os = "macos")]
     {
         if let Ok(dir) = home_dir() {
             let _ = std::fs::remove_file(
-                dir.join("Library/LaunchAgents/com.llama-server-manager.plist"));
+                dir.join("Library/LaunchAgents/com.llama-server-manager.plist"),
+            );
         }
     }
 
     #[cfg(target_os = "linux")]
     {
         if let Ok(dir) = home_dir() {
-            let _ = std::fs::remove_file(
-                dir.join(".config/autostart/llama-server-manager.desktop"));
+            let _ =
+                std::fs::remove_file(dir.join(".config/autostart/llama-server-manager.desktop"));
         }
     }
 
@@ -101,8 +125,12 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
         let out = std::process::Command::new("reg")
-            .args(["query", r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
-                   "/v", APP_NAME])
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                "/v",
+                APP_NAME,
+            ])
             .output();
         match out {
             Ok(o) => {
@@ -116,7 +144,9 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
     #[cfg(target_os = "macos")]
     {
         if let Ok(dir) = home_dir() {
-            Ok(dir.join("Library/LaunchAgents/com.llama-server-manager.plist").exists())
+            Ok(dir
+                .join("Library/LaunchAgents/com.llama-server-manager.plist")
+                .exists())
         } else {
             Ok(false)
         }
@@ -125,7 +155,9 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
     #[cfg(target_os = "linux")]
     {
         if let Ok(dir) = home_dir() {
-            Ok(dir.join(".config/autostart/llama-server-manager.desktop").exists())
+            Ok(dir
+                .join(".config/autostart/llama-server-manager.desktop")
+                .exists())
         } else {
             Ok(false)
         }

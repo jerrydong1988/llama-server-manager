@@ -1,11 +1,11 @@
-use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 use crate::models::{AppState, DownloadArtifactState, MsFileEntry, PersistedQueueEntry};
 use crate::utils;
-use tauri::{Emitter, Manager};
 use futures_util::StreamExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::LazyLock;
+use tauri::{Emitter, Manager};
 
 // Shared HTTP client for all download operations
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
@@ -39,6 +39,21 @@ fn effective_download_concurrency(state: &AppState) -> usize {
         1
     } else {
         configured
+    }
+}
+
+fn active_download_slot_count(state: &AppState) -> usize {
+    let file_slots: usize = {
+        let active_entries = state.download_active_entries.lock().unwrap();
+        active_entries
+            .values()
+            .map(|entry| entry.files.len().max(1))
+            .sum()
+    };
+    if file_slots > 0 {
+        file_slots
+    } else {
+        state.download_active_batches.lock().unwrap().len()
     }
 }
 
@@ -105,7 +120,9 @@ fn sanitize_repo_id(repo_id: &str) -> Result<String, String> {
 }
 
 fn sanitize_file_name(name: &str) -> Result<String, String> {
-    if name.is_empty() { return Err("文件名不能为空".into()); }
+    if name.is_empty() {
+        return Err("文件名不能为空".into());
+    }
     if name.contains("..") || name.contains('/') || name.contains('\\') {
         return Err(format!("文件名包含非法路径字符: {}", name));
     }
@@ -130,7 +147,12 @@ struct ActiveDownloadGuard {
 }
 impl Drop for ActiveDownloadGuard {
     fn drop(&mut self) {
-        self.app.state::<AppState>().active_downloads.lock().unwrap().remove(&self.run_id);
+        self.app
+            .state::<AppState>()
+            .active_downloads
+            .lock()
+            .unwrap()
+            .remove(&self.run_id);
     }
 }
 
@@ -186,13 +208,34 @@ struct DownloadTaskContext {
 impl DownloadTaskContext {
     fn emit(&self, app: &tauri::AppHandle, event: &str, extra: serde_json::Value) {
         let mut payload = serde_json::Map::new();
-        payload.insert("taskId".into(), serde_json::Value::String(self.task_id.clone()));
-        payload.insert("runId".into(), serde_json::Value::String(self.run_id.clone()));
-        payload.insert("version".into(), serde_json::Value::Number(self.version.into()));
-        payload.insert("fileName".into(), serde_json::Value::String(self.file_name.clone()));
-        payload.insert("repoId".into(), serde_json::Value::String(self.repo_id.clone()));
-        payload.insert("source".into(), serde_json::Value::String(self.source.clone()));
-        payload.insert("remotePath".into(), serde_json::Value::String(self.remote_path.clone()));
+        payload.insert(
+            "taskId".into(),
+            serde_json::Value::String(self.task_id.clone()),
+        );
+        payload.insert(
+            "runId".into(),
+            serde_json::Value::String(self.run_id.clone()),
+        );
+        payload.insert(
+            "version".into(),
+            serde_json::Value::Number(self.version.into()),
+        );
+        payload.insert(
+            "fileName".into(),
+            serde_json::Value::String(self.file_name.clone()),
+        );
+        payload.insert(
+            "repoId".into(),
+            serde_json::Value::String(self.repo_id.clone()),
+        );
+        payload.insert(
+            "source".into(),
+            serde_json::Value::String(self.source.clone()),
+        );
+        payload.insert(
+            "remotePath".into(),
+            serde_json::Value::String(self.remote_path.clone()),
+        );
 
         if let serde_json::Value::Object(extra_map) = extra {
             payload.extend(extra_map);
@@ -212,8 +255,14 @@ pub struct ResumeDownloadTaskResult {
 
 fn build_task_context(file: &MsFileEntry, repo_id: &str, source: &str) -> DownloadTaskContext {
     DownloadTaskContext {
-        task_id: file.task_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-        run_id: file.run_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        task_id: file
+            .task_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+        run_id: file
+            .run_id
+            .clone()
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
         version: file.version.unwrap_or(0),
         file_name: file.name.clone(),
         repo_id: repo_id.to_string(),
@@ -222,16 +271,25 @@ fn build_task_context(file: &MsFileEntry, repo_id: &str, source: &str) -> Downlo
     }
 }
 
-fn resolve_repo_save_path(app: &tauri::AppHandle, save_dir: &str, repo_id: &str) -> Result<PathBuf, String> {
+fn resolve_repo_save_path(
+    app: &tauri::AppHandle,
+    save_dir: &str,
+    repo_id: &str,
+) -> Result<PathBuf, String> {
     let base_path = if Path::new(save_dir).is_absolute() {
         PathBuf::from(save_dir)
     } else {
         let managed = app.state::<AppState>();
         let config_dir = managed.config_dir.lock().unwrap();
-        config_dir.parent().unwrap_or(Path::new(".")).to_path_buf().join(save_dir)
+        config_dir
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+            .join(save_dir)
     };
     let save_path = base_path.join(repo_id.replace('/', &std::path::MAIN_SEPARATOR.to_string()));
-    std::fs::create_dir_all(&save_path).map_err(|e| format!("Failed to create download directory: {}", e))?;
+    std::fs::create_dir_all(&save_path)
+        .map_err(|e| format!("Failed to create download directory: {}", e))?;
     Ok(save_path)
 }
 
@@ -267,10 +325,14 @@ async fn download_single_file(
         Ok(n) => n,
         Err(e) => {
             has_error.store(true, Ordering::SeqCst);
-            ctx.emit(&app, "download-error", serde_json::json!({
-                "error": e,
-                "retryable": false,
-            }));
+            ctx.emit(
+                &app,
+                "download-error",
+                serde_json::json!({
+                    "error": e,
+                    "retryable": false,
+                }),
+            );
             return;
         }
     };
@@ -282,15 +344,22 @@ async fn download_single_file(
         if !active.insert(ctx.run_id.clone()) {
             // 该文件已有活跃下载任务，跳过（避免两个任务同时写同一个文件）
             has_error.store(true, Ordering::SeqCst);
-            ctx.emit(&app, "download-error", serde_json::json!({
-                "error": "Download task is already active",
-                "retryable": false,
-            }));
+            ctx.emit(
+                &app,
+                "download-error",
+                serde_json::json!({
+                    "error": "Download task is already active",
+                    "retryable": false,
+                }),
+            );
             return;
         }
     }
     // RAII guard: 函数退出时自动从 active_downloads 中移除
-    let _guard = ActiveDownloadGuard { app: app.clone(), run_id: ctx.run_id.clone() };
+    let _guard = ActiveDownloadGuard {
+        app: app.clone(),
+        run_id: ctx.run_id.clone(),
+    };
     let task_id = ctx.task_id.clone();
     let run_id = ctx.run_id.clone();
     let repo_id = ctx.repo_id.clone();
@@ -305,24 +374,50 @@ async fn download_single_file(
         .map(|a| a.downloaded_size)
         .unwrap_or_else(|| temp_path.metadata().map(|m| m.len()).unwrap_or(0));
 
-    if shared.cancel_flags.lock().unwrap().get(&run_id).copied().unwrap_or(false) {
-        if !shared.pause_flags.lock().unwrap().get(&run_id).copied().unwrap_or(false) {
-                save_artifact_state(&DownloadArtifactState {
-                    task_id: task_id.clone(), run_id: run_id.clone(),
-                    repo_id: repo_id.clone(), source: source.clone(),
+    if shared
+        .cancel_flags
+        .lock()
+        .unwrap()
+        .get(&run_id)
+        .copied()
+        .unwrap_or(false)
+    {
+        if !shared
+            .pause_flags
+            .lock()
+            .unwrap()
+            .get(&run_id)
+            .copied()
+            .unwrap_or(false)
+        {
+            save_artifact_state(
+                &DownloadArtifactState {
+                    task_id: task_id.clone(),
+                    run_id: run_id.clone(),
+                    repo_id: repo_id.clone(),
+                    source: source.clone(),
                     remote_path: remote_path.clone(),
                     final_path: final_path.to_string_lossy().to_string(),
                     temp_path: temp_path.to_string_lossy().to_string(),
-                    expected_size: file_size, downloaded_size: resume_from,
-                    etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-                }, &temp_path);
-                update_manager_file_state(&shared, &task_id, FileStatePatch {
+                    expected_size: file_size,
+                    downloaded_size: resume_from,
+                    etag: save_etag.clone(),
+                    last_modified: save_lm.clone(),
+                    updated_at: now_secs(),
+                },
+                &temp_path,
+            );
+            update_manager_file_state(
+                &shared,
+                &task_id,
+                FileStatePatch {
                     downloaded: Some(resume_from),
                     version: Some(ctx.version),
                     status: Some("cancelled".into()),
                     ..Default::default()
-                });
-                let _ = app.emit("download-cancelled", serde_json::json!({
+                },
+            );
+            let _ = app.emit("download-cancelled", serde_json::json!({
                     "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
                     "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                 }));
@@ -338,23 +433,35 @@ async fn download_single_file(
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            save_artifact_state(&DownloadArtifactState {
-                task_id: task_id.clone(), run_id: run_id.clone(),
-                repo_id: repo_id.clone(), source: source.clone(),
-                remote_path: remote_path.clone(),
-                final_path: final_path.to_string_lossy().to_string(),
-                temp_path: temp_path.to_string_lossy().to_string(),
-                expected_size: file_size, downloaded_size: resume_from,
-                etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-            }, &temp_path);
+            save_artifact_state(
+                &DownloadArtifactState {
+                    task_id: task_id.clone(),
+                    run_id: run_id.clone(),
+                    repo_id: repo_id.clone(),
+                    source: source.clone(),
+                    remote_path: remote_path.clone(),
+                    final_path: final_path.to_string_lossy().to_string(),
+                    temp_path: temp_path.to_string_lossy().to_string(),
+                    expected_size: file_size,
+                    downloaded_size: resume_from,
+                    etag: save_etag.clone(),
+                    last_modified: save_lm.clone(),
+                    updated_at: now_secs(),
+                },
+                &temp_path,
+            );
             has_error.store(true, Ordering::SeqCst);
-            update_manager_file_state(&shared, &task_id, FileStatePatch {
-                downloaded: Some(resume_from),
-                version: Some(ctx.version),
-                status: Some("error".into()),
-                error: Some(Some(e.to_string())),
-                ..Default::default()
-            });
+            update_manager_file_state(
+                &shared,
+                &task_id,
+                FileStatePatch {
+                    downloaded: Some(resume_from),
+                    version: Some(ctx.version),
+                    status: Some("error".into()),
+                    error: Some(Some(e.to_string())),
+                    ..Default::default()
+                },
+            );
             let _ = app.emit("download-error", serde_json::json!({
                 "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "error": e.to_string(),
                 "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
@@ -364,37 +471,58 @@ async fn download_single_file(
         }
     };
     // A1-06: Read ETag and Last-Modified from response headers
-    let resp_etag = resp.headers().get("etag").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-    let resp_last_modified = resp.headers().get("last-modified").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    let resp_etag = resp
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let resp_last_modified = resp
+        .headers()
+        .get("last-modified")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
     save_etag = resp_etag.clone();
     save_lm = resp_last_modified.clone();
     // A1-06: Persist updated artifact state immediately after reading headers
-    save_artifact_state(&DownloadArtifactState {
-        task_id: task_id.clone(), run_id: run_id.clone(),
-        repo_id: repo_id.clone(), source: source.clone(),
-        remote_path: remote_path.clone(),
-        final_path: final_path.to_string_lossy().to_string(),
-        temp_path: temp_path.to_string_lossy().to_string(),
-        expected_size: file_size, downloaded_size: resume_from,
-        etag: save_etag.clone(), last_modified: save_lm.clone(),
-        updated_at: now_secs(),
-    }, &temp_path);
+    save_artifact_state(
+        &DownloadArtifactState {
+            task_id: task_id.clone(),
+            run_id: run_id.clone(),
+            repo_id: repo_id.clone(),
+            source: source.clone(),
+            remote_path: remote_path.clone(),
+            final_path: final_path.to_string_lossy().to_string(),
+            temp_path: temp_path.to_string_lossy().to_string(),
+            expected_size: file_size,
+            downloaded_size: resume_from,
+            etag: save_etag.clone(),
+            last_modified: save_lm.clone(),
+            updated_at: now_secs(),
+        },
+        &temp_path,
+    );
 
     // A1-05: Handle 416 Range Not Satisfiable with file size intelligence
     if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
         let part_size = temp_path.metadata().map(|m| m.len()).unwrap_or(0);
         if part_size >= file_size {
-            if final_path.exists() { let _ = std::fs::remove_file(&final_path); }
+            if final_path.exists() {
+                let _ = std::fs::remove_file(&final_path);
+            }
             if std::fs::rename(&temp_path, &final_path).is_ok() {
                 cleanup_artifact_state(&temp_path);
-                update_manager_file_state(&shared, &task_id, FileStatePatch {
-                    downloaded: Some(file_size),
-                    size: Some(file_size),
-                    version: Some(ctx.version),
-                    status: Some("completed".into()),
-                    error: Some(None),
-                    ..Default::default()
-                });
+                update_manager_file_state(
+                    &shared,
+                    &task_id,
+                    FileStatePatch {
+                        downloaded: Some(file_size),
+                        size: Some(file_size),
+                        version: Some(ctx.version),
+                        status: Some("completed".into()),
+                        error: Some(None),
+                        ..Default::default()
+                    },
+                );
                 let _ = app.emit("download-complete", serde_json::json!({
                     "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
                     "path": final_path.to_string_lossy(),
@@ -405,24 +533,38 @@ async fn download_single_file(
         }
         if part_size > file_size {
             let _ = std::fs::remove_file(&temp_path);
-            save_artifact_state(&DownloadArtifactState {
-                task_id: task_id.clone(), run_id: run_id.clone(),
-                repo_id: repo_id.clone(), source: source.clone(),
-                remote_path: remote_path.clone(),
-                final_path: final_path.to_string_lossy().to_string(),
-                temp_path: temp_path.to_string_lossy().to_string(),
-                expected_size: file_size, downloaded_size: 0,
-                etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-            }, &temp_path);
+            save_artifact_state(
+                &DownloadArtifactState {
+                    task_id: task_id.clone(),
+                    run_id: run_id.clone(),
+                    repo_id: repo_id.clone(),
+                    source: source.clone(),
+                    remote_path: remote_path.clone(),
+                    final_path: final_path.to_string_lossy().to_string(),
+                    temp_path: temp_path.to_string_lossy().to_string(),
+                    expected_size: file_size,
+                    downloaded_size: 0,
+                    etag: save_etag.clone(),
+                    last_modified: save_lm.clone(),
+                    updated_at: now_secs(),
+                },
+                &temp_path,
+            );
             has_error.store(true, Ordering::SeqCst);
-            update_manager_file_state(&shared, &task_id, FileStatePatch {
-                downloaded: Some(0),
-                version: Some(ctx.version),
-                status: Some("error".into()),
-                error: Some(Some("Download corrupted: part file larger than expected".into())),
-                ..Default::default()
-            });
-        let _ = app.emit("download-error", serde_json::json!({
+            update_manager_file_state(
+                &shared,
+                &task_id,
+                FileStatePatch {
+                    downloaded: Some(0),
+                    version: Some(ctx.version),
+                    status: Some("error".into()),
+                    error: Some(Some(
+                        "Download corrupted: part file larger than expected".into(),
+                    )),
+                    ..Default::default()
+                },
+            );
+            let _ = app.emit("download-error", serde_json::json!({
             "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
             "error": "Download corrupted: part file larger than expected",
             "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
@@ -430,23 +572,37 @@ async fn download_single_file(
         }));
             return;
         }
-        save_artifact_state(&DownloadArtifactState {
-            task_id: task_id.clone(), run_id: run_id.clone(),
-            repo_id: repo_id.clone(), source: source.clone(),
-            remote_path: remote_path.clone(),
-            final_path: final_path.to_string_lossy().to_string(),
-            temp_path: temp_path.to_string_lossy().to_string(),
-            expected_size: file_size, downloaded_size: 0,
-            etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-        }, &temp_path);
+        save_artifact_state(
+            &DownloadArtifactState {
+                task_id: task_id.clone(),
+                run_id: run_id.clone(),
+                repo_id: repo_id.clone(),
+                source: source.clone(),
+                remote_path: remote_path.clone(),
+                final_path: final_path.to_string_lossy().to_string(),
+                temp_path: temp_path.to_string_lossy().to_string(),
+                expected_size: file_size,
+                downloaded_size: 0,
+                etag: save_etag.clone(),
+                last_modified: save_lm.clone(),
+                updated_at: now_secs(),
+            },
+            &temp_path,
+        );
         has_error.store(true, Ordering::SeqCst);
-        update_manager_file_state(&shared, &task_id, FileStatePatch {
-            downloaded: Some(0),
-            version: Some(ctx.version),
-            status: Some("error".into()),
-            error: Some(Some("Server does not support resume, please restart download".into())),
-            ..Default::default()
-        });
+        update_manager_file_state(
+            &shared,
+            &task_id,
+            FileStatePatch {
+                downloaded: Some(0),
+                version: Some(ctx.version),
+                status: Some("error".into()),
+                error: Some(Some(
+                    "Server does not support resume, please restart download".into(),
+                )),
+                ..Default::default()
+            },
+        );
         let _ = app.emit("download-error", serde_json::json!({
             "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
             "error": "Server does not support resume, please restart download",
@@ -465,23 +621,35 @@ async fn download_single_file(
             code => &format!("HTTP {}", code),
         };
         let retryable = is_retryable_error(Some(status_code));
-        save_artifact_state(&DownloadArtifactState {
-            task_id: task_id.clone(), run_id: run_id.clone(),
-            repo_id: repo_id.clone(), source: source.clone(),
-            remote_path: remote_path.clone(),
-            final_path: final_path.to_string_lossy().to_string(),
-            temp_path: temp_path.to_string_lossy().to_string(),
-            expected_size: file_size, downloaded_size: resume_from,
-            etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-        }, &temp_path);
+        save_artifact_state(
+            &DownloadArtifactState {
+                task_id: task_id.clone(),
+                run_id: run_id.clone(),
+                repo_id: repo_id.clone(),
+                source: source.clone(),
+                remote_path: remote_path.clone(),
+                final_path: final_path.to_string_lossy().to_string(),
+                temp_path: temp_path.to_string_lossy().to_string(),
+                expected_size: file_size,
+                downloaded_size: resume_from,
+                etag: save_etag.clone(),
+                last_modified: save_lm.clone(),
+                updated_at: now_secs(),
+            },
+            &temp_path,
+        );
         has_error.store(true, Ordering::SeqCst);
-        update_manager_file_state(&shared, &task_id, FileStatePatch {
-            downloaded: Some(resume_from),
-            version: Some(ctx.version),
-            status: Some("error".into()),
-            error: Some(Some(msg.to_string())),
-            ..Default::default()
-        });
+        update_manager_file_state(
+            &shared,
+            &task_id,
+            FileStatePatch {
+                downloaded: Some(resume_from),
+                version: Some(ctx.version),
+                status: Some("error".into()),
+                error: Some(Some(msg.to_string())),
+                ..Default::default()
+            },
+        );
         let _ = app.emit("download-error", serde_json::json!({
             "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "error": msg,
             "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
@@ -495,13 +663,17 @@ async fn download_single_file(
 
     // A1-05: 200 OK with .part file means server ignored Range header → restart
     if !is_partial && temp_path.exists() {
-        update_manager_file_state(&shared, &task_id, FileStatePatch {
-            downloaded: Some(0),
-            version: Some(ctx.version),
-            status: Some("active".into()),
-            error: Some(None),
-            ..Default::default()
-        });
+        update_manager_file_state(
+            &shared,
+            &task_id,
+            FileStatePatch {
+                downloaded: Some(0),
+                version: Some(ctx.version),
+                status: Some("active".into()),
+                error: Some(None),
+                ..Default::default()
+            },
+        );
         let _ = app.emit("download-restarted", serde_json::json!({
             "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
             "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
@@ -511,16 +683,23 @@ async fn download_single_file(
 
     // A1-06: Check if remote file changed (ETag/Last-Modified mismatch on resume)
     if let Some(ref old_state) = artifact {
-        let etag_changed = resp_etag.is_some() && old_state.etag.is_some() && resp_etag != old_state.etag;
-        let lm_changed = resp_last_modified.is_some() && old_state.last_modified.is_some() && resp_last_modified != old_state.last_modified;
+        let etag_changed =
+            resp_etag.is_some() && old_state.etag.is_some() && resp_etag != old_state.etag;
+        let lm_changed = resp_last_modified.is_some()
+            && old_state.last_modified.is_some()
+            && resp_last_modified != old_state.last_modified;
         if (etag_changed || lm_changed) && temp_path.exists() {
-            update_manager_file_state(&shared, &task_id, FileStatePatch {
-                downloaded: Some(0),
-                version: Some(ctx.version),
-                status: Some("active".into()),
-                error: Some(None),
-                ..Default::default()
-            });
+            update_manager_file_state(
+                &shared,
+                &task_id,
+                FileStatePatch {
+                    downloaded: Some(0),
+                    version: Some(ctx.version),
+                    status: Some("active".into()),
+                    error: Some(None),
+                    ..Default::default()
+                },
+            );
             let _ = app.emit("download-remote-changed", serde_json::json!({
                 "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
                 "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
@@ -543,27 +722,43 @@ async fn download_single_file(
 
     use std::io::Write;
     let mut file = match std::fs::OpenOptions::new()
-        .create(true).append(is_partial).truncate(!is_partial).write(true)
-        .open(&temp_path) {
+        .create(true)
+        .append(is_partial)
+        .truncate(!is_partial)
+        .write(true)
+        .open(&temp_path)
+    {
         Ok(f) => f,
         Err(e) => {
-            save_artifact_state(&DownloadArtifactState {
-                task_id: task_id.clone(), run_id: run_id.clone(),
-                repo_id: repo_id.clone(), source: source.clone(),
-                remote_path: remote_path.clone(),
-                final_path: final_path.to_string_lossy().to_string(),
-                temp_path: temp_path.to_string_lossy().to_string(),
-                expected_size: total, downloaded_size: downloaded,
-                etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-            }, &temp_path);
-            update_manager_file_state(&shared, &task_id, FileStatePatch {
-                downloaded: Some(downloaded),
-                size: Some(total),
-                version: Some(ctx.version),
-                status: Some("error".into()),
-                error: Some(Some(format!("File create/write failed: {}", e))),
-                ..Default::default()
-            });
+            save_artifact_state(
+                &DownloadArtifactState {
+                    task_id: task_id.clone(),
+                    run_id: run_id.clone(),
+                    repo_id: repo_id.clone(),
+                    source: source.clone(),
+                    remote_path: remote_path.clone(),
+                    final_path: final_path.to_string_lossy().to_string(),
+                    temp_path: temp_path.to_string_lossy().to_string(),
+                    expected_size: total,
+                    downloaded_size: downloaded,
+                    etag: save_etag.clone(),
+                    last_modified: save_lm.clone(),
+                    updated_at: now_secs(),
+                },
+                &temp_path,
+            );
+            update_manager_file_state(
+                &shared,
+                &task_id,
+                FileStatePatch {
+                    downloaded: Some(downloaded),
+                    size: Some(total),
+                    version: Some(ctx.version),
+                    status: Some("error".into()),
+                    error: Some(Some(format!("File create/write failed: {}", e))),
+                    ..Default::default()
+                },
+            );
             has_error.store(true, Ordering::SeqCst);
             let _ = app.emit("download-error", serde_json::json!({
                 "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "error": format!("File create/write failed: {}", e),
@@ -576,45 +771,83 @@ async fn download_single_file(
 
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        if shared.cancel_flags.lock().unwrap().get(&run_id).copied().unwrap_or(false) {
-            if !shared.pause_flags.lock().unwrap().get(&run_id).copied().unwrap_or(false) {
-                save_artifact_state(&DownloadArtifactState {
-                    task_id: task_id.clone(), run_id: run_id.clone(),
-                    repo_id: repo_id.clone(), source: source.clone(),
-                    remote_path: remote_path.clone(),
-                    final_path: final_path.to_string_lossy().to_string(),
-                    temp_path: temp_path.to_string_lossy().to_string(),
-                    expected_size: total, downloaded_size: downloaded,
-                    etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-                }, &temp_path);
-                update_manager_file_state(&shared, &task_id, FileStatePatch {
-                    downloaded: Some(downloaded),
-                    size: Some(total),
-                    version: Some(ctx.version),
-                    status: Some("cancelled".into()),
-                    ..Default::default()
-                });
+        if shared
+            .cancel_flags
+            .lock()
+            .unwrap()
+            .get(&run_id)
+            .copied()
+            .unwrap_or(false)
+        {
+            if !shared
+                .pause_flags
+                .lock()
+                .unwrap()
+                .get(&run_id)
+                .copied()
+                .unwrap_or(false)
+            {
+                save_artifact_state(
+                    &DownloadArtifactState {
+                        task_id: task_id.clone(),
+                        run_id: run_id.clone(),
+                        repo_id: repo_id.clone(),
+                        source: source.clone(),
+                        remote_path: remote_path.clone(),
+                        final_path: final_path.to_string_lossy().to_string(),
+                        temp_path: temp_path.to_string_lossy().to_string(),
+                        expected_size: total,
+                        downloaded_size: downloaded,
+                        etag: save_etag.clone(),
+                        last_modified: save_lm.clone(),
+                        updated_at: now_secs(),
+                    },
+                    &temp_path,
+                );
+                update_manager_file_state(
+                    &shared,
+                    &task_id,
+                    FileStatePatch {
+                        downloaded: Some(downloaded),
+                        size: Some(total),
+                        version: Some(ctx.version),
+                        status: Some("cancelled".into()),
+                        ..Default::default()
+                    },
+                );
                 let _ = app.emit("download-cancelled", serde_json::json!({
                     "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
                     "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                 }));
             } else {
-                save_artifact_state(&DownloadArtifactState {
-                    task_id: task_id.clone(), run_id: run_id.clone(),
-                    repo_id: repo_id.clone(), source: source.clone(),
-                    remote_path: remote_path.clone(),
-                    final_path: final_path.to_string_lossy().to_string(),
-                    temp_path: temp_path.to_string_lossy().to_string(),
-                    expected_size: total, downloaded_size: downloaded,
-                    etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-                }, &temp_path);
-                update_manager_file_state(&shared, &task_id, FileStatePatch {
-                    downloaded: Some(downloaded),
-                    size: Some(total),
-                    version: Some(ctx.version),
-                    status: Some("paused".into()),
-                    ..Default::default()
-                });
+                save_artifact_state(
+                    &DownloadArtifactState {
+                        task_id: task_id.clone(),
+                        run_id: run_id.clone(),
+                        repo_id: repo_id.clone(),
+                        source: source.clone(),
+                        remote_path: remote_path.clone(),
+                        final_path: final_path.to_string_lossy().to_string(),
+                        temp_path: temp_path.to_string_lossy().to_string(),
+                        expected_size: total,
+                        downloaded_size: downloaded,
+                        etag: save_etag.clone(),
+                        last_modified: save_lm.clone(),
+                        updated_at: now_secs(),
+                    },
+                    &temp_path,
+                );
+                update_manager_file_state(
+                    &shared,
+                    &task_id,
+                    FileStatePatch {
+                        downloaded: Some(downloaded),
+                        size: Some(total),
+                        version: Some(ctx.version),
+                        status: Some("paused".into()),
+                        ..Default::default()
+                    },
+                );
                 let _ = app.emit("download-paused", serde_json::json!({
                     "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
                     "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
@@ -628,25 +861,37 @@ async fn download_single_file(
                 let len = bytes.len() as u64;
                 throttle_download_bytes(&shared, len).await;
                 if let Err(e) = file.write_all(&bytes) {
-                        save_artifact_state(&DownloadArtifactState {
-                            task_id: task_id.clone(), run_id: run_id.clone(),
-                            repo_id: repo_id.clone(), source: source.clone(),
+                    save_artifact_state(
+                        &DownloadArtifactState {
+                            task_id: task_id.clone(),
+                            run_id: run_id.clone(),
+                            repo_id: repo_id.clone(),
+                            source: source.clone(),
                             remote_path: remote_path.clone(),
                             final_path: final_path.to_string_lossy().to_string(),
                             temp_path: temp_path.to_string_lossy().to_string(),
-                            expected_size: total, downloaded_size: downloaded,
-                            etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-                        }, &temp_path);
-                        update_manager_file_state(&shared, &task_id, FileStatePatch {
+                            expected_size: total,
+                            downloaded_size: downloaded,
+                            etag: save_etag.clone(),
+                            last_modified: save_lm.clone(),
+                            updated_at: now_secs(),
+                        },
+                        &temp_path,
+                    );
+                    update_manager_file_state(
+                        &shared,
+                        &task_id,
+                        FileStatePatch {
                             downloaded: Some(downloaded),
                             size: Some(total),
                             version: Some(ctx.version),
                             status: Some("error".into()),
                             error: Some(Some(format!("File create/write failed: {}", e))),
                             ..Default::default()
-                        });
-                        has_error.store(true, Ordering::SeqCst);
-                        let _ = app.emit("download-error", serde_json::json!({
+                        },
+                    );
+                    has_error.store(true, Ordering::SeqCst);
+                    let _ = app.emit("download-error", serde_json::json!({
                             "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "error": format!("File create/write failed: {}", e),
                 "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                             "retryable": false,
@@ -664,51 +909,77 @@ async fn download_single_file(
                     s
                 } else if win_elapsed > 0.0 {
                     win_bytes as f64 / win_elapsed
-                } else { 0.0 };
+                } else {
+                    0.0
+                };
                 if last_emit.elapsed().as_millis() >= 500 {
                     last_emit = now;
-                    update_manager_file_state(&shared, &task_id, FileStatePatch {
-                        run_id: Some(run_id.clone()),
-                        downloaded: Some(downloaded),
-                        size: Some(total),
-                        version: Some(ctx.version),
-                        status: Some("active".into()),
-                        error: Some(None),
-                        ..Default::default()
-                    });
+                    update_manager_file_state(
+                        &shared,
+                        &task_id,
+                        FileStatePatch {
+                            run_id: Some(run_id.clone()),
+                            downloaded: Some(downloaded),
+                            size: Some(total),
+                            version: Some(ctx.version),
+                            status: Some("active".into()),
+                            error: Some(None),
+                            ..Default::default()
+                        },
+                    );
                     let _ = app.emit("download-progress", serde_json::json!({
                         "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "downloaded": downloaded,
                         "total": total, "speed": speed, "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                     }));
-                    save_artifact_state(&DownloadArtifactState {
-                        task_id: task_id.clone(), run_id: run_id.clone(),
-                        repo_id: repo_id.clone(), source: source.clone(),
-                        remote_path: remote_path.clone(),
-                        final_path: final_path.to_string_lossy().to_string(),
-                        temp_path: temp_path.to_string_lossy().to_string(),
-                        expected_size: total, downloaded_size: downloaded,
-                        etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-                    }, &temp_path);
+                    save_artifact_state(
+                        &DownloadArtifactState {
+                            task_id: task_id.clone(),
+                            run_id: run_id.clone(),
+                            repo_id: repo_id.clone(),
+                            source: source.clone(),
+                            remote_path: remote_path.clone(),
+                            final_path: final_path.to_string_lossy().to_string(),
+                            temp_path: temp_path.to_string_lossy().to_string(),
+                            expected_size: total,
+                            downloaded_size: downloaded,
+                            etag: save_etag.clone(),
+                            last_modified: save_lm.clone(),
+                            updated_at: now_secs(),
+                        },
+                        &temp_path,
+                    );
                 }
             }
             Err(e) => {
-                save_artifact_state(&DownloadArtifactState {
-                    task_id: task_id.clone(), run_id: run_id.clone(),
-                    repo_id: repo_id.clone(), source: source.clone(),
-                    remote_path: remote_path.clone(),
-                    final_path: final_path.to_string_lossy().to_string(),
-                    temp_path: temp_path.to_string_lossy().to_string(),
-                    expected_size: total, downloaded_size: downloaded,
-                    etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-                }, &temp_path);
-                update_manager_file_state(&shared, &task_id, FileStatePatch {
-                    downloaded: Some(downloaded),
-                    size: Some(total),
-                    version: Some(ctx.version),
-                    status: Some("error".into()),
-                    error: Some(Some(e.to_string())),
-                    ..Default::default()
-                });
+                save_artifact_state(
+                    &DownloadArtifactState {
+                        task_id: task_id.clone(),
+                        run_id: run_id.clone(),
+                        repo_id: repo_id.clone(),
+                        source: source.clone(),
+                        remote_path: remote_path.clone(),
+                        final_path: final_path.to_string_lossy().to_string(),
+                        temp_path: temp_path.to_string_lossy().to_string(),
+                        expected_size: total,
+                        downloaded_size: downloaded,
+                        etag: save_etag.clone(),
+                        last_modified: save_lm.clone(),
+                        updated_at: now_secs(),
+                    },
+                    &temp_path,
+                );
+                update_manager_file_state(
+                    &shared,
+                    &task_id,
+                    FileStatePatch {
+                        downloaded: Some(downloaded),
+                        size: Some(total),
+                        version: Some(ctx.version),
+                        status: Some("error".into()),
+                        error: Some(Some(e.to_string())),
+                        ..Default::default()
+                    },
+                );
                 has_error.store(true, Ordering::SeqCst);
                 let _ = app.emit("download-error", serde_json::json!({
                     "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "error": e.to_string(),
@@ -723,24 +994,36 @@ async fn download_single_file(
         let _ = std::fs::remove_file(&final_path);
     }
     if let Err(e) = std::fs::rename(&temp_path, &final_path) {
-        save_artifact_state(&DownloadArtifactState {
-            task_id: task_id.clone(), run_id: run_id.clone(),
-            repo_id: repo_id.clone(), source: source.clone(),
-            remote_path: remote_path.clone(),
-            final_path: final_path.to_string_lossy().to_string(),
-            temp_path: temp_path.to_string_lossy().to_string(),
-            expected_size: total, downloaded_size: downloaded,
-            etag: save_etag.clone(), last_modified: save_lm.clone(), updated_at: now_secs(),
-        }, &temp_path);
+        save_artifact_state(
+            &DownloadArtifactState {
+                task_id: task_id.clone(),
+                run_id: run_id.clone(),
+                repo_id: repo_id.clone(),
+                source: source.clone(),
+                remote_path: remote_path.clone(),
+                final_path: final_path.to_string_lossy().to_string(),
+                temp_path: temp_path.to_string_lossy().to_string(),
+                expected_size: total,
+                downloaded_size: downloaded,
+                etag: save_etag.clone(),
+                last_modified: save_lm.clone(),
+                updated_at: now_secs(),
+            },
+            &temp_path,
+        );
         has_error.store(true, Ordering::SeqCst);
-        update_manager_file_state(&shared, &task_id, FileStatePatch {
-            downloaded: Some(downloaded),
-            size: Some(total),
-            version: Some(ctx.version),
-            status: Some("error".into()),
-            error: Some(Some(format!("Failed to finalize download: {}", e))),
-            ..Default::default()
-        });
+        update_manager_file_state(
+            &shared,
+            &task_id,
+            FileStatePatch {
+                downloaded: Some(downloaded),
+                size: Some(total),
+                version: Some(ctx.version),
+                status: Some("error".into()),
+                error: Some(Some(format!("Failed to finalize download: {}", e))),
+                ..Default::default()
+            },
+        );
         let _ = app.emit("download-error", serde_json::json!({
             "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name,
             "error": format!("Failed to finalize download: {}", e),
@@ -750,14 +1033,18 @@ async fn download_single_file(
         return;
     }
     cleanup_artifact_state(&temp_path);
-    update_manager_file_state(&shared, &task_id, FileStatePatch {
-        downloaded: Some(total),
-        size: Some(total),
-        version: Some(ctx.version),
-        status: Some("completed".into()),
-        error: Some(None),
-        ..Default::default()
-    });
+    update_manager_file_state(
+        &shared,
+        &task_id,
+        FileStatePatch {
+            downloaded: Some(total),
+            size: Some(total),
+            version: Some(ctx.version),
+            status: Some("completed".into()),
+            error: Some(None),
+            ..Default::default()
+        },
+    );
     let _ = app.emit("download-complete", serde_json::json!({
         "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "path": final_path.to_string_lossy(),
         "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
@@ -768,39 +1055,61 @@ async fn download_single_file(
 
 #[tauri::command]
 pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
-    let url = format!("https://www.modelscope.cn/api/v1/models/{}/repo/files?Recursive=true", repo_id);
-    let resp = HTTP_CLIENT.get(&url).send().await.map_err(|e| format!("网络错误: {}", e))?;
+    let url = format!(
+        "https://www.modelscope.cn/api/v1/models/{}/repo/files?Recursive=true",
+        repo_id
+    );
+    let resp = HTTP_CLIENT
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("网络错误: {}", e))?;
     let body: serde_json::Value = resp.json().await.map_err(|e| format!("{}", e))?;
 
-    if !body.get("Success").and_then(|v| v.as_bool()).unwrap_or(false) {
-        let msg = body.get("Message").and_then(|v| v.as_str()).unwrap_or("未知错误");
+    if !body
+        .get("Success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        let msg = body
+            .get("Message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("未知错误");
         return Err(msg.to_string());
     }
 
     let empty_vec = vec![];
     let files = body["Data"]["Files"].as_array().unwrap_or(&empty_vec);
-    let mut result: Vec<MsFileEntry> = files.iter().filter_map(|f| {
-        if f.get("Type")?.as_str()? != "blob" { return None; }
-        let name = f.get("Name")?.as_str()?.to_string();
-        if !name.ends_with(".gguf") && !name.ends_with(".txt") { return None; }
-        Some(MsFileEntry {
-            file_type: utils::classify_gguf_file(Path::new(&name)).to_string(),
-            name,
-            path: f.get("Path")?.as_str()?.to_string(),
-            size: f.get("Size")?.as_u64().unwrap_or(0),
-            task_id: None,
-            run_id: None,
-            downloaded: None,
-            version: None,
-            status: None,
-            error: None,
+    let mut result: Vec<MsFileEntry> = files
+        .iter()
+        .filter_map(|f| {
+            if f.get("Type")?.as_str()? != "blob" {
+                return None;
+            }
+            let name = f.get("Name")?.as_str()?.to_string();
+            if !name.ends_with(".gguf") && !name.ends_with(".txt") {
+                return None;
+            }
+            Some(MsFileEntry {
+                file_type: utils::classify_gguf_file(Path::new(&name)).to_string(),
+                name,
+                path: f.get("Path")?.as_str()?.to_string(),
+                size: f.get("Size")?.as_u64().unwrap_or(0),
+                task_id: None,
+                run_id: None,
+                downloaded: None,
+                version: None,
+                status: None,
+                error: None,
+            })
         })
-    }).collect();
+        .collect();
 
-    result.sort_by_key(|e| {
-        match e.file_type.as_str() {
-            "mmproj" => 0, "model" => 1, "imatrix" => 2, _ => 9,
-        }
+    result.sort_by_key(|e| match e.file_type.as_str() {
+        "mmproj" => 0,
+        "model" => 1,
+        "imatrix" => 2,
+        _ => 9,
     });
     Ok(result)
 }
@@ -819,7 +1128,11 @@ pub async fn download_modelscope_files(
 
     let mut handles = Vec::new();
     use tokio::sync::Semaphore;
-    let max_concurrent = *app.state::<AppState>().download_max_concurrent.lock().unwrap();
+    let max_concurrent = *app
+        .state::<AppState>()
+        .download_max_concurrent
+        .lock()
+        .unwrap();
     let semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
     let has_error = Arc::new(AtomicBool::new(false));
 
@@ -827,7 +1140,10 @@ pub async fn download_modelscope_files(
     clear_control_flags_for_files(&app.state::<AppState>(), &files);
 
     for file in files {
-        let url = format!("https://modelscope.cn/models/{}/resolve/master/{}", repo_id, file.path);
+        let url = format!(
+            "https://modelscope.cn/models/{}/resolve/master/{}",
+            repo_id, file.path
+        );
         let dest_dir = save_path.clone();
         let ctx = build_task_context(&file, &repo_id, "modelscope");
         let has_error = Arc::clone(&has_error);
@@ -842,7 +1158,9 @@ pub async fn download_modelscope_files(
         handles.push(handle);
     }
 
-    for h in handles { let _ = h.await; }
+    for h in handles {
+        let _ = h.await;
+    }
     if has_error.load(Ordering::SeqCst) {
         return Err("Download completed with errors".into());
     }
@@ -852,14 +1170,22 @@ pub async fn download_modelscope_files(
 // ── 下载控制 ─────────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn cancel_file_download(task_id: String, run_id: Option<String>, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn cancel_file_download(
+    task_id: String,
+    run_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let key = run_id.unwrap_or(task_id);
     state.cancel_flags.lock().unwrap().insert(key, true);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn pause_file_download(task_id: String, run_id: Option<String>, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn pause_file_download(
+    task_id: String,
+    run_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     let key = run_id.unwrap_or(task_id);
     let mut pause = state.pause_flags.lock().unwrap();
     let mut cancel = state.cancel_flags.lock().unwrap();
@@ -869,12 +1195,21 @@ pub async fn pause_file_download(task_id: String, run_id: Option<String>, state:
 }
 
 #[tauri::command]
-pub async fn cancel_and_cleanup_download(task_id: String, file_name: String, file_path: String, run_id: Option<String>, version: Option<u32>, state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn cancel_and_cleanup_download(
+    task_id: String,
+    file_name: String,
+    file_path: String,
+    run_id: Option<String>,
+    version: Option<u32>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let _ = sanitize_file_name(&file_name)?;
     // Canonicalize + verify the path is within a managed download directory
     let managed = state.config_dir.lock().unwrap();
     let root = managed.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let cpath = std::fs::canonicalize(Path::new(&file_path)).unwrap_or_else(|_| Path::new(&file_path).to_path_buf());
+    let cpath = std::fs::canonicalize(Path::new(&file_path))
+        .unwrap_or_else(|_| Path::new(&file_path).to_path_buf());
     let croot = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
     if !cpath.starts_with(&croot) {
         return Err("文件不在受管目录内".into());
@@ -911,36 +1246,51 @@ struct HfLfsInfo {
 
 #[tauri::command]
 pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
-    let url = format!("https://huggingface.co/api/models/{}/tree/main?recursive=true", repo_id);
-    let resp = HTTP_CLIENT.get(&url).send().await.map_err(|e| format!("网络错误: {}", e))?;
+    let url = format!(
+        "https://huggingface.co/api/models/{}/tree/main?recursive=true",
+        repo_id
+    );
+    let resp = HTTP_CLIENT
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("网络错误: {}", e))?;
     if !resp.status().is_success() {
         return Err(format!("仓库未找到 (HTTP {})", resp.status()));
     }
     let entries: Vec<HfFileEntry> = resp.json().await.map_err(|e| format!("解析失败: {}", e))?;
 
-    let mut result: Vec<MsFileEntry> = entries.iter().filter_map(|e| {
-        if e.entry_type != "file" { return None; }
-        let name = e.path.split('/').last()?.to_string();
-        if !name.ends_with(".gguf") && !name.ends_with(".txt") { return None; }
-        let size = e.lfs.as_ref().map(|l| l.size).or(e.size).unwrap_or(0);
-        Some(MsFileEntry {
-            file_type: utils::classify_gguf_file(Path::new(&name)).to_string(),
-            name,
-            path: e.path.clone(),
-            size,
-            task_id: None,
-            run_id: None,
-            downloaded: None,
-            version: None,
-            status: None,
-            error: None,
+    let mut result: Vec<MsFileEntry> = entries
+        .iter()
+        .filter_map(|e| {
+            if e.entry_type != "file" {
+                return None;
+            }
+            let name = e.path.split('/').last()?.to_string();
+            if !name.ends_with(".gguf") && !name.ends_with(".txt") {
+                return None;
+            }
+            let size = e.lfs.as_ref().map(|l| l.size).or(e.size).unwrap_or(0);
+            Some(MsFileEntry {
+                file_type: utils::classify_gguf_file(Path::new(&name)).to_string(),
+                name,
+                path: e.path.clone(),
+                size,
+                task_id: None,
+                run_id: None,
+                downloaded: None,
+                version: None,
+                status: None,
+                error: None,
+            })
         })
-    }).collect();
+        .collect();
 
-    result.sort_by_key(|e| {
-        match e.file_type.as_str() {
-            "mmproj" => 0, "model" => 1, "imatrix" => 2, _ => 9,
-        }
+    result.sort_by_key(|e| match e.file_type.as_str() {
+        "mmproj" => 0,
+        "model" => 1,
+        "imatrix" => 2,
+        _ => 9,
     });
     Ok(result)
 }
@@ -959,7 +1309,11 @@ pub async fn download_huggingface_files(
     let repo_id = sanitize_repo_id(&repo_id)?;
     let save_path = resolve_repo_save_path(&app, &save_dir, &repo_id)?;
 
-    let max_concurrent = *app.state::<AppState>().download_max_concurrent.lock().unwrap();
+    let max_concurrent = *app
+        .state::<AppState>()
+        .download_max_concurrent
+        .lock()
+        .unwrap();
     let semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
     let has_error = Arc::new(AtomicBool::new(false));
     let mut handles = Vec::new();
@@ -968,7 +1322,10 @@ pub async fn download_huggingface_files(
     clear_control_flags_for_files(&app.state::<AppState>(), &files);
 
     for file in files {
-        let url = format!("https://huggingface.co/{}/resolve/main/{}", repo_id, file.path);
+        let url = format!(
+            "https://huggingface.co/{}/resolve/main/{}",
+            repo_id, file.path
+        );
         let dest_dir = save_path.clone();
         let ctx = build_task_context(&file, &repo_id, "huggingface");
         let has_error = Arc::clone(&has_error);
@@ -983,7 +1340,9 @@ pub async fn download_huggingface_files(
         handles.push(handle);
     }
 
-    for h in handles { let _ = h.await; }
+    for h in handles {
+        let _ = h.await;
+    }
     if has_error.load(Ordering::SeqCst) {
         return Err("Download completed with errors".into());
     }
@@ -1021,7 +1380,10 @@ fn collect_manager_entries(state: &AppState) -> Vec<PersistedQueueEntry> {
     for entry in active_entries.values() {
         let mut active_entry = entry.clone();
         active_entry.status = "active".into();
-        if let Some(existing) = entries.iter_mut().find(|queued| queued.id == active_entry.id) {
+        if let Some(existing) = entries
+            .iter_mut()
+            .find(|queued| queued.id == active_entry.id)
+        {
             *existing = active_entry;
         } else {
             entries.push(active_entry);
@@ -1032,16 +1394,33 @@ fn collect_manager_entries(state: &AppState) -> Vec<PersistedQueueEntry> {
 }
 
 fn derive_entry_status(entry: &PersistedQueueEntry) -> String {
-    if entry.files.iter().any(|file| matches!(file.status.as_deref(), Some("active") | Some("pausing"))) {
+    if entry
+        .files
+        .iter()
+        .any(|file| matches!(file.status.as_deref(), Some("active") | Some("pausing")))
+    {
         return "active".into();
     }
-    if entry.files.iter().any(|file| matches!(file.status.as_deref(), Some("error"))) {
+    if entry
+        .files
+        .iter()
+        .any(|file| matches!(file.status.as_deref(), Some("error")))
+    {
         return "error".into();
     }
-    if entry.files.iter().any(|file| matches!(file.status.as_deref(), Some("paused"))) {
+    if entry
+        .files
+        .iter()
+        .any(|file| matches!(file.status.as_deref(), Some("paused")))
+    {
         return "paused".into();
     }
-    if !entry.files.is_empty() && entry.files.iter().all(|file| matches!(file.status.as_deref(), Some("completed"))) {
+    if !entry.files.is_empty()
+        && entry
+            .files
+            .iter()
+            .all(|file| matches!(file.status.as_deref(), Some("completed")))
+    {
         return "completed".into();
     }
     entry.status.clone()
@@ -1134,7 +1513,9 @@ fn remove_manager_file(state: &AppState, task_id: &str) -> bool {
         let mut changed = false;
         active_entries.retain(|_, entry| {
             let old_len = entry.files.len();
-            entry.files.retain(|file| file.task_id.as_deref() != Some(task_id));
+            entry
+                .files
+                .retain(|file| file.task_id.as_deref() != Some(task_id));
             if entry.files.len() != old_len {
                 changed = true;
             }
@@ -1152,7 +1533,9 @@ fn remove_manager_file(state: &AppState, task_id: &str) -> bool {
     let mut changed = false;
     queue.retain_mut(|entry| {
         let old_file_len = entry.files.len();
-        entry.files.retain(|file| file.task_id.as_deref() != Some(task_id));
+        entry
+            .files
+            .retain(|file| file.task_id.as_deref() != Some(task_id));
         if entry.files.len() != old_file_len {
             changed = true;
         }
@@ -1168,12 +1551,17 @@ fn remove_manager_file(state: &AppState, task_id: &str) -> bool {
 
 fn persist_terminal_entry(state: &AppState, mut entry: PersistedQueueEntry) {
     entry.files.retain(|file| {
-        !matches!(file.status.as_deref(), Some("completed") | Some("cancelled"))
+        !matches!(
+            file.status.as_deref(),
+            Some("completed") | Some("cancelled")
+        )
     });
 
     let runtime_queue = state.download_queue.lock().unwrap().clone();
     let mut persisted = load_download_state(state);
-    persisted.retain(|saved| saved.id != entry.id && !runtime_queue.iter().any(|queued| queued.id == saved.id));
+    persisted.retain(|saved| {
+        saved.id != entry.id && !runtime_queue.iter().any(|queued| queued.id == saved.id)
+    });
     persisted.extend(runtime_queue);
 
     if !entry.files.is_empty() {
@@ -1193,7 +1581,10 @@ fn is_restore_runnable(entry: &PersistedQueueEntry) -> bool {
         && entry.retries < entry.max_retries
 }
 
-async fn run_persisted_entry(entry: PersistedQueueEntry, app: tauri::AppHandle) -> Result<(), String> {
+async fn run_persisted_entry(
+    entry: PersistedQueueEntry,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     if entry.source == "modelscope" {
         download_modelscope_files(entry.repo_id, entry.files, entry.save_dir, app).await
     } else {
@@ -1201,13 +1592,12 @@ async fn run_persisted_entry(entry: PersistedQueueEntry, app: tauri::AppHandle) 
     }
 }
 
-fn process_download_queue_inner(app: tauri::AppHandle) {
+fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
     let state = app.state::<AppState>();
     {
-        let active = state.download_active_batches.lock().unwrap();
         let max = effective_download_concurrency(&state);
-        if active.len() >= max {
-            return;
+        if active_download_slot_count(&state) >= max {
+            return false;
         }
     }
 
@@ -1221,7 +1611,7 @@ fn process_download_queue_inner(app: tauri::AppHandle) {
                 drop(queue);
                 persist_manager_queue(&state);
             }
-            return;
+            return false;
         }
         let mut entry = queue.remove(0);
         for file in entry.files.iter_mut() {
@@ -1255,18 +1645,21 @@ fn process_download_queue_inner(app: tauri::AppHandle) {
     }
 
     for file in &entry.files {
-        let _ = app.emit("download-started", serde_json::json!({
-            "queueId": &entry.id,
-            "taskId": file.task_id.as_deref().unwrap_or(""),
-            "runId": file.run_id.as_deref().unwrap_or(""),
-            "version": file.version.unwrap_or(0),
-            "fileName": &file.name,
-            "repoId": &entry.repo_id,
-            "source": &entry.source,
-            "remotePath": &file.path,
-            "downloaded": file.downloaded.unwrap_or(0),
-            "total": file.size,
-        }));
+        let _ = app.emit(
+            "download-started",
+            serde_json::json!({
+                "queueId": &entry.id,
+                "taskId": file.task_id.as_deref().unwrap_or(""),
+                "runId": file.run_id.as_deref().unwrap_or(""),
+                "version": file.version.unwrap_or(0),
+                "fileName": &file.name,
+                "repoId": &entry.repo_id,
+                "source": &entry.source,
+                "remotePath": &file.path,
+                "downloaded": file.downloaded.unwrap_or(0),
+                "total": file.size,
+            }),
+        );
     }
 
     tauri::async_runtime::spawn(async move {
@@ -1288,7 +1681,10 @@ fn process_download_queue_inner(app: tauri::AppHandle) {
                 retry_entry.retries += 1;
                 retry_entry.status = "queued".into();
                 for file in retry_entry.files.iter_mut() {
-                    if matches!(file.status.as_deref(), Some("error") | Some("paused") | Some("cancelled")) {
+                    if matches!(
+                        file.status.as_deref(),
+                        Some("error") | Some("paused") | Some("cancelled")
+                    ) {
                         file.status = Some("queued".into());
                     }
                     file.error = None;
@@ -1296,15 +1692,23 @@ fn process_download_queue_inner(app: tauri::AppHandle) {
 
                 {
                     let state = app.state::<AppState>();
-                    state.download_active_batches.lock().unwrap().remove(&batch_id);
-                    state.download_active_entries.lock().unwrap().remove(&batch_id);
+                    state
+                        .download_active_batches
+                        .lock()
+                        .unwrap()
+                        .remove(&batch_id);
+                    state
+                        .download_active_entries
+                        .lock()
+                        .unwrap()
+                        .remove(&batch_id);
                     let mut queue = state.download_queue.lock().unwrap();
                     queue.insert(0, retry_entry);
                     drop(queue);
                     persist_manager_queue(&state);
                 }
 
-                process_download_queue_inner(app);
+                fill_download_queue_slots(app);
                 return;
             }
         }
@@ -1314,22 +1718,37 @@ fn process_download_queue_inner(app: tauri::AppHandle) {
             if let Some(entry) = finalized_entry {
                 persist_terminal_entry(&state, entry);
             }
-            state.download_active_batches.lock().unwrap().remove(&batch_id);
-            state.download_active_entries.lock().unwrap().remove(&batch_id);
+            state
+                .download_active_batches
+                .lock()
+                .unwrap()
+                .remove(&batch_id);
+            state
+                .download_active_entries
+                .lock()
+                .unwrap()
+                .remove(&batch_id);
             // B-01: remove from inflight on final completion/exhaustion
             let mut inflight = load_inflight_state(&state);
             inflight.retain(|e| e.id != batch_id);
             save_inflight_state(&inflight, &state);
         }
-        process_download_queue_inner(app);
+        fill_download_queue_slots(app);
     });
+    true
+}
+
+fn fill_download_queue_slots(app: tauri::AppHandle) {
+    while process_download_queue_inner(app.clone()) {}
 }
 
 pub(crate) fn save_download_state(queue: &[PersistedQueueEntry], state: &AppState) {
     let config_dir = state.config_dir.lock().unwrap().clone();
     let _ = std::fs::create_dir_all(&config_dir);
     let path = config_dir.join("downloads.json");
-    let ds = DownloadState { queue: queue.to_vec() };
+    let ds = DownloadState {
+        queue: queue.to_vec(),
+    };
     if let Ok(json) = serde_json::to_string_pretty(&ds) {
         let tmp = config_dir.join("downloads.json.tmp");
         if std::fs::write(&tmp, &json).is_ok() {
@@ -1349,7 +1768,11 @@ pub(crate) fn load_download_state(state: &AppState) -> Vec<PersistedQueueEntry> 
 }
 
 fn inflight_path(state: &AppState) -> PathBuf {
-    state.config_dir.lock().unwrap().join("downloads_inflight.json")
+    state
+        .config_dir
+        .lock()
+        .unwrap()
+        .join("downloads_inflight.json")
 }
 
 fn save_inflight_state(inflight: &[PersistedQueueEntry], state: &AppState) {
@@ -1358,7 +1781,9 @@ fn save_inflight_state(inflight: &[PersistedQueueEntry], state: &AppState) {
         let _ = std::fs::remove_file(&path);
         return;
     }
-    let ds = DownloadState { queue: inflight.to_vec() };
+    let ds = DownloadState {
+        queue: inflight.to_vec(),
+    };
     if let Ok(json) = serde_json::to_string_pretty(&ds) {
         let _ = std::fs::write(&path, json);
     }
@@ -1377,7 +1802,10 @@ fn clear_inflight_state(state: &AppState) {
     let _ = std::fs::remove_file(inflight_path(state));
 }
 
-pub(crate) fn restore_runtime_queue_from_disk(state: &AppState, app: &tauri::AppHandle) -> Vec<PersistedQueueEntry> {
+pub(crate) fn restore_runtime_queue_from_disk(
+    state: &AppState,
+    app: &tauri::AppHandle,
+) -> Vec<PersistedQueueEntry> {
     let mut queue = load_download_state(state);
 
     let inflight = load_inflight_state(state);
@@ -1396,9 +1824,11 @@ pub(crate) fn restore_runtime_queue_from_disk(state: &AppState, app: &tauri::App
     let save_dir_base = config_dir.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     for entry in queue.iter_mut() {
-        let repo_dir = save_dir_base
-            .join(&entry.save_dir)
-            .join(entry.repo_id.replace('/', &std::path::MAIN_SEPARATOR.to_string()));
+        let repo_dir = save_dir_base.join(&entry.save_dir).join(
+            entry
+                .repo_id
+                .replace('/', &std::path::MAIN_SEPARATOR.to_string()),
+        );
         for file in entry.files.iter_mut() {
             if file.status.is_none() {
                 file.status = Some(entry.status.clone());
@@ -1423,7 +1853,11 @@ pub(crate) fn restore_runtime_queue_from_disk(state: &AppState, app: &tauri::App
         }
     }
 
-    let runnable: Vec<_> = queue.iter().filter(|e| is_restore_runnable(e)).cloned().collect();
+    let runnable: Vec<_> = queue
+        .iter()
+        .filter(|e| is_restore_runnable(e))
+        .cloned()
+        .collect();
     *state.download_queue.lock().unwrap() = runnable;
     save_download_state(&queue, state);
 
@@ -1432,7 +1866,7 @@ pub(crate) fn restore_runtime_queue_from_disk(state: &AppState, app: &tauri::App
     if policy == "auto_on_launch" {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            process_download_queue_inner(app);
+            fill_download_queue_slots(app);
         });
     }
 
@@ -1444,13 +1878,20 @@ pub async fn persist_download_queue(
     queue: Vec<PersistedQueueEntry>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let runtime_queue: Vec<PersistedQueueEntry> = queue.iter().filter(|e| is_runtime_queued(e)).cloned().collect();
+    let runtime_queue: Vec<PersistedQueueEntry> = queue
+        .iter()
+        .filter(|e| is_runtime_queued(e))
+        .cloned()
+        .collect();
     *state.download_queue.lock().unwrap() = runtime_queue.clone();
 
     let mut persisted = load_download_state(&state);
     persisted.retain(|entry| !is_runtime_queued(entry));
 
-    for entry in collect_manager_entries(&state).into_iter().filter(|entry| !is_runtime_queued(entry)) {
+    for entry in collect_manager_entries(&state)
+        .into_iter()
+        .filter(|entry| !is_runtime_queued(entry))
+    {
         if let Some(existing) = persisted.iter_mut().find(|saved| saved.id == entry.id) {
             *existing = entry;
         } else {
@@ -1493,7 +1934,7 @@ pub async fn enqueue_download_queue(
         }
     }
     persist_manager_queue(&state);
-    process_download_queue_inner(app);
+    fill_download_queue_slots(app);
     Ok(())
 }
 
@@ -1518,7 +1959,13 @@ pub async fn clear_download_tasks_by_status(
     let status_set: std::collections::HashSet<String> = statuses.into_iter().collect();
     let mut persisted = load_download_state(&state);
     persisted.retain_mut(|entry| {
-        entry.files.retain(|file| !file.status.as_ref().map(|s| status_set.contains(s)).unwrap_or(false));
+        entry.files.retain(|file| {
+            !file
+                .status
+                .as_ref()
+                .map(|s| status_set.contains(s))
+                .unwrap_or(false)
+        });
         entry.status = derive_entry_status(entry);
         !entry.files.is_empty()
     });
@@ -1526,7 +1973,13 @@ pub async fn clear_download_tasks_by_status(
     {
         let mut queue = state.download_queue.lock().unwrap();
         queue.retain_mut(|entry| {
-            entry.files.retain(|file| !file.status.as_ref().map(|s| status_set.contains(s)).unwrap_or(false));
+            entry.files.retain(|file| {
+                !file
+                    .status
+                    .as_ref()
+                    .map(|s| status_set.contains(s))
+                    .unwrap_or(false)
+            });
             entry.status = derive_entry_status(entry);
             !entry.files.is_empty()
         });
@@ -1541,12 +1994,14 @@ pub async fn clear_download_tasks_by_status(
 
 #[tauri::command]
 pub async fn process_download_queue(app: tauri::AppHandle) -> Result<(), String> {
-    process_download_queue_inner(app);
+    fill_download_queue_slots(app);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn get_download_resume_policy(state: tauri::State<'_, AppState>) -> Result<String, String> {
+pub async fn get_download_resume_policy(
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
     let config_dir = state.config_dir.lock().unwrap().clone();
     let config = crate::commands::config::read_config_from_disk(&config_dir);
     Ok(config.download_resume_policy)
@@ -1574,15 +2029,33 @@ pub async fn resume_download_task(
 ) -> Result<ResumeDownloadTaskResult, String> {
     let state = app.state::<AppState>();
 
-    if state.download_active_entries.lock().unwrap().values().any(|entry| {
-        entry.files.iter().any(|file| file.task_id.as_deref() == Some(task_id.as_str()))
-    }) {
+    if state
+        .download_active_entries
+        .lock()
+        .unwrap()
+        .values()
+        .any(|entry| {
+            entry
+                .files
+                .iter()
+                .any(|file| file.task_id.as_deref() == Some(task_id.as_str()))
+        })
+    {
         return Err("Download task is already active".into());
     }
 
-    if let Some(existing) = state.download_queue.lock().unwrap().iter().find_map(|entry| {
-        entry.files.iter().find(|file| file.task_id.as_deref() == Some(task_id.as_str()))
-    }) {
+    if let Some(existing) = state
+        .download_queue
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|entry| {
+            entry
+                .files
+                .iter()
+                .find(|file| file.task_id.as_deref() == Some(task_id.as_str()))
+        })
+    {
         return Ok(ResumeDownloadTaskResult {
             task_id: task_id.clone(),
             run_id: existing.run_id.clone().unwrap_or_default(),
@@ -1595,7 +2068,11 @@ pub async fn resume_download_task(
     let mut target_meta: Option<(String, String, String, u32, u32)> = None;
 
     persisted.retain_mut(|entry| {
-        if let Some(pos) = entry.files.iter().position(|file| file.task_id.as_deref() == Some(task_id.as_str())) {
+        if let Some(pos) = entry
+            .files
+            .iter()
+            .position(|file| file.task_id.as_deref() == Some(task_id.as_str()))
+        {
             if target_file.is_none() {
                 target_file = Some(entry.files.remove(pos));
                 target_meta = Some((
@@ -1614,8 +2091,8 @@ pub async fn resume_download_task(
     let mut file = target_file.ok_or_else(|| "Download task not found".to_string())?;
     clear_control_flags_for_files(&state, &[file.clone()]);
 
-    let (repo_id, source, save_dir, retries, max_retries) = target_meta
-        .ok_or_else(|| "Download task metadata is missing".to_string())?;
+    let (repo_id, source, save_dir, retries, max_retries) =
+        target_meta.ok_or_else(|| "Download task metadata is missing".to_string())?;
     let run_id = uuid::Uuid::new_v4().to_string();
     let version = file.version.unwrap_or(0) + 1;
     file.run_id = Some(run_id.clone());
@@ -1646,7 +2123,7 @@ pub async fn resume_download_task(
     persisted.extend(runtime_queue);
     save_download_state(&persisted, &state);
 
-    process_download_queue_inner(app);
+    fill_download_queue_slots(app);
 
     Ok(ResumeDownloadTaskResult {
         task_id,
@@ -1673,7 +2150,7 @@ pub async fn resume_all_downloads(app: tauri::AppHandle) -> Result<(), String> {
     }
     drop(runtime);
     persist_manager_queue(&state);
-    process_download_queue_inner(app);
+    fill_download_queue_slots(app);
     Ok(())
 }
 
@@ -1730,7 +2207,10 @@ pub async fn pause_all_downloads(state: tauri::State<'_, AppState>) -> Result<()
 }
 
 #[tauri::command]
-pub async fn cancel_all_downloads(state: tauri::State<'_, AppState>, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn cancel_all_downloads(
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let active_entries: Vec<PersistedQueueEntry> = {
         let entries = state.download_active_entries.lock().unwrap();
         entries.values().cloned().collect()
@@ -1748,15 +2228,18 @@ pub async fn cancel_all_downloads(state: tauri::State<'_, AppState>, app: tauri:
     }
     for entry in active_entries {
         for file in entry.files {
-            let _ = app.emit("download-cancelled", serde_json::json!({
-                "taskId": file.task_id.as_deref().unwrap_or(""),
-                "runId": file.run_id.as_deref().unwrap_or(""),
-                "version": file.version.unwrap_or(0),
-                "fileName": &file.name,
-                "repoId": &entry.repo_id,
-                "source": &entry.source,
-                "remotePath": &file.path,
-            }));
+            let _ = app.emit(
+                "download-cancelled",
+                serde_json::json!({
+                    "taskId": file.task_id.as_deref().unwrap_or(""),
+                    "runId": file.run_id.as_deref().unwrap_or(""),
+                    "version": file.version.unwrap_or(0),
+                    "fileName": &file.name,
+                    "repoId": &entry.repo_id,
+                    "source": &entry.source,
+                    "remotePath": &file.path,
+                }),
+            );
         }
     }
     Ok(())
@@ -1765,12 +2248,19 @@ pub async fn cancel_all_downloads(state: tauri::State<'_, AppState>, app: tauri:
 // ── 并发控制命令 ──────────────────────────────────────────────────
 
 #[tauri::command]
-pub async fn set_download_concurrency(n: usize, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    if n < 1 || n > 8 { return Err("concurrency must be 1-8".into()); }
+pub async fn set_download_concurrency(
+    n: usize,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    if n < 1 || n > 8 {
+        return Err("concurrency must be 1-8".into());
+    }
     *state.download_max_concurrent.lock().unwrap() = n;
     crate::commands::config::update_and_persist(&state, |global| {
         global.download_max_concurrent = n;
     })?;
+    fill_download_queue_slots(app);
     Ok(())
 }
 
@@ -1782,7 +2272,10 @@ pub async fn get_download_concurrency(state: tauri::State<'_, AppState>) -> Resu
 // ── 重置下载状态（重新下载专用） ────────────────────────────────────
 
 #[tauri::command]
-pub async fn set_download_bandwidth_limit(bytes_per_sec: u64, state: tauri::State<'_, AppState>) -> Result<(), String> {
+pub async fn set_download_bandwidth_limit(
+    bytes_per_sec: u64,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
     const MAX_LIMIT_BYTES_PER_SEC: u64 = 10 * 1024 * 1024 * 1024;
     if bytes_per_sec > MAX_LIMIT_BYTES_PER_SEC {
         return Err("bandwidth limit must be 0-10 GiB/s".into());
@@ -1800,12 +2293,17 @@ pub async fn set_download_bandwidth_limit(bytes_per_sec: u64, state: tauri::Stat
 }
 
 #[tauri::command]
-pub async fn get_download_bandwidth_limit(state: tauri::State<'_, AppState>) -> Result<u64, String> {
+pub async fn get_download_bandwidth_limit(
+    state: tauri::State<'_, AppState>,
+) -> Result<u64, String> {
     Ok(*state.download_bandwidth_limit_bytes_per_sec.lock().unwrap())
 }
 
 #[tauri::command]
-pub async fn set_download_low_priority_throttle(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+pub async fn set_download_low_priority_throttle(
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let state = app.state::<AppState>();
     *state.download_low_priority_throttle.lock().unwrap() = enabled;
     {
@@ -1818,13 +2316,15 @@ pub async fn set_download_low_priority_throttle(enabled: bool, app: tauri::AppHa
     })?;
     drop(state);
     if !enabled {
-        process_download_queue_inner(app);
+        fill_download_queue_slots(app);
     }
     Ok(())
 }
 
 #[tauri::command]
-pub async fn get_download_low_priority_throttle(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+pub async fn get_download_low_priority_throttle(
+    state: tauri::State<'_, AppState>,
+) -> Result<bool, String> {
     Ok(*state.download_low_priority_throttle.lock().unwrap())
 }
 
@@ -1840,7 +2340,11 @@ pub async fn reset_download_for_redownload(
         PathBuf::from(&save_dir)
     } else {
         let managed = state.config_dir.lock().unwrap();
-        managed.parent().unwrap_or(Path::new(".")).to_path_buf().join(&save_dir)
+        managed
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+            .join(&save_dir)
     };
     let (_final_path, temp_path, _meta_path) = build_download_paths(&save_path, &file_name);
     cleanup_artifact_state(&temp_path);
@@ -1860,11 +2364,14 @@ pub struct DownloadManagerSnapshot {
 }
 
 #[tauri::command]
-pub async fn get_download_manager_snapshot(state: tauri::State<'_, AppState>) -> Result<DownloadManagerSnapshot, String> {
+pub async fn get_download_manager_snapshot(
+    state: tauri::State<'_, AppState>,
+) -> Result<DownloadManagerSnapshot, String> {
     let queue = collect_manager_entries(&state);
     let active_count = state.download_active_batches.lock().unwrap().len();
     let max_concurrent = *state.download_max_concurrent.lock().unwrap();
-    let bandwidth_limit_bytes_per_sec = *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap();
+    let bandwidth_limit_bytes_per_sec =
+        *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap();
     let low_priority_throttle = *state.download_low_priority_throttle.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
     let config = crate::commands::config::read_config_from_disk(&config_dir);

@@ -1,25 +1,41 @@
-use std::process::Command;
 use std::net::TcpStream;
+use std::process::Command;
 
-fn detect_remote_os(host: &str, ssh_user: &str, ssh_key_path: Option<&str>, ssh_port: u16) -> Option<String> {
+fn detect_remote_os(
+    host: &str,
+    ssh_user: &str,
+    ssh_key_path: Option<&str>,
+    ssh_port: u16,
+) -> Option<String> {
     let mut c = Command::new("ssh");
     // #1: accept-new 替代 no，首次信任后续验证
-    c.arg("-o").arg("StrictHostKeyChecking=accept-new")
-     .arg("-o").arg("ConnectTimeout=5")
-     .arg("-o").arg("BatchMode=yes")
-     .arg("-p").arg(ssh_port.to_string());
+    c.arg("-o")
+        .arg("StrictHostKeyChecking=accept-new")
+        .arg("-o")
+        .arg("ConnectTimeout=5")
+        .arg("-o")
+        .arg("BatchMode=yes")
+        .arg("-p")
+        .arg(ssh_port.to_string());
 
-    if let Some(k) = ssh_key_path { c.arg("-i").arg(k); }
+    if let Some(k) = ssh_key_path {
+        c.arg("-i").arg(k);
+    }
 
     c.arg(format!("{}@{}", ssh_user, host))
-     .arg("uname -s 2>/dev/null || ver 2>NUL");
+        .arg("uname -s 2>/dev/null || ver 2>NUL");
 
     c.output().ok().and_then(|o| {
         let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
-        if s.contains("Linux") { Some("linux".into()) }
-        else if s.contains("Darwin") { Some("macos".into()) }
-        else if s.contains("Windows") || s.contains("Microsoft") { Some("windows".into()) }
-        else { None }
+        if s.contains("Linux") {
+            Some("linux".into())
+        } else if s.contains("Darwin") {
+            Some("macos".into())
+        } else if s.contains("Windows") || s.contains("Microsoft") {
+            Some("windows".into())
+        } else {
+            None
+        }
     })
 }
 

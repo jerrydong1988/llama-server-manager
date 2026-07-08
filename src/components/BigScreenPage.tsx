@@ -80,7 +80,6 @@ export default function BigScreenPage() {
       const [nextOverview, nextSessions] = await Promise.all([
         invoke<TelemetryOverview>('get_telemetry_overview').catch(() => emptyOverview),
         invoke<TelemetrySessionSummary[]>('list_telemetry_sessions', { limit: 12 }).catch(() => []),
-        loadInitialData().catch(() => undefined),
       ])
       setOverview(nextOverview)
       setSessions(nextSessions)
@@ -96,6 +95,10 @@ export default function BigScreenPage() {
     } finally {
       setRefreshing(false)
     }
+  }, [])
+
+  useEffect(() => {
+    void loadInitialData().catch(() => undefined)
   }, [loadInitialData])
 
   useEffect(() => {
@@ -456,7 +459,9 @@ function RequestTable({ requests, labels }: { requests: InferenceRequestSummary[
               <td className="truncate px-3 py-2">{request.source === 'proxy' ? `${labels.proxy}${request.http_status ? ` ${request.http_status}` : ''}` : labels.log}</td>
               <td className="truncate px-3 py-2">{formatNumber(request.total_tokens)}</td>
               <td className="truncate px-3 py-2">{formatRate(request.generation_tps)}</td>
-              <td className="truncate px-3 py-2">{formatMs(request.total_time_ms)}</td>
+              <td className="truncate px-3 py-2">
+                {request.source === 'proxy' ? `${labels.firstResponse} ${formatMs(request.total_time_ms)}` : formatMs(request.total_time_ms)}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -629,6 +634,7 @@ function getLabels(zh: boolean) {
     tokens: zh ? '令牌' : 'Tokens',
     speed: zh ? '速度' : 'Speed',
     duration: zh ? '耗时' : 'Duration',
+    firstResponse: zh ? '首响' : 'First byte',
     noRequests: zh ? '暂无已完成请求记录' : 'No completed request records',
     alertLogs: zh ? '异常日志' : 'Exception Logs',
     noLogs: zh ? '暂无日志' : 'No logs',

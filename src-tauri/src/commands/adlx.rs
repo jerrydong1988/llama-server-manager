@@ -21,17 +21,26 @@ const ADLX_DLL: &str = r"C:\Windows\System32\amdadlx64.dll";
 const ADLX_DLL: &str = "libADLX.so";
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
-fn ensure_loaded() -> bool { false }
+fn ensure_loaded() -> bool {
+    false
+}
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 fn ensure_loaded() -> bool {
     let mut state = ADLX_STATE.lock().unwrap();
-    if state.is_some() { return true; }
-    let lib = unsafe { match libloading::Library::new(ADLX_DLL) {
-        Ok(l) => Box::leak(Box::new(l)),
-        Err(_) => return false,
-    } };
-    *state = Some(AdlxState { lib, sys: std::ptr::null_mut() });
+    if state.is_some() {
+        return true;
+    }
+    let lib = unsafe {
+        match libloading::Library::new(ADLX_DLL) {
+            Ok(l) => Box::leak(Box::new(l)),
+            Err(_) => return false,
+        }
+    };
+    *state = Some(AdlxState {
+        lib,
+        sys: std::ptr::null_mut(),
+    });
     true
 }
 
@@ -51,20 +60,29 @@ unsafe fn vtbl<T>(base: *const c_void, idx: usize) -> T {
 
 /// Release COM object (vtable index 1 = Release)
 unsafe fn release(obj: *mut c_void) {
-    if obj.is_null() { return; }
+    if obj.is_null() {
+        return;
+    }
     type Release = unsafe extern "system" fn(*mut c_void) -> u32;
     vtbl::<Release>(*(obj as *const *const c_void), 1)(obj);
 }
 
 pub fn collect_metrics() -> Option<AdlxMetrics> {
-    if !ensure_loaded() { return None; }
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { try_collect() }));
+    if !ensure_loaded() {
+        return None;
+    }
+    let result =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { try_collect() }));
     match result {
         Ok(r) => r,
         Err(e) => {
-            let msg = if let Some(s) = e.downcast_ref::<String>() { s.clone() }
-                else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }
-                else { "?".to_string() };
+            let msg = if let Some(s) = e.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = e.downcast_ref::<&str>() {
+                s.to_string()
+            } else {
+                "?".to_string()
+            };
             eprintln!("[adlx] PANIC: {}", msg);
             None
         }
@@ -92,7 +110,13 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
 
     let sys = state.sys;
     let vt = *(sys as *const *const c_void);
-    let mut m = AdlxMetrics { cpu_percent: None, memory_mb: None, gpu_percent: None, vram_used_mb: None, vram_total_mb: None };
+    let mut m = AdlxMetrics {
+        cpu_percent: None,
+        memory_mb: None,
+        gpu_percent: None,
+        vram_used_mb: None,
+        vram_total_mb: None,
+    };
 
     // GetGPUs (index 1)
     let mut gpu_list: *mut c_void = std::ptr::null_mut();
@@ -103,7 +127,9 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
         type TotalRAM = unsafe extern "system" fn(*mut c_void, *mut u32) -> AdlxResult;
         let mut ram: u32 = 0;
         vtbl::<TotalRAM>(vt, 10)(sys, &mut ram);
-        if ram > 0 { m.memory_mb = Some(ram as f64); }
+        if ram > 0 {
+            m.memory_mb = Some(ram as f64);
+        }
 
         // GPU list vtable
         let vt_gl = *(gpu_list as *const *const c_void);
@@ -117,7 +143,9 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
             type TotalVRAM = unsafe extern "system" fn(*mut c_void, *mut u32) -> AdlxResult;
             let mut vram: u32 = 0;
             vtbl::<TotalVRAM>(vt_gpu, 11)(gpu, &mut vram);
-            if vram > 0 { m.vram_total_mb = Some(vram as f64); }
+            if vram > 0 {
+                m.vram_total_mb = Some(vram as f64);
+            }
         }
     }
 
@@ -142,19 +170,24 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
         type CPUUsage = unsafe extern "system" fn(*mut c_void, *mut f64) -> AdlxResult;
         let mut cpu: f64 = 0.0;
         vtbl::<CPUUsage>(vt_sm, 4)(sm, &mut cpu);
-        if cpu > 0.0 { m.cpu_percent = Some(cpu as f32); }
+        if cpu > 0.0 {
+            m.cpu_percent = Some(cpu as f32);
+        }
 
         // SM::SystemRAM (index 5)
         type SysRAM = unsafe extern "system" fn(*mut c_void, *mut i32) -> AdlxResult;
         let mut sram: i32 = 0;
         vtbl::<SysRAM>(vt_sm, 5)(sm, &mut sram);
-        if sram > 0 { m.memory_mb = Some(sram as f64); }
+        if sram > 0 {
+            m.memory_mb = Some(sram as f64);
+        }
     }
 
     // PM::GetCurrentGPUMetrics (index 18) for GPU[0]
     let mut gm: *mut c_void = std::ptr::null_mut();
     if !gpu.is_null() {
-        type GetGM = unsafe extern "system" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> AdlxResult;
+        type GetGM =
+            unsafe extern "system" fn(*mut c_void, *mut c_void, *mut *mut c_void) -> AdlxResult;
         if vtbl::<GetGM>(vt_pm, 18)(pm, gpu, &mut gm) == ADLX_OK && !gm.is_null() {
             let vt_gm = *(gm as *const *const c_void);
 
@@ -162,13 +195,17 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
             type GPUUsage = unsafe extern "system" fn(*mut c_void, *mut f64) -> AdlxResult;
             let mut gpu_pct: f64 = 0.0;
             vtbl::<GPUUsage>(vt_gm, 4)(gm, &mut gpu_pct);
-            if gpu_pct > 0.0 { m.gpu_percent = Some(gpu_pct as f32); }
+            if gpu_pct > 0.0 {
+                m.gpu_percent = Some(gpu_pct as f32);
+            }
 
             // GM::GPUVRAM (index 12)
             type GPUVram = unsafe extern "system" fn(*mut c_void, *mut i32) -> AdlxResult;
             let mut gv_mb: i32 = 0;
             vtbl::<GPUVram>(vt_gm, 12)(gm, &mut gv_mb);
-            if gv_mb > 0 { m.vram_used_mb = Some(gv_mb as f64); }
+            if gv_mb > 0 {
+                m.vram_used_mb = Some(gv_mb as f64);
+            }
         }
     }
 
