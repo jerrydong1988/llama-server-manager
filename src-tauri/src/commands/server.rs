@@ -378,8 +378,9 @@ pub async fn start_server(
     let app_tail = app.clone();
     let id_tail = instance_id.clone();
     let log_path_tail = log_path.clone();
+    let telemetry_session_tail = telemetry_session_id.clone();
     std::thread::spawn(move || {
-        tail_log_file(&log_path_tail, &id_tail, app_tail);
+        tail_log_file(&log_path_tail, &id_tail, telemetry_session_tail, app_tail);
     });
 
     // ── 进程存活监控 + 退出清理 ──
@@ -476,6 +477,7 @@ fn monitor_loop(
 
     let client = reqwest::blocking::Client::new();
     let metrics_url = format!("http://{}:{}/metrics", host, port);
+    let slots_url = format!("http://{}:{}/slots", host, port);
 
     // 启动时间用于计算 uptime
     let start_instant = std::time::Instant::now();
@@ -561,6 +563,53 @@ fn monitor_loop(
             &sys_metrics,
             llama_sample.as_ref(),
         );
+
+        let mut slots_req = client.get(&slots_url);
+        if !api_key.is_empty() {
+            slots_req = slots_req.header("Authorization", format!("Bearer {}", api_key));
+        }
+        if let Ok(resp) = slots_req
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+        {
+            if resp.status().is_success() {
+                if let Ok(values) = resp.json::<Vec<serde_json::Value>>() {
+                    let slots: Vec<crate::commands::telemetry::SlotSnapshotRecord> = values
+                        .iter()
+                        .enumerate()
+                        .map(|(index, value)| {
+                            let slot_id = value
+                                .get("id")
+                                .and_then(|item| item.as_u64())
+                                .unwrap_or(index as u64) as u32;
+                            let is_processing = value
+                                .get("is_processing")
+                                .and_then(|item| item.as_bool())
+                                .unwrap_or(false);
+                            let n_ctx = value
+                                .get("n_ctx")
+                                .and_then(|item| item.as_u64())
+                                .unwrap_or(0) as u32;
+                            let n_past = value
+                                .get("n_past")
+                                .and_then(|item| item.as_u64())
+                                .map(|item| item as u32);
+                            crate::commands::telemetry::SlotSnapshotRecord {
+                                slot_id,
+                                is_processing,
+                                n_ctx,
+                                n_past,
+                            }
+                        })
+                        .collect();
+                    let _ = crate::commands::telemetry::record_slot_snapshots(
+                        telemetry_session_id.as_deref(),
+                        instance_id,
+                        &slots,
+                    );
+                }
+            }
+        }
 
         let _ = app.emit("metrics-update", serde_json::json!({
             "instanceId": instance_id,
@@ -973,8 +1022,9 @@ pub fn reconnect_running_instance(
     {
         let app_log = app.clone();
         let id_log = instance_id.to_string();
+        let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log).ok().flatten();
         std::thread::spawn(move || {
-            tail_log_file(&log_path, &id_log, app_log);
+            tail_log_file(&log_path, &id_log, telemetry_session_id, app_log);
         });
     }
 
@@ -1155,12 +1205,48 @@ fn parse_perf_line(
 
 /// 从日志文件读取已有内容并持续 tail 新行，通过 server-log 事件推送。
 /// 对标 Docker `docker logs -f` / systemd `journalctl -f` 的实现模式。
-fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppHandle) {
+fn tail_log_file(
+    log_path: &std::path::Path,
+    instance_id: &str,
+    telemetry_session_id: Option<String>,
+    app: tauri::AppHandle,
+) {
     use std::io::{Seek, SeekFrom};
 
     let parser = PerfParser::new();
     let mut tasks: HashMap<u32, TaskPerfState> = HashMap::new();
     let mut last_completed: Option<TaskPerfState> = None;
+    let mut last_recorded_task_id: Option<u32> = None;
+
+    let record_completed = |last: &Option<TaskPerfState>, recorded: &mut Option<u32>| {
+        let Some(task) = last else {
+            return;
+        };
+        if *recorded == Some(task.task_id) {
+            return;
+        }
+        let record = crate::commands::telemetry::InferenceRequestRecord {
+            task_id: task.task_id,
+            slot_id: task.slot_id,
+            prompt_tokens: task.prompt_tokens,
+            prompt_time_ms: task.prompt_time_ms,
+            prompt_tps: task.prompt_tps,
+            generated_tokens: task.gen_tokens,
+            generation_time_ms: task.gen_time_ms,
+            generation_tps: task.gen_tps,
+            total_tokens: task.total_tokens,
+            total_time_ms: task.total_time_ms,
+            spec_accept_rate: task.spec_accept_rate,
+            spec_accepted: task.spec_accepted,
+            spec_generated: task.spec_generated,
+            spec_gen_time_ms: task.spec_gen_time_ms,
+        };
+        let _ = crate::commands::telemetry::record_inference_request(
+            telemetry_session_id.as_deref(),
+            &record,
+        );
+        *recorded = Some(task.task_id);
+    };
 
     let emit_perf = |app: &tauri::AppHandle, tasks: &HashMap<u32, TaskPerfState>, last: &Option<TaskPerfState>| {
         let active: Vec<&TaskPerfState> = tasks.values().filter(|t| !t.completed).collect();
@@ -1182,7 +1268,9 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
                     "instanceId": instance_id,
                     "text": format!("{}\n", line),
                 }));
-                parse_perf_line(&parser, line, &mut tasks, &mut last_completed);
+                if parse_perf_line(&parser, line, &mut tasks, &mut last_completed) {
+                    record_completed(&last_completed, &mut last_recorded_task_id);
+                }
             }
             // Clean up completed tasks from replay
             tasks.retain(|_, t| !t.completed);
@@ -1231,6 +1319,7 @@ fn tail_log_file(log_path: &std::path::Path, instance_id: &str, app: tauri::AppH
                             }));
                             if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
                                 perf_changed = true;
+                                record_completed(&last_completed, &mut last_recorded_task_id);
                             }
                         }
                     }

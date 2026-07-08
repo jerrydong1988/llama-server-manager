@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 3;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TelemetryOverview {
@@ -54,6 +54,80 @@ pub struct TelemetrySampleSummary {
     pub requests_processing: Option<i64>,
     pub requests_deferred: Option<i64>,
     pub busy_slots_per_decode: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InferenceRequestSummary {
+    pub session_id: String,
+    pub task_id: u32,
+    pub slot_id: u32,
+    pub completed_at: i64,
+    pub prompt_tokens: Option<u64>,
+    pub prompt_time_ms: Option<f64>,
+    pub prompt_tps: Option<f64>,
+    pub generated_tokens: Option<u64>,
+    pub generation_time_ms: Option<f64>,
+    pub generation_tps: Option<f64>,
+    pub total_tokens: Option<u64>,
+    pub total_time_ms: Option<f64>,
+    pub spec_accept_rate: Option<f64>,
+    pub spec_accepted: Option<u64>,
+    pub spec_generated: Option<u64>,
+    pub spec_gen_time_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TelemetrySessionAnalysis {
+    pub request_count: u32,
+    pub avg_prompt_tokens: f64,
+    pub avg_generated_tokens: f64,
+    pub avg_total_tokens: f64,
+    pub avg_prompt_tps: f64,
+    pub avg_generation_tps: f64,
+    pub avg_total_time_ms: f64,
+    pub max_total_tokens: u64,
+    pub avg_busy_slots: f64,
+    pub max_busy_slots: u32,
+    pub avg_cached_slots: f64,
+    pub max_context_tokens: u32,
+    pub slot_sample_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagnosticFinding {
+    pub id: String,
+    pub severity: String,
+    pub confidence: f64,
+    pub title: String,
+    pub summary: String,
+    pub evidence: Vec<String>,
+    pub recommendation: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SlotSnapshotRecord {
+    pub slot_id: u32,
+    pub is_processing: bool,
+    pub n_ctx: u32,
+    pub n_past: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InferenceRequestRecord {
+    pub task_id: u32,
+    pub slot_id: u32,
+    pub prompt_tokens: Option<u64>,
+    pub prompt_time_ms: Option<f64>,
+    pub prompt_tps: Option<f64>,
+    pub generated_tokens: Option<u64>,
+    pub generation_time_ms: Option<f64>,
+    pub generation_tps: Option<f64>,
+    pub total_tokens: Option<u64>,
+    pub total_time_ms: Option<f64>,
+    pub spec_accept_rate: Option<f64>,
+    pub spec_accepted: Option<u64>,
+    pub spec_generated: Option<u64>,
+    pub spec_gen_time_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +214,46 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_metric_samples_session_ts ON metric_samples(session_id, ts);
         CREATE INDEX IF NOT EXISTS idx_metric_samples_instance_ts ON metric_samples(instance_id, ts);
         CREATE INDEX IF NOT EXISTS idx_run_sessions_instance_started ON run_sessions(instance_id, started_at DESC);
+
+        CREATE TABLE IF NOT EXISTS inference_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            task_id INTEGER NOT NULL,
+            slot_id INTEGER NOT NULL,
+            completed_at INTEGER NOT NULL,
+            prompt_tokens INTEGER,
+            prompt_time_ms REAL,
+            prompt_tps REAL,
+            generated_tokens INTEGER,
+            generation_time_ms REAL,
+            generation_tps REAL,
+            total_tokens INTEGER,
+            total_time_ms REAL,
+            spec_accept_rate REAL,
+            spec_accepted INTEGER,
+            spec_generated INTEGER,
+            spec_gen_time_ms REAL,
+            UNIQUE(session_id, task_id),
+            FOREIGN KEY(session_id) REFERENCES run_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_inference_requests_session_completed
+            ON inference_requests(session_id, completed_at DESC);
+
+        CREATE TABLE IF NOT EXISTS slot_snapshots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            instance_id TEXT NOT NULL,
+            ts INTEGER NOT NULL,
+            slot_id INTEGER NOT NULL,
+            is_processing INTEGER NOT NULL,
+            n_ctx INTEGER NOT NULL,
+            n_past INTEGER,
+            FOREIGN KEY(session_id) REFERENCES run_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_slot_snapshots_session_ts
+            ON slot_snapshots(session_id, ts);
         "#,
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
@@ -249,6 +363,100 @@ pub fn record_metric_sample(
         ],
     )
     .map_err(|e| format!("无法写入遥测采样: {}", e))?;
+    Ok(())
+}
+
+pub fn record_inference_request(
+    session_id: Option<&str>,
+    record: &InferenceRequestRecord,
+) -> Result<(), String> {
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    let conn = open_connection()?;
+    conn.execute(
+        "INSERT INTO inference_requests
+            (session_id, task_id, slot_id, completed_at, prompt_tokens, prompt_time_ms, prompt_tps,
+             generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
+             spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+         ON CONFLICT(session_id, task_id) DO UPDATE SET
+             slot_id = excluded.slot_id,
+             completed_at = excluded.completed_at,
+             prompt_tokens = excluded.prompt_tokens,
+             prompt_time_ms = excluded.prompt_time_ms,
+             prompt_tps = excluded.prompt_tps,
+             generated_tokens = excluded.generated_tokens,
+             generation_time_ms = excluded.generation_time_ms,
+             generation_tps = excluded.generation_tps,
+             total_tokens = excluded.total_tokens,
+             total_time_ms = excluded.total_time_ms,
+             spec_accept_rate = excluded.spec_accept_rate,
+             spec_accepted = excluded.spec_accepted,
+             spec_generated = excluded.spec_generated,
+             spec_gen_time_ms = excluded.spec_gen_time_ms",
+        params![
+            session_id,
+            record.task_id,
+            record.slot_id,
+            now_ms(),
+            record.prompt_tokens.map(|v| v as i64),
+            record.prompt_time_ms,
+            record.prompt_tps,
+            record.generated_tokens.map(|v| v as i64),
+            record.generation_time_ms,
+            record.generation_tps,
+            record.total_tokens.map(|v| v as i64),
+            record.total_time_ms,
+            record.spec_accept_rate,
+            record.spec_accepted.map(|v| v as i64),
+            record.spec_generated.map(|v| v as i64),
+            record.spec_gen_time_ms,
+        ],
+    )
+    .map_err(|e| format!("无法写入推理请求遥测: {}", e))?;
+    Ok(())
+}
+
+pub fn record_slot_snapshots(
+    session_id: Option<&str>,
+    instance_id: &str,
+    slots: &[SlotSnapshotRecord],
+) -> Result<(), String> {
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    if slots.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_connection()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("无法开始 slot 遥测事务: {}", e))?;
+    let ts = now_ms();
+    {
+        let mut stmt = tx
+            .prepare(
+                "INSERT INTO slot_snapshots
+                    (session_id, instance_id, ts, slot_id, is_processing, n_ctx, n_past)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )
+            .map_err(|e| format!("无法准备 slot 遥测写入: {}", e))?;
+        for slot in slots {
+            stmt.execute(params![
+                session_id,
+                instance_id,
+                ts,
+                slot.slot_id,
+                if slot.is_processing { 1 } else { 0 },
+                slot.n_ctx,
+                slot.n_past.map(|v| v as i64),
+            ])
+            .map_err(|e| format!("无法写入 slot 遥测: {}", e))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("无法提交 slot 遥测事务: {}", e))?;
     Ok(())
 }
 
@@ -374,6 +582,563 @@ pub async fn prune_telemetry(retention_days: Option<u32>) -> Result<u32, String>
     })
     .await
     .map_err(|e| format!("遥测清理失败: {}", e))?
+}
+
+#[tauri::command]
+pub async fn get_telemetry_session_analysis(
+    session_id: String,
+) -> Result<TelemetrySessionAnalysis, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_connection()?;
+        let request_stats = conn
+            .query_row(
+                "SELECT
+                    COUNT(*),
+                    COALESCE(AVG(prompt_tokens), 0),
+                    COALESCE(AVG(generated_tokens), 0),
+                    COALESCE(AVG(total_tokens), 0),
+                    COALESCE(AVG(prompt_tps), 0),
+                    COALESCE(AVG(generation_tps), 0),
+                    COALESCE(AVG(total_time_ms), 0),
+                    COALESCE(MAX(total_tokens), 0)
+                 FROM inference_requests
+                 WHERE session_id = ?1",
+                params![session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, f64>(3)?,
+                        row.get::<_, f64>(4)?,
+                        row.get::<_, f64>(5)?,
+                        row.get::<_, f64>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .map_err(|e| format!("无法查询请求分析摘要: {}", e))?;
+
+        let slot_stats = conn
+            .query_row(
+                "WITH per_ts AS (
+                    SELECT
+                        ts,
+                        SUM(CASE WHEN is_processing != 0 THEN 1 ELSE 0 END) AS busy_slots,
+                        SUM(CASE WHEN is_processing = 0 AND n_ctx > 0 THEN 1 ELSE 0 END) AS cached_slots,
+                        MAX(COALESCE(n_past, n_ctx, 0)) AS context_tokens
+                    FROM slot_snapshots
+                    WHERE session_id = ?1
+                    GROUP BY ts
+                 )
+                 SELECT
+                    COALESCE(AVG(busy_slots), 0),
+                    COALESCE(MAX(busy_slots), 0),
+                    COALESCE(AVG(cached_slots), 0),
+                    COALESCE(MAX(context_tokens), 0),
+                    COUNT(*)
+                 FROM per_ts",
+                params![session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, f64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .map_err(|e| format!("无法查询 slot 分析摘要: {}", e))?;
+
+        Ok(TelemetrySessionAnalysis {
+            request_count: request_stats.0.max(0) as u32,
+            avg_prompt_tokens: request_stats.1,
+            avg_generated_tokens: request_stats.2,
+            avg_total_tokens: request_stats.3,
+            avg_prompt_tps: request_stats.4,
+            avg_generation_tps: request_stats.5,
+            avg_total_time_ms: request_stats.6,
+            max_total_tokens: request_stats.7.max(0) as u64,
+            avg_busy_slots: slot_stats.0,
+            max_busy_slots: slot_stats.1.max(0) as u32,
+            avg_cached_slots: slot_stats.2,
+            max_context_tokens: slot_stats.3.max(0) as u32,
+            slot_sample_count: slot_stats.4.max(0) as u32,
+        })
+    })
+    .await
+    .map_err(|e| format!("会话分析查询失败: {}", e))?
+}
+
+#[derive(Debug)]
+struct SessionMetricStats {
+    sample_count: u32,
+    avg_tps: f64,
+    max_tps: f64,
+    avg_gpu: f64,
+    avg_instance_cpu: f64,
+    avg_system_cpu: f64,
+    max_vram_ratio: f64,
+    avg_processing: f64,
+    max_processing: u32,
+    avg_deferred: f64,
+    max_deferred: u32,
+    avg_busy_slots_metric: f64,
+    max_busy_slots_metric: f64,
+}
+
+fn query_session_analysis(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<TelemetrySessionAnalysis, String> {
+    let request_stats = conn
+        .query_row(
+            "SELECT
+                COUNT(*),
+                COALESCE(AVG(prompt_tokens), 0),
+                COALESCE(AVG(generated_tokens), 0),
+                COALESCE(AVG(total_tokens), 0),
+                COALESCE(AVG(prompt_tps), 0),
+                COALESCE(AVG(generation_tps), 0),
+                COALESCE(AVG(total_time_ms), 0),
+                COALESCE(MAX(total_tokens), 0)
+             FROM inference_requests
+             WHERE session_id = ?1",
+            params![session_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, f64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, f64>(3)?,
+                    row.get::<_, f64>(4)?,
+                    row.get::<_, f64>(5)?,
+                    row.get::<_, f64>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("无法查询请求分析摘要: {}", e))?;
+
+    let slot_stats = conn
+        .query_row(
+            "WITH per_ts AS (
+                SELECT
+                    ts,
+                    SUM(CASE WHEN is_processing != 0 THEN 1 ELSE 0 END) AS busy_slots,
+                    SUM(CASE WHEN is_processing = 0 AND n_ctx > 0 THEN 1 ELSE 0 END) AS cached_slots,
+                    MAX(COALESCE(n_past, n_ctx, 0)) AS context_tokens
+                FROM slot_snapshots
+                WHERE session_id = ?1
+                GROUP BY ts
+             )
+             SELECT
+                COALESCE(AVG(busy_slots), 0),
+                COALESCE(MAX(busy_slots), 0),
+                COALESCE(AVG(cached_slots), 0),
+                COALESCE(MAX(context_tokens), 0),
+                COUNT(*)
+             FROM per_ts",
+            params![session_id],
+            |row| {
+                Ok((
+                    row.get::<_, f64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, f64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("无法查询 slot 分析摘要: {}", e))?;
+
+    Ok(TelemetrySessionAnalysis {
+        request_count: request_stats.0.max(0) as u32,
+        avg_prompt_tokens: request_stats.1,
+        avg_generated_tokens: request_stats.2,
+        avg_total_tokens: request_stats.3,
+        avg_prompt_tps: request_stats.4,
+        avg_generation_tps: request_stats.5,
+        avg_total_time_ms: request_stats.6,
+        max_total_tokens: request_stats.7.max(0) as u64,
+        avg_busy_slots: slot_stats.0,
+        max_busy_slots: slot_stats.1.max(0) as u32,
+        avg_cached_slots: slot_stats.2,
+        max_context_tokens: slot_stats.3.max(0) as u32,
+        slot_sample_count: slot_stats.4.max(0) as u32,
+    })
+}
+
+fn query_session_metric_stats(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<SessionMetricStats, String> {
+    conn.query_row(
+        "SELECT
+            COUNT(*),
+            COALESCE(AVG(tokens_per_sec), 0),
+            COALESCE(MAX(tokens_per_sec), 0),
+            COALESCE(AVG(gpu_percent), 0),
+            COALESCE(AVG(cpu_percent), 0),
+            COALESCE(AVG(system_cpu_percent), 0),
+            COALESCE(MAX(CASE WHEN vram_total_mb > 0 THEN vram_used_mb / vram_total_mb ELSE 0 END), 0),
+            COALESCE(AVG(requests_processing), 0),
+            COALESCE(MAX(requests_processing), 0),
+            COALESCE(AVG(requests_deferred), 0),
+            COALESCE(MAX(requests_deferred), 0),
+            COALESCE(AVG(busy_slots_per_decode), 0),
+            COALESCE(MAX(busy_slots_per_decode), 0)
+         FROM metric_samples
+         WHERE session_id = ?1",
+        params![session_id],
+        |row| {
+            Ok(SessionMetricStats {
+                sample_count: row.get::<_, i64>(0)?.max(0) as u32,
+                avg_tps: row.get(1)?,
+                max_tps: row.get(2)?,
+                avg_gpu: row.get(3)?,
+                avg_instance_cpu: row.get(4)?,
+                avg_system_cpu: row.get(5)?,
+                max_vram_ratio: row.get(6)?,
+                avg_processing: row.get(7)?,
+                max_processing: row.get::<_, i64>(8)?.max(0) as u32,
+                avg_deferred: row.get(9)?,
+                max_deferred: row.get::<_, i64>(10)?.max(0) as u32,
+                avg_busy_slots_metric: row.get(11)?,
+                max_busy_slots_metric: row.get(12)?,
+            })
+        },
+    )
+    .map_err(|e| format!("无法查询会话指标摘要: {}", e))
+}
+
+fn diagnostic_finding(
+    id: &str,
+    severity: &str,
+    confidence: f64,
+    title: &str,
+    summary: &str,
+    evidence: Vec<String>,
+    recommendation: Vec<String>,
+) -> DiagnosticFinding {
+    DiagnosticFinding {
+        id: id.to_string(),
+        severity: severity.to_string(),
+        confidence,
+        title: title.to_string(),
+        summary: summary.to_string(),
+        evidence,
+        recommendation,
+    }
+}
+
+fn fmt_diag_rate(value: f64) -> String {
+    if !value.is_finite() || value <= 0.0 {
+        "--".to_string()
+    } else {
+        format!("{:.1} tok/s", value)
+    }
+}
+
+fn fmt_diag_percent(value: f64) -> String {
+    if !value.is_finite() {
+        "--".to_string()
+    } else {
+        format!("{:.0}%", value)
+    }
+}
+
+#[tauri::command]
+pub async fn get_telemetry_session_diagnostics(
+    session_id: String,
+) -> Result<Vec<DiagnosticFinding>, String> {
+    tokio::task::spawn_blocking(move || {
+        let conn = open_connection()?;
+        let session = conn
+            .query_row(
+                "SELECT model_name, engine_id, backend FROM run_sessions WHERE id = ?1",
+                params![session_id.as_str()],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            )
+            .optional()
+            .map_err(|e| format!("无法读取诊断会话: {}", e))?
+            .ok_or_else(|| "找不到对应的遥测会话".to_string())?;
+        let analysis = query_session_analysis(&conn, &session_id)?;
+        let metrics = query_session_metric_stats(&conn, &session_id)?;
+        let baseline = conn
+            .query_row(
+                "WITH per_session AS (
+                    SELECT s.id, AVG(m.tokens_per_sec) AS avg_tps, COUNT(*) AS samples
+                    FROM run_sessions s
+                    JOIN metric_samples m ON m.session_id = s.id
+                    WHERE s.model_name = ?1 AND s.id != ?2 AND m.tokens_per_sec > 0
+                    GROUP BY s.id
+                    HAVING samples >= 3
+                 )
+                 SELECT COALESCE(AVG(avg_tps), 0), COUNT(*) FROM per_session",
+                params![session.0.as_str(), session_id.as_str()],
+                |row| Ok((row.get::<_, f64>(0)?, row.get::<_, i64>(1)?.max(0) as u32)),
+            )
+            .map_err(|e| format!("无法查询历史基线: {}", e))?;
+
+        let mut findings = Vec::new();
+
+        if metrics.sample_count == 0 {
+            findings.push(diagnostic_finding(
+                "no_metric_samples",
+                "info",
+                0.98,
+                "遥测样本不足",
+                "当前会话还没有可用于分析的资源或吞吐采样。",
+                vec!["采样数 0".to_string()],
+                vec!["保持实例运行一段时间，或发起一次推理请求后再查看诊断。".to_string()],
+            ));
+            return Ok(findings);
+        }
+
+        if baseline.1 >= 2 && baseline.0 > 0.0 && metrics.avg_tps > 0.0 && metrics.avg_tps < baseline.0 * 0.75 {
+            findings.push(diagnostic_finding(
+                "throughput_regression",
+                "warning",
+                0.82,
+                "吞吐低于历史基线",
+                "同一模型的本次平均吞吐明显低于历史会话，可能存在参数、后端或系统负载差异。",
+                vec![
+                    format!("本次平均 {}", fmt_diag_rate(metrics.avg_tps)),
+                    format!("历史基线 {}", fmt_diag_rate(baseline.0)),
+                    format!("历史样本 {} 个会话", baseline.1),
+                ],
+                vec![
+                    "对比本次与历史会话的引擎、后端、上下文长度、批处理参数和 GPU 层数。".to_string(),
+                    "检查是否有其他进程占用 CPU/GPU 或显存。".to_string(),
+                ],
+            ));
+        }
+
+        if metrics.max_vram_ratio >= 0.92 {
+            findings.push(diagnostic_finding(
+                "vram_pressure",
+                if metrics.max_vram_ratio >= 0.98 { "critical" } else { "warning" },
+                0.9,
+                "显存压力偏高",
+                "会话期间显存占用接近上限，可能导致后续请求失败、回退到 CPU 或响应抖动。",
+                vec![format!("显存峰值占比 {}", fmt_diag_percent(metrics.max_vram_ratio * 100.0))],
+                vec![
+                    "降低上下文长度、并发槽位或 GPU offload 层数。".to_string(),
+                    "避免同一 GPU 上同时运行多个大模型实例。".to_string(),
+                ],
+            ));
+        }
+
+        if metrics.max_deferred > 0 || metrics.avg_deferred >= 0.5 {
+            findings.push(diagnostic_finding(
+                "queue_pressure",
+                "warning",
+                0.86,
+                "请求排队压力",
+                "监控到延迟队列，说明当前实例吞吐或 slot 配置可能无法覆盖请求峰值。",
+                vec![
+                    format!("最大延迟请求 {}", metrics.max_deferred),
+                    format!("平均处理中 {:.1}", metrics.avg_processing),
+                    format!("最大处理中 {}", metrics.max_processing),
+                ],
+                vec![
+                    "根据业务目标增加并发 slot，或拆分为多个实例分担请求。".to_string(),
+                    "如果延迟集中出现在长上下文请求，优先限制单次请求上下文规模。".to_string(),
+                ],
+            ));
+        }
+
+        if metrics.avg_tps > 0.0 && metrics.avg_gpu < 35.0 && (metrics.avg_system_cpu > 55.0 || metrics.avg_instance_cpu > 55.0) {
+            findings.push(diagnostic_finding(
+                "gpu_underutilized",
+                "warning",
+                0.74,
+                "GPU 利用率偏低",
+                "吞吐产生时 GPU 平均利用率较低，同时 CPU 负载较高，可能存在 CPU 侧瓶颈或 GPU offload 不充分。",
+                vec![
+                    format!("GPU 平均 {}", fmt_diag_percent(metrics.avg_gpu)),
+                    format!("系统 CPU 平均 {}", fmt_diag_percent(metrics.avg_system_cpu)),
+                    format!("实例 CPU 平均 {}", fmt_diag_percent(metrics.avg_instance_cpu)),
+                ],
+                vec![
+                    "检查引擎是否使用了预期的 CUDA/ROCm/Vulkan 后端。".to_string(),
+                    "尝试增加 GPU offload 层数，或调整 batch/ubatch 配置。".to_string(),
+                ],
+            ));
+        }
+
+        if analysis.request_count == 0 {
+            findings.push(diagnostic_finding(
+                "no_request_records",
+                "info",
+                0.78,
+                "暂无请求级样本",
+                "资源采样已经写入，但还没有解析到已完成请求，因此暂时无法判断 prompt 和 generation 阶段瓶颈。",
+                vec![format!("资源采样 {} 条", metrics.sample_count)],
+                vec!["完成至少一次推理请求后，诊断会补充 token、耗时和吞吐拆解。".to_string()],
+            ));
+        } else {
+            if analysis.avg_prompt_tps > 0.0
+                && analysis.avg_generation_tps > 0.0
+                && analysis.avg_prompt_tps < analysis.avg_generation_tps * 0.55
+            {
+                findings.push(diagnostic_finding(
+                    "prompt_eval_bottleneck",
+                    "info",
+                    0.72,
+                    "提示词处理偏慢",
+                    "prompt 阶段吞吐显著低于 generation 阶段，长提示词或 KV cache 命中率可能影响首 token 延迟。",
+                    vec![
+                        format!("Prompt {}", fmt_diag_rate(analysis.avg_prompt_tps)),
+                        format!("Generation {}", fmt_diag_rate(analysis.avg_generation_tps)),
+                    ],
+                    vec![
+                        "关注长提示词请求的首 token 延迟，必要时优化 prompt 模板或启用可复用上下文。".to_string(),
+                        "结合 slot 缓存数据判断是否需要调整 cache/keep 参数。".to_string(),
+                    ],
+                ));
+            }
+
+            if analysis.avg_total_time_ms > 60_000.0 {
+                findings.push(diagnostic_finding(
+                    "long_request_latency",
+                    "warning",
+                    0.8,
+                    "请求耗时偏长",
+                    "平均请求总耗时超过 60 秒，交互式使用可能感到明显等待。",
+                    vec![
+                        format!("平均耗时 {:.1} 秒", analysis.avg_total_time_ms / 1000.0),
+                        format!("平均生成 token {:.0}", analysis.avg_generated_tokens),
+                    ],
+                    vec![
+                        "检查 max_tokens、上下文长度和并发设置是否符合目标场景。".to_string(),
+                        "若是批处理场景，可以将该会话单独标记为长任务基线。".to_string(),
+                    ],
+                ));
+            }
+        }
+
+        if analysis.slot_sample_count > 0 && analysis.avg_cached_slots >= 1.0 {
+            findings.push(diagnostic_finding(
+                "slot_cache_observed",
+                "info",
+                0.68,
+                "检测到 slot 缓存",
+                "会话中存在空闲但带上下文的 slot，说明实例可能正在保留 KV cache。",
+                vec![
+                    format!("平均缓存 slot {:.1}", analysis.avg_cached_slots),
+                    format!("slot 采样 {} 条", analysis.slot_sample_count),
+                ],
+                vec![
+                    "如果重复对话较多，这是有益信号；如果显存紧张，可降低保留上下文或并发槽位。".to_string(),
+                ],
+            ));
+        }
+
+        if analysis.max_context_tokens >= 32_768 {
+            findings.push(diagnostic_finding(
+                "large_context_window",
+                "info",
+                0.66,
+                "上下文窗口较大",
+                "该会话观测到较大的上下文窗口，吞吐和显存占用可能受上下文规模影响。",
+                vec![format!("最大上下文 {} tokens", analysis.max_context_tokens)],
+                vec![
+                    "如不需要长上下文，降低 ctx-size 通常可以改善显存压力和延迟。".to_string(),
+                ],
+            ));
+        }
+
+        if findings.iter().all(|item| item.severity == "info") && analysis.request_count > 0 {
+            findings.insert(0, diagnostic_finding(
+                "session_healthy",
+                "success",
+                0.76,
+                "未发现明显瓶颈",
+                "基于当前采样、请求和历史基线，暂未发现需要立即处理的性能异常。",
+                vec![
+                    format!("请求 {} 次", analysis.request_count),
+                    format!("平均生成 {}", fmt_diag_rate(analysis.avg_generation_tps)),
+                    format!("峰值吞吐 {}", fmt_diag_rate(metrics.max_tps)),
+                ],
+                vec!["可以继续积累更多会话样本，后续基线判断会更稳定。".to_string()],
+            ));
+        }
+
+        if findings.is_empty() {
+            findings.push(diagnostic_finding(
+                "baseline_collecting",
+                "info",
+                0.7,
+                "正在建立分析基线",
+                "当前数据可用于展示趋势，但历史基线或请求级样本仍偏少。",
+                vec![
+                    format!("引擎 {} / {}", session.1, session.2),
+                    format!("资源采样 {} 条", metrics.sample_count),
+                    format!("请求 {} 次", analysis.request_count),
+                    format!("指标 busy slot 平均 {:.1} / 峰值 {:.1}", metrics.avg_busy_slots_metric, metrics.max_busy_slots_metric),
+                ],
+                vec!["多运行几组相同模型和相同参数的会话后，诊断会自动给出更明确的对比结论。".to_string()],
+            ));
+        }
+
+        Ok(findings)
+    })
+    .await
+    .map_err(|e| format!("会话诊断查询失败: {}", e))?
+}
+
+#[tauri::command]
+pub async fn list_inference_requests(
+    session_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<InferenceRequestSummary>, String> {
+    let limit = limit.unwrap_or(20).clamp(1, 200);
+    tokio::task::spawn_blocking(move || {
+        let conn = open_connection()?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT session_id, task_id, slot_id, completed_at, prompt_tokens, prompt_time_ms, prompt_tps,
+                        generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
+                        spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms
+                 FROM inference_requests
+                 WHERE session_id = ?1
+                 ORDER BY completed_at DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| format!("无法准备推理请求查询: {}", e))?;
+        let rows = stmt
+            .query_map(params![session_id, limit], |row| {
+                Ok(InferenceRequestSummary {
+                    session_id: row.get(0)?,
+                    task_id: row.get(1)?,
+                    slot_id: row.get(2)?,
+                    completed_at: row.get(3)?,
+                    prompt_tokens: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
+                    prompt_time_ms: row.get(5)?,
+                    prompt_tps: row.get(6)?,
+                    generated_tokens: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
+                    generation_time_ms: row.get(8)?,
+                    generation_tps: row.get(9)?,
+                    total_tokens: row.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+                    total_time_ms: row.get(11)?,
+                    spec_accept_rate: row.get(12)?,
+                    spec_accepted: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
+                    spec_generated: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
+                    spec_gen_time_ms: row.get(15)?,
+                })
+            })
+            .map_err(|e| format!("无法查询推理请求: {}", e))?;
+        let mut requests = Vec::new();
+        for row in rows {
+            requests.push(row.map_err(|e| format!("无法读取推理请求: {}", e))?);
+        }
+        Ok(requests)
+    })
+    .await
+    .map_err(|e| format!("推理请求查询失败: {}", e))?
 }
 
 pub fn latest_open_session_id(instance_id: &str) -> Result<Option<String>, String> {

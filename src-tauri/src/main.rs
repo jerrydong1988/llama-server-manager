@@ -18,7 +18,7 @@ use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
 use crate::commands::autostart::{enable_autostart, disable_autostart, is_autostart_enabled};
 use crate::commands::cluster_ssh::ssh_launch_rpc;
-use crate::commands::telemetry::{get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, prune_telemetry};
+use crate::commands::telemetry::{get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry};
 use std::sync::OnceLock;
 
 static NATIVE_START: OnceLock<Instant> = OnceLock::new();
@@ -252,7 +252,7 @@ fn main() {
             get_download_manager_snapshot,
             test_connection, check_port,
             get_system_metrics, get_system_health, get_slots, get_metrics,
-            get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, prune_telemetry,
+            get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
             save_window_state, load_window_state,
             resolve_path,
             scan_workers_tcp, test_worker, get_worker_info,

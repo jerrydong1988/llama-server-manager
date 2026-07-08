@@ -4,7 +4,7 @@ import { listen } from '@tauri-apps/api/event'
 import { Activity, BarChart3, Database, Gauge, HardDrive, RefreshCw, Server } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
-import type { SystemMetrics, TelemetryOverview, TelemetrySampleSummary, TelemetrySessionSummary } from '../../store/types'
+import type { DiagnosticFinding, InferenceRequestSummary, SystemMetrics, TelemetryOverview, TelemetrySampleSummary, TelemetrySessionAnalysis, TelemetrySessionSummary } from '../../store/types'
 import { Badge, Button, EmptyPanel, InsetSurface, MetricCard, PageFrame, PageHeader, ResourceMeter, SectionHeader, Surface } from '../ui'
 
 type MetricsEvent = {
@@ -42,6 +42,9 @@ export default function PerformancePage() {
   const [overview, setOverview] = useState<TelemetryOverview>(emptyOverview)
   const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
   const [samples, setSamples] = useState<TelemetrySampleSummary[]>([])
+  const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
+  const [analysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
+  const [diagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
   const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [loading, setLoading] = useState(false)
@@ -101,11 +104,25 @@ export default function PerformancePage() {
   useEffect(() => {
     if (!selectedSessionId) {
       setSamples([])
+      setRequests([])
+      setAnalysis(null)
+      setDiagnostics([])
       return
     }
-    invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId: selectedSessionId, limit: 160 })
-      .then(setSamples)
-      .catch(() => setSamples([]))
+    void Promise.all([
+      invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId: selectedSessionId, limit: 160 })
+        .then(setSamples)
+        .catch(() => setSamples([])),
+      invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId: selectedSessionId, limit: 16 })
+        .then(setRequests)
+        .catch(() => setRequests([])),
+      invoke<TelemetrySessionAnalysis>('get_telemetry_session_analysis', { sessionId: selectedSessionId })
+        .then(setAnalysis)
+        .catch(() => setAnalysis(null)),
+      invoke<DiagnosticFinding[]>('get_telemetry_session_diagnostics', { sessionId: selectedSessionId })
+        .then(setDiagnostics)
+        .catch(() => setDiagnostics([])),
+    ])
   }, [selectedSessionId])
 
   const latestSample = overview.latest_samples[0] || null
@@ -124,7 +141,7 @@ export default function PerformancePage() {
       .slice(0, 5)
   }, [sessions])
 
-  const insight = buildInsight(labels, liveSystem, latestSample)
+  const liveInsight = buildInsight(labels, liveSystem, latestSample)
 
   return (
     <PageFrame
@@ -143,17 +160,29 @@ export default function PerformancePage() {
       inspector={
         <div className="space-y-4">
           <Surface as="aside" className="p-4">
-            <SectionHeader title={labels.diagnosis} description={insight.description} />
-            <div className="mt-4 space-y-3">
-              {insight.items.map(item => (
-                <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-slate-600 dark:text-slate-400">{item.label}</span>
-                    <Badge tone={item.tone}>{item.value}</Badge>
+            <SectionHeader title={labels.diagnosis} description={selectedSession ? labels.diagnosisDesc : liveInsight.description} />
+            {selectedSession ? (
+              <div className="mt-4 space-y-3">
+                {diagnostics.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-slate-300 px-3 py-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    {labels.noDiagnostics}
                   </div>
-                </div>
-              ))}
-            </div>
+                ) : diagnostics.map(finding => (
+                  <DiagnosticCard key={finding.id} finding={finding} labels={labels} />
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {liveInsight.items.map(item => (
+                  <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm text-slate-600 dark:text-slate-400">{item.label}</span>
+                      <Badge tone={item.tone}>{item.value}</Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </Surface>
 
           <Surface as="aside" className="p-4">
@@ -307,6 +336,33 @@ export default function PerformancePage() {
                   </InsetSurface>
                 </div>
 
+                <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.requests}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{analysis?.request_count ?? 0}</div>
+                  </InsetSurface>
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.avgGenerationSpeed}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatRate(analysis?.avg_generation_tps)}</div>
+                  </InsetSurface>
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.avgTotalTime}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatMs(analysis?.avg_total_time_ms)}</div>
+                  </InsetSurface>
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.maxBusySlots}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{analysis?.max_busy_slots ?? 0}</div>
+                  </InsetSurface>
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.avgCachedSlots}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatFixed(analysis?.avg_cached_slots)}</div>
+                  </InsetSurface>
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.maxContext}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatTokenCount(analysis?.max_context_tokens)}</div>
+                  </InsetSurface>
+                </div>
+
                 <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
                   <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
                     <BarChart3 className="h-4 w-4 text-blue-400" />
@@ -320,6 +376,51 @@ export default function PerformancePage() {
                   <Detail label={labels.engine} value={`${selectedSession.engine_id || '--'} · ${selectedSession.backend || '--'}`} />
                   <Detail label={labels.startedAt} value={formatDate(selectedSession.started_at)} />
                   <Detail label={labels.stoppedAt} value={selectedSession.stopped_at ? formatDate(selectedSession.stopped_at) : labels.stillRunning} />
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.recentRequests}</div>
+                      <div className="text-xs text-slate-500 dark:text-slate-400">{labels.recentRequestsDesc}</div>
+                    </div>
+                    <Badge tone={requests.length > 0 ? 'emerald' : 'slate'}>{requests.length} {labels.requests}</Badge>
+                  </div>
+                  {requests.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                      {labels.noRequestsYet}
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+                      <table className="w-full table-fixed text-left text-sm">
+                        <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+                          <tr>
+                            <th className="px-3 py-2 font-medium">{labels.task}</th>
+                            <th className="px-3 py-2 font-medium">{labels.prompt}</th>
+                            <th className="px-3 py-2 font-medium">{labels.generated}</th>
+                            <th className="px-3 py-2 font-medium">{labels.generationSpeed}</th>
+                            <th className="px-3 py-2 font-medium">{labels.totalTime}</th>
+                            <th className="px-3 py-2 font-medium">{labels.specAccept}</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                          {requests.map(request => (
+                            <tr key={`${request.session_id}-${request.task_id}`} className="text-slate-700 dark:text-slate-200">
+                              <td className="px-3 py-2">
+                                <div className="font-medium">#{request.task_id}</div>
+                                <div className="text-xs text-slate-500">slot {request.slot_id}</div>
+                              </td>
+                              <td className="px-3 py-2">{formatTokenCount(request.prompt_tokens)}</td>
+                              <td className="px-3 py-2">{formatTokenCount(request.generated_tokens)}</td>
+                              <td className="px-3 py-2">{formatRate(request.generation_tps)}</td>
+                              <td className="px-3 py-2">{formatMs(request.total_time_ms)}</td>
+                              <td className="px-3 py-2">{formatPercent(request.spec_accept_rate)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -337,6 +438,50 @@ function Detail({ label, value }: { label: string; value: string }) {
       <div className="mt-2 truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={value}>{value}</div>
     </div>
   )
+}
+
+function DiagnosticCard({ finding, labels }: { finding: DiagnosticFinding; labels: ReturnType<typeof getLabels> }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-slate-950 dark:text-slate-100">{finding.title}</div>
+          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{finding.summary}</p>
+        </div>
+        <Badge tone={diagnosticTone(finding.severity)} className="shrink-0">
+          {diagnosticSeverityLabel(finding.severity, labels)}
+        </Badge>
+      </div>
+      {finding.evidence.length > 0 ? (
+        <div className="mt-3 space-y-1 rounded-md bg-slate-50 p-2 text-xs text-slate-600 dark:bg-slate-900 dark:text-slate-300">
+          {finding.evidence.slice(0, 3).map(item => (
+            <div key={item} className="truncate" title={item}>{item}</div>
+          ))}
+        </div>
+      ) : null}
+      {finding.recommendation.length > 0 ? (
+        <div className="mt-3 space-y-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
+          {finding.recommendation.slice(0, 2).map(item => (
+            <div key={item}>{item}</div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function diagnosticTone(severity: DiagnosticFinding['severity']) {
+  if (severity === 'critical') return 'red'
+  if (severity === 'warning') return 'amber'
+  if (severity === 'success') return 'emerald'
+  return 'blue'
+}
+
+function diagnosticSeverityLabel(severity: DiagnosticFinding['severity'], labels: ReturnType<typeof getLabels>) {
+  if (severity === 'critical') return labels.severityCritical
+  if (severity === 'warning') return labels.severityWarning
+  if (severity === 'success') return labels.severitySuccess
+  return labels.severityInfo
 }
 
 function TelemetryCurve({ samples, emptyText }: { samples: TelemetrySampleSummary[]; emptyText: string }) {
@@ -429,13 +574,33 @@ function getLabels(zh: boolean) {
     startedAt: zh ? '\u5f00\u59cb\u65f6\u95f4' : 'Started',
     stoppedAt: zh ? '\u7ed3\u675f\u65f6\u95f4' : 'Stopped',
     stillRunning: zh ? '\u4ecd\u5728\u8fd0\u884c' : 'Still running',
-    diagnosis: zh ? '\u8bca\u65ad\u4fe1\u53f7' : 'Diagnostic Signals',
-    diagnosisDesc: zh ? '\u7b2c\u4e00\u7248\u5148\u7ed9\u51fa\u8d44\u6e90\u538b\u529b\u4e0e\u541e\u5410\u4fe1\u53f7\uff0c\u540e\u7eed\u53ef\u6269\u5c55\u6210\u56de\u5f52\u68c0\u6d4b\u4e0e\u53c2\u6570\u5efa\u8bae\u3002' : 'First-pass pressure and throughput signals; later this can grow into regression detection and tuning advice.',
+    diagnosis: zh ? '\u667a\u80fd\u8bca\u65ad' : 'Smart Diagnostics',
+    diagnosisDesc: zh ? '\u57fa\u4e8e\u8d44\u6e90\u91c7\u6837\u3001\u8bf7\u6c42\u62c6\u89e3\u3001slot \u72b6\u6001\u548c\u5386\u53f2\u57fa\u7ebf\u751f\u6210\u8bca\u65ad\u7ed3\u8bba\u3002' : 'Findings based on resource samples, request breakdown, slot state, and historical baselines.',
+    noDiagnostics: zh ? '\u5f53\u524d\u4f1a\u8bdd\u6682\u65e0\u53ef\u7528\u8bca\u65ad\u7ed3\u8bba' : 'No diagnostics available for this session yet',
+    severityCritical: zh ? '\u9ad8\u98ce\u9669' : 'Critical',
+    severityWarning: zh ? '\u63d0\u9192' : 'Warning',
+    severityInfo: zh ? '\u4fe1\u606f' : 'Info',
+    severitySuccess: zh ? '\u6b63\u5e38' : 'Healthy',
     gpuPressure: zh ? 'GPU \u538b\u529b' : 'GPU Pressure',
     vramPressure: zh ? '\u663e\u5b58\u538b\u529b' : 'VRAM Pressure',
     throughput: zh ? '\u541e\u5410' : 'Throughput',
     modelRank: zh ? '\u6a21\u578b\u8868\u73b0' : 'Model Performance',
     modelRankDesc: zh ? '\u6309\u5386\u53f2\u4f1a\u8bdd\u805a\u5408\u7684\u6a21\u578b\u541e\u5410\u6392\u884c\u3002' : 'Model throughput ranking aggregated from run sessions.',
+    recentRequests: zh ? '\u6700\u8fd1\u63a8\u7406\u8bf7\u6c42' : 'Recent Inference Requests',
+    recentRequestsDesc: zh ? '\u6765\u81ea llama-server \u65e5\u5fd7\u89e3\u6790\u7684\u8bf7\u6c42\u7ea7 token\u3001\u8017\u65f6\u4e0e\u541e\u5410\u8bb0\u5f55\u3002' : 'Request-level tokens, duration, and throughput parsed from llama-server logs.',
+    requests: zh ? '\u8bf7\u6c42' : 'requests',
+    noRequestsYet: zh ? '\u6682\u65e0\u5df2\u5b8c\u6210\u7684\u63a8\u7406\u8bf7\u6c42\u8bb0\u5f55' : 'No completed inference request records yet',
+    task: zh ? '\u4efb\u52a1' : 'Task',
+    prompt: zh ? '\u63d0\u793a\u8bcd' : 'Prompt',
+    generated: zh ? '\u751f\u6210' : 'Generated',
+    generationSpeed: zh ? '\u751f\u6210\u901f\u5ea6' : 'Gen Speed',
+    totalTime: zh ? '\u603b\u8017\u65f6' : 'Total Time',
+    specAccept: zh ? '\u63a8\u6d4b\u63a5\u53d7' : 'Spec Accept',
+    avgGenerationSpeed: zh ? '\u5e73\u5747\u751f\u6210\u901f\u5ea6' : 'Avg Gen Speed',
+    avgTotalTime: zh ? '\u5e73\u5747\u603b\u8017\u65f6' : 'Avg Total Time',
+    maxBusySlots: zh ? '\u5fd9\u788c slot \u5cf0\u503c' : 'Peak Busy Slots',
+    avgCachedSlots: zh ? '\u5e73\u5747\u7f13\u5b58 slot' : 'Avg Cached Slots',
+    maxContext: zh ? '\u6700\u5927\u4e0a\u4e0b\u6587' : 'Max Context',
   }
 }
 
@@ -466,4 +631,26 @@ function formatDuration(seconds?: number | null) {
   if (h > 0) return `${h}h ${m}m`
   if (m > 0) return `${m}m ${s}s`
   return `${s}s`
+}
+
+function formatTokenCount(value?: number | null) {
+  if (value == null) return '--'
+  return value.toLocaleString()
+}
+
+function formatMs(value?: number | null) {
+  if (value == null || !Number.isFinite(value)) return '--'
+  if (value < 1000) return `${value.toFixed(0)} ms`
+  if (value < 60000) return `${(value / 1000).toFixed(1)} s`
+  return `${(value / 60000).toFixed(1)} min`
+}
+
+function formatPercent(value?: number | null) {
+  if (value == null || !Number.isFinite(value)) return '--'
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function formatFixed(value?: number | null) {
+  if (value == null || !Number.isFinite(value)) return '--'
+  return value.toFixed(value >= 10 ? 1 : 2)
 }

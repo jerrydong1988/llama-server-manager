@@ -258,6 +258,51 @@ export interface TelemetrySessionSummary {
   stop_reason: string | null
 }
 
+export interface InferenceRequestSummary {
+  session_id: string
+  task_id: number
+  slot_id: number
+  completed_at: number
+  prompt_tokens: number | null
+  prompt_time_ms: number | null
+  prompt_tps: number | null
+  generated_tokens: number | null
+  generation_time_ms: number | null
+  generation_tps: number | null
+  total_tokens: number | null
+  total_time_ms: number | null
+  spec_accept_rate: number | null
+  spec_accepted: number | null
+  spec_generated: number | null
+  spec_gen_time_ms: number | null
+}
+
+export interface TelemetrySessionAnalysis {
+  request_count: number
+  avg_prompt_tokens: number
+  avg_generated_tokens: number
+  avg_total_tokens: number
+  avg_prompt_tps: number
+  avg_generation_tps: number
+  avg_total_time_ms: number
+  max_total_tokens: number
+  avg_busy_slots: number
+  max_busy_slots: number
+  avg_cached_slots: number
+  max_context_tokens: number
+  slot_sample_count: number
+}
+
+export interface DiagnosticFinding {
+  id: string
+  severity: 'info' | 'warning' | 'critical' | 'success'
+  confidence: number
+  title: string
+  summary: string
+  evidence: string[]
+  recommendation: string[]
+}
+
 export interface AppState {
   models: ModelInfo[]
   engines: EngineInfo[]
