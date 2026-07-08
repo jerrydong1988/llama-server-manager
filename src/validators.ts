@@ -7,8 +7,8 @@ export interface Warning {
   key: string
 }
 
-// ── 已知 CLI 标志：从 server.rs generate_command() 完整统计 ──
-// 若自定义参数中出现这些标志，引导用户到对应配置界面修改
+// Known CLI flags collected from server.rs generate_command().
+// If custom args contain these flags, guide the user to the matching config UI.
 export const KNOWN_FLAGS = new Set([
   // Basic
   '-m', '-a', '--alias', '--lora', '--lora-init-without-apply', '--lora-scaled',
@@ -89,9 +89,9 @@ export function validateConfig(
 ): Warning[] {
   const w: Warning[] = []
 
-  // ═══ A 组：参数逻辑矛盾 ═══
+  // Group A: parameter logic conflicts.
 
-  // A1: reasoning=off 但 reasoning 相关参数仍设置（合并为单条警告）
+  // A1: reasoning=off but reasoning-related parameters are still set; merge into one warning.
   if (config.reasoning === 'off' && (
     (config.reasoning_effort && config.reasoning_effort !== '') ||
     (config.reasoning_format && config.reasoning_format !== '' && config.reasoning_format !== 'none') ||
@@ -100,7 +100,7 @@ export function validateConfig(
   ))
     w.push({ field: 'reasoning', severity: 'high', key: 'warnA1' })
 
-  // A2: embedding 模式下生成/采样参数仍设置
+  // A2: generation/sampling parameters are still set in embedding mode.
   if (config.embedding) {
     const defaults = defaultInstanceConfig()
     const genDefaults: Record<string, string | number | boolean> = {
@@ -131,30 +131,30 @@ export function validateConfig(
       w.push({ field: 'embedding', severity: 'high', key: 'warnA2' })
   }
 
-  // A3: spec_type 需要草稿模型但未设置（draft-mtp 有内置头时例外）
+  // A3: spec_type needs a draft model but none is set, except draft-mtp with builtin heads.
   if (config.spec_type && config.spec_type !== '' && config.spec_type !== 'none') {
     const needsDraft = ['draft-simple', 'draft-eagle3', 'draft-dflash', 'draft-mtp'].some(t => config.spec_type.includes(t))
     if (needsDraft && !config.draft_model_path) {
       // draft-mtp with builtin MTP heads doesn't strictly need external draft model
       if (config.spec_type.includes('draft-mtp') && model?.has_mtp_head) {
-        // no warning — builtin heads suffice
+        // No warning: builtin heads suffice.
       } else {
         w.push({ field: 'draft_model_path', severity: 'medium', key: 'warnA3' })
       }
     }
   }
 
-  // A4: backend_sampling 在 ROCm 环境
+  // A4: backend_sampling on ROCm.
   if (config.backend_sampling && engine?.backend?.toLowerCase().includes('rocm'))
     w.push({ field: 'backend_sampling', severity: 'high', key: 'warnA4' })
 
-  // A5: spec_type 为空但推测解码参数非默认值
+  // A5: spec_type is empty but speculative decoding parameters are non-default.
   if ((!config.spec_type || config.spec_type === '' || config.spec_type === 'none') &&
       (config.draft_tokens !== 3 && config.draft_tokens !== 0 || config.spec_draft_n_min !== 0 ||
        config.spec_draft_p_min !== 0 || config.spec_draft_p_split !== 0.1))
     w.push({ field: 'spec_type', severity: 'medium', key: 'warnA5' })
 
-  // A6: ctx_size_auto 且 RoPE/YaRN 参数非默认值
+  // A6: ctx_size_auto is enabled while RoPE/YaRN parameters are non-default.
   if (config.ctx_size_auto && (
     config.rope_scaling !== '' || config.rope_scale !== 0 ||
     config.rope_freq_base !== 0 || config.rope_freq_scale !== 0 ||
@@ -162,104 +162,104 @@ export function validateConfig(
    config.yarn_beta_slow > 0 || config.yarn_beta_fast !== -1))
     w.push({ field: 'ctx_size_auto', severity: 'medium', key: 'warnA6' })
 
-  // A7: ctx_size 超过模型上下文 4 倍
+  // A7: ctx_size exceeds four times the model context.
   if (!config.ctx_size_auto && config.ctx_size > 0 && model?.context_length && config.ctx_size > model.context_length * 4)
     w.push({ field: 'ctx_size', severity: 'medium', key: 'warnA7' })
 
-  // A8: image tokens 设置了但无投影器
+  // A8: image tokens are set without a projector.
   if ((config.image_min_tokens > 0 || config.image_max_tokens > 0) &&
       !config.mmproj_path && !config.mmproj_url)
     w.push({ field: 'image_min_tokens', severity: 'medium', key: 'warnA8' })
 
-  // A9: swa_full 但模型不支持
+  // A9: swa_full is enabled but the model does not support it.
   if (config.swa_full && isSwaUnsupported(model?.architecture))
     w.push({ field: 'swa_full', severity: 'medium', key: 'warnA9' })
 
-  // A10: flash_attn=on 但后端为 CPU
+  // A10: flash_attn=on while backend is CPU.
   if (config.flash_attn === 'on' && engine?.backend?.toLowerCase() === 'cpu')
     w.push({ field: 'flash_attn', severity: 'medium', key: 'warnA10' })
 
-  // A11: grammar 和 grammar_file 同时设置
+  // A11: grammar and grammar_file are both set.
   if (config.grammar && config.grammar_file)
     w.push({ field: 'grammar', severity: 'low', key: 'warnA11' })
 
-  // A12: chat_template 和 chat_template_file 同时设置
+  // A12: chat_template and chat_template_file are both set.
   if (config.chat_template && config.chat_template_file)
     w.push({ field: 'chat_template', severity: 'low', key: 'warnA12' })
 
-  // A13: api_key 和 api_key_file 同时设置
+  // A13: api_key and api_key_file are both set.
   if (config.api_key && config.api_key_file)
     w.push({ field: 'api_key', severity: 'low', key: 'warnA13' })
 
-  // ═══ B 组：冗余/无意义 ═══
+  // Group B: redundant or meaningless settings.
 
   // B1: warmup + embedding
   if (config.warmup && config.embedding)
     w.push({ field: 'warmup', severity: 'low', key: 'warnB1' })
 
-  // B2: cache_ram 或 cache_reuse 设置了但 cache_prompt 关闭
+  // B2: cache_ram or cache_reuse is set while cache_prompt is disabled.
   if ((config.cache_ram > 0 || config.cache_reuse > 0) && !config.cache_prompt)
     w.push({ field: 'cache_prompt', severity: 'low', key: 'warnB2' })
 
-  // B3: slot 相关参数设置了但 slots_enabled 关闭
+  // B3: slot-related parameters are set while slots_enabled is disabled.
   if (!config.slots_enabled &&
       (config.slot_save_path !== '' || config.slot_prompt_similarity !== 0.1))
     w.push({ field: 'slots_enabled', severity: 'low', key: 'warnB3' })
 
-  // B4: mirostat 开启但 temp 非默认值
+  // B4: mirostat is enabled but temp is non-default.
   if (config.mirostat > 0 && Math.abs(config.temp - 0.8) > 0.001)
     w.push({ field: 'mirostat', severity: 'low', key: 'warnB4' })
 
-  // B5: samplers 自定义了且单独采样参数也为非默认
+  // B5: samplers are customized while individual sampling parameters are also non-default.
   if (config.samplers && config.samplers !== '') {
     if (config.temp !== 0.8 || config.top_k !== 40 || config.top_p !== 0.95 ||
         config.min_p !== 0.05 || config.typical_p !== 1.0)
       w.push({ field: 'samplers', severity: 'low', key: 'warnB5' })
   }
 
-  // B6: pooling 设置了但 embedding 未启用
+  // B6: pooling is set while embedding is disabled.
   if (config.pooling && config.pooling !== '' && !config.embedding)
     w.push({ field: 'pooling', severity: 'low', key: 'warnB6' })
 
-  // B7: gpu_layers=0 但 device 指向 GPU
+  // B7: gpu_layers=0 while device points to GPU.
   if (config.gpu_layers === 0 && config.device && config.device !== '')
     w.push({ field: 'gpu_layers', severity: 'low', key: 'warnB7' })
 
-  // B8: ctx_checkpoints/checkpoint_min_step 设置了但 cache_ram=0
+  // B8: ctx_checkpoints/checkpoint_min_step is set while cache_ram=0.
   if (config.cache_ram === 0 && ((config.ctx_checkpoints !== 32 && config.ctx_checkpoints !== 0) || config.checkpoint_min_step !== 0))
     w.push({ field: 'ctx_checkpoints', severity: 'low', key: 'warnB8' })
 
-  // B9: lookup_cache 设置了但 spec_type 不含 ngram
+  // B9: lookup_cache is set while spec_type does not include ngram.
   if ((config.lookup_cache_static || config.lookup_cache_dynamic) &&
       (!config.spec_type || !config.spec_type.includes('ngram')))
     w.push({ field: 'lookup_cache_static', severity: 'low', key: 'warnB9' })
 
-  // B10: --no-mmproj 与 --mmproj 同时设置
+  // B10: --no-mmproj and --mmproj are both set.
   if (config.no_mmproj && config.mmproj_path)
     w.push({ field: 'no_mmproj', severity: 'low', key: 'warnB10' })
 
-  // B11: json_schema 与 json_schema_file 同时设置
+  // B11: json_schema and json_schema_file are both set.
   if (config.json_schema && config.json_schema_file)
     w.push({ field: 'json_schema', severity: 'low', key: 'warnB11' })
 
-  // ═══ C 组：环境感知 ═══
+  // Group C: environment-aware checks.
 
-  // C1: mmproj 非空但模型架构不像视觉模型
+  // C1: mmproj is set but the model architecture does not look visual.
   if (config.mmproj_path && model?.architecture &&
       !isVisionArch(model.architecture) && model.file_type !== 'mmproj')
     w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1' })
 
-  // C2: (已删除 — draft-mtp 是否需要草稿模型取决于模型是否有内置 MTP 头，无法仅从配置判断)
+  // C2: removed; draft-mtp draft model requirements depend on builtin MTP heads and cannot be inferred from config only.
 
-  // C3: n_predict=-1 无限生成 + ignore_eos 忽略结束符
+  // C3: n_predict=-1 enables infinite generation and ignore_eos ignores stop tokens.
   if (config.n_predict === -1 && config.ignore_eos)
     w.push({ field: 'n_predict', severity: 'medium', key: 'warnC3' })
 
-  // C4: draft-mtp + 模型已有内置 MTP 头 + 额外设置了草稿模型（可能冗余）
+  // C4: draft-mtp with builtin MTP heads plus an extra draft model may be redundant.
   if (config.draft_model_path && config.spec_type?.includes('draft-mtp') && model?.has_mtp_head)
     w.push({ field: 'draft_model_path', severity: 'low', key: 'warnC4' })
 
-  // D1: 自定义参数与已知配置冲突
+  // D1: custom args conflict with known config fields.
   if (config.custom_args.length > 0) {
     const conflicts: string[] = []
     for (const arg of config.custom_args) {

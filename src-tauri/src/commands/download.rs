@@ -16,7 +16,7 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .unwrap_or_default()
 });
 
-// ── #9: 共享下载核心 ─────────────────────────────────────────────
+// #9: Shared download core.
 
 const LOW_PRIORITY_FALLBACK_LIMIT_BYTES_PER_SEC: u64 = 2 * 1024 * 1024;
 
@@ -132,7 +132,7 @@ fn sanitize_file_name(name: &str) -> Result<String, String> {
             return Err(format!("文件名包含非法路径字符: {}", name));
         }
     }
-    // 确保 name 是纯文件名（不含路径分隔符）
+    // Ensure name is only a file name without path separators.
     let path = Path::new(name);
     if path.file_name().and_then(|s| s.to_str()) != Some(name) {
         return Err(format!("文件名包含路径分隔符: {}", name));
@@ -312,7 +312,7 @@ fn is_retryable_error(status_code: Option<u16>) -> bool {
     }
 }
 
-/// 下载单个文件的通用逻辑。
+/// Shared logic for downloading a single file.
 async fn download_single_file(
     ctx: DownloadTaskContext,
     url: String,
@@ -342,7 +342,7 @@ async fn download_single_file(
     {
         let mut active = shared.active_downloads.lock().unwrap();
         if !active.insert(ctx.run_id.clone()) {
-            // 该文件已有活跃下载任务，跳过（避免两个任务同时写同一个文件）
+            // Skip files that already have active downloads so two tasks cannot write the same file.
             has_error.store(true, Ordering::SeqCst);
             ctx.emit(
                 &app,
@@ -355,7 +355,7 @@ async fn download_single_file(
             return;
         }
     }
-    // RAII guard: 函数退出时自动从 active_downloads 中移除
+    // RAII guard: remove the run from active_downloads when the function exits.
     let _guard = ActiveDownloadGuard {
         app: app.clone(),
         run_id: ctx.run_id.clone(),
@@ -661,7 +661,7 @@ async fn download_single_file(
     let is_partial = resp.status() == reqwest::StatusCode::PARTIAL_CONTENT;
     let mut resume_from = if is_partial { resume_from } else { 0 };
 
-    // A1-05: 200 OK with .part file means server ignored Range header → restart
+    // A1-05: 200 OK with .part file means server ignored Range header, so restart.
     if !is_partial && temp_path.exists() {
         update_manager_file_state(
             &shared,
@@ -718,7 +718,7 @@ async fn download_single_file(
     let mut downloaded = resume_from;
     let mut win_start = std::time::Instant::now();
     let mut win_bytes: u64 = 0;
-    let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1); // 首次立即发射
+    let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1); // Emit immediately the first time.
 
     use std::io::Write;
     let mut file = match std::fs::OpenOptions::new()
@@ -1051,7 +1051,7 @@ async fn download_single_file(
     }));
 }
 
-// ── ModelScope 浏览 ──────────────────────────────────────────────
+// ModelScope browse.
 
 #[tauri::command]
 pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
@@ -1114,7 +1114,7 @@ pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, Stri
     Ok(result)
 }
 
-// ── ModelScope 并行下载 ─────────────────────────────────────────
+// ModelScope parallel download.
 
 #[tauri::command]
 pub async fn download_modelscope_files(
@@ -1136,7 +1136,7 @@ pub async fn download_modelscope_files(
     let semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
     let has_error = Arc::new(AtomicBool::new(false));
 
-    // 清除本批次文件的 cancel/pause flags（避免上次暂停/取消的标记残留）
+    // Clear cancel/pause flags for this batch to avoid stale pause/cancel state.
     clear_control_flags_for_files(&app.state::<AppState>(), &files);
 
     for file in files {
@@ -1167,7 +1167,7 @@ pub async fn download_modelscope_files(
     Ok(())
 }
 
-// ── 下载控制 ─────────────────────────────────────────────────────
+// Download controls.
 
 #[tauri::command]
 pub async fn cancel_file_download(
@@ -1227,7 +1227,7 @@ pub async fn cancel_and_cleanup_download(
     Ok(())
 }
 
-// ── HuggingFace 数据结构和浏览 ──────────────────────────────────
+// HuggingFace data structures and browse.
 
 #[derive(serde::Deserialize)]
 struct HfFileEntry {
@@ -1295,7 +1295,7 @@ pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, Str
     Ok(result)
 }
 
-// ── HuggingFace 下载 ────────────────────────────────────────────
+// HuggingFace download.
 
 #[tauri::command]
 pub async fn download_huggingface_files(
@@ -1318,7 +1318,7 @@ pub async fn download_huggingface_files(
     let has_error = Arc::new(AtomicBool::new(false));
     let mut handles = Vec::new();
 
-    // 清除本批次文件的 cancel/pause flags
+    // Clear cancel/pause flags for this batch.
     clear_control_flags_for_files(&app.state::<AppState>(), &files);
 
     for file in files {
@@ -1360,7 +1360,7 @@ pub async fn check_local_file(path: String) -> Result<Option<u64>, String> {
     }
 }
 
-// ── 下载队列持久化 ─────────────────────────────────────────────
+// Download queue persistence.
 
 use crate::models::DownloadState;
 
@@ -1603,7 +1603,7 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
 
     let entry = {
         let mut queue = state.download_queue.lock().unwrap();
-        // 一次性清除不可运行的条目（它们无法被处理，留队列中会阻塞后续任务）
+        // Drop non-runnable entries once so they cannot block later queue items.
         let old_len = queue.len();
         queue.retain(|e| is_restore_runnable(e));
         if queue.is_empty() {
@@ -1628,7 +1628,7 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
             inflight.push(inflight_entry);
             save_inflight_state(&inflight, &state);
         }
-        // 只在出队后保存一次，避免循环中反复写磁盘
+        // Save once after dequeueing to avoid repeated disk writes inside the loop.
         drop(queue);
         persist_manager_queue(&state);
         entry
@@ -2192,7 +2192,7 @@ pub fn flush_download_manager_state(app: &tauri::AppHandle) {
     save_download_state(&persisted, &state);
 }
 
-// ── 批量控制命令 ──────────────────────────────────────────────────
+// Batch control commands.
 
 #[tauri::command]
 pub async fn pause_all_downloads(state: tauri::State<'_, AppState>) -> Result<(), String> {
@@ -2245,7 +2245,7 @@ pub async fn cancel_all_downloads(
     Ok(())
 }
 
-// ── 并发控制命令 ──────────────────────────────────────────────────
+// Concurrency control commands.
 
 #[tauri::command]
 pub async fn set_download_concurrency(
@@ -2269,7 +2269,7 @@ pub async fn get_download_concurrency(state: tauri::State<'_, AppState>) -> Resu
     Ok(*state.download_max_concurrent.lock().unwrap())
 }
 
-// ── 重置下载状态（重新下载专用） ────────────────────────────────────
+// Reset download state for redownload.
 
 #[tauri::command]
 pub async fn set_download_bandwidth_limit(
@@ -2351,7 +2351,7 @@ pub async fn reset_download_for_redownload(
     Ok(())
 }
 
-// ── 下载管理器快照 ────────────────────────────────────────────────
+// Download manager snapshot.
 
 #[derive(serde::Serialize)]
 pub struct DownloadManagerSnapshot {

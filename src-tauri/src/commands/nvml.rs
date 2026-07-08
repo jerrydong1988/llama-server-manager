@@ -5,7 +5,7 @@ type NvmlResult = u32;
 const NVML_SUCCESS: NvmlResult = 0;
 const NVML_ERROR_NO_PERMISSION: NvmlResult = 6;
 
-// #3: 用 Mutex 替代 static mut 消除数据竞争（与 adlx.rs 一致）
+// #3: Use Mutex instead of static mut to avoid data races, matching adlx.rs.
 struct NvmlState {
     lib: &'static libloading::Library,
     initialized: bool,
@@ -103,7 +103,7 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
     let state = state_guard.as_mut()?;
     let lib = state.lib;
 
-    // ── Initialize NVML (only once) ──
+    // Initialize NVML once.
     if !state.initialized {
         eprintln!("[nvml] initializing...");
         type InitFn = unsafe extern "system" fn() -> NvmlResult;
@@ -121,7 +121,7 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
         eprintln!("[nvml] initialized OK");
     }
 
-    // ── Get device handle for GPU 0 ──
+    // Get device handle for GPU 0.
     type GetHandleFn = unsafe extern "system" fn(u32, *mut *mut c_void) -> NvmlResult;
     let get_handle: libloading::Symbol<GetHandleFn> =
         lib.get(b"nvmlDeviceGetHandleByIndex_v2\0").ok()?;
@@ -138,7 +138,7 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
     };
 
     if !device.is_null() {
-        // ── Utilization ──
+        // Utilization.
         type GetUtilFn = unsafe extern "system" fn(*mut c_void, *mut NvmlUtilization) -> NvmlResult;
         let get_util: libloading::Symbol<GetUtilFn> =
             lib.get(b"nvmlDeviceGetUtilizationRates\0").ok()?;
@@ -148,7 +148,7 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
             m.gpu_percent = Some(util.gpu as f32);
         }
 
-        // ── Memory Info ──
+        // Memory info.
         type GetMemFn = unsafe extern "system" fn(*mut c_void, *mut NvmlMemory) -> NvmlResult;
         let get_mem: libloading::Symbol<GetMemFn> = lib.get(b"nvmlDeviceGetMemoryInfo\0").ok()?;
 
@@ -166,7 +166,7 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
     Some(m)
 }
 
-/// Cleanup NVML — call on app shutdown (best-effort, not mandatory)
+/// Cleanup NVML on app shutdown; best-effort and not mandatory.
 pub fn shutdown() {
     if let Ok(mut state) = NVML_STATE.lock() {
         if let Some(s) = state.as_ref() {

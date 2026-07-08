@@ -4,7 +4,7 @@ use std::sync::Mutex;
 type AdlxResult = i32;
 const ADLX_OK: AdlxResult = 0;
 
-// #11: 用 Mutex 替代 static mut 消除数据竞争
+// #11: Use Mutex instead of static mut to avoid data races.
 struct AdlxState {
     lib: &'static libloading::Library,
     sys: *mut c_void,
@@ -134,7 +134,7 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
         // GPU list vtable
         let vt_gl = *(gpu_list as *const *const c_void);
 
-        // GPUList::At_GPUList (index 11) → get GPU[0]
+        // GPUList::At_GPUList (index 11) -> get GPU[0].
         type AtGPU = unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> AdlxResult;
         if vtbl::<AtGPU>(vt_gl, 11)(gpu_list, 0, &mut gpu) == ADLX_OK && !gpu.is_null() {
             let vt_gpu = *(gpu as *const *const c_void);

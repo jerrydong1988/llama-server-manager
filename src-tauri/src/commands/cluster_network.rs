@@ -14,7 +14,7 @@ pub async fn detect_usb4_adapters(state: State<'_, AppState>) -> Result<Vec<Usb4
 
     #[cfg(not(target_os = "windows"))]
     {
-        // macOS/Linux stub — return empty for now
+        // macOS/Linux stub: return empty for now.
         let _ = state;
         Ok(Vec::new())
     }

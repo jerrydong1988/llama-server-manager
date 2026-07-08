@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use sysinfo::System;
 use tauri::{Emitter, Manager};
 
-// ── 生成 CLI 命令 ────────────────────────────────────────────────
+// Generate CLI command.
 
 fn mask_api_key_in_cmd(cmd: &str) -> String {
     let mut result = cmd.to_string();
@@ -56,7 +56,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     let mut cmd = vec![exe, "-m".into(), config.model_path.clone()];
     let is_emb = config.embedding;
 
-    // ── Basic ──
+    // Basic.
     if !config.alias.is_empty() {
         cmd.extend_from_slice(&["-a".into(), config.alias.clone()]);
     }
@@ -127,7 +127,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         }
     }
 
-    // ── Performance & Context ──
+    // Performance and context.
     if !config.ctx_size_auto {
         cmd.extend_from_slice(&["-c".into(), config.ctx_size.to_string()]);
     }
@@ -180,7 +180,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.push("--swa-full".into());
     }
 
-    // ── RoPE / YaRN ──
+    // RoPE / YaRN.
     if !config.rope_scaling.is_empty() {
         cmd.extend_from_slice(&["--rope-scaling".into(), config.rope_scaling.clone()]);
     }
@@ -218,7 +218,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.extend_from_slice(&["--yarn-orig-ctx".into(), config.yarn_orig_ctx.to_string()]);
     }
 
-    // ── Flash Attention ──
+    // Flash Attention.
     if !is_emb {
         let fa = config.flash_attn.as_str();
         if fa != "auto" && !fa.is_empty() {
@@ -226,7 +226,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         }
     }
 
-    // ── Memory & Loading ──
+    // Memory and loading.
     if config.moe_cpu_layers > 0 {
         cmd.extend_from_slice(&["--n-cpu-moe".into(), config.moe_cpu_layers.to_string()]);
     }
@@ -264,7 +264,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
     }
 
-    // ── KV Cache ──
+    // KV cache.
     if !config.cache_type_k.is_empty() {
         cmd.extend_from_slice(&["-ctk".into(), config.cache_type_k.clone()]);
     }
@@ -287,7 +287,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.push("--no-cache-idle-slots".into());
     }
 
-    // ── GPU & Device ──
+    // GPU and device.
     if !config.device.is_empty() {
         cmd.extend_from_slice(&["-dev".into(), config.device.clone()]);
     }
@@ -304,7 +304,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.extend_from_slice(&["--override-kv".into(), config.override_kv.clone()]);
     }
 
-    // ── Speculative Decoding ──
+    // Speculative decoding.
     let spec_active = !is_emb && !config.spec_type.is_empty() && config.spec_type != "none";
     if spec_active {
         if !config.draft_model_path.is_empty() {
@@ -361,7 +361,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         }
     }
 
-    // ── Network ──
+    // Network.
     cmd.extend_from_slice(&[
         "--host".into(),
         config.host.clone(),
@@ -405,7 +405,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.push("--agent".into());
     }
 
-    // ── Embedding / Generation ──
+    // Embedding / generation.
     if config.embedding {
         cmd.push("--embedding".into());
         if !config.pooling.is_empty() {
@@ -560,7 +560,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         }
     }
 
-    // ── Server features ──
+    // Server features.
     if config.timeout > 0 {
         cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]);
     }
@@ -592,7 +592,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.push("--prefill-assistant".into());
     }
 
-    // ── New server features (aligned with llama.cpp master) ──
+    // New server features aligned with llama.cpp master.
     if !config.rpc_servers.is_empty() {
         cmd.extend_from_slice(&["--rpc".into(), config.rpc_servers.clone()]);
     }
@@ -606,7 +606,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.push("--reuse-port".into());
     }
 
-    // ── Multi-Model & Media ──
+    // Multi-model and media.
     if !config.models_dir.is_empty() {
         cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]);
     }
@@ -647,7 +647,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]);
     }
 
-    // Custom args（#13: 支持双引号包裹参数）
+    // Custom args (#13: support double-quoted arguments).
     for arg in &config.custom_args {
         if !arg.is_empty() {
             cmd.extend(split_args(arg));
@@ -679,7 +679,7 @@ pub async fn start_server(
     let cmd_str = cmd.join(" ");
     let cmd_display = mask_api_key_in_cmd(&cmd_str);
 
-    // 创建日志文件 — llama-server 直接写到这里（不经过 pipe 中转）
+    // Create a log file; llama-server writes here directly without pipe forwarding.
     let config_dir = state.config_dir.lock().unwrap().clone();
     let log_dir = config_dir.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
@@ -721,7 +721,7 @@ pub async fn start_server(
     )
     .ok();
 
-    // Atomic check+insert — prevents starting same instance twice
+    // Atomic check-and-insert prevents starting the same instance twice.
     {
         let mut running = state.running.lock().unwrap();
         if running.contains_key(&instance_id) {
@@ -746,7 +746,7 @@ pub async fn start_server(
         );
     }
 
-    // 立即同步写 running 到磁盘 — 使用统一原子写入避免竞态
+    // Persist running state to disk immediately via unified atomic writes to avoid races.
     {
         let config_dir = state.config_dir.lock().unwrap().clone();
         let path = config_dir.join("instances.json");
@@ -769,7 +769,7 @@ pub async fn start_server(
     )
     .ok();
 
-    // ── 日志 tail 线程：读取 llama-server 直接写入的日志文件 ──
+    // Log tail thread: read the log file written directly by llama-server.
     let app_tail = app.clone();
     let id_tail = instance_id.clone();
     let log_path_tail = log_path.clone();
@@ -778,7 +778,7 @@ pub async fn start_server(
         tail_log_file(&log_path_tail, &id_tail, telemetry_session_tail, app_tail);
     });
 
-    // ── 进程存活监控 + 退出清理 ──
+    // Process liveness monitoring and exit cleanup.
     let id = instance_id.clone();
     let app_clone = app.clone();
     let log_path_mon = log_path.clone();
@@ -861,7 +861,7 @@ pub async fn start_server(
         health_check_loop(&id, &host, port, pid, &api_key_health, app_for_health);
     });
 
-    // P1/P2: 后台指标推送 + 历史记录线程
+    // P1/P2: background metrics push and history recording thread.
     let id_metrics = instance_id.clone();
     let app_metrics = app.clone();
     let host_metrics = if config.host == "0.0.0.0" {
@@ -887,7 +887,7 @@ pub async fn start_server(
     Ok(())
 }
 
-/// 后台指标采集循环 — 每 5 秒采集并推送到前端 + 记录历史
+/// Background metrics loop that samples every 5 seconds, pushes to the frontend, and records history.
 fn monitor_loop(
     instance_id: &str,
     expected_pid: u32,
@@ -897,7 +897,7 @@ fn monitor_loop(
     telemetry_session_id: Option<String>,
     app: tauri::AppHandle,
 ) {
-    // 等待 llama-server 启动完成（给 3 秒启动时间）
+    // Wait for llama-server startup, giving it 3 seconds.
     std::thread::sleep(std::time::Duration::from_secs(3));
 
     let is_my_instance = || {
@@ -913,10 +913,10 @@ fn monitor_loop(
     let metrics_url = format!("http://{}:{}/metrics", host, port);
     let slots_url = format!("http://{}:{}/slots", host, port);
 
-    // 启动时间用于计算 uptime
+    // Startup timestamp used to compute uptime.
     let start_instant = std::time::Instant::now();
 
-    // 进程级指标专用 System（系统级 GPU 指标复用 SYSINFO_CACHE 单例）
+    // Dedicated System for process metrics; system/GPU metrics reuse the SYSINFO_CACHE singleton.
     let mut proc_sys = System::new_all();
 
     loop {
@@ -925,7 +925,7 @@ fn monitor_loop(
             break;
         }
 
-        // ── 系统级 + GPU 指标 — 复用 collect_gpu_and_system 单例缓存
+        // System-level and GPU metrics using the collect_gpu_and_system singleton cache.
         let (
             adlx_cpu,
             gpu_pct,
@@ -938,7 +938,7 @@ fn monitor_loop(
             sys_mem_used,
         ) = collect_gpu_and_system();
 
-        // 进程级指标
+        // Process-level metrics.
         proc_sys.refresh_cpu_all();
         let (cpu, mem) = get_process_metrics(&mut proc_sys, expected_pid);
         let cpu_pct = adlx_cpu.unwrap_or(cpu);
@@ -961,7 +961,7 @@ fn monitor_loop(
             gpu_vendor,
         };
 
-        // ── llama 指标 ──
+        // llama metrics.
         let mut llama_metrics: Option<serde_json::Value> = None;
         let mut llama_sample: Option<crate::commands::telemetry::LlamaMetricSample> = None;
         let mut req = client.get(&metrics_url);
@@ -1002,7 +1002,7 @@ fn monitor_loop(
             }
         }
 
-        // ── 发射事件 ──
+        // Emit events.
         let _ = crate::commands::telemetry::record_metric_sample(
             telemetry_session_id.as_deref(),
             instance_id,
@@ -1099,7 +1099,7 @@ pub fn health_check_loop(
             .unwrap_or(false)
     };
 
-    // Fast initial health check: 10 × 1s = 10s
+    // Fast initial health check: 10 x 1s = 10s
     for _ in 0..10 {
         if !is_my_instance() {
             return;
@@ -1209,7 +1209,7 @@ pub async fn stop_server(
     let mut killed = false;
 
     if let Some(ref ri) = ri {
-        // taskkill /T 优先（含子进程），PowerShell 按端口备用
+        // Prefer taskkill /T, including child processes; PowerShell by port is the fallback.
         #[cfg(target_os = "windows")]
         {
             let r = std::os::windows::process::CommandExt::creation_flags(
@@ -1293,8 +1293,8 @@ pub async fn stop_server(
         .ok();
         Ok(())
     } else {
-        // 进程仍在运行，不发射 server-stopped，前端保持 running 状态
-        // 监控线程会在进程真正退出时处理清理
+        // Process is still running; do not emit server-stopped so the frontend stays running.
+        // The monitor thread cleans up when the process actually exits.
         Err("无法终止进程".into())
     }
 }
@@ -1374,7 +1374,7 @@ pub async fn check_port(port: u16) -> Result<bool, String> {
     }
 }
 
-// ── 系统性能指标（sysinfo） ──────────────────────────────────
+// System performance metrics via sysinfo.
 
 static SYSINFO_CACHE: Mutex<Option<System>> = Mutex::new(None);
 
@@ -1438,12 +1438,12 @@ fn collect_gpu_and_system() -> (
     )
 }
 
-/// #6: 复用 System 实例，避免每次 new → refresh → sleep → refresh 的 300ms 阻塞
+/// #6: Reuse the System instance to avoid repeated new -> refresh -> sleep -> refresh 300ms stalls.
 fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
     sys.refresh_cpu_all();
     if let Some(p) = sys.processes().values().find(|p| p.pid().as_u32() == pid) {
         let raw = p.cpu_usage();
-        // Always normalize by CPU count — sysinfo reports total across all cores
+        // Always normalize by CPU count because sysinfo reports total across all cores.
         let cpu = if sys.cpus().is_empty() {
             0.0
         } else {
@@ -1522,7 +1522,7 @@ pub async fn get_system_metrics(
     Ok(result)
 }
 
-/// System health — no instance required. Used by Dashboard for the system resource bar.
+/// System health without requiring an instance. Used by Dashboard for the system resource bar.
 #[tauri::command]
 pub async fn get_system_health() -> Result<SystemMetrics, String> {
     let result = tokio::task::spawn_blocking(|| {
@@ -1651,11 +1651,11 @@ pub async fn get_metrics(
     }))
 }
 
-// ── 重启后恢复日志和监控 ─────────────────────────────────────────
+// Restore logs and monitoring after app restart.
 
-/// 应用重启后，为已运行的实例重新建立日志捕获和指标推送。
-/// stdout/stderr 管道已不可用，改为从日志文件读取（tail 模式）。
-/// 同时创建新的 history session 继续记录。
+/// Reconnects log capture and metrics push for instances that are still running after app restart.
+/// stdout/stderr pipes are unavailable after restart, so read from the log file in tail mode.
+/// Also creates a new history session to continue recording.
 pub fn register_restored_runtime_instance(
     app: &tauri::AppHandle,
     instance_id: &str,
@@ -1678,7 +1678,7 @@ pub fn reconnect_running_instance(
 ) {
     let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
 
-    // ── 日志恢复：先回放已有内容，再 tail 新内容 ──
+    // Log recovery: replay existing content, then tail new content.
     {
         let app_log = app.clone();
         let id_log = instance_id.to_string();
@@ -1690,7 +1690,7 @@ pub fn reconnect_running_instance(
         });
     }
 
-    // ── 指标恢复：重新启动 monitor_loop，使用新 session 继续记录 ──
+    // Metrics recovery: restart monitor_loop and keep recording with the new session.
     {
         let app_metrics = app.clone();
         let id_metrics = instance_id.to_string();
@@ -1717,20 +1717,20 @@ pub fn reconnect_running_instance(
     }
 }
 
-// ── 性能分析解析器 ───────────────────────────────────────────────
+// Performance analysis parser.
 
 use std::collections::HashMap;
 
-/// 单个推理任务的性能剖面
+/// Performance profile for one inference task.
 #[derive(Clone, serde::Serialize)]
 struct TaskPerfState {
     slot_id: u32,
     task_id: u32,
     n_decoded: u64,
     tg: f64,
-    /// (n_decoded, tg) 历史采样点，用于速度曲线
+    /// Historical (n_decoded, tg) samples used for speed curves.
     history: Vec<(u64, f64)>,
-    // 最终汇总
+    // Final summary.
     prompt_tokens: Option<u64>,
     prompt_time_ms: Option<f64>,
     prompt_tps: Option<f64>,
@@ -1739,7 +1739,7 @@ struct TaskPerfState {
     gen_tps: Option<f64>,
     total_tokens: Option<u64>,
     total_time_ms: Option<f64>,
-    // 推测解码
+    // Speculative decoding.
     spec_accept_rate: Option<f64>,
     spec_accepted: Option<u64>,
     spec_generated: Option<u64>,
@@ -1747,7 +1747,7 @@ struct TaskPerfState {
     completed: bool,
 }
 
-/// 预编译正则集合，避免每行重复编译
+/// Precompiled regex collection to avoid recompiling for every line.
 struct PerfParser {
     re_ids: regex_lite::Regex,
     re_launch: regex_lite::Regex,
@@ -1767,8 +1767,8 @@ impl PerfParser {
             re_launch: regex_lite::Regex::new(r"launch_slot_.*processing\s+task").unwrap(),
             re_release: regex_lite::Regex::new(r"slot\s+release.*id\s+\d+\s*\|\s*task\s+\d+\s*\|\s*stop").unwrap(),
             re_decoded: regex_lite::Regex::new(r"n_decoded\s*=\s*(\d+).*?tg\s*=\s*([\d.]+)\s*t/s").unwrap(),
-            re_prompt: regex_lite::Regex::new(r"prompt eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?\(\s*([\d.]+)\s*tokens per second\)").unwrap(),
-            re_eval: regex_lite::Regex::new(r"eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?\(\s*([\d.]+)\s*tokens per second\)").unwrap(),
+            re_prompt: regex_lite::Regex::new(r"prompt eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?,\s*([\d.]+)\s*tokens per second\)").unwrap(),
+            re_eval: regex_lite::Regex::new(r"eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?,\s*([\d.]+)\s*tokens per second\)").unwrap(),
             re_total: regex_lite::Regex::new(r"total time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens").unwrap(),
             re_draft: regex_lite::Regex::new(r"draft acceptance\s*=\s*([\d.]+)\s*\(\s*(\d+)\s*accepted\s*/\s*(\d+)\s*generated\)").unwrap(),
             re_stats: regex_lite::Regex::new(r"statistics\s+draft-mtp.*?#gen tokens\s*=\s*(\d+).*?#acc tokens\s*=\s*(\d+).*?dur\(g\)\s*=\s*([\d.]+)").unwrap(),
@@ -1791,7 +1791,7 @@ impl PerfParser {
     }
 }
 
-/// 解析一行日志，更新任务性能状态。返回是否需要发射 perf-update。
+/// Parses one log line and updates task performance state. Returns whether perf-update should be emitted.
 fn parse_perf_line(
     parser: &PerfParser,
     line: &str,
@@ -1802,7 +1802,7 @@ fn parse_perf_line(
         return false;
     };
 
-    // ── 任务创建 ──
+    // Task creation.
     if parser.is_launch(line) {
         tasks.insert(
             task_id,
@@ -1835,7 +1835,7 @@ fn parse_perf_line(
         None => return false, // stale line from before app started
     };
 
-    // ── 进度更新 ──
+    // Progress update.
     if let Some(c) = parser.re_decoded.captures(line) {
         if let (Ok(n), Ok(tg)) = (
             c.get(1).unwrap().as_str().parse::<u64>(),
@@ -1850,7 +1850,7 @@ fn parse_perf_line(
         }
     }
 
-    // ── 提示阶段汇总 ──
+    // Prompt phase summary.
     if let Some(c) = parser.re_prompt.captures(line) {
         task.prompt_time_ms = c.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
         task.prompt_tokens = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
@@ -1858,7 +1858,7 @@ fn parse_perf_line(
         return true;
     }
 
-    // ── 生成阶段汇总 ──
+    // Generation phase summary.
     if let Some(c) = parser.re_eval.captures(line) {
         task.gen_time_ms = c.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
         task.gen_tokens = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
@@ -1866,14 +1866,14 @@ fn parse_perf_line(
         return true;
     }
 
-    // ── 总计时 ──
+    // Total timing.
     if let Some(c) = parser.re_total.captures(line) {
         task.total_time_ms = c.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
         task.total_tokens = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
         return true;
     }
 
-    // ── 推测解码 ──
+    // Speculative decoding.
     if let Some(c) = parser.re_draft.captures(line) {
         task.spec_accept_rate = c.get(1).and_then(|m| m.as_str().parse::<f64>().ok());
         task.spec_accepted = c.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
@@ -1881,7 +1881,7 @@ fn parse_perf_line(
         return true;
     }
 
-    // ── draft-mtp 详细统计 ──
+    // Detailed draft-mtp statistics.
     if let Some(c) = parser.re_stats.captures(line) {
         task.spec_generated = c
             .get(1)
@@ -1895,7 +1895,7 @@ fn parse_perf_line(
         return true;
     }
 
-    // ── 任务完成 ──
+    // Task completion.
     if parser.is_release(line) {
         task.completed = true;
         *last_completed = Some(task.clone());
@@ -1905,8 +1905,8 @@ fn parse_perf_line(
     false
 }
 
-/// 从日志文件读取已有内容并持续 tail 新行，通过 server-log 事件推送。
-/// 对标 Docker `docker logs -f` / systemd `journalctl -f` 的实现模式。
+/// Reads existing content from the log file and tails new lines through server-log events.
+/// Mirrors the behavior of Docker `docker logs -f` or systemd `journalctl -f`.
 fn tail_log_file(
     log_path: &std::path::Path,
     instance_id: &str,
@@ -1964,7 +1964,7 @@ fn tail_log_file(
         );
     };
 
-    // ── 阶段 1: 回放已有内容（最后 2000 行，覆盖前端 1000 条上限） ──
+    // Phase 1: replay the last 2000 existing lines, covering the frontend 1000-line cap.
     if log_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&log_path) {
             let lines: Vec<&str> = content.lines().collect();
@@ -1994,8 +1994,8 @@ fn tail_log_file(
     }
     emit_perf(&app, &tasks, &last_completed);
 
-    // ── 阶段 2: 持续 tail 新内容 ──
-    // 等待一小段时间让任何正在进行的写入完成（避免读到半行）
+    // Phase 2: continuously tail new content.
+    // Wait briefly for in-flight writes to finish so half-lines are avoided.
     std::thread::sleep(std::time::Duration::from_millis(200));
 
     let mut last_size = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
@@ -2003,7 +2003,7 @@ fn tail_log_file(
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // 检查实例是否还在运行
+        // Check whether the instance is still running.
         {
             let st = app.state::<AppState>();
             let guard = st.running.lock().unwrap();
@@ -2012,14 +2012,14 @@ fn tail_log_file(
             }
         }
 
-        // 检查文件状态
+        // Check file state.
         let current_size = match std::fs::metadata(log_path) {
             Ok(meta) => meta.len(),
-            Err(_) => break, // 文件被删除，退出
+            Err(_) => break, // Exit if the file was deleted.
         };
 
         if current_size < last_size {
-            // 文件被截断（例如日志轮转），从当前位置重新开始
+            // If the file was truncated, for example by log rotation, restart from the current position.
             last_size = 0;
         }
 
@@ -2057,7 +2057,7 @@ fn tail_log_file(
     }
 }
 
-/// #13: 简单 shell 风格参数分割，支持双引号。
+/// #13: Simple shell-style argument splitting with double-quote support.
 fn split_args(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
@@ -2077,4 +2077,42 @@ fn split_args(input: &str) -> Vec<String> {
         args.push(current);
     }
     args
+}
+
+#[cfg(test)]
+mod perf_parser_tests {
+    use super::*;
+
+    #[test]
+    fn parses_llama_cpp_print_timing_token_stats() {
+        let parser = PerfParser::new();
+        let mut tasks = HashMap::new();
+        let mut last_completed = None;
+
+        let lines = [
+            "0.34.994.322 I slot launch_slot_: id  3 | task 6 | processing task, is_child = 0",
+            "1.29.406.958 I slot print_timing: id  3 | task 6 | prompt eval time =    1193.36 ms /   707 tokens (    1.69 ms per token,   592.45 tokens per second)",
+            "1.29.406.983 I slot print_timing: id  3 | task 6 |        eval time =   53204.70 ms /  3519 tokens (   15.12 ms per token,    66.14 tokens per second)",
+            "1.29.406.993 I slot print_timing: id  3 | task 6 |       total time =   54398.06 ms /  4226 tokens",
+            "1.29.407.011 I slot print_timing: id  3 | task 6 | draft acceptance = 0.92624 ( 2587 accepted /  2793 generated), mean len =  3.78",
+            "1.29.409.737 I slot      release: id  3 | task 6 | stop processing: n_tokens = 4225, truncated = 0",
+        ];
+
+        for line in lines {
+            assert!(parse_perf_line(
+                &parser,
+                line,
+                &mut tasks,
+                &mut last_completed
+            ));
+        }
+
+        let task = last_completed.expect("completed task should be captured");
+        assert_eq!(task.prompt_tokens, Some(707));
+        assert_eq!(task.gen_tokens, Some(3519));
+        assert_eq!(task.total_tokens, Some(4226));
+        assert_eq!(task.prompt_tps, Some(592.45));
+        assert_eq!(task.gen_tps, Some(66.14));
+        assert_eq!(task.spec_accept_rate, Some(0.92624));
+    }
 }

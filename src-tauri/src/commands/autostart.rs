@@ -1,5 +1,5 @@
-/// 程序开机自启动管理。
-/// Windows: 注册表 HKCU\Software\Microsoft\Windows\CurrentVersion\Run
+/// Manages application auto-start on login.
+/// Windows: HKCU\Software\Microsoft\Windows\CurrentVersion\Run registry entry.
 /// macOS:   ~/Library/LaunchAgents/com.llama-server-manager.plist
 /// Linux:   ~/.config/autostart/llama-server-manager.desktop
 use std::path::PathBuf;

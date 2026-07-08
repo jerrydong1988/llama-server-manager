@@ -3,7 +3,7 @@ use crate::utils;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-// ── 扫描缓存 ──────────────────────────────────────────────────────
+// Scan cache.
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct CachedModel {
@@ -70,15 +70,15 @@ fn file_mtime(path: &Path) -> u64 {
         .unwrap_or(0)
 }
 
-// ── 跨平台可执行文件名 ────────────────────────────────────────────
+// Cross-platform executable names.
 
-// ── 跨平台可执行文件名 ────────────────────────────────────────────
+// Cross-platform executable names.
 #[cfg(target_os = "windows")]
 const ENGINE_EXE_NAME: &str = "llama-server.exe";
 #[cfg(not(target_os = "windows"))]
 const ENGINE_EXE_NAME: &str = "llama-server";
 
-// ── 引擎信息构建 ──────────────────────────────────────────────────
+// Engine info construction.
 pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<EngineInfo> {
     let name = dir
         .file_name()
@@ -87,7 +87,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
         .to_string();
     let version = name.clone();
     let backend = utils::detect_backend(dir);
-    // #10: 使用目录规范化路径作为稳定 ID，避免移动目录导致引用断裂
+    // #10: Use the canonical directory path as a stable ID so moved directories do not break references.
     let id = std::fs::canonicalize(dir)
         .unwrap_or_else(|_| dir.to_path_buf())
         .to_string_lossy()
@@ -103,7 +103,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
     })
 }
 
-// ── 模型扫描 ──────────────────────────────────────────────────────
+// Model scanning.
 #[tauri::command]
 pub async fn scan_models(
     paths: Vec<String>,
@@ -137,7 +137,7 @@ pub async fn scan_models(
             let mut models: Vec<ModelInfo> = Vec::new();
             let mut seen = std::collections::HashSet::new();
             let mut errors = Vec::new();
-            // 收集需要新鲜解析的文件路径（mtime 变更或缓存未命中）
+            // Collect paths that need fresh parsing because mtime changed or cache missed.
             let mut fresh_files: Vec<(PathBuf, String, u64)> = Vec::new(); // (path, canonical_key, size)
 
             for scan_root in &scan_paths {
@@ -190,7 +190,7 @@ pub async fn scan_models(
                         std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
                     let cache_key = canonical.to_string_lossy().to_string();
 
-                    // mtime 匹配 → 缓存命中，跳过 GGUF 解析
+                    // Matching mtime means a cache hit, so skip GGUF parsing.
                     if let Some((cached_id, cm)) = cache.models.get(&cache_key) {
                         if cm.mtime == mtime && cm.size == size {
                             file_count += 1;
@@ -212,7 +212,7 @@ pub async fn scan_models(
 
                     file_count += 1;
                     fresh_files.push((path.to_path_buf(), cache_key, size));
-                    // 占位先入 models，之后用解析结果回填
+                    // Insert placeholders first, then backfill parse results.
                     let _idx = models.len();
                     models.push(ModelInfo {
                         id: uuid::Uuid::new_v4().to_string(),
@@ -232,7 +232,7 @@ pub async fn scan_models(
                 }
             }
 
-            // ── 并行 GGUF 解析：对需要新鲜解析的文件分线程批量处理 ──
+            // Parallel GGUF parsing for files that need fresh parsing.
             if !fresh_files.is_empty() {
                 let chunk_size = (fresh_files.len()
                     / std::thread::available_parallelism()
@@ -263,7 +263,7 @@ pub async fn scan_models(
                             .collect()
                     });
 
-                // 回填解析结果 + 更新缓存
+                // Backfill parse results and update the cache.
                 let base_idx = models.len() - fresh_files.len();
                 for (chunk_idx, chunk_results) in results.iter().enumerate() {
                     for (i, arch, ctx, qt, mtp) in chunk_results {
@@ -319,7 +319,7 @@ pub async fn scan_models(
         Err(errors) => return Err(errors.join("; ")),
     };
 
-    // ── 分片模型检测：按基础名分组，验证文件数是否等于声明的 N ──
+    // Sharded model detection by base name; verify file count against declared N.
     {
         use regex_lite::Regex;
         // [0-9] for regex_lite compat; .+? (lazy) avoids backtracking issues with names containing hyphens
@@ -355,7 +355,7 @@ pub async fn scan_models(
     Ok(models)
 }
 
-// ── 批量加载 — 一次 IPC 完成扫描+下载恢复 ──
+// Batch load: scan and restore downloads in one IPC call.
 #[tauri::command]
 pub async fn load_app_data(
     paths: Vec<String>,
@@ -380,7 +380,7 @@ pub async fn load_app_data(
     Ok((models, engines, queue))
 }
 
-/// 从磁盘缓存读取扫描结果，用于启动时立即展示数据（无需等待全量扫描）
+/// Reads cached scan results from disk so startup can show data before a full scan finishes.
 #[tauri::command]
 pub async fn get_cached_scan(
     state: tauri::State<'_, AppState>,
@@ -429,7 +429,7 @@ pub async fn get_cached_scan(
         engines.push(info);
     }
 
-    // 写入 state 以便其他组件立即可用
+    // Write into state so other components can use it immediately.
     {
         let mut state_models = state.models.lock().unwrap();
         *state_models = models.clone();
@@ -507,7 +507,7 @@ pub async fn read_gguf_metadata(
     utils::parse_gguf_metadata(Path::new(&path))
 }
 
-// ── 引擎扫描 ──────────────────────────────────────────────────────
+// Engine scanning.
 #[tauri::command]
 pub async fn scan_engines(
     paths: Vec<String>,
@@ -519,7 +519,7 @@ pub async fn scan_engines(
         let mut seen = std::collections::HashSet::new();
         let app_dir = utils::get_data_dir();
 
-        // 辅助：尝试从缓存还原引擎信息
+        // Helper: restore engine info from cache when possible.
         let mut try_cache = |dir: &Path, exe: &Path, source: &str| {
             let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
             let cache_key = canonical.to_string_lossy().to_string();
@@ -629,7 +629,7 @@ pub async fn scan_engines(
     .await
     .map_err(|e| format!("扫描线程失败: {}", e))??;
 
-    // 保留已改名的引擎自定义名称（state 访问在 spawn_blocking 外部）
+    // Preserve custom engine names; state access stays outside spawn_blocking.
     {
         let saved_names = state.engine_names.lock().unwrap();
         for engine in &mut engines {
@@ -669,7 +669,7 @@ pub async fn rename_engine(
         engine.name = name.clone();
     }
     state.engine_names.lock().unwrap().insert(id, name);
-    // Persist engine names immediately — use unified atomic write to avoid race conditions
+    // Persist engine names immediately using unified atomic writes to avoid race conditions.
     crate::commands::config::update_and_persist(&state, |global| {
         global.engine_names = state.engine_names.lock().unwrap().clone();
     })?;

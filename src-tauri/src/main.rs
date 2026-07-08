@@ -164,15 +164,15 @@ fn main() {
             }
             timings.push(("setup-tray-done".into(), now()));
 
-            // ── 提前读取配置，通过 initialization_script 注入到前端 ──
-            // 绕过 IPC 冷启动延迟：前端 JS 第一行就能读到 window.__INITIAL_CONFIG__
+            // Read config early and inject it into the frontend through initialization_script.
+            // Avoid IPC cold-start delay; frontend JS can read window.__INITIAL_CONFIG__ immediately.
             let data_dir = crate::utils::get_data_dir();
             let config_dir = data_dir.join("configs");
             let config = crate::commands::config::read_config_from_disk(&config_dir);
             let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
             timings.push(("setup-config-read".into(), now()));
 
-            // 程序化创建窗口，注入配置数据
+            // Create the window programmatically and inject config data.
             let init_script = format!(
                 "window.__INITIAL_CONFIG__ = {};\nif(window.__lsm_setInitialConfig)window.__lsm_setInitialConfig(window.__INITIAL_CONFIG__);",
                 config_json
@@ -188,7 +188,7 @@ fn main() {
                 .background_color(tauri::utils::config::Color(26, 26, 46, 255))
                 .initialization_script(&init_script);
 
-            // 恢复窗口位置
+            // Restore window position.
             if let Some(ws) = window_state {
                 window_builder = window_builder
                     .position(ws.x as f64, ws.y as f64)
@@ -198,7 +198,7 @@ fn main() {
             window_builder.build()?;
             timings.push(("setup-window-built".into(), now()));
 
-            // 同步更新 AppState（进程恢复逻辑在 load_config IPC 中异步执行）
+            // Synchronize AppState; process restoration also runs asynchronously in load_config IPC.
             {
                 let st = app.state::<AppState>();
                 *st.instances.lock().unwrap() = config.instances.clone();
@@ -207,7 +207,7 @@ fn main() {
                 *st.proxy_config.lock().unwrap() = config.proxy_config.clone();
             }
 
-            // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
+            // Start health checks, log recovery, and metrics monitoring for restored running instances.
             for (id, ri) in &config.running {
                 if !crate::commands::server::register_restored_runtime_instance(app.handle(), id, ri.pid) {
                     continue;

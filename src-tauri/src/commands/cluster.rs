@@ -47,9 +47,9 @@ const VIRTUAL_KEYWORDS: &[&str] = &[
     "nebula",
 ];
 
-// ═══════════════════════════════════════════════════════════════════
-// 持久化
-// ═══════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------
+// Persistence.
+// -------------------------------------------------------------------
 
 fn workers_path() -> PathBuf {
     let config_dir = utils::get_data_dir().join("configs");
@@ -84,7 +84,7 @@ fn save_workers_to(path: &std::path::Path, workers: &[WorkerInfo]) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    // 原子写入: 先写临时文件再 rename
+    // Atomic write: write a temporary file first, then rename it.
     let tmp = path.with_extension("json.tmp");
     if let Ok(json) = serde_json::to_string_pretty(workers) {
         if std::fs::write(&tmp, json).is_ok() {
@@ -95,14 +95,14 @@ fn save_workers_to(path: &std::path::Path, workers: &[WorkerInfo]) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// 获取本机 LAN 地址段
-// ═══════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------
+// Get local LAN prefixes.
+// -------------------------------------------------------------------
 
 fn get_lan_prefixes() -> Vec<String> {
     let mut prefixes = Vec::new();
 
-    // 虚拟网卡名称关键字（不区分大小写）— 使用全局常量
+    // Virtual network adapter keywords, case-insensitive.
     if let Ok(ifs) = if_addrs::get_if_addrs() {
         for iface in ifs {
             if iface.is_loopback() {
@@ -117,7 +117,7 @@ fn get_lan_prefixes() -> Vec<String> {
                 _ => continue,
             };
 
-            // 排除已知虚拟子网
+            // Exclude known virtual subnets.
             let is_virtual_subnet = matches!(
                 (octets[0], octets[1]),
                 (198, 18) | (198, 19) |           // benchmarking
@@ -129,7 +129,7 @@ fn get_lan_prefixes() -> Vec<String> {
                 continue;
             }
 
-            // 排除虚拟网卡名
+            // Exclude virtual network adapters by name.
             let name_lower = iface.name.to_lowercase();
             if VIRTUAL_KEYWORDS.iter().any(|k| name_lower.contains(k)) {
                 continue;
@@ -155,7 +155,7 @@ fn get_lan_prefixes() -> Vec<String> {
     prefixes
 }
 
-/// 获取物理网卡的 IPv4 地址列表（用于 socket bind 绕过 VPN/TUN）
+/// Gets IPv4 addresses from physical adapters for socket binding around VPN/TUN routes.
 fn get_physical_ips() -> Vec<Ipv4Addr> {
     let mut ips = Vec::new();
     if let Ok(ifs) = if_addrs::get_if_addrs() {
@@ -183,9 +183,9 @@ fn get_physical_ips() -> Vec<Ipv4Addr> {
     ips
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// Tauri 命令
-// ═══════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------
+// Tauri commands.
+// -------------------------------------------------------------------
 
 #[tauri::command]
 pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerInfo>, String> {
@@ -214,7 +214,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
     let discovered = Arc::new(tokio::sync::Mutex::new(Vec::<WorkerInfo>::new()));
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
-    // #5: 使用 tokio async connect 替代 spawn_blocking，减少线程创建
+    // #5: Use tokio async connect instead of spawn_blocking to reduce thread creation.
     let scan_future = async {
         let mut handles = Vec::new();
         for idx in 0..candidates.len() {
@@ -225,9 +225,9 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
             let handle = tokio::spawn(async move {
                 let _permit = permit;
                 if let Ok(socket_addr) = addr.parse::<SocketAddr>() {
-                    // 尝试通过物理网卡连接，绕过 VPN/TUN 路由
+                    // Try connecting through a physical adapter to bypass VPN/TUN routes.
                     let connected = if physical_ips.is_empty() {
-                        // 通用情况：tokio async connect + timeout
+                        // Common case: tokio async connect plus timeout.
                         tokio::time::timeout(
                             connect_timeout,
                             tokio::net::TcpStream::connect(socket_addr),
@@ -236,7 +236,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                         .ok()
                         .map(|_| ()) // discard stream, just check reachability
                     } else {
-                        // 绑定物理网卡：spawn_blocking 处理 socket2
+                        // Bind physical adapter: use spawn_blocking for socket2.
                         tokio::task::spawn_blocking(move || {
                             physical_ips.iter().find_map(|bind_ip| {
                                 let bind_addr = SocketAddr::new(IpAddr::V4(*bind_ip), 0);
@@ -266,7 +266,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                             let host = parts[0].to_string();
                             let worker_name =
                                 format!("Worker-{}", host.split('.').last().unwrap_or("?"));
-                            // 使用 lock().await 而非 try_lock()，避免高并发下锁竞争导致已发现的 worker 被静默丢弃
+                            // Use lock().await instead of try_lock() so high concurrency cannot silently drop discovered workers.
                             let mut list = discovered.lock().await;
                             list.push(WorkerInfo {
                                 id: format!("auto-{}", host.replace('.', "-")),
@@ -320,7 +320,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
             Ok(existing)
         }
         Err(_) => {
-            // Timeout — return whatever was found so far
+            // Timeout: return whatever was found so far.
             let partial = discovered.lock().await.clone();
             Ok(partial)
         }
@@ -340,7 +340,7 @@ pub async fn test_worker(
         Ok(socket_addr) => {
             match TcpStream::connect_timeout(&socket_addr, timeout) {
                 Ok(_) => {
-                    // 更新 worker 状态
+                    // Update worker status.
                     let mut workers = load_workers();
                     if let Some(w) = workers
                         .iter_mut()
@@ -379,18 +379,18 @@ pub async fn test_worker(
 
 #[tauri::command]
 pub async fn get_worker_info(host: String, _port: u16) -> Result<Vec<WorkerDevice>, String> {
-    // 检查是否为本地 worker
+    // Check whether this is a local worker.
     let is_local =
         host == "127.0.0.1" || host == "localhost" || host == "::1" || is_local_ip(&host);
 
     if !is_local {
-        // 远程 worker — rpc-server 不暴露设备查询接口
+        // Remote worker: rpc-server does not expose device query APIs.
         return Ok(Vec::new());
     }
 
     let binary = find_rpc_server_binary_internal().unwrap_or_else(|| RPC_SERVER_NAME.to_string());
 
-    // 用临时端口启动 rpc-server，抓取启动输出中的设备信息，然后立即杀掉
+    // Start rpc-server on a temporary port, capture device output, then stop it immediately.
     let devices = tokio::task::spawn_blocking(move || -> Result<Vec<WorkerDevice>, String> {
         let mut child = Command::new(&binary)
             .args(["--host", "127.0.0.1", "--port", "0"])
@@ -504,7 +504,7 @@ pub async fn add_worker(
             existing.name = name;
         }
         let result = existing.clone();
-        let _ = existing; // 释放可变借用
+        let _ = existing; // Release the mutable borrow.
         save_workers(&workers);
         if let Ok(mut w) = state.workers.lock() {
             *w = workers.clone();
@@ -554,7 +554,7 @@ pub async fn get_workers(state: State<'_, AppState>) -> Result<Vec<WorkerInfo>, 
 
 #[tauri::command]
 pub async fn find_rpc_server_binary(_state: State<'_, AppState>) -> Result<Option<String>, String> {
-    // #8: 直接委托给内部函数，消除代码重复
+    // #8: Delegate to the internal function to remove duplication.
     Ok(find_rpc_server_binary_internal())
 }
 
@@ -574,7 +574,7 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
                 .output()
                 .map_err(|e| format!("netstat 失败: {}", e))?;
             let out = String::from_utf8_lossy(&output.stdout);
-            // #6: 用正则匹配 PID，避免 netstat 格式跨语言差异；加 /T 递归杀子进程
+            // #6: Match PID with regex to avoid localized netstat output; /T kills child processes.
             let pid_re = regex_lite::Regex::new(r"LISTENING\s+(\d+)$").ok();
             for line in out.lines() {
                 if line.contains(&format!(":{}", port)) && line.contains("LISTENING") {
@@ -594,7 +594,7 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
         }
         #[cfg(target_os = "linux")]
         {
-            // #11: 避免 grep -P (PCRE)，改用 sed 兼容精简 Linux
+            // #11: Avoid grep -P and use sed for minimal Linux compatibility.
             let output = std::process::Command::new("sh")
                 .arg("-c")
                 .arg(&format!(
@@ -606,7 +606,7 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
             let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !out.is_empty() {
                 let _ = std::process::Command::new("kill").arg(&out).output();
-                // 同时杀子进程
+                // Kill child processes too.
                 let _ = std::process::Command::new("sh")
                     .arg("-c")
                     .arg(&format!("ps --ppid {} -o pid= 2>/dev/null", out))
@@ -758,7 +758,7 @@ pub async fn start_local_rpc(
                 .map_err(|e| format!("无法启动 {}: {}", binary, e))?;
         }
 
-        // 等待端口就绪
+        // Wait for the port to become ready.
         std::thread::sleep(std::time::Duration::from_secs(2));
         let addr = format!("127.0.0.1:{}", port);
         let sock_addr = addr
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].host, "192.168.1.10");
 
-        // 清理临时文件
+        // Clean up temporary files.
         let _ = std::fs::remove_file(&test_path);
         let _ = std::fs::remove_dir(&dir);
     }

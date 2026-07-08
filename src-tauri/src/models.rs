@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Instant;
 
-// ── 模型信息 ──────────────────────────────────────────────────────
+// Model information.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
     pub id: String,
@@ -19,7 +19,7 @@ pub struct ModelInfo {
     pub is_shard: bool,
 }
 
-// ── 引擎信息 ──────────────────────────────────────────────────────
+// Engine information.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EngineInfo {
     pub id: String,
@@ -32,9 +32,9 @@ pub struct EngineInfo {
     pub custom_name: Option<String>,
 }
 
-// ── 实例配置 ──────────────────────────────────────────────────────
-// #[serde(default)] 容器级别：任何缺失字段都回退到 Default impl，
-// 防止旧版/手改配置因缺少单个字段导致全部实例反序列化失败。
+// Instance config.
+// Container-level #[serde(default)]: missing fields fall back to Default.
+// Prevent older or hand-edited configs from failing all instance deserialization because one field is missing.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InstanceConfig {
@@ -486,7 +486,7 @@ impl Default for InstanceConfig {
     }
 }
 
-// ── 运行中实例 ────────────────────────────────────────────────────
+// Running instances.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunningInstance {
     pub instance_id: String,
@@ -517,7 +517,7 @@ pub struct SystemMetrics {
     pub gpu_vendor: Option<String>,
 }
 
-// ── 集群管理 / Worker ─────────────────────────────────────────────
+// Cluster management / Worker.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkerDevice {
     pub device_type: String, // CUDA, ROCm, Metal, Vulkan, CPU
@@ -633,7 +633,7 @@ pub struct ProxyTarget {
     pub running: bool,
 }
 
-// ── 应用全局状态 ──────────────────────────────────────────────────
+// Application global state.
 pub struct AppState {
     pub models: Mutex<Vec<ModelInfo>>,
     pub engines: Mutex<Vec<EngineInfo>>,
@@ -674,7 +674,7 @@ impl Default for DownloadBandwidthLimiter {
     }
 }
 
-// ── 全局配置结构（用于 JSON 序列化） ──────────────────────────────
+// Global config structure for JSON serialization.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct GlobalConfig {
     pub instances: HashMap<String, InstanceConfig>,
@@ -701,7 +701,7 @@ pub struct GlobalConfig {
     pub proxy_config: ProxyConfig,
 }
 
-// ── 窗口状态 ─────────────────────────────────────────────────────
+// Window state.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct WindowState {
     pub x: i32,
@@ -710,7 +710,7 @@ pub struct WindowState {
     pub height: u32,
 }
 
-// ── 下载队列持久化 ─────────────────────────────────────────────
+// Download queue persistence.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct PersistedQueueEntry {
     pub id: String,
@@ -734,7 +734,7 @@ pub struct DownloadState {
     pub queue: Vec<PersistedQueueEntry>,
 }
 
-// ── ModelScope 文件信息 ───────────────────────────────────────────
+// ModelScope file information.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MsFileEntry {
     pub name: String,
@@ -755,7 +755,7 @@ pub struct MsFileEntry {
     pub error: Option<String>,
 }
 
-// ── 下载工件状态 ──────────────────────────────────────────────────
+// Download artifact state.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct DownloadArtifactState {
     pub task_id: String,

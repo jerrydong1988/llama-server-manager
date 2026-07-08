@@ -8,7 +8,7 @@ fn detect_remote_os(
     ssh_port: u16,
 ) -> Option<String> {
     let mut c = Command::new("ssh");
-    // #1: accept-new 替代 no，首次信任后续验证
+    // #1: Use accept-new instead of no so the first connection is trusted and later ones are verified.
     c.arg("-o")
         .arg("StrictHostKeyChecking=accept-new")
         .arg("-o")
@@ -82,7 +82,7 @@ pub async fn ssh_launch_rpc(
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| "rpc-server".to_string());
 
-    // 自动检测远程 OS，或使用用户指定的
+    // Auto-detect the remote OS, or use the user-specified value.
     let os = remote_os
         .filter(|o| !o.is_empty() && o != "auto")
         .or_else(|| detect_remote_os(&host, &ssh_user, ssh_key_path.as_deref(), ssh_port))
@@ -123,16 +123,16 @@ pub async fn ssh_launch_rpc(
             return Err(format!("SSH 执行失败: {}", msg.trim()));
         }
 
-        // 检查远程端口是否在监听
+        // Check whether the remote port is listening.
         let combined = format!("{}{}", stdout, stderr);
         if combined.contains("PORT-NOT-FOUND") {
-            // 提取启动日志（PORT-CHECK 之前的部分）
+            // Extract startup logs before PORT-CHECK.
             let log_part = stdout.split("---PORT-CHECK---").next().unwrap_or("").trim();
             let log_msg = if log_part.is_empty() { "无输出".to_string() } else { log_part.to_string() };
             return Err(format!("rpc-server 启动失败\n日志: {}", log_msg));
         }
 
-        // 远程验证通过 — 本地再做一次确认
+        // Remote validation passed; verify locally once more.
         let sock_addr = format!("{}:{}", host, rpc_port).parse::<std::net::SocketAddr>()
             .map_err(|e| format!("地址解析失败 ({}:{}): {}", host, rpc_port, e))?;
         match TcpStream::connect_timeout(

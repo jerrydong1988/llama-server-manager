@@ -14,7 +14,7 @@ pub async fn start_mdns_discovery(_state: State<'_, AppState>) -> Result<String,
     *active = true;
     drop(active);
 
-    // spawn background task — operates on workers.json directly, no state needed
+    // Spawn background task: operates on workers.json directly, no state needed.
     tokio::spawn(async move {
         if let Err(e) = run_mdns_discovery().await {
             eprintln!("mDNS discovery error: {}", e);

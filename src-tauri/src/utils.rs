@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-// ── GGUF 元信息解析 ───────────────────────────────────────────────
+// GGUF metadata parsing.
 pub fn parse_gguf_metadata(
     path: &Path,
 ) -> Result<(Option<String>, Option<u32>, Option<String>, bool), String> {
@@ -10,7 +10,7 @@ pub fn parse_gguf_metadata(
         return Err("文件太小".into());
     }
 
-    // #8: 先读头部获取 metadata_kv_count，动态计算需要读取的字节
+    // #8: Read the header first to get metadata_kv_count, then compute the required read size.
     let mut header = [0u8; 24];
     use std::io::Read;
     f.read_exact(&mut header).map_err(|e| format!("{}", e))?;
@@ -19,7 +19,7 @@ pub fn parse_gguf_metadata(
     }
 
     let metadata_kv_count = u64::from_le_bytes(header[16..24].try_into().unwrap()) as usize;
-    // 每个 KV 对最多 ~512 字节（key + type + value），最多 200 个
+    // Estimate up to about 512 bytes per KV pair, capped at 200 pairs.
     let estimate = 24 + (metadata_kv_count.min(200) * 512);
     let read_size = estimate.min(file_size);
     let mut data = vec![0u8; read_size];
@@ -264,7 +264,7 @@ pub fn parse_gguf_metadata(
     Ok((architecture, context_length, quant_type, has_mtp))
 }
 
-// ── 文件类型分类 ──────────────────────────────────────────────────
+// File type classification.
 pub fn classify_gguf_file(path: &Path) -> &'static str {
     let name = path
         .file_name()
@@ -280,7 +280,7 @@ pub fn classify_gguf_file(path: &Path) -> &'static str {
     }
 }
 
-// ── 后端类型检测 ──────────────────────────────────────────────────
+// Backend type detection.
 pub fn detect_backend(dir: &Path) -> String {
     let entries: Vec<String> = std::fs::read_dir(dir)
         .ok()
@@ -302,7 +302,7 @@ pub fn detect_backend(dir: &Path) -> String {
     }
 }
 
-// ── 获取应用目录 ──────────────────────────────────────────────────
+// Get application directory.
 pub fn get_app_dir() -> PathBuf {
     std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("."))
@@ -311,7 +311,7 @@ pub fn get_app_dir() -> PathBuf {
         .to_path_buf()
 }
 
-// ── 获取数据目录 (ASCII-safe, 避免中文路径) ──────────────────────
+// Get data directory, ASCII-safe to avoid non-ASCII paths.
 pub fn get_data_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
