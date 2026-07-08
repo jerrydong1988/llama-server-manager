@@ -263,6 +263,11 @@ export interface InferenceRequestSummary {
   task_id: number
   slot_id: number
   completed_at: number
+  source: string
+  model: string | null
+  target_instance_id: string | null
+  http_status: number | null
+  error_text: string | null
   prompt_tokens: number | null
   prompt_time_ms: number | null
   prompt_tps: number | null

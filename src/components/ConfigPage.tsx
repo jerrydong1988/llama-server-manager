@@ -83,7 +83,9 @@ type ConfigTemplate = {
   id: string
   title: string
   description: string
+  tone: string
   changes: Partial<InstanceConfig>
+  risks: string[]
 }
 
 const isEqualValue = (left: unknown, right: unknown) => {
@@ -166,6 +168,16 @@ const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig, t: an
       after: formatValue(local[key], labels),
     }))
 
+const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConfig>, t: any, labels: Record<string, string>): ConfigChange[] =>
+  (Object.keys(changes) as Array<keyof InstanceConfig>)
+    .filter(key => !isEqualValue(local[key], changes[key]))
+    .map(key => ({
+      key,
+      label: fieldLabel(key, t),
+      before: formatValue(local[key], labels),
+      after: formatValue(changes[key], labels),
+    }))
+
 const ConfigPage = () => {
   const { instances, activeConfigInstanceId, updateInstance, saveConfig, models, modelDirs, engines, defaultEngineId, setActiveTab } = useAppStore()
   const { t, lang } = useI18n()
@@ -179,6 +191,7 @@ const ConfigPage = () => {
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
   const [searchQuery, setSearchQuery] = useState('')
+  const [appliedTemplateId, setAppliedTemplateId] = useState<string | null>(null)
   const mountedRef = useRef(true)
   const prevQuery = useRef('')
 
@@ -217,6 +230,7 @@ const ConfigPage = () => {
   }, [activeConfigInstanceId, inst])
 
   const set = (key: keyof InstanceConfig, value: any) => {
+    setAppliedTemplateId(null)
     setLocal(current => (current ? { ...current, [key]: value } : current))
   }
 
@@ -341,9 +355,13 @@ const ConfigPage = () => {
     emptyValue: zh ? '\u672a\u8bbe\u7f6e' : 'Not set',
     moreChanges: zh ? '\u8fd8\u6709' : 'plus',
     moreChangesSuffix: zh ? '\u9879\u53d8\u66f4' : 'more changes',
-    quickTemplates: zh ? '\u5feb\u901f\u573a\u666f' : 'Quick Scenarios',
-    quickTemplatesDesc: zh ? '\u5148\u5e94\u7528\u524d\u7aef\u63a8\u8350\u503c\uff0c\u786e\u8ba4\u540e\u518d\u4fdd\u5b58\u5230\u5b9e\u4f8b\u3002' : 'Apply recommended frontend presets first, then save after review.',
-    applyTemplate: zh ? '\u5e94\u7528' : 'Apply',
+    quickTemplates: zh ? '\u914d\u7f6e\u9884\u8bbe' : 'Config Presets',
+    quickTemplatesDesc: zh ? '\u5e94\u7528\u5230\u672c\u5730\u8349\u7a3f\uff0c\u5148\u5bf9\u6bd4\u5dee\u5f02\u548c\u98ce\u9669\uff0c\u786e\u8ba4\u540e\u518d\u4fdd\u5b58\u5230\u5b9e\u4f8b\u3002' : 'Apply to the local draft, review the diff and risk notes, then save when ready.',
+    applyTemplate: zh ? '\u5e94\u7528\u5230\u8349\u7a3f' : 'Apply to Draft',
+    appliedTemplate: zh ? '\u5df2\u5e94\u7528' : 'Applied',
+    templateDiff: zh ? '\u5c06\u4fee\u6539' : 'Changes',
+    templateNoDiff: zh ? '\u5f53\u524d\u8349\u7a3f\u5df2\u7b26\u5408\u8be5\u9884\u8bbe\u3002' : 'The draft already matches this preset.',
+    templateRisks: zh ? '\u98ce\u9669' : 'Risks',
     checkPassed: zh ? '\u672a\u53d1\u73b0\u660e\u663e\u914d\u7f6e\u51b2\u7a81\u3002' : 'No obvious configuration conflicts found.',
     missingModel: zh ? '\u8bf7\u5148\u9009\u62e9\u4e3b\u6a21\u578b\uff0c\u5426\u5219\u5b9e\u4f8b\u65e0\u6cd5\u6b63\u5e38\u542f\u52a8\u3002' : 'Select a primary model before starting this instance.',
     missingEngine: zh ? '\u672a\u5339\u914d\u5230\u53ef\u7528\u5f15\u64ce\uff0c\u8bf7\u786e\u8ba4\u5f15\u64ce\u626b\u63cf\u7ed3\u679c\u3002' : 'No usable engine is matched. Check engine scan results.',
@@ -380,39 +398,50 @@ const ConfigPage = () => {
   ]
   const quickTemplates: ConfigTemplate[] = [
     {
-      id: 'balanced',
-      title: zh ? '\u65e5\u5e38\u5bf9\u8bdd' : 'Balanced Chat',
-      description: zh ? '\u4fdd\u6301\u81ea\u52a8\u663e\u5b58\u3001\u9ed8\u8ba4\u91c7\u6837\u548c\u7a33\u5b9a\u6279\u5904\u7406\uff0c\u9002\u5408\u5927\u591a\u6570 API \u670d\u52a1\u3002' : 'Auto GPU layers, default sampling, and stable batching for general API serving.',
-      changes: { ctx_size_auto: true, gpu_layers_auto: true, flash_attn: 'auto', cont_batching: true, batch_size: 2048, ubatch_size: 512, parallel: -1, cache_ram: 8192, warmup: true },
+      id: 'conservative',
+      title: zh ? '\u4fdd\u5b88\u7a33\u5b9a' : 'Conservative',
+      description: zh ? '\u4f18\u5148\u542f\u52a8\u6210\u529f\u548c\u7a33\u5b9a\u54cd\u5e94\uff0c\u964d\u4f4e\u6279\u5904\u7406\u4e0e\u5e76\u53d1\u538b\u529b\u3002' : 'Prioritizes reliable startup and steady responses with modest batching and concurrency.',
+      tone: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200',
+      changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: true, batch_size: 1024, ubatch_size: 256, parallel: 1, flash_attn: 'auto', cont_batching: true, cache_ram: 4096, metrics: true, props: true, slots_enabled: true },
+      risks: zh
+        ? ['\u541e\u5410\u4f1a\u4f4e\u4e8e\u6fc0\u8fdb\u5e76\u53d1\u914d\u7f6e\u3002', '\u56fa\u5b9a 4K \u4e0a\u4e0b\u6587\u53ef\u80fd\u4e0d\u9002\u5408\u957f\u6587\u6863\u4efb\u52a1\u3002']
+        : ['Throughput will be lower than aggressive concurrent configs.', 'A fixed 4K context may not fit long-document workloads.'],
     },
     {
       id: 'throughput',
-      title: zh ? '\u9ad8\u541e\u5410\u5e76\u53d1' : 'High Throughput',
-      description: zh ? '\u63d0\u9ad8 batch\u3001parallel \u548c Flash Attention\uff0c\u66f4\u9002\u5408\u591a\u8bf7\u6c42\u5e76\u53d1\u3002' : 'Larger batches, parallel slots, and Flash Attention for heavier request concurrency.',
-      changes: { ctx_size_auto: true, gpu_layers_auto: true, batch_size: 4096, ubatch_size: 1024, parallel: 4, cont_batching: true, flash_attn: 'on', metrics: true, props: true },
+      title: zh ? '\u9ad8\u541e\u5410' : 'Throughput',
+      description: zh ? '\u63d0\u9ad8 batch\u3001parallel \u548c Flash Attention\uff0c\u9002\u5408\u591a\u8bf7\u6c42 API \u670d\u52a1\u3002' : 'Raises batch size, parallel slots, and Flash Attention for heavier API concurrency.',
+      tone: 'border-blue-500/25 bg-blue-500/10 text-blue-200',
+      changes: { ctx_size_auto: true, gpu_layers_auto: true, batch_size: 4096, ubatch_size: 1024, parallel: 4, cont_batching: true, flash_attn: 'on', cache_ram: 8192, metrics: true, props: true, slots_enabled: true },
+      risks: zh
+        ? ['\u9700\u8981\u66f4\u591a\u663e\u5b58\u548c KV cache \u7a7a\u95f4\u3002', 'CPU \u6216\u4e0d\u652f\u6301 Flash Attention \u7684\u540e\u7aef\u53ef\u80fd\u51fa\u73b0\u8b66\u544a\u6216\u964d\u901f\u3002']
+        : ['Needs more VRAM and KV cache headroom.', 'CPU or non-Flash-Attention backends may warn or slow down.'],
     },
     {
-      id: 'low-memory',
-      title: zh ? '\u4f4e\u663e\u5b58\u4f18\u5148' : 'Low Memory',
-      description: zh ? '\u964d\u4f4e batch \u548c\u5e76\u53d1\uff0c\u5173\u95ed\u6fc0\u8fdb\u663e\u5b58\u8bbe\u7f6e\uff0c\u4fbf\u4e8e\u5728\u8d44\u6e90\u7d27\u5f20\u65f6\u542f\u52a8\u3002' : 'Smaller batches and conservative concurrency for constrained machines.',
-      changes: { gpu_layers_auto: false, gpu_layers: 0, batch_size: 512, ubatch_size: 128, cache_ram: 0, mlock: false, flash_attn: 'off', parallel: 1 },
+      id: 'long-context',
+      title: zh ? '\u957f\u4e0a\u4e0b\u6587' : 'Long Context',
+      description: zh ? '\u6269\u5927\u4e0a\u4e0b\u6587\u548c\u7f13\u5b58\u9884\u7559\uff0c\u9762\u5411\u957f\u6587\u6863\u6216\u591a\u8f6e\u5bf9\u8bdd\u3002' : 'Expands context and cache headroom for long documents or extended conversations.',
+      tone: 'border-violet-500/25 bg-violet-500/10 text-violet-200',
+      changes: { ctx_size_auto: false, ctx_size: 32768, batch_size: 2048, ubatch_size: 512, parallel: 1, cache_ram: 16384, ctx_checkpoints: 64, flash_attn: 'auto', context_shift: true, metrics: true, props: true },
+      risks: zh
+        ? ['KV cache \u4f1a\u663e\u8457\u589e\u52a0\u5185\u5b58 / \u663e\u5b58\u538b\u529b\u3002', '\u8d85\u8fc7\u6a21\u578b\u539f\u751f\u4e0a\u4e0b\u6587\u65f6\uff0c\u8d28\u91cf\u53ef\u80fd\u4e0b\u964d\u3002']
+        : ['KV cache can substantially increase RAM or VRAM pressure.', 'Quality may degrade beyond the model native context.'],
     },
     {
-      id: 'embedding',
-      title: zh ? '\u5411\u91cf\u68c0\u7d22' : 'Embedding Retrieval',
-      description: zh ? '\u542f\u7528 embedding \u548c mean pooling\uff0c\u5c06\u751f\u6210\u7c7b\u53c2\u6570\u6536\u655b\u5230\u5411\u91cf\u670d\u52a1\u573a\u666f\u3002' : 'Turns on embedding mode with mean pooling for retrieval-oriented serving.',
-      changes: { embedding: true, pooling: 'mean', n_predict: 0, temp: 0, top_k: 0, top_p: 0, repeat_penalty: 0 },
-    },
-    {
-      id: 'diagnostics',
-      title: zh ? '\u6027\u80fd\u8bca\u65ad\u51c6\u5907' : 'Diagnostics Ready',
-      description: zh ? '\u6253\u5f00 metrics\u3001props \u548c perf\uff0c\u8ba9\u540e\u7eed\u6027\u80fd\u9875\u6709\u66f4\u591a\u53ef\u5206\u6790\u4fe1\u53f7\u3002' : 'Enables metrics, props, and perf timings so Performance has richer signals later.',
-      changes: { metrics: true, props: true, perf: true, verbose: true, slots_enabled: true },
+      id: 'low-vram',
+      title: zh ? '\u4f4e\u663e\u5b58' : 'Low VRAM',
+      description: zh ? '\u5c3d\u91cf\u964d\u4f4e GPU \u5360\u7528\u548c\u6279\u5904\u7406\u89c4\u6a21\uff0c\u4fbf\u4e8e\u8d44\u6e90\u7d27\u5f20\u65f6\u5148\u8dd1\u8d77\u6765\u3002' : 'Reduces GPU pressure and batch size so constrained machines can start first.',
+      tone: 'border-amber-500/25 bg-amber-500/10 text-amber-200',
+      changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: false, gpu_layers: 0, batch_size: 512, ubatch_size: 128, parallel: 1, cache_ram: 0, mlock: false, flash_attn: 'off', no_kv_offload: false, metrics: true },
+      risks: zh
+        ? ['CPU \u8d1f\u8f7d\u4f1a\u589e\u52a0\uff0c\u751f\u6210\u901f\u5ea6\u53ef\u80fd\u660e\u663e\u53d8\u6162\u3002', '\u4ec5\u4f7f\u7528 4K \u4e0a\u4e0b\u6587\uff0c\u4e0d\u9002\u5408\u957f\u8f93\u5165\u3002']
+        : ['CPU load will rise and generation can become much slower.', 'Uses only a 4K context, so long prompts are not a good fit.'],
     },
   ]
 
   const applyTemplate = (template: ConfigTemplate) => {
     setLocal(current => (current ? { ...current, ...template.changes } : current))
+    setAppliedTemplateId(template.id)
   }
 
   const directoryGroups = [
@@ -543,28 +572,76 @@ const ConfigPage = () => {
             </div>
           )}
 
-          <Surface className="p-5">
+          <Surface className="p-5" data-guide="config-presets">
             <div className="mb-4">
               <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
             </div>
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {quickTemplates.map(template => (
-                <button
-                  key={template.id}
-                  type="button"
-                  onClick={() => applyTemplate(template)}
-                  className="flex min-h-[132px] flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
-                >
-                  <span>
-                    <span className="block text-sm font-medium text-slate-900 dark:text-slate-100">{template.title}</span>
-                    <span className="mt-2 block text-sm leading-5 text-slate-500 dark:text-slate-400">{template.description}</span>
-                  </span>
-                  <span className="mt-4 inline-flex items-center gap-2 text-xs font-medium text-blue-300">
-                    <Sparkles className="h-3.5 w-3.5" />
-                    {labels.applyTemplate}
-                  </span>
-                </button>
-              ))}
+            <div className="grid gap-3 xl:grid-cols-2">
+              {quickTemplates.map(template => {
+                const previewChanges = getTemplateChanges(local, template.changes, t, labels)
+                const isApplied = appliedTemplateId === template.id
+                return (
+                  <button
+                    key={template.id}
+                    type="button"
+                    onClick={() => applyTemplate(template)}
+                    className={`flex min-h-[220px] flex-col justify-between rounded-lg border bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:bg-slate-950/40 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10 ${
+                      isApplied ? 'border-blue-400 ring-1 ring-blue-400/40 dark:border-blue-500/60' : 'border-slate-200 dark:border-slate-800'
+                    }`}
+                  >
+                    <span>
+                      <span className="flex items-start justify-between gap-3">
+                        <span className="min-w-0">
+                          <span className="block text-sm font-medium text-slate-900 dark:text-slate-100">{template.title}</span>
+                          <span className="mt-2 block text-sm leading-5 text-slate-500 dark:text-slate-400">{template.description}</span>
+                        </span>
+                        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium ${template.tone}`}>
+                          {isApplied ? labels.appliedTemplate : labels.applyTemplate}
+                        </span>
+                      </span>
+
+                      <span className="mt-4 block rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70">
+                        <span className="mb-2 block text-xs font-medium uppercase tracking-[0.12em] text-slate-500">{labels.templateDiff}</span>
+                        {previewChanges.length === 0 ? (
+                          <span className="block text-xs leading-5 text-slate-500">{labels.templateNoDiff}</span>
+                        ) : (
+                          <span className="block space-y-1">
+                            {previewChanges.slice(0, 4).map(change => (
+                              <span key={change.key} className="grid min-w-0 grid-cols-[92px_minmax(0,1fr)] gap-2 text-xs">
+                                <span className="truncate text-slate-500" title={change.label}>{change.label}</span>
+                                <span className="min-w-0 truncate text-slate-700 dark:text-slate-200" title={`${change.before} -> ${change.after}`}>
+                                  {change.before} {'->'} {change.after}
+                                </span>
+                              </span>
+                            ))}
+                            {previewChanges.length > 4 && (
+                              <span className="block text-xs text-slate-500">
+                                {zh ? `${labels.moreChanges} ${previewChanges.length - 4} ${labels.moreChangesSuffix}` : `${labels.moreChanges} ${previewChanges.length - 4} ${labels.moreChangesSuffix}`}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </span>
+
+                      <span className="mt-3 block">
+                        <span className="mb-1 block text-xs font-medium uppercase tracking-[0.12em] text-slate-500">{labels.templateRisks}</span>
+                        <span className="block space-y-1">
+                          {template.risks.map(risk => (
+                            <span key={risk} className="block text-xs leading-5 text-slate-500 dark:text-slate-400">
+                              {risk}
+                            </span>
+                          ))}
+                        </span>
+                      </span>
+                    </span>
+
+                    <span className="mt-4 inline-flex items-center gap-2 text-xs font-medium text-blue-300">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      {labels.applyTemplate}
+                    </span>
+                  </button>
+                )
+              })}
             </div>
           </Surface>
 

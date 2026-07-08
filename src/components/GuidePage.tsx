@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { marked } from 'marked'
 import { driver } from 'driver.js'
 import 'driver.js/dist/driver.css'
-import { BookOpen, Compass, PlayCircle } from 'lucide-react'
+import { BookOpen, CheckCircle2, Circle, Compass, PlayCircle } from 'lucide-react'
 import { version } from '../../package.json'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
@@ -57,6 +57,14 @@ function waitDOM(selector: string, timeout: number): Promise<Element> {
 export default function GuidePage() {
   const { lang } = useI18n()
   const setActiveTab = useAppStore((state) => state.setActiveTab)
+  const models = useAppStore((state) => state.models)
+  const modelDirs = useAppStore((state) => state.modelDirs)
+  const engines = useAppStore((state) => state.engines)
+  const engineDirs = useAppStore((state) => state.engineDirs)
+  const instances = useAppStore((state) => state.instances)
+  const downloadQueue = useAppStore((state) => state.downloadQueue)
+  const downloadTasks = useAppStore((state) => state.downloadTasks)
+  const sysMetrics = useAppStore((state) => state.sysMetrics)
   const [html, setHtml] = useState('')
   const [toc, setToc] = useState<{ id: string; title: string }[]>([])
   const contentRef = useRef<HTMLDivElement>(null)
@@ -74,7 +82,68 @@ export default function GuidePage() {
     contents: zh ? '\u76ee\u5f55' : 'Contents',
     done: zh ? '\u5b8c\u6210' : 'Done',
     next: zh ? '\u4e0b\u4e00\u6b65' : 'Next',
+    checklistTitle: zh ? '\u542f\u7528\u68c0\u67e5' : 'Setup Checklist',
+    checklistDesc: zh ? '\u6839\u636e\u5f53\u524d\u914d\u7f6e\u548c\u8fd0\u884c\u72b6\u6001\u81ea\u52a8\u63a8\u65ad\u8fdb\u5ea6\u3002' : 'Derived from the current config and runtime state.',
+    completed: zh ? '\u5df2\u5b8c\u6210' : 'Complete',
+    pending: zh ? '\u5f85\u5904\u7406' : 'Pending',
   }
+
+  const checklist = useMemo(() => {
+    const hasRunningInstance = instances.some(instance => instance.status === 'running')
+    const hasDownloadActivity = downloadQueue.length > 0 || Object.keys(downloadTasks).length > 0
+    return [
+      {
+        id: 'model-dirs',
+        title: zh ? '\u6a21\u578b\u76ee\u5f55' : 'Model directories',
+        detail: zh
+          ? `${modelDirs.length} \u4e2a\u76ee\u5f55\uff0c${models.length} \u4e2a\u8d44\u4ea7`
+          : `${modelDirs.length} directories, ${models.length} assets`,
+        done: modelDirs.length > 0 && models.length > 0,
+        tab: 'model-repo',
+      },
+      {
+        id: 'engine-scan',
+        title: zh ? '\u5f15\u64ce\u626b\u63cf' : 'Engine scan',
+        detail: zh
+          ? `${engineDirs.length} \u4e2a\u76ee\u5f55\uff0c${engines.length} \u4e2a\u5f15\u64ce`
+          : `${engineDirs.length} directories, ${engines.length} engines`,
+        done: engines.length > 0,
+        tab: 'engine',
+      },
+      {
+        id: 'instance-create',
+        title: zh ? '\u521b\u5efa\u5b9e\u4f8b' : 'Create an instance',
+        detail: zh ? `${instances.length} \u4e2a\u5b9e\u4f8b` : `${instances.length} instances`,
+        done: instances.length > 0,
+        tab: 'instances',
+      },
+      {
+        id: 'instance-start',
+        title: zh ? '\u542f\u52a8\u5b9e\u4f8b' : 'Start an instance',
+        detail: zh ? (hasRunningInstance ? '\u5df2\u6709\u8fd0\u884c\u4e2d\u5b9e\u4f8b' : '\u5c1a\u672a\u542f\u52a8') : (hasRunningInstance ? 'At least one instance is running' : 'No instance is running'),
+        done: hasRunningInstance,
+        tab: 'instances',
+      },
+      {
+        id: 'downloads',
+        title: zh ? '\u4e0b\u8f7d\u76ee\u5f55 / \u961f\u5217' : 'Download directory / queue',
+        detail: zh
+          ? `${downloadQueue.length} \u4e2a\u961f\u5217\u9879\uff0c${Object.keys(downloadTasks).length} \u4e2a\u4efb\u52a1`
+          : `${downloadQueue.length} queue entries, ${Object.keys(downloadTasks).length} tasks`,
+        done: hasDownloadActivity,
+        tab: 'downloads',
+      },
+      {
+        id: 'performance',
+        title: zh ? '\u6027\u80fd\u76d1\u63a7' : 'Performance monitoring',
+        detail: zh
+          ? (sysMetrics ? '\u5df2\u6536\u5230\u7cfb\u7edf\u6307\u6807' : '\u542f\u52a8\u5b9e\u4f8b\u540e\u67e5\u770b\u9065\u6d4b')
+          : (sysMetrics ? 'System metrics are available' : 'Start an instance to inspect telemetry'),
+        done: !!sysMetrics || instances.some(instance => instance.config.metrics && instance.status === 'running'),
+        tab: 'perf',
+      },
+    ]
+  }, [downloadQueue.length, downloadTasks, engineDirs.length, engines.length, instances, modelDirs.length, models.length, sysMetrics, zh])
 
   useEffect(() => {
     setToc(parseTOC(guideContent))
@@ -177,6 +246,39 @@ export default function GuidePage() {
           </Button>
 
           <InsetSurface className="p-3">
+            <div className="mb-4">
+              <div className="mb-2 flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-slate-500">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {labels.checklistTitle}
+              </div>
+              <p className="mb-3 text-xs leading-5 text-slate-500">{labels.checklistDesc}</p>
+              <div className="space-y-2">
+                {checklist.map(item => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setActiveTab(item.tab)}
+                    className="flex w-full items-start gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-left transition hover:border-slate-700 hover:bg-slate-900"
+                  >
+                    {item.done ? (
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-300" />
+                    ) : (
+                      <Circle className="mt-0.5 h-4 w-4 shrink-0 text-slate-500" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center justify-between gap-2">
+                        <span className="truncate text-sm text-slate-200">{item.title}</span>
+                        <span className={`shrink-0 text-[11px] ${item.done ? 'text-emerald-300' : 'text-slate-500'}`}>
+                          {item.done ? labels.completed : labels.pending}
+                        </span>
+                      </span>
+                      <span className="mt-1 block truncate text-xs text-slate-500">{item.detail}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="mb-3 flex items-center gap-2 text-xs uppercase tracking-[0.14em] text-slate-500">
               <Compass className="h-3.5 w-3.5" />
               {labels.contents}

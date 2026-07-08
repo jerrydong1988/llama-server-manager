@@ -303,7 +303,7 @@ export default function PerformancePage() {
           <MetricCard label={labels.peakVram24h} value={formatGb(overview.peak_vram_mb_24h)} icon={<HardDrive className="h-5 w-5" />} tone="border-violet-500/20 bg-violet-500/10 text-violet-300" valueClassName="text-2xl" />
         </div>
 
-        <Surface as="section" className="p-5">
+        <Surface as="section" className="p-5" data-guide="perf-select">
           <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
             <SectionHeader title={labels.liveMonitor} description={labels.liveMonitorDesc} />
             <select
@@ -489,6 +489,7 @@ export default function PerformancePage() {
                         <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
                           <tr>
                             <th className="px-3 py-2 font-medium">{labels.task}</th>
+                            <th className="px-3 py-2 font-medium">{labels.source}</th>
                             <th className="px-3 py-2 font-medium">{labels.prompt}</th>
                             <th className="px-3 py-2 font-medium">{labels.generated}</th>
                             <th className="px-3 py-2 font-medium">{labels.generationSpeed}</th>
@@ -501,7 +502,11 @@ export default function PerformancePage() {
                             <tr key={`${request.session_id}-${request.task_id}`} className="text-slate-700 dark:text-slate-200">
                               <td className="px-3 py-2">
                                 <div className="font-medium">#{request.task_id}</div>
-                                <div className="text-xs text-slate-500">slot {request.slot_id}</div>
+                                <div className="text-xs text-slate-500">{request.source === 'proxy' ? (request.model || '--') : `slot ${request.slot_id}`}</div>
+                              </td>
+                              <td className="px-3 py-2">
+                                <Badge tone={request.source === 'proxy' ? 'blue' : 'slate'}>{request.source === 'proxy' ? labels.proxy : labels.log}</Badge>
+                                {request.http_status ? <div className="mt-1 text-xs text-slate-500">HTTP {request.http_status}</div> : null}
                               </td>
                               <td className="px-3 py-2">{formatTokenCount(request.prompt_tokens)}</td>
                               <td className="px-3 py-2">{formatTokenCount(request.generated_tokens)}</td>
@@ -896,6 +901,9 @@ function getLabels(zh: boolean) {
     requests: zh ? '\u8bf7\u6c42' : 'requests',
     noRequestsYet: zh ? '\u6682\u65e0\u5df2\u5b8c\u6210\u7684\u63a8\u7406\u8bf7\u6c42\u8bb0\u5f55' : 'No completed inference request records yet',
     task: zh ? '\u4efb\u52a1' : 'Task',
+    source: zh ? '\u6765\u6e90' : 'Source',
+    proxy: zh ? '\u8def\u7531' : 'Proxy',
+    log: zh ? '\u65e5\u5fd7' : 'Log',
     prompt: zh ? '\u63d0\u793a\u8bcd' : 'Prompt',
     generated: zh ? '\u751f\u6210' : 'Generated',
     generationSpeed: zh ? '\u751f\u6210\u901f\u5ea6' : 'Gen Speed',

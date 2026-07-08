@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TelemetryOverview {
@@ -62,6 +62,11 @@ pub struct InferenceRequestSummary {
     pub task_id: u32,
     pub slot_id: u32,
     pub completed_at: i64,
+    pub source: String,
+    pub model: Option<String>,
+    pub target_instance_id: Option<String>,
+    pub http_status: Option<u16>,
+    pub error_text: Option<String>,
     pub prompt_tokens: Option<u64>,
     pub prompt_time_ms: Option<f64>,
     pub prompt_tps: Option<f64>,
@@ -128,6 +133,16 @@ pub struct InferenceRequestRecord {
     pub spec_accepted: Option<u64>,
     pub spec_generated: Option<u64>,
     pub spec_gen_time_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProxyRequestRecord {
+    pub task_id: u32,
+    pub model: Option<String>,
+    pub target_instance_id: String,
+    pub http_status: Option<u16>,
+    pub duration_ms: f64,
+    pub error_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +236,11 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             task_id INTEGER NOT NULL,
             slot_id INTEGER NOT NULL,
             completed_at INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'log',
+            model TEXT,
+            target_instance_id TEXT,
+            http_status INTEGER,
+            error_text TEXT,
             prompt_tokens INTEGER,
             prompt_time_ms REAL,
             prompt_tps REAL,
@@ -239,6 +259,8 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
 
         CREATE INDEX IF NOT EXISTS idx_inference_requests_session_completed
             ON inference_requests(session_id, completed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
+            ON inference_requests(source, completed_at DESC);
 
         CREATE TABLE IF NOT EXISTS slot_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -257,8 +279,35 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
+    migrate_inference_request_columns(conn)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)
         .map_err(|e| format!("无法写入遥测 schema 版本: {}", e))?;
+    Ok(())
+}
+
+fn migrate_inference_request_columns(conn: &Connection) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(inference_requests)")
+        .map_err(|e| format!("failed to read inference request schema: {}", e))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("failed to query inference request schema: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to parse inference request schema: {}", e))?;
+
+    let additions = [
+        ("source", "TEXT NOT NULL DEFAULT 'log'"),
+        ("model", "TEXT"),
+        ("target_instance_id", "TEXT"),
+        ("http_status", "INTEGER"),
+        ("error_text", "TEXT"),
+    ];
+    for (name, definition) in additions {
+        if !columns.iter().any(|column| column == name) {
+            conn.execute(&format!("ALTER TABLE inference_requests ADD COLUMN {} {}", name, definition), [])
+                .map_err(|e| format!("failed to migrate inference request schema: {}", e))?;
+        }
+    }
     Ok(())
 }
 
@@ -376,13 +425,14 @@ pub fn record_inference_request(
     let conn = open_connection()?;
     conn.execute(
         "INSERT INTO inference_requests
-            (session_id, task_id, slot_id, completed_at, prompt_tokens, prompt_time_ms, prompt_tps,
+            (session_id, task_id, slot_id, completed_at, source, prompt_tokens, prompt_time_ms, prompt_tps,
              generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
              spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+         VALUES (?1, ?2, ?3, ?4, 'log', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(session_id, task_id) DO UPDATE SET
              slot_id = excluded.slot_id,
              completed_at = excluded.completed_at,
+             source = excluded.source,
              prompt_tokens = excluded.prompt_tokens,
              prompt_time_ms = excluded.prompt_time_ms,
              prompt_tps = excluded.prompt_tps,
@@ -415,6 +465,42 @@ pub fn record_inference_request(
         ],
     )
     .map_err(|e| format!("无法写入推理请求遥测: {}", e))?;
+    Ok(())
+}
+
+pub fn record_proxy_request(
+    session_id: Option<&str>,
+    record: &ProxyRequestRecord,
+) -> Result<(), String> {
+    let Some(session_id) = session_id else {
+        return Ok(());
+    };
+    let conn = open_connection()?;
+    conn.execute(
+        "INSERT INTO inference_requests
+            (session_id, task_id, slot_id, completed_at, source, model, target_instance_id,
+             http_status, error_text, total_time_ms)
+         VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(session_id, task_id) DO UPDATE SET
+             completed_at = excluded.completed_at,
+             source = excluded.source,
+             model = excluded.model,
+             target_instance_id = excluded.target_instance_id,
+             http_status = excluded.http_status,
+             error_text = excluded.error_text,
+             total_time_ms = excluded.total_time_ms",
+        params![
+            session_id,
+            record.task_id,
+            now_ms(),
+            record.model.as_deref(),
+            record.target_instance_id,
+            record.http_status.map(|v| v as i64),
+            record.error_text.as_deref(),
+            record.duration_ms,
+        ],
+    )
+    .map_err(|e| format!("failed to write proxy request telemetry: {}", e))?;
     Ok(())
 }
 
@@ -1100,7 +1186,8 @@ pub async fn list_inference_requests(
         let conn = open_connection()?;
         let mut stmt = conn
             .prepare(
-                "SELECT session_id, task_id, slot_id, completed_at, prompt_tokens, prompt_time_ms, prompt_tps,
+                "SELECT session_id, task_id, slot_id, completed_at, source, model, target_instance_id, http_status, error_text,
+                        prompt_tokens, prompt_time_ms, prompt_tps,
                         generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
                         spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms
                  FROM inference_requests
@@ -1116,18 +1203,23 @@ pub async fn list_inference_requests(
                     task_id: row.get(1)?,
                     slot_id: row.get(2)?,
                     completed_at: row.get(3)?,
-                    prompt_tokens: row.get::<_, Option<i64>>(4)?.map(|v| v as u64),
-                    prompt_time_ms: row.get(5)?,
-                    prompt_tps: row.get(6)?,
-                    generated_tokens: row.get::<_, Option<i64>>(7)?.map(|v| v as u64),
-                    generation_time_ms: row.get(8)?,
-                    generation_tps: row.get(9)?,
-                    total_tokens: row.get::<_, Option<i64>>(10)?.map(|v| v as u64),
-                    total_time_ms: row.get(11)?,
-                    spec_accept_rate: row.get(12)?,
-                    spec_accepted: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
-                    spec_generated: row.get::<_, Option<i64>>(14)?.map(|v| v as u64),
-                    spec_gen_time_ms: row.get(15)?,
+                    source: row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "log".into()),
+                    model: row.get(5)?,
+                    target_instance_id: row.get(6)?,
+                    http_status: row.get::<_, Option<i64>>(7)?.map(|v| v as u16),
+                    error_text: row.get(8)?,
+                    prompt_tokens: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+                    prompt_time_ms: row.get(10)?,
+                    prompt_tps: row.get(11)?,
+                    generated_tokens: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
+                    generation_time_ms: row.get(13)?,
+                    generation_tps: row.get(14)?,
+                    total_tokens: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                    total_time_ms: row.get(16)?,
+                    spec_accept_rate: row.get(17)?,
+                    spec_accepted: row.get::<_, Option<i64>>(18)?.map(|v| v as u64),
+                    spec_generated: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+                    spec_gen_time_ms: row.get(20)?,
                 })
             })
             .map_err(|e| format!("无法查询推理请求: {}", e))?;

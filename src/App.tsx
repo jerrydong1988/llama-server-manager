@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense, Component, ReactNode } from 'react'
-import { Activity, BarChart3, BookOpen, Cpu, Database, Download, Network, Package, Play, RefreshCw, Search, Server, Settings, Square, Terminal, Wrench, X } from 'lucide-react'
+import { Activity, BarChart3, BookOpen, Cpu, Database, Download, Monitor, Network, Package, Play, RefreshCw, Route, Search, Server, Settings, Square, Terminal, Wrench, X } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
 import ModelRepo from './components/ModelRepo'
@@ -10,6 +10,8 @@ import ConfigPage from './components/ConfigPage'
 const PerformancePage = lazy(() => import('./components/PerformancePage/PerformancePage'))
 const ClusterPage = lazy(() => import('./components/ClusterPage/ClusterPage'))
 const DownloadManager = lazy(() => import('./components/DownloadManager'))
+const ProxyPage = lazy(() => import('./components/ProxyPage'))
+const BigScreenPage = lazy(() => import('./components/BigScreenPage'))
 import Dashboard from './components/Dashboard/Dashboard'
 const GuidePage = lazy(() => import('./components/GuidePage'))
 import { _startupTimings } from './store'
@@ -231,7 +233,9 @@ const TAB_CONTENT: Record<string, () => React.ReactElement> = {
   perf: () => <PerformancePage />,
   logs: () => <LogsViewer />,
   cluster: () => <ClusterPage />,
+  proxy: () => <ProxyPage />,
   downloads: () => <DownloadManager />,
+  bigscreen: () => <BigScreenPage />,
   guide: () => <GuidePage />,
 }
 
@@ -293,7 +297,9 @@ function AppInner() {
     { id: 'instances', name: t.nav.instances, icon: Server, badge: upCount },
     { id: 'config', name: t.nav.config, icon: Settings, separator: true },
     { id: 'cluster', name: t.nav.cluster, icon: Network },
+    { id: 'proxy', name: t.nav.proxy || (lang === 'zh-CN' ? '实例路由' : 'Routing'), icon: Route },
     { id: 'perf', name: t.nav.perf, icon: Activity },
+    { id: 'bigscreen', name: t.nav.bigScreen || (lang === 'zh-CN' ? '大屏模式' : 'Big Screen'), icon: Monitor },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
     { id: 'guide', name: lang === 'zh-CN' ? '\u4F7F\u7528\u8BF4\u660E' : 'Guide', icon: BookOpen, separator: true },
   ], [t, lang, upCount, activeDownloadCount])
@@ -419,6 +425,14 @@ function AppInner() {
         group: zh ? '诊断' : 'Diagnostics',
         icon: <Activity className="h-4 w-4" />,
         action: go('perf'),
+      },
+      {
+        id: 'routing',
+        title: zh ? '\u7ba1\u7406\u5b9e\u4f8b\u8def\u7531' : 'Manage instance routing',
+        description: zh ? '\u914d\u7f6e\u7edf\u4e00 OpenAI \u517c\u5bb9\u5165\u53e3\uff0c\u5c06\u8bf7\u6c42\u6309\u6a21\u578b\u540d\u5206\u53d1\u5230\u8fd0\u884c\u4e2d\u7684\u5b9e\u4f8b\u3002' : 'Configure the unified OpenAI-compatible endpoint and route requests by model name.',
+        group: zh ? '\u670d\u52a1' : 'Services',
+        icon: <Route className="h-4 w-4" />,
+        action: go('proxy'),
       },
       {
         id: 'logs',
@@ -580,7 +594,7 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const layoutWide = activeTab === 'logs' || activeTab === 'guide'
+  const layoutWide = activeTab === 'logs' || activeTab === 'guide' || activeTab === 'bigscreen' || activeTab === 'proxy'
   const statusChips: ShellStatusChip[] = [
     { label: t.nav.up || 'up', value: upCount, tone: 'emerald' },
     { label: t.nav.down || 'down', value: downCount, tone: 'slate' },
@@ -594,6 +608,7 @@ function AppInner() {
     instances: lang === 'zh-CN' ? '服务实例、端口与进程状态' : 'Server instances, ports, and process state',
     config: lang === 'zh-CN' ? '应用默认值与运行时偏好' : 'Application defaults and runtime preferences',
     cluster: lang === 'zh-CN' ? '分布式 worker 与网络可用性' : 'Distributed workers and network availability',
+    proxy: lang === 'zh-CN' ? '统一 API 入口与模型别名路由' : 'Unified API endpoint and model alias routing',
     perf: lang === 'zh-CN' ? '性能遥测与资源信号' : 'Performance telemetry and resource signals',
     logs: lang === 'zh-CN' ? '运行日志与诊断输出' : 'Runtime logs and diagnostic output',
     guide: lang === 'zh-CN' ? '参考资料与操作说明' : 'Reference material and operating notes',

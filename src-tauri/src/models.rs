@@ -448,6 +448,74 @@ pub struct Usb4Adapter {
     pub ip: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ProxyRoute {
+    pub id: String,
+    pub enabled: bool,
+    pub model_alias: String,
+    pub target_instance_id: String,
+    pub priority: i32,
+}
+
+impl Default for ProxyRoute {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            enabled: true,
+            model_alias: String::new(),
+            target_instance_id: String::new(),
+            priority: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ProxyConfig {
+    pub enabled: bool,
+    pub host: String,
+    pub port: u16,
+    pub public_api_key: String,
+    pub default_instance_id: String,
+    pub routes: Vec<ProxyRoute>,
+    pub routing_strategy: String,
+    pub timeout_ms: u64,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: "127.0.0.1".into(),
+            port: 11435,
+            public_api_key: String::new(),
+            default_instance_id: String::new(),
+            routes: Vec::new(),
+            routing_strategy: "firstHealthy".into(),
+            timeout_ms: 600_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProxyStatus {
+    pub running: bool,
+    pub bound_addr: String,
+    pub active_routes: usize,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProxyTarget {
+    pub instance_id: String,
+    pub name: String,
+    pub alias: String,
+    pub host: String,
+    pub port: u16,
+    pub running: bool,
+}
+
 // ── 应用全局状态 ──────────────────────────────────────────────────
 pub struct AppState {
     pub models: Mutex<Vec<ModelInfo>>,
@@ -468,6 +536,10 @@ pub struct AppState {
     pub download_bandwidth_limiter: Mutex<DownloadBandwidthLimiter>,
     pub workers: Mutex<Vec<WorkerInfo>>,
     pub usb4_adapters: Mutex<Vec<Usb4Adapter>>,
+    pub proxy_config: Mutex<ProxyConfig>,
+    pub proxy_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    pub proxy_bound_addr: Mutex<Option<String>>,
+    pub proxy_last_error: Mutex<Option<String>>,
 }
 
 pub struct DownloadBandwidthLimiter {
@@ -507,6 +579,8 @@ pub struct GlobalConfig {
     pub download_bandwidth_limit_bytes_per_sec: u64,
     #[serde(default)]
     pub download_low_priority_throttle: bool,
+    #[serde(default)]
+    pub proxy_config: ProxyConfig,
 }
 
 // ── 窗口状态 ─────────────────────────────────────────────────────

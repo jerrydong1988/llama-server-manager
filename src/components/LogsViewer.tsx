@@ -171,7 +171,7 @@ const LogsViewer = () => {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3" data-guide="logs-clear">
           <Button
             onClick={toggleAutoScroll}
             variant={autoScroll ? 'success' : 'secondary'}

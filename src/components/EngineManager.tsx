@@ -155,7 +155,7 @@ const EngineManager = () => {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3" data-guide="engine-scan">
           <Button
             onClick={handleScan}
             disabled={isLoading}

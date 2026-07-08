@@ -1,5 +1,5 @@
 ﻿export const zhCN = {
-  nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', perf: '\u6027\u80FD\u76D1\u63A7', logs: '\u670D\u52A1\u5668\u65E5\u5FD7', dashboard: '\u603B\u89C8', up: '\u8FD0\u884C', down: '\u505C\u6B62' },
+  nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', proxy: '\u5B9E\u4F8B\u8DEF\u7531', perf: '\u6027\u80FD\u76D1\u63A7', bigScreen: '\u5927\u5C4F\u6A21\u5F0F', logs: '\u670D\u52A1\u5668\u65E5\u5FD7', dashboard: '\u603B\u89C8', up: '\u8FD0\u884C', down: '\u505C\u6B62' },
   instance: {
     title: '\u670D\u52A1\u5668\u5B9E\u4F8B', create: '\u521B\u5EFA\u5B9E\u4F8B', newInstance: '\u521B\u5EFA\u65B0\u5B9E\u4F8B',
     name: '\u5B9E\u4F8B\u540D\u79F0', namePlaceholder: '\u4F8B\u5982\uFF1ALlama-3-8B',

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::models::{AppState, GlobalConfig, InstanceConfig, WindowState};
+use crate::models::{AppState, GlobalConfig, InstanceConfig, ProxyConfig, WindowState};
 use tauri::Emitter;
 
 // ── 统一配置写入工具 ────────────────────────────────────────────
@@ -86,6 +86,7 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
             download_max_concurrent: 1,
             download_bandwidth_limit_bytes_per_sec: 0,
             download_low_priority_throttle: false,
+            proxy_config: ProxyConfig::default(),
         },
     };
 
@@ -100,6 +101,7 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
             download_max_concurrent: 1,
             download_bandwidth_limit_bytes_per_sec: 0,
             download_low_priority_throttle: false,
+            proxy_config: ProxyConfig::default(),
         },
     };
 
@@ -155,6 +157,7 @@ pub async fn save_config(
         download_max_concurrent: existing.download_max_concurrent,
         download_bandwidth_limit_bytes_per_sec: existing.download_bandwidth_limit_bytes_per_sec,
         download_low_priority_throttle: existing.download_low_priority_throttle,
+        proxy_config: existing.proxy_config,
     };
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     persist_global_config(&config_dir, &global)?;
@@ -181,6 +184,7 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
     *state.download_max_concurrent.lock().unwrap() = global.download_max_concurrent.max(1);
     *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap() = global.download_bandwidth_limit_bytes_per_sec;
     *state.download_low_priority_throttle.lock().unwrap() = global.download_low_priority_throttle;
+    *state.proxy_config.lock().unwrap() = global.proxy_config.clone();
 
     // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
     for (id, ri) in &global.running {

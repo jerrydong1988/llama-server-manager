@@ -19,6 +19,7 @@ use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
 use crate::commands::autostart::{enable_autostart, disable_autostart, is_autostart_enabled};
 use crate::commands::cluster_ssh::ssh_launch_rpc;
 use crate::commands::telemetry::{get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry};
+use crate::commands::proxy::{get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy};
 use std::sync::OnceLock;
 
 static NATIVE_START: OnceLock<Instant> = OnceLock::new();
@@ -112,9 +113,11 @@ fn main() {
                                         instance_order: vec![], last_tab: "model-repo".into(), dark_mode: true,
                                         engine_names: HashMap::new(), download_resume_policy: "manual".into(), download_max_concurrent: 1,
                                         download_bandwidth_limit_bytes_per_sec: 0, download_low_priority_throttle: false,
+                                        proxy_config: models::ProxyConfig::default(),
                                     });
                                 global.running = s.running.lock().unwrap().clone();
                                 global.engine_names = s.engine_names.lock().unwrap().clone();
+                                global.proxy_config = s.proxy_config.lock().unwrap().clone();
                                 let _ = std::fs::write(&path, serde_json::to_string_pretty(&global).unwrap_or_default());
                             }
                             flush_download_manager_state(&app);
@@ -177,6 +180,7 @@ fn main() {
                 *st.instances.lock().unwrap() = config.instances.clone();
                 *st.engine_names.lock().unwrap() = config.engine_names.clone();
                 *st.running.lock().unwrap() = config.running.clone();
+                *st.proxy_config.lock().unwrap() = config.proxy_config.clone();
             }
 
             // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
@@ -198,6 +202,13 @@ fn main() {
                     crate::commands::server::health_check_loop(&id_hc, &host, port, pid, &api_key_health, app_hc);
                 });
                 crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir_clone, &api_key_reconnect, app_reconnect);
+            }
+
+            if config.proxy_config.enabled {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = crate::commands::proxy::start_proxy_for_app(app_handle).await;
+                });
             }
 
             // Write accumulated timings in a single I/O operation
@@ -232,6 +243,10 @@ fn main() {
             download_bandwidth_limiter: Mutex::new(models::DownloadBandwidthLimiter::default()),
             workers: Mutex::new(Vec::new()),
             usb4_adapters: Mutex::new(Vec::new()),
+            proxy_config: Mutex::new(initial_config.proxy_config),
+            proxy_shutdown: Mutex::new(None),
+            proxy_bound_addr: Mutex::new(None),
+            proxy_last_error: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata,
@@ -253,6 +268,7 @@ fn main() {
             test_connection, check_port,
             get_system_metrics, get_system_health, get_slots, get_metrics,
             get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
+            get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
             save_window_state, load_window_state,
             resolve_path,
             scan_workers_tcp, test_worker, get_worker_info,

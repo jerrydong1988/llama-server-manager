@@ -439,7 +439,7 @@ const ModelRepo = () => {
           </div>
         </Surface>
 
-        <Surface as="section" className="min-h-[620px] p-5">
+        <Surface as="section" className="min-h-[620px] p-5" data-guide="model-search">
           <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-50">{lang === 'zh-CN' ? '\u4ED3\u5E93\u6D4F\u89C8\u5668' : 'Repository Explorer'}</h2>
