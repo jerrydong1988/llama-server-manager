@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::Instant;
 
 // ── 模型信息 ──────────────────────────────────────────────────────
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -379,6 +380,8 @@ pub struct RunningInstance {
     pub host: String,
     #[serde(default)]
     pub start_time: u64,
+    #[serde(default)]
+    pub telemetry_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -460,8 +463,25 @@ pub struct AppState {
     pub download_active_batches: Mutex<std::collections::HashSet<String>>,
     pub download_active_entries: Mutex<HashMap<String, PersistedQueueEntry>>,
     pub download_max_concurrent: Mutex<usize>,
+    pub download_bandwidth_limit_bytes_per_sec: Mutex<u64>,
+    pub download_low_priority_throttle: Mutex<bool>,
+    pub download_bandwidth_limiter: Mutex<DownloadBandwidthLimiter>,
     pub workers: Mutex<Vec<WorkerInfo>>,
     pub usb4_adapters: Mutex<Vec<Usb4Adapter>>,
+}
+
+pub struct DownloadBandwidthLimiter {
+    pub available_bytes: f64,
+    pub last_refill: Instant,
+}
+
+impl Default for DownloadBandwidthLimiter {
+    fn default() -> Self {
+        Self {
+            available_bytes: 0.0,
+            last_refill: Instant::now(),
+        }
+    }
 }
 
 // ── 全局配置结构（用于 JSON 序列化） ──────────────────────────────
@@ -483,6 +503,10 @@ pub struct GlobalConfig {
     pub download_resume_policy: String,
     #[serde(default = "default_download_max_concurrent")]
     pub download_max_concurrent: usize,
+    #[serde(default)]
+    pub download_bandwidth_limit_bytes_per_sec: u64,
+    #[serde(default)]
+    pub download_low_priority_throttle: bool,
 }
 
 // ── 窗口状态 ─────────────────────────────────────────────────────

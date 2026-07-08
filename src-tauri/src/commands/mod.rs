@@ -9,3 +9,4 @@ pub mod cluster_network;
 pub mod cluster_mdns;
 pub mod cluster_ssh;
 pub mod autostart;
+pub mod telemetry;

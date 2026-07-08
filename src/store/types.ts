@@ -193,6 +193,8 @@ export interface DownloadManagerSnapshot {
   active_count: number
   max_concurrent: number
   resume_policy: string
+  bandwidth_limit_bytes_per_sec: number
+  low_priority_throttle: boolean
 }
 
 export interface SystemMetrics {
@@ -206,6 +208,54 @@ export interface SystemMetrics {
   system_memory_total_mb: number | null
   system_memory_used_mb: number | null
   gpu_vendor: string | null
+}
+
+export interface TelemetrySampleSummary {
+  session_id: string
+  instance_id: string
+  ts: number
+  cpu_percent: number | null
+  memory_mb: number | null
+  gpu_percent: number | null
+  vram_used_mb: number | null
+  vram_total_mb: number | null
+  system_cpu_percent: number | null
+  system_memory_used_mb: number | null
+  system_memory_total_mb: number | null
+  tokens_per_sec: number | null
+  prompt_tokens_per_sec: number | null
+  prompt_tokens_total: number | null
+  generated_tokens_total: number | null
+  requests_total: number | null
+  requests_processing: number | null
+  requests_deferred: number | null
+  busy_slots_per_decode: number | null
+}
+
+export interface TelemetryOverview {
+  active_sessions: number
+  sessions_24h: number
+  avg_tokens_per_sec_24h: number
+  peak_vram_mb_24h: number
+  latest_samples: TelemetrySampleSummary[]
+}
+
+export interface TelemetrySessionSummary {
+  id: string
+  instance_id: string
+  instance_name: string
+  model_name: string
+  model_path: string
+  engine_id: string
+  backend: string
+  started_at: number
+  stopped_at: number | null
+  duration_secs: number | null
+  avg_tokens_per_second?: number
+  avg_tokens_per_sec: number
+  peak_vram_mb: number
+  sample_count: number
+  stop_reason: string | null
 }
 
 export interface AppState {

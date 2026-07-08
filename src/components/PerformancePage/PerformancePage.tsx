@@ -1,371 +1,469 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { Activity, BarChart3, Cpu, Gauge, Layers3, Server } from 'lucide-react'
+import { Activity, BarChart3, Database, Gauge, HardDrive, RefreshCw, Server } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
-import type { SystemMetrics } from '../../store/types'
-import PerfAnalysis from './PerfAnalysis'
-import GaugeMeter from './GaugeMeter'
-import { Badge, Button, EmptyState, InsetSurface, MetricCard, SectionHeader, SelectInput, Surface } from '../ui'
+import type { SystemMetrics, TelemetryOverview, TelemetrySampleSummary, TelemetrySessionSummary } from '../../store/types'
+import { Badge, Button, EmptyPanel, InsetSurface, MetricCard, PageFrame, PageHeader, ResourceMeter, SectionHeader, Surface } from '../ui'
 
-interface SlotInfo {
-  id: number
-  is_processing: boolean
-  n_ctx: number
+type MetricsEvent = {
+  instanceId: string
+  system: SystemMetrics
+  llama?: {
+    tokens_per_sec?: number
+    prompt_tokens_per_sec?: number
+    prompt_tokens?: number
+    gen_tokens?: number
+    requests?: number
+    requests_processing?: number
+    requests_deferred?: number
+    busy_slots_per_decode?: number
+  } | null
+  ts: number
+}
+
+const emptyOverview: TelemetryOverview = {
+  active_sessions: 0,
+  sessions_24h: 0,
+  avg_tokens_per_sec_24h: 0,
+  peak_vram_mb_24h: 0,
+  latest_samples: [],
 }
 
 export default function PerformancePage() {
-  const { t, lang } = useI18n()
+  const { lang } = useI18n()
   const zh = lang === 'zh-CN'
+  const labels = getLabels(zh)
   const { instances } = useAppStore()
   const running = instances.filter(instance => instance.status === 'running')
-  const [selectedId, setSelectedId] = useState('')
-  const [interval, setIntervalState] = useState(5)
-  const [sys, setSys] = useState<SystemMetrics | null>(null)
-  const [slots, setSlots] = useState<SlotInfo[]>([])
-  const [viewMode, setViewMode] = useState<'overview' | 'gauges'>('overview')
+  const [selectedInstanceId, setSelectedInstanceId] = useState('')
+  const [selectedSessionId, setSelectedSessionId] = useState('')
+  const [overview, setOverview] = useState<TelemetryOverview>(emptyOverview)
+  const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
+  const [samples, setSamples] = useState<TelemetrySampleSummary[]>([])
+  const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
+  const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
+  const [loading, setLoading] = useState(false)
 
-  const inst = instances.find(instance => instance.id === selectedId)
-  const host = inst?.config.host || '127.0.0.1'
-  const port = inst?.config.port || 8080
+  const selectedInstance = instances.find(instance => instance.id === selectedInstanceId)
+  const selectedSession = sessions.find(session => session.id === selectedSessionId)
 
-  useEffect(() => {
-    if (running.length > 0 && (!selectedId || !running.find(item => item.id === selectedId))) {
-      setSelectedId(running[0].id)
+  const refreshTelemetry = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [nextOverview, nextSessions] = await Promise.all([
+        invoke<TelemetryOverview>('get_telemetry_overview'),
+        invoke<TelemetrySessionSummary[]>('list_telemetry_sessions', { limit: 24 }),
+      ])
+      setOverview(nextOverview)
+      setSessions(nextSessions)
+      setSelectedSessionId(current => current || nextSessions[0]?.id || '')
+    } finally {
+      setLoading(false)
     }
-  }, [running, selectedId])
+  }, [])
 
   useEffect(() => {
-    if (!selectedId || !inst) {
+    void refreshTelemetry()
+    const timer = window.setInterval(refreshTelemetry, 10000)
+    return () => window.clearInterval(timer)
+  }, [refreshTelemetry])
+
+  useEffect(() => {
+    if (running.length > 0 && (!selectedInstanceId || !running.some(instance => instance.id === selectedInstanceId))) {
+      setSelectedInstanceId(running[0].id)
+    }
+  }, [running, selectedInstanceId])
+
+  useEffect(() => {
+    if (!selectedInstanceId) {
       return
     }
+    invoke<SystemMetrics>('get_system_metrics', { instanceId: selectedInstanceId })
+      .then(setLiveSystem)
+      .catch(() => setLiveSystem(null))
 
-    const fetchInitial = async () => {
-      try {
-        setSys(await invoke<SystemMetrics>('get_system_metrics', { instanceId: selectedId }))
-      } catch {
-        // ignore
-      }
-
-      try {
-        setSlots(await invoke<SlotInfo[]>('get_slots', { host, port, apiKey: inst?.config.api_key || null }))
-      } catch {
-        setSlots([])
-      }
-    }
-
-    void fetchInitial()
-
-    const unlisten = listen<{ instanceId: string; system: SystemMetrics; ts: number }>('metrics-update', event => {
-      const { instanceId, system } = event.payload
-      if (instanceId !== selectedId) {
+    const unlisten = listen<MetricsEvent>('metrics-update', event => {
+      if (event.payload.instanceId !== selectedInstanceId) {
         return
       }
-      setSys(system)
+      setLiveSystem(event.payload.system)
+      setLiveLlama(event.payload.llama || null)
+      void refreshTelemetry()
     })
-
-    const slotsInterval = window.setInterval(async () => {
-      try {
-        setSlots(await invoke<SlotInfo[]>('get_slots', { host, port, apiKey: inst?.config.api_key || null }))
-      } catch {
-        setSlots([])
-      }
-    }, interval * 1000)
 
     return () => {
       unlisten.then(fn => fn())
-      clearInterval(slotsInterval)
     }
-  }, [selectedId, interval, host, port, inst?.config.api_key])
+  }, [selectedInstanceId, refreshTelemetry])
 
-  const slotSummary = useMemo(() => {
-    const busy = slots.filter(slot => slot.is_processing).length
-    const cached = slots.filter(slot => !slot.is_processing && slot.n_ctx > 0).length
-    const idle = slots.length - busy - cached
-    return { busy, cached, idle }
-  }, [slots])
-  const labels = {
-    subtitle: zh
-      ? '\u5728\u5e94\u7528\u58f3\u5185\u76d1\u63a7\u7cfb\u7edf\u538b\u529b\u3001\u5b9e\u65f6 slots \u548c\u8fd1\u671f\u4efb\u52a1\u541e\u5410\u3002'
-      : 'Watch system pressure, live slots, and recent task throughput without leaving the app shell.',
-    realtimeMetrics: zh ? '\u5b9e\u65f6\u6307\u6807' : 'Realtime Metrics',
-    realtimeMetricsDesc: zh ? '\u5728\u5bc6\u96c6\u6982\u89c8\u548c\u4eea\u8868\u68c0\u67e5\u4e4b\u95f4\u5207\u6362\u3002' : 'Switch between dense overview cards and gauge-first inspection.',
-    overview: zh ? '\u6982\u89c8' : 'Overview',
-    gauges: zh ? '\u4eea\u8868' : 'Gauges',
-    runContext: zh ? '\u8fd0\u884c\u4e0a\u4e0b\u6587' : 'Run Context',
-    runContextDesc: zh ? '\u5feb\u901f\u67e5\u770b\u5f53\u524d\u76d1\u63a7\u7684\u5b9e\u4f8b\u3002' : 'A quick read on the instance currently being monitored.',
-    interval: zh ? '\u5237\u65b0\u95f4\u9694' : 'Interval',
-    busySlots: zh ? '\u5fd9\u788c slots' : 'Busy slots',
-    cachedSlots: zh ? '\u5df2\u7f13\u5b58 slots' : 'Cached slots',
-    idleSlots: zh ? '\u7a7a\u95f2 slots' : 'Idle slots',
-    cached: zh ? '\u5df2\u7f13\u5b58' : 'Cached',
-    total: zh ? '\u603b\u91cf' : 'total',
-    online: zh ? '\u5728\u7ebf' : 'online',
-    devices: zh ? '\u8bbe\u5907' : 'devices',
-  }
+  useEffect(() => {
+    if (!selectedSessionId) {
+      setSamples([])
+      return
+    }
+    invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId: selectedSessionId, limit: 160 })
+      .then(setSamples)
+      .catch(() => setSamples([]))
+  }, [selectedSessionId])
 
-  if (!running.length) {
-    return (
-      <div className="space-y-5">
-        <EmptyState icon={<BarChart3 className="h-10 w-10" />} title={t.nav.perf} description={t.perfBlock.noRunning} />
-      </div>
-    )
-  }
+  const latestSample = overview.latest_samples[0] || null
+  const modelRank = useMemo(() => {
+    const byModel = new Map<string, { model: string; count: number; avg: number; peakVram: number }>()
+    for (const session of sessions) {
+      const current = byModel.get(session.model_name) || { model: session.model_name, count: 0, avg: 0, peakVram: 0 }
+      current.count += 1
+      current.avg += session.avg_tokens_per_sec || 0
+      current.peakVram = Math.max(current.peakVram, session.peak_vram_mb || 0)
+      byModel.set(session.model_name, current)
+    }
+    return Array.from(byModel.values())
+      .map(item => ({ ...item, avg: item.count ? item.avg / item.count : 0 }))
+      .sort((a, b) => b.avg - a.avg)
+      .slice(0, 5)
+  }, [sessions])
+
+  const insight = buildInsight(labels, liveSystem, latestSample)
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
-        <div className="space-y-3">
-          <div className="flex items-center gap-3">
-            <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3 text-violet-300">
-              <Gauge className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-50">{t.nav.perf}</h1>
-                <Badge tone="slate">
-                  {running.length} {t.nav.up}
-                </Badge>
-              </div>
-              <p className="mt-1 max-w-3xl text-sm text-slate-400">{labels.subtitle}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <SelectInput
-            value={selectedId}
-            onChange={event => setSelectedId(event.target.value)}
-            className="min-w-[180px]"
-            data-guide="perf-select"
-          >
-            {running.map(instance => (
-              <option key={instance.id} value={instance.id}>
-                {instance.name}
-              </option>
-            ))}
-          </SelectInput>
-          <SelectInput
-            value={interval}
-            onChange={event => setIntervalState(Number(event.target.value))}
-            className="min-w-[96px]"
-          >
-            <option value={2}>2s</option>
-            <option value={5}>5s</option>
-            <option value={10}>10s</option>
-            <option value={30}>30s</option>
-          </SelectInput>
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {[
-          { label: t.perfBlock.cpu, value: sys ? `${Math.round(sys.cpu_percent ?? 0)}%` : '--', icon: Cpu, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
-          { label: t.perfBlock.memory, value: sys ? `${((sys.memory_mb ?? 0) / 1024).toFixed(1)} GB` : '--', icon: Activity, tone: 'text-purple-300 bg-purple-500/10 border-purple-500/20' },
-          { label: t.perfBlock.gpu, value: sys ? `${Math.round(sys.gpu_percent ?? 0)}%` : '--', icon: Gauge, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
-          { label: t.perfBlock.slotStatus, value: `${slotSummary.busy}/${slots.length}`, icon: Layers3, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
-        ].map(card => (
-          <MetricCard key={card.label} label={card.label} value={card.value} icon={<card.icon className="h-5 w-5" />} tone={card.tone} />
-        ))}
-      </div>
-
-      <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_320px]">
-        <Surface as="section" className="p-5">
-            <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <SectionHeader title={labels.realtimeMetrics} description={labels.realtimeMetricsDesc} />
-            <div className="inline-flex rounded-lg border border-slate-700 bg-slate-950 p-1">
-              <Button
-                onClick={() => setViewMode('overview')}
-                variant={viewMode === 'overview' ? 'primary' : 'subtle'}
-                size="sm"
-              >
-                {labels.overview}
-              </Button>
-              <Button
-                onClick={() => setViewMode('gauges')}
-                variant={viewMode === 'gauges' ? 'primary' : 'subtle'}
-                size="sm"
-              >
-                {labels.gauges}
-              </Button>
-            </div>
-          </div>
-
-          {viewMode === 'overview' ? (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {[
-                { label: t.perfBlock.cpu, value: sys ? `${Math.round(sys.cpu_percent ?? 0)}%` : t.perfBlock.waiting, detail: sys ? `${t.perfBlock.sysLabel} ${Math.round(sys.system_cpu_percent ?? 0)}%` : '' },
-                { label: t.perfBlock.memory, value: sys ? `${((sys.memory_mb ?? 0) / 1024).toFixed(1)} GB` : t.perfBlock.waiting, detail: sys ? `${((sys.system_memory_used_mb ?? 0) / 1024).toFixed(1)} / ${((sys.system_memory_total_mb ?? 0) / 1024).toFixed(1)} GB` : '' },
-                { label: t.perfBlock.gpu, value: sys ? `${Math.round(sys.gpu_percent ?? 0)}%` : t.perfBlock.waiting, detail: sys?.gpu_vendor || 'N/A' },
-                { label: t.perfBlock.vram, value: sys ? `${((sys.vram_used_mb ?? 0) / 1024).toFixed(1)} GB` : t.perfBlock.waiting, detail: sys ? `${((sys.vram_total_mb ?? 0) / 1024).toFixed(1)} GB ${labels.total}` : '' },
-              ].map(card => (
-                <div key={card.label} className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
-                  <p className="text-sm text-slate-400">{card.label}</p>
-                  <p className="mt-3 text-2xl font-semibold text-slate-50">{card.value}</p>
-                  <p className="mt-2 text-xs text-slate-500">{card.detail}</p>
+    <PageFrame
+      header={
+        <PageHeader
+          title={labels.title}
+          description={labels.description}
+          meta={<Badge tone="violet">{labels.sqliteBacked}</Badge>}
+          actions={
+            <Button icon={<RefreshCw className="h-4 w-4" />} onClick={refreshTelemetry} disabled={loading}>
+              {labels.refresh}
+            </Button>
+          }
+        />
+      }
+      inspector={
+        <div className="space-y-4">
+          <Surface as="aside" className="p-4">
+            <SectionHeader title={labels.diagnosis} description={insight.description} />
+            <div className="mt-4 space-y-3">
+              {insight.items.map(item => (
+                <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="text-sm text-slate-600 dark:text-slate-400">{item.label}</span>
+                    <Badge tone={item.tone}>{item.value}</Badge>
+                  </div>
                 </div>
               ))}
             </div>
+          </Surface>
+
+          <Surface as="aside" className="p-4">
+            <SectionHeader title={labels.modelRank} description={labels.modelRankDesc} />
+            <div className="mt-4 space-y-2">
+              {modelRank.length === 0 ? (
+                <p className="py-4 text-center text-sm text-slate-500 dark:text-slate-400">{labels.noHistory}</p>
+              ) : modelRank.map(model => (
+                <div key={model.model} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                  <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={model.model}>{model.model}</div>
+                  <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                    <span>{model.count} {labels.sessions}</span>
+                    <span>{formatRate(model.avg)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Surface>
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
+          <MetricCard label={labels.activeSessions} value={overview.active_sessions} icon={<Server className="h-5 w-5" />} tone="border-emerald-500/20 bg-emerald-500/10 text-emerald-300" />
+          <MetricCard label={labels.sessions24h} value={overview.sessions_24h} icon={<Database className="h-5 w-5" />} tone="border-blue-500/20 bg-blue-500/10 text-blue-300" />
+          <MetricCard label={labels.avgTps24h} value={formatRate(overview.avg_tokens_per_sec_24h)} icon={<Gauge className="h-5 w-5" />} tone="border-amber-500/20 bg-amber-500/10 text-amber-300" valueClassName="text-2xl" />
+          <MetricCard label={labels.peakVram24h} value={formatGb(overview.peak_vram_mb_24h)} icon={<HardDrive className="h-5 w-5" />} tone="border-violet-500/20 bg-violet-500/10 text-violet-300" valueClassName="text-2xl" />
+        </div>
+
+        <Surface as="section" className="p-5">
+          <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+            <SectionHeader title={labels.liveMonitor} description={labels.liveMonitorDesc} />
+            <select
+              value={selectedInstanceId}
+              onChange={event => setSelectedInstanceId(event.target.value)}
+              className="select-custom h-11 min-w-[220px] rounded-lg border border-slate-300 bg-white pl-3 pr-8 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            >
+              {running.length === 0 ? <option value="">{labels.noRunning}</option> : null}
+              {running.map(instance => (
+                <option key={instance.id} value={instance.id}>{instance.name}</option>
+              ))}
+            </select>
+          </div>
+
+          {running.length === 0 ? (
+            <EmptyPanel title={labels.noRunning} description={labels.noRunningDesc} />
           ) : (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-              {sys ? (
-                <>
-                  <GaugeMeter label={t.perfBlock.cpu} value={sys.cpu_percent ?? 0} max={100} unit="%" color="blue" detail={`${t.perfBlock.sysLabel} ${(sys.system_cpu_percent ?? 0).toFixed(0)}%`} />
-                  <GaugeMeter label={t.perfBlock.memory} value={(sys.memory_mb ?? 0) / 1024} max={(sys.system_memory_total_mb ?? 32000) / 1024} unit="GB" color="purple" detail={`${((sys.memory_mb ?? 0) / 1024).toFixed(1)} / ${((sys.system_memory_total_mb ?? 0) / 1024).toFixed(1)} GB`} />
-                  <GaugeMeter label={t.perfBlock.gpu} value={sys.gpu_percent ?? 0} max={100} unit="%" color="emerald" detail={sys.gpu_vendor || 'N/A'} />
-                  <GaugeMeter label={t.perfBlock.vram} value={(sys.vram_used_mb ?? 0) / 1024} max={(sys.vram_total_mb ?? 8192) / 1024} unit="GB" color="amber" detail={`${((sys.vram_used_mb ?? 0) / 1024).toFixed(1)} / ${((sys.vram_total_mb ?? 0) / 1024).toFixed(1)} GB`} />
-                </>
-              ) : (
-                <div className="col-span-4 py-6 text-center text-sm text-slate-400">{t.perfBlock.waitingMetrics}</div>
-              )}
+            <div className="grid gap-3 xl:grid-cols-3">
+              <ResourceMeter
+                label="CPU"
+                value={liveSystem?.cpu_percent || 0}
+                tone="blue"
+                description={`${labels.system} ${Math.round(liveSystem?.system_cpu_percent || 0)}%`}
+              />
+              <ResourceMeter
+                label="GPU"
+                value={liveSystem?.gpu_percent || 0}
+                tone="emerald"
+                description={liveSystem?.gpu_vendor || labels.unknownGpu}
+              />
+              <ResourceMeter
+                label={labels.memory}
+                value={liveSystem?.system_memory_used_mb || liveSystem?.memory_mb || 0}
+                max={liveSystem?.system_memory_total_mb || Math.max(liveSystem?.memory_mb || 1, 1)}
+                unit="MB"
+                tone="violet"
+                description={formatMemoryPair(liveSystem?.system_memory_used_mb || liveSystem?.memory_mb, liveSystem?.system_memory_total_mb)}
+              />
+              <InsetSurface className="p-4">
+                <div className="text-sm text-slate-500 dark:text-slate-400">{labels.selectedInstance}</div>
+                <div className="mt-2 truncate text-base font-semibold text-slate-950 dark:text-slate-50">{selectedInstance?.name || '--'}</div>
+                <div className="mt-1 text-xs text-slate-500">{selectedInstance?.config.host}:{selectedInstance?.config.port}</div>
+              </InsetSurface>
+              <InsetSurface className="p-4">
+                <div className="text-sm text-slate-500 dark:text-slate-400">{labels.currentTps}</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-slate-50">{formatRate(liveLlama?.tokens_per_sec || latestSample?.tokens_per_sec || 0)}</div>
+                <div className="mt-1 text-xs text-slate-500">{labels.fromLlamaMetrics}</div>
+              </InsetSurface>
+              <InsetSurface className="p-4">
+                <div className="text-sm text-slate-500 dark:text-slate-400">{labels.queuePressure}</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-slate-50">{liveLlama?.requests_processing ?? latestSample?.requests_processing ?? 0} / {liveLlama?.requests_deferred ?? latestSample?.requests_deferred ?? 0}</div>
+                <div className="mt-1 text-xs text-slate-500">{labels.processingDeferred}</div>
+              </InsetSurface>
             </div>
           )}
         </Surface>
 
-        <Surface as="aside" className="p-5">
-          <div className="mb-5">
-            <SectionHeader title={labels.runContext} description={labels.runContextDesc} />
-          </div>
-
-          <div className="space-y-4">
-            <InsetSurface className="p-4">
-              <div className="flex items-start gap-3">
-                <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 text-slate-300">
-                  <Server className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-100">{inst?.name}</p>
-                  <p className="mt-1 text-xs text-slate-500">{host}:{port}</p>
-                </div>
-              </div>
-            </InsetSurface>
-
-            <InsetSurface className="space-y-3 p-4">
-              {[
-                [labels.interval, `${interval}s`],
-                [labels.busySlots, String(slotSummary.busy)],
-                [labels.cachedSlots, String(slotSummary.cached)],
-                [labels.idleSlots, String(slotSummary.idle)],
-                [t.perfBlock.uptime, sys ? formatSeconds(sys.uptime_secs) : '--'],
-              ].map(([label, value]) => (
-                <div key={label} className="flex items-center justify-between gap-3">
-                  <span className="text-sm text-slate-500">{label}</span>
-                  <span className="text-sm text-slate-200">{value}</span>
-                </div>
+        <div className="grid gap-4 2xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
+          <Surface as="section" className="overflow-hidden">
+            <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <SectionHeader title={labels.sessionHistory} description={labels.sessionHistoryDesc} />
+            </div>
+            <div className="max-h-[520px] overflow-y-auto p-3">
+              {sessions.length === 0 ? (
+                <EmptyPanel title={labels.noHistory} description={labels.noHistoryDesc} />
+              ) : sessions.map(session => (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => setSelectedSessionId(session.id)}
+                  className={`mb-2 block w-full rounded-lg border p-3 text-left transition ${
+                    session.id === selectedSessionId
+                      ? 'border-blue-400 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-950/30'
+                      : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex min-w-0 items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-950 dark:text-slate-100" title={session.instance_name}>{session.instance_name}</div>
+                      <div className="mt-1 truncate text-xs text-slate-500" title={session.model_name}>{session.model_name}</div>
+                    </div>
+                    <Badge tone={session.stopped_at ? 'slate' : 'emerald'}>{session.stopped_at ? labels.finished : labels.running}</Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span>{formatRate(session.avg_tokens_per_sec)}</span>
+                    <span>{formatGb(session.peak_vram_mb)}</span>
+                    <span>{session.sample_count} {labels.samples}</span>
+                  </div>
+                </button>
               ))}
-            </InsetSurface>
+            </div>
+          </Surface>
 
-            <InsetSurface className="p-4">
-              <p className="text-sm font-medium text-slate-100">{t.perfBlock.slotStatus}</p>
-              <div className="mt-3 space-y-3">
-                {slots.length === 0 ? (
-                  <div className="py-4 text-center text-sm text-slate-500">{t.perfBlock.noSlots}</div>
-                ) : (
-                  slots.map((slot, index) => {
-                    const usage = slot.is_processing ? 95 : slot.n_ctx > 0 ? 12 : 2
-                    const label = slot.is_processing ? t.perfBlock.busy : slot.n_ctx > 0 ? labels.cached : t.perfBlock.idle
-                    return (
-                      <div key={index}>
-                        <div className="mb-1 flex items-center justify-between text-xs text-slate-500">
-                          <span>Slot {slot.id ?? index}</span>
-                          <span>{label}</span>
-                        </div>
-                        <div className="h-2 rounded-full bg-slate-800">
-                          <div
-                            className={`h-2 rounded-full ${slot.is_processing ? 'bg-blue-500' : slot.n_ctx > 0 ? 'bg-emerald-500' : 'bg-slate-600'}`}
-                            style={{ width: `${usage}%` }}
-                          />
-                        </div>
-                      </div>
-                    )
-                  })
-                )}
+          <Surface as="section" className="p-5">
+            <SectionHeader
+              title={labels.sessionReport}
+              description={selectedSession ? `${selectedSession.instance_name} · ${formatDate(selectedSession.started_at)}` : labels.selectSession}
+              action={selectedSession ? <Badge tone={selectedSession.stopped_at ? 'slate' : 'emerald'}>{selectedSession.stopped_at ? labels.finished : labels.running}</Badge> : null}
+            />
+
+            {!selectedSession ? (
+              <EmptyPanel className="mt-4" title={labels.selectSession} description={labels.selectSessionDesc} />
+            ) : (
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-3 md:grid-cols-4">
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.duration}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatDuration(selectedSession.duration_secs)}</div>
+                  </InsetSurface>
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.avgTps}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatRate(selectedSession.avg_tokens_per_sec)}</div>
+                  </InsetSurface>
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.peakVram}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatGb(selectedSession.peak_vram_mb)}</div>
+                  </InsetSurface>
+                  <InsetSurface className="p-3">
+                    <div className="text-xs text-slate-500">{labels.samples}</div>
+                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{selectedSession.sample_count}</div>
+                  </InsetSurface>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+                  <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+                    <BarChart3 className="h-4 w-4 text-blue-400" />
+                    {labels.throughputTrend}
+                  </div>
+                  <TelemetryCurve samples={samples} emptyText={labels.noSamplesYet} />
+                </div>
+
+                <div className="grid gap-3 xl:grid-cols-2">
+                  <Detail label={labels.model} value={selectedSession.model_name} />
+                  <Detail label={labels.engine} value={`${selectedSession.engine_id || '--'} · ${selectedSession.backend || '--'}`} />
+                  <Detail label={labels.startedAt} value={formatDate(selectedSession.started_at)} />
+                  <Detail label={labels.stoppedAt} value={selectedSession.stopped_at ? formatDate(selectedSession.stopped_at) : labels.stillRunning} />
+                </div>
               </div>
-            </InsetSurface>
-          </div>
-        </Surface>
+            )}
+          </Surface>
+        </div>
       </div>
+    </PageFrame>
+  )
+}
 
-      <PerfAnalysis instanceId={selectedId} />
-
-      <div className="mt-6">
-        <ClusterThroughput t={t} labels={labels} />
-      </div>
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-2 truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={value}>{value}</div>
     </div>
   )
 }
 
-function ClusterThroughput({ t, labels }: { t: any; labels: { online: string; devices: string } }) {
-  const [metrics, setMetrics] = useState<any>(null)
-
-  useEffect(() => {
-    const fetch = async () => {
-      try {
-        const result: any = await invoke('get_cluster_metrics')
-        setMetrics(result)
-      } catch {
-        // ignore
-      }
-    }
-
-    void fetch()
-    const timer = setInterval(fetch, 5000)
-    return () => clearInterval(timer)
-  }, [])
-
-  if (!metrics || metrics.total_workers === 0) {
-    return null
+function TelemetryCurve({ samples, emptyText }: { samples: TelemetrySampleSummary[]; emptyText: string }) {
+  if (samples.length < 2) {
+    return (
+      <div className="flex min-h-[180px] items-center justify-center text-sm text-slate-500 dark:text-slate-400">
+        <Activity className="mr-2 h-4 w-4" />
+        {emptyText}
+      </div>
+    )
   }
+  const values = samples.map(sample => sample.tokens_per_sec || 0)
+  const max = Math.max(...values, 1)
+  const width = 720
+  const height = 180
+  const points = values.map((value, index) => {
+    const x = values.length === 1 ? 0 : (index / (values.length - 1)) * width
+    const y = height - (value / max) * (height - 16) - 8
+    return `${x},${y}`
+  }).join(' ')
 
   return (
-    <Surface className="overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-slate-800 bg-slate-950/90 px-5 py-3">
-        <Activity className="h-4 w-4 text-sky-300" />
-        <h2 className="text-sm font-medium text-slate-100">{t.clusterPage?.clusterThroughput || 'Cluster Throughput'}</h2>
-        <span className="text-xs text-slate-500">{metrics.online_workers}/{metrics.total_workers} {labels.online}</span>
-      </div>
-      <div className="space-y-3 p-5">
-        {metrics.worker_metrics?.map((worker: any, index: number) => (
-          <div key={index} className="rounded-lg border border-slate-800 bg-slate-950/50 p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className={`inline-block h-2 w-2 rounded-full ${worker.online ? 'bg-emerald-400' : 'bg-red-400'}`} />
-                  <p className="truncate text-sm font-medium text-slate-100">{worker.name}</p>
-                </div>
-                <p className="mt-1 text-xs text-slate-500">{worker.host}:{worker.port}</p>
-              </div>
-              <div className="text-right text-xs text-slate-500">{(worker.devices || []).length} {labels.devices}</div>
-            </div>
-            {worker.devices?.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {worker.devices.map((device: any, deviceIndex: number) => (
-                  <Badge key={deviceIndex} tone="slate">
-                    {device.name} · {(device.free_mb / 1024).toFixed(0)} GB free
-                  </Badge>
-                ))}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </Surface>
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-[180px] w-full">
+      <line x1="0" y1={height - 8} x2={width} y2={height - 8} stroke="currentColor" className="text-slate-200 dark:text-slate-800" strokeWidth="1" />
+      <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
+      {values.map((value, index) => {
+        const x = values.length === 1 ? 0 : (index / (values.length - 1)) * width
+        const y = height - (value / max) * (height - 16) - 8
+        return <circle key={`${index}-${value}`} cx={x} cy={y} r="3" fill="#60a5fa" />
+      })}
+    </svg>
   )
 }
 
-function formatSeconds(seconds: number | null | undefined) {
-  if (!seconds) {
-    return '0s'
+function buildInsight(labels: ReturnType<typeof getLabels>, system: SystemMetrics | null, latest: TelemetrySampleSummary | null) {
+  const gpu = system?.gpu_percent ?? latest?.gpu_percent ?? 0
+  const vram = system?.vram_used_mb && system.vram_total_mb ? (system.vram_used_mb / system.vram_total_mb) * 100 : 0
+  const tps = latest?.tokens_per_sec || 0
+  const items = [
+    { label: labels.gpuPressure, value: `${Math.round(gpu)}%`, tone: gpu > 85 ? 'amber' as const : 'emerald' as const },
+    { label: labels.vramPressure, value: `${Math.round(vram)}%`, tone: vram > 90 ? 'red' as const : 'blue' as const },
+    { label: labels.throughput, value: formatRate(tps), tone: tps > 0 ? 'emerald' as const : 'slate' as const },
+  ]
+  return {
+    description: labels.diagnosisDesc,
+    items,
   }
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const secs = Math.floor(seconds % 60)
-  if (hours > 0) {
-    return `${hours}h ${minutes}m`
+}
+
+function getLabels(zh: boolean) {
+  return {
+    title: zh ? '\u6027\u80fd\u5206\u6790' : 'Performance Analytics',
+    description: zh ? '\u57fa\u4e8e SQLite \u6301\u4e45\u5316\u9065\u6d4b\uff0c\u8ffd\u8e2a\u5b9e\u4f8b\u8fd0\u884c\u3001\u6a21\u578b\u541e\u5410\u4e0e\u8d44\u6e90\u538b\u529b\u3002' : 'SQLite-backed telemetry for instance runtime, model throughput, and resource pressure.',
+    sqliteBacked: zh ? 'SQLite \u9065\u6d4b' : 'SQLite telemetry',
+    refresh: zh ? '\u5237\u65b0' : 'Refresh',
+    activeSessions: zh ? '\u6d3b\u52a8\u4f1a\u8bdd' : 'Active Sessions',
+    sessions24h: zh ? '24\u5c0f\u65f6\u4f1a\u8bdd' : 'Sessions 24h',
+    avgTps24h: zh ? '24\u5c0f\u65f6\u5e73\u5747\u541e\u5410' : 'Avg Throughput 24h',
+    peakVram24h: zh ? '24\u5c0f\u65f6\u5cf0\u503c\u663e\u5b58' : 'Peak VRAM 24h',
+    liveMonitor: zh ? '\u5b9e\u65f6\u76d1\u63a7' : 'Live Monitor',
+    liveMonitorDesc: zh ? '\u540e\u7aef\u6301\u7eed\u91c7\u96c6\u5e76\u5199\u5165\u9065\u6d4b\u5e93\uff0c\u9875\u9762\u53ea\u8d1f\u8d23\u67e5\u770b\u548c\u5206\u6790\u3002' : 'The backend keeps collecting telemetry; this view focuses on inspection and analysis.',
+    noRunning: zh ? '\u5f53\u524d\u6ca1\u6709\u8fd0\u884c\u4e2d\u7684\u5b9e\u4f8b' : 'No running instances',
+    noRunningDesc: zh ? '\u542f\u52a8\u5b9e\u4f8b\u540e\u5c06\u81ea\u52a8\u521b\u5efa\u8fd0\u884c\u4f1a\u8bdd\u5e76\u5199\u5165 SQLite\u3002' : 'Start an instance to create a telemetry session automatically.',
+    system: zh ? '\u7cfb\u7edf' : 'System',
+    unknownGpu: zh ? '\u672a\u68c0\u6d4b GPU' : 'GPU not detected',
+    memory: zh ? '\u5185\u5b58' : 'Memory',
+    selectedInstance: zh ? '\u76d1\u63a7\u5b9e\u4f8b' : 'Monitored Instance',
+    currentTps: zh ? '\u5f53\u524d\u751f\u6210\u541e\u5410' : 'Current Generation',
+    fromLlamaMetrics: zh ? '\u6765\u81ea llama-server /metrics' : 'From llama-server /metrics',
+    queuePressure: zh ? '\u8bf7\u6c42\u538b\u529b' : 'Request Pressure',
+    processingDeferred: zh ? '\u5904\u7406\u4e2d / \u5ef6\u8fdf' : 'Processing / deferred',
+    sessionHistory: zh ? '\u8fd0\u884c\u4f1a\u8bdd' : 'Run Sessions',
+    sessionHistoryDesc: zh ? '\u6bcf\u6b21\u5b9e\u4f8b\u8fd0\u884c\u90fd\u4f1a\u5f62\u6210\u4e00\u4efd\u53ef\u56de\u770b\u7684\u6027\u80fd\u8bb0\u5f55\u3002' : 'Each instance run becomes a reviewable performance record.',
+    noHistory: zh ? '\u6682\u65e0\u5386\u53f2\u9065\u6d4b' : 'No telemetry history',
+    noHistoryDesc: zh ? '\u542f\u52a8\u5b9e\u4f8b\u5e76\u7b49\u5f85\u81f3\u5c11\u4e00\u6b21\u91c7\u6837\u540e\uff0c\u8fd9\u91cc\u4f1a\u51fa\u73b0\u4f1a\u8bdd\u8bb0\u5f55\u3002' : 'Start an instance and wait for at least one sample.',
+    sessionReport: zh ? '\u4f1a\u8bdd\u62a5\u544a' : 'Session Report',
+    selectSession: zh ? '\u9009\u62e9\u4e00\u4e2a\u8fd0\u884c\u4f1a\u8bdd' : 'Select a run session',
+    selectSessionDesc: zh ? '\u4ece\u5de6\u4fa7\u9009\u62e9\u4f1a\u8bdd\u540e\u67e5\u770b\u541e\u5410\u66f2\u7ebf\u4e0e\u8d44\u6e90\u6982\u8981\u3002' : 'Pick a session to inspect throughput and resource summary.',
+    finished: zh ? '\u5df2\u7ed3\u675f' : 'Finished',
+    running: zh ? '\u8fd0\u884c\u4e2d' : 'Running',
+    sessions: zh ? '\u6b21' : 'sessions',
+    samples: zh ? '\u91c7\u6837' : 'samples',
+    duration: zh ? '\u65f6\u957f' : 'Duration',
+    avgTps: zh ? '\u5e73\u5747\u541e\u5410' : 'Avg TPS',
+    peakVram: zh ? '\u5cf0\u503c\u663e\u5b58' : 'Peak VRAM',
+    throughputTrend: zh ? '\u541e\u5410\u8d8b\u52bf' : 'Throughput Trend',
+    noSamplesYet: zh ? '\u6682\u65e0\u8db3\u591f\u9065\u6d4b\u91c7\u6837' : 'No telemetry samples yet',
+    model: zh ? '\u6a21\u578b' : 'Model',
+    engine: zh ? '\u5f15\u64ce' : 'Engine',
+    startedAt: zh ? '\u5f00\u59cb\u65f6\u95f4' : 'Started',
+    stoppedAt: zh ? '\u7ed3\u675f\u65f6\u95f4' : 'Stopped',
+    stillRunning: zh ? '\u4ecd\u5728\u8fd0\u884c' : 'Still running',
+    diagnosis: zh ? '\u8bca\u65ad\u4fe1\u53f7' : 'Diagnostic Signals',
+    diagnosisDesc: zh ? '\u7b2c\u4e00\u7248\u5148\u7ed9\u51fa\u8d44\u6e90\u538b\u529b\u4e0e\u541e\u5410\u4fe1\u53f7\uff0c\u540e\u7eed\u53ef\u6269\u5c55\u6210\u56de\u5f52\u68c0\u6d4b\u4e0e\u53c2\u6570\u5efa\u8bae\u3002' : 'First-pass pressure and throughput signals; later this can grow into regression detection and tuning advice.',
+    gpuPressure: zh ? 'GPU \u538b\u529b' : 'GPU Pressure',
+    vramPressure: zh ? '\u663e\u5b58\u538b\u529b' : 'VRAM Pressure',
+    throughput: zh ? '\u541e\u5410' : 'Throughput',
+    modelRank: zh ? '\u6a21\u578b\u8868\u73b0' : 'Model Performance',
+    modelRankDesc: zh ? '\u6309\u5386\u53f2\u4f1a\u8bdd\u805a\u5408\u7684\u6a21\u578b\u541e\u5410\u6392\u884c\u3002' : 'Model throughput ranking aggregated from run sessions.',
   }
-  if (minutes > 0) {
-    return `${minutes}m ${secs}s`
-  }
-  return `${secs}s`
+}
+
+function formatRate(value?: number | null) {
+  if (!value || !Number.isFinite(value)) return '--'
+  return `${value.toFixed(value >= 10 ? 1 : 2)} tok/s`
+}
+
+function formatGb(mb?: number | null) {
+  if (!mb || !Number.isFinite(mb)) return '--'
+  return `${(mb / 1024).toFixed(1)} GB`
+}
+
+function formatMemoryPair(used?: number | null, total?: number | null) {
+  if (!used || !total) return '--'
+  return `${(used / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GB`
+}
+
+function formatDate(ms: number) {
+  return new Date(ms).toLocaleString()
+}
+
+function formatDuration(seconds?: number | null) {
+  if (!seconds) return '--'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  if (h > 0) return `${h}h ${m}m`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
 }

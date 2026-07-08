@@ -1,6 +1,8 @@
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics};
 use crate::commands::adlx;
 use crate::commands::nvml;
@@ -35,6 +37,12 @@ fn mask_api_key_in_cmd(cmd: &str) -> String {
         }
     }
     result
+}
+
+fn telemetry_config_hash(config: &InstanceConfig) -> String {
+    let mut hasher = DefaultHasher::new();
+    serde_json::to_string(config).unwrap_or_default().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
@@ -279,7 +287,7 @@ pub async fn start_server(
     instance_id: String,
     config: InstanceConfig,
     engine_exe: String,
-    _engine_backend: String,
+    engine_backend: String,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -314,12 +322,27 @@ pub async fn start_server(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
+    let telemetry_session_id = crate::commands::telemetry::begin_run_session(
+        &instance_id,
+        &config.name,
+        &config.model_path,
+        &config.engine_id,
+        &engine_backend,
+        &telemetry_config_hash(&config),
+        &cmd_display,
+    )
+    .ok();
 
     // Atomic check+insert — prevents starting same instance twice
     {
         let mut running = state.running.lock().unwrap();
         if running.contains_key(&instance_id) {
             let _ = child.kill();
+            let _ = crate::commands::telemetry::finish_run_session(
+                telemetry_session_id.as_deref(),
+                None,
+                "duplicate-start",
+            );
             return Err("该实例已在运行中".to_string());
         }
         running.insert(instance_id.clone(), RunningInstance {
@@ -328,6 +351,7 @@ pub async fn start_server(
             port: config.port,
             host: config.host.clone(),
             start_time,
+            telemetry_session_id: telemetry_session_id.clone(),
         });
     }
 
@@ -362,6 +386,7 @@ pub async fn start_server(
     let id = instance_id.clone();
     let app_clone = app.clone();
     let log_path_mon = log_path.clone();
+    let telemetry_session_monitor = telemetry_session_id.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(1));
         match child.try_wait() {
@@ -369,6 +394,11 @@ pub async fn start_server(
                 let st = app_clone.state::<AppState>();
                 { let mut r = st.running.lock().unwrap();
                   if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) { r.remove(&id); } }
+                let _ = crate::commands::telemetry::finish_run_session(
+                    telemetry_session_monitor.as_deref(),
+                    status.code(),
+                    "startup-failed",
+                );
                 // Emit captured stderr/log content so errors are never lost on quick exit
                 if let Ok(log_content) = std::fs::read_to_string(&log_path_mon) {
                     if !log_content.trim().is_empty() {
@@ -388,11 +418,16 @@ pub async fn start_server(
             _ => {}
         }
 
-        let _ = child.wait();
+        let exit_code = child.wait().ok().and_then(|status| status.code());
         let st2 = app_clone.state::<AppState>();
         { let mut r = st2.running.lock().unwrap();
           if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
             r.remove(&id);
+            let _ = crate::commands::telemetry::finish_run_session(
+                telemetry_session_monitor.as_deref(),
+                exit_code,
+                "process-exited",
+            );
             let _ = app_clone.emit("server-stopped", serde_json::json!({ "instanceId": id }));
         } }
     });
@@ -412,8 +447,9 @@ pub async fn start_server(
     let host_metrics = if config.host == "0.0.0.0" { "localhost".to_string() } else { config.host.clone() };
     let port_metrics = config.port;
     let api_key_metrics = config.api_key.clone();
+    let telemetry_session_metrics = telemetry_session_id.clone();
     std::thread::spawn(move || {
-        monitor_loop(&id_metrics, pid, &host_metrics, port_metrics, &api_key_metrics, app_metrics);
+        monitor_loop(&id_metrics, pid, &host_metrics, port_metrics, &api_key_metrics, telemetry_session_metrics, app_metrics);
     });
 
     Ok(())
@@ -426,6 +462,7 @@ fn monitor_loop(
     host: &str,
     port: u16,
     api_key: &str,
+    telemetry_session_id: Option<String>,
     app: tauri::AppHandle,
 ) {
     // 等待 llama-server 启动完成（给 3 秒启动时间）
@@ -460,21 +497,22 @@ fn monitor_loop(
         let cpu_pct = adlx_cpu.unwrap_or(cpu);
         let mem_mb = if adlx_cpu.is_some() { _mem.unwrap_or(mem) } else { (mem * 10.0).round() / 10.0 };
 
-        let sys_metrics = serde_json::json!({
-            "cpu_percent": cpu_pct,
-            "memory_mb": mem_mb,
-            "uptime_secs": start_instant.elapsed().as_secs(),
-            "gpu_percent": gpu_pct,
-            "vram_used_mb": vram_u,
-            "vram_total_mb": vram_t,
-            "system_cpu_percent": sys_cpu,
-            "system_memory_total_mb": sys_mem_total,
-            "system_memory_used_mb": sys_mem_used,
-            "gpu_vendor": gpu_vendor,
-        });
+        let sys_metrics = SystemMetrics {
+            cpu_percent: cpu_pct,
+            memory_mb: mem_mb,
+            uptime_secs: start_instant.elapsed().as_secs(),
+            gpu_percent: gpu_pct,
+            vram_used_mb: vram_u,
+            vram_total_mb: vram_t,
+            system_cpu_percent: sys_cpu,
+            system_memory_total_mb: sys_mem_total,
+            system_memory_used_mb: sys_mem_used,
+            gpu_vendor,
+        };
 
         // ── llama 指标 ──
         let mut llama_metrics: Option<serde_json::Value> = None;
+        let mut llama_sample: Option<crate::commands::telemetry::LlamaMetricSample> = None;
         let mut req = client.get(&metrics_url);
         if !api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", api_key));
@@ -491,21 +529,39 @@ fn monitor_loop(
                             .and_then(|l| l.split_whitespace().last()?.parse().ok())
                             .unwrap_or(0.0)
                     };
+                    let sample = crate::commands::telemetry::LlamaMetricSample {
+                        tokens_per_sec: extract("llamacpp:predicted_tokens_seconds"),
+                        prompt_tokens: extract("llamacpp:prompt_tokens_total") as u64,
+                        gen_tokens: extract("llamacpp:tokens_predicted_total") as u64,
+                        requests: extract("llamacpp:n_decode_total") as u64,
+                        prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds"),
+                        requests_processing: extract("llamacpp:requests_processing") as u64,
+                        requests_deferred: extract("llamacpp:requests_deferred") as u64,
+                        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode"),
+                    };
                     llama_metrics = Some(serde_json::json!({
-                        "tokens_per_sec": extract("llamacpp:predicted_tokens_seconds"),
-                        "prompt_tokens": extract("llamacpp:prompt_tokens_total") as u64,
-                        "gen_tokens": extract("llamacpp:tokens_predicted_total") as u64,
-                        "requests": extract("llamacpp:n_decode_total") as u64,
-                        "prompt_tokens_per_sec": extract("llamacpp:prompt_tokens_seconds"),
-                        "requests_processing": extract("llamacpp:requests_processing") as u64,
-                        "requests_deferred": extract("llamacpp:requests_deferred") as u64,
-                        "busy_slots_per_decode": extract("llamacpp:n_busy_slots_per_decode"),
+                        "tokens_per_sec": sample.tokens_per_sec,
+                        "prompt_tokens": sample.prompt_tokens,
+                        "gen_tokens": sample.gen_tokens,
+                        "requests": sample.requests,
+                        "prompt_tokens_per_sec": sample.prompt_tokens_per_sec,
+                        "requests_processing": sample.requests_processing,
+                        "requests_deferred": sample.requests_deferred,
+                        "busy_slots_per_decode": sample.busy_slots_per_decode,
                     }));
+                    llama_sample = Some(sample);
                 }
             }
         }
 
         // ── 发射事件 ──
+        let _ = crate::commands::telemetry::record_metric_sample(
+            telemetry_session_id.as_deref(),
+            instance_id,
+            &sys_metrics,
+            llama_sample.as_ref(),
+        );
+
         let _ = app.emit("metrics-update", serde_json::json!({
             "instanceId": instance_id,
             "system": sys_metrics,
@@ -666,6 +722,11 @@ pub async fn stop_server(
 
     if killed {
         state.running.lock().unwrap().remove(&instance_id);
+        let _ = crate::commands::telemetry::finish_run_session(
+            ri.as_ref().and_then(|item| item.telemetry_session_id.as_deref()),
+            None,
+            "manual-stop",
+        );
         app.emit("server-stopped", serde_json::json!({
             "instanceId": instance_id,
         })).ok();
@@ -923,8 +984,9 @@ pub fn reconnect_running_instance(
         let id_metrics = instance_id.to_string();
         let host_m = if host == "0.0.0.0" { "localhost".to_string() } else { host.to_string() };
         let ak = api_key.to_string();
+        let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_metrics).ok().flatten();
         std::thread::spawn(move || {
-            monitor_loop(&id_metrics, pid, &host_m, port, &ak, app_metrics);
+            monitor_loop(&id_metrics, pid, &host_m, port, &ak, telemetry_session_id, app_metrics);
         });
     }
 }

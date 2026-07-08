@@ -21,6 +21,8 @@ export type GlobalConfigShape = {
   instance_order: string[]
   last_tab: string
   dark_mode: boolean
+  download_bandwidth_limit_bytes_per_sec?: number
+  download_low_priority_throttle?: boolean
 }
 
 declare global {
@@ -30,6 +32,8 @@ declare global {
       active_count: number
       max_concurrent: number
       resume_policy: string
+      bandwidth_limit_bytes_per_sec: number
+      low_priority_throttle: boolean
     }
   }
 }
@@ -80,6 +84,8 @@ function hydrateDownloadTasksFromSnapshot(
     active_count: snapshot.active_count,
     max_concurrent: snapshot.max_concurrent,
     resume_policy: snapshot.resume_policy,
+    bandwidth_limit_bytes_per_sec: snapshot.bandwidth_limit_bytes_per_sec,
+    low_priority_throttle: snapshot.low_priority_throttle,
   }
 }
 

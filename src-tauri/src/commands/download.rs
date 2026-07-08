@@ -18,6 +18,71 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 
 // ── #9: 共享下载核心 ─────────────────────────────────────────────
 
+const LOW_PRIORITY_FALLBACK_LIMIT_BYTES_PER_SEC: u64 = 2 * 1024 * 1024;
+
+fn effective_download_bandwidth_limit(state: &AppState) -> u64 {
+    let configured = *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap();
+    let low_priority = *state.download_low_priority_throttle.lock().unwrap();
+    if !low_priority {
+        return configured;
+    }
+    if configured > 0 {
+        (configured / 2).max(1)
+    } else {
+        LOW_PRIORITY_FALLBACK_LIMIT_BYTES_PER_SEC
+    }
+}
+
+fn effective_download_concurrency(state: &AppState) -> usize {
+    let configured = (*state.download_max_concurrent.lock().unwrap()).max(1);
+    if *state.download_low_priority_throttle.lock().unwrap() {
+        1
+    } else {
+        configured
+    }
+}
+
+async fn throttle_download_bytes(state: &AppState, bytes: u64) {
+    if bytes == 0 {
+        return;
+    }
+
+    loop {
+        let wait = {
+            let limit = effective_download_bandwidth_limit(state);
+            if limit == 0 {
+                return;
+            }
+
+            let mut limiter = state.download_bandwidth_limiter.lock().unwrap();
+            let now = std::time::Instant::now();
+            let elapsed = now.duration_since(limiter.last_refill).as_secs_f64();
+            let limit_f64 = limit as f64;
+            let capacity = limit_f64.max(bytes as f64);
+            limiter.available_bytes = (limiter.available_bytes + elapsed * limit_f64).min(capacity);
+            limiter.last_refill = now;
+
+            if limiter.available_bytes >= bytes as f64 {
+                limiter.available_bytes -= bytes as f64;
+                None
+            } else {
+                let deficit = bytes as f64 - limiter.available_bytes;
+                limiter.available_bytes = 0.0;
+                Some(std::time::Duration::from_secs_f64(deficit / limit_f64))
+            }
+        };
+
+        if let Some(duration) = wait {
+            if duration.is_zero() {
+                return;
+            }
+            tokio::time::sleep(duration).await;
+        } else {
+            return;
+        }
+    }
+}
+
 fn sanitize_repo_id(repo_id: &str) -> Result<String, String> {
     if repo_id.is_empty() {
         return Err("仓库 ID 不能为空".to_string());
@@ -561,6 +626,7 @@ async fn download_single_file(
         match chunk {
             Ok(bytes) => {
                 let len = bytes.len() as u64;
+                throttle_download_bytes(&shared, len).await;
                 if let Err(e) = file.write_all(&bytes) {
                         save_artifact_state(&DownloadArtifactState {
                             task_id: task_id.clone(), run_id: run_id.clone(),
@@ -1139,7 +1205,7 @@ fn process_download_queue_inner(app: tauri::AppHandle) {
     let state = app.state::<AppState>();
     {
         let active = state.download_active_batches.lock().unwrap();
-        let max = *state.download_max_concurrent.lock().unwrap();
+        let max = effective_download_concurrency(&state);
         if active.len() >= max {
             return;
         }
@@ -1716,6 +1782,53 @@ pub async fn get_download_concurrency(state: tauri::State<'_, AppState>) -> Resu
 // ── 重置下载状态（重新下载专用） ────────────────────────────────────
 
 #[tauri::command]
+pub async fn set_download_bandwidth_limit(bytes_per_sec: u64, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    const MAX_LIMIT_BYTES_PER_SEC: u64 = 10 * 1024 * 1024 * 1024;
+    if bytes_per_sec > MAX_LIMIT_BYTES_PER_SEC {
+        return Err("bandwidth limit must be 0-10 GiB/s".into());
+    }
+    *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap() = bytes_per_sec;
+    {
+        let mut limiter = state.download_bandwidth_limiter.lock().unwrap();
+        limiter.available_bytes = 0.0;
+        limiter.last_refill = std::time::Instant::now();
+    }
+    crate::commands::config::update_and_persist(&state, |global| {
+        global.download_bandwidth_limit_bytes_per_sec = bytes_per_sec;
+    })?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_download_bandwidth_limit(state: tauri::State<'_, AppState>) -> Result<u64, String> {
+    Ok(*state.download_bandwidth_limit_bytes_per_sec.lock().unwrap())
+}
+
+#[tauri::command]
+pub async fn set_download_low_priority_throttle(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    *state.download_low_priority_throttle.lock().unwrap() = enabled;
+    {
+        let mut limiter = state.download_bandwidth_limiter.lock().unwrap();
+        limiter.available_bytes = 0.0;
+        limiter.last_refill = std::time::Instant::now();
+    }
+    crate::commands::config::update_and_persist(&state, |global| {
+        global.download_low_priority_throttle = enabled;
+    })?;
+    drop(state);
+    if !enabled {
+        process_download_queue_inner(app);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_download_low_priority_throttle(state: tauri::State<'_, AppState>) -> Result<bool, String> {
+    Ok(*state.download_low_priority_throttle.lock().unwrap())
+}
+
+#[tauri::command]
 pub async fn reset_download_for_redownload(
     _task_id: String,
     file_name: String,
@@ -1742,6 +1855,8 @@ pub struct DownloadManagerSnapshot {
     pub active_count: usize,
     pub max_concurrent: usize,
     pub resume_policy: String,
+    pub bandwidth_limit_bytes_per_sec: u64,
+    pub low_priority_throttle: bool,
 }
 
 #[tauri::command]
@@ -1749,8 +1864,17 @@ pub async fn get_download_manager_snapshot(state: tauri::State<'_, AppState>) ->
     let queue = collect_manager_entries(&state);
     let active_count = state.download_active_batches.lock().unwrap().len();
     let max_concurrent = *state.download_max_concurrent.lock().unwrap();
+    let bandwidth_limit_bytes_per_sec = *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap();
+    let low_priority_throttle = *state.download_low_priority_throttle.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
     let config = crate::commands::config::read_config_from_disk(&config_dir);
     let resume_policy = config.download_resume_policy;
-    Ok(DownloadManagerSnapshot { queue, active_count, max_concurrent, resume_policy })
+    Ok(DownloadManagerSnapshot {
+        queue,
+        active_count,
+        max_concurrent,
+        resume_policy,
+        bandwidth_limit_bytes_per_sec,
+        low_priority_throttle,
+    })
 }

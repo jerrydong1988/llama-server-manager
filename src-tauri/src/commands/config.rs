@@ -84,6 +84,8 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
             engine_names: HashMap::new(),
             download_resume_policy: "manual".into(),
             download_max_concurrent: 1,
+            download_bandwidth_limit_bytes_per_sec: 0,
+            download_low_priority_throttle: false,
         },
     };
 
@@ -96,6 +98,8 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
             engine_names: HashMap::new(),
             download_resume_policy: "manual".into(),
             download_max_concurrent: 1,
+            download_bandwidth_limit_bytes_per_sec: 0,
+            download_low_priority_throttle: false,
         },
     };
 
@@ -149,6 +153,8 @@ pub async fn save_config(
         engine_names,
         download_resume_policy: existing.download_resume_policy,
         download_max_concurrent: existing.download_max_concurrent,
+        download_bandwidth_limit_bytes_per_sec: existing.download_bandwidth_limit_bytes_per_sec,
+        download_low_priority_throttle: existing.download_low_priority_throttle,
     };
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     persist_global_config(&config_dir, &global)?;
@@ -173,6 +179,8 @@ pub async fn load_config(state: tauri::State<'_, AppState>, app: tauri::AppHandl
     *state.engine_names.lock().unwrap() = global.engine_names.clone();
     *state.running.lock().unwrap() = global.running.clone();
     *state.download_max_concurrent.lock().unwrap() = global.download_max_concurrent.max(1);
+    *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap() = global.download_bandwidth_limit_bytes_per_sec;
+    *state.download_low_priority_throttle.lock().unwrap() = global.download_low_priority_throttle;
 
     // 为恢复的运行中实例启动健康检查 + 日志恢复 + 指标监控
     for (id, ri) in &global.running {

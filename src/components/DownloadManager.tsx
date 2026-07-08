@@ -18,6 +18,18 @@ type Section = 'queue' | 'active' | 'paused' | 'failed' | 'completed'
 
 const clampConcurrency = (value: number) => Math.max(1, Math.min(8, Number.isFinite(value) ? value : 1))
 const normalizeResumePolicy = (policy: string): ResumePolicy => policy === 'auto_on_launch' ? 'auto_on_launch' : 'manual'
+const bandwidthUnitMultiplier = (unit: BandwidthUnit) => unit === 'MiB/s' ? 1024 * 1024 : 1024
+const bandwidthToBytes = (value: number, unit: BandwidthUnit) => Math.max(0, Math.round((Number.isFinite(value) ? value : 0) * bandwidthUnitMultiplier(unit)))
+const bytesToBandwidth = (bytes: number, unit: BandwidthUnit) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0
+  const value = bytes / bandwidthUnitMultiplier(unit)
+  return Number.isInteger(value) ? value : Number(value.toFixed(unit === 'MiB/s' ? 2 : 0))
+}
+const preferredBandwidthDisplay = (bytes: number, fallbackUnit: BandwidthUnit) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return { limit: 0, unit: fallbackUnit }
+  if (bytes % (1024 * 1024) === 0) return { limit: bytes / (1024 * 1024), unit: 'MiB/s' as BandwidthUnit }
+  return { limit: Math.round(bytes / 1024), unit: 'KiB/s' as BandwidthUnit }
+}
 
 function MetricTile({
   label,
@@ -148,14 +160,7 @@ export default function DownloadManager() {
   const [dlSettingsOpen, setDlSettingsOpen] = useState(true)
   const [resumePolicy, setResumePolicy] = useState<ResumePolicy>('manual')
   const [concurrency, setConcurrency] = useState(1)
-  const [bandwidthLimit, setBandwidthLimit] = useState(() => {
-    try {
-      const saved = Number(localStorage.getItem('downloadBandwidthLimit') || DEFAULT_BANDWIDTH_LIMIT)
-      return Number.isFinite(saved) && saved > 0 ? saved : DEFAULT_BANDWIDTH_LIMIT
-    } catch {
-      return DEFAULT_BANDWIDTH_LIMIT
-    }
-  })
+  const [bandwidthLimit, setBandwidthLimit] = useState(DEFAULT_BANDWIDTH_LIMIT)
   const [bandwidthUnit, setBandwidthUnit] = useState<BandwidthUnit>(() => {
     try {
       const saved = localStorage.getItem('downloadBandwidthUnit')
@@ -164,16 +169,10 @@ export default function DownloadManager() {
       return DEFAULT_BANDWIDTH_UNIT
     }
   })
-  const [lowPriorityThrottle, setLowPriorityThrottle] = useState(() => {
-    try {
-      return localStorage.getItem('downloadLowPriorityThrottle') === 'true'
-    } catch {
-      return false
-    }
-  })
+  const [lowPriorityThrottle, setLowPriorityThrottle] = useState(false)
   const ui = useMemo(() => lang === 'zh-CN' ? {
     strategyTitle: '\u4E0B\u8F7D\u7B56\u7565',
-    strategySub: '\u6062\u590D\u7B56\u7565\u4E0E\u5E76\u53D1\u6570\u5DF2\u63A5\u5165\u540E\u7AEF; \u5E26\u5BBD\u548C\u4F4E\u4F18\u5148\u7EA7\u7B56\u7565\u6682\u4F5C\u672C\u5730\u504F\u597D',
+    strategySub: '\u6062\u590D\u7B56\u7565\u3001\u5E76\u53D1\u6570\u3001\u5E26\u5BBD\u9650\u5236\u4E0E\u4F4E\u4F18\u5148\u7EA7\u6A21\u5F0F\u5747\u5DF2\u63A5\u5165\u540E\u7AEF',
     addTaskTitle: '\u6DFB\u52A0\u4E0B\u8F7D\u4EFB\u52A1',
     addTaskSub: '\u9009\u62E9\u6A21\u578B\u6765\u6E90\u5E76\u6D4F\u89C8\u4ED3\u5E93\u6587\u4EF6',
     sourceSection: '\u6A21\u578B\u6765\u6E90',
@@ -194,16 +193,14 @@ export default function DownloadManager() {
     displayUnit: '\u663E\u793A\u5355\u4F4D',
     unlimited: '\u4E0D\u9650',
     limitHelp: '0 \u8868\u793A\u4E0D\u9650\u901F',
-    localPreference: '\u672C\u5730\u504F\u597D',
-    backendPending: '\u5F85\u540E\u7AEF\u63A5\u5165',
     lowPriorityThrottle: '\u4F4E\u4F18\u5148\u7EA7\u4EFB\u52A1\u9884\u8BBE',
-    throttleHelp: '\u4EC5\u8BB0\u5F55\u4E3A\u672C\u5730\u504F\u597D, \u5F53\u524D\u4E0D\u4F1A\u5F71\u54CD\u5B9E\u9645\u4E0B\u8F7D\u901F\u7387',
+    throttleHelp: '\u5F00\u542F\u540E\u4E0B\u8F7D\u4F1A\u4EE5\u5355\u5E76\u53D1\u540E\u53F0\u6A21\u5F0F\u8FD0\u884C\uFF0C\u5E76\u5E94\u7528\u66F4\u4FDD\u5B88\u7684\u5E26\u5BBD\u8282\u6D41',
     resetDefaults: '\u91CD\u7F6E\u9ED8\u8BA4',
     noActionable: '\u6682\u65E0\u53EF\u64CD\u4F5C\u4E0B\u8F7D',
     localPreset: '\u672C\u5730\u9884\u8BBE',
   } : {
     strategyTitle: 'Download strategy',
-    strategySub: 'Resume policy and concurrency are backend-backed; bandwidth and low-priority options are local preferences for now',
+    strategySub: 'Resume policy, concurrency, bandwidth limit, and low-priority mode are backend-backed',
     addTaskTitle: 'Add download task',
     addTaskSub: 'Choose a model source and browse repository files',
     sourceSection: 'Model source',
@@ -224,10 +221,8 @@ export default function DownloadManager() {
     displayUnit: 'Display unit',
     unlimited: 'Unlimited',
     limitHelp: '0 means unlimited',
-    localPreference: 'Local preference',
-    backendPending: 'Backend pending',
     lowPriorityThrottle: 'Low-priority task preset',
-    throttleHelp: 'Stored locally only; it does not affect actual download speed yet',
+    throttleHelp: 'Runs downloads as a single-concurrency background workload and applies conservative bandwidth throttling',
     resetDefaults: 'Reset defaults',
     noActionable: 'No actionable downloads',
     localPreset: 'Local preset',
@@ -238,22 +233,30 @@ export default function DownloadManager() {
     if (meta) {
       setResumePolicy(normalizeResumePolicy(meta.resume_policy || 'manual'))
       setConcurrency(clampConcurrency(meta.max_concurrent || 1))
+      const bandwidth = preferredBandwidthDisplay(meta.bandwidth_limit_bytes_per_sec || 0, bandwidthUnit)
+      setBandwidthLimit(bandwidth.limit)
+      setBandwidthUnit(bandwidth.unit)
+      setLowPriorityThrottle(!!meta.low_priority_throttle)
     } else {
       invoke<string>('get_download_resume_policy').then(p => setResumePolicy(normalizeResumePolicy(p || 'manual'))).catch(() => {})
       invoke<number>('get_download_concurrency').then(n => setConcurrency(clampConcurrency(n || 1))).catch(() => {})
+      invoke<number>('get_download_bandwidth_limit').then(bytes => {
+        const bandwidth = preferredBandwidthDisplay(bytes || 0, bandwidthUnit)
+        setBandwidthLimit(bandwidth.limit)
+        setBandwidthUnit(bandwidth.unit)
+      }).catch(() => {})
+      invoke<boolean>('get_download_low_priority_throttle').then(enabled => setLowPriorityThrottle(!!enabled)).catch(() => {})
     }
     setTimeout(() => setInitialLoading(false), 300)
   }, [])
 
   useEffect(() => {
     try {
-      localStorage.setItem('downloadBandwidthLimit', String(bandwidthLimit))
       localStorage.setItem('downloadBandwidthUnit', bandwidthUnit)
-      localStorage.setItem('downloadLowPriorityThrottle', String(lowPriorityThrottle))
     } catch {
       // ignore
     }
-  }, [bandwidthLimit, bandwidthUnit, lowPriorityThrottle])
+  }, [bandwidthUnit])
 
   const handleResumePolicyChange = (policy: ResumePolicy) => {
     setResumePolicy(policy)
@@ -266,12 +269,29 @@ export default function DownloadManager() {
     invoke('set_download_concurrency', { n: next }).catch(() => {})
   }
 
+  const handleBandwidthLimitChange = (value: number) => {
+    const next = Math.max(0, Number.isFinite(value) ? value : 0)
+    setBandwidthLimit(next)
+    invoke('set_download_bandwidth_limit', { bytesPerSec: bandwidthToBytes(next, bandwidthUnit) }).catch(() => {})
+  }
+
+  const handleBandwidthUnitChange = (unit: BandwidthUnit) => {
+    const bytes = bandwidthToBytes(bandwidthLimit, bandwidthUnit)
+    setBandwidthUnit(unit)
+    setBandwidthLimit(bytesToBandwidth(bytes, unit))
+  }
+
+  const handleLowPriorityThrottleChange = (enabled: boolean) => {
+    setLowPriorityThrottle(enabled)
+    invoke('set_download_low_priority_throttle', { enabled }).catch(() => {})
+  }
+
   const resetStrategyDefaults = () => {
     handleResumePolicyChange('manual')
     handleConcurrencyChange(1)
-    setBandwidthLimit(DEFAULT_BANDWIDTH_LIMIT)
+    handleBandwidthLimitChange(DEFAULT_BANDWIDTH_LIMIT)
     setBandwidthUnit(DEFAULT_BANDWIDTH_UNIT)
-    setLowPriorityThrottle(false)
+    handleLowPriorityThrottleChange(false)
   }
 
   const toggleSection = (section: Section) => setCollapsed(prev => ({ ...prev, [section]: !prev[section] }))
@@ -986,8 +1006,8 @@ export default function DownloadManager() {
                 <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
                   <div className="flex items-center justify-between gap-3">
                     <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{ui.bandwidth}</label>
-                    <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-                      {ui.backendPending}
+                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                      {ui.backendSaved}
                     </span>
                   </div>
                   <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2">
@@ -996,12 +1016,12 @@ export default function DownloadManager() {
                       min={0}
                       step={bandwidthUnit === 'MiB/s' ? 1 : 64}
                       value={bandwidthLimit}
-                      onChange={e => setBandwidthLimit(Math.max(0, Number(e.target.value) || 0))}
+                      onChange={e => handleBandwidthLimitChange(Number(e.target.value))}
                       className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
                     />
                     <select
                       value={bandwidthUnit}
-                      onChange={e => setBandwidthUnit(e.target.value as BandwidthUnit)}
+                      onChange={e => handleBandwidthUnitChange(e.target.value as BandwidthUnit)}
                       aria-label={ui.displayUnit}
                       className="rounded-lg border border-slate-200 bg-white px-2 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
                     >
@@ -1009,7 +1029,7 @@ export default function DownloadManager() {
                       <option value="KiB/s">KiB/s</option>
                     </select>
                   </div>
-                  <div className="text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.limitHelp} · {ui.localPreference}</div>
+                  <div className="text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.limitHelp}</div>
                 </div>
 
                 <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
@@ -1017,8 +1037,8 @@ export default function DownloadManager() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{ui.lowPriorityThrottle}</div>
-                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-                          {ui.backendPending}
+                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                          {ui.backendSaved}
                         </span>
                       </div>
                       <div className="mt-1 text-[11px] leading-5 text-slate-400">{ui.throttleHelp}</div>
@@ -1027,7 +1047,7 @@ export default function DownloadManager() {
                       type="button"
                       role="switch"
                       aria-checked={lowPriorityThrottle}
-                      onClick={() => setLowPriorityThrottle(prev => !prev)}
+                      onClick={() => handleLowPriorityThrottleChange(!lowPriorityThrottle)}
                       className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${lowPriorityThrottle ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}
                     >
                       <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition ${lowPriorityThrottle ? 'left-6' : 'left-1'}`} />
