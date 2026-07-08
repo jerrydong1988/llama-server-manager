@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense, Component, ReactNode } from 'react'
-import { Server, Database, Cpu, Terminal, Settings, Activity, Network, Download, BarChart3, BookOpen } from 'lucide-react'
+import { Activity, BarChart3, BookOpen, Cpu, Database, Download, Network, Package, Play, RefreshCw, Search, Server, Settings, Square, Terminal, Wrench, X } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
 import ModelRepo from './components/ModelRepo'
@@ -16,8 +16,169 @@ import { _startupTimings } from './store'
 import { useAppStore } from './store'
 import type { WorkerInfo } from './store'
 import { I18nProvider, useI18n } from './i18n'
-import { Button } from './components/ui'
+import { Badge, Button, TextInput } from './components/ui'
 import { AppShell, type ShellStatusChip } from './components/shell/AppShell'
+
+type ProductIssue = {
+  id: string
+  title: string
+  description: string
+  severity: 'info' | 'warning' | 'critical'
+  actionLabel: string
+  action: () => void
+}
+
+type CommandAction = {
+  id: string
+  title: string
+  description: string
+  group: string
+  icon: ReactNode
+  action: () => void
+}
+
+function CommandCenter({
+  open,
+  lang,
+  issues,
+  commands,
+  onClose,
+}: {
+  open: boolean
+  lang: string
+  issues: ProductIssue[]
+  commands: CommandAction[]
+  onClose: () => void
+}) {
+  const zh = lang === 'zh-CN'
+  const [query, setQuery] = useState('')
+
+  useEffect(() => {
+    if (!open) return
+    setQuery('')
+    const handler = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [open, onClose])
+
+  const filteredCommands = useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    if (!normalized) return commands
+    return commands.filter(command =>
+      command.title.toLowerCase().includes(normalized)
+      || command.description.toLowerCase().includes(normalized)
+      || command.group.toLowerCase().includes(normalized),
+    )
+  }, [commands, query])
+
+  if (!open) return null
+
+  const severityTone: Record<ProductIssue['severity'], 'blue' | 'amber' | 'red'> = {
+    info: 'blue',
+    warning: 'amber',
+    critical: 'red',
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/55 px-4 py-12 backdrop-blur-sm" role="dialog" aria-modal="true">
+      <div className="w-full max-w-4xl overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-2xl dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <Search className="h-5 w-5 text-blue-500" />
+              <h2 className="text-lg font-semibold">{zh ? '任务中心' : 'Command Center'}</h2>
+              {issues.length > 0 ? <Badge tone="amber">{issues.length} {zh ? '项需关注' : 'need attention'}</Badge> : <Badge tone="emerald">{zh ? '状态良好' : 'Healthy'}</Badge>}
+            </div>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+              {zh ? '从这里快速处理配置缺口、运行异常和高频工作流。' : 'Handle setup gaps, runtime issues, and frequent workflows from one place.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label={zh ? '关闭任务中心' : 'Close command center'}
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:hover:bg-slate-900 dark:hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid max-h-[74vh] overflow-y-auto lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0 space-y-4 p-5">
+            <TextInput
+              value={query}
+              onChange={event => setQuery(event.target.value)}
+              placeholder={zh ? '搜索页面、任务或操作...' : 'Search pages, tasks, or actions...'}
+              leadingIcon={<Search className="h-4 w-4" />}
+              autoFocus
+            />
+
+            <section className="space-y-2">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{zh ? '常用任务' : 'Common Tasks'}</div>
+              <div className="grid gap-2 md:grid-cols-2">
+                {filteredCommands.map(command => (
+                  <button
+                    key={command.id}
+                    type="button"
+                    onClick={() => {
+                      command.action()
+                      onClose()
+                    }}
+                    className="flex min-w-0 items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-900/70 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
+                  >
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 dark:border-slate-800 dark:bg-slate-950 dark:text-blue-300">
+                      {command.icon}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{command.title}</span>
+                      <span className="mt-1 line-clamp-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">{command.description}</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          </div>
+
+          <aside className="border-t border-slate-200 bg-slate-50 p-5 dark:border-slate-800 dark:bg-slate-900/55 lg:border-l lg:border-t-0">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold">{zh ? '问题中心' : 'Attention Center'}</div>
+              <Badge tone={issues.length > 0 ? 'amber' : 'emerald'}>{issues.length}</Badge>
+            </div>
+            {issues.length === 0 ? (
+              <div className="rounded-lg border border-slate-200 bg-white px-4 py-5 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
+                {zh ? '当前没有需要立即处理的配置或运行问题。' : 'No setup or runtime issues need immediate action.'}
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {issues.map(issue => (
+                  <div key={issue.id} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                    <div className="mb-2 flex items-center gap-2">
+                      <Badge tone={severityTone[issue.severity]}>{issue.severity === 'critical' ? (zh ? '严重' : 'Critical') : issue.severity === 'warning' ? (zh ? '提醒' : 'Warning') : (zh ? '信息' : 'Info')}</Badge>
+                      <div className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{issue.title}</div>
+                    </div>
+                    <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{issue.description}</p>
+                    <Button
+                      onClick={() => {
+                        issue.action()
+                        onClose()
+                      }}
+                      size="sm"
+                      className="mt-3 w-full"
+                    >
+                      {issue.actionLabel}
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </aside>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -94,15 +255,19 @@ function AppInner() {
   const activeTab = useAppStore(s => s.activeTab)
   const setActiveTab = useAppStore(s => s.setActiveTab)
   const loadConfig = useAppStore(s => s.loadConfig)
+  const loadInitialData = useAppStore(s => s.loadInitialData)
   const instances = useAppStore(s => s.instances)
+  const models = useAppStore(s => s.models)
   const engines = useAppStore(s => s.engines)
   const startInstance = useAppStore(s => s.startInstance)
+  const stopInstance = useAppStore(s => s.stopInstance)
   const darkMode = useAppStore(s => s.darkMode)
   const setDarkMode = useAppStore(s => s.setDarkMode)
   const { t, lang, setLang } = useI18n()
   const [updateInfo, setUpdateInfo] = useState<{ latest_version: string; url: string } | null>(null)
   const [autoStartEnabled, setAutoStartEnabled] = useState(false)
   const [autoStarted, setAutoStarted] = useState(false)
+  const [commandCenterOpen, setCommandCenterOpen] = useState(false)
 
   useEffect(() => {
     invoke<boolean>('is_autostart_enabled').then(setAutoStartEnabled).catch(() => {})
@@ -113,6 +278,10 @@ function AppInner() {
   const downloadTasks = useAppStore(s => s.downloadTasks)
   const activeDownloadCount = useMemo(
     () => Object.values(downloadTasks).filter(t => t.status === 'active' || t.status === 'paused' || t.status === 'pausing').length,
+    [downloadTasks],
+  )
+  const failedDownloadCount = useMemo(
+    () => Object.values(downloadTasks).filter(t => t.status === 'error').length,
     [downloadTasks],
   )
 
@@ -128,6 +297,171 @@ function AppInner() {
     { id: 'logs', name: t.nav.logs, icon: Terminal },
     { id: 'guide', name: lang === 'zh-CN' ? '\u4F7F\u7528\u8BF4\u660E' : 'Guide', icon: BookOpen, separator: true },
   ], [t, lang, upCount, activeDownloadCount])
+
+  const productIssues = useMemo<ProductIssue[]>(() => {
+    const zh = lang === 'zh-CN'
+    const items: ProductIssue[] = []
+    const unhealthyRunning = instances.filter(instance => instance.status === 'running' && instance.healthCheck === 'fail').length
+    const erroredInstances = instances.filter(instance => instance.status === 'error').length
+    const modelCount = models.filter(model => !model.is_shard && model.file_type === 'model').length
+
+    if (engines.length === 0) {
+      items.push({
+        id: 'no-engines',
+        title: zh ? '尚未登记运行引擎' : 'No runtime engines registered',
+        description: zh ? '需要先扫描或添加 llama-server 二进制，实例才能启动。' : 'Scan or add llama-server binaries before starting instances.',
+        severity: 'critical',
+        actionLabel: zh ? '去引擎管理' : 'Open engines',
+        action: () => setActiveTab('engine'),
+      })
+    }
+
+    if (modelCount === 0) {
+      items.push({
+        id: 'no-models',
+        title: zh ? '模型仓库为空' : 'Model inventory is empty',
+        description: zh ? '添加本地模型目录或从下载管理导入模型，实例配置会更顺畅。' : 'Add a local model folder or download models to make instance setup smoother.',
+        severity: 'warning',
+        actionLabel: zh ? '打开模型仓库' : 'Open models',
+        action: () => setActiveTab('model-repo'),
+      })
+    }
+
+    if (instances.length === 0) {
+      items.push({
+        id: 'no-instances',
+        title: zh ? '还没有服务实例' : 'No server instances',
+        description: zh ? '创建第一个实例后，端口、模型、引擎和运行状态会集中展示。' : 'Create the first instance to manage ports, models, engines, and runtime state.',
+        severity: 'info',
+        actionLabel: zh ? '创建实例' : 'Create instance',
+        action: () => setActiveTab('instances'),
+      })
+    }
+
+    if (erroredInstances > 0 || unhealthyRunning > 0) {
+      items.push({
+        id: 'instance-health',
+        title: zh ? '存在异常实例' : 'Instance health needs attention',
+        description: zh
+          ? `${erroredInstances} 个实例错误，${unhealthyRunning} 个运行实例健康检查失败。`
+          : `${erroredInstances} errored instance(s), ${unhealthyRunning} running health check failure(s).`,
+        severity: 'critical',
+        actionLabel: zh ? '查看实例' : 'Review instances',
+        action: () => setActiveTab('instances'),
+      })
+    }
+
+    if (failedDownloadCount > 0) {
+      items.push({
+        id: 'failed-downloads',
+        title: zh ? '存在失败下载任务' : 'Failed downloads detected',
+        description: zh ? `${failedDownloadCount} 个下载任务需要重试、清理或重新排队。` : `${failedDownloadCount} download task(s) need retry, cleanup, or requeue.`,
+        severity: 'warning',
+        actionLabel: zh ? '打开下载管理' : 'Open downloads',
+        action: () => setActiveTab('downloads'),
+      })
+    }
+
+    return items
+  }, [engines.length, failedDownloadCount, instances, lang, models, setActiveTab])
+
+  const commandActions = useMemo<CommandAction[]>(() => {
+    const zh = lang === 'zh-CN'
+    const firstStopped = instances.find(instance => instance.status !== 'running')
+    const firstRunning = instances.find(instance => instance.status === 'running')
+    const go = (id: string) => () => setActiveTab(id)
+
+    const actions: CommandAction[] = [
+      {
+        id: 'dashboard',
+        title: zh ? '查看系统驾驶舱' : 'Open system cockpit',
+        description: zh ? '汇总资源、实例、下载与关键操作入口。' : 'Review resources, instances, downloads, and key actions.',
+        group: zh ? '导航' : 'Navigation',
+        icon: <BarChart3 className="h-4 w-4" />,
+        action: go('dashboard'),
+      },
+      {
+        id: 'instances',
+        title: zh ? '管理服务实例' : 'Manage server instances',
+        description: zh ? '启动、停止、打开端点、调整实例配置。' : 'Start, stop, open endpoints, and adjust instance configuration.',
+        group: zh ? '运行' : 'Runtime',
+        icon: <Server className="h-4 w-4" />,
+        action: go('instances'),
+      },
+      {
+        id: 'models',
+        title: zh ? '整理模型仓库' : 'Organize model inventory',
+        description: zh ? '扫描本地模型、查看分片与目录状态。' : 'Scan local models and review shards and folders.',
+        group: zh ? '资源' : 'Resources',
+        icon: <Package className="h-4 w-4" />,
+        action: go('model-repo'),
+      },
+      {
+        id: 'downloads',
+        title: zh ? '处理下载队列' : 'Manage download queue',
+        description: zh ? '继续、暂停、重试模型下载并调整传输策略。' : 'Resume, pause, retry model downloads, and adjust transfer policy.',
+        group: zh ? '资源' : 'Resources',
+        icon: <Download className="h-4 w-4" />,
+        action: go('downloads'),
+      },
+      {
+        id: 'engines',
+        title: zh ? '检查运行引擎' : 'Check runtime engines',
+        description: zh ? '扫描二进制、设置默认引擎并确认后端。' : 'Scan binaries, set defaults, and verify execution backend.',
+        group: zh ? '配置' : 'Setup',
+        icon: <Wrench className="h-4 w-4" />,
+        action: go('engine'),
+      },
+      {
+        id: 'performance',
+        title: zh ? '打开性能分析' : 'Open performance analysis',
+        description: zh ? '查看遥测、资源瓶颈、实例吞吐与智能诊断。' : 'Inspect telemetry, bottlenecks, instance throughput, and diagnostics.',
+        group: zh ? '诊断' : 'Diagnostics',
+        icon: <Activity className="h-4 w-4" />,
+        action: go('perf'),
+      },
+      {
+        id: 'logs',
+        title: zh ? '查看运行日志' : 'Review runtime logs',
+        description: zh ? '定位启动失败、下载错误和健康检查线索。' : 'Trace startup failures, download errors, and health check clues.',
+        group: zh ? '诊断' : 'Diagnostics',
+        icon: <Terminal className="h-4 w-4" />,
+        action: go('logs'),
+      },
+      {
+        id: 'refresh',
+        title: zh ? '刷新全部状态' : 'Refresh all state',
+        description: zh ? '重新加载实例、模型、引擎与队列状态。' : 'Reload instances, models, engines, and queue state.',
+        group: zh ? '维护' : 'Maintenance',
+        icon: <RefreshCw className="h-4 w-4" />,
+        action: () => void loadInitialData(),
+      },
+    ]
+
+    if (firstStopped) {
+      actions.push({
+        id: 'start-first',
+        title: zh ? `启动 ${firstStopped.name}` : `Start ${firstStopped.name}`,
+        description: zh ? '快速启动第一个未运行实例。' : 'Quickly start the first stopped instance.',
+        group: zh ? '运行' : 'Runtime',
+        icon: <Play className="h-4 w-4" />,
+        action: () => void startInstance(firstStopped.id),
+      })
+    }
+
+    if (firstRunning) {
+      actions.push({
+        id: 'stop-first',
+        title: zh ? `停止 ${firstRunning.name}` : `Stop ${firstRunning.name}`,
+        description: zh ? '快速停止当前第一个运行实例。' : 'Quickly stop the first running instance.',
+        group: zh ? '运行' : 'Runtime',
+        icon: <Square className="h-4 w-4" />,
+        action: () => void stopInstance(firstRunning.id),
+      })
+    }
+
+    return actions
+  }, [instances, lang, loadInitialData, setActiveTab, startInstance, stopInstance])
 
   const mountTimeRef = useRef(performance.now())
   const [configLoaded, setConfigLoaded] = useState(false)
@@ -236,6 +570,10 @@ function AppInner() {
         e.preventDefault()
         useAppStore.getState().saveConfig()
       }
+      if (e.key === 'k' || e.key === 'K') {
+        e.preventDefault()
+        setCommandCenterOpen(true)
+      }
     }
 
     window.addEventListener('keydown', handler)
@@ -291,6 +629,10 @@ function AppInner() {
       languageLabel={lang === 'zh-CN' ? 'EN' : '\u4E2D\u6587'}
       languageTitle={lang === 'zh-CN' ? 'Switch to English' : '\u5207\u6362\u4E3A\u4E2D\u6587'}
       onToggleLanguage={() => setLang(lang === 'zh-CN' ? 'en-US' : 'zh-CN')}
+      commandLabel={lang === 'zh-CN' ? '任务中心' : 'Command Center'}
+      attentionLabel={lang === 'zh-CN' ? '问题中心' : 'Attention Center'}
+      attentionCount={productIssues.length}
+      onOpenCommandCenter={() => setCommandCenterOpen(true)}
       wideContent={layoutWide}
     >
       {!configLoaded ? (
@@ -302,6 +644,13 @@ function AppInner() {
           {renderTabContent(activeTab)}
         </Suspense>
       )}
+      <CommandCenter
+        open={commandCenterOpen}
+        lang={lang}
+        issues={productIssues}
+        commands={commandActions}
+        onClose={() => setCommandCenterOpen(false)}
+      />
     </AppShell>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ComponentType, type ReactNode } from 'react'
-import { ArrowUpRight, Languages, Moon, Sun, Zap } from 'lucide-react'
+import { AlertTriangle, ArrowUpRight, Languages, Moon, Search, Sun, Zap } from 'lucide-react'
 import { Badge, Button, IconButton, joinClassNames } from '../ui'
 
 type NavIcon = ComponentType<{ className?: string }>
@@ -36,6 +36,10 @@ export function AppShell({
   languageLabel,
   languageTitle,
   onToggleLanguage,
+  commandLabel,
+  attentionLabel,
+  attentionCount = 0,
+  onOpenCommandCenter,
   wideContent = false,
   children,
 }: {
@@ -56,6 +60,10 @@ export function AppShell({
   languageLabel: string
   languageTitle: string
   onToggleLanguage: () => void
+  commandLabel: string
+  attentionLabel: string
+  attentionCount?: number
+  onOpenCommandCenter: () => void
   wideContent?: boolean
   children: ReactNode
 }) {
@@ -199,6 +207,29 @@ export function AppShell({
                       <ArrowUpRight className="h-4 w-4 shrink-0" />
                     </a>
                   ) : null}
+                  <IconButton
+                    label={commandLabel}
+                    title={commandLabel}
+                    onClick={onOpenCommandCenter}
+                    icon={<Search className="h-4 w-4" />}
+                    className={joinClassNames('w-9', topControlClassName)}
+                  />
+                  <button
+                    type="button"
+                    onClick={onOpenCommandCenter}
+                    title={attentionLabel}
+                    aria-label={attentionLabel}
+                    className={joinClassNames(
+                      'inline-flex items-center justify-center gap-1.5 border px-2.5 text-xs font-semibold transition',
+                      attentionCount > 0
+                        ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200 dark:hover:bg-amber-500/15'
+                        : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800',
+                      topControlClassName,
+                    )}
+                  >
+                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                    <span className="tabular-nums">{attentionCount}</span>
+                  </button>
                   <Button
                     onClick={onToggleLanguage}
                     size="md"

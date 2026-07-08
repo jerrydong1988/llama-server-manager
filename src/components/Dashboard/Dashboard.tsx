@@ -1,18 +1,22 @@
 import { useMemo, useState } from 'react'
 import {
   Activity,
+  AlertTriangle,
   ArrowUpRight,
   BarChart3,
+  CheckCircle2,
   Cpu,
   Download,
   Gauge,
   HardDrive,
+  Package,
   Play,
   RefreshCw,
   Search,
   Server,
   Settings2,
   Square,
+  Wrench,
   Zap,
 } from 'lucide-react'
 import { useAppStore } from '../../store'
@@ -243,6 +247,23 @@ export default function Dashboard() {
     queuedDownloads: zh ? '排队' : 'Queued',
     failedDownloads: zh ? '失败' : 'Failed',
     transfer: zh ? '传输' : 'Transfer',
+    actionCenter: zh ? '下一步建议' : 'Next Steps',
+    actionCenterDesc: zh ? '根据当前资源、实例与下载状态，优先处理最能提升可用性的事项。' : 'Prioritized actions based on current resources, instances, and downloads.',
+    setupEngineTitle: zh ? '登记运行引擎' : 'Register a runtime engine',
+    setupEngineDesc: zh ? '先添加或扫描 llama-server 二进制，后续实例才能稳定启动。' : 'Add or scan llama-server binaries so instances can start reliably.',
+    setupModelTitle: zh ? '整理模型仓库' : 'Organize model inventory',
+    setupModelDesc: zh ? '扫描本地模型目录，或进入下载管理补齐常用模型。' : 'Scan local model folders or use downloads to add common models.',
+    createInstanceTitle: zh ? '创建服务实例' : 'Create a server instance',
+    createInstanceDesc: zh ? '把模型、引擎、端口组合成可运行的本地服务。' : 'Combine a model, engine, and port into a runnable local service.',
+    inspectHealthTitle: zh ? '处理异常实例' : 'Review unhealthy instances',
+    inspectHealthDesc: zh ? '存在错误或健康检查失败的实例，建议先查看实例与日志。' : 'Some instances errored or failed health checks; review instances and logs.',
+    retryDownloadTitle: zh ? '处理失败下载' : 'Resolve failed downloads',
+    retryDownloadDesc: zh ? '有下载任务失败，可重试、清理或重新加入队列。' : 'Retry, clean up, or requeue failed download tasks.',
+    monitorTransferTitle: zh ? '查看传输队列' : 'Review transfer queue',
+    monitorTransferDesc: zh ? '当前有活动下载任务，进入下载管理可调整策略。' : 'Active downloads are running; tune policy in download management.',
+    reviewPerfTitle: zh ? '查看性能分析' : 'Review performance analysis',
+    reviewPerfDesc: zh ? '资源与实例状态稳定，可继续检查吞吐、瓶颈和诊断建议。' : 'Resources and instances look stable; inspect throughput, bottlenecks, and diagnostics.',
+    goHandle: zh ? '处理' : 'Open',
     recentDownloads: zh ? '近期下载' : 'Recent Downloads',
     noDownloads: zh ? '暂无下载任务' : 'No download tasks',
     inventory: zh ? '资源统计' : 'Resource Summary',
@@ -361,6 +382,96 @@ export default function Dashboard() {
     },
   ]
 
+  const cockpitActions = useMemo(() => {
+    const actions: Array<{
+      id: string
+      title: string
+      description: string
+      tone: 'blue' | 'emerald' | 'amber' | 'red' | 'violet'
+      icon: React.ReactNode
+      action: () => void
+    }> = []
+
+    if (engines.length === 0) {
+      actions.push({
+        id: 'setup-engine',
+        title: labels.setupEngineTitle,
+        description: labels.setupEngineDesc,
+        tone: 'red',
+        icon: <Wrench className="h-4 w-4" />,
+        action: () => setActiveTab('engine'),
+      })
+    }
+
+    if (modelCount === 0) {
+      actions.push({
+        id: 'setup-model',
+        title: labels.setupModelTitle,
+        description: labels.setupModelDesc,
+        tone: 'amber',
+        icon: <Package className="h-4 w-4" />,
+        action: () => setActiveTab('model-repo'),
+      })
+    }
+
+    if (instances.length === 0) {
+      actions.push({
+        id: 'create-instance',
+        title: labels.createInstanceTitle,
+        description: labels.createInstanceDesc,
+        tone: 'blue',
+        icon: <Server className="h-4 w-4" />,
+        action: () => setActiveTab('instances'),
+      })
+    }
+
+    if (attentionCount > 0) {
+      actions.push({
+        id: 'inspect-health',
+        title: labels.inspectHealthTitle,
+        description: labels.inspectHealthDesc,
+        tone: 'red',
+        icon: <AlertTriangle className="h-4 w-4" />,
+        action: () => setActiveTab('instances'),
+      })
+    }
+
+    if (failedDownloadCount > 0) {
+      actions.push({
+        id: 'retry-download',
+        title: labels.retryDownloadTitle,
+        description: labels.retryDownloadDesc,
+        tone: 'amber',
+        icon: <Download className="h-4 w-4" />,
+        action: () => setActiveTab('downloads'),
+      })
+    }
+
+    if (activeDownloadCount > 0) {
+      actions.push({
+        id: 'monitor-transfer',
+        title: labels.monitorTransferTitle,
+        description: labels.monitorTransferDesc,
+        tone: 'blue',
+        icon: <Download className="h-4 w-4" />,
+        action: () => setActiveTab('downloads'),
+      })
+    }
+
+    if (actions.length === 0) {
+      actions.push({
+        id: 'review-performance',
+        title: labels.reviewPerfTitle,
+        description: labels.reviewPerfDesc,
+        tone: 'emerald',
+        icon: <CheckCircle2 className="h-4 w-4" />,
+        action: () => setActiveTab('perf'),
+      })
+    }
+
+    return actions.slice(0, 3)
+  }, [activeDownloadCount, attentionCount, engines.length, failedDownloadCount, instances.length, labels, modelCount, setActiveTab])
+
   const openConfig = (instanceId: string) => {
     setActiveConfigInstanceId(instanceId)
     setActiveTab('config')
@@ -386,6 +497,36 @@ export default function Dashboard() {
             <Button onClick={() => loadInitialData()} icon={<RefreshCw className="h-4 w-4" />}>
               {labels.refresh}
             </Button>
+          </div>
+        </div>
+      </Surface>
+
+      <Surface as="section" className="p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <SectionHeader title={labels.actionCenter} description={labels.actionCenterDesc} />
+          <div className="grid w-full gap-3 xl:max-w-[920px] xl:grid-cols-3">
+            {cockpitActions.map(action => (
+              <button
+                key={action.id}
+                type="button"
+                onClick={action.action}
+                className="group flex min-h-[116px] min-w-0 flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950/55 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
+              >
+                <span className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 dark:border-slate-800 dark:bg-slate-950 dark:text-blue-300">
+                    {action.icon}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-slate-950 dark:text-slate-100">{action.title}</span>
+                    <span className="mt-1 line-clamp-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">{action.description}</span>
+                  </span>
+                </span>
+                <span className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 transition group-hover:text-blue-500 dark:text-blue-300">
+                  {labels.goHandle}
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </span>
+              </button>
+            ))}
           </div>
         </div>
       </Surface>
