@@ -185,6 +185,25 @@ async fn proxy_health(State(app): State<tauri::AppHandle>) -> Json<ProxyStatus> 
     Json(proxy_status_from_state(&state))
 }
 
+async fn proxy_index(State(app): State<tauri::AppHandle>) -> Json<serde_json::Value> {
+    let state = app.state::<AppState>();
+    let status = proxy_status_from_state(&state);
+    Json(json!({
+        "service": "llama-server-manager routing proxy",
+        "status": if status.running { "running" } else { "stopped" },
+        "bound_addr": status.bound_addr,
+        "active_routes": status.active_routes,
+        "endpoints": {
+            "health": "/health",
+            "models": "/v1/models",
+            "chat_completions": "/v1/chat/completions",
+            "completions": "/v1/completions",
+            "embeddings": "/v1/embeddings"
+        },
+        "message": "Use OpenAI-compatible clients against the /v1 endpoints."
+    }))
+}
+
 async fn proxy_models(State(app): State<tauri::AppHandle>) -> Json<serde_json::Value> {
     let state = app.state::<AppState>();
     let config = state.proxy_config.lock().unwrap().clone();
@@ -316,6 +335,7 @@ async fn proxy_openai(
 
 fn proxy_router(app: tauri::AppHandle) -> Router {
     Router::new()
+        .route("/", get(proxy_index))
         .route("/health", get(proxy_health))
         .route("/v1/models", get(proxy_models))
         .route("/v1/chat/completions", any(proxy_openai))
