@@ -218,7 +218,7 @@ export default function Dashboard() {
     memory: zh ? '内存' : 'Memory',
     vram: zh ? '显存' : 'VRAM',
     uptime: zh ? '运行时长' : 'Uptime',
-    waitingMetrics: zh ? '等待系统指标' : 'Waiting for metrics',
+    noMetrics: zh ? '暂无指标' : 'No metrics yet',
     searchPlaceholder: zh ? '搜索实例、模型、端口...' : 'Search instances, models, ports...',
     allEngines: zh ? '全部引擎' : 'All Engines',
     sortName: zh ? '按名称' : 'By name',
@@ -354,8 +354,8 @@ export default function Dashboard() {
       percent: memoryPercent,
       primary: sysMetrics?.system_memory_total_mb
         ? `${formatMb(sysMetrics.system_memory_used_mb ?? sysMetrics.memory_mb)} / ${formatMb(sysMetrics.system_memory_total_mb)}`
-        : labels.waitingMetrics,
-      secondary: sysMetrics?.system_memory_total_mb ? labels.system : labels.waitingMetrics,
+        : '--',
+      secondary: sysMetrics?.system_memory_total_mb ? labels.system : labels.noMetrics,
       tone: 'memory' as const,
       icon: <HardDrive className="h-4 w-4" />,
     },

@@ -64,8 +64,8 @@ export function AppShell({
   const runningChip = statusChips[0]
   const secondaryChips = statusChips.slice(1)
   const activeNavRef = useRef<HTMLButtonElement | null>(null)
-  const topControlClassName = 'h-9 rounded-lg'
-  const topStatusChipClassName = 'h-9 min-w-[72px] justify-center rounded-lg px-3 text-[12px]'
+  const topControlClassName = 'h-9 shrink-0 rounded-lg'
+  const topStatusChipClassName = 'h-9 min-w-[76px] shrink-0 justify-center whitespace-nowrap rounded-lg px-3 text-[12px]'
 
   useEffect(() => {
     activeNavRef.current?.scrollIntoView({ block: 'nearest', inline: 'center' })

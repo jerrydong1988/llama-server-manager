@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, Search, Settings, SlidersHorizontal, Sparkles, X } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, Search, Settings, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { useAppStore, type InstanceConfig, type ModelInfo, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
@@ -72,8 +72,102 @@ const buildPickerTree = (rootDir: string, models: ModelInfo[]): PickerNode => {
 const countActive = (activeParams: Set<keyof InstanceConfig>, keys: Array<keyof InstanceConfig>) =>
   keys.filter(key => activeParams.has(key)).length
 
+type ConfigChange = {
+  key: keyof InstanceConfig
+  label: string
+  before: string
+  after: string
+}
+
+type ConfigTemplate = {
+  id: string
+  title: string
+  description: string
+  changes: Partial<InstanceConfig>
+}
+
+const isEqualValue = (left: unknown, right: unknown) => {
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
+  }
+  return left === right
+}
+
+const formatValue = (value: unknown, labels: Record<string, string>) => {
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.join(' ') : labels.emptyValue
+  }
+  if (typeof value === 'boolean') {
+    return value ? labels.on : labels.off
+  }
+  if (value === '' || value === null || value === undefined) {
+    return labels.emptyValue
+  }
+  return String(value)
+}
+
+const fieldLabel = (key: keyof InstanceConfig, t: any) => {
+  const labelMap: Partial<Record<keyof InstanceConfig, string>> = {
+    model_path: t.configPage.modelPath,
+    alias: t.configPage.alias,
+    chat_template: t.configPage.chatTemplate,
+    host: t.configPage.host,
+    port: t.configPage.portLabel,
+    gpu_layers: t.configPage.gpuLayers,
+    gpu_layers_auto: t.configPage.gpuLayersAuto,
+    ctx_size: t.configPage.ctxSize,
+    ctx_size_auto: t.configPage.ctxAuto,
+    embedding: t.configPage.embedding,
+    pooling: t.configPage.pooling,
+    reasoning: t.configPage.reasoningSwitch,
+    reasoning_format: t.configPage.reasoningFormat,
+    reasoning_effort: t.configPage.reasoningEffort,
+    reasoning_budget: t.configPage.reasoningBudget,
+    reasoning_budget_message: t.configPage.reasoningBudgetMsg,
+    draft_model_path: t.configPage.draftModel,
+    draft_tokens: t.configPage.draftTokens,
+    spec_type: t.configPage.specType,
+    spec_draft_n_min: t.configPage.specDraftNMin,
+    temp: t.configPage.temp,
+    top_k: t.configPage.topK,
+    top_p: t.configPage.topP,
+    repeat_penalty: t.configPage.repeatPenalty,
+    n_predict: t.configPage.nPredict,
+    ignore_eos: t.configPage.ignoreEos,
+    reverse_prompt: t.configPage.reversePrompt,
+    threads: t.configPage.threads,
+    threads_batch: t.configPage.threadsBatch,
+    batch_size: t.configPage.batchSize,
+    ubatch_size: t.configPage.ubatchSize,
+    parallel: t.configPage.parallel,
+    cont_batching: t.configPage.contBatching,
+    flash_attn: t.configPage.flashAttn,
+    mlock: t.configPage.mlock,
+    no_mmap: t.configPage.noMmap,
+    no_repack: t.configPage.noRepack,
+    numa: t.configPage.numa,
+    cache_ram: t.configPage.cacheRam,
+    metrics: t.configPage.metrics,
+    props: t.configPage.props,
+    perf: t.configPage.perf,
+    verbose: t.configPage.verbose,
+    custom_args: t.configPage.customArgs,
+  }
+  return labelMap[key] || String(key).replace(/_/g, ' ')
+}
+
+const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig, t: any, labels: Record<string, string>): ConfigChange[] =>
+  (Object.keys(local) as Array<keyof InstanceConfig>)
+    .filter(key => !isEqualValue(local[key], baseline[key]))
+    .map(key => ({
+      key,
+      label: fieldLabel(key, t),
+      before: formatValue(baseline[key], labels),
+      after: formatValue(local[key], labels),
+    }))
+
 const ConfigPage = () => {
-  const { instances, activeConfigInstanceId, updateInstance, saveConfig, models, modelDirs, engines, defaultEngineId } = useAppStore()
+  const { instances, activeConfigInstanceId, updateInstance, saveConfig, models, modelDirs, engines, defaultEngineId, setActiveTab } = useAppStore()
   const { t, lang } = useI18n()
   const zh = lang === 'zh-CN'
   const inst = instances.find(instance => instance.id === activeConfigInstanceId)
@@ -165,11 +259,6 @@ const ConfigPage = () => {
   const primaryModelPath = currentModel?.path || local.model_path || ''
   const draftModelPath = local.draft_model_path || ''
   const endpoint = `${local.host || '127.0.0.1'}:${local.port}`
-  const warningCounts = {
-    high: saveWarnings.filter(warning => warning.severity === 'high').length,
-    medium: saveWarnings.filter(warning => warning.severity === 'medium').length,
-    low: saveWarnings.filter(warning => warning.severity === 'low').length,
-  }
 
   const pickModel = (modelPath: string) => {
     if (pickerTarget === 'model') {
@@ -244,6 +333,26 @@ const ConfigPage = () => {
     embeddingMode: zh ? '\u5d4c\u5165\u6a21\u5f0f' : 'Embedding mode',
     modifiedParams: zh ? '\u5df2\u4fee\u6539\u53c2\u6570' : 'Modified params',
     validationSummary: zh ? '\u914d\u7f6e\u68c0\u67e5' : 'Configuration Check',
+    configDiff: zh ? '\u672a\u4fdd\u5b58\u53d8\u66f4' : 'Unsaved Changes',
+    configDiffDesc: zh ? '\u5bf9\u6bd4\u5df2\u4fdd\u5b58\u914d\u7f6e\uff0c\u663e\u793a\u672c\u6b21\u8c03\u6574\u7684\u5177\u4f53\u53c2\u6570\u3002' : 'Compared with the saved config, these are the fields changed in this editing session.',
+    noConfigDiff: zh ? '\u5f53\u524d\u6ca1\u6709\u672a\u4fdd\u5b58\u7684\u53c2\u6570\u53d8\u66f4\u3002' : 'No unsaved parameter changes.',
+    before: zh ? '\u539f\u503c' : 'Before',
+    after: zh ? '\u65b0\u503c' : 'After',
+    emptyValue: zh ? '\u672a\u8bbe\u7f6e' : 'Not set',
+    moreChanges: zh ? '\u8fd8\u6709' : 'plus',
+    moreChangesSuffix: zh ? '\u9879\u53d8\u66f4' : 'more changes',
+    quickTemplates: zh ? '\u5feb\u901f\u573a\u666f' : 'Quick Scenarios',
+    quickTemplatesDesc: zh ? '\u5148\u5e94\u7528\u524d\u7aef\u63a8\u8350\u503c\uff0c\u786e\u8ba4\u540e\u518d\u4fdd\u5b58\u5230\u5b9e\u4f8b\u3002' : 'Apply recommended frontend presets first, then save after review.',
+    applyTemplate: zh ? '\u5e94\u7528' : 'Apply',
+    checkPassed: zh ? '\u672a\u53d1\u73b0\u660e\u663e\u914d\u7f6e\u51b2\u7a81\u3002' : 'No obvious configuration conflicts found.',
+    missingModel: zh ? '\u8bf7\u5148\u9009\u62e9\u4e3b\u6a21\u578b\uff0c\u5426\u5219\u5b9e\u4f8b\u65e0\u6cd5\u6b63\u5e38\u542f\u52a8\u3002' : 'Select a primary model before starting this instance.',
+    missingEngine: zh ? '\u672a\u5339\u914d\u5230\u53ef\u7528\u5f15\u64ce\uff0c\u8bf7\u786e\u8ba4\u5f15\u64ce\u626b\u63cf\u7ed3\u679c\u3002' : 'No usable engine is matched. Check engine scan results.',
+    liveWarnings: zh ? '\u6761\u53c2\u6570\u98ce\u9669\u9700\u590d\u6838' : 'parameter risks need review',
+    performanceLink: zh ? '\u6027\u80fd\u8bca\u65ad' : 'Performance Diagnostics',
+    performanceLinkDesc: zh
+      ? '\u4fdd\u5b58\u5e76\u542f\u52a8\u5b9e\u4f8b\u540e\uff0c\u53ef\u5728\u6027\u80fd\u76d1\u63a7\u9875\u67e5\u770b\u541e\u5410\u3001\u663e\u5b58\u548c slot \u8bca\u65ad\u3002'
+      : 'After saving and starting the instance, inspect throughput, VRAM, and slot diagnostics from Performance.',
+    openPerformance: zh ? '\u6253\u5f00\u6027\u80fd\u76d1\u63a7' : 'Open Performance',
     high: zh ? '\u9ad8' : 'High',
     medium: zh ? '\u4e2d' : 'Medium',
     low: zh ? '\u4f4e' : 'Low',
@@ -253,6 +362,57 @@ const ConfigPage = () => {
     pickDraft: zh ? '\u8349\u7a3f\u6a21\u578b' : 'the draft model',
     pickDesc: zh ? '\u4ece\u8d44\u6e90\u5e93\u4e2d\u9009\u62e9\u6587\u4ef6\uff1a' : 'Choose a repository asset for',
     parameterGroups: zh ? '\u53c2\u6570\u5206\u7ec4' : 'Parameter Groups',
+  }
+
+  const savedBaseline = { ...defaultInstanceConfig(), ...(inst?.config ?? {}) }
+  const configChanges = getConfigChanges(local, savedBaseline, t, labels)
+  const liveWarnings = validateConfig(local, currentModel, currentEngine)
+  const visibleWarnings = saved ? saveWarnings : liveWarnings
+  const warningCounts = {
+    high: liveWarnings.filter(warning => warning.severity === 'high').length,
+    medium: liveWarnings.filter(warning => warning.severity === 'medium').length,
+    low: liveWarnings.filter(warning => warning.severity === 'low').length,
+  }
+  const checkMessages = [
+    ...(!primaryModelPath ? [{ tone: 'red', text: labels.missingModel }] : []),
+    ...(!currentEngine ? [{ tone: 'amber', text: labels.missingEngine }] : []),
+    ...(liveWarnings.length > 0 ? [{ tone: liveWarnings.some(warning => warning.severity === 'high') ? 'red' : 'amber', text: `${liveWarnings.length} ${labels.liveWarnings}` }] : []),
+  ]
+  const quickTemplates: ConfigTemplate[] = [
+    {
+      id: 'balanced',
+      title: zh ? '\u65e5\u5e38\u5bf9\u8bdd' : 'Balanced Chat',
+      description: zh ? '\u4fdd\u6301\u81ea\u52a8\u663e\u5b58\u3001\u9ed8\u8ba4\u91c7\u6837\u548c\u7a33\u5b9a\u6279\u5904\u7406\uff0c\u9002\u5408\u5927\u591a\u6570 API \u670d\u52a1\u3002' : 'Auto GPU layers, default sampling, and stable batching for general API serving.',
+      changes: { ctx_size_auto: true, gpu_layers_auto: true, flash_attn: 'auto', cont_batching: true, batch_size: 2048, ubatch_size: 512, parallel: -1, cache_ram: 8192, warmup: true },
+    },
+    {
+      id: 'throughput',
+      title: zh ? '\u9ad8\u541e\u5410\u5e76\u53d1' : 'High Throughput',
+      description: zh ? '\u63d0\u9ad8 batch\u3001parallel \u548c Flash Attention\uff0c\u66f4\u9002\u5408\u591a\u8bf7\u6c42\u5e76\u53d1\u3002' : 'Larger batches, parallel slots, and Flash Attention for heavier request concurrency.',
+      changes: { ctx_size_auto: true, gpu_layers_auto: true, batch_size: 4096, ubatch_size: 1024, parallel: 4, cont_batching: true, flash_attn: 'on', metrics: true, props: true },
+    },
+    {
+      id: 'low-memory',
+      title: zh ? '\u4f4e\u663e\u5b58\u4f18\u5148' : 'Low Memory',
+      description: zh ? '\u964d\u4f4e batch \u548c\u5e76\u53d1\uff0c\u5173\u95ed\u6fc0\u8fdb\u663e\u5b58\u8bbe\u7f6e\uff0c\u4fbf\u4e8e\u5728\u8d44\u6e90\u7d27\u5f20\u65f6\u542f\u52a8\u3002' : 'Smaller batches and conservative concurrency for constrained machines.',
+      changes: { gpu_layers_auto: false, gpu_layers: 0, batch_size: 512, ubatch_size: 128, cache_ram: 0, mlock: false, flash_attn: 'off', parallel: 1 },
+    },
+    {
+      id: 'embedding',
+      title: zh ? '\u5411\u91cf\u68c0\u7d22' : 'Embedding Retrieval',
+      description: zh ? '\u542f\u7528 embedding \u548c mean pooling\uff0c\u5c06\u751f\u6210\u7c7b\u53c2\u6570\u6536\u655b\u5230\u5411\u91cf\u670d\u52a1\u573a\u666f\u3002' : 'Turns on embedding mode with mean pooling for retrieval-oriented serving.',
+      changes: { embedding: true, pooling: 'mean', n_predict: 0, temp: 0, top_k: 0, top_p: 0, repeat_penalty: 0 },
+    },
+    {
+      id: 'diagnostics',
+      title: zh ? '\u6027\u80fd\u8bca\u65ad\u51c6\u5907' : 'Diagnostics Ready',
+      description: zh ? '\u6253\u5f00 metrics\u3001props \u548c perf\uff0c\u8ba9\u540e\u7eed\u6027\u80fd\u9875\u6709\u66f4\u591a\u53ef\u5206\u6790\u4fe1\u53f7\u3002' : 'Enables metrics, props, and perf timings so Performance has richer signals later.',
+      changes: { metrics: true, props: true, perf: true, verbose: true, slots_enabled: true },
+    },
+  ]
+
+  const applyTemplate = (template: ConfigTemplate) => {
+    setLocal(current => (current ? { ...current, ...template.changes } : current))
   }
 
   const directoryGroups = [
@@ -295,13 +455,13 @@ const ConfigPage = () => {
             </div>
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="truncate text-xl font-semibold text-slate-50">{t.configPage.title}</h1>
+                <h1 className="truncate text-xl font-semibold text-slate-950 dark:text-slate-50">{t.configPage.title}</h1>
                 <Badge tone="slate" className="max-w-[220px] truncate">
                   {inst?.name}
                 </Badge>
-                {isEmbedding && <Badge tone="blue">Embedding</Badge>}
+                {isEmbedding && <Badge tone="blue">{labels.embeddingMode}</Badge>}
               </div>
-              <p className="mt-1 max-w-3xl truncate text-sm text-slate-400">{labels.subtitle}</p>
+              <p className="mt-1 max-w-3xl truncate text-sm text-slate-500 dark:text-slate-400">{labels.subtitle}</p>
             </div>
           </div>
 
@@ -321,7 +481,7 @@ const ConfigPage = () => {
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           { label: labels.activeParams, value: activeParams.size, icon: SlidersHorizontal, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
-          { label: labels.warnings, value: saveWarnings.length, icon: AlertTriangle, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
+          { label: labels.warnings, value: liveWarnings.length, icon: AlertTriangle, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
           { label: labels.model, value: currentModel ? pathBasename(currentModel.path) : '--', icon: File, tone: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/20' },
           { label: labels.engine, value: currentEngine?.name || '--', icon: Cpu, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
         ].map(card => (
@@ -338,19 +498,19 @@ const ConfigPage = () => {
                 <button
                   type="button"
                   onClick={() => scrollToSection(group.id)}
-                  className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-200 transition hover:bg-slate-800"
+                  className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
                 >
                   <span className="min-w-0 truncate">{group.title}</span>
                   {group.count > 0 && <Badge tone="emerald" className="shrink-0 px-2 py-0.5">{group.count}</Badge>}
                 </button>
                 {'children' in group && group.children && (
-                  <div className="mt-1 space-y-1 border-l border-slate-800 pl-3">
+                  <div className="mt-1 space-y-1 border-l border-slate-200 pl-3 dark:border-slate-800">
                     {group.children.map(child => (
                       <button
                         key={child.id}
                         type="button"
                         onClick={() => scrollToSection(child.id)}
-                        className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
+                        className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-200"
                       >
                         <span className="min-w-0 truncate">{child.title}</span>
                         {child.count > 0 && <span className="shrink-0 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-300">{child.count}</span>}
@@ -365,7 +525,7 @@ const ConfigPage = () => {
 
         <div className="space-y-4">
           {saved && (
-            <div className="flex items-start gap-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+            <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
               <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 {t.configPage.savedMsg}
@@ -382,6 +542,31 @@ const ConfigPage = () => {
               {t.configPage.embeddingBanner}
             </div>
           )}
+
+          <Surface className="p-5">
+            <div className="mb-4">
+              <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {quickTemplates.map(template => (
+                <button
+                  key={template.id}
+                  type="button"
+                  onClick={() => applyTemplate(template)}
+                  className="flex min-h-[132px] flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
+                >
+                  <span>
+                    <span className="block text-sm font-medium text-slate-900 dark:text-slate-100">{template.title}</span>
+                    <span className="mt-2 block text-sm leading-5 text-slate-500 dark:text-slate-400">{template.description}</span>
+                  </span>
+                  <span className="mt-4 inline-flex items-center gap-2 text-xs font-medium text-blue-300">
+                    <Sparkles className="h-3.5 w-3.5" />
+                    {labels.applyTemplate}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </Surface>
 
           <Surface className="p-5">
             <div className="mb-4">
@@ -410,11 +595,11 @@ const ConfigPage = () => {
           <div className="grid gap-4 lg:grid-cols-3 2xl:block 2xl:space-y-4">
             <InsetSurface className="p-4">
               <div className="flex items-start gap-3">
-                <div className="rounded-lg border border-slate-700 bg-slate-900 p-3 text-slate-300">
+                <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                   <Settings className="h-5 w-5" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-100" title={inst?.name}>{inst?.name}</p>
+                  <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={inst?.name}>{inst?.name}</p>
                   <PathText value={endpoint} maxLength={36} className="mt-1 text-slate-500" />
                 </div>
               </div>
@@ -428,14 +613,14 @@ const ConfigPage = () => {
                 { label: labels.enginePath, value: currentEngine?.dir || '--', path: !!currentEngine?.dir },
                 { label: labels.endpoint, value: endpoint },
                 { label: labels.embeddingMode, value: isEmbedding ? labels.on : labels.off },
-                { label: labels.modifiedParams, value: String(activeParams.size) },
+                { label: labels.modifiedParams, value: String(configChanges.length) },
               ].map(row => (
                 <div key={row.label} className="grid min-w-0 grid-cols-[96px_minmax(0,1fr)] items-start gap-3">
                   <span className="truncate text-sm text-slate-500" title={row.label}>{row.label}</span>
                   {row.path ? (
-                    <PathText value={row.value} maxLength={44} className="text-right text-slate-200" />
+                    <PathText value={row.value} maxLength={44} className="text-right text-slate-700 dark:text-slate-200" />
                   ) : (
-                    <span className="min-w-0 truncate text-right text-sm text-slate-200" title={row.value}>
+                    <span className="min-w-0 truncate text-right text-sm text-slate-700 dark:text-slate-200" title={row.value}>
                       {row.value}
                     </span>
                   )}
@@ -444,7 +629,7 @@ const ConfigPage = () => {
             </InsetSurface>
 
             <InsetSurface className="p-4">
-              <p className="text-sm font-medium text-slate-100">{labels.validationSummary}</p>
+              <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.validationSummary}</p>
               <div className="mt-3 grid grid-cols-3 gap-2 text-center">
                 {[
                   [labels.high, warningCounts.high, 'text-red-300 border-red-500/20 bg-red-500/10'],
@@ -458,16 +643,35 @@ const ConfigPage = () => {
                 ))}
               </div>
 
-              {saveWarnings.length > 0 && (
+              <div className="mt-4 space-y-2">
+                {checkMessages.length === 0 ? (
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+                    {labels.checkPassed}
+                  </div>
+                ) : checkMessages.map((message, index) => (
+                  <div
+                    key={`${message.text}-${index}`}
+                    className={`rounded-lg px-3 py-2 text-sm ${
+                      message.tone === 'red'
+                        ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
+                        : 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
+                    }`}
+                  >
+                    {message.text}
+                  </div>
+                ))}
+              </div>
+
+              {visibleWarnings.length > 0 && (
                 <div className="mt-4 space-y-2">
-                  {saveWarnings.slice(0, 6).map((warning, index) => (
+                  {visibleWarnings.slice(0, 6).map((warning, index) => (
                     <div
                       key={`${warning.key}-${index}`}
                       className={`rounded-lg px-3 py-2 text-sm ${
                         warning.severity === 'high'
-                          ? 'bg-red-500/10 text-red-200'
+                          ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
                           : warning.severity === 'medium'
-                            ? 'bg-amber-500/10 text-amber-200'
+                            ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
                             : 'bg-sky-500/10 text-sky-200'
                       }`}
                     >
@@ -476,6 +680,55 @@ const ConfigPage = () => {
                   ))}
                 </div>
               )}
+            </InsetSurface>
+
+            <InsetSurface className="p-4">
+              <div className="mb-3">
+                <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.configDiff}</p>
+                <p className="mt-1 text-sm text-slate-500">{labels.configDiffDesc}</p>
+              </div>
+              {configChanges.length === 0 ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/40">
+                  {labels.noConfigDiff}
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {configChanges.slice(0, 8).map(change => (
+                    <div key={change.key} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/40">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="min-w-0 truncate text-sm font-medium text-slate-800 dark:text-slate-200" title={change.label}>{change.label}</span>
+                        <Badge tone="blue" className="shrink-0 px-2 py-0.5 text-[11px]">{change.key}</Badge>
+                      </div>
+                      <div className="mt-2 grid min-w-0 grid-cols-[48px_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+                        <span className="text-slate-500">{labels.before}</span>
+                        <span className="min-w-0 truncate text-slate-500" title={change.before}>{change.before}</span>
+                        <span className="text-slate-500">{labels.after}</span>
+                        <span className="min-w-0 truncate text-emerald-700 dark:text-emerald-200" title={change.after}>{change.after}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {configChanges.length > 8 && (
+                    <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-400">
+                      {zh ? `${labels.moreChanges} ${configChanges.length - 8} ${labels.moreChangesSuffix}` : `${labels.moreChanges} ${configChanges.length - 8} ${labels.moreChangesSuffix}`}
+                    </div>
+                  )}
+                </div>
+              )}
+            </InsetSurface>
+
+            <InsetSurface className="p-4">
+              <div className="flex items-start gap-3">
+                <div className="rounded-lg border border-sky-500/20 bg-sky-500/10 p-3 text-sky-300">
+                  <Activity className="h-5 w-5" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.performanceLink}</p>
+                  <p className="mt-1 text-sm leading-5 text-slate-500">{labels.performanceLinkDesc}</p>
+                  <Button onClick={() => setActiveTab('perf')} variant="secondary" className="mt-3 w-full" icon={<Activity className="h-4 w-4" />}>
+                    {labels.openPerformance}
+                  </Button>
+                </div>
+              </div>
             </InsetSurface>
           </div>
         </Surface>

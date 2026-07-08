@@ -405,7 +405,7 @@ const InstanceManager = () => {
                     onKeyDown={event => {
                       if (event.key === 'Enter' || event.key === ' ') setSelectedInstanceId(inst.id)
                     }}
-                    className={`grid min-w-0 gap-3 px-4 py-4 text-left transition lg:grid-cols-[minmax(260px,1.2fr)_minmax(220px,1fr)_minmax(180px,0.7fr)_auto] lg:items-center ${
+                    className={`grid min-w-0 gap-3 px-4 py-4 text-left transition lg:grid-cols-[minmax(280px,1fr)_minmax(210px,0.72fr)_minmax(150px,0.42fr)_minmax(166px,auto)] lg:items-center ${
                       selected ? 'bg-blue-50/70 dark:bg-blue-950/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/60'
                     }`}
                   >
@@ -449,23 +449,17 @@ const InstanceManager = () => {
                           )}
                         </div>
                         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
-                          <span className="tabular-nums">{inst.config.host}:{inst.config.port}</span>
-                          <span>{isRunning ? formatUptime(inst.startTime) : '--'}</span>
+                          <span className="max-w-[320px] truncate" title={inst.model}>{inst.model}</span>
                           {renderTestResult(inst.id)}
                         </div>
                       </div>
-                    </div>
-
-                    <div className="min-w-0">
-                      <div className="truncate text-sm text-slate-700 dark:text-slate-200" title={inst.config.model_path}>{inst.model}</div>
-                      <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-500" title={inst.config.model_path}>{inst.config.model_path || inst.model}</div>
                     </div>
 
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <Button
                         onClick={e => { e.stopPropagation(); setEnginePickerForId(inst.id) }}
                         size="sm"
-                        className="h-8 max-w-[180px] justify-start px-2"
+                        className="h-8 max-w-[150px] justify-start px-2"
                         title={engineNameFor(inst)}
                       >
                         <span className="min-w-0 truncate">{engineNameFor(inst)}</span>
@@ -479,7 +473,12 @@ const InstanceManager = () => {
                       </span>
                     </div>
 
-                    <div className="flex min-w-0 items-center justify-end gap-2" onClick={e => e.stopPropagation()}>
+                    <div className="min-w-0 text-xs text-slate-500 dark:text-slate-400">
+                      <div className="truncate font-mono text-slate-700 dark:text-slate-200" title={`${inst.config.host}:${inst.config.port}`}>{inst.config.host}:{inst.config.port}</div>
+                      <div className="mt-1">{isRunning ? formatUptime(inst.startTime) : '--'}</div>
+                    </div>
+
+                    <div className="flex min-w-0 items-center justify-end gap-1.5" onClick={e => e.stopPropagation()}>
                       <button
                         type="button"
                         role="switch"
@@ -495,7 +494,7 @@ const InstanceManager = () => {
                           onClick={() => stopInstance(inst.id)}
                           variant="danger"
                           size="sm"
-                          className="h-8 w-[74px]"
+                          className="h-8 w-[70px]"
                           icon={<Square className="h-3.5 w-3.5" />}
                         >
                           <span>{t.instance.stop}</span>
@@ -505,7 +504,7 @@ const InstanceManager = () => {
                           onClick={() => startInstance(inst.id)}
                           variant="success"
                           size="sm"
-                          className="h-8 w-[74px]"
+                          className="h-8 w-[70px]"
                           icon={<Play className="h-3.5 w-3.5" />}
                         >
                           <span>{t.instance.start}</span>

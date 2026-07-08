@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { Activity, BarChart3, Database, Gauge, HardDrive, RefreshCw, Server } from 'lucide-react'
+import { Activity, BarChart3, ChevronDown, Database, Gauge, HardDrive, RefreshCw, Server } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
 import type { DiagnosticFinding, InferenceRequestSummary, SystemMetrics, TelemetryOverview, TelemetrySampleSummary, TelemetrySessionAnalysis, TelemetrySessionSummary } from '../../store/types'
@@ -21,6 +21,30 @@ type MetricsEvent = {
     busy_slots_per_decode?: number
   } | null
   ts: number
+}
+
+type SessionBenchmark = {
+  historyCount: number
+  scope: 'sameConfig' | 'allHistory' | 'none'
+  avg: {
+    tokensPerSec: number | null
+    peakVramMb: number | null
+    durationSecs: number | null
+  }
+  best: TelemetrySessionSummary | null
+}
+
+type ModelBackendAggregate = {
+  key: string
+  model: string
+  engine: string
+  backend: string
+  count: number
+  avgTps: number
+  bestTps: number
+  peakVram: number
+  avgDuration: number | null
+  lastStartedAt: number
 }
 
 const emptyOverview: TelemetryOverview = {
@@ -45,6 +69,7 @@ export default function PerformancePage() {
   const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
   const [analysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
+  const [expandedFindings, setExpandedFindings] = useState<Record<string, boolean>>({})
   const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [loading, setLoading] = useState(false)
@@ -107,8 +132,10 @@ export default function PerformancePage() {
       setRequests([])
       setAnalysis(null)
       setDiagnostics([])
+      setExpandedFindings({})
       return
     }
+    setExpandedFindings({})
     void Promise.all([
       invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId: selectedSessionId, limit: 160 })
         .then(setSamples)
@@ -126,22 +153,55 @@ export default function PerformancePage() {
   }, [selectedSessionId])
 
   const latestSample = overview.latest_samples[0] || null
-  const modelRank = useMemo(() => {
-    const byModel = new Map<string, { model: string; count: number; avg: number; peakVram: number }>()
+  const diagnosticsBySeverity = useMemo(() => groupDiagnosticsBySeverity(diagnostics), [diagnostics])
+  const sessionBenchmark = useMemo(() => buildSessionBenchmark(selectedSession, sessions), [selectedSession, sessions])
+  const modelBackendRank = useMemo(() => {
+    const byConfig = new Map<string, ModelBackendAggregate & { totalTps: number; durationSum: number; durationCount: number }>()
     for (const session of sessions) {
-      const current = byModel.get(session.model_name) || { model: session.model_name, count: 0, avg: 0, peakVram: 0 }
+      const model = session.model_name || '--'
+      const engine = session.engine_id || '--'
+      const backend = session.backend || '--'
+      const key = `${model}\u0000${engine}\u0000${backend}`
+      const current = byConfig.get(key) || {
+        key,
+        model,
+        engine,
+        backend,
+        count: 0,
+        avgTps: 0,
+        bestTps: 0,
+        peakVram: 0,
+        avgDuration: null,
+        lastStartedAt: 0,
+        totalTps: 0,
+        durationSum: 0,
+        durationCount: 0,
+      }
       current.count += 1
-      current.avg += session.avg_tokens_per_sec || 0
+      current.totalTps += session.avg_tokens_per_sec || 0
+      current.bestTps = Math.max(current.bestTps, session.avg_tokens_per_sec || 0)
       current.peakVram = Math.max(current.peakVram, session.peak_vram_mb || 0)
-      byModel.set(session.model_name, current)
+      current.lastStartedAt = Math.max(current.lastStartedAt, session.started_at || 0)
+      if (session.duration_secs) {
+        current.durationSum += session.duration_secs
+        current.durationCount += 1
+      }
+      byConfig.set(key, current)
     }
-    return Array.from(byModel.values())
-      .map(item => ({ ...item, avg: item.count ? item.avg / item.count : 0 }))
-      .sort((a, b) => b.avg - a.avg)
+    return Array.from(byConfig.values())
+      .map(({ totalTps, durationSum, durationCount, ...item }) => ({
+        ...item,
+        avgTps: item.count ? totalTps / item.count : 0,
+        avgDuration: durationCount ? durationSum / durationCount : null,
+      }))
+      .sort((a, b) => b.avgTps - a.avgTps || b.count - a.count || b.lastStartedAt - a.lastStartedAt)
       .slice(0, 5)
   }, [sessions])
 
   const liveInsight = buildInsight(labels, liveSystem, latestSample)
+  const toggleFinding = useCallback((id: string) => {
+    setExpandedFindings(current => ({ ...current, [id]: !current[id] }))
+  }, [])
 
   return (
     <PageFrame
@@ -167,8 +227,26 @@ export default function PerformancePage() {
                   <div className="rounded-lg border border-dashed border-slate-300 px-3 py-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
                     {labels.noDiagnostics}
                   </div>
-                ) : diagnostics.map(finding => (
-                  <DiagnosticCard key={finding.id} finding={finding} labels={labels} />
+                ) : diagnosticsBySeverity.map(group => (
+                  <div key={group.severity} className="space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        {diagnosticSeverityLabel(group.severity, labels)}
+                      </div>
+                      <Badge tone={diagnosticTone(group.severity)}>{group.findings.length}</Badge>
+                    </div>
+                    <div className="space-y-2">
+                      {group.findings.map(finding => (
+                        <DiagnosticCard
+                          key={finding.id}
+                          finding={finding}
+                          labels={labels}
+                          expanded={!!expandedFindings[finding.id]}
+                          onToggle={() => toggleFinding(finding.id)}
+                        />
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
             ) : (
@@ -187,15 +265,28 @@ export default function PerformancePage() {
 
           <Surface as="aside" className="p-4">
             <SectionHeader title={labels.modelRank} description={labels.modelRankDesc} />
-            <div className="mt-4 space-y-2">
-              {modelRank.length === 0 ? (
+            <div className="mt-4 space-y-3">
+              {modelBackendRank.length === 0 ? (
                 <p className="py-4 text-center text-sm text-slate-500 dark:text-slate-400">{labels.noHistory}</p>
-              ) : modelRank.map(model => (
-                <div key={model.model} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
-                  <div className="truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={model.model}>{model.model}</div>
-                  <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                    <span>{model.count} {labels.sessions}</span>
-                    <span>{formatRate(model.avg)}</span>
+              ) : modelBackendRank.map(item => (
+                <div key={item.key} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={item.model}>{item.model}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <Badge tone="blue" className="max-w-full truncate">{item.engine}</Badge>
+                        <Badge tone="violet">{item.backend}</Badge>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-semibold text-slate-950 dark:text-slate-50">{formatRate(item.avgTps)}</div>
+                      <div className="text-xs text-slate-500">{labels.avgTps}</div>
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span>{item.count} {labels.sessions}</span>
+                    <span>{labels.best}: {formatRate(item.bestTps)}</span>
+                    <span>{formatGb(item.peakVram)}</span>
                   </div>
                 </div>
               ))}
@@ -336,6 +427,8 @@ export default function PerformancePage() {
                   </InsetSurface>
                 </div>
 
+                <SessionComparison benchmark={sessionBenchmark} selectedSession={selectedSession} labels={labels} />
+
                 <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
                   <InsetSurface className="p-3">
                     <div className="text-xs text-slate-500">{labels.requests}</div>
@@ -431,6 +524,89 @@ export default function PerformancePage() {
   )
 }
 
+function SessionComparison({
+  benchmark,
+  selectedSession,
+  labels,
+}: {
+  benchmark: SessionBenchmark
+  selectedSession: TelemetrySessionSummary
+  labels: ReturnType<typeof getLabels>
+}) {
+  const rows = [
+    {
+      id: 'throughput',
+      label: labels.avgTps,
+      current: formatRate(selectedSession.avg_tokens_per_sec),
+      history: formatRate(benchmark.avg.tokensPerSec),
+      best: formatRate(benchmark.best?.avg_tokens_per_sec),
+      delta: formatDelta(selectedSession.avg_tokens_per_sec, benchmark.avg.tokensPerSec, true),
+    },
+    {
+      id: 'vram',
+      label: labels.peakVram,
+      current: formatGb(selectedSession.peak_vram_mb),
+      history: formatGb(benchmark.avg.peakVramMb),
+      best: formatGb(benchmark.best?.peak_vram_mb),
+      delta: formatDelta(selectedSession.peak_vram_mb, benchmark.avg.peakVramMb, false),
+    },
+    {
+      id: 'duration',
+      label: labels.duration,
+      current: formatDuration(selectedSession.duration_secs),
+      history: formatDuration(benchmark.avg.durationSecs),
+      best: formatDuration(benchmark.best?.duration_secs),
+      delta: null,
+    },
+  ]
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.sessionComparison}</div>
+          <div className="text-xs text-slate-500 dark:text-slate-400">{sessionComparisonScopeLabel(benchmark, labels)}</div>
+        </div>
+        <Badge tone={benchmark.historyCount > 0 ? 'blue' : 'slate'}>{benchmark.historyCount} {labels.sessions}</Badge>
+      </div>
+      <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+        <table className="w-full table-fixed text-left text-sm">
+          <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+            <tr>
+              <th className="px-3 py-2 font-medium">{labels.metric}</th>
+              <th className="px-3 py-2 font-medium">{labels.currentSession}</th>
+              <th className="px-3 py-2 font-medium">{labels.historyAverage}</th>
+              <th className="px-3 py-2 font-medium">{labels.bestSession}</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+            {rows.map(row => (
+              <tr key={row.id} className="text-slate-700 dark:text-slate-200">
+                <td className="px-3 py-2 font-medium text-slate-900 dark:text-slate-100">{row.label}</td>
+                <td className="px-3 py-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>{row.current}</span>
+                    {row.delta ? <Badge tone={row.delta.tone}>{row.delta.text}</Badge> : null}
+                  </div>
+                </td>
+                <td className="px-3 py-2">{row.history}</td>
+                <td className="px-3 py-2">{row.best}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {benchmark.best ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <span>{labels.bestSession}</span>
+          <span className="truncate" title={benchmark.best.instance_name}>{benchmark.best.instance_name}</span>
+          <span>{formatDate(benchmark.best.started_at)}</span>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
@@ -440,7 +616,19 @@ function Detail({ label, value }: { label: string; value: string }) {
   )
 }
 
-function DiagnosticCard({ finding, labels }: { finding: DiagnosticFinding; labels: ReturnType<typeof getLabels> }) {
+function DiagnosticCard({
+  finding,
+  labels,
+  expanded,
+  onToggle,
+}: {
+  finding: DiagnosticFinding
+  labels: ReturnType<typeof getLabels>
+  expanded: boolean
+  onToggle: () => void
+}) {
+  const hasDetails = finding.evidence.length > 0 || finding.recommendation.length > 0
+
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
       <div className="flex items-start justify-between gap-3">
@@ -448,26 +636,130 @@ function DiagnosticCard({ finding, labels }: { finding: DiagnosticFinding; label
           <div className="text-sm font-semibold text-slate-950 dark:text-slate-100">{finding.title}</div>
           <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{finding.summary}</p>
         </div>
-        <Badge tone={diagnosticTone(finding.severity)} className="shrink-0">
-          {diagnosticSeverityLabel(finding.severity, labels)}
-        </Badge>
-      </div>
-      {finding.evidence.length > 0 ? (
-        <div className="mt-3 space-y-1 rounded-md bg-slate-50 p-2 text-xs text-slate-600 dark:bg-slate-900 dark:text-slate-300">
-          {finding.evidence.slice(0, 3).map(item => (
-            <div key={item} className="truncate" title={item}>{item}</div>
-          ))}
+        <div className="flex shrink-0 items-center gap-2">
+          <Badge tone={diagnosticTone(finding.severity)}>
+            {diagnosticSeverityLabel(finding.severity, labels)}
+          </Badge>
+          {hasDetails ? (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900"
+              aria-label={expanded ? labels.collapseDiagnostic : labels.expandDiagnostic}
+            >
+              <ChevronDown className={`h-4 w-4 transition ${expanded ? 'rotate-180' : ''}`} />
+            </button>
+          ) : null}
         </div>
-      ) : null}
-      {finding.recommendation.length > 0 ? (
-        <div className="mt-3 space-y-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-          {finding.recommendation.slice(0, 2).map(item => (
-            <div key={item}>{item}</div>
-          ))}
+      </div>
+      {expanded ? (
+        <div className="mt-3 space-y-3">
+          {finding.evidence.length > 0 ? (
+            <div className="rounded-md bg-slate-50 p-2 dark:bg-slate-900">
+              <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">{labels.evidence}</div>
+              <div className="space-y-1 text-xs text-slate-600 dark:text-slate-300">
+                {finding.evidence.map(item => (
+                  <div key={item} className="break-words">{item}</div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {finding.recommendation.length > 0 ? (
+            <div className="rounded-md border border-slate-200 p-2 dark:border-slate-800">
+              <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">{labels.recommendation}</div>
+              <div className="space-y-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
+                {finding.recommendation.map(item => (
+                  <div key={item}>{item}</div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
   )
+}
+
+function groupDiagnosticsBySeverity(diagnostics: DiagnosticFinding[]) {
+  const order: DiagnosticFinding['severity'][] = ['critical', 'warning', 'info', 'success']
+  return order
+    .map(severity => ({
+      severity,
+      findings: diagnostics.filter(finding => finding.severity === severity),
+    }))
+    .filter(group => group.findings.length > 0)
+}
+
+function buildSessionBenchmark(selectedSession: TelemetrySessionSummary | undefined, sessions: TelemetrySessionSummary[]): SessionBenchmark {
+  if (!selectedSession) {
+    return emptySessionBenchmark()
+  }
+
+  const history = sessions.filter(session => session.id !== selectedSession.id && session.sample_count > 0)
+  const sameConfig = history.filter(session =>
+    session.model_name === selectedSession.model_name &&
+    session.engine_id === selectedSession.engine_id &&
+    session.backend === selectedSession.backend
+  )
+  const basis = sameConfig.length > 0 ? sameConfig : history
+  if (basis.length === 0) {
+    return emptySessionBenchmark()
+  }
+
+  return {
+    historyCount: basis.length,
+    scope: sameConfig.length > 0 ? 'sameConfig' : 'allHistory',
+    avg: {
+      tokensPerSec: average(basis.map(session => session.avg_tokens_per_sec)),
+      peakVramMb: average(basis.map(session => session.peak_vram_mb)),
+      durationSecs: average(basis.map(session => session.duration_secs)),
+    },
+    best: basis.reduce<TelemetrySessionSummary | null>((best, session) => {
+      if (!best) return session
+      return (session.avg_tokens_per_sec || 0) > (best.avg_tokens_per_sec || 0) ? session : best
+    }, null),
+  }
+}
+
+function emptySessionBenchmark(): SessionBenchmark {
+  return {
+    historyCount: 0,
+    scope: 'none',
+    avg: {
+      tokensPerSec: null,
+      peakVramMb: null,
+      durationSecs: null,
+    },
+    best: null,
+  }
+}
+
+function average(values: Array<number | null | undefined>) {
+  const valid = values.filter((value): value is number => value != null && Number.isFinite(value))
+  if (valid.length === 0) return null
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length
+}
+
+function formatDelta(current?: number | null, baseline?: number | null, higherIsBetter = true) {
+  if (current == null || baseline == null || !Number.isFinite(current) || !Number.isFinite(baseline) || baseline === 0) {
+    return null
+  }
+  const percent = ((current - baseline) / baseline) * 100
+  if (Math.abs(percent) < 1) {
+    return { text: '0%', tone: 'slate' as const }
+  }
+  const better = higherIsBetter ? percent > 0 : percent < 0
+  const prefix = percent > 0 ? '+' : ''
+  return {
+    text: `${prefix}${percent.toFixed(0)}%`,
+    tone: better ? 'emerald' as const : 'amber' as const,
+  }
+}
+
+function sessionComparisonScopeLabel(benchmark: SessionBenchmark, labels: ReturnType<typeof getLabels>) {
+  if (benchmark.scope === 'sameConfig') return labels.sameConfigHistory
+  if (benchmark.scope === 'allHistory') return labels.allHistoryFallback
+  return labels.noHistoryBaseline
 }
 
 function diagnosticTone(severity: DiagnosticFinding['severity']) {
@@ -564,9 +856,18 @@ function getLabels(zh: boolean) {
     running: zh ? '\u8fd0\u884c\u4e2d' : 'Running',
     sessions: zh ? '\u6b21' : 'sessions',
     samples: zh ? '\u91c7\u6837' : 'samples',
+    best: zh ? '\u6700\u4f73' : 'Best',
     duration: zh ? '\u65f6\u957f' : 'Duration',
     avgTps: zh ? '\u5e73\u5747\u541e\u5410' : 'Avg TPS',
     peakVram: zh ? '\u5cf0\u503c\u663e\u5b58' : 'Peak VRAM',
+    sessionComparison: zh ? '\u4f1a\u8bdd\u5bf9\u6bd4' : 'Session Comparison',
+    metric: zh ? '\u6307\u6807' : 'Metric',
+    currentSession: zh ? '\u672c\u6b21' : 'Current',
+    historyAverage: zh ? '\u5386\u53f2\u5e73\u5747' : 'History Avg',
+    bestSession: zh ? '\u6700\u4f73\u4f1a\u8bdd' : 'Best Session',
+    sameConfigHistory: zh ? '\u4f18\u5148\u5bf9\u6bd4\u540c\u6a21\u578b\u3001\u540c\u5f15\u64ce\u548c\u540c\u540e\u7aef\u7684\u5386\u53f2\u4f1a\u8bdd\u3002' : 'Compares against previous sessions with the same model, engine, and backend.',
+    allHistoryFallback: zh ? '\u6682\u65e0\u540c\u914d\u7f6e\u5386\u53f2\uff0c\u5df2\u9000\u56de\u5168\u90e8\u5386\u53f2\u4f1a\u8bdd\u3002' : 'No same-config history yet, so this falls back to all previous sessions.',
+    noHistoryBaseline: zh ? '\u6682\u65e0\u53ef\u7528\u5386\u53f2\u57fa\u7ebf\u3002' : 'No historical baseline is available yet.',
     throughputTrend: zh ? '\u541e\u5410\u8d8b\u52bf' : 'Throughput Trend',
     noSamplesYet: zh ? '\u6682\u65e0\u8db3\u591f\u9065\u6d4b\u91c7\u6837' : 'No telemetry samples yet',
     model: zh ? '\u6a21\u578b' : 'Model',
@@ -581,11 +882,15 @@ function getLabels(zh: boolean) {
     severityWarning: zh ? '\u63d0\u9192' : 'Warning',
     severityInfo: zh ? '\u4fe1\u606f' : 'Info',
     severitySuccess: zh ? '\u6b63\u5e38' : 'Healthy',
+    evidence: zh ? '\u8bc1\u636e' : 'Evidence',
+    recommendation: zh ? '\u5efa\u8bae' : 'Recommendation',
+    expandDiagnostic: zh ? '\u5c55\u5f00\u8bca\u65ad\u8be6\u60c5' : 'Expand diagnostic details',
+    collapseDiagnostic: zh ? '\u6536\u8d77\u8bca\u65ad\u8be6\u60c5' : 'Collapse diagnostic details',
     gpuPressure: zh ? 'GPU \u538b\u529b' : 'GPU Pressure',
     vramPressure: zh ? '\u663e\u5b58\u538b\u529b' : 'VRAM Pressure',
     throughput: zh ? '\u541e\u5410' : 'Throughput',
     modelRank: zh ? '\u6a21\u578b\u8868\u73b0' : 'Model Performance',
-    modelRankDesc: zh ? '\u6309\u5386\u53f2\u4f1a\u8bdd\u805a\u5408\u7684\u6a21\u578b\u541e\u5410\u6392\u884c\u3002' : 'Model throughput ranking aggregated from run sessions.',
+    modelRankDesc: zh ? '\u6309\u6a21\u578b + \u5f15\u64ce/\u540e\u7aef\u805a\u5408\u7684\u5386\u53f2\u541e\u5410\u5361\u7247\u3002' : 'Historical throughput cards grouped by model plus engine/backend.',
     recentRequests: zh ? '\u6700\u8fd1\u63a8\u7406\u8bf7\u6c42' : 'Recent Inference Requests',
     recentRequestsDesc: zh ? '\u6765\u81ea llama-server \u65e5\u5fd7\u89e3\u6790\u7684\u8bf7\u6c42\u7ea7 token\u3001\u8017\u65f6\u4e0e\u541e\u5410\u8bb0\u5f55\u3002' : 'Request-level tokens, duration, and throughput parsed from llama-server logs.',
     requests: zh ? '\u8bf7\u6c42' : 'requests',

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, type ReactNode } from 'react'
-import { Trash2, FolderOpen, X, Download, ChevronDown, ChevronUp, Pause, Play, RotateCcw, RefreshCw, Square, Settings2, AlertTriangle } from 'lucide-react'
+import { Trash2, FolderOpen, X, Download, ChevronDown, ChevronUp, Pause, Play, RotateCcw, RefreshCw, Square, Settings2, AlertTriangle, Database } from 'lucide-react'
 import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
 import { useI18n } from '../i18n'
@@ -135,6 +135,8 @@ export default function DownloadManager() {
   const retryFailedDownload = useAppStore(s => s.retryFailedDownload)
   const redownloadFile = useAppStore(s => s.redownloadFile)
   const moveQueueEntry = useAppStore(s => s.moveQueueEntry)
+  const scanModels = useAppStore(s => s.scanModels)
+  const openModelFolder = useAppStore(s => s.openModelFolder)
 
   const [source, setSource] = useState<DownloadSource>('modelscope')
   const [repoId, setRepoId] = useState('')
@@ -160,6 +162,8 @@ export default function DownloadManager() {
   const [dlSettingsOpen, setDlSettingsOpen] = useState(true)
   const [resumePolicy, setResumePolicy] = useState<ResumePolicy>('manual')
   const [concurrency, setConcurrency] = useState(1)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
+  const [modelImportStatus, setModelImportStatus] = useState('')
   const [bandwidthLimit, setBandwidthLimit] = useState(DEFAULT_BANDWIDTH_LIMIT)
   const [bandwidthUnit, setBandwidthUnit] = useState<BandwidthUnit>(() => {
     try {
@@ -178,7 +182,8 @@ export default function DownloadManager() {
     sourceSection: '\u6A21\u578B\u6765\u6E90',
     sourceHelp: '\u8F93\u5165\u4ED3\u5E93 ID \u540E\u6D4F\u89C8\u53EF\u4E0B\u8F7D\u6587\u4EF6',
     storageSection: '\u4E0B\u8F7D\u5B58\u50A8\u8DEF\u5F84',
-    storageHelp: '\u4E0B\u8F7D\u6587\u4EF6\u5C06\u4FDD\u5B58\u5230\u6B64\u76EE\u5F55\u4E0B\u7684\u4ED3\u5E93\u5B50\u76EE\u5F55',
+    storageHelp: '\u8F93\u5165\u7EDD\u5BF9\u8DEF\u5F84\uFF0C\u6216\u4F7F\u7528 models \u8FD9\u7C7B\u76F8\u5BF9\u8DEF\u5F84\u4FDD\u5B58\u5230\u5E94\u7528\u6570\u636E\u76EE\u5F55',
+    storagePreview: '\u4FDD\u5B58\u843D\u70B9',
     chooseFolder: '\u9009\u62E9\u76EE\u5F55',
     batchTools: '\u6279\u91CF\u5DE5\u5177',
     totalSpeed: '\u5F53\u524D\u901F\u5EA6',
@@ -193,11 +198,34 @@ export default function DownloadManager() {
     displayUnit: '\u663E\u793A\u5355\u4F4D',
     unlimited: '\u4E0D\u9650',
     limitHelp: '0 \u8868\u793A\u4E0D\u9650\u901F',
-    lowPriorityThrottle: '\u4F4E\u4F18\u5148\u7EA7\u4EFB\u52A1\u9884\u8BBE',
-    throttleHelp: '\u5F00\u542F\u540E\u4E0B\u8F7D\u4F1A\u4EE5\u5355\u5E76\u53D1\u540E\u53F0\u6A21\u5F0F\u8FD0\u884C\uFF0C\u5E76\u5E94\u7528\u66F4\u4FDD\u5B88\u7684\u5E26\u5BBD\u8282\u6D41',
+    lowPriorityThrottle: '\u4F4E\u4F18\u5148\u7EA7\u8282\u6D41',
+    throttleHelp: '\u5F00\u542F\u540E\u540E\u7AEF\u4F1A\u5C06\u4E0B\u8F7D\u6536\u655B\u4E3A\u5355\u5E76\u53D1\uFF1B\u82E5\u672A\u8BBE\u7F6E\u9650\u901F\uFF0C\u5219\u81EA\u52A8\u4F7F\u7528 2 MiB/s \u540E\u53F0\u9650\u901F',
     resetDefaults: '\u91CD\u7F6E\u9ED8\u8BA4',
     noActionable: '\u6682\u65E0\u53EF\u64CD\u4F5C\u4E0B\u8F7D',
     localPreset: '\u672C\u5730\u9884\u8BBE',
+    taskSummary: '\u4EFB\u52A1\u8BE6\u60C5',
+    noSelectedTask: '\u6682\u65E0\u9009\u4E2D\u4EFB\u52A1',
+    selectedTaskHint: '\u5355\u51FB\u4EFB\u52A1\u5361\u7247\u53EF\u5207\u6362\u8BE6\u60C5',
+    progress: '\u8FDB\u5EA6',
+    downloaded: '\u5DF2\u4E0B\u8F7D',
+    speed: '\u901F\u5EA6',
+    eta: '\u5269\u4F59',
+    etaPending: '\u5F85\u4F30\u7B97',
+    queueState: '\u961F\u5217\u72B6\u6001',
+    queuePosition: '\u961F\u5217\u7B2C',
+    runningNow: '\u6B63\u5728\u4E0B\u8F7D',
+    notQueued: '\u4E0D\u5728\u7B49\u5F85\u961F\u5217',
+    failedReason: '\u5931\u8D25\u539F\u56E0',
+    retryAdvice: '\u91CD\u8BD5\u5EFA\u8BAE',
+    retryAdviceNetwork: '\u4FDD\u7559\u5DF2\u4E0B\u8F7D\u5206\u7247\u5E76\u91CD\u8BD5\uFF1B\u5982\u679C\u7EE7\u7EED\u5931\u8D25\uFF0C\u68C0\u67E5\u7F51\u7EDC\u6216\u9650\u901F\u8BBE\u7F6E',
+    retryAdviceRedownload: '\u670D\u52A1\u7AEF\u6216\u5206\u7247\u72B6\u6001\u4E0D\u9002\u5408\u7EED\u4F20\uFF0C\u5EFA\u8BAE\u4F7F\u7528\u91CD\u65B0\u4E0B\u8F7D',
+    retryAdvicePermission: '\u68C0\u67E5\u4ED3\u5E93\u6743\u9650\u3001\u6587\u4EF6\u662F\u5426\u5B58\u5728\uFF0C\u7136\u540E\u91CD\u8BD5',
+    retryAdviceGeneric: '\u5148\u91CD\u8BD5\u4EE5\u7EED\u4F20\uFF1B\u82E5\u9519\u8BEF\u91CD\u590D\u51FA\u73B0\uFF0C\u518D\u6267\u884C\u91CD\u65B0\u4E0B\u8F7D',
+    openLocation: '\u6253\u5F00\u4F4D\u7F6E',
+    addToModelRepo: '\u5165\u5E93\u626B\u63CF',
+    importedToRepo: '\u5DF2\u626B\u63CF\u4FDD\u5B58\u76EE\u5F55\u5E76\u5237\u65B0\u6A21\u578B\u5E93',
+    importFailed: '\u5165\u5E93\u626B\u63CF\u5931\u8D25',
+    localPath: '\u672C\u5730\u6587\u4EF6',
   } : {
     strategyTitle: 'Download strategy',
     strategySub: 'Resume policy, concurrency, bandwidth limit, and low-priority mode are backend-backed',
@@ -206,7 +234,8 @@ export default function DownloadManager() {
     sourceSection: 'Model source',
     sourceHelp: 'Enter a repository ID, then browse downloadable files',
     storageSection: 'Download storage path',
-    storageHelp: 'Files are saved under this directory, grouped by repository',
+    storageHelp: 'Use an absolute folder, or a relative folder such as models under the app data directory',
+    storagePreview: 'Save target',
     chooseFolder: 'Choose folder',
     batchTools: 'Bulk tools',
     totalSpeed: 'Current speed',
@@ -221,11 +250,34 @@ export default function DownloadManager() {
     displayUnit: 'Display unit',
     unlimited: 'Unlimited',
     limitHelp: '0 means unlimited',
-    lowPriorityThrottle: 'Low-priority task preset',
-    throttleHelp: 'Runs downloads as a single-concurrency background workload and applies conservative bandwidth throttling',
+    lowPriorityThrottle: 'Low-priority throttling',
+    throttleHelp: 'Backend switches downloads to single concurrency; without a custom limit it applies a 2 MiB/s background cap',
     resetDefaults: 'Reset defaults',
     noActionable: 'No actionable downloads',
     localPreset: 'Local preset',
+    taskSummary: 'Task details',
+    noSelectedTask: 'No task selected',
+    selectedTaskHint: 'Click any task card to switch this panel',
+    progress: 'Progress',
+    downloaded: 'Downloaded',
+    speed: 'Speed',
+    eta: 'ETA',
+    etaPending: 'Pending',
+    queueState: 'Queue state',
+    queuePosition: 'Queue position',
+    runningNow: 'Downloading now',
+    notQueued: 'Not waiting in queue',
+    failedReason: 'Failure reason',
+    retryAdvice: 'Retry advice',
+    retryAdviceNetwork: 'Keep the partial file and retry; if it fails again, check network or bandwidth settings',
+    retryAdviceRedownload: 'The server or partial file state is not suitable for resume; use redownload',
+    retryAdvicePermission: 'Check repository access and whether the file still exists, then retry',
+    retryAdviceGeneric: 'Retry first to resume from the partial file; redownload if the error repeats',
+    openLocation: 'Open location',
+    addToModelRepo: 'Scan into model repo',
+    importedToRepo: 'Scanned the save directory and refreshed the model repository',
+    importFailed: 'Model repo scan failed',
+    localPath: 'Local file',
   }, [lang])
 
   useEffect(() => {
@@ -460,11 +512,49 @@ export default function DownloadManager() {
     cancelAndCleanupDownload(task.id, task.fileName, pathJoin(task.saveDir, task.repoId, task.fileName), task.runId, task.version)
   }
 
+  const taskLocalPath = (task: DownloadProgress) => task.path || pathJoin(task.saveDir, task.repoId, task.fileName)
+
+  const taskEtaText = (task: DownloadProgress) => {
+    const eta = formatETA(task.downloaded, task.total, task.speed || 0)
+    return eta || ui.etaPending
+  }
+
+  const retrySuggestion = (task: DownloadProgress) => {
+    const message = (task.error || '').toLowerCase()
+    if (task.remoteChanged || message.includes('corrupt') || message.includes('does not support resume') || message.includes('larger than expected')) {
+      return ui.retryAdviceRedownload
+    }
+    if (message.includes('403') || message.includes('404') || message.includes('access denied') || message.includes('not found')) {
+      return ui.retryAdvicePermission
+    }
+    if (message.includes('429') || message.includes('timeout') || message.includes('network') || message.includes('connection') || message.includes('http 5')) {
+      return ui.retryAdviceNetwork
+    }
+    return ui.retryAdviceGeneric
+  }
+
+  const handleOpenTaskLocation = async (task: DownloadProgress) => {
+    try {
+      await openModelFolder(taskLocalPath(task))
+    } catch (error: any) {
+      setModelImportStatus(typeof error === 'string' ? error : String(error || ui.importFailed))
+    }
+  }
+
+  const handleImportCompletedTask = async (task: DownloadProgress) => {
+    const error = await scanModels([task.saveDir])
+    setModelImportStatus(error ? `${ui.importFailed}: ${error}` : ui.importedToRepo)
+  }
+
   const allTasks = useMemo(() => Object.values(downloadTasks), [downloadTasks])
   const activeTasks = useMemo(() => allTasks.filter(task => task.status === 'active'), [allTasks])
   const pausedTasks = useMemo(() => allTasks.filter(task => task.status === 'paused' || task.status === 'pausing'), [allTasks])
   const failedTasks = useMemo(() => allTasks.filter(task => task.status === 'error'), [allTasks])
   const completedTasks = useMemo(() => allTasks.filter(task => task.status === 'completed' || task.status === 'cancelled'), [allTasks])
+  const selectedTask = useMemo(() => {
+    if (selectedTaskId && downloadTasks[selectedTaskId]) return downloadTasks[selectedTaskId]
+    return activeTasks[0] || failedTasks[0] || completedTasks.find(task => task.status === 'completed') || pausedTasks[0] || null
+  }, [activeTasks, completedTasks, downloadTasks, failedTasks, pausedTasks, selectedTaskId])
 
   const hasActive = activeTasks.length > 0
   const hasPaused = pausedTasks.length > 0
@@ -488,8 +578,24 @@ export default function DownloadManager() {
     return Array.from(map.entries()).map(([key, group]) => ({ key, ...group }))
   }, [downloadQueue])
 
+  const queuedTaskIds = useMemo(() => downloadQueue.flatMap(entry => entry.files.map(file => file.task_id).filter(Boolean) as string[]), [downloadQueue])
+
+  const storagePreview = useMemo(() => {
+    const repo = browsedRepoId || repoId.trim() || '<repo>'
+    return pathJoin(saveDir || DEFAULT_SAVE_DIR, repo, '<file>')
+  }, [browsedRepoId, repoId, saveDir])
+
+  const queueStateDetail = (task: DownloadProgress) => {
+    const index = queuedTaskIds.indexOf(task.id)
+    if (index >= 0) return `${ui.queuePosition} ${index + 1} / ${queuedTaskIds.length}`
+    if (task.status === 'active') return ui.runningNow
+    if (task.status === 'queued') return t.downloadPage.queued
+    return ui.notQueued
+  }
+
   const renderTaskCard = (task: DownloadProgress) => {
     const pct = task.total > 0 ? Math.min(100, (task.downloaded / task.total) * 100) : 0
+    const isSelected = selectedTask?.id === task.id
     const barColor = task.status === 'active'
       ? 'bg-blue-500'
       : (task.status === 'paused' || task.status === 'pausing')
@@ -499,7 +605,16 @@ export default function DownloadManager() {
           : 'bg-emerald-500'
 
     return (
-      <div key={task.id} className="min-w-0 border-b border-slate-200 px-4 py-4 last:border-b-0 dark:border-slate-800">
+      <div
+        key={task.id}
+        role="button"
+        tabIndex={0}
+        onClick={() => setSelectedTaskId(task.id)}
+        onKeyDown={event => {
+          if (event.key === 'Enter' || event.key === ' ') setSelectedTaskId(task.id)
+        }}
+        className={`min-w-0 border-b px-4 py-4 text-left outline-none transition last:border-b-0 ${isSelected ? 'border-blue-200 bg-blue-50/60 dark:border-blue-900/50 dark:bg-blue-950/20' : 'border-slate-200 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-900/45'}`}
+      >
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
@@ -565,6 +680,27 @@ export default function DownloadManager() {
               </>
             )}
 
+            {task.status === 'completed' && (
+              <>
+                <button
+                  onClick={() => handleImportCompletedTask(task)}
+                  className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-2 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/70"
+                  title={ui.addToModelRepo}
+                >
+                  <Database className="h-3.5 w-3.5" />
+                  <span>{ui.addToModelRepo}</span>
+                </button>
+                <button
+                  onClick={() => handleOpenTaskLocation(task)}
+                  className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                  title={ui.openLocation}
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                  <span>{ui.openLocation}</span>
+                </button>
+              </>
+            )}
+
             {(task.status === 'completed' || task.status === 'cancelled') && task.path && (
               <button
                 onClick={() => cancelAndCleanupDownload(task.id, task.fileName, task.path!, task.runId, task.version)}
@@ -602,22 +738,41 @@ export default function DownloadManager() {
           <div className={`h-full rounded-full ${barColor} transition-all duration-300`} style={{ width: `${pct}%` }} />
         </div>
 
-        <div className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <span className="shrink-0">{formatSize(task.downloaded)} / {formatSize(task.total)}</span>
-          {task.status === 'active' ? (
-            <span className="truncate">{formatSpeed(task.speed || 0)} &middot; {formatETA(task.downloaded, task.total, task.speed || 0)}</span>
-          ) : task.status === 'paused' || task.status === 'pausing' ? (
-            <span className="text-amber-600 dark:text-amber-400">{t.downloadPage.paused}</span>
-          ) : task.status === 'error' && task.error ? (
-            <span className="max-w-[280px] truncate text-rose-500" title={task.error}>{task.error}</span>
-          ) : task.status === 'completed' ? (
-            <span className="text-emerald-600 dark:text-emerald-400">{t.modelRepo.done}</span>
-          ) : task.status === 'cancelled' ? (
-            <span>{t.modelRepo.cancelled}</span>
-          ) : (
-            <span>{taskStatusLabel(task)}</span>
-          )}
+        <div className="mt-3 grid min-w-0 grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+          <div className="min-w-0">
+            <div className="text-slate-400 dark:text-slate-500">{ui.progress}</div>
+            <div className="mt-0.5 truncate text-slate-600 dark:text-slate-300">{pct.toFixed(1)}%</div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-slate-400 dark:text-slate-500">{ui.downloaded}</div>
+            <div className="mt-0.5 truncate text-slate-600 dark:text-slate-300">{formatSize(task.downloaded)} / {formatSize(task.total)}</div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-slate-400 dark:text-slate-500">{ui.speed}</div>
+            <div className="mt-0.5 truncate text-slate-600 dark:text-slate-300">{task.status === 'active' ? formatSpeed(task.speed || 0) : '-'}</div>
+          </div>
+          <div className="min-w-0">
+            <div className="text-slate-400 dark:text-slate-500">{ui.eta}</div>
+            <div className="mt-0.5 truncate text-slate-600 dark:text-slate-300">{task.status === 'active' ? taskEtaText(task) : queueStateDetail(task)}</div>
+          </div>
         </div>
+
+        {task.status === 'error' && (
+          <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/25 dark:text-rose-300">
+            <div className="truncate font-medium" title={task.error || t.modelRepo.failed}>{task.error || t.modelRepo.failed}</div>
+            <div className="mt-1 text-rose-600 dark:text-rose-300">{retrySuggestion(task)}</div>
+          </div>
+        )}
+
+        {task.status === 'completed' && (
+          <PathText value={taskLocalPath(task)} maxLength={110} className="mt-3 max-w-full text-xs text-slate-400 dark:text-slate-500" />
+        )}
+
+        {modelImportStatus && isSelected && (
+          <div className="mt-3 truncate rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400" title={modelImportStatus}>
+            {modelImportStatus}
+          </div>
+        )}
       </div>
     )
   }
@@ -733,6 +888,109 @@ export default function DownloadManager() {
     )
   }
 
+  const renderSelectedTaskSummary = () => {
+    if (!selectedTask) {
+      return (
+        <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
+          <div className="border-b border-slate-200 px-4 py-4 dark:border-slate-800">
+            <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.taskSummary}</div>
+          </div>
+          <div className="px-4 py-8 text-sm text-slate-400 dark:text-slate-500">{ui.noSelectedTask}</div>
+        </section>
+      )
+    }
+
+    const pct = selectedTask.total > 0 ? Math.min(100, (selectedTask.downloaded / selectedTask.total) * 100) : 0
+    const isCompleted = selectedTask.status === 'completed'
+    const isFailed = selectedTask.status === 'error'
+
+    return (
+      <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
+        <div className="border-b border-slate-200 px-4 py-4 dark:border-slate-800">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.taskSummary}</div>
+              <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={selectedTask.fileName}>{selectedTask.fileName}</div>
+            </div>
+            <StatusBadge status={selectedTask.status} label={taskStatusLabel(selectedTask)} />
+          </div>
+        </div>
+
+        <div className="space-y-4 px-4 py-4">
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium text-slate-500 dark:text-slate-400">{ui.progress}</span>
+              <span className="text-slate-600 dark:text-slate-300">{pct.toFixed(1)}%</span>
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+              <div className="h-full rounded-full bg-blue-500 transition-all duration-300" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
+              <div className="text-slate-400 dark:text-slate-500">{ui.downloaded}</div>
+              <div className="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">{formatSize(selectedTask.downloaded)} / {formatSize(selectedTask.total)}</div>
+            </div>
+            <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
+              <div className="text-slate-400 dark:text-slate-500">{ui.speed}</div>
+              <div className="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">{selectedTask.status === 'active' ? formatSpeed(selectedTask.speed || 0) : '-'}</div>
+            </div>
+            <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
+              <div className="text-slate-400 dark:text-slate-500">{ui.eta}</div>
+              <div className="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">{selectedTask.status === 'active' ? taskEtaText(selectedTask) : '-'}</div>
+            </div>
+            <div className="min-w-0 rounded-lg border border-slate-200 px-3 py-2.5 dark:border-slate-800">
+              <div className="text-slate-400 dark:text-slate-500">{ui.queueState}</div>
+              <div className="mt-1 truncate font-medium text-slate-700 dark:text-slate-200">{queueStateDetail(selectedTask)}</div>
+            </div>
+          </div>
+
+          <div className="space-y-2 text-xs">
+            <div className="text-slate-400 dark:text-slate-500">{ui.localPath}</div>
+            <PathText value={taskLocalPath(selectedTask)} maxLength={120} className="max-w-full text-slate-600 dark:text-slate-300" />
+          </div>
+
+          {isFailed && (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/25 dark:text-rose-300">
+              <div className="font-medium">{ui.failedReason}</div>
+              <div className="mt-1 break-words">{selectedTask.error || t.modelRepo.failed}</div>
+              <div className="mt-2 font-medium">{ui.retryAdvice}</div>
+              <div className="mt-1">{retrySuggestion(selectedTask)}</div>
+            </div>
+          )}
+
+          {isCompleted && (
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => handleImportCompletedTask(selectedTask)}
+                className="inline-flex items-center justify-center gap-1 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:hover:bg-emerald-950/70"
+              >
+                <Database className="h-3.5 w-3.5" />
+                <span>{ui.addToModelRepo}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenTaskLocation(selectedTask)}
+                className="inline-flex items-center justify-center gap-1 rounded-lg bg-slate-100 px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+                <span>{ui.openLocation}</span>
+              </button>
+            </div>
+          )}
+
+          {modelImportStatus && (
+            <div className="truncate rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-400" title={modelImportStatus}>
+              {modelImportStatus}
+            </div>
+          )}
+        </div>
+      </section>
+    )
+  }
+
   if (initialLoading) {
     return (
       <div className="space-y-5">
@@ -760,7 +1018,7 @@ export default function DownloadManager() {
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricTile label={t.downloadPage.queue} value={queueFileCount} detail={downloadQueue.length > 0 ? `${downloadQueue.length} ${lang === 'zh-CN' ? '\u6279\u6B21' : 'batches'}` : t.downloadPage.noQueue} tone="slate" />
-        <MetricTile label={t.downloadPage.active} value={activeTasks.length} detail={hasActive ? formatSize(activeTasks.reduce((sum, task) => sum + task.speed, 0)) + '/s' : t.downloadPage.noActive} tone="blue" />
+        <MetricTile label={t.downloadPage.active} value={activeTasks.length} detail={hasActive ? formatSpeed(activeTasks.reduce((sum, task) => sum + task.speed, 0)) : t.downloadPage.noActive} tone="blue" />
         <MetricTile label={t.downloadPage.paused} value={pausedTasks.length} detail={hasPaused ? `${pausedTasks.filter(task => task.status === 'paused').length} ${lang === 'zh-CN' ? '\u53EF\u6062\u590D' : 'resumable'}` : t.downloadPage.noPaused} tone="amber" />
         <MetricTile label={t.downloadPage.completed} value={completedTasks.length} detail={completedBytes > 0 ? formatSize(completedBytes) : t.downloadPage.noCompleted} tone="emerald" />
       </div>
@@ -900,6 +1158,11 @@ export default function DownloadManager() {
                   </button>
                 </div>
 
+                <div className="mt-3 rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-slate-800 dark:bg-slate-950">
+                  <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{ui.storagePreview}</div>
+                  <PathText value={storagePreview} maxLength={96} className="mt-1 max-w-full text-xs text-slate-600 dark:text-slate-300" />
+                </div>
+
                 {status && (
                   <div className="mt-3 truncate rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400" title={status}>
                     {status}
@@ -921,6 +1184,8 @@ export default function DownloadManager() {
         </section>
 
         <div className="min-w-0 space-y-5">
+          {renderSelectedTaskSummary()}
+
           <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
             <button
               type="button"
