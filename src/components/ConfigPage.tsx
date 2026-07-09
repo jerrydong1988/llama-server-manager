@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, Search, Settings, SlidersHorizontal, Sparkles, X } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, ListChecks, RotateCcw, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { useAppStore, type InstanceConfig, type ModelInfo, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
@@ -82,10 +82,25 @@ type ConfigChange = {
 type ConfigTemplate = {
   id: string
   title: string
+  subtitle: string
   description: string
+  bestFor: string[]
+  highlights: string[]
   tone: string
   changes: Partial<InstanceConfig>
   risks: string[]
+}
+
+type TemplateSnapshot = {
+  templateId: string
+  templateTitle: string
+  config: InstanceConfig
+}
+
+type ChangeGroup = {
+  id: string
+  title: string
+  keys: Array<keyof InstanceConfig>
 }
 
 const isEqualValue = (left: unknown, right: unknown) => {
@@ -178,6 +193,22 @@ const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConf
       after: formatValue(changes[key], labels),
     }))
 
+const groupTemplateChanges = (changes: ConfigChange[], groups: ChangeGroup[], otherTitle: string) => {
+  const grouped = groups
+    .map(group => ({
+      ...group,
+      changes: changes.filter(change => group.keys.includes(change.key)),
+    }))
+    .filter(group => group.changes.length > 0)
+
+  const groupedKeys = new Set(grouped.flatMap(group => group.changes.map(change => change.key)))
+  const otherChanges = changes.filter(change => !groupedKeys.has(change.key))
+
+  return otherChanges.length > 0
+    ? [...grouped, { id: 'other', title: otherTitle, keys: [], changes: otherChanges }]
+    : grouped
+}
+
 const ConfigPage = () => {
   const { instances, activeConfigInstanceId, updateInstance, saveConfig, models, modelDirs, engines, defaultEngineId, setActiveTab } = useAppStore()
   const { t, lang } = useI18n()
@@ -192,6 +223,9 @@ const ConfigPage = () => {
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [appliedTemplateId, setAppliedTemplateId] = useState<string | null>(null)
+  const [showPresetAssistant, setShowPresetAssistant] = useState(false)
+  const [selectedTemplateId, setSelectedTemplateId] = useState('safe-start')
+  const [lastTemplateSnapshot, setLastTemplateSnapshot] = useState<TemplateSnapshot | null>(null)
   const mountedRef = useRef(true)
   const prevQuery = useRef('')
 
@@ -227,10 +261,14 @@ const ConfigPage = () => {
     } else {
       setLocal(null)
     }
+    setAppliedTemplateId(null)
+    setLastTemplateSnapshot(null)
+    setShowPresetAssistant(false)
   }, [activeConfigInstanceId, inst])
 
   const set = (key: keyof InstanceConfig, value: any) => {
     setAppliedTemplateId(null)
+    setLastTemplateSnapshot(null)
     setLocal(current => (current ? { ...current, [key]: value } : current))
   }
 
@@ -356,12 +394,35 @@ const ConfigPage = () => {
     moreChanges: zh ? '\u8fd8\u6709' : 'plus',
     moreChangesSuffix: zh ? '\u9879\u53d8\u66f4' : 'more changes',
     quickTemplates: zh ? '\u914d\u7f6e\u9884\u8bbe' : 'Config Presets',
-    quickTemplatesDesc: zh ? '\u5e94\u7528\u5230\u672c\u5730\u8349\u7a3f\uff0c\u5148\u5bf9\u6bd4\u5dee\u5f02\u548c\u98ce\u9669\uff0c\u786e\u8ba4\u540e\u518d\u4fdd\u5b58\u5230\u5b9e\u4f8b\u3002' : 'Apply to the local draft, review the diff and risk notes, then save when ready.',
+    quickTemplatesDesc: zh ? '\u9884\u8bbe\u4e0d\u518d\u76f4\u63a5\u6539\u52a8\u914d\u7f6e\uff1b\u6253\u5f00\u52a9\u624b\u540e\u5148\u770b\u573a\u666f\u3001\u5dee\u5f02\u548c\u98ce\u9669\uff0c\u518d\u660e\u786e\u5e94\u7528\u5230\u8349\u7a3f\u3002' : 'Presets no longer change config directly. Open the assistant, review the scenario, diff, and risks, then explicitly apply to the draft.',
+    openPresetAssistant: zh ? '\u6253\u5f00\u9884\u8bbe\u52a9\u624b' : 'Open Preset Assistant',
+    presetAssistant: zh ? '\u914d\u7f6e\u9884\u8bbe\u52a9\u624b' : 'Config Preset Assistant',
+    presetAssistantDesc: zh ? '\u9009\u4e2d\u9884\u8bbe\u53ea\u4f1a\u9884\u89c8\uff0c\u4e0d\u4f1a\u7acb\u5373\u6539\u52a8\u5f53\u524d\u914d\u7f6e\u3002' : 'Selecting a preset only previews it; the current config is not changed until you apply it.',
+    presetSafeHint: zh ? '\u5b89\u5168\u6d41\u7a0b\uff1a\u9009\u62e9 -> \u9884\u89c8\u5dee\u5f02 -> \u786e\u8ba4\u5e94\u7528 -> \u4fdd\u5b58\u914d\u7f6e\u3002' : 'Safe flow: select, preview diff, apply, then save the config.',
+    presetNoDirectApply: zh ? '\u6b64\u533a\u57df\u4e0d\u4f1a\u76f4\u63a5\u8986\u76d6\u53c2\u6570' : 'This area does not directly overwrite parameters',
+    presetRecommended: zh ? '\u63a8\u8350\u8d77\u70b9' : 'Recommended starting point',
+    presetCurrent: zh ? '\u5f53\u524d\u9009\u4e2d' : 'Selected',
     applyTemplate: zh ? '\u5e94\u7528\u5230\u8349\u7a3f' : 'Apply to Draft',
     appliedTemplate: zh ? '\u5df2\u5e94\u7528' : 'Applied',
+    templateAppliedMessage: zh ? '\u5df2\u5e94\u7528\u5230\u672c\u5730\u8349\u7a3f\uff0c\u5c1a\u672a\u4fdd\u5b58\u5230\u5b9e\u4f8b\u3002' : 'Applied to the local draft, not saved to the instance yet.',
+    undoTemplate: zh ? '\u64a4\u9500\u9884\u8bbe' : 'Undo Preset',
+    templateBestFor: zh ? '\u9002\u7528\u573a\u666f' : 'Best For',
+    templateHighlights: zh ? '\u4e3b\u8981\u8c03\u6574' : 'Main Adjustments',
     templateDiff: zh ? '\u5c06\u4fee\u6539' : 'Changes',
+    templateChangeCount: zh ? '\u9879\u5c06\u4fee\u6539' : 'changes',
+    templateDiffDesc: zh ? '\u53ea\u5217\u51fa\u4e0e\u5f53\u524d\u8349\u7a3f\u4e0d\u540c\u7684\u5b57\u6bb5\u3002' : 'Only fields that differ from the current draft are listed.',
     templateNoDiff: zh ? '\u5f53\u524d\u8349\u7a3f\u5df2\u7b26\u5408\u8be5\u9884\u8bbe\u3002' : 'The draft already matches this preset.',
     templateRisks: zh ? '\u98ce\u9669' : 'Risks',
+    templateOverwriteWarning: zh ? '\u5f53\u524d\u8349\u7a3f\u4e2d\u5df2\u6709\u672a\u4fdd\u5b58\u53d8\u66f4\uff0c\u5e94\u7528\u9884\u8bbe\u53ef\u80fd\u8986\u76d6\u5176\u4e2d\u4e00\u90e8\u5206\u3002' : 'The current draft has unsaved changes. Applying this preset may overwrite part of them.',
+    templateRunningWarning: zh ? '\u6b64\u5b9e\u4f8b\u6b63\u5728\u8fd0\u884c\uff1b\u9884\u8bbe\u53ea\u4f1a\u6539\u8349\u7a3f\uff0c\u4fdd\u5b58\u540e\u901a\u5e38\u9700\u8981\u91cd\u542f\u624d\u4f1a\u751f\u6548\u3002' : 'This instance is running. The preset only changes the draft; after saving, restart is usually required.',
+    templateCancel: zh ? '\u53d6\u6d88' : 'Cancel',
+    templateGroupsPerformance: zh ? '\u6027\u80fd\u4e0e\u5e76\u53d1' : 'Performance and Concurrency',
+    templateGroupsContext: zh ? '\u4e0a\u4e0b\u6587\u4e0e\u7f13\u5b58' : 'Context and Cache',
+    templateGroupsHardware: zh ? '\u786c\u4ef6\u4e0e\u5185\u5b58' : 'Hardware and Memory',
+    templateGroupsObservability: zh ? '\u89c2\u6d4b\u4e0e API' : 'Observability and API',
+    templateGroupsSpeculative: zh ? '\u63a8\u6d4b\u89e3\u7801' : 'Speculative Decoding',
+    templateGroupsGeneration: zh ? '\u751f\u6210\u884c\u4e3a' : 'Generation Behavior',
+    templateGroupsOther: zh ? '\u5176\u4ed6' : 'Other',
     checkPassed: zh ? '\u672a\u53d1\u73b0\u660e\u663e\u914d\u7f6e\u51b2\u7a81\u3002' : 'No obvious configuration conflicts found.',
     missingModel: zh ? '\u8bf7\u5148\u9009\u62e9\u4e3b\u6a21\u578b\uff0c\u5426\u5219\u5b9e\u4f8b\u65e0\u6cd5\u6b63\u5e38\u542f\u52a8\u3002' : 'Select a primary model before starting this instance.',
     missingEngine: zh ? '\u672a\u5339\u914d\u5230\u53ef\u7528\u5f15\u64ce\uff0c\u8bf7\u786e\u8ba4\u5f15\u64ce\u626b\u63cf\u7ed3\u679c\u3002' : 'No usable engine is matched. Check engine scan results.',
@@ -398,50 +459,106 @@ const ConfigPage = () => {
   ]
   const quickTemplates: ConfigTemplate[] = [
     {
-      id: 'conservative',
-      title: zh ? '\u4fdd\u5b88\u7a33\u5b9a' : 'Conservative',
-      description: zh ? '\u4f18\u5148\u542f\u52a8\u6210\u529f\u548c\u7a33\u5b9a\u54cd\u5e94\uff0c\u964d\u4f4e\u6279\u5904\u7406\u4e0e\u5e76\u53d1\u538b\u529b\u3002' : 'Prioritizes reliable startup and steady responses with modest batching and concurrency.',
+      id: 'safe-start',
+      title: zh ? '稳妥启动' : 'Safe Start',
+      subtitle: zh ? '先跑起来，再逐步加压' : 'Start reliably, then tune upward',
+      description: zh ? '优先保证启动成功、日志可观察和资源压力可控，适合新模型或新引擎的第一次验证。' : 'Prioritizes successful startup, observability, and controlled resource pressure for first validation of a model or engine.',
+      bestFor: zh ? ['新模型首测', '不确定显存余量', '排查启动失败'] : ['First model test', 'Unknown VRAM headroom', 'Startup troubleshooting'],
+      highlights: zh ? ['固定 4K 上下文', '降低 batch 与并发', '开启 metrics / props / slots'] : ['Fixed 4K context', 'Lower batch and concurrency', 'Enable metrics / props / slots'],
       tone: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-200',
       changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: true, batch_size: 1024, ubatch_size: 256, parallel: 1, flash_attn: 'auto', cont_batching: true, cache_ram: 4096, metrics: true, props: true, slots_enabled: true },
-      risks: zh
-        ? ['\u541e\u5410\u4f1a\u4f4e\u4e8e\u6fc0\u8fdb\u5e76\u53d1\u914d\u7f6e\u3002', '\u56fa\u5b9a 4K \u4e0a\u4e0b\u6587\u53ef\u80fd\u4e0d\u9002\u5408\u957f\u6587\u6863\u4efb\u52a1\u3002']
-        : ['Throughput will be lower than aggressive concurrent configs.', 'A fixed 4K context may not fit long-document workloads.'],
+      risks: zh ? ['吞吐会低于并发服务型配置。', '固定 4K 上下文不适合长文档任务。'] : ['Throughput will be lower than service-oriented configs.', 'Fixed 4K context is not ideal for long-document tasks.'],
     },
     {
-      id: 'throughput',
-      title: zh ? '\u9ad8\u541e\u5410' : 'Throughput',
-      description: zh ? '\u63d0\u9ad8 batch\u3001parallel \u548c Flash Attention\uff0c\u9002\u5408\u591a\u8bf7\u6c42 API \u670d\u52a1\u3002' : 'Raises batch size, parallel slots, and Flash Attention for heavier API concurrency.',
+      id: 'single-chat',
+      title: zh ? '单用户聊天' : 'Single User Chat',
+      subtitle: zh ? '低延迟、长会话、交互优先' : 'Low-latency interactive chat',
+      description: zh ? '面向本机单人交互，保持自动上下文和较温和的批处理，减少并发争抢。' : 'For local single-user interaction with automatic context and moderate batching, reducing concurrency contention.',
+      bestFor: zh ? ['本机聊天', '长时间单会话', '稳定低延迟'] : ['Local chat', 'Long single sessions', 'Stable latency'],
+      highlights: zh ? ['使用模型原生上下文', 'parallel 设为 1', '保留连续批处理'] : ['Use native model context', 'Set parallel to 1', 'Keep continuous batching'],
+      tone: 'border-sky-500/25 bg-sky-500/10 text-sky-200',
+      changes: { ctx_size_auto: true, gpu_layers_auto: true, batch_size: 2048, ubatch_size: 512, parallel: 1, cont_batching: true, flash_attn: 'auto', cache_ram: 8192, metrics: true, props: true, slots_enabled: true, n_predict: -1 },
+      risks: zh ? ['多客户端并发时响应会排队。', '自动上下文可能占用较多 KV cache。'] : ['Multiple clients may queue behind each other.', 'Automatic context can consume more KV cache.'],
+    },
+    {
+      id: 'api-service',
+      title: zh ? 'API 并发服务' : 'Concurrent API Service',
+      subtitle: zh ? '多请求吞吐优先' : 'Throughput for multiple clients',
+      description: zh ? '提升 batch、ubatch 和 parallel，适合作为 OpenAI 兼容 API 的本地服务端。' : 'Raises batch, ubatch, and parallel slots for local OpenAI-compatible API service use.',
+      bestFor: zh ? ['多客户端 API', '工具链调用', '请求吞吐测试'] : ['Multi-client API', 'Tool integrations', 'Throughput testing'],
+      highlights: zh ? ['parallel 设为 4', 'batch 提高到 4096', '优先启用 Flash Attention'] : ['Set parallel to 4', 'Raise batch to 4096', 'Prefer Flash Attention'],
       tone: 'border-blue-500/25 bg-blue-500/10 text-blue-200',
       changes: { ctx_size_auto: true, gpu_layers_auto: true, batch_size: 4096, ubatch_size: 1024, parallel: 4, cont_batching: true, flash_attn: 'on', cache_ram: 8192, metrics: true, props: true, slots_enabled: true },
-      risks: zh
-        ? ['\u9700\u8981\u66f4\u591a\u663e\u5b58\u548c KV cache \u7a7a\u95f4\u3002', 'CPU \u6216\u4e0d\u652f\u6301 Flash Attention \u7684\u540e\u7aef\u53ef\u80fd\u51fa\u73b0\u8b66\u544a\u6216\u964d\u901f\u3002']
-        : ['Needs more VRAM and KV cache headroom.', 'CPU or non-Flash-Attention backends may warn or slow down.'],
+      risks: zh ? ['需要更多显存和 KV cache 空间。', '不支持 Flash Attention 的后端可能出现警告或降速。'] : ['Needs more VRAM and KV cache headroom.', 'Backends without Flash Attention support may warn or slow down.'],
     },
     {
       id: 'long-context',
-      title: zh ? '\u957f\u4e0a\u4e0b\u6587' : 'Long Context',
-      description: zh ? '\u6269\u5927\u4e0a\u4e0b\u6587\u548c\u7f13\u5b58\u9884\u7559\uff0c\u9762\u5411\u957f\u6587\u6863\u6216\u591a\u8f6e\u5bf9\u8bdd\u3002' : 'Expands context and cache headroom for long documents or extended conversations.',
+      title: zh ? '长上下文阅读' : 'Long Context Reading',
+      subtitle: zh ? '文档、代码库、长会话' : 'Documents, codebases, long sessions',
+      description: zh ? '扩大上下文和缓存预留，适合长文档摘要、代码阅读或长多轮对话。' : 'Expands context and cache headroom for long-document summarization, code reading, or extended conversations.',
+      bestFor: zh ? ['长文档摘要', '代码库阅读', '长多轮对话'] : ['Document summarization', 'Codebase reading', 'Long conversations'],
+      highlights: zh ? ['固定 32K 上下文', '提高 cache_ram', '启用 context shift'] : ['Fixed 32K context', 'Increase cache_ram', 'Enable context shift'],
       tone: 'border-violet-500/25 bg-violet-500/10 text-violet-200',
       changes: { ctx_size_auto: false, ctx_size: 32768, batch_size: 2048, ubatch_size: 512, parallel: 1, cache_ram: 16384, ctx_checkpoints: 64, flash_attn: 'auto', context_shift: true, metrics: true, props: true },
-      risks: zh
-        ? ['KV cache \u4f1a\u663e\u8457\u589e\u52a0\u5185\u5b58 / \u663e\u5b58\u538b\u529b\u3002', '\u8d85\u8fc7\u6a21\u578b\u539f\u751f\u4e0a\u4e0b\u6587\u65f6\uff0c\u8d28\u91cf\u53ef\u80fd\u4e0b\u964d\u3002']
-        : ['KV cache can substantially increase RAM or VRAM pressure.', 'Quality may degrade beyond the model native context.'],
+      risks: zh ? ['KV cache 会明显增加内存或显存压力。', '超过模型原生上下文时，质量可能下降。'] : ['KV cache can substantially increase RAM or VRAM pressure.', 'Quality may degrade beyond the model native context.'],
     },
     {
       id: 'low-vram',
-      title: zh ? '\u4f4e\u663e\u5b58' : 'Low VRAM',
-      description: zh ? '\u5c3d\u91cf\u964d\u4f4e GPU \u5360\u7528\u548c\u6279\u5904\u7406\u89c4\u6a21\uff0c\u4fbf\u4e8e\u8d44\u6e90\u7d27\u5f20\u65f6\u5148\u8dd1\u8d77\u6765\u3002' : 'Reduces GPU pressure and batch size so constrained machines can start first.',
+      title: zh ? '低显存保命' : 'Low VRAM Rescue',
+      subtitle: zh ? '保留自动 GPU，降低压力' : 'Keep automatic GPU, reduce pressure',
+      description: zh ? '降低批处理、并发和缓存压力，但不强制切换纯 CPU，适合显存紧张时保守启动。' : 'Reduces batching, concurrency, and cache pressure without forcing CPU-only mode, useful when VRAM is tight.',
+      bestFor: zh ? ['显存接近上限', '模型较大', '先启动后调优'] : ['VRAM near limit', 'Large models', 'Start before tuning'],
+      highlights: zh ? ['保留自动 GPU 层数', '缩小 batch / ubatch', '限制 4K 上下文'] : ['Keep automatic GPU layers', 'Shrink batch / ubatch', 'Limit context to 4K'],
       tone: 'border-amber-500/25 bg-amber-500/10 text-amber-200',
-      changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: false, gpu_layers: 0, batch_size: 512, ubatch_size: 128, parallel: 1, cache_ram: 0, mlock: false, flash_attn: 'off', no_kv_offload: false, metrics: true },
-      risks: zh
-        ? ['CPU \u8d1f\u8f7d\u4f1a\u589e\u52a0\uff0c\u751f\u6210\u901f\u5ea6\u53ef\u80fd\u660e\u663e\u53d8\u6162\u3002', '\u4ec5\u4f7f\u7528 4K \u4e0a\u4e0b\u6587\uff0c\u4e0d\u9002\u5408\u957f\u8f93\u5165\u3002']
-        : ['CPU load will rise and generation can become much slower.', 'Uses only a 4K context, so long prompts are not a good fit.'],
+      changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: true, batch_size: 512, ubatch_size: 128, parallel: 1, cache_ram: 2048, mlock: false, flash_attn: 'auto', no_kv_offload: false, metrics: true, props: true, slots_enabled: true },
+      risks: zh ? ['长输入和高并发性能会明显受限。', '如果仍然 OOM，需要再手动降低 GPU 层数或上下文。'] : ['Long prompts and high concurrency will be limited.', 'If OOM persists, manually lower GPU layers or context size.'],
+    },
+    {
+      id: 'spec-draft-mtp',
+      title: zh ? '推测解码实验' : 'Speculative Decoding Lab',
+      subtitle: zh ? '用于内置 MTP 或草稿模型验证' : 'Validate built-in MTP or draft models',
+      description: zh ? '打开 draft-mtp 类型并设置温和的草稿 token，用于对比推测解码收益。' : 'Enables draft-mtp with moderate draft tokens for comparing speculative decoding benefits.',
+      bestFor: zh ? ['内置 MTP 模型', '草稿模型实验', '吞吐对比'] : ['Built-in MTP models', 'Draft model experiments', 'Throughput comparison'],
+      highlights: zh ? ['spec_type 设为 draft-mtp', '草稿 token 设为 3', '保留观测指标'] : ['Set spec_type to draft-mtp', 'Use 3 draft tokens', 'Keep observability enabled'],
+      tone: 'border-fuchsia-500/25 bg-fuchsia-500/10 text-fuchsia-200',
+      changes: { spec_type: 'draft-mtp', draft_tokens: 3, spec_draft_n_min: 1, batch_size: 4096, ubatch_size: 1024, cont_batching: true, metrics: true, props: true, slots_enabled: true },
+      risks: zh ? ['非 MTP 模型可能需要外部草稿模型。', '推测接受率过低时可能没有加速收益。'] : ['Non-MTP models may need an external draft model.', 'Low draft acceptance can remove the speed benefit.'],
     },
   ]
 
+  const selectedTemplate = quickTemplates.find(template => template.id === selectedTemplateId) ?? quickTemplates[0]
+  const selectedTemplateChanges = selectedTemplate ? getTemplateChanges(local, selectedTemplate.changes, t, labels) : []
+  const selectedTemplateGroups = groupTemplateChanges(selectedTemplateChanges, [
+    { id: 'performance', title: labels.templateGroupsPerformance, keys: ['batch_size', 'ubatch_size', 'parallel', 'cont_batching', 'threads', 'threads_batch', 'threads_http'] },
+    { id: 'context', title: labels.templateGroupsContext, keys: ['ctx_size_auto', 'ctx_size', 'cache_prompt', 'cache_ram', 'cache_reuse', 'ctx_checkpoints', 'checkpoint_min_step', 'context_shift'] },
+    { id: 'hardware', title: labels.templateGroupsHardware, keys: ['gpu_layers_auto', 'gpu_layers', 'flash_attn', 'mlock', 'no_mmap', 'no_kv_offload', 'kv_unified', 'device', 'split_mode', 'tensor_split', 'main_gpu'] },
+    { id: 'observability', title: labels.templateGroupsObservability, keys: ['metrics', 'props', 'slots_enabled', 'perf', 'verbose'] },
+    { id: 'speculative', title: labels.templateGroupsSpeculative, keys: ['spec_type', 'draft_model_path', 'draft_tokens', 'spec_draft_n_min', 'spec_draft_p_min', 'spec_draft_p_split', 'draft_gpu_layers', 'spec_default'] },
+    { id: 'generation', title: labels.templateGroupsGeneration, keys: ['n_predict', 'temp', 'top_k', 'top_p', 'repeat_penalty', 'min_p', 'ignore_eos'] },
+  ], labels.templateGroupsOther)
+  const overwrittenChanges = selectedTemplateChanges.filter(change => !isEqualValue(local[change.key], savedBaseline[change.key]))
+
   const applyTemplate = (template: ConfigTemplate) => {
-    setLocal(current => (current ? { ...current, ...template.changes } : current))
+    if (!local) {
+      return
+    }
+    setLastTemplateSnapshot({ templateId: template.id, templateTitle: template.title, config: { ...local } })
+    setLocal({ ...local, ...template.changes })
     setAppliedTemplateId(template.id)
+    setShowPresetAssistant(false)
+    setSaved(false)
+    setSaveWarnings([])
+  }
+
+  const undoTemplate = () => {
+    if (!lastTemplateSnapshot) {
+      return
+    }
+    setLocal({ ...lastTemplateSnapshot.config })
+    setAppliedTemplateId(null)
+    setLastTemplateSnapshot(null)
+    setSaved(false)
+    setSaveWarnings([])
   }
 
   const directoryGroups = [
@@ -572,76 +689,40 @@ const ConfigPage = () => {
             </div>
           )}
 
-          <Surface className="p-5" data-guide="config-presets">
-            <div className="mb-4">
-              <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
+          {lastTemplateSnapshot && (
+            <div className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200 sm:flex-row sm:items-center sm:justify-between">
+              <span className="inline-flex min-w-0 items-center gap-2">
+                <Sparkles className="h-4 w-4 shrink-0" />
+                <span className="min-w-0">
+                  {labels.appliedTemplate} {lastTemplateSnapshot.templateTitle}。{labels.templateAppliedMessage}
+                </span>
+              </span>
+              <Button onClick={undoTemplate} variant="secondary" size="sm" icon={<RotateCcw className="h-4 w-4" />} className="shrink-0">
+                {labels.undoTemplate}
+              </Button>
             </div>
-            <div className="grid gap-3 xl:grid-cols-2">
-              {quickTemplates.map(template => {
-                const previewChanges = getTemplateChanges(local, template.changes, t, labels)
-                const isApplied = appliedTemplateId === template.id
-                return (
-                  <button
-                    key={template.id}
-                    type="button"
-                    onClick={() => applyTemplate(template)}
-                    className={`flex min-h-[220px] flex-col justify-between rounded-lg border bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:bg-slate-950/40 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10 ${
-                      isApplied ? 'border-blue-400 ring-1 ring-blue-400/40 dark:border-blue-500/60' : 'border-slate-200 dark:border-slate-800'
-                    }`}
-                  >
-                    <span>
-                      <span className="flex items-start justify-between gap-3">
-                        <span className="min-w-0">
-                          <span className="block text-sm font-medium text-slate-900 dark:text-slate-100">{template.title}</span>
-                          <span className="mt-2 block text-sm leading-5 text-slate-500 dark:text-slate-400">{template.description}</span>
-                        </span>
-                        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium ${template.tone}`}>
-                          {isApplied ? labels.appliedTemplate : labels.applyTemplate}
-                        </span>
-                      </span>
+          )}
 
-                      <span className="mt-4 block rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70">
-                        <span className="mb-2 block text-xs font-medium uppercase tracking-[0.12em] text-slate-500">{labels.templateDiff}</span>
-                        {previewChanges.length === 0 ? (
-                          <span className="block text-xs leading-5 text-slate-500">{labels.templateNoDiff}</span>
-                        ) : (
-                          <span className="block space-y-1">
-                            {previewChanges.slice(0, 4).map(change => (
-                              <span key={change.key} className="grid min-w-0 grid-cols-[92px_minmax(0,1fr)] gap-2 text-xs">
-                                <span className="truncate text-slate-500" title={change.label}>{change.label}</span>
-                                <span className="min-w-0 truncate text-slate-700 dark:text-slate-200" title={`${change.before} -> ${change.after}`}>
-                                  {change.before} {'->'} {change.after}
-                                </span>
-                              </span>
-                            ))}
-                            {previewChanges.length > 4 && (
-                              <span className="block text-xs text-slate-500">
-                                {zh ? `${labels.moreChanges} ${previewChanges.length - 4} ${labels.moreChangesSuffix}` : `${labels.moreChanges} ${previewChanges.length - 4} ${labels.moreChangesSuffix}`}
-                              </span>
-                            )}
-                          </span>
-                        )}
-                      </span>
-
-                      <span className="mt-3 block">
-                        <span className="mb-1 block text-xs font-medium uppercase tracking-[0.12em] text-slate-500">{labels.templateRisks}</span>
-                        <span className="block space-y-1">
-                          {template.risks.map(risk => (
-                            <span key={risk} className="block text-xs leading-5 text-slate-500 dark:text-slate-400">
-                              {risk}
-                            </span>
-                          ))}
-                        </span>
-                      </span>
-                    </span>
-
-                    <span className="mt-4 inline-flex items-center gap-2 text-xs font-medium text-blue-300">
-                      <Sparkles className="h-3.5 w-3.5" />
-                      {labels.applyTemplate}
-                    </span>
-                  </button>
-                )
-              })}
+          <Surface className="p-5" data-guide="config-presets">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
+              <Button onClick={() => setShowPresetAssistant(true)} icon={<Sparkles className="h-4 w-4" />} className="shrink-0">
+                {labels.openPresetAssistant}
+              </Button>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <InsetSurface className="flex items-center gap-3 p-3">
+                <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-400" />
+                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetNoDirectApply}</span>
+              </InsetSurface>
+              <InsetSurface className="flex items-center gap-3 p-3">
+                <ListChecks className="h-5 w-5 shrink-0 text-blue-400" />
+                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetSafeHint}</span>
+              </InsetSurface>
+              <InsetSurface className="flex items-center gap-3 p-3">
+                <Sparkles className="h-5 w-5 shrink-0 text-violet-400" />
+                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetRecommended}: {quickTemplates[0]?.title}</span>
+              </InsetSurface>
             </div>
           </Surface>
 
@@ -810,6 +891,178 @@ const ConfigPage = () => {
           </div>
         </Surface>
       </div>
+
+      {showPresetAssistant && selectedTemplate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.25)] dark:border-slate-800 dark:bg-slate-900 dark:shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/90">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="h-5 w-5 text-blue-500" />
+                  <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.presetAssistant}</h3>
+                </div>
+                <p className="mt-1 text-sm text-slate-500">{labels.presetAssistantDesc}</p>
+              </div>
+              <Button onClick={() => setShowPresetAssistant(false)} variant="subtle" size="icon" aria-label="Close">
+                <X className="h-5 w-5" />
+              </Button>
+            </div>
+
+            <div className="grid min-h-0 flex-1 overflow-hidden lg:grid-cols-[300px_minmax(0,1fr)]">
+              <aside className="min-h-0 overflow-y-auto border-b border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/50 lg:border-b-0 lg:border-r">
+                <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+                  {labels.presetSafeHint}
+                </div>
+                <div className="space-y-2">
+                  {quickTemplates.map(template => {
+                    const changeCount = getTemplateChanges(local, template.changes, t, labels).length
+                    const isSelected = template.id === selectedTemplate.id
+                    const isApplied = template.id === appliedTemplateId
+                    return (
+                      <button
+                        key={template.id}
+                        type="button"
+                        onClick={() => setSelectedTemplateId(template.id)}
+                        className={`w-full rounded-lg border p-3 text-left transition ${
+                          isSelected
+                            ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-400/30 dark:border-blue-500/60 dark:bg-blue-500/10'
+                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-950/40 dark:hover:border-slate-700 dark:hover:bg-slate-800/70'
+                        }`}
+                      >
+                        <span className="flex items-start justify-between gap-3">
+                          <span className="min-w-0">
+                            <span className="block text-sm font-semibold text-slate-900 dark:text-slate-100">{template.title}</span>
+                            <span className="mt-1 block text-xs leading-5 text-slate-500">{template.subtitle}</span>
+                          </span>
+                          <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium ${template.tone}`}>
+                            {isApplied ? labels.appliedTemplate : changeCount}
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </aside>
+
+              <div className="min-h-0 overflow-y-auto p-5">
+                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h4 className="text-xl font-semibold text-slate-950 dark:text-slate-50">{selectedTemplate.title}</h4>
+                      <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${selectedTemplate.tone}`}>
+                        {selectedTemplate.subtitle}
+                      </span>
+                    </div>
+                    <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500">{selectedTemplate.description}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/50 dark:text-slate-300">
+                    <ListChecks className="h-4 w-4 text-blue-400" />
+                    <span>{selectedTemplateChanges.length} {labels.templateChangeCount}</span>
+                  </div>
+                </div>
+
+                <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                  <InsetSurface className="p-4">
+                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.templateBestFor}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {selectedTemplate.bestFor.map(item => (
+                        <Badge key={item} tone="blue" className="px-2.5 py-1 text-xs">{item}</Badge>
+                      ))}
+                    </div>
+                  </InsetSurface>
+                  <InsetSurface className="p-4">
+                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.templateHighlights}</p>
+                    <ul className="mt-3 space-y-2 text-sm text-slate-600 dark:text-slate-300">
+                      {selectedTemplate.highlights.map(item => (
+                        <li key={item} className="flex gap-2">
+                          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                          <span>{item}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </InsetSurface>
+                </div>
+
+                {(inst?.status === 'running' || overwrittenChanges.length > 0) && (
+                  <div className="mt-4 space-y-2">
+                    {inst?.status === 'running' && (
+                      <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{labels.templateRunningWarning}</span>
+                      </div>
+                    )}
+                    {overwrittenChanges.length > 0 && (
+                      <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>{labels.templateOverwriteWarning}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                  <InsetSurface className="p-4">
+                    <div className="mb-4">
+                      <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.templateDiff}</p>
+                      <p className="mt-1 text-sm text-slate-500">{labels.templateDiffDesc}</p>
+                    </div>
+                    {selectedTemplateChanges.length === 0 ? (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/40">
+                        {labels.templateNoDiff}
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {selectedTemplateGroups.map(group => (
+                          <div key={group.id} className="rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950/40">
+                            <div className="border-b border-slate-200 px-3 py-2 text-sm font-medium text-slate-800 dark:border-slate-800 dark:text-slate-200">
+                              {group.title}
+                            </div>
+                            <div className="divide-y divide-slate-200 dark:divide-slate-800">
+                              {group.changes.map(change => (
+                                <div key={change.key} className="grid min-w-0 gap-2 px-3 py-2 text-sm md:grid-cols-[140px_minmax(0,1fr)_minmax(0,1fr)]">
+                                  <span className="min-w-0 truncate font-medium text-slate-700 dark:text-slate-200" title={change.label}>{change.label}</span>
+                                  <span className="min-w-0 truncate text-slate-500" title={change.before}>{change.before}</span>
+                                  <span className="min-w-0 truncate text-emerald-700 dark:text-emerald-200" title={change.after}>{change.after}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </InsetSurface>
+
+                  <InsetSurface className="h-fit p-4">
+                    <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.templateRisks}</p>
+                    <div className="mt-3 space-y-2">
+                      {selectedTemplate.risks.map(risk => (
+                        <div key={risk} className="flex gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/40 dark:text-slate-300">
+                          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                          <span>{risk}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </InsetSurface>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/90 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-slate-500">
+                {selectedTemplateChanges.length === 0 ? labels.templateNoDiff : `${selectedTemplateChanges.length} ${labels.templateChangeCount}`}
+              </div>
+              <div className="flex gap-2">
+                <Button onClick={() => setShowPresetAssistant(false)} variant="secondary">
+                  {labels.templateCancel}
+                </Button>
+                <Button onClick={() => applyTemplate(selectedTemplate)} disabled={selectedTemplateChanges.length === 0} icon={<Sparkles className="h-4 w-4" />}>
+                  {labels.applyTemplate}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showPicker && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
