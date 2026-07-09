@@ -5,6 +5,8 @@ import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './typ
 export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   AppState,
   | 'setSysMetrics'
+  | 'addRuntimeWarning'
+  | 'clearRuntimeWarnings'
   | 'setModels'
   | 'setEngines'
   | 'setModelDirs'
@@ -25,6 +27,14 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
 > {
   return {
     setSysMetrics: (metrics) => set({ sysMetrics: metrics }),
+    addRuntimeWarning: (message) => {
+      const trimmed = String(message || '').trim()
+      if (!trimmed) return
+      set((state) => ({
+        runtimeWarnings: [trimmed, ...state.runtimeWarnings.filter(item => item !== trimmed)].slice(0, 8),
+      }))
+    },
+    clearRuntimeWarnings: () => set({ runtimeWarnings: [] }),
     setModels: (models) => set({ models }),
     setEngines: (engines) => set({ engines }),
     setModelDirs: (dirs) => {

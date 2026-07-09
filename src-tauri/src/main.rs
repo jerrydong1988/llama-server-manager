@@ -14,8 +14,8 @@ use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_ssh::ssh_launch_rpc;
 use crate::commands::config::{
-    load_config, load_window_state, persist_global_config, resolve_path, save_config,
-    save_window_state,
+    load_config, load_window_state, resolve_path, save_config, save_window_state,
+    update_and_persist,
 };
 use crate::commands::download::{
     browse_huggingface, browse_modelscope, cancel_all_downloads, cancel_and_cleanup_download,
@@ -136,13 +136,14 @@ fn main() {
                         }
                         "quit" => {
                             if let Some(s) = app.try_state::<AppState>() {
-                                let config_dir = s.config_dir.lock().unwrap().clone();
-                                let _ = std::fs::create_dir_all(&config_dir);
-                                let mut global = crate::commands::config::read_config_from_disk(&config_dir);
-                                global.running = s.running.lock().unwrap().clone();
-                                global.engine_names = s.engine_names.lock().unwrap().clone();
-                                global.proxy_config = s.proxy_config.lock().unwrap().clone();
-                                let _ = persist_global_config(&config_dir, &global);
+                                let running = s.running.lock().unwrap().clone();
+                                let engine_names = s.engine_names.lock().unwrap().clone();
+                                let proxy_config = s.proxy_config.lock().unwrap().clone();
+                                let _ = update_and_persist(&s, |global| {
+                                    global.running = running;
+                                    global.engine_names = engine_names;
+                                    global.proxy_config = proxy_config;
+                                });
                             }
                             flush_download_manager_state(&app);
                             crate::commands::nvml::shutdown();
@@ -179,7 +180,7 @@ fn main() {
             );
             let window_state = crate::commands::config::read_window_state_from_disk(&config_dir);
             let mut window_builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
-                .title("Llama服务器管理器")
+                .title("Llama 服务器管理器")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(1024.0, 720.0)
                 .resizable(true)

@@ -267,6 +267,8 @@ function AppInner() {
   const stopInstance = useAppStore(s => s.stopInstance)
   const darkMode = useAppStore(s => s.darkMode)
   const setDarkMode = useAppStore(s => s.setDarkMode)
+  const runtimeWarnings = useAppStore(s => s.runtimeWarnings)
+  const clearRuntimeWarnings = useAppStore(s => s.clearRuntimeWarnings)
   const { t, lang, setLang } = useI18n()
   const [updateInfo, setUpdateInfo] = useState<{ latest_version: string; url: string } | null>(null)
   const [autoStartEnabled, setAutoStartEnabled] = useState(false)
@@ -297,11 +299,11 @@ function AppInner() {
     { id: 'instances', name: t.nav.instances, icon: Server, badge: upCount },
     { id: 'config', name: t.nav.config, icon: Settings, separator: true },
     { id: 'cluster', name: t.nav.cluster, icon: Network },
-    { id: 'proxy', name: t.nav.proxy || (lang === 'zh-CN' ? '实例路由' : 'Routing'), icon: Route },
+    { id: 'proxy', name: t.nav.proxy || (lang === 'zh-CN' ? '\u5b9e\u4f8b\u8def\u7531' : 'Routing'), icon: Route },
     { id: 'perf', name: t.nav.perf, icon: Activity },
-    { id: 'bigscreen', name: t.nav.bigScreen || (lang === 'zh-CN' ? '大屏模式' : 'Big Screen'), icon: Monitor },
+    { id: 'bigscreen', name: t.nav.bigScreen || (lang === 'zh-CN' ? '\u5927\u5c4f\u6a21\u5f0f' : 'Big Screen'), icon: Monitor },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
-    { id: 'guide', name: lang === 'zh-CN' ? '\u4F7F\u7528\u8BF4\u660E' : 'Guide', icon: BookOpen, separator: true },
+    { id: 'guide', name: lang === 'zh-CN' ? '\u4f7f\u7528\u8bf4\u660e' : 'Guide', icon: BookOpen, separator: true },
   ], [t, lang, upCount, activeDownloadCount])
 
   const productIssues = useMemo<ProductIssue[]>(() => {
@@ -315,9 +317,9 @@ function AppInner() {
       items.push({
         id: 'no-engines',
         title: zh ? '尚未登记运行引擎' : 'No runtime engines registered',
-        description: zh ? '需要先扫描或添加 llama-server 二进制，实例才能启动。' : 'Scan or add llama-server binaries before starting instances.',
+        description: zh ? '需要先扫描或添加 llama-server 二进制文件，实例才能启动。' : 'Scan or add llama-server binaries before starting instances.',
         severity: 'critical',
-        actionLabel: zh ? '去引擎管理' : 'Open engines',
+        actionLabel: zh ? '打开引擎管理' : 'Open engines',
         action: () => setActiveTab('engine'),
       })
     }
@@ -349,8 +351,8 @@ function AppInner() {
         id: 'instance-health',
         title: zh ? '存在异常实例' : 'Instance health needs attention',
         description: zh
-          ? `${erroredInstances} 个实例错误，${unhealthyRunning} 个运行实例健康检查失败。`
-          : `${erroredInstances} errored instance(s), ${unhealthyRunning} running health check failure(s).`,
+          ? erroredInstances + ' 个实例错误，' + unhealthyRunning + ' 个运行实例健康检查失败。'
+          : erroredInstances + ' errored instance(s), ' + unhealthyRunning + ' running health check failure(s).',
         severity: 'critical',
         actionLabel: zh ? '查看实例' : 'Review instances',
         action: () => setActiveTab('instances'),
@@ -361,7 +363,7 @@ function AppInner() {
       items.push({
         id: 'failed-downloads',
         title: zh ? '存在失败下载任务' : 'Failed downloads detected',
-        description: zh ? `${failedDownloadCount} 个下载任务需要重试、清理或重新排队。` : `${failedDownloadCount} download task(s) need retry, cleanup, or requeue.`,
+        description: zh ? failedDownloadCount + ' 个下载任务需要重试、清理或重新排队。' : failedDownloadCount + ' download task(s) need retry, cleanup, or requeue.',
         severity: 'warning',
         actionLabel: zh ? '打开下载管理' : 'Open downloads',
         action: () => setActiveTab('downloads'),
@@ -380,7 +382,7 @@ function AppInner() {
     const actions: CommandAction[] = [
       {
         id: 'dashboard',
-        title: zh ? '查看系统驾驶舱' : 'Open system cockpit',
+        title: zh ? '打开系统驾驶舱' : 'Open system cockpit',
         description: zh ? '汇总资源、实例、下载与关键操作入口。' : 'Review resources, instances, downloads, and key actions.',
         group: zh ? '导航' : 'Navigation',
         icon: <BarChart3 className="h-4 w-4" />,
@@ -397,7 +399,7 @@ function AppInner() {
       {
         id: 'models',
         title: zh ? '整理模型仓库' : 'Organize model inventory',
-        description: zh ? '扫描本地模型、查看分片与目录状态。' : 'Scan local models and review shards and folders.',
+        description: zh ? '扫描本地模型，查看分片与目录状态。' : 'Scan local models and review shards and folders.',
         group: zh ? '资源' : 'Resources',
         icon: <Package className="h-4 w-4" />,
         action: go('model-repo'),
@@ -413,7 +415,7 @@ function AppInner() {
       {
         id: 'engines',
         title: zh ? '检查运行引擎' : 'Check runtime engines',
-        description: zh ? '扫描二进制、设置默认引擎并确认后端。' : 'Scan binaries, set defaults, and verify execution backend.',
+        description: zh ? '扫描二进制、设置默认引擎并确认执行后端。' : 'Scan binaries, set defaults, and verify execution backend.',
         group: zh ? '配置' : 'Setup',
         icon: <Wrench className="h-4 w-4" />,
         action: go('engine'),
@@ -428,9 +430,9 @@ function AppInner() {
       },
       {
         id: 'routing',
-        title: zh ? '\u7ba1\u7406\u5b9e\u4f8b\u8def\u7531' : 'Manage instance routing',
-        description: zh ? '\u914d\u7f6e\u7edf\u4e00 OpenAI \u517c\u5bb9\u5165\u53e3\uff0c\u5c06\u8bf7\u6c42\u6309\u6a21\u578b\u540d\u5206\u53d1\u5230\u8fd0\u884c\u4e2d\u7684\u5b9e\u4f8b\u3002' : 'Configure the unified OpenAI-compatible endpoint and route requests by model name.',
-        group: zh ? '\u670d\u52a1' : 'Services',
+        title: zh ? '管理实例路由' : 'Manage instance routing',
+        description: zh ? '配置统一 OpenAI 兼容入口，将请求按模型名分发到运行中的实例。' : 'Configure the unified OpenAI-compatible endpoint and route requests by model name.',
+        group: zh ? '服务' : 'Services',
         icon: <Route className="h-4 w-4" />,
         action: go('proxy'),
       },
@@ -455,7 +457,7 @@ function AppInner() {
     if (firstStopped) {
       actions.push({
         id: 'start-first',
-        title: zh ? `启动 ${firstStopped.name}` : `Start ${firstStopped.name}`,
+        title: zh ? '启动 ' + firstStopped.name : 'Start ' + firstStopped.name,
         description: zh ? '快速启动第一个未运行实例。' : 'Quickly start the first stopped instance.',
         group: zh ? '运行' : 'Runtime',
         icon: <Play className="h-4 w-4" />,
@@ -466,7 +468,7 @@ function AppInner() {
     if (firstRunning) {
       actions.push({
         id: 'stop-first',
-        title: zh ? `停止 ${firstRunning.name}` : `Stop ${firstRunning.name}`,
+        title: zh ? '停止 ' + firstRunning.name : 'Stop ' + firstRunning.name,
         description: zh ? '快速停止当前第一个运行实例。' : 'Quickly stop the first running instance.',
         group: zh ? '运行' : 'Runtime',
         icon: <Square className="h-4 w-4" />,
@@ -601,17 +603,17 @@ function AppInner() {
     { label: t.nav.downloads || 'Downloads', value: activeDownloadCount, tone: 'blue' },
   ]
   const pageContext: Record<string, string> = {
-    dashboard: lang === 'zh-CN' ? '系统总览与 llama-server 实例活动' : 'System overview and current llama-server activity',
-    'model-repo': lang === 'zh-CN' ? '浏览本地与远程模型资源' : 'Browse local and remote model assets',
-    downloads: lang === 'zh-CN' ? '模型传输队列与活动任务' : 'Model transfer queue and active tasks',
-    engine: lang === 'zh-CN' ? '运行时二进制与执行后端' : 'Runtime binaries and execution backends',
-    instances: lang === 'zh-CN' ? '服务实例、端口与进程状态' : 'Server instances, ports, and process state',
-    config: lang === 'zh-CN' ? '应用默认值与运行时偏好' : 'Application defaults and runtime preferences',
-    cluster: lang === 'zh-CN' ? '分布式 worker 与网络可用性' : 'Distributed workers and network availability',
-    proxy: lang === 'zh-CN' ? '统一 API 入口与模型别名路由' : 'Unified API endpoint and model alias routing',
-    perf: lang === 'zh-CN' ? '性能遥测与资源信号' : 'Performance telemetry and resource signals',
-    logs: lang === 'zh-CN' ? '运行日志与诊断输出' : 'Runtime logs and diagnostic output',
-    guide: lang === 'zh-CN' ? '参考资料与操作说明' : 'Reference material and operating notes',
+    dashboard: lang === 'zh-CN' ? '\u7cfb\u7edf\u603b\u89c8\u4e0e llama-server \u5b9e\u4f8b\u6d3b\u52a8' : 'System overview and current llama-server activity',
+    'model-repo': lang === 'zh-CN' ? '\u6d4f\u89c8\u672c\u5730\u4e0e\u8fdc\u7a0b\u6a21\u578b\u8d44\u6e90' : 'Browse local and remote model assets',
+    downloads: lang === 'zh-CN' ? '\u6a21\u578b\u4f20\u8f93\u961f\u5217\u4e0e\u6d3b\u52a8\u4efb\u52a1' : 'Model transfer queue and active tasks',
+    engine: lang === 'zh-CN' ? '\u8fd0\u884c\u65f6\u4e8c\u8fdb\u5236\u4e0e\u6267\u884c\u540e\u7aef' : 'Runtime binaries and execution backends',
+    instances: lang === 'zh-CN' ? '\u670d\u52a1\u5b9e\u4f8b\u3001\u7aef\u53e3\u4e0e\u8fdb\u7a0b\u72b6\u6001' : 'Server instances, ports, and process state',
+    config: lang === 'zh-CN' ? '\u5e94\u7528\u9ed8\u8ba4\u503c\u4e0e\u8fd0\u884c\u65f6\u504f\u597d' : 'Application defaults and runtime preferences',
+    cluster: lang === 'zh-CN' ? '\u5206\u5e03\u5f0f worker \u4e0e\u7f51\u7edc\u53ef\u7528\u6027' : 'Distributed workers and network availability',
+    proxy: lang === 'zh-CN' ? '\u7edf\u4e00 API \u5165\u53e3\u4e0e\u6a21\u578b\u522b\u540d\u8def\u7531' : 'Unified API endpoint and model alias routing',
+    perf: lang === 'zh-CN' ? '\u6027\u80fd\u9065\u6d4b\u4e0e\u8d44\u6e90\u4fe1\u53f7' : 'Performance telemetry and resource signals',
+    logs: lang === 'zh-CN' ? '\u8fd0\u884c\u65e5\u5fd7\u4e0e\u8bca\u65ad\u8f93\u51fa' : 'Runtime logs and diagnostic output',
+    guide: lang === 'zh-CN' ? '\u53c2\u8003\u8d44\u6599\u4e0e\u64cd\u4f5c\u8bf4\u660e' : 'Reference material and operating notes',
   }
   const handleAutoStartChange = (next: boolean) => {
     setAutoStartEnabled(next)
@@ -632,7 +634,7 @@ function AppInner() {
       navigation={navigation}
       activeId={activeTab}
       onNavigate={setActiveTab}
-      pageDescription={pageContext[activeTab] || (lang === 'zh-CN' ? '管理本地 llama-server 运行状态' : 'Manage local llama-server runtime state')}
+      pageDescription={pageContext[activeTab] || (lang === 'zh-CN' ? '\u7ba1\u7406\u672c\u5730 llama-server \u8fd0\u884c\u72b6\u6001' : 'Manage local llama-server runtime state')}
       statusChips={statusChips}
       updateInfo={updateInfo}
       autoStartLabel={t.common.autoStart || 'Auto Start'}
@@ -640,16 +642,31 @@ function AppInner() {
       onAutoStartChange={handleAutoStartChange}
       darkMode={darkMode}
       onToggleDarkMode={() => setDarkMode(!darkMode)}
-      darkModeTitle={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+      darkModeTitle={darkMode ? (lang === 'zh-CN' ? '\u5207\u6362\u5230\u660e\u4eae\u6a21\u5f0f' : 'Switch to light mode') : (lang === 'zh-CN' ? '\u5207\u6362\u5230\u6df1\u8272\u6a21\u5f0f' : 'Switch to dark mode')}
       languageLabel={lang === 'zh-CN' ? 'EN' : '\u4E2D\u6587'}
       languageTitle={lang === 'zh-CN' ? 'Switch to English' : '\u5207\u6362\u4E3A\u4E2D\u6587'}
       onToggleLanguage={() => setLang(lang === 'zh-CN' ? 'en-US' : 'zh-CN')}
-      commandLabel={lang === 'zh-CN' ? '任务中心' : 'Command Center'}
-      attentionLabel={lang === 'zh-CN' ? '问题中心' : 'Attention Center'}
+      commandLabel={lang === 'zh-CN' ? '\u4efb\u52a1\u4e2d\u5fc3' : 'Command Center'}
+      attentionLabel={lang === 'zh-CN' ? '\u5173\u6ce8\u4e2d\u5fc3' : 'Attention Center'}
       attentionCount={productIssues.length}
       onOpenCommandCenter={() => setCommandCenterOpen(true)}
       wideContent={layoutWide}
     >
+      {runtimeWarnings.length > 0 && (
+        <div className="mx-auto mb-4 flex w-full max-w-7xl items-start justify-between gap-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+          <div className="min-w-0">
+            <div className="font-semibold">{lang === 'zh-CN' ? '\u8fd0\u884c\u8b66\u544a' : 'Runtime warnings'}</div>
+            <div className="mt-1 truncate text-xs opacity-90" title={runtimeWarnings[0]}>{runtimeWarnings[0]}</div>
+          </div>
+          <button
+            type="button"
+            onClick={clearRuntimeWarnings}
+            className="shrink-0 rounded-md border border-amber-300 px-2 py-1 text-xs font-medium transition hover:bg-amber-100 dark:border-amber-400/40 dark:hover:bg-amber-500/20"
+          >
+            {lang === 'zh-CN' ? '\u6e05\u9664' : 'Clear'}
+          </button>
+        </div>
+      )}
       {!configLoaded ? (
         <div className="flex min-h-[calc(100vh-160px)] items-center justify-center px-6">
           <PageFallback label={t.common?.loading || 'Loading...'} />

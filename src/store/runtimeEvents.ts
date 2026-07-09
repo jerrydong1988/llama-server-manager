@@ -37,7 +37,8 @@ const runMatches = (payload: { runId?: string }, task: DownloadProgress) => (
 )
 
 const versionMatches = (payload: { version?: number }, task: DownloadProgress) => (
-  payload.version === undefined || task.version === undefined || task.version === payload.version
+  task.version === undefined
+  || (payload.version !== undefined && task.version === payload.version)
 )
 
 function taskIdFromEvent(
@@ -106,11 +107,18 @@ function startSysMetricsPolling(store: StoreLike) {
       .then((metrics) => {
         store.getState().setSysMetrics(metrics)
       })
-      .catch(() => {})
+      .catch((error) => {
+        store.getState().addRuntimeWarning(`system metrics polling failed: ${error?.message || String(error)}`)
+      })
   }
 
   fetchSysMetrics()
   sysMetricsTimer = setInterval(fetchSysMetrics, 5000)
+}
+
+function warnListenerFailure(store: StoreLike, eventName: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  store.getState().addRuntimeWarning(`listener "${eventName}" failed to register: ${message}`)
 }
 
 export function registerGlobalStoreListeners(
@@ -127,7 +135,7 @@ export function registerGlobalStoreListeners(
 
   listen<{ name: string; ms: number }>('startup-timing', (event) => {
     startupTimings.push({ name: event.payload.name, ms: event.payload.ms })
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'startup-timing', error))
 
   listen<{ instanceId: string; text: string }>('server-log', (event) => {
     store.getState().addLog({
@@ -135,7 +143,7 @@ export function registerGlobalStoreListeners(
       text: event.payload.text,
       timestamp: Date.now(),
     })
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'server-log', error))
 
   listen<{ instanceId: string; pid: number; port: number; command: string }>('server-started', (event) => {
     const state = store.getState()
@@ -150,7 +158,7 @@ export function registerGlobalStoreListeners(
       timestamp: Date.now(),
     })
     state.saveConfig()
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'server-started', error))
 
   listen<{ instanceId: string }>('server-stopped', (event) => {
     const state = store.getState()
@@ -163,7 +171,7 @@ export function registerGlobalStoreListeners(
       })
     }
     state.saveConfig()
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'server-stopped', error))
 
   listen<{ instanceId: string; error: string }>('server-error', (event) => {
     const state = store.getState()
@@ -172,13 +180,13 @@ export function registerGlobalStoreListeners(
       healthCheck: 'fail',
     })
     state.saveConfig()
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'server-error', error))
 
   listen<{ instanceId: string; status: string }>('health-status', (event) => {
     store.getState().updateInstance(event.payload.instanceId, {
       healthCheck: event.payload.status === 'ok' ? 'ok' : 'fail',
     })
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'health-status', error))
 
   listen<DownloadEventPayload>('download-started', (event) => {
     const applied = applyDownloadPatch(store, event.payload, {
@@ -195,7 +203,7 @@ export function registerGlobalStoreListeners(
       ? state.downloadQueue.filter((entry) => entry.id !== event.payload.queueId)
       : state.downloadQueue.filter((entry) => !entry.files.some((file) => file.task_id === event.payload.taskId))
     store.setState({ downloadQueue: queue })
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-started', error))
 
   listen<DownloadEventPayload>('download-progress', (event) => {
     const state = store.getState()
@@ -212,7 +220,7 @@ export function registerGlobalStoreListeners(
       total: event.payload.total ?? 0,
       speed: event.payload.speed ?? 0,
     })
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-progress', error))
 
   listen<DownloadEventPayload>('download-complete', (event) => {
     const applied = applyDownloadPatch(store, event.payload, {
@@ -229,14 +237,14 @@ export function registerGlobalStoreListeners(
       const nextState = store.getState()
       nextState.scanModels(nextState.modelDirs)
     }, 2000)
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-complete', error))
 
   listen<DownloadEventPayload>('download-cancelled', (event) => {
     const applied = applyDownloadPatch(store, event.payload, { status: 'cancelled', speed: 0 })
     if (!applied) return
 
     store.getState().processDownloadQueue()
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-cancelled', error))
 
   listen<DownloadEventPayload>('download-paused', (event) => {
     applyDownloadPatch(store, event.payload, {
@@ -245,7 +253,7 @@ export function registerGlobalStoreListeners(
       total: event.payload.total ?? 0,
       speed: 0,
     })
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-paused', error))
 
   listen<DownloadEventPayload>('download-error', (event) => {
     const applied = applyDownloadPatch(store, event.payload, {
@@ -256,7 +264,7 @@ export function registerGlobalStoreListeners(
     if (!applied) return
 
     store.getState().processDownloadQueue()
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-error', error))
 
   listen<DownloadEventPayload>('download-restarted', (event) => {
     applyDownloadPatch(store, event.payload, {
@@ -264,7 +272,7 @@ export function registerGlobalStoreListeners(
       speed: 0,
       remoteChanged: false,
     })
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-restarted', error))
 
   listen<DownloadEventPayload>('download-remote-changed', (event) => {
     const state = store.getState()
@@ -290,7 +298,7 @@ export function registerGlobalStoreListeners(
         remoteChanged: true,
       },
     })
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-remote-changed', error))
 
   listen<{ taskId?: string; fileName: string; version?: number }>('download-removed', (event) => {
     const state = store.getState()
@@ -303,7 +311,7 @@ export function registerGlobalStoreListeners(
     const tasks = { ...state.downloadTasks }
     delete tasks[taskId]
     state.setDownloadTasks(tasks)
-  }).catch(() => {})
+  }).catch((error) => warnListenerFailure(store, 'download-removed', error))
 
   startSysMetricsPolling(store)
 }

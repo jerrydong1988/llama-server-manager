@@ -332,6 +332,7 @@ export interface AppState {
   instances: Instance[]
   logs: Record<string, LogEntry[]>
   isLoading: boolean
+  runtimeWarnings: string[]
   defaultEngineId: string | null
   modelDirs: string[]
   engineDirs: string[]
@@ -347,6 +348,8 @@ export interface AppState {
   setDarkMode: (dm: boolean) => void
   setActiveConfigInstanceId: (id: string | null) => void
   setSysMetrics: (m: SystemMetrics | null) => void
+  addRuntimeWarning: (message: string) => void
+  clearRuntimeWarnings: () => void
 
   setModels: (models: ModelInfo[]) => void
   setEngines: (engines: EngineInfo[]) => void

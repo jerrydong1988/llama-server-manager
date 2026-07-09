@@ -147,12 +147,15 @@ async function processConfig(
         })
       }
     })
-    .catch(() => {
+    .catch((error) => {
+      get().addRuntimeWarning(`load_app_data failed: ${error?.message || String(error)}`)
       invoke<EngineInfo[]>('scan_engines', { paths: global.engine_dirs || [] })
         .then((engines) => startTransition(() => {
           set({ engines })
         }))
-        .catch(() => {})
+        .catch((fallbackError) => {
+          get().addRuntimeWarning(`scan_engines fallback failed: ${fallbackError?.message || String(fallbackError)}`)
+        })
     })
 
   invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')
@@ -161,7 +164,9 @@ async function processConfig(
         hydrateDownloadTasksFromSnapshot(snapshot, get, set)
       }
     })
-    .catch(() => {})
+    .catch((error) => {
+      get().addRuntimeWarning(`download snapshot failed: ${error?.message || String(error)}`)
+    })
 }
 
 export async function loadAppBootstrap(
@@ -177,7 +182,9 @@ export async function loadAppBootstrap(
       .then((ms) => {
         startupTimings.push({ name: 'native-init', ms })
       })
-      .catch(() => {})
+      .catch((error) => {
+        get().addRuntimeWarning(`startup timing failed: ${error?.message || String(error)}`)
+      })
 
     invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan')
       .then((data) => {
@@ -187,7 +194,9 @@ export async function loadAppBootstrap(
           })
         }
       })
-      .catch(() => {})
+      .catch((error) => {
+        get().addRuntimeWarning(`cached scan failed: ${error?.message || String(error)}`)
+      })
 
     const injected = window.__INITIAL_CONFIG__
     if (injected) {
@@ -202,6 +211,7 @@ export async function loadAppBootstrap(
     }
   } catch (error) {
     console.error('load_config error:', error)
+    get().addRuntimeWarning(`bootstrap failed: ${(error as any)?.message || String(error)}`)
   }
 
   set({ isLoading: false })

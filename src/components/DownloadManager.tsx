@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, type ReactNode } from 'react'
-import { Trash2, FolderOpen, X, Download, ChevronDown, ChevronUp, Pause, Play, RotateCcw, RefreshCw, Square, Settings2, AlertTriangle, Database } from 'lucide-react'
+import { Trash2, FolderOpen, X, Download, ChevronDown, ChevronUp, Pause, Play, RotateCcw, RefreshCw, Square, AlertTriangle, Database } from 'lucide-react'
 import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
 import { useI18n } from '../i18n'
@@ -8,10 +8,13 @@ import { open } from '@tauri-apps/plugin-dialog'
 import { pathJoin } from '../utils/path'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
 import { PathText, surfaceClassName } from './ui'
+import {
+  DownloadSettingsPanel,
+  type DownloadBandwidthUnit as BandwidthUnit,
+  type DownloadResumePolicy as ResumePolicy,
+} from './DownloadManager/DownloadSettingsPanel'
 
 type DownloadSource = 'modelscope' | 'huggingface'
-type ResumePolicy = 'manual' | 'auto_on_launch'
-type BandwidthUnit = 'MiB/s' | 'KiB/s'
 const DEFAULT_SAVE_DIR = 'models'
 const DEFAULT_BANDWIDTH_LIMIT = 0
 const DEFAULT_BANDWIDTH_UNIT: BandwidthUnit = 'MiB/s'
@@ -175,6 +178,7 @@ export default function DownloadManager() {
     }
   })
   const [lowPriorityThrottle, setLowPriorityThrottle] = useState(false)
+  const [settingsError, setSettingsError] = useState('')
   const ui = useMemo(() => lang === 'zh-CN' ? {
     strategyTitle: '\u4E0B\u8F7D\u7B56\u7565',
     strategySub: '\u6062\u590D\u7B56\u7565\u3001\u5E76\u53D1\u6570\u3001\u5E26\u5BBD\u9650\u5236\u4E0E\u4F4E\u4F18\u5148\u7EA7\u6A21\u5F0F\u5747\u5DF2\u63A5\u5165\u540E\u7AEF',
@@ -227,6 +231,8 @@ export default function DownloadManager() {
     importedToRepo: '\u5DF2\u626B\u63CF\u4FDD\u5B58\u76EE\u5F55\u5E76\u5237\u65B0\u6A21\u578B\u5E93',
     importFailed: '\u5165\u5E93\u626B\u63CF\u5931\u8D25',
     localPath: '\u672C\u5730\u6587\u4EF6',
+    settingsLoadFailed: '\u4E0B\u8F7D\u7B56\u7565\u8BFB\u53D6\u5931\u8D25',
+    settingsSaveFailed: '\u4E0B\u8F7D\u7B56\u7565\u4FDD\u5B58\u5931\u8D25',
   } : {
     strategyTitle: 'Download strategy',
     strategySub: 'Resume policy, concurrency, bandwidth limit, and low-priority mode are backend-backed',
@@ -279,7 +285,14 @@ export default function DownloadManager() {
     importedToRepo: 'Scanned the save directory and refreshed the model repository',
     importFailed: 'Model repo scan failed',
     localPath: 'Local file',
+    settingsLoadFailed: 'Failed to load download settings',
+    settingsSaveFailed: 'Failed to save download settings',
   }, [lang])
+
+  const settingsFailureText = (prefix: string, error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    return `${prefix}: ${message}`
+  }
 
   useEffect(() => {
     const meta = (window as any).__downloadSnapshotMeta
@@ -291,14 +304,24 @@ export default function DownloadManager() {
       setBandwidthUnit(bandwidth.unit)
       setLowPriorityThrottle(!!meta.low_priority_throttle)
     } else {
-      invoke<string>('get_download_resume_policy').then(p => setResumePolicy(normalizeResumePolicy(p || 'manual'))).catch(() => {})
-      invoke<number>('get_download_concurrency').then(n => setConcurrency(clampConcurrency(n || 1))).catch(() => {})
-      invoke<number>('get_download_bandwidth_limit').then(bytes => {
-        const bandwidth = preferredBandwidthDisplay(bytes || 0, bandwidthUnit)
-        setBandwidthLimit(bandwidth.limit)
-        setBandwidthUnit(bandwidth.unit)
-      }).catch(() => {})
-      invoke<boolean>('get_download_low_priority_throttle').then(enabled => setLowPriorityThrottle(!!enabled)).catch(() => {})
+      void Promise.all([
+        invoke<string>('get_download_resume_policy'),
+        invoke<number>('get_download_concurrency'),
+        invoke<number>('get_download_bandwidth_limit'),
+        invoke<boolean>('get_download_low_priority_throttle'),
+      ])
+        .then(([policy, concurrent, bytes, throttle]) => {
+          setResumePolicy(normalizeResumePolicy(policy || 'manual'))
+          setConcurrency(clampConcurrency(concurrent || 1))
+          const bandwidth = preferredBandwidthDisplay(bytes || 0, bandwidthUnit)
+          setBandwidthLimit(bandwidth.limit)
+          setBandwidthUnit(bandwidth.unit)
+          setLowPriorityThrottle(!!throttle)
+          setSettingsError('')
+        })
+        .catch((error) => {
+          setSettingsError(settingsFailureText(ui.settingsLoadFailed, error))
+        })
     }
     setTimeout(() => setInitialLoading(false), 300)
   }, [])
@@ -311,21 +334,42 @@ export default function DownloadManager() {
     }
   }, [bandwidthUnit])
 
-  const handleResumePolicyChange = (policy: ResumePolicy) => {
+  const handleResumePolicyChange = async (policy: ResumePolicy) => {
+    const previous = resumePolicy
     setResumePolicy(policy)
-    invoke('set_download_resume_policy', { policy }).catch(() => {})
+    try {
+      await invoke('set_download_resume_policy', { policy })
+      setSettingsError('')
+    } catch (error) {
+      setResumePolicy(previous)
+      setSettingsError(settingsFailureText(ui.settingsSaveFailed, error))
+    }
   }
 
-  const handleConcurrencyChange = (n: number) => {
+  const handleConcurrencyChange = async (n: number) => {
+    const previous = concurrency
     const next = clampConcurrency(n)
     setConcurrency(next)
-    invoke('set_download_concurrency', { n: next }).catch(() => {})
+    try {
+      await invoke('set_download_concurrency', { n: next })
+      setSettingsError('')
+    } catch (error) {
+      setConcurrency(previous)
+      setSettingsError(settingsFailureText(ui.settingsSaveFailed, error))
+    }
   }
 
-  const handleBandwidthLimitChange = (value: number) => {
+  const handleBandwidthLimitChange = async (value: number) => {
+    const previous = bandwidthLimit
     const next = Math.max(0, Number.isFinite(value) ? value : 0)
     setBandwidthLimit(next)
-    invoke('set_download_bandwidth_limit', { bytesPerSec: bandwidthToBytes(next, bandwidthUnit) }).catch(() => {})
+    try {
+      await invoke('set_download_bandwidth_limit', { bytesPerSec: bandwidthToBytes(next, bandwidthUnit) })
+      setSettingsError('')
+    } catch (error) {
+      setBandwidthLimit(previous)
+      setSettingsError(settingsFailureText(ui.settingsSaveFailed, error))
+    }
   }
 
   const handleBandwidthUnitChange = (unit: BandwidthUnit) => {
@@ -334,17 +378,24 @@ export default function DownloadManager() {
     setBandwidthLimit(bytesToBandwidth(bytes, unit))
   }
 
-  const handleLowPriorityThrottleChange = (enabled: boolean) => {
+  const handleLowPriorityThrottleChange = async (enabled: boolean) => {
+    const previous = lowPriorityThrottle
     setLowPriorityThrottle(enabled)
-    invoke('set_download_low_priority_throttle', { enabled }).catch(() => {})
+    try {
+      await invoke('set_download_low_priority_throttle', { enabled })
+      setSettingsError('')
+    } catch (error) {
+      setLowPriorityThrottle(previous)
+      setSettingsError(settingsFailureText(ui.settingsSaveFailed, error))
+    }
   }
 
-  const resetStrategyDefaults = () => {
-    handleResumePolicyChange('manual')
-    handleConcurrencyChange(1)
-    handleBandwidthLimitChange(DEFAULT_BANDWIDTH_LIMIT)
+  const resetStrategyDefaults = async () => {
+    await handleResumePolicyChange('manual')
+    await handleConcurrencyChange(1)
     setBandwidthUnit(DEFAULT_BANDWIDTH_UNIT)
-    handleLowPriorityThrottleChange(false)
+    await handleBandwidthLimitChange(DEFAULT_BANDWIDTH_LIMIT)
+    await handleLowPriorityThrottleChange(false)
   }
 
   const toggleSection = (section: Section) => setCollapsed(prev => ({ ...prev, [section]: !prev[section] }))
@@ -1186,151 +1237,31 @@ export default function DownloadManager() {
         <div className="min-w-0 space-y-5">
           {renderSelectedTaskSummary()}
 
-          <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
-            <button
-              type="button"
-              onClick={() => setDlSettingsOpen(!dlSettingsOpen)}
-              className="flex w-full items-start justify-between gap-3 border-b border-slate-200 px-4 py-4 text-left dark:border-slate-800"
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <Settings2 className="h-4 w-4 text-slate-500" />
-                  <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{ui.strategyTitle}</span>
-                </div>
-                <div className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{ui.strategySub}</div>
-              </div>
-              {dlSettingsOpen ? <ChevronUp className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" /> : <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />}
-            </button>
-
-            {dlSettingsOpen && (
-              <div className="space-y-5 px-4 py-4">
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="rounded-lg border border-slate-200 px-3 py-3 dark:border-slate-800">
-                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{ui.strategy}</div>
-                    <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">{resumePolicyLabel}</div>
-                  </div>
-                  <div className="rounded-lg border border-slate-200 px-3 py-3 dark:border-slate-800">
-                    <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{ui.bandwidth}</div>
-                    <div className="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">{bandwidthSummary}</div>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{t.downloadPage.resumePolicy}</label>
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                      {ui.backendSaved}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2 rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
-                    <button
-                      type="button"
-                      onClick={() => handleResumePolicyChange('manual')}
-                      className={`rounded-md px-3 py-2 text-xs font-medium transition ${resumePolicy === 'manual' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-                    >
-                      {t.downloadPage.resumeManual}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleResumePolicyChange('auto_on_launch')}
-                      className={`rounded-md px-3 py-2 text-xs font-medium transition ${resumePolicy === 'auto_on_launch' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-950 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
-                    >
-                      {t.downloadPage.resumeAuto}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{t.downloadPage.maxConcurrent}</label>
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                      {ui.backendSaved}
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range"
-                      min={1}
-                      max={8}
-                      value={concurrency}
-                      onChange={e => handleConcurrencyChange(parseInt(e.target.value, 10))}
-                      className="min-w-0 flex-1 accent-blue-600"
-                    />
-                    <input
-                      type="number"
-                      min={1}
-                      max={8}
-                      value={concurrency}
-                      onChange={e => handleConcurrencyChange(parseInt(e.target.value, 10))}
-                      className="w-24 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-center text-sm text-slate-900 outline-none transition focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
-                    />
-                  </div>
-                  <div className="text-[11px] text-slate-400">1-8</div>
-                </div>
-
-                <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
-                  <div className="flex items-center justify-between gap-3">
-                    <label className="text-xs font-medium text-slate-500 dark:text-slate-400">{ui.bandwidth}</label>
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                      {ui.backendSaved}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-[minmax(0,1fr)_96px] gap-2">
-                    <input
-                      type="number"
-                      min={0}
-                      step={bandwidthUnit === 'MiB/s' ? 1 : 64}
-                      value={bandwidthLimit}
-                      onChange={e => handleBandwidthLimitChange(Number(e.target.value))}
-                      className="min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
-                    />
-                    <select
-                      value={bandwidthUnit}
-                      onChange={e => handleBandwidthUnitChange(e.target.value as BandwidthUnit)}
-                      aria-label={ui.displayUnit}
-                      className="rounded-lg border border-slate-200 bg-white px-2 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
-                    >
-                      <option value="MiB/s">MiB/s</option>
-                      <option value="KiB/s">KiB/s</option>
-                    </select>
-                  </div>
-                  <div className="text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.limitHelp}</div>
-                </div>
-
-                <div className="space-y-3 border-t border-slate-200 pt-4 dark:border-slate-800">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-xs font-medium text-slate-600 dark:text-slate-300">{ui.lowPriorityThrottle}</div>
-                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-                          {ui.backendSaved}
-                        </span>
-                      </div>
-                      <div className="mt-1 text-[11px] leading-5 text-slate-400">{ui.throttleHelp}</div>
-                    </div>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={lowPriorityThrottle}
-                      onClick={() => handleLowPriorityThrottleChange(!lowPriorityThrottle)}
-                      className={`relative mt-0.5 h-6 w-11 shrink-0 rounded-full transition ${lowPriorityThrottle ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}
-                    >
-                      <span className={`absolute top-1 h-4 w-4 rounded-full bg-white shadow-sm transition ${lowPriorityThrottle ? 'left-6' : 'left-1'}`} />
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={resetStrategyDefaults}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-xs font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-900 dark:hover:text-white"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  <span>{ui.resetDefaults}</span>
-                </button>
-              </div>
-            )}
-          </section>
+          <DownloadSettingsPanel
+            open={dlSettingsOpen}
+            onToggle={() => setDlSettingsOpen(!dlSettingsOpen)}
+            copy={ui}
+            labels={{
+              resumePolicy: t.downloadPage.resumePolicy,
+              resumeManual: t.downloadPage.resumeManual,
+              resumeAuto: t.downloadPage.resumeAuto,
+              maxConcurrent: t.downloadPage.maxConcurrent,
+            }}
+            settingsError={settingsError}
+            resumePolicy={resumePolicy}
+            resumePolicyLabel={resumePolicyLabel}
+            bandwidthSummary={bandwidthSummary}
+            concurrency={concurrency}
+            bandwidthLimit={bandwidthLimit}
+            bandwidthUnit={bandwidthUnit}
+            lowPriorityThrottle={lowPriorityThrottle}
+            onResumePolicyChange={policy => void handleResumePolicyChange(policy)}
+            onConcurrencyChange={value => void handleConcurrencyChange(value)}
+            onBandwidthLimitChange={value => void handleBandwidthLimitChange(value)}
+            onBandwidthUnitChange={handleBandwidthUnitChange}
+            onLowPriorityThrottleChange={enabled => void handleLowPriorityThrottleChange(enabled)}
+            onResetDefaults={() => void resetStrategyDefaults()}
+          />
 
           <SectionPanel
             title={t.downloadPage.queue}

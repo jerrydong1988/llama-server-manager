@@ -23,6 +23,7 @@ pub struct InventoryModelRecord {
     pub file_type: String,
     pub is_shard: bool,
     pub last_seen: i64,
+    pub cache_version: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +37,7 @@ pub struct InventoryEngineRecord {
     pub exe_mtime: u64,
     pub scan_root: String,
     pub last_seen: i64,
+    pub cache_version: i64,
 }
 
 impl InventoryModelRecord {
@@ -61,6 +63,7 @@ impl InventoryModelRecord {
             file_type: model.file_type.clone(),
             is_shard: model.is_shard,
             last_seen: now_secs(),
+            cache_version: MODEL_INVENTORY_SCHEMA_VERSION,
         }
     }
 
@@ -93,6 +96,7 @@ impl InventoryEngineRecord {
             exe_mtime,
             scan_root,
             last_seen: now_secs(),
+            cache_version: MODEL_INVENTORY_SCHEMA_VERSION,
         }
     }
 
@@ -195,7 +199,7 @@ pub fn load_model_index() -> Result<HashMap<String, InventoryModelRecord>, Strin
             r#"
             SELECT path, id, display_path, name, scan_root, size, mtime,
                    architecture, context_length, quant_type, has_mtp_head,
-                   capabilities_json, file_type, is_shard, last_seen
+                   capabilities_json, file_type, is_shard, last_seen, cache_version
             FROM model_inventory
             "#,
         )
@@ -207,6 +211,8 @@ pub fn load_model_index() -> Result<HashMap<String, InventoryModelRecord>, Strin
         .map_err(|e| format!("failed to read model inventory row: {}", e))?;
     Ok(rows
         .into_iter()
+        .filter(|record| record.cache_version == MODEL_INVENTORY_SCHEMA_VERSION)
+        .filter(|record| std::path::Path::new(&record.path).is_file())
         .map(|record| (record.path.clone(), record))
         .collect())
 }
@@ -329,7 +335,7 @@ pub fn load_engine_index() -> Result<HashMap<String, InventoryEngineRecord>, Str
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, name, dir, exe, version, backend, exe_mtime, scan_root, last_seen
+            SELECT id, name, dir, exe, version, backend, exe_mtime, scan_root, last_seen, cache_version
             FROM engine_inventory
             "#,
         )
@@ -341,6 +347,8 @@ pub fn load_engine_index() -> Result<HashMap<String, InventoryEngineRecord>, Str
         .map_err(|e| format!("failed to read engine inventory row: {}", e))?;
     Ok(rows
         .into_iter()
+        .filter(|record| record.cache_version == MODEL_INVENTORY_SCHEMA_VERSION)
+        .filter(|record| std::path::Path::new(&record.exe).is_file())
         .map(|record| (record.id.clone(), record))
         .collect())
 }
@@ -443,7 +451,13 @@ pub fn delete_engine(id: &str) -> Result<(), String> {
 fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRecord> {
     let capabilities_json: String = row.get(11)?;
     let capabilities =
-        serde_json::from_str::<ModelCapabilities>(&capabilities_json).unwrap_or_default();
+        serde_json::from_str::<ModelCapabilities>(&capabilities_json).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(
+                11,
+                rusqlite::types::Type::Text,
+                Box::new(err),
+            )
+        })?;
     let context_length_i64: Option<i64> = row.get(8)?;
     Ok(InventoryModelRecord {
         path: row.get(0)?,
@@ -461,6 +475,7 @@ fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRe
         file_type: row.get(12)?,
         is_shard: row.get::<_, i64>(13)? != 0,
         last_seen: row.get(14)?,
+        cache_version: row.get(15)?,
     })
 }
 
@@ -475,5 +490,6 @@ fn engine_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inventory
         exe_mtime: row.get::<_, i64>(6)?.max(0) as u64,
         scan_root: row.get(7)?,
         last_seen: row.get(8)?,
+        cache_version: row.get(9)?,
     })
 }

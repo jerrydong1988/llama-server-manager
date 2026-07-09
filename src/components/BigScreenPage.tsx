@@ -73,25 +73,29 @@ export default function BigScreenPage() {
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [lastUpdatedAt, setLastUpdatedAt] = useState(Date.now())
   const [refreshing, setRefreshing] = useState(false)
+  const [telemetryError, setTelemetryError] = useState<string | null>(null)
 
   const refreshTelemetry = useCallback(async () => {
     setRefreshing(true)
     try {
       const [nextOverview, nextSessions] = await Promise.all([
-        invoke<TelemetryOverview>('get_telemetry_overview').catch(() => emptyOverview),
-        invoke<TelemetrySessionSummary[]>('list_telemetry_sessions', { limit: 12 }).catch(() => []),
+        invoke<TelemetryOverview>('get_telemetry_overview'),
+        invoke<TelemetrySessionSummary[]>('list_telemetry_sessions', { limit: 12 }),
       ])
       setOverview(nextOverview)
       setSessions(nextSessions)
 
       const sessionId = nextSessions[0]?.id
       if (sessionId) {
-        const nextRequests = await invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 8 }).catch(() => [])
+        const nextRequests = await invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 8 })
         setRequests(nextRequests)
       } else {
         setRequests([])
       }
+      setTelemetryError(null)
       setLastUpdatedAt(Date.now())
+    } catch (error) {
+      setTelemetryError(error instanceof Error ? error.message : String(error))
     } finally {
       setRefreshing(false)
     }
@@ -189,6 +193,11 @@ export default function BigScreenPage() {
               <Clock className="h-4 w-4 text-cyan-300" />
               {labels.updated}: {formatTime(lastUpdatedAt)}
             </span>
+            {telemetryError && (
+              <span className="inline-flex h-9 max-w-[360px] items-center rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 text-xs text-amber-100" title={telemetryError}>
+                {zh ? '遥测异常' : 'Telemetry stale'}: {telemetryError}
+              </span>
+            )}
             <button
               type="button"
               onClick={() => void refreshTelemetry()}

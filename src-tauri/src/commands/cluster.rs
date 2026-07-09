@@ -561,7 +561,7 @@ pub async fn find_rpc_server_binary(_state: State<'_, AppState>) -> Result<Optio
 #[tauri::command]
 pub async fn generate_rpc_launch_cmd(port: u16) -> Result<String, String> {
     let binary = find_rpc_server_binary_internal().unwrap_or_else(|| RPC_SERVER_NAME.to_string());
-    Ok(format!("{} --host 0.0.0.0 --port {}", binary, port))
+    Ok(format!("{} --host 127.0.0.1 --port {}", binary, port))
 }
 
 #[tauri::command]
@@ -738,7 +738,7 @@ pub async fn start_local_rpc(
             const DETACHED_PROCESS: u32 = 0x00000008;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             std::process::Command::new(&binary)
-                .args(["--host", "0.0.0.0", "--port", &port.to_string()])
+                .args(["--host", "127.0.0.1", "--port", &port.to_string()])
                 .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
                 .spawn()
                 .map_err(|e| format!("无法启动 {}: {}", binary, e))?;
@@ -750,7 +750,7 @@ pub async fn start_local_rpc(
                 std::fs::File::create(&log_path).map_err(|e| format!("无法创建日志文件: {}", e))?;
             std::process::Command::new("nohup")
                 .arg(&binary)
-                .args(["--host", "0.0.0.0", "--port", &port.to_string()])
+                .args(["--host", "127.0.0.1", "--port", &port.to_string()])
                 .stdin(Stdio::null())
                 .stdout(Stdio::from(log_file))
                 .stderr(Stdio::null())
@@ -818,7 +818,7 @@ mod tests {
     fn test_generate_rpc_launch_cmd() {
         let cmd = generate_rpc_launch_cmd_internal(50052);
         assert!(cmd.contains("50052"));
-        assert!(cmd.contains("0.0.0.0"));
+        assert!(cmd.contains("127.0.0.1"));
     }
 
     fn generate_rpc_launch_cmd_internal(port: u16) -> String {
@@ -826,6 +826,6 @@ mod tests {
         const NAME: &str = "rpc-server.exe";
         #[cfg(not(target_os = "windows"))]
         const NAME: &str = "rpc-server";
-        format!("{} --host 0.0.0.0 --port {}", NAME, port)
+        format!("{} --host 127.0.0.1 --port {}", NAME, port)
     }
 }

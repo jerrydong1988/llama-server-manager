@@ -1,11 +1,13 @@
 use crate::models::{AppState, GlobalConfig, InstanceConfig, ProxyConfig, WindowState};
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use tauri::Emitter;
 
 // Unified config write helpers.
 
-/// Atomically writes instances.json; all config writes should go through this helper to avoid races.
-pub fn persist_global_config(
+static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+fn persist_global_config_unlocked(
     config_dir: &std::path::Path,
     global: &GlobalConfig,
 ) -> Result<(), String> {
@@ -13,9 +15,21 @@ pub fn persist_global_config(
     let json = serde_json::to_string_pretty(global).map_err(|e| format!("序列化失败: {}", e))?;
     let tmp = config_dir.join("instances.json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("保存失败: {}", e))?;
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
+    }
     std::fs::rename(&tmp, &path).map_err(|e| format!("保存失败: {}", e))?;
     let _ = std::fs::copy(&path, config_dir.join("instances.json.bak"));
     Ok(())
+}
+
+/// Atomically writes instances.json; all config writes should go through this helper to avoid races.
+pub fn persist_global_config(
+    config_dir: &std::path::Path,
+    global: &GlobalConfig,
+) -> Result<(), String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    persist_global_config_unlocked(config_dir, global)
 }
 
 /// Reads existing config, mutates it, then writes atomically for non-save_config paths.
@@ -23,13 +37,14 @@ pub fn update_and_persist<F>(state: &AppState, update_fn: F) -> Result<(), Strin
 where
     F: FnOnce(&mut GlobalConfig),
 {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
     let path = config_dir.join("instances.json");
     let json = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {}", e))?;
     let mut global: GlobalConfig =
         serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
     update_fn(&mut global);
-    persist_global_config(&config_dir, &global)
+    persist_global_config_unlocked(&config_dir, &global)
 }
 
 /// Lightweight process liveness check using Windows OpenProcess or Unix kill(0), avoiding a full sysinfo refresh.
@@ -154,12 +169,26 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
 
     // Filter dead processes.
     let mut restored = HashMap::new();
+    let mut stale_sessions = Vec::new();
     for (id, ri) in &global.running {
         if is_process_alive(ri.pid) {
             restored.insert(id.clone(), ri.clone());
+        } else if let Some(session_id) = &ri.telemetry_session_id {
+            stale_sessions.push(session_id.clone());
         }
     }
+    let removed_running = restored.len() != global.running.len();
     global.running = restored;
+    if removed_running {
+        for session_id in stale_sessions {
+            let _ = crate::commands::telemetry::finish_run_session(
+                Some(session_id.as_str()),
+                None,
+                "restore-cleanup",
+            );
+        }
+        let _ = persist_global_config(config_dir, &global);
+    }
 
     global
 }

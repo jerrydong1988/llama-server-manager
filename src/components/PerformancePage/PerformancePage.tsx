@@ -73,6 +73,7 @@ export default function PerformancePage() {
   const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [loading, setLoading] = useState(false)
+  const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const lastTelemetryRefreshRef = useRef(0)
 
   const selectedInstance = instances.find(instance => instance.id === selectedInstanceId)
@@ -89,6 +90,9 @@ export default function PerformancePage() {
       setOverview(nextOverview)
       setSessions(nextSessions)
       setSelectedSessionId(current => current || nextSessions[0]?.id || '')
+      setTelemetryError(null)
+    } catch (error) {
+      setTelemetryError(error instanceof Error ? error.message : String(error))
     } finally {
       setLoading(false)
     }
@@ -142,17 +146,29 @@ export default function PerformancePage() {
     setExpandedFindings({})
     void Promise.all([
       invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId: selectedSessionId, limit: 160 })
-        .then(setSamples)
-        .catch(() => setSamples([])),
+        .then(data => {
+          setSamples(data)
+          setTelemetryError(null)
+        })
+        .catch((error) => setTelemetryError(error instanceof Error ? error.message : String(error))),
       invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId: selectedSessionId, limit: 16 })
-        .then(setRequests)
-        .catch(() => setRequests([])),
+        .then(data => {
+          setRequests(data)
+          setTelemetryError(null)
+        })
+        .catch((error) => setTelemetryError(error instanceof Error ? error.message : String(error))),
       invoke<TelemetrySessionAnalysis>('get_telemetry_session_analysis', { sessionId: selectedSessionId })
-        .then(setAnalysis)
-        .catch(() => setAnalysis(null)),
+        .then(data => {
+          setAnalysis(data)
+          setTelemetryError(null)
+        })
+        .catch((error) => setTelemetryError(error instanceof Error ? error.message : String(error))),
       invoke<DiagnosticFinding[]>('get_telemetry_session_diagnostics', { sessionId: selectedSessionId })
-        .then(setDiagnostics)
-        .catch(() => setDiagnostics([])),
+        .then(data => {
+          setDiagnostics(data)
+          setTelemetryError(null)
+        })
+        .catch((error) => setTelemetryError(error instanceof Error ? error.message : String(error))),
     ])
   }, [selectedSessionId])
 
@@ -300,6 +316,12 @@ export default function PerformancePage() {
       }
     >
       <div className="space-y-4">
+        {telemetryError && (
+          <Surface className="border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+            <div className="font-semibold">{zh ? '遥测数据读取异常' : 'Telemetry query failed'}</div>
+            <div className="mt-1 truncate text-xs opacity-90" title={telemetryError}>{telemetryError}</div>
+          </Surface>
+        )}
         <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
           <MetricCard label={labels.activeSessions} value={overview.active_sessions} icon={<Server className="h-5 w-5" />} tone="border-emerald-500/20 bg-emerald-500/10 text-emerald-300" />
           <MetricCard label={labels.sessions24h} value={overview.sessions_24h} icon={<Database className="h-5 w-5" />} tone="border-blue-500/20 bg-blue-500/10 text-blue-300" />

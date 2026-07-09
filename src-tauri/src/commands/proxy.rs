@@ -6,7 +6,7 @@ use axum::{
     routing::{any, get},
     Json, Router,
 };
-use futures_util::TryStreamExt;
+use futures_util::StreamExt;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -359,21 +359,6 @@ async fn proxy_openai(
 
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let _ = record_proxy_request(
-        target.telemetry_session_id.as_deref(),
-        &ProxyRequestRecord {
-            task_id: proxy_task_id,
-            model: requested_model.clone(),
-            target_instance_id: target.public.instance_id.clone(),
-            http_status: Some(status.as_u16()),
-            duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
-            error_text: if status.is_success() {
-                None
-            } else {
-                Some(format!("upstream returned {}", status.as_u16()))
-            },
-        },
-    );
     let mut builder = Response::builder().status(status);
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
@@ -391,9 +376,64 @@ async fn proxy_openai(
         }
     }
 
-    let stream = response
-        .bytes_stream()
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err));
+    let telemetry_session_id = target.telemetry_session_id.clone();
+    let target_instance_id = target.public.instance_id.clone();
+    let model = requested_model.clone();
+    let http_status = status.as_u16();
+    let status_success = status.is_success();
+    let upstream_stream = Box::pin(response.bytes_stream());
+    let stream = futures_util::stream::unfold(
+        (upstream_stream, false),
+        move |(mut upstream_stream, finalized)| {
+            let telemetry_session_id = telemetry_session_id.clone();
+            let target_instance_id = target_instance_id.clone();
+            let model = model.clone();
+            async move {
+                if finalized {
+                    return None;
+                }
+                match upstream_stream.as_mut().next().await {
+                    Some(Ok(bytes)) => Some((Ok(bytes), (upstream_stream, false))),
+                    Some(Err(err)) => {
+                        let error_text = err.to_string();
+                        let _ = record_proxy_request(
+                            telemetry_session_id.as_deref(),
+                            &ProxyRequestRecord {
+                                task_id: proxy_task_id,
+                                model,
+                                target_instance_id,
+                                http_status: Some(http_status),
+                                duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+                                error_text: Some(error_text.clone()),
+                            },
+                        );
+                        Some((
+                            Err(std::io::Error::new(std::io::ErrorKind::Other, error_text)),
+                            (upstream_stream, true),
+                        ))
+                    }
+                    None => {
+                        let _ = record_proxy_request(
+                            telemetry_session_id.as_deref(),
+                            &ProxyRequestRecord {
+                                task_id: proxy_task_id,
+                                model,
+                                target_instance_id,
+                                http_status: Some(http_status),
+                                duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+                                error_text: if status_success {
+                                    None
+                                } else {
+                                    Some(format!("upstream returned {}", http_status))
+                                },
+                            },
+                        );
+                        None
+                    }
+                }
+            }
+        },
+    );
     builder
         .body(Body::from_stream(stream))
         .unwrap_or_else(|err| {

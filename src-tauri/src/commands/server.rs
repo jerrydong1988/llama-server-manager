@@ -1,6 +1,6 @@
 use crate::commands::adlx;
 use crate::commands::nvml;
-use crate::models::{AppState, GlobalConfig, InstanceConfig, RunningInstance, SystemMetrics};
+use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader};
@@ -747,16 +747,10 @@ pub async fn start_server(
     }
 
     // Persist running state to disk immediately via unified atomic writes to avoid races.
-    {
-        let config_dir = state.config_dir.lock().unwrap().clone();
-        let path = config_dir.join("instances.json");
-        if let Ok(json) = std::fs::read_to_string(&path) {
-            if let Ok(mut global) = serde_json::from_str::<GlobalConfig>(&json) {
-                global.running = state.running.lock().unwrap().clone();
-                let _ = crate::commands::config::persist_global_config(&config_dir, &global);
-            }
-        }
-    }
+    let running_snapshot = state.running.lock().unwrap().clone();
+    let _ = crate::commands::config::update_and_persist(&state, |global| {
+        global.running = running_snapshot;
+    });
 
     app.emit(
         "server-started",
@@ -1104,6 +1098,10 @@ pub fn health_check_loop(
         if !is_my_instance() {
             return;
         }
+        if !is_recorded_process_alive(expected_pid) {
+            cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
+            return;
+        }
         if let Ok(resp) = health_req(2) {
             if resp.status().is_success() {
                 let _ = app.emit(
@@ -1116,6 +1114,10 @@ pub fn health_check_loop(
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                     if !is_my_instance() {
+                        return;
+                    }
+                    if !is_recorded_process_alive(expected_pid) {
+                        cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
                         return;
                     }
                     if let Ok(resp) = health_req(5) {
@@ -1134,6 +1136,15 @@ pub fn health_check_loop(
                         fail_count += 1;
                     }
                     if fail_count >= 3 {
+                        if !is_recorded_process_alive(expected_pid) {
+                            cleanup_running_instance(
+                                &app,
+                                instance_id,
+                                expected_pid,
+                                "process-exited",
+                            );
+                            return;
+                        }
                         let _ = app.emit(
                             "health-status",
                             serde_json::json!({
@@ -1232,42 +1243,7 @@ pub async fn stop_server(
 
     if !killed {
         if let Some(ref ri) = ri {
-            #[cfg(target_os = "windows")]
-            {
-                let cmd = format!("try{{$p=Get-NetTCPConnection -LocalPort {} -ErrorAction Stop|Select -First 1 -ExpandProperty OwningProcess;Stop-Process -Id $p -Force;Write-Output $p}}catch{{}}", ri.port);
-                let r = std::os::windows::process::CommandExt::creation_flags(
-                    &mut Command::new("powershell"),
-                    0x08000000,
-                )
-                .args(["-NoProfile", "-Command", &cmd])
-                .output();
-                killed = r
-                    .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
-                    .unwrap_or(false);
-            }
-            #[cfg(target_os = "macos")]
-            {
-                let port_str = ri.port.to_string();
-                if let Ok(out) = Command::new("lsof")
-                    .args(["-ti", &format!(":{}", port_str)])
-                    .output()
-                {
-                    let pids = String::from_utf8_lossy(&out.stdout);
-                    for pid in pids.lines() {
-                        let _ = Command::new("kill").arg("-9").arg(pid).status();
-                        killed = true;
-                    }
-                }
-            }
-            #[cfg(target_os = "linux")]
-            {
-                if let Ok(out) = Command::new("fuser")
-                    .args(["-k", &format!("{}/tcp", ri.port)])
-                    .status()
-                {
-                    killed = out.success() || killed;
-                }
-            }
+            killed = !is_recorded_process_alive(ri.pid);
         }
     }
 
@@ -1299,21 +1275,112 @@ pub async fn stop_server(
     }
 }
 
+fn is_recorded_process_alive(pid: u32) -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            CloseHandle(handle);
+            true
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+}
+
+fn cleanup_running_instance(
+    app: &tauri::AppHandle,
+    instance_id: &str,
+    expected_pid: u32,
+    reason: &str,
+) -> bool {
+    let state = app.state::<AppState>();
+    let removed = {
+        let mut running = state.running.lock().unwrap();
+        match running.get(instance_id) {
+            Some(current) if current.pid == expected_pid => running.remove(instance_id),
+            _ => None,
+        }
+    };
+    let Some(ri) = removed else {
+        return false;
+    };
+    {
+        let mut restored = state.restored_runtime_instances.lock().unwrap();
+        let prefix = format!("{}:", instance_id);
+        restored.retain(|key| !key.starts_with(&prefix));
+    }
+    let _ = crate::commands::telemetry::finish_run_session(
+        ri.telemetry_session_id.as_deref(),
+        None,
+        reason,
+    );
+    let _ = crate::commands::config::update_and_persist(&state, |global| {
+        if global
+            .running
+            .get(instance_id)
+            .map(|current| current.pid == expected_pid)
+            .unwrap_or(false)
+        {
+            global.running.remove(instance_id);
+        }
+    });
+    let _ = app.emit(
+        "server-stopped",
+        serde_json::json!({
+            "instanceId": instance_id,
+            "reason": reason,
+        }),
+    );
+    true
+}
+
+fn browser_url_for_host(host: &str, port: u16) -> Result<String, String> {
+    let normalized = if host == "0.0.0.0" || host == "::" {
+        "localhost".to_string()
+    } else {
+        host.trim().to_string()
+    };
+    if normalized.is_empty() {
+        return Err("Invalid host: empty".into());
+    }
+    if let Ok(ip) = normalized.parse::<std::net::IpAddr>() {
+        return Ok(match ip {
+            std::net::IpAddr::V4(_) => format!("http://{}:{}", ip, port),
+            std::net::IpAddr::V6(_) => format!("http://[{}]:{}", ip, port),
+        });
+    }
+    let valid_hostname = normalized
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.'))
+        && normalized
+            .split('.')
+            .all(|label| !label.is_empty() && !label.starts_with('-') && !label.ends_with('-'));
+    if !valid_hostname {
+        return Err(format!("Invalid host: {}", host));
+    }
+    Ok(format!("http://{}:{}", normalized, port))
+}
+
 #[tauri::command]
 pub async fn open_browser(host: String, port: u16) -> Result<(), String> {
-    let host = if host == "0.0.0.0" {
-        "localhost"
-    } else {
-        &host
-    };
-    let url = format!("http://{}:{}", host, port);
+    let url = browser_url_for_host(&host, port)?;
     #[cfg(target_os = "windows")]
     {
         std::os::windows::process::CommandExt::creation_flags(
-            &mut std::process::Command::new("cmd"),
+            &mut std::process::Command::new("explorer.exe"),
             0x08000000,
         )
-        .args(["/c", "start", &url])
+        .arg(&url)
         .spawn()
         .map_err(|e| format!("{}", e))?;
     }
@@ -2114,5 +2181,17 @@ mod perf_parser_tests {
         assert_eq!(task.prompt_tps, Some(592.45));
         assert_eq!(task.gen_tps, Some(66.14));
         assert_eq!(task.spec_accept_rate, Some(0.92624));
+    }
+
+    #[test]
+    fn browser_url_rejects_command_metacharacters_in_host() {
+        let err = browser_url_for_host("127.0.0.1 & calc", 8080).unwrap_err();
+        assert!(err.contains("Invalid host"));
+    }
+
+    #[test]
+    fn browser_url_maps_wildcard_host_to_localhost() {
+        let url = browser_url_for_host("0.0.0.0", 8080).unwrap();
+        assert_eq!(url, "http://localhost:8080");
     }
 }

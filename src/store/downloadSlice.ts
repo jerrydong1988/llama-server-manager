@@ -278,16 +278,25 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       invoke('persist_download_queue', { queue }).catch(() => {})
     },
     resumeAllDownloads: async () => {
+      let identities: Array<{ taskId: string; runId: string; version: number }> = []
       try {
-        await invoke('resume_all_downloads')
+        identities = await invoke<Array<{ taskId: string; runId: string; version: number }>>('resume_all_downloads')
       } catch (error) {
         console.error(error)
+        return
       }
 
       const tasks = { ...get().downloadTasks }
+      const identityByTaskId = new Map(identities.map(identity => [identity.taskId, identity]))
       for (const id of Object.keys(tasks)) {
         if (tasks[id].status === 'paused' || tasks[id].status === 'pausing') {
-          tasks[id] = { ...tasks[id], status: 'queued', speed: 0 }
+          const identity = identityByTaskId.get(id)
+          tasks[id] = {
+            ...tasks[id],
+            status: 'queued',
+            speed: 0,
+            ...(identity ? { runId: identity.runId, version: identity.version } : {}),
+          }
         }
       }
       set({ downloadTasks: tasks })

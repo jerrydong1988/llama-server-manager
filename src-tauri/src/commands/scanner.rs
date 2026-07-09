@@ -105,7 +105,7 @@ pub async fn scan_models(
     };
 
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<ModelInfo>, Vec<String>> {
-        let inventory = model_inventory::load_model_index().unwrap_or_default();
+        let inventory = model_inventory::load_model_index().map_err(|err| vec![err])?;
         let mut models: Vec<ModelInfo> = Vec::new();
         let mut seen_display_paths = HashSet::new();
         let mut seen_inventory_paths = HashSet::new();
@@ -138,6 +138,10 @@ pub async fn scan_models(
                 .flatten()
             {
                 let path = entry.path();
+                if entry.file_type().is_symlink() {
+                    errors.push(format!("{} is a symlink and was skipped", path.display()));
+                    continue;
+                }
                 if !path.is_file() {
                     continue;
                 }
@@ -211,31 +215,44 @@ pub async fn scan_models(
                     .unwrap_or(4)
                     .max(1))
             .max(1);
-            let results: Vec<Vec<(usize, crate::models::GgufMetadataSummary)>> =
-                std::thread::scope(|s| {
-                    let mut handles = Vec::new();
-                    for chunk in fresh_files.chunks(chunk_size) {
-                        let chunk: Vec<_> = chunk.to_vec();
-                        handles.push(s.spawn(move || {
-                            chunk
-                                .iter()
-                                .map(|(model_idx, path)| {
-                                    let summary =
-                                        utils::parse_gguf_metadata(path).unwrap_or_default();
-                                    (*model_idx, summary)
-                                })
-                                .collect::<Vec<_>>()
-                        }));
-                    }
-                    handles
-                        .into_iter()
-                        .map(|h| h.join().unwrap_or_default())
-                        .collect()
-                });
+            type MetadataParseResult = (
+                usize,
+                PathBuf,
+                Result<crate::models::GgufMetadataSummary, String>,
+            );
+            let results: Vec<Vec<MetadataParseResult>> = std::thread::scope(|s| {
+                let mut handles = Vec::new();
+                for chunk in fresh_files.chunks(chunk_size) {
+                    let chunk: Vec<_> = chunk.to_vec();
+                    handles.push(s.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|(model_idx, path)| {
+                                (*model_idx, path.clone(), utils::parse_gguf_metadata(path))
+                            })
+                            .collect::<Vec<_>>()
+                    }));
+                }
+                handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap_or_default())
+                    .collect()
+            });
 
             for chunk_results in results {
-                for (model_idx, summary) in chunk_results {
+                for (model_idx, path, summary_result) in chunk_results {
                     if model_idx < models.len() {
+                        let summary = match summary_result {
+                            Ok(summary) => summary,
+                            Err(err) => {
+                                errors.push(format!(
+                                    "{} metadata parse failed: {}",
+                                    path.display(),
+                                    err
+                                ));
+                                continue;
+                            }
+                        };
                         let model = &mut models[model_idx];
                         model.architecture = summary.architecture;
                         model.context_length = summary.context_length;
@@ -265,8 +282,9 @@ pub async fn scan_models(
                     })
             })
             .collect::<Vec<_>>();
-        let _ = model_inventory::upsert_model_records(&records);
-        let _ = model_inventory::prune_absent_models(&scan_root_keys, &seen_inventory_paths);
+        model_inventory::upsert_model_records(&records).map_err(|err| vec![err])?;
+        model_inventory::prune_absent_models(&scan_root_keys, &seen_inventory_paths)
+            .map_err(|err| vec![err])?;
 
         if models.is_empty() && !errors.is_empty() {
             Err(errors)
@@ -317,10 +335,10 @@ pub async fn load_app_data(
 pub async fn get_cached_scan(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<(Vec<ModelInfo>, Vec<EngineInfo>)>, String> {
-    let mut models = model_inventory::list_cached_models().unwrap_or_default();
+    let mut models = model_inventory::list_cached_models()?;
     mark_sharded_models(&mut models);
 
-    let mut engines = model_inventory::list_cached_engines().unwrap_or_default();
+    let mut engines = model_inventory::list_cached_engines()?;
     {
         let saved_names = state.engine_names.lock().unwrap();
         for engine in &mut engines {
@@ -357,6 +375,13 @@ pub async fn delete_model_file(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let p = std::path::Path::new(&path);
+    if std::fs::symlink_metadata(p)
+        .map_err(|e| format!("璺緞鏃犳晥: {}", e))?
+        .file_type()
+        .is_symlink()
+    {
+        return Err("Cannot delete symlinked model files".to_string());
+    }
     if p.extension()
         .and_then(|s| s.to_str())
         .map(|s| s.to_lowercase())
@@ -421,7 +446,7 @@ pub async fn scan_engines(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<EngineInfo>, String> {
     let mut engines = tokio::task::spawn_blocking(move || -> Result<Vec<EngineInfo>, String> {
-        let inventory = model_inventory::load_engine_index().unwrap_or_default();
+        let inventory = model_inventory::load_engine_index()?;
         let mut engines: Vec<EngineInfo> = Vec::new();
         let mut engine_records: Vec<InventoryEngineRecord> = Vec::new();
         let mut seen = HashSet::new();
@@ -525,8 +550,8 @@ pub async fn scan_engines(
             }
         }
 
-        let _ = model_inventory::upsert_engine_records(&engine_records);
-        let _ = model_inventory::prune_absent_engines(&scan_root_keys, &seen_inventory_ids);
+        model_inventory::upsert_engine_records(&engine_records)?;
+        model_inventory::prune_absent_engines(&scan_root_keys, &seen_inventory_ids)?;
         Ok(engines)
     })
     .await

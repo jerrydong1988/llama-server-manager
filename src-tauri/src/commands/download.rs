@@ -167,6 +167,25 @@ fn artifact_state_path(temp_path: &Path) -> PathBuf {
     PathBuf::from(format!("{}.json", temp_path.display()))
 }
 
+fn write_string_atomic(path: &Path, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create directory: {}", e))?;
+    }
+    let tmp = path.with_extension(format!(
+        "{}tmp",
+        path.extension()
+            .and_then(|s| s.to_str())
+            .map(|s| format!("{}.", s))
+            .unwrap_or_default()
+    ));
+    std::fs::write(&tmp, contents).map_err(|e| format!("failed to write temp file: {}", e))?;
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::rename(&tmp, path).map_err(|e| format!("failed to replace file: {}", e))
+}
+
 fn load_artifact_state(temp_path: &Path) -> Option<DownloadArtifactState> {
     let metadata_path = artifact_state_path(temp_path);
     std::fs::read_to_string(&metadata_path)
@@ -177,7 +196,7 @@ fn load_artifact_state(temp_path: &Path) -> Option<DownloadArtifactState> {
 fn save_artifact_state(state: &DownloadArtifactState, temp_path: &Path) {
     let metadata_path = artifact_state_path(temp_path);
     if let Ok(json) = serde_json::to_string(state) {
-        let _ = std::fs::write(&metadata_path, json);
+        let _ = write_string_atomic(&metadata_path, &json);
     }
 }
 
@@ -192,6 +211,104 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn normalize_path_for_compare(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn queue_entry_download_dir(base_dir: &Path, entry: &PersistedQueueEntry) -> PathBuf {
+    base_dir.join(&entry.save_dir).join(
+        entry
+            .repo_id
+            .replace('/', &std::path::MAIN_SEPARATOR.to_string()),
+    )
+}
+
+fn refresh_download_file_identity(file: &mut MsFileEntry) -> ResumeDownloadTaskResult {
+    let task_id = file
+        .task_id
+        .clone()
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let version = file.version.unwrap_or(0) + 1;
+    file.task_id = Some(task_id.clone());
+    file.run_id = Some(run_id.clone());
+    file.version = Some(version);
+    file.status = Some("queued".into());
+    file.error = None;
+    ResumeDownloadTaskResult {
+        task_id,
+        run_id,
+        version,
+    }
+}
+
+fn normalize_crash_recovered_entry(entry: &mut PersistedQueueEntry) {
+    if matches!(entry.status.as_str(), "active" | "pausing") {
+        entry.status = "paused".into();
+    }
+    for file in entry.files.iter_mut() {
+        if matches!(file.status.as_deref(), Some("active" | "pausing")) {
+            file.status = Some("paused".into());
+        } else if file.status.is_none() {
+            file.status = Some(entry.status.clone());
+        }
+    }
+}
+
+fn trusted_download_cleanup_paths(
+    entries: &[PersistedQueueEntry],
+    base_dir: &Path,
+    task_id: &str,
+    file_name: &str,
+    run_id: Option<&str>,
+    frontend_path: Option<&Path>,
+) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+    let sanitized = sanitize_file_name(file_name)?;
+    let mut candidates = Vec::new();
+    for entry in entries {
+        for file in &entry.files {
+            if file.task_id.as_deref() != Some(task_id) {
+                continue;
+            }
+            if let Some(expected_run_id) = run_id {
+                if file.run_id.as_deref() != Some(expected_run_id) {
+                    continue;
+                }
+            }
+            if file.name != sanitized {
+                return Err("Download task file name does not match registered file".into());
+            }
+            let dir = queue_entry_download_dir(base_dir, entry);
+            candidates.push(build_download_paths(&dir, &file.name));
+        }
+    }
+
+    let (final_path, temp_path, metadata_path) = candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| "Download task not found".to_string())?;
+
+    if let Some(frontend_path) = frontend_path {
+        let expected = normalize_path_for_compare(&final_path);
+        let provided = normalize_path_for_compare(frontend_path);
+        if provided != expected {
+            return Err("Frontend file path does not match registered download task".into());
+        }
+    }
+
+    Ok((final_path, temp_path, metadata_path))
 }
 
 #[derive(Clone)]
@@ -1205,11 +1322,37 @@ pub async fn cancel_and_cleanup_download(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let _ = sanitize_file_name(&file_name)?;
+    let run_id_for_match = run_id.as_deref();
+    let mut entries = load_download_state(&state);
+    entries.extend(state.download_queue.lock().unwrap().clone());
+    entries.extend(
+        state
+            .download_active_entries
+            .lock()
+            .unwrap()
+            .values()
+            .cloned(),
+    );
+    let base_dir = state
+        .config_dir
+        .lock()
+        .unwrap()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let (trusted_final_path, trusted_temp_path, trusted_metadata_path) =
+        trusted_download_cleanup_paths(
+            &entries,
+            &base_dir,
+            &task_id,
+            &file_name,
+            run_id_for_match,
+            Some(Path::new(&file_path)),
+        )?;
     // Canonicalize + verify the path is within a managed download directory
     let managed = state.config_dir.lock().unwrap();
     let root = managed.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let cpath = std::fs::canonicalize(Path::new(&file_path))
-        .unwrap_or_else(|_| Path::new(&file_path).to_path_buf());
+    let cpath = trusted_final_path;
     let croot = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
     if !cpath.starts_with(&croot) {
         return Err("文件不在受管目录内".into());
@@ -1218,10 +1361,8 @@ pub async fn cancel_and_cleanup_download(
     state.cancel_flags.lock().unwrap().insert(key.clone(), true);
     state.pause_flags.lock().unwrap().remove(&key);
     let _ = std::fs::remove_file(&cpath);
-    let part_path = PathBuf::from(format!("{}.part", cpath.display()));
-    let part_json_path = PathBuf::from(format!("{}.part.json", cpath.display()));
-    let _ = std::fs::remove_file(&part_path);
-    let _ = std::fs::remove_file(&part_json_path);
+    let _ = std::fs::remove_file(&trusted_temp_path);
+    let _ = std::fs::remove_file(&trusted_metadata_path);
     remove_manager_file(&state, &task_id);
     let _ = app.emit("download-removed", serde_json::json!({ "taskId": task_id, "fileName": file_name, "version": version.unwrap_or(0) }));
     Ok(())
@@ -1785,7 +1926,7 @@ fn save_inflight_state(inflight: &[PersistedQueueEntry], state: &AppState) {
         queue: inflight.to_vec(),
     };
     if let Ok(json) = serde_json::to_string_pretty(&ds) {
-        let _ = std::fs::write(&path, json);
+        let _ = write_string_atomic(&path, &json);
     }
 }
 
@@ -1811,9 +1952,7 @@ pub(crate) fn restore_runtime_queue_from_disk(
     let inflight = load_inflight_state(state);
     if !inflight.is_empty() {
         for mut entry in inflight {
-            if entry.status == "active" {
-                entry.status = "paused".into();
-            }
+            normalize_crash_recovered_entry(&mut entry);
             queue.push(entry);
         }
         clear_inflight_state(state);
@@ -1830,7 +1969,9 @@ pub(crate) fn restore_runtime_queue_from_disk(
                 .replace('/', &std::path::MAIN_SEPARATOR.to_string()),
         );
         for file in entry.files.iter_mut() {
-            if file.status.is_none() {
+            if matches!(file.status.as_deref(), Some("active" | "pausing")) {
+                file.status = Some("paused".into());
+            } else if file.status.is_none() {
                 file.status = Some(entry.status.clone());
             }
             let (final_path, temp_path, _) = build_download_paths(&repo_dir, &file.name);
@@ -2015,10 +2156,9 @@ pub async fn set_download_resume_policy(
     if policy != "manual" && policy != "auto_on_launch" {
         return Err("Invalid policy. Must be 'manual' or 'auto_on_launch'".into());
     }
-    let config_dir = state.config_dir.lock().unwrap().clone();
-    let mut config = crate::commands::config::read_config_from_disk(&config_dir);
-    config.download_resume_policy = policy;
-    crate::commands::config::persist_global_config(&config_dir, &config)?;
+    crate::commands::config::update_and_persist(&state, |global| {
+        global.download_resume_policy = policy;
+    })?;
     Ok(())
 }
 
@@ -2093,12 +2233,7 @@ pub async fn resume_download_task(
 
     let (repo_id, source, save_dir, retries, max_retries) =
         target_meta.ok_or_else(|| "Download task metadata is missing".to_string())?;
-    let run_id = uuid::Uuid::new_v4().to_string();
-    let version = file.version.unwrap_or(0) + 1;
-    file.run_id = Some(run_id.clone());
-    file.version = Some(version);
-    file.status = Some("queued".into());
-    file.error = None;
+    let identity = refresh_download_file_identity(&mut file);
 
     let runtime_entry = PersistedQueueEntry {
         id: uuid::Uuid::new_v4().to_string(),
@@ -2127,23 +2262,25 @@ pub async fn resume_download_task(
 
     Ok(ResumeDownloadTaskResult {
         task_id,
-        run_id,
-        version,
+        run_id: identity.run_id,
+        version: identity.version,
     })
 }
 
 #[tauri::command]
-pub async fn resume_all_downloads(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn resume_all_downloads(
+    app: tauri::AppHandle,
+) -> Result<Vec<ResumeDownloadTaskResult>, String> {
     let state = app.state::<AppState>();
     let queue = load_download_state(&state);
     let mut runtime = state.download_queue.lock().unwrap();
+    let mut identities = Vec::new();
     for entry in &queue {
         if entry.status == "paused" && !runtime.iter().any(|e| e.id == entry.id) {
             let mut entry = entry.clone();
             entry.status = "queued".into();
             for file in entry.files.iter_mut() {
-                file.status = Some("queued".into());
-                file.error = None;
+                identities.push(refresh_download_file_identity(file));
             }
             runtime.push(entry);
         }
@@ -2151,7 +2288,7 @@ pub async fn resume_all_downloads(app: tauri::AppHandle) -> Result<(), String> {
     drop(runtime);
     persist_manager_queue(&state);
     fill_download_queue_slots(app);
-    Ok(())
+    Ok(identities)
 }
 
 pub fn flush_download_manager_state(app: &tauri::AppHandle) {
@@ -2190,6 +2327,111 @@ pub fn flush_download_manager_state(app: &tauri::AppHandle) {
     persisted.retain(|entry| !queue.iter().any(|queued| queued.id == entry.id));
     persisted.extend(queue);
     save_download_state(&persisted, &state);
+}
+
+#[cfg(test)]
+mod audit_remediation_tests {
+    use super::*;
+
+    #[test]
+    fn crash_recovered_inflight_entry_normalizes_active_file_statuses() {
+        let mut entry = PersistedQueueEntry {
+            id: "entry-1".into(),
+            repo_id: "repo/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "active".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "file".into(),
+                downloaded: Some(12),
+                status: Some("active".into()),
+                error: None,
+                task_id: Some("task-1".into()),
+                run_id: Some("run-1".into()),
+                version: Some(1),
+            }],
+        };
+
+        normalize_crash_recovered_entry(&mut entry);
+
+        assert_eq!(entry.status, "paused");
+        assert_eq!(entry.files[0].status.as_deref(), Some("paused"));
+        assert_eq!(entry.files[0].error, None);
+    }
+
+    #[test]
+    fn refresh_download_file_identity_increments_version_and_clears_error() {
+        let mut file = MsFileEntry {
+            name: "model.gguf".into(),
+            path: "model.gguf".into(),
+            size: 100,
+            file_type: "file".into(),
+            downloaded: Some(12),
+            status: Some("paused".into()),
+            error: Some("old".into()),
+            task_id: Some("task-1".into()),
+            run_id: Some("run-1".into()),
+            version: Some(7),
+        };
+
+        let result = refresh_download_file_identity(&mut file);
+
+        assert_eq!(result.task_id, "task-1");
+        assert_eq!(result.version, 8);
+        assert_ne!(result.run_id, "run-1");
+        assert_eq!(file.status.as_deref(), Some("queued"));
+        assert_eq!(file.error, None);
+        assert_eq!(file.version, Some(8));
+        assert_eq!(file.run_id.as_deref(), Some(result.run_id.as_str()));
+    }
+
+    #[test]
+    fn trusted_download_cleanup_path_rejects_frontend_path_outside_entry_directory() {
+        let entry = PersistedQueueEntry {
+            id: "entry-1".into(),
+            repo_id: "repo/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "paused".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "file".into(),
+                downloaded: None,
+                status: Some("paused".into()),
+                error: None,
+                task_id: Some("task-1".into()),
+                run_id: Some("run-1".into()),
+                version: Some(1),
+            }],
+        };
+        let base = Path::new("/app-data");
+        let forged = Path::new("/app-data/configs/instances.json");
+
+        let err = trusted_download_cleanup_paths(
+            &[entry],
+            base,
+            "task-1",
+            "model.gguf",
+            Some("run-1"),
+            Some(forged),
+        )
+        .unwrap_err();
+
+        assert!(err.contains("does not match"));
+    }
 }
 
 // Batch control commands.
