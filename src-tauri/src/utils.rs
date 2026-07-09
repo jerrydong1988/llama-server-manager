@@ -247,6 +247,10 @@ fn is_vision_family(family: Option<&str>) -> bool {
 }
 
 fn quant_type_from_file_type(file_type: Option<u32>, path: &Path) -> Option<String> {
+    if let Some(named_quant) = quant_type_from_name(path) {
+        return Some(named_quant);
+    }
+
     match file_type {
         Some(0) => Some("F32".into()),
         Some(1) => Some("F16".into()),
@@ -278,8 +282,21 @@ fn quant_type_from_file_type(file_type: Option<u32>, path: &Path) -> Option<Stri
         Some(30) => Some("IQ4_XS".into()),
         Some(31) => Some("IQ1_M".into()),
         Some(32) => Some("BF16".into()),
+        Some(33) => Some("Q4_0_4_4".into()),
+        Some(34) => Some("Q4_0_4_8".into()),
+        Some(35) => Some("Q4_0_8_8".into()),
+        Some(36) => Some("TQ1_0".into()),
+        Some(37) => Some("TQ2_0".into()),
+        Some(38) => Some("MXFP4_MOE".into()),
+        Some(39) => Some("NVFP4".into()),
+        Some(40) => Some("Q1_0".into()),
+        Some(41) => Some("Q2_0".into()),
         _ => quant_type_from_name(path),
     }
+}
+
+pub fn normalize_quant_type_for_path(quant_type: Option<String>, path: &Path) -> Option<String> {
+    quant_type_from_name(path).or(quant_type)
 }
 
 fn quant_type_from_name(path: &Path) -> Option<String> {
@@ -288,52 +305,81 @@ fn quant_type_from_name(path: &Path) -> Option<String> {
         .and_then(|s| s.to_str())
         .unwrap_or("")
         .to_lowercase();
-    if fname.contains("bf16") {
-        Some("BF16".into())
-    } else if fname.contains("f16") {
-        Some("F16".into())
-    } else if fname.contains("f32") {
-        Some("F32".into())
-    } else if fname.contains("q8_k") || fname.contains("q8k") {
-        Some("Q8_K".into())
-    } else if fname.contains("q8_0") || fname.contains("q8o") {
-        Some("Q8_0".into())
-    } else if fname.contains("q6_k") || fname.contains("q6k") {
-        Some("Q6_K".into())
-    } else if fname.contains("q5_k") || fname.contains("q5k") {
-        Some("Q5_K".into())
-    } else if fname.contains("q5_1") {
-        Some("Q5_1".into())
-    } else if fname.contains("q5_0") {
-        Some("Q5_0".into())
-    } else if fname.contains("q4_k_xl") || fname.contains("q4k_xl") {
-        Some("Q4_K_XL".into())
-    } else if fname.contains("q4_k_l") || fname.contains("q4k_l") {
-        Some("Q4_K_L".into())
-    } else if fname.contains("q4_k") || fname.contains("q4k") {
-        Some("Q4_K".into())
-    } else if fname.contains("q4_1") {
-        Some("Q4_1".into())
-    } else if fname.contains("q4_0") {
-        Some("Q4_0".into())
-    } else if fname.contains("q3_k") || fname.contains("q3k") {
-        Some("Q3_K".into())
-    } else if fname.contains("q2_k") || fname.contains("q2k") {
-        Some("Q2_K".into())
-    } else if fname.contains("iq4") {
-        Some("IQ4".into())
-    } else if fname.contains("iq3") {
-        Some("IQ3".into())
-    } else if fname.contains("iq2") {
-        Some("IQ2".into())
-    } else if fname.contains("iq1") {
-        Some("IQ1".into())
-    } else if fname.contains("mxfp4") {
-        Some("MXFP4".into())
-    } else if fname.contains("mxfp6") {
-        Some("MXFP6".into())
-    } else if fname.contains("mxfp8") {
-        Some("MXFP8".into())
+    let normalized = fname.replace(['-', '.', ' '], "_");
+    let patterns = [
+        ("mxfp4_moe", "MXFP4_MOE"),
+        ("mxfp4", "MXFP4"),
+        ("mxfp6", "MXFP6"),
+        ("mxfp8", "MXFP8"),
+        ("nvfp4", "NVFP4"),
+        ("tq1_0", "TQ1_0"),
+        ("tq2_0", "TQ2_0"),
+        ("iq4_xs", "IQ4_XS"),
+        ("iq4_nl", "IQ4_NL"),
+        ("iq3_xxs", "IQ3_XXS"),
+        ("iq3_xs", "IQ3_XS"),
+        ("iq3_m", "IQ3_M"),
+        ("iq3_s", "IQ3_S"),
+        ("iq2_xxs", "IQ2_XXS"),
+        ("iq2_xs", "IQ2_XS"),
+        ("iq2_m", "IQ2_M"),
+        ("iq2_s", "IQ2_S"),
+        ("iq1_m", "IQ1_M"),
+        ("iq1_s", "IQ1_S"),
+        ("iq4", "IQ4"),
+        ("iq3", "IQ3"),
+        ("iq2", "IQ2"),
+        ("iq1", "IQ1"),
+        ("q8_k", "Q8_K"),
+        ("q8k", "Q8_K"),
+        ("q8_0", "Q8_0"),
+        ("q8o", "Q8_0"),
+        ("q6_k", "Q6_K"),
+        ("q6k", "Q6_K"),
+        ("q5_k_m", "Q5_K_M"),
+        ("q5k_m", "Q5_K_M"),
+        ("q5_k_s", "Q5_K_S"),
+        ("q5k_s", "Q5_K_S"),
+        ("q5_k", "Q5_K"),
+        ("q5k", "Q5_K"),
+        ("q5_1", "Q5_1"),
+        ("q5_0", "Q5_0"),
+        ("q4_k_xl", "Q4_K_XL"),
+        ("q4k_xl", "Q4_K_XL"),
+        ("q4_k_l", "Q4_K_L"),
+        ("q4k_l", "Q4_K_L"),
+        ("q4_k_m", "Q4_K_M"),
+        ("q4k_m", "Q4_K_M"),
+        ("q4_k_s", "Q4_K_S"),
+        ("q4k_s", "Q4_K_S"),
+        ("q4_k", "Q4_K"),
+        ("q4k", "Q4_K"),
+        ("q4_1", "Q4_1"),
+        ("q4_0", "Q4_0"),
+        ("q3_k_l", "Q3_K_L"),
+        ("q3k_l", "Q3_K_L"),
+        ("q3_k_m", "Q3_K_M"),
+        ("q3k_m", "Q3_K_M"),
+        ("q3_k_s", "Q3_K_S"),
+        ("q3k_s", "Q3_K_S"),
+        ("q3_k", "Q3_K"),
+        ("q3k", "Q3_K"),
+        ("q2_k_s", "Q2_K_S"),
+        ("q2k_s", "Q2_K_S"),
+        ("q2_k", "Q2_K"),
+        ("q2k", "Q2_K"),
+        ("q2_0", "Q2_0"),
+        ("q1_0", "Q1_0"),
+        ("bf16", "BF16"),
+        ("f16", "F16"),
+        ("f32", "F32"),
+    ];
+
+    if let Some((_, label)) = patterns
+        .iter()
+        .find(|(needle, _)| normalized.contains(*needle))
+    {
+        Some((*label).into())
     } else if fname.contains("apex") {
         Some("IQ (APEX)".into())
     } else if fname.contains("-i-compact") || fname.contains("_i-compact") {
@@ -342,8 +388,6 @@ fn quant_type_from_name(path: &Path) -> Option<String> {
         Some("IQ (Static)".into())
     } else if fname.contains("-i-dynamic") || fname.contains("_i-dynamic") {
         Some("IQ (Dynamic)".into())
-    } else if fname.contains("gguf") {
-        Some("Original Precision".into())
     } else {
         None
     }
@@ -416,4 +460,103 @@ pub fn get_data_dir() -> PathBuf {
         }
     }
     get_app_dir()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path(name: &str) -> PathBuf {
+        PathBuf::from(name)
+    }
+
+    #[test]
+    fn quant_name_preserves_extended_q4_k_variants_over_metadata() {
+        assert_eq!(
+            quant_type_from_file_type(
+                Some(15),
+                &path("nvidia_Nemotron-3-Super-120B-A12B-Q4_K_L-00001-of-00003.gguf")
+            )
+            .as_deref(),
+            Some("Q4_K_L")
+        );
+        assert_eq!(
+            quant_type_from_file_type(Some(15), &path("model-Q4_K_XL.gguf")).as_deref(),
+            Some("Q4_K_XL")
+        );
+        assert_eq!(
+            quant_type_from_file_type(Some(15), &path("plain-model.gguf")).as_deref(),
+            Some("Q4_K_M")
+        );
+    }
+
+    #[test]
+    fn quant_name_detects_specific_k_quant_suffixes() {
+        let cases = [
+            ("model-Q5_K_M.gguf", "Q5_K_M"),
+            ("model-Q5_K_S.gguf", "Q5_K_S"),
+            ("model-Q4_K_M.gguf", "Q4_K_M"),
+            ("model-Q4_K_S.gguf", "Q4_K_S"),
+            ("model-Q3_K_L.gguf", "Q3_K_L"),
+            ("model-Q3_K_M.gguf", "Q3_K_M"),
+            ("model-Q3_K_S.gguf", "Q3_K_S"),
+            ("model-Q2_K_S.gguf", "Q2_K_S"),
+            ("model-Q2_K.gguf", "Q2_K"),
+        ];
+
+        for (name, expected) in cases {
+            assert_eq!(
+                quant_type_from_name(&path(name)).as_deref(),
+                Some(expected),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn quant_name_detects_newer_and_iq_variants() {
+        let cases = [
+            ("model-IQ4_XS.gguf", "IQ4_XS"),
+            ("model-IQ4_NL.gguf", "IQ4_NL"),
+            ("model-IQ3_XXS.gguf", "IQ3_XXS"),
+            ("model-IQ3_XS.gguf", "IQ3_XS"),
+            ("model-IQ3_M.gguf", "IQ3_M"),
+            ("model-IQ3_S.gguf", "IQ3_S"),
+            ("model-IQ2_XXS.gguf", "IQ2_XXS"),
+            ("model-IQ2_XS.gguf", "IQ2_XS"),
+            ("model-IQ2_M.gguf", "IQ2_M"),
+            ("model-IQ2_S.gguf", "IQ2_S"),
+            ("model-IQ1_M.gguf", "IQ1_M"),
+            ("model-IQ1_S.gguf", "IQ1_S"),
+            ("model-TQ1_0.gguf", "TQ1_0"),
+            ("model-TQ2_0.gguf", "TQ2_0"),
+            ("model-MXFP4_MOE.gguf", "MXFP4_MOE"),
+            ("model-NVFP4.gguf", "NVFP4"),
+            ("model-Q1_0.gguf", "Q1_0"),
+            ("model-Q2_0.gguf", "Q2_0"),
+        ];
+
+        for (name, expected) in cases {
+            assert_eq!(
+                quant_type_from_name(&path(name)).as_deref(),
+                Some(expected),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn quant_name_does_not_guess_precision_for_unknown_gguf() {
+        assert_eq!(quant_type_from_name(&path("model.gguf")), None);
+    }
+
+    #[test]
+    fn classify_file_distinguishes_models_projectors_and_imatrix() {
+        assert_eq!(classify_gguf_file(&path("mmproj-model-f16.gguf")), "mmproj");
+        assert_eq!(
+            classify_gguf_file(&path("model-imatrix.dat.gguf")),
+            "imatrix"
+        );
+        assert_eq!(classify_gguf_file(&path("model-Q4_K_M.gguf")), "model");
+    }
 }

@@ -1,7 +1,7 @@
 use crate::models::{EngineInfo, ModelCapabilities, ModelInfo};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 2;
@@ -85,7 +85,10 @@ impl InventoryModelRecord {
             size: self.size,
             architecture: self.architecture.clone(),
             context_length: self.context_length,
-            quant_type: self.quant_type.clone(),
+            quant_type: crate::utils::normalize_quant_type_for_path(
+                self.quant_type.clone(),
+                Path::new(&self.display_path),
+            ),
             has_mtp_head: self.has_mtp_head,
             capabilities: self.capabilities.clone(),
             file_type: self.file_type.clone(),
