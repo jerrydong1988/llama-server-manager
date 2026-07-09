@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import {
@@ -52,6 +52,9 @@ const emptyOverview: TelemetryOverview = {
   latest_samples: [],
 }
 
+const BIG_SCREEN_TELEMETRY_REFRESH_MS = 10000
+const BIG_SCREEN_EVENT_REFRESH_MS = 5000
+
 const exceptionPattern = /(error|fail|failed|fatal|panic|exception|warn|warning|错误|失败|异常|告警|警告)/i
 
 export default function BigScreenPage() {
@@ -74,9 +77,13 @@ export default function BigScreenPage() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState(Date.now())
   const [refreshing, setRefreshing] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
+  const lastTelemetryRefreshRef = useRef(0)
 
-  const refreshTelemetry = useCallback(async () => {
-    setRefreshing(true)
+  const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
+    lastTelemetryRefreshRef.current = Date.now()
+    if (!options.silent) {
+      setRefreshing(true)
+    }
     try {
       const [nextOverview, nextSessions] = await Promise.all([
         invoke<TelemetryOverview>('get_telemetry_overview'),
@@ -97,7 +104,9 @@ export default function BigScreenPage() {
     } catch (error) {
       setTelemetryError(error instanceof Error ? error.message : String(error))
     } finally {
-      setRefreshing(false)
+      if (!options.silent) {
+        setRefreshing(false)
+      }
     }
   }, [])
 
@@ -107,7 +116,7 @@ export default function BigScreenPage() {
 
   useEffect(() => {
     void refreshTelemetry()
-    const timer = window.setInterval(() => void refreshTelemetry(), 10000)
+    const timer = window.setInterval(() => void refreshTelemetry({ silent: true }), BIG_SCREEN_TELEMETRY_REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [refreshTelemetry])
 
@@ -115,11 +124,14 @@ export default function BigScreenPage() {
     const unlisten = listen<MetricsEvent>('metrics-update', event => {
       setLiveLlama(event.payload.llama || null)
       setLastUpdatedAt(Date.now())
+      if (Date.now() - lastTelemetryRefreshRef.current > BIG_SCREEN_EVENT_REFRESH_MS) {
+        void refreshTelemetry({ silent: true })
+      }
     })
     return () => {
       unlisten.then(dispose => dispose()).catch(() => {})
     }
-  }, [])
+  }, [refreshTelemetry])
 
   const allDownloads = useMemo(() => Object.values(downloadTasks), [downloadTasks])
   const runningInstances = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])

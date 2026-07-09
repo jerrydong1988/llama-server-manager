@@ -55,6 +55,9 @@ const emptyOverview: TelemetryOverview = {
   latest_samples: [],
 }
 
+const TELEMETRY_OVERVIEW_REFRESH_MS = 10000
+const TELEMETRY_DETAIL_REFRESH_MS = 5000
+
 export default function PerformancePage() {
   const { lang } = useI18n()
   const zh = lang === 'zh-CN'
@@ -75,13 +78,17 @@ export default function PerformancePage() {
   const [loading, setLoading] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const lastTelemetryRefreshRef = useRef(0)
+  const lastSessionDetailRefreshRef = useRef(0)
+  const selectedSessionIdRef = useRef('')
 
   const selectedInstance = instances.find(instance => instance.id === selectedInstanceId)
   const selectedSession = sessions.find(session => session.id === selectedSessionId)
 
-  const refreshTelemetry = useCallback(async () => {
+  const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
     lastTelemetryRefreshRef.current = Date.now()
-    setLoading(true)
+    if (!options.silent) {
+      setLoading(true)
+    }
     try {
       const [nextOverview, nextSessions] = await Promise.all([
         invoke<TelemetryOverview>('get_telemetry_overview'),
@@ -89,18 +96,53 @@ export default function PerformancePage() {
       ])
       setOverview(nextOverview)
       setSessions(nextSessions)
-      setSelectedSessionId(current => current || nextSessions[0]?.id || '')
+      setSelectedSessionId(current => {
+        const nextSessionId = current && nextSessions.some(session => session.id === current)
+          ? current
+          : nextSessions[0]?.id || ''
+        selectedSessionIdRef.current = nextSessionId
+        return nextSessionId
+      })
       setTelemetryError(null)
     } catch (error) {
       setTelemetryError(error instanceof Error ? error.message : String(error))
     } finally {
-      setLoading(false)
+      if (!options.silent) {
+        setLoading(false)
+      }
+    }
+  }, [])
+
+  const refreshSelectedSessionDetails = useCallback(async (sessionId: string) => {
+    if (!sessionId) {
+      return
+    }
+    lastSessionDetailRefreshRef.current = Date.now()
+    try {
+      const [nextSamples, nextRequests, nextAnalysis, nextDiagnostics] = await Promise.all([
+        invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId, limit: 160 }),
+        invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 16 }),
+        invoke<TelemetrySessionAnalysis>('get_telemetry_session_analysis', { sessionId }),
+        invoke<DiagnosticFinding[]>('get_telemetry_session_diagnostics', { sessionId }),
+      ])
+      if (selectedSessionIdRef.current !== sessionId) {
+        return
+      }
+      setSamples(nextSamples)
+      setRequests(nextRequests)
+      setAnalysis(nextAnalysis)
+      setDiagnostics(nextDiagnostics)
+      setTelemetryError(null)
+    } catch (error) {
+      if (selectedSessionIdRef.current === sessionId) {
+        setTelemetryError(error instanceof Error ? error.message : String(error))
+      }
     }
   }, [])
 
   useEffect(() => {
     void refreshTelemetry()
-    const timer = window.setInterval(refreshTelemetry, 10000)
+    const timer = window.setInterval(() => void refreshTelemetry({ silent: true }), TELEMETRY_OVERVIEW_REFRESH_MS)
     return () => window.clearInterval(timer)
   }, [refreshTelemetry])
 
@@ -124,17 +166,22 @@ export default function PerformancePage() {
       }
       setLiveSystem(event.payload.system)
       setLiveLlama(event.payload.llama || null)
-      if (Date.now() - lastTelemetryRefreshRef.current > 10000) {
-        void refreshTelemetry()
+      const now = Date.now()
+      if (now - lastTelemetryRefreshRef.current > TELEMETRY_OVERVIEW_REFRESH_MS) {
+        void refreshTelemetry({ silent: true })
+      }
+      if (selectedSessionIdRef.current && now - lastSessionDetailRefreshRef.current > TELEMETRY_DETAIL_REFRESH_MS) {
+        void refreshSelectedSessionDetails(selectedSessionIdRef.current)
       }
     })
 
     return () => {
       unlisten.then(fn => fn())
     }
-  }, [selectedInstanceId, refreshTelemetry])
+  }, [selectedInstanceId, refreshTelemetry, refreshSelectedSessionDetails])
 
   useEffect(() => {
+    selectedSessionIdRef.current = selectedSessionId
     if (!selectedSessionId) {
       setSamples([])
       setRequests([])
@@ -144,33 +191,13 @@ export default function PerformancePage() {
       return
     }
     setExpandedFindings({})
-    void Promise.all([
-      invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId: selectedSessionId, limit: 160 })
-        .then(data => {
-          setSamples(data)
-          setTelemetryError(null)
-        })
-        .catch((error) => setTelemetryError(error instanceof Error ? error.message : String(error))),
-      invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId: selectedSessionId, limit: 16 })
-        .then(data => {
-          setRequests(data)
-          setTelemetryError(null)
-        })
-        .catch((error) => setTelemetryError(error instanceof Error ? error.message : String(error))),
-      invoke<TelemetrySessionAnalysis>('get_telemetry_session_analysis', { sessionId: selectedSessionId })
-        .then(data => {
-          setAnalysis(data)
-          setTelemetryError(null)
-        })
-        .catch((error) => setTelemetryError(error instanceof Error ? error.message : String(error))),
-      invoke<DiagnosticFinding[]>('get_telemetry_session_diagnostics', { sessionId: selectedSessionId })
-        .then(data => {
-          setDiagnostics(data)
-          setTelemetryError(null)
-        })
-        .catch((error) => setTelemetryError(error instanceof Error ? error.message : String(error))),
-    ])
-  }, [selectedSessionId])
+    void refreshSelectedSessionDetails(selectedSessionId)
+    const timer = window.setInterval(
+      () => void refreshSelectedSessionDetails(selectedSessionId),
+      TELEMETRY_DETAIL_REFRESH_MS,
+    )
+    return () => window.clearInterval(timer)
+  }, [selectedSessionId, refreshSelectedSessionDetails])
 
   const latestSample = overview.latest_samples[0] || null
   const diagnosticsBySeverity = useMemo(() => groupDiagnosticsBySeverity(diagnostics), [diagnostics])
@@ -231,7 +258,7 @@ export default function PerformancePage() {
           description={labels.description}
           meta={<Badge tone="violet">{labels.sqliteBacked}</Badge>}
           actions={
-            <Button icon={<RefreshCw className="h-4 w-4" />} onClick={refreshTelemetry} disabled={loading}>
+            <Button icon={<RefreshCw className="h-4 w-4" />} onClick={() => void refreshTelemetry()} disabled={loading}>
               {labels.refresh}
             </Button>
           }
@@ -399,7 +426,10 @@ export default function PerformancePage() {
                 <button
                   key={session.id}
                   type="button"
-                  onClick={() => setSelectedSessionId(session.id)}
+                  onClick={() => {
+                    selectedSessionIdRef.current = session.id
+                    setSelectedSessionId(session.id)
+                  }}
                   className={`mb-2 block w-full rounded-lg border p-3 text-left transition ${
                     session.id === selectedSessionId
                       ? 'border-blue-400 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-950/30'
