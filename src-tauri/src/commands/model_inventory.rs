@@ -40,6 +40,16 @@ pub struct InventoryEngineRecord {
     pub cache_version: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct InventoryDirectoryRecord {
+    pub kind: String,
+    pub path: String,
+    pub scan_root: String,
+    pub signature: String,
+    pub last_seen: i64,
+    pub cache_version: i64,
+}
+
 impl InventoryModelRecord {
     pub fn from_model(
         model: &ModelInfo,
@@ -109,6 +119,19 @@ impl InventoryEngineRecord {
             version: self.version.clone(),
             backend: self.backend.clone(),
             custom_name: None,
+        }
+    }
+}
+
+impl InventoryDirectoryRecord {
+    pub fn new(kind: &str, path: String, scan_root: String, signature: String) -> Self {
+        Self {
+            kind: kind.to_string(),
+            path,
+            scan_root,
+            signature,
+            last_seen: now_secs(),
+            cache_version: MODEL_INVENTORY_SCHEMA_VERSION,
         }
     }
 }
@@ -184,11 +207,123 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             ON engine_inventory(scan_root);
         CREATE INDEX IF NOT EXISTS idx_engine_inventory_backend
             ON engine_inventory(backend);
+
+        CREATE TABLE IF NOT EXISTS inventory_directories (
+            kind TEXT NOT NULL,
+            path TEXT NOT NULL,
+            scan_root TEXT NOT NULL,
+            signature TEXT NOT NULL,
+            last_seen INTEGER NOT NULL,
+            cache_version INTEGER NOT NULL,
+            PRIMARY KEY(kind, path)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_inventory_directories_scan_root
+            ON inventory_directories(kind, scan_root);
         "#,
     )
     .map_err(|e| format!("failed to initialize model inventory schema: {}", e))?;
     conn.pragma_update(None, "user_version", MODEL_INVENTORY_SCHEMA_VERSION)
         .map_err(|e| format!("failed to write model inventory schema version: {}", e))?;
+    Ok(())
+}
+
+pub fn load_directory_index(
+    kind: &str,
+) -> Result<HashMap<String, InventoryDirectoryRecord>, String> {
+    let conn = open_connection()?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT kind, path, scan_root, signature, last_seen, cache_version
+            FROM inventory_directories
+            WHERE kind = ?1
+            "#,
+        )
+        .map_err(|e| format!("failed to prepare directory inventory query: {}", e))?;
+    let rows = stmt
+        .query_map(params![kind], directory_record_from_row)
+        .map_err(|e| format!("failed to query directory inventory: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read directory inventory row: {}", e))?;
+    Ok(rows
+        .into_iter()
+        .filter(|record| record.cache_version == MODEL_INVENTORY_SCHEMA_VERSION)
+        .filter(|record| std::path::Path::new(&record.path).is_dir())
+        .map(|record| (record.path.clone(), record))
+        .collect())
+}
+
+pub fn upsert_directory_records(records: &[InventoryDirectoryRecord]) -> Result<(), String> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_connection()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("failed to start directory inventory transaction: {}", e))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO inventory_directories (
+                    kind, path, scan_root, signature, last_seen, cache_version
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6
+                )
+                ON CONFLICT(kind, path) DO UPDATE SET
+                    scan_root=excluded.scan_root,
+                    signature=excluded.signature,
+                    last_seen=excluded.last_seen,
+                    cache_version=excluded.cache_version
+                "#,
+            )
+            .map_err(|e| format!("failed to prepare directory inventory upsert: {}", e))?;
+        for record in records {
+            stmt.execute(params![
+                record.kind,
+                record.path,
+                record.scan_root,
+                record.signature,
+                record.last_seen,
+                MODEL_INVENTORY_SCHEMA_VERSION,
+            ])
+            .map_err(|e| format!("failed to upsert directory inventory row: {}", e))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("failed to commit directory inventory transaction: {}", e))?;
+    Ok(())
+}
+
+pub fn prune_absent_directories(
+    kind: &str,
+    scan_roots: &HashSet<String>,
+    seen_dirs: &HashSet<String>,
+) -> Result<(), String> {
+    if scan_roots.is_empty() {
+        return Ok(());
+    }
+    let conn = open_connection()?;
+    let mut stmt = conn
+        .prepare("SELECT path, scan_root FROM inventory_directories WHERE kind = ?1")
+        .map_err(|e| format!("failed to prepare directory inventory prune query: {}", e))?;
+    let rows = stmt
+        .query_map(params![kind], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("failed to query directory inventory for pruning: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read directory inventory prune row: {}", e))?;
+
+    for (path, scan_root) in rows {
+        if scan_roots.contains(&scan_root) && !seen_dirs.contains(&path) {
+            let _ = conn.execute(
+                "DELETE FROM inventory_directories WHERE kind = ?1 AND path = ?2",
+                params![kind, path],
+            );
+        }
+    }
     Ok(())
 }
 
@@ -491,5 +626,18 @@ fn engine_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inventory
         scan_root: row.get(7)?,
         last_seen: row.get(8)?,
         cache_version: row.get(9)?,
+    })
+}
+
+fn directory_record_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<InventoryDirectoryRecord> {
+    Ok(InventoryDirectoryRecord {
+        kind: row.get(0)?,
+        path: row.get(1)?,
+        scan_root: row.get(2)?,
+        signature: row.get(3)?,
+        last_seen: row.get(4)?,
+        cache_version: row.get(5)?,
     })
 }

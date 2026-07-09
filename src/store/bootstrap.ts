@@ -133,31 +133,6 @@ async function processConfig(
     })
   }
 
-  await invoke<[ModelInfo[], EngineInfo[], PersistedQueueEntry[]]>('load_app_data', {
-    paths: global.model_dirs || [],
-    enginePaths: global.engine_dirs || [],
-  })
-    .then(([models, engines, queue]) => {
-      startTransition(() => {
-        set({ models, engines })
-      })
-      if (queue?.length > 0) {
-        startTransition(() => {
-          get().restoreDownloadQueue(queue)
-        })
-      }
-    })
-    .catch((error) => {
-      get().addRuntimeWarning(`load_app_data failed: ${error?.message || String(error)}`)
-      invoke<EngineInfo[]>('scan_engines', { paths: global.engine_dirs || [] })
-        .then((engines) => startTransition(() => {
-          set({ engines })
-        }))
-        .catch((fallbackError) => {
-          get().addRuntimeWarning(`scan_engines fallback failed: ${fallbackError?.message || String(fallbackError)}`)
-        })
-    })
-
   invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')
     .then((snapshot) => {
       if (snapshot) {
@@ -166,6 +141,38 @@ async function processConfig(
     })
     .catch((error) => {
       get().addRuntimeWarning(`download snapshot failed: ${error?.message || String(error)}`)
+    })
+
+  invoke<PersistedQueueEntry[]>('restore_download_queue', {})
+    .then((queue) => {
+      if (queue?.length > 0) {
+        startTransition(() => {
+          get().restoreDownloadQueue(queue)
+        })
+      }
+    })
+    .catch((error) => {
+      get().addRuntimeWarning(`download queue restore failed: ${error?.message || String(error)}`)
+    })
+
+  invoke<ModelInfo[]>('scan_models', { paths: global.model_dirs || [] })
+    .then((models) => {
+      startTransition(() => {
+        set({ models })
+      })
+    })
+    .catch((error) => {
+      get().addRuntimeWarning(`model scan failed: ${error?.message || String(error)}`)
+    })
+
+  invoke<EngineInfo[]>('scan_engines', { paths: global.engine_dirs || [] })
+    .then((engines) => {
+      startTransition(() => {
+        set({ engines })
+      })
+    })
+    .catch((error) => {
+      get().addRuntimeWarning(`engine scan failed: ${error?.message || String(error)}`)
     })
 }
 
