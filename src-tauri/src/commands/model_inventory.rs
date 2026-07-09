@@ -1,0 +1,479 @@
+use crate::models::{EngineInfo, ModelCapabilities, ModelInfo};
+use rusqlite::{params, Connection};
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 2;
+
+#[derive(Debug, Clone)]
+pub struct InventoryModelRecord {
+    pub path: String,
+    pub id: String,
+    pub display_path: String,
+    pub name: String,
+    pub scan_root: String,
+    pub size: u64,
+    pub mtime: u64,
+    pub architecture: Option<String>,
+    pub context_length: Option<u32>,
+    pub quant_type: Option<String>,
+    pub has_mtp_head: bool,
+    pub capabilities: ModelCapabilities,
+    pub file_type: String,
+    pub is_shard: bool,
+    pub last_seen: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct InventoryEngineRecord {
+    pub id: String,
+    pub name: String,
+    pub dir: String,
+    pub exe: String,
+    pub version: String,
+    pub backend: String,
+    pub exe_mtime: u64,
+    pub scan_root: String,
+    pub last_seen: i64,
+}
+
+impl InventoryModelRecord {
+    pub fn from_model(
+        model: &ModelInfo,
+        canonical_path: String,
+        scan_root: String,
+        mtime: u64,
+    ) -> Self {
+        Self {
+            path: canonical_path,
+            id: model.id.clone(),
+            display_path: model.path.clone(),
+            name: model.name.clone(),
+            scan_root,
+            size: model.size,
+            mtime,
+            architecture: model.architecture.clone(),
+            context_length: model.context_length,
+            quant_type: model.quant_type.clone(),
+            has_mtp_head: model.has_mtp_head,
+            capabilities: model.capabilities.clone(),
+            file_type: model.file_type.clone(),
+            is_shard: model.is_shard,
+            last_seen: now_secs(),
+        }
+    }
+
+    pub fn to_model_info(&self) -> ModelInfo {
+        ModelInfo {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            path: self.display_path.clone(),
+            size: self.size,
+            architecture: self.architecture.clone(),
+            context_length: self.context_length,
+            quant_type: self.quant_type.clone(),
+            has_mtp_head: self.has_mtp_head,
+            capabilities: self.capabilities.clone(),
+            file_type: self.file_type.clone(),
+            is_shard: self.is_shard,
+        }
+    }
+}
+
+impl InventoryEngineRecord {
+    pub fn from_engine(engine: &EngineInfo, exe_mtime: u64, scan_root: String) -> Self {
+        Self {
+            id: engine.id.clone(),
+            name: engine.name.clone(),
+            dir: engine.dir.clone(),
+            exe: engine.exe.clone(),
+            version: engine.version.clone(),
+            backend: engine.backend.clone(),
+            exe_mtime,
+            scan_root,
+            last_seen: now_secs(),
+        }
+    }
+
+    pub fn to_engine_info(&self) -> EngineInfo {
+        EngineInfo {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            dir: self.dir.clone(),
+            exe: self.exe.clone(),
+            version: self.version.clone(),
+            backend: self.backend.clone(),
+            custom_name: None,
+        }
+    }
+}
+
+fn inventory_db_path() -> PathBuf {
+    crate::utils::get_data_dir().join("scan_inventory.db")
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn open_connection() -> Result<Connection, String> {
+    let path = inventory_db_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create model inventory directory: {}", e))?;
+    }
+    let conn = Connection::open(path)
+        .map_err(|e| format!("failed to open model inventory database: {}", e))?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|e| format!("failed to enable model inventory WAL: {}", e))?;
+    init_schema(&conn)?;
+    Ok(conn)
+}
+
+fn init_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS model_inventory (
+            path TEXT PRIMARY KEY,
+            id TEXT NOT NULL,
+            display_path TEXT NOT NULL,
+            name TEXT NOT NULL,
+            scan_root TEXT NOT NULL,
+            size INTEGER NOT NULL,
+            mtime INTEGER NOT NULL,
+            architecture TEXT,
+            context_length INTEGER,
+            quant_type TEXT,
+            has_mtp_head INTEGER NOT NULL,
+            capabilities_json TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            is_shard INTEGER NOT NULL,
+            last_seen INTEGER NOT NULL,
+            cache_version INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_model_inventory_scan_root
+            ON model_inventory(scan_root);
+        CREATE INDEX IF NOT EXISTS idx_model_inventory_type
+            ON model_inventory(file_type);
+        CREATE INDEX IF NOT EXISTS idx_model_inventory_arch
+            ON model_inventory(architecture);
+
+        CREATE TABLE IF NOT EXISTS engine_inventory (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            dir TEXT NOT NULL,
+            exe TEXT NOT NULL,
+            version TEXT NOT NULL,
+            backend TEXT NOT NULL,
+            exe_mtime INTEGER NOT NULL,
+            scan_root TEXT NOT NULL,
+            last_seen INTEGER NOT NULL,
+            cache_version INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_engine_inventory_scan_root
+            ON engine_inventory(scan_root);
+        CREATE INDEX IF NOT EXISTS idx_engine_inventory_backend
+            ON engine_inventory(backend);
+        "#,
+    )
+    .map_err(|e| format!("failed to initialize model inventory schema: {}", e))?;
+    conn.pragma_update(None, "user_version", MODEL_INVENTORY_SCHEMA_VERSION)
+        .map_err(|e| format!("failed to write model inventory schema version: {}", e))?;
+    Ok(())
+}
+
+pub fn load_model_index() -> Result<HashMap<String, InventoryModelRecord>, String> {
+    let conn = open_connection()?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT path, id, display_path, name, scan_root, size, mtime,
+                   architecture, context_length, quant_type, has_mtp_head,
+                   capabilities_json, file_type, is_shard, last_seen
+            FROM model_inventory
+            "#,
+        )
+        .map_err(|e| format!("failed to prepare model inventory query: {}", e))?;
+    let rows = stmt
+        .query_map([], record_from_row)
+        .map_err(|e| format!("failed to query model inventory: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read model inventory row: {}", e))?;
+    Ok(rows
+        .into_iter()
+        .map(|record| (record.path.clone(), record))
+        .collect())
+}
+
+pub fn list_cached_models() -> Result<Vec<ModelInfo>, String> {
+    let mut records = load_model_index()?.into_values().collect::<Vec<_>>();
+    records.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(records
+        .into_iter()
+        .map(|record| record.to_model_info())
+        .collect())
+}
+
+pub fn upsert_model_records(records: &[InventoryModelRecord]) -> Result<(), String> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_connection()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("failed to start model inventory transaction: {}", e))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO model_inventory (
+                    path, id, display_path, name, scan_root, size, mtime,
+                    architecture, context_length, quant_type, has_mtp_head,
+                    capabilities_json, file_type, is_shard, last_seen, cache_version
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+                )
+                ON CONFLICT(path) DO UPDATE SET
+                    id=excluded.id,
+                    display_path=excluded.display_path,
+                    name=excluded.name,
+                    scan_root=excluded.scan_root,
+                    size=excluded.size,
+                    mtime=excluded.mtime,
+                    architecture=excluded.architecture,
+                    context_length=excluded.context_length,
+                    quant_type=excluded.quant_type,
+                    has_mtp_head=excluded.has_mtp_head,
+                    capabilities_json=excluded.capabilities_json,
+                    file_type=excluded.file_type,
+                    is_shard=excluded.is_shard,
+                    last_seen=excluded.last_seen,
+                    cache_version=excluded.cache_version
+                "#,
+            )
+            .map_err(|e| format!("failed to prepare model inventory upsert: {}", e))?;
+        for record in records {
+            let capabilities_json = serde_json::to_string(&record.capabilities)
+                .map_err(|e| format!("failed to encode model capabilities: {}", e))?;
+            stmt.execute(params![
+                record.path,
+                record.id,
+                record.display_path,
+                record.name,
+                record.scan_root,
+                record.size as i64,
+                record.mtime as i64,
+                record.architecture,
+                record.context_length.map(|value| value as i64),
+                record.quant_type,
+                if record.has_mtp_head { 1 } else { 0 },
+                capabilities_json,
+                record.file_type,
+                if record.is_shard { 1 } else { 0 },
+                record.last_seen,
+                MODEL_INVENTORY_SCHEMA_VERSION,
+            ])
+            .map_err(|e| format!("failed to upsert model inventory row: {}", e))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("failed to commit model inventory transaction: {}", e))?;
+    Ok(())
+}
+
+pub fn prune_absent_models(
+    scan_roots: &HashSet<String>,
+    seen_paths: &HashSet<String>,
+) -> Result<(), String> {
+    if scan_roots.is_empty() {
+        return Ok(());
+    }
+    let conn = open_connection()?;
+    let mut stmt = conn
+        .prepare("SELECT path, scan_root FROM model_inventory")
+        .map_err(|e| format!("failed to prepare model inventory prune query: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("failed to query model inventory for pruning: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read model inventory prune row: {}", e))?;
+
+    for (path, scan_root) in rows {
+        if scan_roots.contains(&scan_root) && !seen_paths.contains(&path) {
+            let _ = conn.execute("DELETE FROM model_inventory WHERE path = ?1", params![path]);
+        }
+    }
+    Ok(())
+}
+
+pub fn delete_model(path: &str) -> Result<(), String> {
+    let conn = open_connection()?;
+    conn.execute(
+        "DELETE FROM model_inventory WHERE path = ?1 OR display_path = ?1",
+        params![path],
+    )
+    .map_err(|e| format!("failed to delete model inventory row: {}", e))?;
+    Ok(())
+}
+
+pub fn load_engine_index() -> Result<HashMap<String, InventoryEngineRecord>, String> {
+    let conn = open_connection()?;
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT id, name, dir, exe, version, backend, exe_mtime, scan_root, last_seen
+            FROM engine_inventory
+            "#,
+        )
+        .map_err(|e| format!("failed to prepare engine inventory query: {}", e))?;
+    let rows = stmt
+        .query_map([], engine_record_from_row)
+        .map_err(|e| format!("failed to query engine inventory: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read engine inventory row: {}", e))?;
+    Ok(rows
+        .into_iter()
+        .map(|record| (record.id.clone(), record))
+        .collect())
+}
+
+pub fn list_cached_engines() -> Result<Vec<EngineInfo>, String> {
+    let mut records = load_engine_index()?.into_values().collect::<Vec<_>>();
+    records.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(records
+        .into_iter()
+        .map(|record| record.to_engine_info())
+        .collect())
+}
+
+pub fn upsert_engine_records(records: &[InventoryEngineRecord]) -> Result<(), String> {
+    if records.is_empty() {
+        return Ok(());
+    }
+    let mut conn = open_connection()?;
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("failed to start engine inventory transaction: {}", e))?;
+    {
+        let mut stmt = tx
+            .prepare(
+                r#"
+                INSERT INTO engine_inventory (
+                    id, name, dir, exe, version, backend, exe_mtime,
+                    scan_root, last_seen, cache_version
+                ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+                )
+                ON CONFLICT(id) DO UPDATE SET
+                    name=excluded.name,
+                    dir=excluded.dir,
+                    exe=excluded.exe,
+                    version=excluded.version,
+                    backend=excluded.backend,
+                    exe_mtime=excluded.exe_mtime,
+                    scan_root=excluded.scan_root,
+                    last_seen=excluded.last_seen,
+                    cache_version=excluded.cache_version
+                "#,
+            )
+            .map_err(|e| format!("failed to prepare engine inventory upsert: {}", e))?;
+        for record in records {
+            stmt.execute(params![
+                record.id,
+                record.name,
+                record.dir,
+                record.exe,
+                record.version,
+                record.backend,
+                record.exe_mtime as i64,
+                record.scan_root,
+                record.last_seen,
+                MODEL_INVENTORY_SCHEMA_VERSION,
+            ])
+            .map_err(|e| format!("failed to upsert engine inventory row: {}", e))?;
+        }
+    }
+    tx.commit()
+        .map_err(|e| format!("failed to commit engine inventory transaction: {}", e))?;
+    Ok(())
+}
+
+pub fn prune_absent_engines(
+    scan_roots: &HashSet<String>,
+    seen_ids: &HashSet<String>,
+) -> Result<(), String> {
+    if scan_roots.is_empty() {
+        return Ok(());
+    }
+    let conn = open_connection()?;
+    let mut stmt = conn
+        .prepare("SELECT id, scan_root FROM engine_inventory")
+        .map_err(|e| format!("failed to prepare engine inventory prune query: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("failed to query engine inventory for pruning: {}", e))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read engine inventory prune row: {}", e))?;
+
+    for (id, scan_root) in rows {
+        if scan_roots.contains(&scan_root) && !seen_ids.contains(&id) {
+            let _ = conn.execute("DELETE FROM engine_inventory WHERE id = ?1", params![id]);
+        }
+    }
+    Ok(())
+}
+
+pub fn delete_engine(id: &str) -> Result<(), String> {
+    let conn = open_connection()?;
+    conn.execute("DELETE FROM engine_inventory WHERE id = ?1", params![id])
+        .map_err(|e| format!("failed to delete engine inventory row: {}", e))?;
+    Ok(())
+}
+
+fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRecord> {
+    let capabilities_json: String = row.get(11)?;
+    let capabilities =
+        serde_json::from_str::<ModelCapabilities>(&capabilities_json).unwrap_or_default();
+    let context_length_i64: Option<i64> = row.get(8)?;
+    Ok(InventoryModelRecord {
+        path: row.get(0)?,
+        id: row.get(1)?,
+        display_path: row.get(2)?,
+        name: row.get(3)?,
+        scan_root: row.get(4)?,
+        size: row.get::<_, i64>(5)?.max(0) as u64,
+        mtime: row.get::<_, i64>(6)?.max(0) as u64,
+        architecture: row.get(7)?,
+        context_length: context_length_i64.map(|value| value.max(0) as u32),
+        quant_type: row.get(9)?,
+        has_mtp_head: row.get::<_, i64>(10)? != 0,
+        capabilities,
+        file_type: row.get(12)?,
+        is_shard: row.get::<_, i64>(13)? != 0,
+        last_seen: row.get(14)?,
+    })
+}
+
+fn engine_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryEngineRecord> {
+    Ok(InventoryEngineRecord {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        dir: row.get(2)?,
+        exe: row.get(3)?,
+        version: row.get(4)?,
+        backend: row.get(5)?,
+        exe_mtime: row.get::<_, i64>(6)?.max(0) as u64,
+        scan_root: row.get(7)?,
+        last_seen: row.get(8)?,
+    })
+}
