@@ -1,4 +1,4 @@
-use crate::models::{AppState, EngineInfo, ModelInfo};
+use crate::models::{AppState, EngineInfo, ModelCapabilities, ModelInfo};
 use crate::utils;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,6 +13,8 @@ struct CachedModel {
     context_length: Option<u32>,
     quant_type: Option<String>,
     has_mtp_head: bool,
+    #[serde(default)]
+    capabilities: ModelCapabilities,
     file_type: String,
 }
 
@@ -28,9 +30,13 @@ struct CachedEngine {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct ScanCache {
+    #[serde(default)]
+    version: u32,
     models: HashMap<String, (String, CachedModel)>, // canonical_path -> (id, cached)
     engines: HashMap<String, CachedEngine>,         // canonical_dir -> cached
 }
+
+const SCAN_CACHE_VERSION: u32 = 2;
 
 fn cache_path() -> PathBuf {
     utils::get_data_dir().join("scan_cache.json")
@@ -41,11 +47,14 @@ fn load_scan_cache() -> ScanCache {
     if p.exists() {
         if let Ok(data) = std::fs::read_to_string(&p) {
             if let Ok(c) = serde_json::from_str::<ScanCache>(&data) {
-                return c;
+                if c.version == SCAN_CACHE_VERSION {
+                    return c;
+                }
             }
         }
     }
     ScanCache {
+        version: SCAN_CACHE_VERSION,
         models: HashMap::new(),
         engines: HashMap::new(),
     }
@@ -56,7 +65,9 @@ fn save_scan_cache(cache: &ScanCache) {
     if let Some(parent) = p.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    if let Ok(json) = serde_json::to_string(cache) {
+    let mut cache = cache.clone();
+    cache.version = SCAN_CACHE_VERSION;
+    if let Ok(json) = serde_json::to_string(&cache) {
         let _ = std::fs::write(&p, json);
     }
 }
@@ -138,7 +149,7 @@ pub async fn scan_models(
             let mut seen = std::collections::HashSet::new();
             let mut errors = Vec::new();
             // Collect paths that need fresh parsing because mtime changed or cache missed.
-            let mut fresh_files: Vec<(PathBuf, String, u64)> = Vec::new(); // (path, canonical_key, size)
+            let mut fresh_files: Vec<(usize, PathBuf, String, u64)> = Vec::new(); // (model_index, path, canonical_key, size)
 
             for scan_root in &scan_paths {
                 let root_str = scan_root.display().to_string();
@@ -203,6 +214,7 @@ pub async fn scan_models(
                                 context_length: cm.context_length,
                                 quant_type: cm.quant_type.clone(),
                                 has_mtp_head: cm.has_mtp_head,
+                                capabilities: cm.capabilities.clone(),
                                 file_type: cm.file_type.clone(),
                                 is_shard: false,
                             });
@@ -211,9 +223,8 @@ pub async fn scan_models(
                     }
 
                     file_count += 1;
-                    fresh_files.push((path.to_path_buf(), cache_key, size));
                     // Insert placeholders first, then backfill parse results.
-                    let _idx = models.len();
+                    let idx = models.len();
                     models.push(ModelInfo {
                         id: uuid::Uuid::new_v4().to_string(),
                         name,
@@ -223,9 +234,11 @@ pub async fn scan_models(
                         context_length: None,
                         quant_type: None,
                         has_mtp_head: false,
+                        capabilities: ModelCapabilities::default(),
                         file_type: ftype.to_string(),
                         is_shard: false,
                     });
+                    fresh_files.push((idx, path.to_path_buf(), cache_key, size));
                 }
                 if file_count == 0 {
                     errors.push(format!("{} 中未找到 .gguf 模型文件", root_str));
@@ -240,7 +253,7 @@ pub async fn scan_models(
                         .unwrap_or(4)
                         .max(1))
                 .max(1);
-                let results: Vec<Vec<(usize, Option<String>, Option<u32>, Option<String>, bool)>> =
+                let results: Vec<Vec<(usize, crate::models::GgufMetadataSummary)>> =
                     std::thread::scope(|s| {
                         let mut handles = Vec::new();
                         for chunk in fresh_files.chunks(chunk_size) {
@@ -249,10 +262,10 @@ pub async fn scan_models(
                                 chunk
                                     .iter()
                                     .enumerate()
-                                    .map(|(i, (p, _key, _sz))| {
-                                        let (arch, ctx, qt, mtp) = utils::parse_gguf_metadata(p)
-                                            .unwrap_or_else(|_| (None, None, None, false));
-                                        (i, arch, ctx, qt, mtp)
+                                    .map(|(i, (_model_idx, p, _key, _sz))| {
+                                        let summary =
+                                            utils::parse_gguf_metadata(p).unwrap_or_default();
+                                        (i, summary)
                                     })
                                     .collect::<Vec<_>>()
                             }));
@@ -264,39 +277,41 @@ pub async fn scan_models(
                     });
 
                 // Backfill parse results and update the cache.
-                let base_idx = models.len() - fresh_files.len();
                 for (chunk_idx, chunk_results) in results.iter().enumerate() {
-                    for (i, arch, ctx, qt, mtp) in chunk_results {
-                        let global_i = base_idx + chunk_idx * chunk_size + i;
-                        if global_i < models.len() {
-                            let m = &mut models[global_i];
-                            m.architecture = arch.clone();
-                            m.context_length = *ctx;
-                            m.quant_type = qt.clone();
-                            m.has_mtp_head = *mtp;
+                    for (i, summary) in chunk_results {
+                        let fresh_idx = chunk_idx * chunk_size + i;
+                        let Some((model_idx, _path, cache_key, size)) = fresh_files.get(fresh_idx)
+                        else {
+                            continue;
+                        };
+                        if *model_idx < models.len() {
+                            let m = &mut models[*model_idx];
+                            m.architecture = summary.architecture.clone();
+                            m.context_length = summary.context_length;
+                            m.quant_type = summary.quant_type.clone();
+                            m.has_mtp_head = summary.capabilities.has_builtin_mtp;
+                            m.capabilities = summary.capabilities.clone();
                         }
-                        if chunk_idx * chunk_size + i < fresh_files.len() {
-                            let (_, cache_key, size) = &fresh_files[chunk_idx * chunk_size + i];
-                            let mpath = std::path::Path::new(cache_key);
-                            let mtime = file_mtime(mpath);
-                            if global_i < models.len() {
-                                let cached_id = models[global_i].id.clone();
-                                cache.models.insert(
-                                    cache_key.clone(),
-                                    (
-                                        cached_id,
-                                        CachedModel {
-                                            mtime,
-                                            size: *size,
-                                            architecture: arch.clone(),
-                                            context_length: *ctx,
-                                            quant_type: qt.clone(),
-                                            has_mtp_head: *mtp,
-                                            file_type: models[global_i].file_type.clone(),
-                                        },
-                                    ),
-                                );
-                            }
+                        let mpath = std::path::Path::new(cache_key);
+                        let mtime = file_mtime(mpath);
+                        if *model_idx < models.len() {
+                            let cached_id = models[*model_idx].id.clone();
+                            cache.models.insert(
+                                cache_key.clone(),
+                                (
+                                    cached_id,
+                                    CachedModel {
+                                        mtime,
+                                        size: *size,
+                                        architecture: summary.architecture.clone(),
+                                        context_length: summary.context_length,
+                                        quant_type: summary.quant_type.clone(),
+                                        has_mtp_head: summary.capabilities.has_builtin_mtp,
+                                        capabilities: summary.capabilities.clone(),
+                                        file_type: models[*model_idx].file_type.clone(),
+                                    },
+                                ),
+                            );
                         }
                     }
                 }
@@ -405,6 +420,7 @@ pub async fn get_cached_scan(
             context_length: cm.context_length,
             quant_type: cm.quant_type.clone(),
             has_mtp_head: cm.has_mtp_head,
+            capabilities: cm.capabilities.clone(),
             file_type: cm.file_type.clone(),
             is_shard: false,
         });
@@ -503,7 +519,7 @@ pub async fn open_model_folder(path: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn read_gguf_metadata(
     path: String,
-) -> Result<(Option<String>, Option<u32>, Option<String>, bool), String> {
+) -> Result<crate::models::GgufMetadataSummary, String> {
     utils::parse_gguf_metadata(Path::new(&path))
 }
 

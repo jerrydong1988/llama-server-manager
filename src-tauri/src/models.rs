@@ -3,6 +3,34 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Instant;
 
+// Compact GGUF capability summary used by UI validation. Keep field names stable
+// because cached scan results and TypeScript models deserialize this structure.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ModelCapabilities {
+    #[serde(default)]
+    pub metadata_complete: bool,
+    #[serde(default)]
+    pub has_builtin_mtp: bool,
+    #[serde(default)]
+    pub mtp_layers: Option<u32>,
+    #[serde(default)]
+    pub is_vision_model: bool,
+    #[serde(default)]
+    pub vision_family: Option<String>,
+    #[serde(default)]
+    pub is_mmproj: bool,
+    #[serde(default)]
+    pub projector_family: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct GgufMetadataSummary {
+    pub architecture: Option<String>,
+    pub context_length: Option<u32>,
+    pub quant_type: Option<String>,
+    pub capabilities: ModelCapabilities,
+}
+
 // Model information.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModelInfo {
@@ -14,6 +42,8 @@ pub struct ModelInfo {
     pub context_length: Option<u32>,
     pub quant_type: Option<String>,
     pub has_mtp_head: bool,
+    #[serde(default)]
+    pub capabilities: ModelCapabilities,
     pub file_type: String,
     #[serde(default)]
     pub is_shard: bool,

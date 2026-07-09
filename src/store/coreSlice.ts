@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import type { AppStoreGet, AppStoreSet } from './helpers'
-import type { AppState, EngineInfo, ModelInfo } from './types'
+import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'
 
 export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   AppState,
@@ -82,7 +82,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     openModelFolder: async (path) => {
       await invoke('open_model_folder', { path })
     },
-    readGgufMetadata: async (path) => invoke<[string | null, number | null, string | null]>('read_gguf_metadata', { path }),
+    readGgufMetadata: async (path) => invoke<GgufMetadataSummary>('read_gguf_metadata', { path }),
     scanEngines: async (paths) => {
       set({ isLoading: true })
       try {

@@ -1,3 +1,20 @@
+export interface ModelCapabilities {
+  metadata_complete?: boolean
+  has_builtin_mtp?: boolean
+  mtp_layers?: number
+  is_vision_model?: boolean
+  vision_family?: string
+  is_mmproj?: boolean
+  projector_family?: string
+}
+
+export interface GgufMetadataSummary {
+  architecture?: string
+  context_length?: number
+  quant_type?: string
+  capabilities?: ModelCapabilities
+}
+
 export interface ModelInfo {
   id: string
   name: string
@@ -7,6 +24,7 @@ export interface ModelInfo {
   context_length?: number
   quant_type?: string
   has_mtp_head?: boolean
+  capabilities?: ModelCapabilities
   file_type: string
   is_shard?: boolean
 }
@@ -347,7 +365,7 @@ export interface AppState {
   scanModels: (paths: string[]) => Promise<string | null>
   deleteModelFile: (path: string) => Promise<void>
   openModelFolder: (path: string) => Promise<void>
-  readGgufMetadata: (path: string) => Promise<[string | null, number | null, string | null]>
+  readGgufMetadata: (path: string) => Promise<GgufMetadataSummary>
 
   scanEngines: (paths: string[]) => Promise<void>
   deleteEngine: (id: string) => Promise<void>

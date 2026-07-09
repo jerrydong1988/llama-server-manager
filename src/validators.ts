@@ -62,24 +62,32 @@ export const KNOWN_FLAGS = new Set([
   '-to', '--sleep-idle-seconds', '--context-shift', '-v',
 ])
 
-const VISION_ARCHS = [
-  'qwen2vl', 'qwen3vl', 'qwen2-vl', 'qwen3-vl',
-  'llava', 'minicpmv', 'minicpm-v', 'internvl', 'intern-vl',
-  'gemma3', 'glm4v', 'glm-4v', 'phi3v', 'phi3-v', 'phi4v', 'phi4-v',
-  'gpt4v', 'cogvlm', 'fuyu',
-]
 const SWA_UNSUPPORTED = ['qwen2vl', 'qwen3vl', 'qwen2-vl', 'qwen3-vl']
 
-function isVisionArch(arch: string | undefined): boolean {
-  if (!arch) return false
-  const lower = arch.toLowerCase()
-  return VISION_ARCHS.some(a => lower.includes(a))
+function hasMetadata(model: ModelInfo | null | undefined): boolean {
+  return !!model?.capabilities?.metadata_complete
 }
 
-function isSwaUnsupported(arch: string | undefined): boolean {
-  if (!arch) return false
-  const lower = arch.toLowerCase()
-  return SWA_UNSUPPORTED.some(a => lower.includes(a))
+function hasBuiltinMtp(model: ModelInfo | null | undefined): boolean {
+  return !!(model?.capabilities?.has_builtin_mtp ?? model?.has_mtp_head)
+}
+
+function isVisionModel(model: ModelInfo | null | undefined): boolean | null {
+  if (!model) return null
+  if (model.capabilities?.is_vision_model) return true
+  if (hasMetadata(model)) return false
+  return null
+}
+
+function isMmprojArtifact(model: ModelInfo | null | undefined): boolean {
+  return !!(model?.capabilities?.is_mmproj || model?.file_type === 'mmproj')
+}
+
+function isSwaUnsupported(model: ModelInfo | null | undefined): boolean {
+  const family = model?.capabilities?.vision_family?.toLowerCase() || ''
+  if (family === 'qwen-vl') return true
+  const arch = model?.architecture?.toLowerCase()
+  return !!arch && SWA_UNSUPPORTED.some(a => arch.includes(a))
 }
 
 export function validateConfig(
@@ -131,16 +139,18 @@ export function validateConfig(
       w.push({ field: 'embedding', severity: 'high', key: 'warnA2' })
   }
 
-  // A3: spec_type needs a draft model but none is set, except draft-mtp with builtin heads.
+  // A3: external draft requirements depend on the speculative decoding mode.
   if (config.spec_type && config.spec_type !== '' && config.spec_type !== 'none') {
-    const needsDraft = ['draft-simple', 'draft-eagle3', 'draft-dflash', 'draft-mtp'].some(t => config.spec_type.includes(t))
-    if (needsDraft && !config.draft_model_path) {
-      // draft-mtp with builtin MTP heads doesn't strictly need external draft model
-      if (config.spec_type.includes('draft-mtp') && model?.has_mtp_head) {
-        // No warning: builtin heads suffice.
-      } else {
-        w.push({ field: 'draft_model_path', severity: 'medium', key: 'warnA3' })
-      }
+    const isDraftMtp = config.spec_type.includes('draft-mtp')
+    const needsExternalDraft = ['draft-simple', 'draft-eagle3', 'draft-dflash'].some(t => config.spec_type.includes(t))
+    if (needsExternalDraft && !config.draft_model_path) {
+      w.push({ field: 'draft_model_path', severity: 'medium', key: 'warnA3' })
+    } else if (isDraftMtp && !config.draft_model_path && !hasBuiltinMtp(model)) {
+      w.push({
+        field: 'draft_model_path',
+        severity: hasMetadata(model) ? 'medium' : 'low',
+        key: hasMetadata(model) ? 'warnA3MtpNeedsDraft' : 'warnA3MtpUnknown',
+      })
     }
   }
 
@@ -171,8 +181,8 @@ export function validateConfig(
       !config.mmproj_path && !config.mmproj_url)
     w.push({ field: 'image_min_tokens', severity: 'medium', key: 'warnA8' })
 
-  // A9: swa_full is enabled but the model does not support it.
-  if (config.swa_full && isSwaUnsupported(model?.architecture))
+  // A9: swa_full is enabled on a model family known to reject it.
+  if (config.swa_full && isSwaUnsupported(model))
     w.push({ field: 'swa_full', severity: 'medium', key: 'warnA9' })
 
   // A10: flash_attn=on while backend is CPU.
@@ -244,10 +254,17 @@ export function validateConfig(
 
   // Group C: environment-aware checks.
 
-  // C1: mmproj is set but the model architecture does not look visual.
-  if (config.mmproj_path && model?.architecture &&
-      !isVisionArch(model.architecture) && model.file_type !== 'mmproj')
-    w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1' })
+  // C1: mmproj is set but model metadata cannot confirm a vision-capable model.
+  if (config.mmproj_path) {
+    const vision = isVisionModel(model)
+    if (isMmprojArtifact(model)) {
+      w.push({ field: 'model_path', severity: 'medium', key: 'warnC5' })
+    } else if (vision === false) {
+      w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1' })
+    } else if (vision === null) {
+      w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1Unknown' })
+    }
+  }
 
   // C2: removed; draft-mtp draft model requirements depend on builtin MTP heads and cannot be inferred from config only.
 
@@ -256,7 +273,7 @@ export function validateConfig(
     w.push({ field: 'n_predict', severity: 'medium', key: 'warnC3' })
 
   // C4: draft-mtp with builtin MTP heads plus an extra draft model may be redundant.
-  if (config.draft_model_path && config.spec_type?.includes('draft-mtp') && model?.has_mtp_head)
+  if (config.draft_model_path && config.spec_type?.includes('draft-mtp') && hasBuiltinMtp(model))
     w.push({ field: 'draft_model_path', severity: 'low', key: 'warnC4' })
 
   // D1: custom args conflict with known config fields.

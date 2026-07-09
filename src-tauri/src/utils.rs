@@ -1,168 +1,253 @@
+use crate::models::{GgufMetadataSummary, ModelCapabilities};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-// GGUF metadata parsing.
-pub fn parse_gguf_metadata(
-    path: &Path,
-) -> Result<(Option<String>, Option<u32>, Option<String>, bool), String> {
-    let mut f = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
-    let file_size = f.metadata().map(|m| m.len()).unwrap_or(0) as usize;
+pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
+    let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
     if file_size < 24 {
-        return Err("文件太小".into());
+        return Err("file is too small".into());
     }
 
-    // #8: Read the header first to get metadata_kv_count, then compute the required read size.
     let mut header = [0u8; 24];
-    use std::io::Read;
-    f.read_exact(&mut header).map_err(|e| format!("{}", e))?;
+    file.read_exact(&mut header).map_err(|e| format!("{}", e))?;
     if &header[0..4] != b"GGUF" {
-        return Err("不是有效的 GGUF 文件".into());
+        return Err("not a valid GGUF file".into());
     }
 
     let metadata_kv_count = u64::from_le_bytes(header[16..24].try_into().unwrap()) as usize;
-    // Estimate up to about 512 bytes per KV pair, capped at 200 pairs.
-    let estimate = 24 + (metadata_kv_count.min(200) * 512);
-    let read_size = estimate.min(file_size);
-    let mut data = vec![0u8; read_size];
-    data[..24].copy_from_slice(&header);
-    f.read_exact(&mut data[24..])
-        .map_err(|e| format!("{}", e))?;
-    let mut pos: usize = 24;
-
-    fn read_string(data: &[u8], pos: &mut usize) -> Option<String> {
-        if *pos + 8 > data.len() {
-            return None;
-        }
-        let len = u64::from_le_bytes(data[*pos..*pos + 8].try_into().unwrap()) as usize;
-        *pos += 8;
-        if len > 10_000_000 || *pos + len > data.len() {
-            return None;
-        }
-        let s = String::from_utf8_lossy(&data[*pos..*pos + len]).to_string();
-        *pos += len;
-        Some(s)
-    }
-
     let mut architecture: Option<String> = None;
     let mut context_length: Option<u32> = None;
     let mut file_type: Option<u32> = None;
-    let mut has_mtp: bool = false;
+    let mut mtp_layers: Option<u32> = None;
+    let mut has_vision_key = false;
+    let mut has_projector_key = false;
+    let mut family_hint = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .and_then(detect_model_family);
 
-    for _ in 0..metadata_kv_count.min(200) {
-        if pos + 2 > data.len() {
-            break;
-        }
-        let key = match read_string(&data, &mut pos) {
-            Some(k) => k,
-            None => break,
-        };
-        if pos + 4 > data.len() {
-            break;
-        }
-        let vtype = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-        pos += 4;
+    for _ in 0..metadata_kv_count {
+        let key = read_gguf_string(&mut file)?;
+        let key_lower = key.to_lowercase();
+        let value_type = read_u32(&mut file)?;
 
-        match vtype {
+        if key_lower.contains("vision")
+            || key_lower.contains("image")
+            || key_lower.contains("mmproj")
+            || key_lower.contains("clip")
+            || key_lower.contains("patch")
+        {
+            has_vision_key = true;
+        }
+        if key_lower.contains("mmproj")
+            || key_lower.contains("projector")
+            || key_lower.contains("clip")
+        {
+            has_projector_key = true;
+        }
+        if family_hint.is_none() {
+            family_hint = detect_model_family(&key_lower);
+        }
+
+        match value_type {
             8 => {
-                if pos + 8 > data.len() {
-                    break;
+                let value = read_gguf_string(&mut file)?;
+                if key == "general.architecture" {
+                    architecture = Some(value.clone());
                 }
-                if let Some(s) = read_string(&data, &mut pos) {
-                    if key == "general.architecture" {
-                        architecture = Some(s);
-                    }
-                } else {
-                    break;
+                if family_hint.is_none() {
+                    family_hint = detect_model_family(&value);
                 }
             }
             4 => {
-                if pos + 4 > data.len() {
-                    break;
-                }
-                let v = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-                pos += 4;
+                let value = read_u32(&mut file)?;
                 if key == "general.file_type" {
-                    file_type = Some(v);
+                    file_type = Some(value);
                 }
-                if key.contains("context_length") {
-                    context_length = Some(v);
+                if key_lower.contains("context_length") {
+                    context_length = Some(value);
                 }
-                if key.contains("nextn_predict_layers") && v > 0 {
-                    has_mtp = true;
+                if key_lower.contains("nextn_predict_layers") && value > 0 {
+                    mtp_layers = Some(value);
                 }
             }
             5 => {
-                if pos + 4 > data.len() {
-                    break;
+                let value = read_i32(&mut file)?;
+                if key_lower.contains("context_length") && value > 0 {
+                    context_length = Some(value as u32);
                 }
-                let v = i32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-                pos += 4;
-                if key.contains("context_length") {
-                    context_length = Some(v as u32);
-                }
-                if key.contains("nextn_predict_layers") && v > 0 {
-                    has_mtp = true;
+                if key_lower.contains("nextn_predict_layers") && value > 0 {
+                    mtp_layers = Some(value as u32);
                 }
             }
             10 => {
-                if pos + 8 > data.len() {
-                    break;
+                let value = read_u64(&mut file)?;
+                if key_lower.contains("context_length") {
+                    context_length = Some(value as u32);
                 }
-                let v = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
-                pos += 8;
-                if key.contains("context_length") {
-                    context_length = Some(v as u32);
-                }
-                if key.contains("nextn_predict_layers") && v > 0 {
-                    has_mtp = true;
+                if key_lower.contains("nextn_predict_layers") && value > 0 {
+                    mtp_layers = Some(value as u32);
                 }
             }
-            7 => {
-                pos += 1;
-            }
-            0 | 1 => {
-                pos += 1;
-            }
-            2 | 3 => {
-                pos += 2;
-            }
-            6 | 12 => {
-                pos += if vtype == 6 { 4 } else { 8 };
-            }
-            9 => {
-                if pos + 12 > data.len() {
-                    break;
+            11 => {
+                let value = read_i64(&mut file)?;
+                if key_lower.contains("context_length") && value > 0 {
+                    context_length = Some(value as u32);
                 }
-                let _arr_type = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap());
-                pos += 4;
-                let arr_len = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
-                pos += 8;
-                if arr_len > 100_000 {
-                    break;
-                }
-                let elem_size = match _arr_type {
-                    0..=3 => 1_usize,
-                    4 | 5 => 4,
-                    6 | 12 => 4,
-                    7 => 1,
-                    8 => 0,
-                    10 | 11 => 8,
-                    _ => 0,
-                };
-                if elem_size > 0 {
-                    pos += (arr_len * elem_size).min(1_000_000);
-                } else if _arr_type == 8 {
-                    for _ in 0..arr_len.min(1000) {
-                        if read_string(&data, &mut pos).is_none() {
-                            break;
-                        }
-                    }
+                if key_lower.contains("nextn_predict_layers") && value > 0 {
+                    mtp_layers = Some(value as u32);
                 }
             }
-            _ => break,
+            _ => skip_gguf_value(&mut file, value_type)?,
         }
     }
 
-    let quant_type = match file_type {
+    let file_kind = classify_gguf_file(path);
+    let arch_family = architecture.as_deref().and_then(detect_model_family);
+    let family = arch_family.or(family_hint);
+    let is_mmproj = file_kind == "mmproj" || has_projector_key && architecture.is_none();
+    let is_vision_model = !is_mmproj && (has_vision_key || is_vision_family(family.as_deref()));
+
+    Ok(GgufMetadataSummary {
+        architecture,
+        context_length,
+        quant_type: quant_type_from_file_type(file_type, path),
+        capabilities: ModelCapabilities {
+            metadata_complete: true,
+            has_builtin_mtp: mtp_layers.unwrap_or(0) > 0,
+            mtp_layers,
+            is_vision_model,
+            vision_family: if is_vision_model {
+                family.clone()
+            } else {
+                None
+            },
+            is_mmproj,
+            projector_family: if is_mmproj { family } else { None },
+        },
+    })
+}
+
+fn read_u32(file: &mut std::fs::File) -> Result<u32, String> {
+    let mut buf = [0u8; 4];
+    file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
+    Ok(u32::from_le_bytes(buf))
+}
+
+fn read_i32(file: &mut std::fs::File) -> Result<i32, String> {
+    let mut buf = [0u8; 4];
+    file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
+    Ok(i32::from_le_bytes(buf))
+}
+
+fn read_u64(file: &mut std::fs::File) -> Result<u64, String> {
+    let mut buf = [0u8; 8];
+    file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
+    Ok(u64::from_le_bytes(buf))
+}
+
+fn read_i64(file: &mut std::fs::File) -> Result<i64, String> {
+    let mut buf = [0u8; 8];
+    file.read_exact(&mut buf).map_err(|e| format!("{}", e))?;
+    Ok(i64::from_le_bytes(buf))
+}
+
+fn read_gguf_string(file: &mut std::fs::File) -> Result<String, String> {
+    let len = read_u64(file)? as usize;
+    if len > 10_000_000 {
+        return Err("GGUF string is too large".into());
+    }
+    let mut bytes = vec![0u8; len];
+    file.read_exact(&mut bytes).map_err(|e| format!("{}", e))?;
+    Ok(String::from_utf8_lossy(&bytes).to_string())
+}
+
+fn skip_bytes(file: &mut std::fs::File, bytes: u64) -> Result<(), String> {
+    file.seek(SeekFrom::Current(bytes as i64))
+        .map_err(|e| format!("{}", e))?;
+    Ok(())
+}
+
+fn skip_gguf_value(file: &mut std::fs::File, value_type: u32) -> Result<(), String> {
+    match value_type {
+        0 | 1 | 7 => skip_bytes(file, 1),
+        2 | 3 => skip_bytes(file, 2),
+        4 | 5 | 6 => skip_bytes(file, 4),
+        10 | 11 | 12 => skip_bytes(file, 8),
+        8 => {
+            let _ = read_gguf_string(file)?;
+            Ok(())
+        }
+        9 => {
+            let array_type = read_u32(file)?;
+            let array_len = read_u64(file)?;
+            if array_len > 10_000_000 {
+                return Err("GGUF array is too large".into());
+            }
+            match array_type {
+                0 | 1 | 7 => skip_bytes(file, array_len),
+                2 | 3 => skip_bytes(file, array_len.saturating_mul(2)),
+                4 | 5 | 6 => skip_bytes(file, array_len.saturating_mul(4)),
+                10 | 11 | 12 => skip_bytes(file, array_len.saturating_mul(8)),
+                8 => {
+                    for _ in 0..array_len {
+                        let _ = read_gguf_string(file)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(format!("unsupported GGUF array type {}", array_type)),
+            }
+        }
+        _ => Err(format!("unsupported GGUF value type {}", value_type)),
+    }
+}
+
+fn detect_model_family(text: &str) -> Option<String> {
+    let normalized = text.to_lowercase().replace(['_', '-', '.'], "");
+    let families = [
+        ("qwen25vl", "qwen-vl"),
+        ("qwen2vl", "qwen-vl"),
+        ("qwen3vl", "qwen-vl"),
+        ("llava", "llava"),
+        ("minicpmv", "minicpm-v"),
+        ("internvl", "intern-vl"),
+        ("gemma3", "gemma-vision"),
+        ("glm4v", "glm-v"),
+        ("phi3v", "phi-v"),
+        ("phi4v", "phi-v"),
+        ("smolvlm", "smolvlm"),
+        ("idefics", "idefics"),
+        ("moondream", "moondream"),
+        ("clip", "clip"),
+        ("vit", "vit"),
+    ];
+    families
+        .iter()
+        .find(|(needle, _)| normalized.contains(*needle))
+        .map(|(_, family)| (*family).to_string())
+}
+
+fn is_vision_family(family: Option<&str>) -> bool {
+    matches!(
+        family,
+        Some(
+            "qwen-vl"
+                | "llava"
+                | "minicpm-v"
+                | "intern-vl"
+                | "gemma-vision"
+                | "glm-v"
+                | "phi-v"
+                | "smolvlm"
+                | "idefics"
+                | "moondream"
+        )
+    )
+}
+
+fn quant_type_from_file_type(file_type: Option<u32>, path: &Path) -> Option<String> {
+    match file_type {
         Some(0) => Some("F32".into()),
         Some(1) => Some("F16".into()),
         Some(2) => Some("Q4_0".into()),
@@ -193,78 +278,77 @@ pub fn parse_gguf_metadata(
         Some(30) => Some("IQ4_XS".into()),
         Some(31) => Some("IQ1_M".into()),
         Some(32) => Some("BF16".into()),
-        _ => {
-            let fname = path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            if fname.contains("bf16") {
-                Some("BF16".into())
-            } else if fname.contains("f16") {
-                Some("F16".into())
-            } else if fname.contains("f32") {
-                Some("F32".into())
-            } else if fname.contains("q8_k") || fname.contains("q8k") {
-                Some("Q8_K".into())
-            } else if fname.contains("q8_0") || fname.contains("q8o") {
-                Some("Q8_0".into())
-            } else if fname.contains("q6_k") || fname.contains("q6k") {
-                Some("Q6_K".into())
-            } else if fname.contains("q5_k") || fname.contains("q5k") {
-                Some("Q5_K".into())
-            } else if fname.contains("q5_1") {
-                Some("Q5_1".into())
-            } else if fname.contains("q5_0") {
-                Some("Q5_0".into())
-            } else if fname.contains("q4_k_xl") || fname.contains("q4k_xl") {
-                Some("Q4_K_XL".into())
-            } else if fname.contains("q4_k_l") || fname.contains("q4k_l") {
-                Some("Q4_K_L".into())
-            } else if fname.contains("q4_k") || fname.contains("q4k") {
-                Some("Q4_K".into())
-            } else if fname.contains("q4_1") {
-                Some("Q4_1".into())
-            } else if fname.contains("q4_0") {
-                Some("Q4_0".into())
-            } else if fname.contains("q3_k") || fname.contains("q3k") {
-                Some("Q3_K".into())
-            } else if fname.contains("q2_k") || fname.contains("q2k") {
-                Some("Q2_K".into())
-            } else if fname.contains("iq4") {
-                Some("IQ4".into())
-            } else if fname.contains("iq3") {
-                Some("IQ3".into())
-            } else if fname.contains("iq2") {
-                Some("IQ2".into())
-            } else if fname.contains("iq1") {
-                Some("IQ1".into())
-            } else if fname.contains("mxfp4") {
-                Some("MXFP4".into())
-            } else if fname.contains("mxfp6") {
-                Some("MXFP6".into())
-            } else if fname.contains("mxfp8") {
-                Some("MXFP8".into())
-            } else if fname.contains("apex") {
-                Some("IQ (APEX)".into())
-            } else if fname.contains("-i-compact") || fname.contains("_i-compact") {
-                Some("IQ (Compact)".into())
-            } else if fname.contains("-i-static") || fname.contains("_i-static") {
-                Some("IQ (Static)".into())
-            } else if fname.contains("-i-dynamic") || fname.contains("_i-dynamic") {
-                Some("IQ (Dynamic)".into())
-            } else if fname.contains("gguf") {
-                Some("原始精度".into())
-            } else {
-                None
-            }
-        }
-    };
-
-    Ok((architecture, context_length, quant_type, has_mtp))
+        _ => quant_type_from_name(path),
+    }
 }
 
-// File type classification.
+fn quant_type_from_name(path: &Path) -> Option<String> {
+    let fname = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if fname.contains("bf16") {
+        Some("BF16".into())
+    } else if fname.contains("f16") {
+        Some("F16".into())
+    } else if fname.contains("f32") {
+        Some("F32".into())
+    } else if fname.contains("q8_k") || fname.contains("q8k") {
+        Some("Q8_K".into())
+    } else if fname.contains("q8_0") || fname.contains("q8o") {
+        Some("Q8_0".into())
+    } else if fname.contains("q6_k") || fname.contains("q6k") {
+        Some("Q6_K".into())
+    } else if fname.contains("q5_k") || fname.contains("q5k") {
+        Some("Q5_K".into())
+    } else if fname.contains("q5_1") {
+        Some("Q5_1".into())
+    } else if fname.contains("q5_0") {
+        Some("Q5_0".into())
+    } else if fname.contains("q4_k_xl") || fname.contains("q4k_xl") {
+        Some("Q4_K_XL".into())
+    } else if fname.contains("q4_k_l") || fname.contains("q4k_l") {
+        Some("Q4_K_L".into())
+    } else if fname.contains("q4_k") || fname.contains("q4k") {
+        Some("Q4_K".into())
+    } else if fname.contains("q4_1") {
+        Some("Q4_1".into())
+    } else if fname.contains("q4_0") {
+        Some("Q4_0".into())
+    } else if fname.contains("q3_k") || fname.contains("q3k") {
+        Some("Q3_K".into())
+    } else if fname.contains("q2_k") || fname.contains("q2k") {
+        Some("Q2_K".into())
+    } else if fname.contains("iq4") {
+        Some("IQ4".into())
+    } else if fname.contains("iq3") {
+        Some("IQ3".into())
+    } else if fname.contains("iq2") {
+        Some("IQ2".into())
+    } else if fname.contains("iq1") {
+        Some("IQ1".into())
+    } else if fname.contains("mxfp4") {
+        Some("MXFP4".into())
+    } else if fname.contains("mxfp6") {
+        Some("MXFP6".into())
+    } else if fname.contains("mxfp8") {
+        Some("MXFP8".into())
+    } else if fname.contains("apex") {
+        Some("IQ (APEX)".into())
+    } else if fname.contains("-i-compact") || fname.contains("_i-compact") {
+        Some("IQ (Compact)".into())
+    } else if fname.contains("-i-static") || fname.contains("_i-static") {
+        Some("IQ (Static)".into())
+    } else if fname.contains("-i-dynamic") || fname.contains("_i-dynamic") {
+        Some("IQ (Dynamic)".into())
+    } else if fname.contains("gguf") {
+        Some("Original Precision".into())
+    } else {
+        None
+    }
+}
+
 pub fn classify_gguf_file(path: &Path) -> &'static str {
     let name = path
         .file_name()
@@ -280,7 +364,6 @@ pub fn classify_gguf_file(path: &Path) -> &'static str {
     }
 }
 
-// Backend type detection.
 pub fn detect_backend(dir: &Path) -> String {
     let entries: Vec<String> = std::fs::read_dir(dir)
         .ok()
@@ -302,7 +385,6 @@ pub fn detect_backend(dir: &Path) -> String {
     }
 }
 
-// Get application directory.
 pub fn get_app_dir() -> PathBuf {
     std::env::current_exe()
         .unwrap_or_else(|_| PathBuf::from("."))
@@ -311,7 +393,6 @@ pub fn get_app_dir() -> PathBuf {
         .to_path_buf()
 }
 
-// Get data directory, ASCII-safe to avoid non-ASCII paths.
 pub fn get_data_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
