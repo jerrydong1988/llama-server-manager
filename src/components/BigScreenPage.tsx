@@ -24,6 +24,8 @@ import type {
   InferenceRequestSummary,
   Instance,
   LogEntry,
+  PerfUpdateEvent,
+  RunningInferenceTask,
   SystemMetrics,
   TelemetryOverview,
   TelemetrySessionSummary,
@@ -73,6 +75,7 @@ export default function BigScreenPage() {
   const [overview, setOverview] = useState<TelemetryOverview>(emptyOverview)
   const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
   const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
+  const [runningTasksByInstance, setRunningTasksByInstance] = useState<Record<string, RunningInferenceTask[]>>({})
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [lastUpdatedAt, setLastUpdatedAt] = useState(Date.now())
   const [refreshing, setRefreshing] = useState(false)
@@ -133,8 +136,31 @@ export default function BigScreenPage() {
     }
   }, [refreshTelemetry])
 
+  useEffect(() => {
+    const unlisten = listen<PerfUpdateEvent>('perf-update', event => {
+      setRunningTasksByInstance(current => ({
+        ...current,
+        [event.payload.instanceId]: event.payload.tasks || [],
+      }))
+      setLastUpdatedAt(Date.now())
+    })
+    return () => {
+      unlisten.then(dispose => dispose()).catch(() => {})
+    }
+  }, [])
+
   const allDownloads = useMemo(() => Object.values(downloadTasks), [downloadTasks])
   const runningInstances = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
+  const activeRequestTasks = useMemo(
+    () => Object.entries(runningTasksByInstance)
+      .flatMap(([instanceId, tasks]) => {
+        const instanceName = instances.find(instance => instance.id === instanceId)?.name || instanceId
+        return tasks.map(task => ({ ...task, instanceName }))
+      })
+      .sort((left, right) => right.updated_at_ms - left.updated_at_ms)
+      .slice(0, 6),
+    [instances, runningTasksByInstance],
+  )
   const attentionInstances = useMemo(
     () => instances.filter(instance => instance.status === 'error' || (instance.status === 'running' && instance.healthCheck === 'fail')),
     [instances],
@@ -280,13 +306,13 @@ export default function BigScreenPage() {
                 <MiniCounter label={labels.avg24h} value={formatRate(overview.avg_tokens_per_sec_24h)} tone="text-emerald-200" />
                 <MiniCounter label={labels.peakVram} value={formatMemory(overview.peak_vram_mb_24h)} tone="text-amber-200" />
               </div>
-              <RequestTable requests={requests} labels={labels} />
+              <RequestTable activeTasks={activeRequestTasks} requests={requests} labels={labels} />
             </Panel>
           </section>
         </div>
 
         <div className="space-y-4">
-          <Panel title={labels.alertLogs} icon={<Terminal className="h-5 w-5" />}>
+          <Panel title={labels.runtimeLogs} icon={<Terminal className="h-5 w-5" />}>
             <div className="space-y-2">
               {logRows.length === 0 ? (
                 <EmptyLine text={labels.noLogs} />
@@ -311,10 +337,10 @@ export default function BigScreenPage() {
                       {session.stopped_at ? labels.finished : labels.runningNow}
                     </Badge>
                   </div>
-                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-slate-400">
-                    <span className="truncate">{formatRate(session.avg_tokens_per_sec)}</span>
-                    <span className="truncate">{formatMemory(session.peak_vram_mb)}</span>
-                    <span className="truncate">{formatDuration(session.duration_secs)}</span>
+                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                    <MetricMini label={labels.throughput} value={formatRate(session.avg_tokens_per_sec)} />
+                    <MetricMini label={labels.peakVram} value={formatMemory(session.peak_vram_mb)} />
+                    <MetricMini label={labels.duration} value={formatDuration(session.duration_secs)} />
                   </div>
                 </div>
               ))}
@@ -456,37 +482,68 @@ function DownloadLine({ task, labels }: { task: DownloadProgress; labels: Return
   )
 }
 
-function RequestTable({ requests, labels }: { requests: InferenceRequestSummary[]; labels: ReturnType<typeof getLabels> }) {
-  if (requests.length === 0) {
+function RequestTable({
+  activeTasks,
+  requests,
+  labels,
+}: {
+  activeTasks: Array<RunningInferenceTask & { instanceName: string }>
+  requests: InferenceRequestSummary[]
+  labels: ReturnType<typeof getLabels>
+}) {
+  if (activeTasks.length === 0 && requests.length === 0) {
     return <EmptyLine text={labels.noRequests} />
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-700">
-      <table className="w-full table-fixed text-left text-xs">
-        <thead className="bg-slate-950 text-slate-500">
-          <tr>
-            <th className="px-3 py-2 font-medium">{labels.task}</th>
-            <th className="px-3 py-2 font-medium">{labels.source}</th>
-            <th className="px-3 py-2 font-medium">{labels.tokens}</th>
-            <th className="px-3 py-2 font-medium">{labels.speed}</th>
-            <th className="px-3 py-2 font-medium">{labels.duration}</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-slate-700 bg-slate-900/70 text-slate-300">
-          {requests.map(request => (
-            <tr key={`${request.session_id}-${request.task_id}-${request.completed_at}`}>
-              <td className="truncate px-3 py-2">{request.source === 'proxy' ? (request.model || `#${request.task_id}`) : `#${request.task_id}`}</td>
-              <td className="truncate px-3 py-2">{request.source === 'proxy' ? `${labels.proxy}${request.http_status ? ` ${request.http_status}` : ''}` : labels.log}</td>
-              <td className="truncate px-3 py-2">{formatNumber(request.total_tokens)}</td>
-              <td className="truncate px-3 py-2">{formatRate(request.generation_tps)}</td>
-              <td className="truncate px-3 py-2">
-                {request.source === 'proxy' ? `${labels.firstResponse} ${formatMs(request.total_time_ms)}` : formatMs(request.total_time_ms)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="space-y-3">
+      {activeTasks.length > 0 && (
+        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
+          <div className="mb-2 flex items-center justify-between gap-3 text-xs">
+            <span className="font-medium text-emerald-200">{labels.activeRequests}</span>
+            <Badge tone="emerald">{activeTasks.length}</Badge>
+          </div>
+          <div className="grid gap-2">
+            {activeTasks.map(task => (
+              <div key={`${task.instanceName}-${task.task_id}`} className="grid grid-cols-[minmax(0,1fr)_64px_72px_64px] gap-2 text-xs text-slate-300">
+                <span className="truncate" title={task.instanceName}>#{task.task_id} · {task.instanceName}</span>
+                <span className="truncate">{formatNumber(task.n_decoded)}</span>
+                <span className="truncate">{formatRate(task.tg)}</span>
+                <span className="truncate">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {requests.length > 0 && (
+        <div className="overflow-hidden rounded-lg border border-slate-700">
+          <table className="w-full table-fixed text-left text-xs">
+            <thead className="bg-slate-950 text-slate-500">
+              <tr>
+                <th className="px-3 py-2 font-medium">{labels.task}</th>
+                <th className="px-3 py-2 font-medium">{labels.source}</th>
+                <th className="px-3 py-2 font-medium">{labels.tokens}</th>
+                <th className="px-3 py-2 font-medium">{labels.speed}</th>
+                <th className="px-3 py-2 font-medium">{labels.duration}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-700 bg-slate-900/70 text-slate-300">
+              {requests.map(request => (
+                <tr key={`${request.session_id}-${request.task_id}-${request.completed_at}`}>
+                  <td className="truncate px-3 py-2">{request.source === 'proxy' ? (request.model || `#${request.task_id}`) : `#${request.task_id}`}</td>
+                  <td className="truncate px-3 py-2">{request.source === 'proxy' ? `${labels.proxy}${request.http_status ? ` ${request.http_status}` : ''}` : labels.log}</td>
+                  <td className="truncate px-3 py-2">{formatNumber(request.total_tokens)}</td>
+                  <td className="truncate px-3 py-2">{formatRate(request.generation_tps)}</td>
+                  <td className="truncate px-3 py-2">
+                    {request.source === 'proxy' ? `${labels.firstResponse} ${formatMs(request.total_time_ms)}` : formatMs(request.total_time_ms)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }
@@ -511,6 +568,15 @@ function MiniCounter({ label, value, tone }: { label: string; value: ReactNode; 
     <div className="min-w-0 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2">
       <div className="truncate text-[11px] uppercase text-slate-500">{label}</div>
       <div className={joinClassNames('mt-1 truncate text-lg font-semibold', tone)} title={String(value)}>{value}</div>
+    </div>
+  )
+}
+
+function MetricMini({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="truncate text-[10px] uppercase text-slate-500" title={label}>{label}</div>
+      <div className="mt-0.5 truncate text-slate-300" title={value}>{value}</div>
     </div>
   )
 }
@@ -578,7 +644,7 @@ function formatPercent(value?: number | null) {
 }
 
 function formatDuration(seconds?: number | null) {
-  if (!seconds || !Number.isFinite(seconds) || seconds < 0) return '--'
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '--'
   const total = Math.floor(seconds)
   const hours = Math.floor(total / 3600)
   const minutes = Math.floor((total % 3600) / 60)
@@ -645,6 +711,7 @@ function getLabels(zh: boolean) {
     cancelled: zh ? '取消' : 'Cancelled',
     noDownloads: zh ? '暂无下载任务' : 'No download tasks',
     performance: zh ? '请求 / 性能' : 'Requests / Performance',
+    activeRequests: zh ? '运行中请求' : 'Active Requests',
     sessions24h: zh ? '24小时会话' : 'Sessions 24h',
     avg24h: zh ? '24小时均速' : 'Avg 24h',
     peakVram: zh ? '峰值显存' : 'Peak VRAM',
@@ -657,7 +724,7 @@ function getLabels(zh: boolean) {
     duration: zh ? '耗时' : 'Duration',
     firstResponse: zh ? '首响' : 'First byte',
     noRequests: zh ? '暂无已完成请求记录' : 'No completed request records',
-    alertLogs: zh ? '异常日志' : 'Exception Logs',
+    runtimeLogs: zh ? '运行日志' : 'Runtime Logs',
     noLogs: zh ? '暂无日志' : 'No logs',
     sessionSnapshot: zh ? '运行会话' : 'Run Sessions',
     noSessions: zh ? '暂无遥测会话' : 'No telemetry sessions',

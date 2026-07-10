@@ -152,6 +152,9 @@ const InstanceManager = () => {
     quickActions: lang === 'zh-CN' ? '\u5feb\u6377\u64cd\u4f5c' : 'Quick Actions',
     order: lang === 'zh-CN' ? '\u987a\u5e8f' : 'Order',
     autoStartHint: lang === 'zh-CN' ? '\u968f\u5e94\u7528\u542f\u52a8\u65f6\u81ea\u52a8\u542f\u52a8\u6b64\u5b9e\u4f8b' : 'Start this instance automatically when the app starts',
+    selected: lang === 'zh-CN' ? '\u5f53\u524d\u9009\u4e2d' : 'Selected',
+    operationTarget: lang === 'zh-CN' ? '\u5f53\u524d\u64cd\u4f5c\u5b9e\u4f8b' : 'Current Operation Target',
+    operationTargetHint: lang === 'zh-CN' ? '\u53f3\u4fa7\u5feb\u6377\u64cd\u4f5c\u5c06\u4f5c\u7528\u4e8e\u8be5\u5b9e\u4f8b' : 'Right-side actions apply to this instance',
   }
 
   useEffect(() => {
@@ -405,8 +408,12 @@ const InstanceManager = () => {
                     onKeyDown={event => {
                       if (event.key === 'Enter' || event.key === ' ') setSelectedInstanceId(inst.id)
                     }}
-                    className={`grid min-w-0 gap-3 px-4 py-4 text-left transition lg:grid-cols-[minmax(280px,1fr)_minmax(210px,0.72fr)_minmax(150px,0.42fr)_minmax(166px,auto)] lg:items-center ${
-                      selected ? 'bg-blue-50/70 dark:bg-blue-950/20' : 'hover:bg-slate-50 dark:hover:bg-slate-900/60'
+                    aria-selected={selected}
+                    aria-current={selected ? 'true' : undefined}
+                    className={`relative grid min-w-0 gap-3 border-l-4 px-4 py-4 text-left transition lg:grid-cols-[minmax(280px,1fr)_minmax(210px,0.72fr)_minmax(150px,0.42fr)_minmax(166px,auto)] lg:items-center ${
+                      selected
+                        ? 'border-l-blue-500 bg-blue-50/95 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.24)] dark:border-l-blue-400 dark:bg-blue-500/15 dark:shadow-[inset_0_0_0_1px_rgba(96,165,250,0.32)]'
+                        : 'border-l-transparent hover:bg-slate-50 dark:hover:bg-slate-900/60'
                     }`}
                   >
                     <div className="flex min-w-0 items-center gap-3">
@@ -436,6 +443,11 @@ const InstanceManager = () => {
                           ) : (
                             <>
                               <div className="min-w-0 truncate font-medium text-slate-900 dark:text-slate-100" title={inst.name}>{inst.name}</div>
+                              {selected && (
+                                <Badge tone="blue" className="shrink-0 px-2 py-0.5 text-[11px]">
+                                  {labels.selected}
+                                </Badge>
+                              )}
                               <Button
                                 onClick={e => { e.stopPropagation(); setEditingId(inst.id); setEditName(inst.name) }}
                                 variant="subtle"
@@ -593,17 +605,32 @@ const InstanceManager = () => {
         <Surface as="aside" className="h-fit min-w-0 overflow-hidden p-4 2xl:sticky 2xl:top-4">
           {selectedInstance ? (
             <div className="space-y-4">
-              <div className="flex min-w-0 items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${healthDotClass(selectedInstance)}`} />
-                    <h3 className="truncate text-base font-semibold text-slate-950 dark:text-slate-50" title={selectedInstance.name}>{selectedInstance.name}</h3>
+              <div className="rounded-xl border border-blue-200 bg-blue-50/90 p-3 shadow-sm dark:border-blue-500/30 dark:bg-blue-500/10">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-blue-600 dark:text-blue-300">
+                      {labels.operationTarget}
+                    </div>
+                    <div className="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400">
+                      {labels.operationTargetHint}
+                    </div>
                   </div>
-                  <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">{selectedInstance.config.host}:{selectedInstance.config.port}</p>
+                  <Badge tone="blue" className="shrink-0">
+                    {labels.selected}
+                  </Badge>
                 </div>
-                <Badge tone={selectedInstance.status === 'running' ? 'emerald' : selectedInstance.status === 'error' ? 'red' : 'slate'}>
-                  {statusText(selectedInstance)}
-                </Badge>
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${healthDotClass(selectedInstance)}`} />
+                      <h3 className="truncate text-base font-semibold text-slate-950 dark:text-slate-50" title={selectedInstance.name}>{selectedInstance.name}</h3>
+                    </div>
+                    <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-300">{selectedInstance.config.host}:{selectedInstance.config.port}</p>
+                  </div>
+                  <Badge tone={selectedInstance.status === 'running' ? 'emerald' : selectedInstance.status === 'error' ? 'red' : 'slate'}>
+                    {statusText(selectedInstance)}
+                  </Badge>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -663,7 +690,14 @@ const InstanceManager = () => {
                 <div className="grid grid-cols-2 gap-2">
                   <Button onClick={() => handleTestConnection(selectedInstance)} disabled={selectedInstance.status !== 'running'} variant="secondary" icon={<Wifi className="h-4 w-4" />}>{t.instance.testConnection}</Button>
                   <Button onClick={() => handleShowCommand(selectedInstance.id)} variant="secondary" icon={<Terminal className="h-4 w-4" />}>{t.instance.genCommand}</Button>
-                  <Button onClick={() => { setActiveConfigInstanceId(selectedInstance.id); setActiveTab('config') }} variant="secondary" icon={<Settings className="h-4 w-4" />}>{t.instance.configParams}</Button>
+                  <Button
+                    onClick={() => { setActiveConfigInstanceId(selectedInstance.id); setActiveTab('config') }}
+                    variant="primary"
+                    icon={<Settings className="h-4 w-4" />}
+                    title={`${labels.operationTarget}: ${selectedInstance.name}`}
+                  >
+                    {t.instance.configParams}
+                  </Button>
                   <Button onClick={() => handleDelete(selectedInstance.id)} variant="danger" icon={<Trash2 className="h-4 w-4" />}>{t.instance.delete}</Button>
                 </div>
               </div>

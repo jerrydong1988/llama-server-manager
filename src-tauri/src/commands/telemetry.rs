@@ -168,6 +168,10 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+pub fn current_time_ms() -> i64 {
+    now_ms()
+}
+
 fn open_connection() -> Result<Connection, String> {
     let path = telemetry_db_path();
     if let Some(parent) = path.parent() {
@@ -604,23 +608,27 @@ pub async fn list_telemetry_sessions(
     let limit = limit.unwrap_or(20).clamp(1, 200);
     tokio::task::spawn_blocking(move || {
         let conn = open_connection()?;
+        let current_time = now_ms();
         let mut stmt = conn
             .prepare(
                 "SELECT
                     s.id, s.instance_id, s.instance_name, s.model_name, s.model_path, s.engine_id, s.backend,
                     s.started_at, s.stopped_at,
-                    CASE WHEN s.stopped_at IS NULL THEN NULL ELSE CAST((s.stopped_at - s.started_at) / 1000 AS INTEGER) END,
+                    CASE
+                        WHEN COALESCE(s.stopped_at, ?1) <= s.started_at THEN 0
+                        ELSE CAST((COALESCE(s.stopped_at, ?1) - s.started_at) / 1000 AS INTEGER)
+                    END,
                     COALESCE((SELECT AVG(m.tokens_per_sec) FROM metric_samples m WHERE m.session_id = s.id AND m.tokens_per_sec > 0), 0),
                     COALESCE((SELECT MAX(m.vram_used_mb) FROM metric_samples m WHERE m.session_id = s.id), 0),
                     COALESCE((SELECT COUNT(*) FROM metric_samples m WHERE m.session_id = s.id), 0),
                     s.stop_reason
                  FROM run_sessions s
                  ORDER BY s.started_at DESC
-                 LIMIT ?1",
+                 LIMIT ?2",
             )
             .map_err(|e| format!("无法准备遥测会话查询: {}", e))?;
         let rows = stmt
-            .query_map(params![limit], |row| {
+            .query_map(params![current_time, limit], |row| {
                 Ok(TelemetrySessionSummary {
                     id: row.get(0)?,
                     instance_id: row.get(1)?,

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { Activity, BarChart3, ChevronDown, Database, Gauge, HardDrive, RefreshCw, Server } from 'lucide-react'
+import { Activity, BarChart3, ChevronDown, Database, Gauge, HardDrive, Radio, RefreshCw, Server } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
-import type { DiagnosticFinding, InferenceRequestSummary, SystemMetrics, TelemetryOverview, TelemetrySampleSummary, TelemetrySessionAnalysis, TelemetrySessionSummary } from '../../store/types'
+import type { DiagnosticFinding, InferenceRequestSummary, PerfUpdateEvent, RunningInferenceTask, SystemMetrics, TelemetryOverview, TelemetrySampleSummary, TelemetrySessionAnalysis, TelemetrySessionSummary } from '../../store/types'
 import { Badge, Button, EmptyPanel, InsetSurface, MetricCard, PageFrame, PageHeader, ResourceMeter, SectionHeader, Surface } from '../ui'
 
 type MetricsEvent = {
@@ -72,6 +72,7 @@ export default function PerformancePage() {
   const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
   const [analysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
+  const [runningTasksByInstance, setRunningTasksByInstance] = useState<Record<string, RunningInferenceTask[]>>({})
   const [expandedFindings, setExpandedFindings] = useState<Record<string, boolean>>({})
   const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
@@ -181,6 +182,23 @@ export default function PerformancePage() {
   }, [selectedInstanceId, refreshTelemetry, refreshSelectedSessionDetails])
 
   useEffect(() => {
+    const unlisten = listen<PerfUpdateEvent>('perf-update', event => {
+      setRunningTasksByInstance(current => ({
+        ...current,
+        [event.payload.instanceId]: event.payload.tasks || [],
+      }))
+      const now = Date.now()
+      if (selectedSessionIdRef.current && now - lastSessionDetailRefreshRef.current > TELEMETRY_DETAIL_REFRESH_MS) {
+        void refreshSelectedSessionDetails(selectedSessionIdRef.current)
+      }
+    })
+
+    return () => {
+      unlisten.then(fn => fn())
+    }
+  }, [refreshSelectedSessionDetails])
+
+  useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
     if (!selectedSessionId) {
       setSamples([])
@@ -200,11 +218,17 @@ export default function PerformancePage() {
   }, [selectedSessionId, refreshSelectedSessionDetails])
 
   const latestSample = overview.latest_samples[0] || null
+  const activeTasks = selectedSession && !selectedSession.stopped_at
+    ? runningTasksByInstance[selectedSession.instance_id] || []
+    : []
   const diagnosticsBySeverity = useMemo(() => groupDiagnosticsBySeverity(diagnostics), [diagnostics])
   const sessionBenchmark = useMemo(() => buildSessionBenchmark(selectedSession, sessions), [selectedSession, sessions])
   const modelBackendRank = useMemo(() => {
     const byConfig = new Map<string, ModelBackendAggregate & { totalTps: number; durationSum: number; durationCount: number }>()
     for (const session of sessions) {
+      if (!session.stopped_at || session.sample_count === 0) {
+        continue
+      }
       const model = session.model_name || '--'
       const engine = session.engine_id || '--'
       const backend = session.backend || '--'
@@ -229,7 +253,7 @@ export default function PerformancePage() {
       current.bestTps = Math.max(current.bestTps, session.avg_tokens_per_sec || 0)
       current.peakVram = Math.max(current.peakVram, session.peak_vram_mb || 0)
       current.lastStartedAt = Math.max(current.lastStartedAt, session.started_at || 0)
-      if (session.duration_secs) {
+      if (session.stopped_at && session.duration_secs != null) {
         current.durationSum += session.duration_secs
         current.durationCount += 1
       }
@@ -527,6 +551,8 @@ export default function PerformancePage() {
                   <Detail label={labels.stoppedAt} value={selectedSession.stopped_at ? formatDate(selectedSession.stopped_at) : labels.stillRunning} />
                 </div>
 
+                <ActiveRequestsPanel tasks={activeTasks} labels={labels} isRunning={!selectedSession.stopped_at} />
+
                 <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
                   <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -670,6 +696,65 @@ function SessionComparison({
   )
 }
 
+function ActiveRequestsPanel({
+  tasks,
+  labels,
+  isRunning,
+}: {
+  tasks: RunningInferenceTask[]
+  labels: ReturnType<typeof getLabels>
+  isRunning: boolean
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
+      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
+            <Radio className="h-4 w-4 text-emerald-400" />
+            {labels.activeRequests}
+          </div>
+          <div className="text-xs text-slate-500 dark:text-slate-400">{labels.activeRequestsDesc}</div>
+        </div>
+        <Badge tone={tasks.length > 0 ? 'emerald' : 'slate'}>{tasks.length} {labels.processing}</Badge>
+      </div>
+
+      {tasks.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 px-4 py-5 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+          {isRunning ? labels.noActiveRequests : labels.sessionFinishedNoActive}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
+          <table className="w-full table-fixed text-left text-sm">
+            <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
+              <tr>
+                <th className="px-3 py-2 font-medium">{labels.task}</th>
+                <th className="px-3 py-2 font-medium">{labels.generated}</th>
+                <th className="px-3 py-2 font-medium">{labels.currentSpeed}</th>
+                <th className="px-3 py-2 font-medium">{labels.elapsed}</th>
+                <th className="px-3 py-2 font-medium">{labels.specAccept}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+              {tasks.map(task => (
+                <tr key={task.task_id} className="text-slate-700 dark:text-slate-200">
+                  <td className="px-3 py-2">
+                    <div className="font-medium">#{task.task_id}</div>
+                    <div className="text-xs text-slate-500">slot {task.slot_id}</div>
+                  </td>
+                  <td className="px-3 py-2">{formatTokenCount(task.n_decoded)}</td>
+                  <td className="px-3 py-2">{formatRate(task.tg)}</td>
+                  <td className="px-3 py-2">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</td>
+                  <td className="px-3 py-2">{formatPercent(task.spec_accept_rate)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function Detail({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
@@ -758,7 +843,7 @@ function buildSessionBenchmark(selectedSession: TelemetrySessionSummary | undefi
     return emptySessionBenchmark()
   }
 
-  const history = sessions.filter(session => session.id !== selectedSession.id && session.sample_count > 0)
+  const history = sessions.filter(session => session.id !== selectedSession.id && session.stopped_at && session.sample_count > 0)
   const sameConfig = history.filter(session =>
     session.model_name === selectedSession.model_name &&
     session.engine_id === selectedSession.engine_id &&
@@ -954,6 +1039,13 @@ function getLabels(zh: boolean) {
     throughput: zh ? '\u541e\u5410' : 'Throughput',
     modelRank: zh ? '\u6a21\u578b\u8868\u73b0' : 'Model Performance',
     modelRankDesc: zh ? '\u6309\u6a21\u578b + \u5f15\u64ce/\u540e\u7aef\u805a\u5408\u7684\u5386\u53f2\u541e\u5410\u5361\u7247\u3002' : 'Historical throughput cards grouped by model plus engine/backend.',
+    activeRequests: zh ? '\u6b63\u5728\u63a8\u7406\u7684\u8bf7\u6c42' : 'Active Inference Requests',
+    activeRequestsDesc: zh ? '\u6765\u81ea llama-server \u5b9e\u65f6\u65e5\u5fd7\u4e8b\u4ef6\uff0c\u7528\u4e8e\u8ddf\u8e2a\u5c1a\u672a\u5b8c\u6210\u7684 task / slot\u3002' : 'Live llama-server log events for in-flight task and slot tracking.',
+    noActiveRequests: zh ? '\u5f53\u524d\u6ca1\u6709\u6b63\u5728\u5904\u7406\u7684\u63a8\u7406\u8bf7\u6c42\u3002' : 'No inference request is currently processing.',
+    sessionFinishedNoActive: zh ? '\u8be5\u4f1a\u8bdd\u5df2\u7ed3\u675f\uff0c\u4e0d\u518d\u6709\u8fd0\u884c\u4e2d\u8bf7\u6c42\u3002' : 'This session has finished, so there are no active requests.',
+    processing: zh ? '\u5904\u7406\u4e2d' : 'processing',
+    currentSpeed: zh ? '\u5373\u65f6\u901f\u5ea6' : 'Live Speed',
+    elapsed: zh ? '\u5df2\u8fd0\u884c' : 'Elapsed',
     recentRequests: zh ? '\u6700\u8fd1\u63a8\u7406\u8bf7\u6c42' : 'Recent Inference Requests',
     recentRequestsDesc: zh ? '\u6765\u81ea llama-server \u65e5\u5fd7\u89e3\u6790\u7684\u8bf7\u6c42\u7ea7 token\u3001\u8017\u65f6\u4e0e\u541e\u5410\u8bb0\u5f55\u3002' : 'Request-level tokens, duration, and throughput parsed from llama-server logs.',
     requests: zh ? '\u8bf7\u6c42' : 'requests',
@@ -996,10 +1088,11 @@ function formatDate(ms: number) {
 }
 
 function formatDuration(seconds?: number | null) {
-  if (!seconds) return '--'
-  const h = Math.floor(seconds / 3600)
-  const m = Math.floor((seconds % 3600) / 60)
-  const s = Math.floor(seconds % 60)
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '--'
+  const total = Math.floor(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
   if (h > 0) return `${h}h ${m}m`
   if (m > 0) return `${m}m ${s}s`
   return `${s}s`

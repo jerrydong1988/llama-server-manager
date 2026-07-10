@@ -1793,6 +1793,8 @@ use std::collections::HashMap;
 struct TaskPerfState {
     slot_id: u32,
     task_id: u32,
+    started_at_ms: i64,
+    updated_at_ms: i64,
     n_decoded: u64,
     tg: f64,
     /// Historical (n_decoded, tg) samples used for speed curves.
@@ -1871,11 +1873,14 @@ fn parse_perf_line(
 
     // Task creation.
     if parser.is_launch(line) {
+        let timestamp = crate::commands::telemetry::current_time_ms();
         tasks.insert(
             task_id,
             TaskPerfState {
                 slot_id,
                 task_id,
+                started_at_ms: timestamp,
+                updated_at_ms: timestamp,
                 n_decoded: 0,
                 tg: 0.0,
                 history: Vec::new(),
@@ -1901,6 +1906,7 @@ fn parse_perf_line(
         Some(t) => t,
         None => return false, // stale line from before app started
     };
+    task.updated_at_ms = crate::commands::telemetry::current_time_ms();
 
     // Progress update.
     if let Some(c) = parser.re_decoded.captures(line) {

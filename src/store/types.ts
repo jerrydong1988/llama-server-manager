@@ -300,6 +300,35 @@ export interface InferenceRequestSummary {
   spec_gen_time_ms: number | null
 }
 
+export interface RunningInferenceTask {
+  slot_id: number
+  task_id: number
+  started_at_ms: number
+  updated_at_ms: number
+  n_decoded: number
+  tg: number
+  history: [number, number][]
+  prompt_tokens: number | null
+  prompt_time_ms: number | null
+  prompt_tps: number | null
+  gen_tokens: number | null
+  gen_time_ms: number | null
+  gen_tps: number | null
+  total_tokens: number | null
+  total_time_ms: number | null
+  spec_accept_rate: number | null
+  spec_accepted: number | null
+  spec_generated: number | null
+  spec_gen_time_ms: number | null
+  completed: boolean
+}
+
+export interface PerfUpdateEvent {
+  instanceId: string
+  tasks: RunningInferenceTask[]
+  lastCompleted: RunningInferenceTask | null
+}
+
 export interface TelemetrySessionAnalysis {
   request_count: number
   avg_prompt_tokens: number
