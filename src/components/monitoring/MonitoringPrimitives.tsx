@@ -51,7 +51,7 @@ export function MonitorPanel({
   bodyClassName?: string
 }) {
   return (
-    <section className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900/72 dark:text-slate-100', className)}>
+    <section className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-100', className)}>
       <div className="flex min-h-[52px] items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-800">
         <div className="flex min-w-0 items-center gap-2">
           {icon ? <span className="shrink-0 text-blue-500 dark:text-blue-300">{icon}</span> : null}
@@ -140,7 +140,7 @@ export function SignalMeter({
 }) {
   const safeValue = clampPercent(value)
   return (
-    <div className={joinClassNames('min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/64', compact ? 'space-y-2' : 'space-y-3')}>
+    <div className={joinClassNames('min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60', compact ? 'space-y-2' : 'space-y-3')}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {icon ? <div className={joinClassNames('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border', toneBorder[tone], toneText[tone])}>{icon}</div> : null}
@@ -194,10 +194,10 @@ export function TrendChart({
   }).join(' ')
 
   return (
-    <div className={joinClassNames('min-h-[260px] overflow-hidden rounded-lg border border-slate-200 bg-white/0 dark:border-slate-800 dark:bg-slate-950/35', className)}>
+    <div className={joinClassNames('min-h-[260px] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40', className)}>
       <svg viewBox={`0 0 ${width} ${height}`} className={joinClassNames('h-[260px] w-full', toneText[tone])} preserveAspectRatio="none">
         {[0.25, 0.5, 0.75].map(ratio => (
-          <line key={ratio} x1="0" y1={height * ratio} x2={width} y2={height * ratio} stroke="currentColor" className="text-slate-200 dark:text-slate-800" strokeWidth="1" strokeDasharray="5 7" />
+          <line key={ratio} x1="0" y1={height * ratio} x2={width} y2={height * ratio} stroke="currentColor" className="text-slate-300 dark:text-slate-800" strokeWidth="1" strokeDasharray="5 7" />
         ))}
         <polyline points={points} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
@@ -261,8 +261,8 @@ export function SessionCard({
       className={joinClassNames(
         'block w-full rounded-lg border p-3 text-left transition',
         selected
-          ? 'border-blue-400 bg-blue-50 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.22)] dark:border-blue-500/50 dark:bg-blue-500/18'
-          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/64 dark:hover:border-slate-700',
+          ? 'border-blue-400 bg-blue-50 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.22)] dark:border-blue-500/50 dark:bg-blue-500/20'
+          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700',
       )}
     >
       <div className="flex min-w-0 items-start justify-between gap-3">

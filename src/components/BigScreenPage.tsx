@@ -289,9 +289,9 @@ export default function BigScreenPage() {
                 <MiniWallStat label={labels.avg5m} value={formatRate(avgTps)} />
               </div>
             </div>
-            <TrendChart values={trendValues} emptyText={labels.noSamples} className="border-slate-200 bg-white/70 dark:border-slate-700 dark:bg-slate-950/55" />
+            <TrendChart values={trendValues} emptyText={labels.noSamples} className="border-slate-200 bg-white/70 dark:border-slate-700 dark:bg-slate-950/50" />
           </div>
-          <div className="mt-4 rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/55">
+          <div className="mt-4 rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/50">
             <div className="mb-2 flex items-center justify-between gap-3">
               <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{labels.activeRequests}</div>
               <Badge tone={activeRequestTasks.length > 0 ? 'emerald' : 'slate'}>{activeRequestTasks.length}</Badge>
@@ -346,7 +346,7 @@ export default function BigScreenPage() {
           action={<div className="flex gap-3 text-sm"><span className="text-blue-700 dark:text-blue-300">{labels.active} {downloadStats.active}</span><span className="text-amber-700 dark:text-amber-300">{labels.queued} {downloadStats.queued}</span><span className="text-red-700 dark:text-red-300">{labels.failed} {downloadStats.failed}</span></div>}
         >
           <div className="space-y-3">
-            <div className="rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/55">
+            <div className="rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/50">
               <div className="text-xs text-slate-500">{labels.totalSpeed}</div>
               <div className="mt-1 text-2xl font-semibold text-blue-700 dark:text-blue-300">{formatBytesPerSecond(downloadStats.speed)}</div>
             </div>
@@ -402,7 +402,7 @@ function WallPanel({ title, icon, action, children }: { title: string; icon: Rea
 function WallKpi({ label, value, detail, tone, icon }: { label: string; value: ReactNode; detail: string; tone: SignalTone; icon: ReactNode }) {
   const toneClass = wallTone(tone)
   return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-[0_12px_42px_rgba(15,23,42,0.08)] dark:border-slate-700 dark:bg-slate-900/92 dark:shadow-[0_12px_42px_rgba(2,6,23,0.22)]">
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-[0_12px_42px_rgba(15,23,42,0.08)] dark:border-slate-700 dark:bg-slate-900/90 dark:shadow-[0_12px_42px_rgba(2,6,23,0.22)]">
       <div className="flex min-w-0 items-center gap-4">
         <div className={joinClassNames('flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border', toneClass.box)}>
           {icon}
@@ -421,7 +421,7 @@ function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { 
   const safe = Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)))
   const toneClass = wallTone(tone)
   return (
-    <div className="grid min-w-0 grid-cols-[48px_110px_78px_minmax(120px,1fr)_140px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-950/55">
+    <div className="grid min-w-0 grid-cols-[48px_110px_78px_minmax(120px,1fr)_140px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-950/50">
       <div className={joinClassNames('flex h-10 w-10 items-center justify-center rounded-lg border', toneClass.box)}>{icon}</div>
       <div className="min-w-0">
         <div className="truncate text-base font-semibold text-slate-900 dark:text-slate-100">{label}</div>
@@ -459,7 +459,7 @@ function InstanceWallRow({ instance, labels, sessions }: { instance: Instance; l
   const latestSession = sessions.find(session => session.instance_id === instance.id)
   const tone = instance.status === 'error' ? 'red' : isRunning ? 'emerald' : 'slate'
   return (
-    <div className="grid min-w-0 grid-cols-[84px_minmax(0,1fr)_112px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/55">
+    <div className="grid min-w-0 grid-cols-[84px_minmax(0,1fr)_112px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/50">
       <Badge tone={tone}>{isRunning ? labels.running : instance.status === 'error' ? labels.error : labels.stopped}</Badge>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={instance.name}>{instance.name}</div>
@@ -473,7 +473,7 @@ function InstanceWallRow({ instance, labels, sessions }: { instance: Instance; l
 function DownloadWallRow({ task, labels }: { task: DownloadProgress; labels: ReturnType<typeof getLabels> }) {
   const progress = task.total > 0 ? Math.max(0, Math.min(100, (task.downloaded / task.total) * 100)) : 0
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/55">
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/50">
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={task.fileName}>{task.fileName}</div>
         <Badge tone={downloadTone(task.status)}>{downloadStatusText(task.status, labels)}</Badge>
@@ -508,7 +508,7 @@ function ActivityWallRow({ item }: { item: ActivityFeedItem }) {
 
 function MiniWallStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/55">
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/50">
       <div className="text-xs text-slate-500">{label}</div>
       <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">{value}</div>
     </div>
@@ -517,7 +517,7 @@ function MiniWallStat({ label, value }: { label: string; value: string }) {
 
 function EmptyDark({ text }: { text: string }) {
   return (
-    <div className="flex min-h-[88px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950/45">
+    <div className="flex min-h-[88px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950/40">
       <CheckCircle2 className="mr-2 h-4 w-4 text-slate-400 dark:text-slate-600" />
       {text}
     </div>

@@ -231,6 +231,7 @@ export default function PerformancePage() {
 
   return (
     <PageFrame
+      className="text-slate-900 dark:text-slate-100"
       header={
         <PageHeader
           title={labels.title}
@@ -305,7 +306,7 @@ export default function PerformancePage() {
           </aside>
 
           <main className="min-w-0 space-y-4">
-            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/72">
+            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/70">
               <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_180px_190px] xl:items-center">
                 <div className="min-w-0">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -441,7 +442,7 @@ export default function PerformancePage() {
 
 function MiniStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/64">
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
       <div className="truncate text-xs text-slate-500">{label}</div>
       <div className="mt-2 truncate text-lg font-semibold text-slate-950 dark:text-slate-100" title={String(value)}>{value}</div>
     </div>
