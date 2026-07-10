@@ -1,11 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { Activity, BarChart3, ChevronDown, Database, Gauge, HardDrive, Radio, RefreshCw, Server } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Clock, Cpu, Gauge, HardDrive, Radio, RefreshCw, Server, Zap } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { useI18n } from '../../i18n'
-import type { DiagnosticFinding, InferenceRequestSummary, PerfUpdateEvent, RunningInferenceTask, SystemMetrics, TelemetryOverview, TelemetrySampleSummary, TelemetrySessionAnalysis, TelemetrySessionSummary } from '../../store/types'
-import { Badge, Button, EmptyPanel, InsetSurface, MetricCard, PageFrame, PageHeader, ResourceMeter, SectionHeader, Surface } from '../ui'
+import type {
+  DiagnosticFinding,
+  InferenceRequestSummary,
+  PerfUpdateEvent,
+  RunningInferenceTask,
+  SystemMetrics,
+  TelemetryOverview,
+  TelemetrySampleSummary,
+  TelemetrySessionAnalysis,
+  TelemetrySessionSummary,
+} from '../../store/types'
+import { Badge, Button, EmptyPanel, PageFrame, PageHeader } from '../ui'
+import { ActiveRequestRow, ComparisonTable, MonitorPanel, SessionCard, SignalMeter, StatusTile, TrendChart } from '../monitoring/MonitoringPrimitives'
+import { formatDuration, formatMemory, formatMs, formatRate, formatTime } from '../monitoring/monitoringFormat'
+import { buildRequestPressure, buildResourceSignals, selectCurrentThroughput } from '../monitoring/monitoringViewModel'
 
 type MetricsEvent = {
   instanceId: string
@@ -34,19 +47,6 @@ type SessionBenchmark = {
   best: TelemetrySessionSummary | null
 }
 
-type ModelBackendAggregate = {
-  key: string
-  model: string
-  engine: string
-  backend: string
-  count: number
-  avgTps: number
-  bestTps: number
-  peakVram: number
-  avgDuration: number | null
-  lastStartedAt: number
-}
-
 const emptyOverview: TelemetryOverview = {
   active_sessions: 0,
   sessions_24h: 0,
@@ -63,7 +63,7 @@ export default function PerformancePage() {
   const zh = lang === 'zh-CN'
   const labels = getLabels(zh)
   const { instances } = useAppStore()
-  const running = instances.filter(instance => instance.status === 'running')
+  const running = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
   const [selectedInstanceId, setSelectedInstanceId] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
   const [overview, setOverview] = useState<TelemetryOverview>(emptyOverview)
@@ -73,27 +73,33 @@ export default function PerformancePage() {
   const [analysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
   const [runningTasksByInstance, setRunningTasksByInstance] = useState<Record<string, RunningInferenceTask[]>>({})
-  const [expandedFindings, setExpandedFindings] = useState<Record<string, boolean>>({})
   const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [loading, setLoading] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
+  const [trendRange, setTrendRange] = useState<'1m' | '5m' | '15m' | '1h'>('5m')
   const lastTelemetryRefreshRef = useRef(0)
   const lastSessionDetailRefreshRef = useRef(0)
   const selectedSessionIdRef = useRef('')
 
-  const selectedInstance = instances.find(instance => instance.id === selectedInstanceId)
   const selectedSession = sessions.find(session => session.id === selectedSessionId)
+  const selectedInstance = instances.find(instance => instance.id === selectedInstanceId)
+    || instances.find(instance => instance.id === selectedSession?.instance_id)
+    || null
+  const latestSample = overview.latest_samples[0] || null
+  const activeTasks = selectedSession && !selectedSession.stopped_at
+    ? runningTasksByInstance[selectedSession.instance_id] || []
+    : selectedInstance
+      ? runningTasksByInstance[selectedInstance.id] || []
+      : []
 
   const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
     lastTelemetryRefreshRef.current = Date.now()
-    if (!options.silent) {
-      setLoading(true)
-    }
+    if (!options.silent) setLoading(true)
     try {
       const [nextOverview, nextSessions] = await Promise.all([
         invoke<TelemetryOverview>('get_telemetry_overview'),
-        invoke<TelemetrySessionSummary[]>('list_telemetry_sessions', { limit: 24 }),
+        invoke<TelemetrySessionSummary[]>('list_telemetry_sessions', { limit: 36 }),
       ])
       setOverview(nextOverview)
       setSessions(nextSessions)
@@ -108,27 +114,21 @@ export default function PerformancePage() {
     } catch (error) {
       setTelemetryError(error instanceof Error ? error.message : String(error))
     } finally {
-      if (!options.silent) {
-        setLoading(false)
-      }
+      if (!options.silent) setLoading(false)
     }
   }, [])
 
   const refreshSelectedSessionDetails = useCallback(async (sessionId: string) => {
-    if (!sessionId) {
-      return
-    }
+    if (!sessionId) return
     lastSessionDetailRefreshRef.current = Date.now()
     try {
       const [nextSamples, nextRequests, nextAnalysis, nextDiagnostics] = await Promise.all([
-        invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId, limit: 160 }),
-        invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 16 }),
+        invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId, limit: 220 }),
+        invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 18 }),
         invoke<TelemetrySessionAnalysis>('get_telemetry_session_analysis', { sessionId }),
         invoke<DiagnosticFinding[]>('get_telemetry_session_diagnostics', { sessionId }),
       ])
-      if (selectedSessionIdRef.current !== sessionId) {
-        return
-      }
+      if (selectedSessionIdRef.current !== sessionId) return
       setSamples(nextSamples)
       setRequests(nextRequests)
       setAnalysis(nextAnalysis)
@@ -154,17 +154,13 @@ export default function PerformancePage() {
   }, [running, selectedInstanceId])
 
   useEffect(() => {
-    if (!selectedInstanceId) {
-      return
-    }
+    if (!selectedInstanceId) return
     invoke<SystemMetrics>('get_system_metrics', { instanceId: selectedInstanceId })
       .then(setLiveSystem)
       .catch(() => setLiveSystem(null))
 
     const unlisten = listen<MetricsEvent>('metrics-update', event => {
-      if (event.payload.instanceId !== selectedInstanceId) {
-        return
-      }
+      if (event.payload.instanceId !== selectedInstanceId) return
       setLiveSystem(event.payload.system)
       setLiveLlama(event.payload.llama || null)
       const now = Date.now()
@@ -205,74 +201,33 @@ export default function PerformancePage() {
       setRequests([])
       setAnalysis(null)
       setDiagnostics([])
-      setExpandedFindings({})
       return
     }
-    setExpandedFindings({})
+    const session = sessions.find(item => item.id === selectedSessionId)
+    if (session) setSelectedInstanceId(session.instance_id)
     void refreshSelectedSessionDetails(selectedSessionId)
     const timer = window.setInterval(
       () => void refreshSelectedSessionDetails(selectedSessionId),
       TELEMETRY_DETAIL_REFRESH_MS,
     )
     return () => window.clearInterval(timer)
-  }, [selectedSessionId, refreshSelectedSessionDetails])
+  }, [selectedSessionId, sessions, refreshSelectedSessionDetails])
 
-  const latestSample = overview.latest_samples[0] || null
-  const activeTasks = selectedSession && !selectedSession.stopped_at
-    ? runningTasksByInstance[selectedSession.instance_id] || []
-    : []
-  const diagnosticsBySeverity = useMemo(() => groupDiagnosticsBySeverity(diagnostics), [diagnostics])
+  const trendSamples = useMemo(() => filterSamplesByRange(samples.length > 0 ? samples : overview.latest_samples, trendRange), [samples, overview.latest_samples, trendRange])
+  const resourceSignals = useMemo(
+    () => buildResourceSignals({
+      system: liveSystem,
+      latest: latestSample,
+      samples: trendSamples,
+      labels,
+    }),
+    [liveSystem, latestSample, trendSamples, labels],
+  )
+  const currentThroughput = selectCurrentThroughput(liveLlama?.tokens_per_sec, latestSample?.tokens_per_sec ?? selectedSession?.avg_tokens_per_sec)
+  const pressure = buildRequestPressure(liveLlama?.requests_processing ?? latestSample?.requests_processing, liveLlama?.requests_deferred ?? latestSample?.requests_deferred)
   const sessionBenchmark = useMemo(() => buildSessionBenchmark(selectedSession, sessions), [selectedSession, sessions])
-  const modelBackendRank = useMemo(() => {
-    const byConfig = new Map<string, ModelBackendAggregate & { totalTps: number; durationSum: number; durationCount: number }>()
-    for (const session of sessions) {
-      if (!session.stopped_at || session.sample_count === 0) {
-        continue
-      }
-      const model = session.model_name || '--'
-      const engine = session.engine_id || '--'
-      const backend = session.backend || '--'
-      const key = `${model}\u0000${engine}\u0000${backend}`
-      const current = byConfig.get(key) || {
-        key,
-        model,
-        engine,
-        backend,
-        count: 0,
-        avgTps: 0,
-        bestTps: 0,
-        peakVram: 0,
-        avgDuration: null,
-        lastStartedAt: 0,
-        totalTps: 0,
-        durationSum: 0,
-        durationCount: 0,
-      }
-      current.count += 1
-      current.totalTps += session.avg_tokens_per_sec || 0
-      current.bestTps = Math.max(current.bestTps, session.avg_tokens_per_sec || 0)
-      current.peakVram = Math.max(current.peakVram, session.peak_vram_mb || 0)
-      current.lastStartedAt = Math.max(current.lastStartedAt, session.started_at || 0)
-      if (session.stopped_at && session.duration_secs != null) {
-        current.durationSum += session.duration_secs
-        current.durationCount += 1
-      }
-      byConfig.set(key, current)
-    }
-    return Array.from(byConfig.values())
-      .map(({ totalTps, durationSum, durationCount, ...item }) => ({
-        ...item,
-        avgTps: item.count ? totalTps / item.count : 0,
-        avgDuration: durationCount ? durationSum / durationCount : null,
-      }))
-      .sort((a, b) => b.avgTps - a.avgTps || b.count - a.count || b.lastStartedAt - a.lastStartedAt)
-      .slice(0, 5)
-  }, [sessions])
-
-  const liveInsight = buildInsight(labels, liveSystem, latestSample)
-  const toggleFinding = useCallback((id: string) => {
-    setExpandedFindings(current => ({ ...current, [id]: !current[id] }))
-  }, [])
+  const comparisonRows = useMemo(() => buildComparisonRows(selectedSession, sessionBenchmark, labels), [selectedSession, sessionBenchmark, labels])
+  const visibleDiagnostics = diagnostics.slice(0, 3)
 
   return (
     <PageFrame
@@ -288,561 +243,221 @@ export default function PerformancePage() {
           }
         />
       }
-      inspector={
-        <div className="space-y-4">
-          <Surface as="aside" className="p-4">
-            <SectionHeader title={labels.diagnosis} description={selectedSession ? labels.diagnosisDesc : liveInsight.description} />
-            {selectedSession ? (
-              <div className="mt-4 space-y-3">
-                {diagnostics.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-slate-300 px-3 py-6 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                    {labels.noDiagnostics}
-                  </div>
-                ) : diagnosticsBySeverity.map(group => (
-                  <div key={group.severity} className="space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
-                        {diagnosticSeverityLabel(group.severity, labels)}
-                      </div>
-                      <Badge tone={diagnosticTone(group.severity)}>{group.findings.length}</Badge>
-                    </div>
-                    <div className="space-y-2">
-                      {group.findings.map(finding => (
-                        <DiagnosticCard
-                          key={finding.id}
-                          finding={finding}
-                          labels={labels}
-                          expanded={!!expandedFindings[finding.id]}
-                          onToggle={() => toggleFinding(finding.id)}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="mt-4 space-y-3">
-                {liveInsight.items.map(item => (
-                  <div key={item.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-sm text-slate-600 dark:text-slate-400">{item.label}</span>
-                      <Badge tone={item.tone}>{item.value}</Badge>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </Surface>
-
-          <Surface as="aside" className="p-4">
-            <SectionHeader title={labels.modelRank} description={labels.modelRankDesc} />
-            <div className="mt-4 space-y-3">
-              {modelBackendRank.length === 0 ? (
-                <p className="py-4 text-center text-sm text-slate-500 dark:text-slate-400">{labels.noHistory}</p>
-              ) : modelBackendRank.map(item => (
-                <div key={item.key} className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={item.model}>{item.model}</div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                        <Badge tone="blue" className="max-w-full truncate">{item.engine}</Badge>
-                        <Badge tone="violet">{item.backend}</Badge>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-semibold text-slate-950 dark:text-slate-50">{formatRate(item.avgTps)}</div>
-                      <div className="text-xs text-slate-500">{labels.avgTps}</div>
-                    </div>
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-500 dark:text-slate-400">
-                    <span>{item.count} {labels.sessions}</span>
-                    <span>{labels.best}: {formatRate(item.bestTps)}</span>
-                    <span>{formatGb(item.peakVram)}</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Surface>
-        </div>
-      }
     >
       <div className="space-y-4">
-        {telemetryError && (
-          <Surface className="border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
-            <div className="font-semibold">{zh ? '遥测数据读取异常' : 'Telemetry query failed'}</div>
+        {telemetryError ? (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+            <div className="font-semibold">{labels.telemetryError}</div>
             <div className="mt-1 truncate text-xs opacity-90" title={telemetryError}>{telemetryError}</div>
-          </Surface>
-        )}
-        <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-4">
-          <MetricCard label={labels.activeSessions} value={overview.active_sessions} icon={<Server className="h-5 w-5" />} tone="border-emerald-500/20 bg-emerald-500/10 text-emerald-300" />
-          <MetricCard label={labels.sessions24h} value={overview.sessions_24h} icon={<Database className="h-5 w-5" />} tone="border-blue-500/20 bg-blue-500/10 text-blue-300" />
-          <MetricCard label={labels.avgTps24h} value={formatRate(overview.avg_tokens_per_sec_24h)} icon={<Gauge className="h-5 w-5" />} tone="border-amber-500/20 bg-amber-500/10 text-amber-300" valueClassName="text-2xl" />
-          <MetricCard label={labels.peakVram24h} value={formatGb(overview.peak_vram_mb_24h)} icon={<HardDrive className="h-5 w-5" />} tone="border-violet-500/20 bg-violet-500/10 text-violet-300" valueClassName="text-2xl" />
-        </div>
-
-        <Surface as="section" className="p-5" data-guide="perf-select">
-          <div className="mb-4 flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-            <SectionHeader title={labels.liveMonitor} description={labels.liveMonitorDesc} />
-            <select
-              value={selectedInstanceId}
-              onChange={event => setSelectedInstanceId(event.target.value)}
-              className="select-custom h-11 min-w-[220px] rounded-lg border border-slate-300 bg-white pl-3 pr-8 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-            >
-              {running.length === 0 ? <option value="">{labels.noRunning}</option> : null}
-              {running.map(instance => (
-                <option key={instance.id} value={instance.id}>{instance.name}</option>
-              ))}
-            </select>
           </div>
+        ) : null}
 
-          {running.length === 0 ? (
-            <EmptyPanel title={labels.noRunning} description={labels.noRunningDesc} />
-          ) : (
-            <div className="grid gap-3 xl:grid-cols-3">
-              <ResourceMeter
-                label="CPU"
-                value={liveSystem?.cpu_percent || 0}
-                tone="blue"
-                description={`${labels.system} ${Math.round(liveSystem?.system_cpu_percent || 0)}%`}
-              />
-              <ResourceMeter
-                label="GPU"
-                value={liveSystem?.gpu_percent || 0}
-                tone="emerald"
-                description={liveSystem?.gpu_vendor || labels.unknownGpu}
-              />
-              <ResourceMeter
-                label={labels.memory}
-                value={liveSystem?.system_memory_used_mb || liveSystem?.memory_mb || 0}
-                max={liveSystem?.system_memory_total_mb || Math.max(liveSystem?.memory_mb || 1, 1)}
-                unit="MB"
-                tone="violet"
-                description={formatMemoryPair(liveSystem?.system_memory_used_mb || liveSystem?.memory_mb, liveSystem?.system_memory_total_mb)}
-              />
-              <InsetSurface className="p-4">
-                <div className="text-sm text-slate-500 dark:text-slate-400">{labels.selectedInstance}</div>
-                <div className="mt-2 truncate text-base font-semibold text-slate-950 dark:text-slate-50">{selectedInstance?.name || '--'}</div>
-                <div className="mt-1 text-xs text-slate-500">{selectedInstance?.config.host}:{selectedInstance?.config.port}</div>
-              </InsetSurface>
-              <InsetSurface className="p-4">
-                <div className="text-sm text-slate-500 dark:text-slate-400">{labels.currentTps}</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-slate-50">{formatRate(liveLlama?.tokens_per_sec || latestSample?.tokens_per_sec || 0)}</div>
-                <div className="mt-1 text-xs text-slate-500">{labels.fromLlamaMetrics}</div>
-              </InsetSurface>
-              <InsetSurface className="p-4">
-                <div className="text-sm text-slate-500 dark:text-slate-400">{labels.queuePressure}</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-950 dark:text-slate-50">{liveLlama?.requests_processing ?? latestSample?.requests_processing ?? 0} / {liveLlama?.requests_deferred ?? latestSample?.requests_deferred ?? 0}</div>
-                <div className="mt-1 text-xs text-slate-500">{labels.processingDeferred}</div>
-              </InsetSurface>
-            </div>
-          )}
-        </Surface>
-
-        <div className="grid gap-4 2xl:grid-cols-[minmax(0,420px)_minmax(0,1fr)]">
-          <Surface as="section" className="overflow-hidden">
-            <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-              <SectionHeader title={labels.sessionHistory} description={labels.sessionHistoryDesc} />
-            </div>
-            <div className="max-h-[520px] overflow-y-auto p-3">
-              {sessions.length === 0 ? (
-                <EmptyPanel title={labels.noHistory} description={labels.noHistoryDesc} />
-              ) : sessions.map(session => (
-                <button
-                  key={session.id}
-                  type="button"
-                  onClick={() => {
-                    selectedSessionIdRef.current = session.id
-                    setSelectedSessionId(session.id)
-                  }}
-                  className={`mb-2 block w-full rounded-lg border p-3 text-left transition ${
-                    session.id === selectedSessionId
-                      ? 'border-blue-400 bg-blue-50 dark:border-blue-500/40 dark:bg-blue-950/30'
-                      : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-950 dark:hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex min-w-0 items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-slate-950 dark:text-slate-100" title={session.instance_name}>{session.instance_name}</div>
-                      <div className="mt-1 truncate text-xs text-slate-500" title={session.model_name}>{session.model_name}</div>
-                    </div>
-                    <Badge tone={session.stopped_at ? 'slate' : 'emerald'}>{session.stopped_at ? labels.finished : labels.running}</Badge>
-                  </div>
-                  <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-500 dark:text-slate-400">
-                    <span>{formatRate(session.avg_tokens_per_sec)}</span>
-                    <span>{formatGb(session.peak_vram_mb)}</span>
-                    <span>{session.sample_count} {labels.samples}</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </Surface>
-
-          <Surface as="section" className="p-5">
-            <SectionHeader
-              title={labels.sessionReport}
-              description={selectedSession ? `${selectedSession.instance_name} · ${formatDate(selectedSession.started_at)}` : labels.selectSession}
-              action={selectedSession ? <Badge tone={selectedSession.stopped_at ? 'slate' : 'emerald'}>{selectedSession.stopped_at ? labels.finished : labels.running}</Badge> : null}
-            />
-
-            {!selectedSession ? (
-              <EmptyPanel className="mt-4" title={labels.selectSession} description={labels.selectSessionDesc} />
-            ) : (
-              <div className="mt-4 space-y-4">
-                <div className="grid gap-3 md:grid-cols-4">
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.duration}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatDuration(selectedSession.duration_secs)}</div>
-                  </InsetSurface>
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.avgTps}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatRate(selectedSession.avg_tokens_per_sec)}</div>
-                  </InsetSurface>
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.peakVram}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatGb(selectedSession.peak_vram_mb)}</div>
-                  </InsetSurface>
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.samples}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{selectedSession.sample_count}</div>
-                  </InsetSurface>
+        <div className="grid min-h-[calc(100vh-178px)] gap-4 xl:grid-cols-[310px_minmax(0,1fr)_360px]">
+          <aside className="min-w-0 space-y-4">
+            <MonitorPanel title={labels.monitoringObject} icon={<Server className="h-5 w-5" />} action={<Badge tone="emerald">{running.length}</Badge>}>
+              <div className="space-y-4">
+                <div>
+                  <label className="mb-2 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.runningInstance}</label>
+                  <select
+                    value={selectedInstanceId}
+                    onChange={event => {
+                      const nextId = event.target.value
+                      setSelectedInstanceId(nextId)
+                      const nextSession = sessions.find(session => session.instance_id === nextId && !session.stopped_at)
+                        || sessions.find(session => session.instance_id === nextId)
+                      if (nextSession) setSelectedSessionId(nextSession.id)
+                    }}
+                    className="select-custom h-11 w-full rounded-lg border border-slate-300 bg-white pl-3 pr-8 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                  >
+                    {running.length === 0 ? <option value="">{labels.noRunning}</option> : null}
+                    {running.map(instance => (
+                      <option key={instance.id} value={instance.id}>{instance.name}</option>
+                    ))}
+                  </select>
                 </div>
 
-                <SessionComparison benchmark={sessionBenchmark} selectedSession={selectedSession} labels={labels} />
-
-                <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.requests}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{analysis?.request_count ?? 0}</div>
-                  </InsetSurface>
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.avgGenerationSpeed}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatRate(analysis?.avg_generation_tps)}</div>
-                  </InsetSurface>
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.avgTotalTime}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatMs(analysis?.avg_total_time_ms)}</div>
-                  </InsetSurface>
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.maxBusySlots}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{analysis?.max_busy_slots ?? 0}</div>
-                  </InsetSurface>
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.avgCachedSlots}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatFixed(analysis?.avg_cached_slots)}</div>
-                  </InsetSurface>
-                  <InsetSurface className="p-3">
-                    <div className="text-xs text-slate-500">{labels.maxContext}</div>
-                    <div className="mt-2 text-lg font-semibold text-slate-950 dark:text-slate-50">{formatTokenCount(analysis?.max_context_tokens)}</div>
-                  </InsetSurface>
-                </div>
-
-                <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
-                  <div className="mb-3 flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
-                    <BarChart3 className="h-4 w-4 text-blue-400" />
-                    {labels.throughputTrend}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{labels.sessionHistory}</div>
+                    <Badge tone="blue">{sessions.length}</Badge>
                   </div>
-                  <TelemetryCurve samples={samples} emptyText={labels.noSamplesYet} />
-                </div>
-
-                <div className="grid gap-3 xl:grid-cols-2">
-                  <Detail label={labels.model} value={selectedSession.model_name} />
-                  <Detail label={labels.engine} value={`${selectedSession.engine_id || '--'} · ${selectedSession.backend || '--'}`} />
-                  <Detail label={labels.startedAt} value={formatDate(selectedSession.started_at)} />
-                  <Detail label={labels.stoppedAt} value={selectedSession.stopped_at ? formatDate(selectedSession.stopped_at) : labels.stillRunning} />
-                </div>
-
-                <ActiveRequestsPanel tasks={activeTasks} labels={labels} isRunning={!selectedSession.stopped_at} />
-
-                <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
-                  <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.recentRequests}</div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400">{labels.recentRequestsDesc}</div>
-                    </div>
-                    <Badge tone={requests.length > 0 ? 'emerald' : 'slate'}>{requests.length} {labels.requests}</Badge>
+                  <div className="max-h-[calc(100vh-374px)] space-y-2 overflow-y-auto pr-1">
+                    {sessions.length === 0 ? (
+                      <EmptyPanel title={labels.noHistory} description={labels.noHistoryDesc} />
+                    ) : sessions.map(session => (
+                      <SessionCard
+                        key={session.id}
+                        title={session.instance_name}
+                        subtitle={session.model_name || labels.unknown}
+                        meta={`${formatRate(session.avg_tokens_per_sec)} · ${formatMemory(session.peak_vram_mb)} · ${formatTime(session.started_at)}`}
+                        selected={session.id === selectedSessionId}
+                        running={!session.stopped_at}
+                        onClick={() => {
+                          setSelectedSessionId(session.id)
+                          setSelectedInstanceId(session.instance_id)
+                        }}
+                      />
+                    ))}
                   </div>
-                  {requests.length === 0 ? (
-                    <div className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-                      {labels.noRequestsYet}
-                    </div>
-                  ) : (
-                    <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-                      <table className="w-full table-fixed text-left text-sm">
-                        <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
-                          <tr>
-                            <th className="px-3 py-2 font-medium">{labels.task}</th>
-                            <th className="px-3 py-2 font-medium">{labels.source}</th>
-                            <th className="px-3 py-2 font-medium">{labels.prompt}</th>
-                            <th className="px-3 py-2 font-medium">{labels.generated}</th>
-                            <th className="px-3 py-2 font-medium">{labels.generationSpeed}</th>
-                            <th className="px-3 py-2 font-medium">{labels.totalTime}</th>
-                            <th className="px-3 py-2 font-medium">{labels.specAccept}</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                          {requests.map(request => (
-                            <tr key={`${request.session_id}-${request.task_id}`} className="text-slate-700 dark:text-slate-200">
-                              <td className="px-3 py-2">
-                                <div className="font-medium">#{request.task_id}</div>
-                                <div className="text-xs text-slate-500">{request.source === 'proxy' ? (request.model || '--') : `slot ${request.slot_id}`}</div>
-                              </td>
-                              <td className="px-3 py-2">
-                                <Badge tone={request.source === 'proxy' ? 'blue' : 'slate'}>{request.source === 'proxy' ? labels.proxy : labels.log}</Badge>
-                                {request.http_status ? <div className="mt-1 text-xs text-slate-500">HTTP {request.http_status}</div> : null}
-                              </td>
-                              <td className="px-3 py-2">{formatTokenCount(request.prompt_tokens)}</td>
-                              <td className="px-3 py-2">{formatTokenCount(request.generated_tokens)}</td>
-                              <td className="px-3 py-2">{formatRate(request.generation_tps)}</td>
-                              <td className="px-3 py-2">
-                                {request.source === 'proxy' ? `${labels.firstResponse} ${formatMs(request.total_time_ms)}` : formatMs(request.total_time_ms)}
-                              </td>
-                              <td className="px-3 py-2">{formatPercent(request.spec_accept_rate)}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
                 </div>
               </div>
-            )}
-          </Surface>
+            </MonitorPanel>
+          </aside>
+
+          <main className="min-w-0 space-y-4">
+            <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/72">
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_180px_190px] xl:items-center">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-blue-300/40 bg-blue-500/10 text-blue-600 dark:text-blue-300">
+                      <Server className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <h2 className="truncate text-xl font-semibold text-slate-950 dark:text-white" title={selectedInstance?.name || selectedSession?.instance_name || labels.noSelection}>
+                          {selectedInstance?.name || selectedSession?.instance_name || labels.noSelection}
+                        </h2>
+                        <Badge tone={selectedInstance?.status === 'running' || selectedSession?.stopped_at == null ? 'emerald' : 'slate'}>
+                          {selectedInstance?.status === 'running' || selectedSession?.stopped_at == null ? labels.running : labels.finished}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 truncate font-mono text-xs text-blue-600 dark:text-blue-300">
+                        {selectedInstance ? `${selectedInstance.config.host}:${selectedInstance.config.port}` : selectedSession?.model_name || '--'}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <StatusTile label={labels.currentTps} value={formatRate(currentThroughput)} detail={labels.fromLlamaMetrics} icon={<Gauge className="h-5 w-5" />} tone="blue" className="py-3" />
+                <StatusTile
+                  label={labels.queuePressure}
+                  value={`${pressure.percent}%`}
+                  detail={`${pressure.active} / ${pressure.queued} ${labels.processingDeferred}`}
+                  icon={<Zap className="h-5 w-5" />}
+                  tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : 'emerald'}
+                  className="py-3"
+                />
+              </div>
+            </section>
+
+            <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
+              {resourceSignals.map(signal => (
+                <SignalMeter
+                  key={signal.id}
+                  label={signal.label}
+                  value={signal.value}
+                  detail={signal.detail}
+                  tone={signal.tone}
+                  icon={signal.id === 'cpu' ? <Cpu className="h-4 w-4" /> : signal.id === 'gpu' ? <Gauge className="h-4 w-4" /> : <HardDrive className="h-4 w-4" />}
+                  sparkline={signal.sparkline}
+                  compact
+                />
+              ))}
+            </div>
+
+            <MonitorPanel
+              title={labels.throughputTrend}
+              icon={<BarChart3 className="h-5 w-5" />}
+              action={
+                <div className="flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950">
+                  {(['1m', '5m', '15m', '1h'] as const).map(range => (
+                    <button
+                      key={range}
+                      type="button"
+                      onClick={() => setTrendRange(range)}
+                      className={`h-7 rounded-md px-2 text-xs font-medium transition ${trendRange === range ? 'bg-blue-600 text-white' : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100'}`}
+                    >
+                      {labels.ranges[range]}
+                    </button>
+                  ))}
+                </div>
+              }
+            >
+              <TrendChart values={trendSamples.map(sample => sample.tokens_per_sec || 0)} emptyText={labels.noSamplesYet} />
+            </MonitorPanel>
+
+            <MonitorPanel title={labels.activeRequests} icon={<Radio className="h-5 w-5" />} action={<Badge tone={activeTasks.length > 0 ? 'emerald' : 'slate'}>{activeTasks.length}</Badge>}>
+              {activeTasks.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  {selectedSession?.stopped_at ? labels.sessionFinishedNoActive : labels.noActiveRequests}
+                </div>
+              ) : (
+                <div className="grid gap-2">
+                  {activeTasks.map(task => (
+                    <ActiveRequestRow key={task.task_id} task={task} instanceName={selectedInstance?.name || selectedSession?.instance_name} />
+                  ))}
+                </div>
+              )}
+            </MonitorPanel>
+          </main>
+
+          <aside className="min-w-0 space-y-4">
+            <MonitorPanel title={labels.diagnosis} icon={<AlertTriangle className="h-5 w-5" />} action={<Badge tone={diagnostics.length > 0 ? 'amber' : 'emerald'}>{diagnostics.length}</Badge>}>
+              {visibleDiagnostics.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-300 px-3 py-8 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                  {labels.noDiagnostics}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {visibleDiagnostics.map(finding => (
+                    <div key={finding.id} className={`rounded-lg border p-3 ${diagnosticPanelClass(finding.severity)}`}>
+                      <div className="mb-2 flex items-start justify-between gap-3">
+                        <div className="min-w-0 font-semibold text-slate-950 dark:text-slate-100">{finding.title}</div>
+                        <Badge tone={diagnosticTone(finding.severity)}>{diagnosticSeverityLabel(finding.severity, labels)}</Badge>
+                      </div>
+                      <p className="text-xs leading-5 text-slate-600 dark:text-slate-400">{finding.summary}</p>
+                      {finding.recommendation[0] ? (
+                        <div className="mt-2 text-xs font-medium text-blue-600 dark:text-blue-300">{finding.recommendation[0]}</div>
+                      ) : null}
+                    </div>
+                  ))}
+                  {diagnostics.length > visibleDiagnostics.length ? (
+                    <div className="text-center text-xs text-slate-500">{labels.moreDiagnostics(diagnostics.length - visibleDiagnostics.length)}</div>
+                  ) : null}
+                </div>
+              )}
+            </MonitorPanel>
+
+            <MonitorPanel title={labels.historyBaseline} icon={<Clock className="h-5 w-5" />}>
+              <div className="mb-3 text-xs leading-5 text-slate-500 dark:text-slate-400">
+                {sessionComparisonScopeLabel(sessionBenchmark, labels)}
+              </div>
+              <ComparisonTable rows={comparisonRows} />
+            </MonitorPanel>
+
+            <MonitorPanel title={labels.sessionDigest} icon={<Activity className="h-5 w-5" />}>
+              <div className="grid grid-cols-2 gap-2">
+                <MiniStat label={labels.requests} value={analysis?.request_count ?? requests.length} />
+                <MiniStat label={labels.avgGenerationSpeed} value={formatRate(analysis?.avg_generation_tps)} />
+                <MiniStat label={labels.avgTotalTime} value={formatMs(analysis?.avg_total_time_ms)} />
+                <MiniStat label={labels.maxBusySlots} value={analysis?.max_busy_slots ?? 0} />
+              </div>
+            </MonitorPanel>
+          </aside>
         </div>
       </div>
     </PageFrame>
   )
 }
 
-function SessionComparison({
-  benchmark,
-  selectedSession,
-  labels,
-}: {
-  benchmark: SessionBenchmark
-  selectedSession: TelemetrySessionSummary
-  labels: ReturnType<typeof getLabels>
-}) {
-  const rows = [
-    {
-      id: 'throughput',
-      label: labels.avgTps,
-      current: formatRate(selectedSession.avg_tokens_per_sec),
-      history: formatRate(benchmark.avg.tokensPerSec),
-      best: formatRate(benchmark.best?.avg_tokens_per_sec),
-      delta: formatDelta(selectedSession.avg_tokens_per_sec, benchmark.avg.tokensPerSec, true),
-    },
-    {
-      id: 'vram',
-      label: labels.peakVram,
-      current: formatGb(selectedSession.peak_vram_mb),
-      history: formatGb(benchmark.avg.peakVramMb),
-      best: formatGb(benchmark.best?.peak_vram_mb),
-      delta: formatDelta(selectedSession.peak_vram_mb, benchmark.avg.peakVramMb, false),
-    },
-    {
-      id: 'duration',
-      label: labels.duration,
-      current: formatDuration(selectedSession.duration_secs),
-      history: formatDuration(benchmark.avg.durationSecs),
-      best: formatDuration(benchmark.best?.duration_secs),
-      delta: null,
-    },
-  ]
-
+function MiniStat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
-      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.sessionComparison}</div>
-          <div className="text-xs text-slate-500 dark:text-slate-400">{sessionComparisonScopeLabel(benchmark, labels)}</div>
-        </div>
-        <Badge tone={benchmark.historyCount > 0 ? 'blue' : 'slate'}>{benchmark.historyCount} {labels.sessions}</Badge>
-      </div>
-      <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-        <table className="w-full table-fixed text-left text-sm">
-          <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
-            <tr>
-              <th className="px-3 py-2 font-medium">{labels.metric}</th>
-              <th className="px-3 py-2 font-medium">{labels.currentSession}</th>
-              <th className="px-3 py-2 font-medium">{labels.historyAverage}</th>
-              <th className="px-3 py-2 font-medium">{labels.bestSession}</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-            {rows.map(row => (
-              <tr key={row.id} className="text-slate-700 dark:text-slate-200">
-                <td className="px-3 py-2 font-medium text-slate-900 dark:text-slate-100">{row.label}</td>
-                <td className="px-3 py-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span>{row.current}</span>
-                    {row.delta ? <Badge tone={row.delta.tone}>{row.delta.text}</Badge> : null}
-                  </div>
-                </td>
-                <td className="px-3 py-2">{row.history}</td>
-                <td className="px-3 py-2">{row.best}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      {benchmark.best ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <span>{labels.bestSession}</span>
-          <span className="truncate" title={benchmark.best.instance_name}>{benchmark.best.instance_name}</span>
-          <span>{formatDate(benchmark.best.started_at)}</span>
-        </div>
-      ) : null}
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/64">
+      <div className="truncate text-xs text-slate-500">{label}</div>
+      <div className="mt-2 truncate text-lg font-semibold text-slate-950 dark:text-slate-100" title={String(value)}>{value}</div>
     </div>
   )
 }
 
-function ActiveRequestsPanel({
-  tasks,
-  labels,
-  isRunning,
-}: {
-  tasks: RunningInferenceTask[]
-  labels: ReturnType<typeof getLabels>
-  isRunning: boolean
-}) {
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-950">
-      <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-slate-100">
-            <Radio className="h-4 w-4 text-emerald-400" />
-            {labels.activeRequests}
-          </div>
-          <div className="text-xs text-slate-500 dark:text-slate-400">{labels.activeRequestsDesc}</div>
-        </div>
-        <Badge tone={tasks.length > 0 ? 'emerald' : 'slate'}>{tasks.length} {labels.processing}</Badge>
-      </div>
-
-      {tasks.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-slate-300 px-4 py-5 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
-          {isRunning ? labels.noActiveRequests : labels.sessionFinishedNoActive}
-        </div>
-      ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-800">
-          <table className="w-full table-fixed text-left text-sm">
-            <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
-              <tr>
-                <th className="px-3 py-2 font-medium">{labels.task}</th>
-                <th className="px-3 py-2 font-medium">{labels.generated}</th>
-                <th className="px-3 py-2 font-medium">{labels.currentSpeed}</th>
-                <th className="px-3 py-2 font-medium">{labels.elapsed}</th>
-                <th className="px-3 py-2 font-medium">{labels.specAccept}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-              {tasks.map(task => (
-                <tr key={task.task_id} className="text-slate-700 dark:text-slate-200">
-                  <td className="px-3 py-2">
-                    <div className="font-medium">#{task.task_id}</div>
-                    <div className="text-xs text-slate-500">slot {task.slot_id}</div>
-                  </td>
-                  <td className="px-3 py-2">{formatTokenCount(task.n_decoded)}</td>
-                  <td className="px-3 py-2">{formatRate(task.tg)}</td>
-                  <td className="px-3 py-2">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</td>
-                  <td className="px-3 py-2">{formatPercent(task.spec_accept_rate)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
-      <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-2 truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={value}>{value}</div>
-    </div>
-  )
-}
-
-function DiagnosticCard({
-  finding,
-  labels,
-  expanded,
-  onToggle,
-}: {
-  finding: DiagnosticFinding
-  labels: ReturnType<typeof getLabels>
-  expanded: boolean
-  onToggle: () => void
-}) {
-  const hasDetails = finding.evidence.length > 0 || finding.recommendation.length > 0
-
-  return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-950">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-slate-950 dark:text-slate-100">{finding.title}</div>
-          <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{finding.summary}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Badge tone={diagnosticTone(finding.severity)}>
-            {diagnosticSeverityLabel(finding.severity, labels)}
-          </Badge>
-          {hasDetails ? (
-            <button
-              type="button"
-              onClick={onToggle}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition hover:bg-slate-50 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900"
-              aria-label={expanded ? labels.collapseDiagnostic : labels.expandDiagnostic}
-            >
-              <ChevronDown className={`h-4 w-4 transition ${expanded ? 'rotate-180' : ''}`} />
-            </button>
-          ) : null}
-        </div>
-      </div>
-      {expanded ? (
-        <div className="mt-3 space-y-3">
-          {finding.evidence.length > 0 ? (
-            <div className="rounded-md bg-slate-50 p-2 dark:bg-slate-900">
-              <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">{labels.evidence}</div>
-              <div className="space-y-1 text-xs text-slate-600 dark:text-slate-300">
-                {finding.evidence.map(item => (
-                  <div key={item} className="break-words">{item}</div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-          {finding.recommendation.length > 0 ? (
-            <div className="rounded-md border border-slate-200 p-2 dark:border-slate-800">
-              <div className="mb-1 text-xs font-medium text-slate-500 dark:text-slate-400">{labels.recommendation}</div>
-              <div className="space-y-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
-                {finding.recommendation.map(item => (
-                  <div key={item}>{item}</div>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  )
-}
-
-function groupDiagnosticsBySeverity(diagnostics: DiagnosticFinding[]) {
-  const order: DiagnosticFinding['severity'][] = ['critical', 'warning', 'info', 'success']
-  return order
-    .map(severity => ({
-      severity,
-      findings: diagnostics.filter(finding => finding.severity === severity),
-    }))
-    .filter(group => group.findings.length > 0)
+function filterSamplesByRange(samples: TelemetrySampleSummary[], range: '1m' | '5m' | '15m' | '1h') {
+  if (samples.length === 0) return []
+  const now = Math.max(...samples.map(sample => sample.ts || 0), Date.now())
+  const rangeMs = range === '1m' ? 60000 : range === '5m' ? 300000 : range === '15m' ? 900000 : 3600000
+  const filtered = samples.filter(sample => now - sample.ts <= rangeMs)
+  return filtered.length >= 2 ? filtered : samples.slice(-80)
 }
 
 function buildSessionBenchmark(selectedSession: TelemetrySessionSummary | undefined, sessions: TelemetrySessionSummary[]): SessionBenchmark {
-  if (!selectedSession) {
-    return emptySessionBenchmark()
-  }
-
+  if (!selectedSession) return emptySessionBenchmark()
   const history = sessions.filter(session => session.id !== selectedSession.id && session.stopped_at && session.sample_count > 0)
   const sameConfig = history.filter(session =>
     session.model_name === selectedSession.model_name &&
@@ -850,10 +465,7 @@ function buildSessionBenchmark(selectedSession: TelemetrySessionSummary | undefi
     session.backend === selectedSession.backend
   )
   const basis = sameConfig.length > 0 ? sameConfig : history
-  if (basis.length === 0) {
-    return emptySessionBenchmark()
-  }
-
+  if (basis.length === 0) return emptySessionBenchmark()
   return {
     historyCount: basis.length,
     scope: sameConfig.length > 0 ? 'sameConfig' : 'allHistory',
@@ -873,11 +485,7 @@ function emptySessionBenchmark(): SessionBenchmark {
   return {
     historyCount: 0,
     scope: 'none',
-    avg: {
-      tokensPerSec: null,
-      peakVramMb: null,
-      durationSecs: null,
-    },
+    avg: { tokensPerSec: null, peakVramMb: null, durationSecs: null },
     best: null,
   }
 }
@@ -888,18 +496,38 @@ function average(values: Array<number | null | undefined>) {
   return valid.reduce((sum, value) => sum + value, 0) / valid.length
 }
 
+function buildComparisonRows(selectedSession: TelemetrySessionSummary | undefined, benchmark: SessionBenchmark, labels: ReturnType<typeof getLabels>) {
+  if (!selectedSession) return []
+  return [
+    {
+      metric: labels.avgTps,
+      current: formatRate(selectedSession.avg_tokens_per_sec),
+      baseline: formatRate(benchmark.avg.tokensPerSec),
+      ...formatDelta(selectedSession.avg_tokens_per_sec, benchmark.avg.tokensPerSec, true),
+    },
+    {
+      metric: labels.peakVram,
+      current: formatMemory(selectedSession.peak_vram_mb),
+      baseline: formatMemory(benchmark.avg.peakVramMb),
+      ...formatDelta(selectedSession.peak_vram_mb, benchmark.avg.peakVramMb, false),
+    },
+    {
+      metric: labels.duration,
+      current: formatDuration(selectedSession.duration_secs),
+      baseline: formatDuration(benchmark.avg.durationSecs),
+    },
+  ]
+}
+
 function formatDelta(current?: number | null, baseline?: number | null, higherIsBetter = true) {
   if (current == null || baseline == null || !Number.isFinite(current) || !Number.isFinite(baseline) || baseline === 0) {
-    return null
+    return { delta: '--', tone: 'slate' as const }
   }
   const percent = ((current - baseline) / baseline) * 100
-  if (Math.abs(percent) < 1) {
-    return { text: '0%', tone: 'slate' as const }
-  }
+  if (Math.abs(percent) < 1) return { delta: '0%', tone: 'slate' as const }
   const better = higherIsBetter ? percent > 0 : percent < 0
-  const prefix = percent > 0 ? '+' : ''
   return {
-    text: `${prefix}${percent.toFixed(0)}%`,
+    delta: `${percent > 0 ? '+' : ''}${percent.toFixed(0)}%`,
     tone: better ? 'emerald' as const : 'amber' as const,
   }
 }
@@ -917,6 +545,13 @@ function diagnosticTone(severity: DiagnosticFinding['severity']) {
   return 'blue'
 }
 
+function diagnosticPanelClass(severity: DiagnosticFinding['severity']) {
+  if (severity === 'critical') return 'border-red-300 bg-red-50 dark:border-red-500/30 dark:bg-red-500/10'
+  if (severity === 'warning') return 'border-amber-300 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10'
+  if (severity === 'success') return 'border-emerald-300 bg-emerald-50 dark:border-emerald-500/30 dark:bg-emerald-500/10'
+  return 'border-blue-300 bg-blue-50 dark:border-blue-500/30 dark:bg-blue-500/10'
+}
+
 function diagnosticSeverityLabel(severity: DiagnosticFinding['severity'], labels: ReturnType<typeof getLabels>) {
   if (severity === 'critical') return labels.severityCritical
   if (severity === 'warning') return labels.severityWarning
@@ -924,198 +559,61 @@ function diagnosticSeverityLabel(severity: DiagnosticFinding['severity'], labels
   return labels.severityInfo
 }
 
-function TelemetryCurve({ samples, emptyText }: { samples: TelemetrySampleSummary[]; emptyText: string }) {
-  if (samples.length < 2) {
-    return (
-      <div className="flex min-h-[180px] items-center justify-center text-sm text-slate-500 dark:text-slate-400">
-        <Activity className="mr-2 h-4 w-4" />
-        {emptyText}
-      </div>
-    )
-  }
-  const values = samples.map(sample => sample.tokens_per_sec || 0)
-  const max = Math.max(...values, 1)
-  const width = 720
-  const height = 180
-  const points = values.map((value, index) => {
-    const x = values.length === 1 ? 0 : (index / (values.length - 1)) * width
-    const y = height - (value / max) * (height - 16) - 8
-    return `${x},${y}`
-  }).join(' ')
-
-  return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-[180px] w-full">
-      <line x1="0" y1={height - 8} x2={width} y2={height - 8} stroke="currentColor" className="text-slate-200 dark:text-slate-800" strokeWidth="1" />
-      <polyline points={points} fill="none" stroke="#3b82f6" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
-      {values.map((value, index) => {
-        const x = values.length === 1 ? 0 : (index / (values.length - 1)) * width
-        const y = height - (value / max) * (height - 16) - 8
-        return <circle key={`${index}-${value}`} cx={x} cy={y} r="3" fill="#60a5fa" />
-      })}
-    </svg>
-  )
-}
-
-function buildInsight(labels: ReturnType<typeof getLabels>, system: SystemMetrics | null, latest: TelemetrySampleSummary | null) {
-  const gpu = system?.gpu_percent ?? latest?.gpu_percent ?? 0
-  const vram = system?.vram_used_mb && system.vram_total_mb ? (system.vram_used_mb / system.vram_total_mb) * 100 : 0
-  const tps = latest?.tokens_per_sec || 0
-  const items = [
-    { label: labels.gpuPressure, value: `${Math.round(gpu)}%`, tone: gpu > 85 ? 'amber' as const : 'emerald' as const },
-    { label: labels.vramPressure, value: `${Math.round(vram)}%`, tone: vram > 90 ? 'red' as const : 'blue' as const },
-    { label: labels.throughput, value: formatRate(tps), tone: tps > 0 ? 'emerald' as const : 'slate' as const },
-  ]
-  return {
-    description: labels.diagnosisDesc,
-    items,
-  }
-}
-
 function getLabels(zh: boolean) {
   return {
-    title: zh ? '\u6027\u80fd\u5206\u6790' : 'Performance Analytics',
-    description: zh ? '\u57fa\u4e8e SQLite \u6301\u4e45\u5316\u9065\u6d4b\uff0c\u8ffd\u8e2a\u5b9e\u4f8b\u8fd0\u884c\u3001\u6a21\u578b\u541e\u5410\u4e0e\u8d44\u6e90\u538b\u529b\u3002' : 'SQLite-backed telemetry for instance runtime, model throughput, and resource pressure.',
-    sqliteBacked: zh ? 'SQLite \u9065\u6d4b' : 'SQLite telemetry',
-    refresh: zh ? '\u5237\u65b0' : 'Refresh',
-    activeSessions: zh ? '\u6d3b\u52a8\u4f1a\u8bdd' : 'Active Sessions',
-    sessions24h: zh ? '24\u5c0f\u65f6\u4f1a\u8bdd' : 'Sessions 24h',
-    avgTps24h: zh ? '24\u5c0f\u65f6\u5e73\u5747\u541e\u5410' : 'Avg Throughput 24h',
-    peakVram24h: zh ? '24\u5c0f\u65f6\u5cf0\u503c\u663e\u5b58' : 'Peak VRAM 24h',
-    liveMonitor: zh ? '\u5b9e\u65f6\u76d1\u63a7' : 'Live Monitor',
-    liveMonitorDesc: zh ? '\u540e\u7aef\u6301\u7eed\u91c7\u96c6\u5e76\u5199\u5165\u9065\u6d4b\u5e93\uff0c\u9875\u9762\u53ea\u8d1f\u8d23\u67e5\u770b\u548c\u5206\u6790\u3002' : 'The backend keeps collecting telemetry; this view focuses on inspection and analysis.',
-    noRunning: zh ? '\u5f53\u524d\u6ca1\u6709\u8fd0\u884c\u4e2d\u7684\u5b9e\u4f8b' : 'No running instances',
-    noRunningDesc: zh ? '\u542f\u52a8\u5b9e\u4f8b\u540e\u5c06\u81ea\u52a8\u521b\u5efa\u8fd0\u884c\u4f1a\u8bdd\u5e76\u5199\u5165 SQLite\u3002' : 'Start an instance to create a telemetry session automatically.',
-    system: zh ? '\u7cfb\u7edf' : 'System',
-    unknownGpu: zh ? '\u672a\u68c0\u6d4b GPU' : 'GPU not detected',
-    memory: zh ? '\u5185\u5b58' : 'Memory',
-    selectedInstance: zh ? '\u76d1\u63a7\u5b9e\u4f8b' : 'Monitored Instance',
-    currentTps: zh ? '\u5f53\u524d\u751f\u6210\u541e\u5410' : 'Current Generation',
-    fromLlamaMetrics: zh ? '\u6765\u81ea llama-server /metrics' : 'From llama-server /metrics',
-    queuePressure: zh ? '\u8bf7\u6c42\u538b\u529b' : 'Request Pressure',
-    processingDeferred: zh ? '\u5904\u7406\u4e2d / \u5ef6\u8fdf' : 'Processing / deferred',
-    sessionHistory: zh ? '\u8fd0\u884c\u4f1a\u8bdd' : 'Run Sessions',
-    sessionHistoryDesc: zh ? '\u6bcf\u6b21\u5b9e\u4f8b\u8fd0\u884c\u90fd\u4f1a\u5f62\u6210\u4e00\u4efd\u53ef\u56de\u770b\u7684\u6027\u80fd\u8bb0\u5f55\u3002' : 'Each instance run becomes a reviewable performance record.',
-    noHistory: zh ? '\u6682\u65e0\u5386\u53f2\u9065\u6d4b' : 'No telemetry history',
-    noHistoryDesc: zh ? '\u542f\u52a8\u5b9e\u4f8b\u5e76\u7b49\u5f85\u81f3\u5c11\u4e00\u6b21\u91c7\u6837\u540e\uff0c\u8fd9\u91cc\u4f1a\u51fa\u73b0\u4f1a\u8bdd\u8bb0\u5f55\u3002' : 'Start an instance and wait for at least one sample.',
-    sessionReport: zh ? '\u4f1a\u8bdd\u62a5\u544a' : 'Session Report',
-    selectSession: zh ? '\u9009\u62e9\u4e00\u4e2a\u8fd0\u884c\u4f1a\u8bdd' : 'Select a run session',
-    selectSessionDesc: zh ? '\u4ece\u5de6\u4fa7\u9009\u62e9\u4f1a\u8bdd\u540e\u67e5\u770b\u541e\u5410\u66f2\u7ebf\u4e0e\u8d44\u6e90\u6982\u8981\u3002' : 'Pick a session to inspect throughput and resource summary.',
-    finished: zh ? '\u5df2\u7ed3\u675f' : 'Finished',
-    running: zh ? '\u8fd0\u884c\u4e2d' : 'Running',
-    sessions: zh ? '\u6b21' : 'sessions',
-    samples: zh ? '\u91c7\u6837' : 'samples',
-    best: zh ? '\u6700\u4f73' : 'Best',
-    duration: zh ? '\u65f6\u957f' : 'Duration',
-    avgTps: zh ? '\u5e73\u5747\u541e\u5410' : 'Avg TPS',
-    peakVram: zh ? '\u5cf0\u503c\u663e\u5b58' : 'Peak VRAM',
-    sessionComparison: zh ? '\u4f1a\u8bdd\u5bf9\u6bd4' : 'Session Comparison',
-    metric: zh ? '\u6307\u6807' : 'Metric',
-    currentSession: zh ? '\u672c\u6b21' : 'Current',
-    historyAverage: zh ? '\u5386\u53f2\u5e73\u5747' : 'History Avg',
-    bestSession: zh ? '\u6700\u4f73\u4f1a\u8bdd' : 'Best Session',
-    sameConfigHistory: zh ? '\u4f18\u5148\u5bf9\u6bd4\u540c\u6a21\u578b\u3001\u540c\u5f15\u64ce\u548c\u540c\u540e\u7aef\u7684\u5386\u53f2\u4f1a\u8bdd\u3002' : 'Compares against previous sessions with the same model, engine, and backend.',
-    allHistoryFallback: zh ? '\u6682\u65e0\u540c\u914d\u7f6e\u5386\u53f2\uff0c\u5df2\u9000\u56de\u5168\u90e8\u5386\u53f2\u4f1a\u8bdd\u3002' : 'No same-config history yet, so this falls back to all previous sessions.',
-    noHistoryBaseline: zh ? '\u6682\u65e0\u53ef\u7528\u5386\u53f2\u57fa\u7ebf\u3002' : 'No historical baseline is available yet.',
-    throughputTrend: zh ? '\u541e\u5410\u8d8b\u52bf' : 'Throughput Trend',
-    noSamplesYet: zh ? '\u6682\u65e0\u8db3\u591f\u9065\u6d4b\u91c7\u6837' : 'No telemetry samples yet',
-    model: zh ? '\u6a21\u578b' : 'Model',
-    engine: zh ? '\u5f15\u64ce' : 'Engine',
-    startedAt: zh ? '\u5f00\u59cb\u65f6\u95f4' : 'Started',
-    stoppedAt: zh ? '\u7ed3\u675f\u65f6\u95f4' : 'Stopped',
-    stillRunning: zh ? '\u4ecd\u5728\u8fd0\u884c' : 'Still running',
-    diagnosis: zh ? '\u667a\u80fd\u8bca\u65ad' : 'Smart Diagnostics',
-    diagnosisDesc: zh ? '\u57fa\u4e8e\u8d44\u6e90\u91c7\u6837\u3001\u8bf7\u6c42\u62c6\u89e3\u3001slot \u72b6\u6001\u548c\u5386\u53f2\u57fa\u7ebf\u751f\u6210\u8bca\u65ad\u7ed3\u8bba\u3002' : 'Findings based on resource samples, request breakdown, slot state, and historical baselines.',
-    noDiagnostics: zh ? '\u5f53\u524d\u4f1a\u8bdd\u6682\u65e0\u53ef\u7528\u8bca\u65ad\u7ed3\u8bba' : 'No diagnostics available for this session yet',
-    severityCritical: zh ? '\u9ad8\u98ce\u9669' : 'Critical',
-    severityWarning: zh ? '\u63d0\u9192' : 'Warning',
-    severityInfo: zh ? '\u4fe1\u606f' : 'Info',
-    severitySuccess: zh ? '\u6b63\u5e38' : 'Healthy',
-    evidence: zh ? '\u8bc1\u636e' : 'Evidence',
-    recommendation: zh ? '\u5efa\u8bae' : 'Recommendation',
-    expandDiagnostic: zh ? '\u5c55\u5f00\u8bca\u65ad\u8be6\u60c5' : 'Expand diagnostic details',
-    collapseDiagnostic: zh ? '\u6536\u8d77\u8bca\u65ad\u8be6\u60c5' : 'Collapse diagnostic details',
-    gpuPressure: zh ? 'GPU \u538b\u529b' : 'GPU Pressure',
-    vramPressure: zh ? '\u663e\u5b58\u538b\u529b' : 'VRAM Pressure',
-    throughput: zh ? '\u541e\u5410' : 'Throughput',
-    modelRank: zh ? '\u6a21\u578b\u8868\u73b0' : 'Model Performance',
-    modelRankDesc: zh ? '\u6309\u6a21\u578b + \u5f15\u64ce/\u540e\u7aef\u805a\u5408\u7684\u5386\u53f2\u541e\u5410\u5361\u7247\u3002' : 'Historical throughput cards grouped by model plus engine/backend.',
-    activeRequests: zh ? '\u6b63\u5728\u63a8\u7406\u7684\u8bf7\u6c42' : 'Active Inference Requests',
-    activeRequestsDesc: zh ? '\u6765\u81ea llama-server \u5b9e\u65f6\u65e5\u5fd7\u4e8b\u4ef6\uff0c\u7528\u4e8e\u8ddf\u8e2a\u5c1a\u672a\u5b8c\u6210\u7684 task / slot\u3002' : 'Live llama-server log events for in-flight task and slot tracking.',
-    noActiveRequests: zh ? '\u5f53\u524d\u6ca1\u6709\u6b63\u5728\u5904\u7406\u7684\u63a8\u7406\u8bf7\u6c42\u3002' : 'No inference request is currently processing.',
-    sessionFinishedNoActive: zh ? '\u8be5\u4f1a\u8bdd\u5df2\u7ed3\u675f\uff0c\u4e0d\u518d\u6709\u8fd0\u884c\u4e2d\u8bf7\u6c42\u3002' : 'This session has finished, so there are no active requests.',
-    processing: zh ? '\u5904\u7406\u4e2d' : 'processing',
-    currentSpeed: zh ? '\u5373\u65f6\u901f\u5ea6' : 'Live Speed',
-    elapsed: zh ? '\u5df2\u8fd0\u884c' : 'Elapsed',
-    recentRequests: zh ? '\u6700\u8fd1\u63a8\u7406\u8bf7\u6c42' : 'Recent Inference Requests',
-    recentRequestsDesc: zh ? '\u6765\u81ea llama-server \u65e5\u5fd7\u89e3\u6790\u7684\u8bf7\u6c42\u7ea7 token\u3001\u8017\u65f6\u4e0e\u541e\u5410\u8bb0\u5f55\u3002' : 'Request-level tokens, duration, and throughput parsed from llama-server logs.',
-    requests: zh ? '\u8bf7\u6c42' : 'requests',
-    noRequestsYet: zh ? '\u6682\u65e0\u5df2\u5b8c\u6210\u7684\u63a8\u7406\u8bf7\u6c42\u8bb0\u5f55' : 'No completed inference request records yet',
-    task: zh ? '\u4efb\u52a1' : 'Task',
-    source: zh ? '\u6765\u6e90' : 'Source',
-    proxy: zh ? '\u8def\u7531' : 'Proxy',
-    log: zh ? '\u65e5\u5fd7' : 'Log',
-    prompt: zh ? '\u63d0\u793a\u8bcd' : 'Prompt',
-    generated: zh ? '\u751f\u6210' : 'Generated',
-    generationSpeed: zh ? '\u751f\u6210\u901f\u5ea6' : 'Gen Speed',
-    totalTime: zh ? '\u603b\u8017\u65f6' : 'Total Time',
-    firstResponse: zh ? '\u9996\u54cd' : 'First byte',
-    specAccept: zh ? '\u63a8\u6d4b\u63a5\u53d7' : 'Spec Accept',
-    avgGenerationSpeed: zh ? '\u5e73\u5747\u751f\u6210\u901f\u5ea6' : 'Avg Gen Speed',
-    avgTotalTime: zh ? '\u5e73\u5747\u603b\u8017\u65f6' : 'Avg Total Time',
-    maxBusySlots: zh ? '\u5fd9\u788c slot \u5cf0\u503c' : 'Peak Busy Slots',
-    avgCachedSlots: zh ? '\u5e73\u5747\u7f13\u5b58 slot' : 'Avg Cached Slots',
-    maxContext: zh ? '\u6700\u5927\u4e0a\u4e0b\u6587' : 'Max Context',
+    title: zh ? '性能监控' : 'Performance Monitoring',
+    description: zh ? '实例性能、请求吞吐与诊断分析' : 'Instance performance, request throughput, and diagnostics.',
+    sqliteBacked: zh ? 'SQLite 遥测' : 'SQLite Telemetry',
+    refresh: zh ? '刷新' : 'Refresh',
+    telemetryError: zh ? '遥测数据读取异常' : 'Telemetry query failed',
+    monitoringObject: zh ? '监控对象' : 'Monitoring Target',
+    runningInstance: zh ? '运行中实例' : 'Running Instance',
+    noRunning: zh ? '暂无运行中实例' : 'No running instance',
+    sessionHistory: zh ? '会话历史' : 'Session History',
+    noHistory: zh ? '暂无历史会话' : 'No Session History',
+    noHistoryDesc: zh ? '启动实例并产生采样后会显示在这里。' : 'Sessions appear after an instance starts and emits samples.',
+    noSelection: zh ? '未选择实例' : 'No instance selected',
+    unknown: zh ? '未知' : 'Unknown',
+    running: zh ? '运行中' : 'Running',
+    finished: zh ? '已结束' : 'Finished',
+    currentTps: zh ? '当前吞吐' : 'Current Throughput',
+    fromLlamaMetrics: zh ? '来自 llama-server /metrics' : 'From llama-server /metrics',
+    queuePressure: zh ? '请求压力' : 'Request Pressure',
+    processingDeferred: zh ? '处理中 / 排队' : 'processing / queued',
+    process: zh ? '进程' : 'Process',
+    system: zh ? '系统' : 'System',
+    memory: zh ? '内存' : 'Memory',
+    vram: zh ? '显存' : 'VRAM',
+    gpuUnavailable: zh ? '未检测到 GPU' : 'GPU unavailable',
+    throughputTrend: zh ? '吞吐趋势' : 'Throughput Trend',
+    noSamplesYet: zh ? '暂无足够遥测采样' : 'Not enough telemetry samples yet',
+    ranges: {
+      '1m': zh ? '1分钟' : '1m',
+      '5m': zh ? '5分钟' : '5m',
+      '15m': zh ? '15分钟' : '15m',
+      '1h': zh ? '1小时' : '1h',
+    },
+    activeRequests: zh ? '运行中请求' : 'Active Requests',
+    noActiveRequests: zh ? '当前没有正在处理的推理请求。' : 'No inference request is currently processing.',
+    sessionFinishedNoActive: zh ? '该会话已结束，不再有运行中请求。' : 'This session has finished.',
+    diagnosis: zh ? '智能诊断' : 'Smart Diagnostics',
+    noDiagnostics: zh ? '当前会话暂无诊断结论。' : 'No diagnostics available yet.',
+    moreDiagnostics: (count: number) => zh ? `另有 ${count} 条诊断已折叠` : `${count} more diagnostics collapsed`,
+    severityCritical: zh ? '严重' : 'Critical',
+    severityWarning: zh ? '提醒' : 'Warning',
+    severityInfo: zh ? '信息' : 'Info',
+    severitySuccess: zh ? '正常' : 'Healthy',
+    historyBaseline: zh ? '历史基线' : 'Historical Baseline',
+    sameConfigHistory: zh ? '优先对比同模型、同引擎和同后端的历史会话。' : 'Compares with previous sessions using the same model, engine, and backend.',
+    allHistoryFallback: zh ? '暂无同配置历史，已回退到全部历史会话。' : 'No same-config history, falling back to all history.',
+    noHistoryBaseline: zh ? '暂无可用历史基线。' : 'No historical baseline is available yet.',
+    sessionDigest: zh ? '会话摘要' : 'Session Digest',
+    requests: zh ? '请求' : 'Requests',
+    avgGenerationSpeed: zh ? '平均生成速度' : 'Avg Generation Speed',
+    avgTotalTime: zh ? '平均总耗时' : 'Avg Total Time',
+    maxBusySlots: zh ? '忙碌 slot 峰值' : 'Max Busy Slots',
+    avgTps: zh ? '平均吞吐' : 'Avg Throughput',
+    peakVram: zh ? '峰值显存' : 'Peak VRAM',
+    duration: zh ? '时长' : 'Duration',
   }
-}
-
-function formatRate(value?: number | null) {
-  if (!value || !Number.isFinite(value)) return '--'
-  return `${value.toFixed(value >= 10 ? 1 : 2)} tok/s`
-}
-
-function formatGb(mb?: number | null) {
-  if (!mb || !Number.isFinite(mb)) return '--'
-  return `${(mb / 1024).toFixed(1)} GB`
-}
-
-function formatMemoryPair(used?: number | null, total?: number | null) {
-  if (!used || !total) return '--'
-  return `${(used / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GB`
-}
-
-function formatDate(ms: number) {
-  return new Date(ms).toLocaleString()
-}
-
-function formatDuration(seconds?: number | null) {
-  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '--'
-  const total = Math.floor(seconds)
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  if (h > 0) return `${h}h ${m}m`
-  if (m > 0) return `${m}m ${s}s`
-  return `${s}s`
-}
-
-function formatTokenCount(value?: number | null) {
-  if (value == null) return '--'
-  return value.toLocaleString()
-}
-
-function formatMs(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return '--'
-  if (value < 1000) return `${value.toFixed(0)} ms`
-  if (value < 60000) return `${(value / 1000).toFixed(1)} s`
-  return `${(value / 60000).toFixed(1)} min`
-}
-
-function formatPercent(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return '--'
-  return `${(value * 100).toFixed(1)}%`
-}
-
-function formatFixed(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return '--'
-  return value.toFixed(value >= 10 ? 1 : 2)
 }

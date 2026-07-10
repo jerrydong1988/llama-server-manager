@@ -5,14 +5,12 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
-  Clock,
   Cpu,
   Database,
   Download,
   Gauge,
   HardDrive,
   Monitor,
-  Radio,
   Server,
   Terminal,
   Zap,
@@ -23,7 +21,6 @@ import type {
   DownloadProgress,
   InferenceRequestSummary,
   Instance,
-  LogEntry,
   PerfUpdateEvent,
   RunningInferenceTask,
   SystemMetrics,
@@ -31,6 +28,9 @@ import type {
   TelemetrySessionSummary,
 } from '../store/types'
 import { Badge, joinClassNames } from './ui'
+import { MiniSparkline, TrendChart } from './monitoring/MonitoringPrimitives'
+import { formatBytes, formatBytesPerSecond, formatDuration, formatRate, formatTime } from './monitoring/monitoringFormat'
+import { buildActivityFeed, buildRequestPressure, buildResourceSignals, buildServiceStatus, selectCurrentThroughput, type ActivityFeedItem, type SignalTone } from './monitoring/monitoringViewModel'
 
 type MetricsEvent = {
   instanceId: string
@@ -57,8 +57,6 @@ const emptyOverview: TelemetryOverview = {
 const BIG_SCREEN_TELEMETRY_REFRESH_MS = 10000
 const BIG_SCREEN_EVENT_REFRESH_MS = 5000
 
-const exceptionPattern = /(error|fail|failed|fatal|panic|exception|warn|warning|错误|失败|异常|告警|警告)/i
-
 export default function BigScreenPage() {
   const { lang } = useI18n()
   const zh = lang === 'zh-CN'
@@ -84,9 +82,7 @@ export default function BigScreenPage() {
 
   const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
     lastTelemetryRefreshRef.current = Date.now()
-    if (!options.silent) {
-      setRefreshing(true)
-    }
+    if (!options.silent) setRefreshing(true)
     try {
       const [nextOverview, nextSessions] = await Promise.all([
         invoke<TelemetryOverview>('get_telemetry_overview'),
@@ -107,9 +103,7 @@ export default function BigScreenPage() {
     } catch (error) {
       setTelemetryError(error instanceof Error ? error.message : String(error))
     } finally {
-      if (!options.silent) {
-        setRefreshing(false)
-      }
+      if (!options.silent) setRefreshing(false)
     }
   }, [])
 
@@ -151,6 +145,34 @@ export default function BigScreenPage() {
 
   const allDownloads = useMemo(() => Object.values(downloadTasks), [downloadTasks])
   const runningInstances = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
+  const stoppedCount = instances.filter(instance => instance.status === 'stopped').length
+  const errorCount = instances.filter(instance => instance.status === 'error').length
+  const latestSample = overview.latest_samples[0] || null
+  const trendSamples = useMemo(
+    () => [...overview.latest_samples].sort((left, right) => left.ts - right.ts),
+    [overview.latest_samples],
+  )
+  const trendValues = trendSamples.map(sample => sample.tokens_per_sec || 0)
+  const currentTps = selectCurrentThroughput(liveLlama?.tokens_per_sec, latestSample?.tokens_per_sec ?? overview.avg_tokens_per_sec_24h)
+  const peakTps = Math.max(...trendValues, currentTps, 0)
+  const avgTps = average(trendValues.slice(-12))
+  const pressure = buildRequestPressure(liveLlama?.requests_processing ?? latestSample?.requests_processing, liveLlama?.requests_deferred ?? latestSample?.requests_deferred)
+
+  const flatLogs = useMemo(
+    () => Object.entries(logs)
+      .flatMap(([instanceId, entries]) => {
+        const instanceName = instances.find(instance => instance.id === instanceId)?.name || instanceId
+        return entries.map(entry => ({ ...entry, instanceName }))
+      })
+      .sort((left, right) => right.timestamp - left.timestamp),
+    [instances, logs],
+  )
+
+  const serviceStatus = useMemo(
+    () => buildServiceStatus({ instances, downloads: allDownloads, logs: flatLogs, telemetryError }),
+    [instances, allDownloads, flatLogs, telemetryError],
+  )
+
   const activeRequestTasks = useMemo(
     () => Object.entries(runningTasksByInstance)
       .flatMap(([instanceId, tasks]) => {
@@ -158,14 +180,9 @@ export default function BigScreenPage() {
         return tasks.map(task => ({ ...task, instanceName }))
       })
       .sort((left, right) => right.updated_at_ms - left.updated_at_ms)
-      .slice(0, 6),
+      .slice(0, 4),
     [instances, runningTasksByInstance],
   )
-  const attentionInstances = useMemo(
-    () => instances.filter(instance => instance.status === 'error' || (instance.status === 'running' && instance.healthCheck === 'fail')),
-    [instances],
-  )
-  const modelCount = useMemo(() => models.filter(model => !model.is_shard && model.file_type === 'model').length, [models])
 
   const downloadStats = useMemo(() => {
     const active = allDownloads.filter(task => task.status === 'active')
@@ -192,398 +209,315 @@ export default function BigScreenPage() {
     }
     return [...allDownloads]
       .sort((left, right) => (priority[left.status] ?? 9) - (priority[right.status] ?? 9))
-      .slice(0, 6)
+      .slice(0, 3)
   }, [allDownloads])
 
-  const logRows = useMemo(() => {
-    const rows = Object.entries(logs)
-      .flatMap(([instanceId, entries]) => entries.map(entry => ({ ...entry, instanceId })))
-      .sort((left, right) => right.timestamp - left.timestamp)
-    const exceptions = rows.filter(entry => exceptionPattern.test(entry.text))
-    return (exceptions.length > 0 ? exceptions : rows).slice(0, 8)
-  }, [logs])
+  const resourceSignals = useMemo(
+    () => buildResourceSignals({
+      system: sysMetrics,
+      latest: latestSample,
+      samples: trendSamples,
+      labels,
+    }),
+    [sysMetrics, latestSample, trendSamples, labels],
+  )
 
-  const latestSample = overview.latest_samples[0] || null
-  const currentTps = liveLlama?.tokens_per_sec ?? latestSample?.tokens_per_sec ?? overview.avg_tokens_per_sec_24h
-  const processing = liveLlama?.requests_processing ?? latestSample?.requests_processing ?? 0
-  const deferred = liveLlama?.requests_deferred ?? latestSample?.requests_deferred ?? 0
-  const vramPercent = sysMetrics?.vram_total_mb ? ((sysMetrics.vram_used_mb || 0) / sysMetrics.vram_total_mb) * 100 : null
-  const memoryPercent = sysMetrics?.system_memory_total_mb ? ((sysMetrics.system_memory_used_mb || 0) / sysMetrics.system_memory_total_mb) * 100 : null
+  const activityFeed = useMemo(
+    () => buildActivityFeed({
+      requests,
+      activeTasks: activeRequestTasks,
+      downloads: recentDownloads,
+      logs: flatLogs.slice(0, 8),
+      labels: {
+        request: labels.request,
+        download: labels.download,
+        log: labels.log,
+        active: labels.active,
+        failed: labels.failed,
+        completed: labels.completed,
+      },
+      limit: 8,
+    }),
+    [requests, activeRequestTasks, recentDownloads, flatLogs, labels],
+  )
+
+  const modelCount = models.filter(model => !model.is_shard && model.file_type === 'model').length
+  const statusLabel = serviceStatus.status === 'critical' ? labels.abnormal : serviceStatus.status === 'attention' ? labels.needsAttention : labels.normal
+  const statusTone: SignalTone = serviceStatus.status === 'critical' ? 'red' : serviceStatus.status === 'attention' ? 'amber' : 'emerald'
 
   return (
-    <div className="min-h-full space-y-4 bg-slate-950 text-slate-100">
-      <section className="overflow-hidden rounded-lg border border-cyan-400/20 bg-slate-950 shadow-[0_20px_80px_rgba(8,47,73,0.45)]">
-        <div className="grid gap-4 border-b border-cyan-400/15 bg-slate-900/80 px-5 py-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+    <div className="min-h-[calc(100vh-96px)] space-y-3 bg-slate-950 p-3 text-slate-100">
+      <header className="grid min-h-[72px] grid-cols-[minmax(220px,1fr)_minmax(260px,1.2fr)_minmax(220px,1fr)] items-center rounded-lg border border-slate-700/80 bg-slate-900/90 px-5 shadow-[0_20px_80px_rgba(2,6,23,0.45)]">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-300/25 bg-blue-400/10 text-blue-200">
+            <Monitor className="h-5 w-5" />
+          </div>
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-cyan-300/30 bg-cyan-400/10 text-cyan-200">
-                <Monitor className="h-5 w-5" />
-              </div>
-              <div className="min-w-0">
-                <h2 className="truncate text-2xl font-semibold text-white">{labels.title}</h2>
-                <p className="mt-1 truncate text-sm text-slate-400">{labels.subtitle}</p>
-              </div>
-              <Badge tone="emerald" className="border-emerald-300/30 bg-emerald-400/10 text-emerald-200">{labels.readOnly}</Badge>
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-            <span className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-700 bg-slate-900 px-3">
-              <Clock className="h-4 w-4 text-cyan-300" />
-              {labels.updated}: {formatTime(lastUpdatedAt)}
-            </span>
-            {telemetryError && (
-              <span className="inline-flex h-9 max-w-[360px] items-center rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 text-xs text-amber-100" title={telemetryError}>
-                {zh ? '遥测异常' : 'Telemetry stale'}: {telemetryError}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={() => void refreshTelemetry()}
-              className="inline-flex h-9 items-center gap-2 rounded-lg border border-cyan-300/30 bg-cyan-400/10 px-3 font-medium text-cyan-100 transition hover:bg-cyan-400/20 disabled:cursor-wait disabled:opacity-60"
-              disabled={refreshing}
-            >
-              <Radio className={joinClassNames('h-4 w-4', refreshing && 'animate-pulse')} />
-              {refreshing ? labels.refreshing : labels.refresh}
-            </button>
+            <div className="truncate text-lg font-semibold text-white">Llama Server Manager</div>
+            <div className="truncate text-xs text-slate-500">{labels.wallboard}</div>
           </div>
         </div>
+        <div className="text-center">
+          <h1 className="text-3xl font-semibold tracking-wide text-white">{labels.title}</h1>
+          <p className="mt-1 text-sm text-slate-400">{labels.subtitle}</p>
+        </div>
+        <div className="text-right">
+          <div className="font-mono text-xl font-semibold text-white">{formatTime(lastUpdatedAt)}</div>
+          <div className="mt-1 text-xs text-slate-500">{refreshing ? labels.refreshing : labels.updated}</div>
+        </div>
+      </header>
 
-        <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-6">
-          <KpiCard label={labels.running} value={`${runningInstances.length}/${instances.length}`} detail={labels.instances} icon={<Server className="h-5 w-5" />} tone="emerald" />
-          <KpiCard label={labels.attention} value={attentionInstances.length} detail={attentionInstances.length > 0 ? labels.needsReview : labels.normal} icon={<AlertTriangle className="h-5 w-5" />} tone={attentionInstances.length > 0 ? 'amber' : 'emerald'} />
-          <KpiCard label={labels.modelAssets} value={modelCount} detail={`${engines.length} ${labels.engines}`} icon={<Database className="h-5 w-5" />} tone="blue" />
-          <KpiCard label={labels.transfer} value={formatBytesPerSecond(downloadStats.speed)} detail={`${downloadStats.active} ${labels.activeDownloads}`} icon={<Download className="h-5 w-5" />} tone="violet" />
-          <KpiCard label={labels.throughput} value={formatRate(currentTps)} detail={`${overview.active_sessions} ${labels.activeSessions}`} icon={<Gauge className="h-5 w-5" />} tone="cyan" />
-          <KpiCard label={labels.requests} value={`${processing}/${deferred}`} detail={labels.processingDeferred} icon={<Zap className="h-5 w-5" />} tone={deferred > 0 ? 'amber' : 'blue'} />
-        </div>
+      <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        <WallKpi label={labels.serviceStatus} value={statusLabel} detail={telemetryError || labels.allServicesNormal} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
+        <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
+        <WallKpi label={labels.currentThroughput} value={formatRate(currentTps)} detail={`${labels.peak} ${formatRate(peakTps)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />
+        <WallKpi label={labels.requestPressure} value={`${pressure.percent}%`} detail={pressure.level === 'high' ? labels.high : pressure.level === 'medium' ? labels.medium : labels.normal} tone={pressure.level === 'high' ? 'amber' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
+        <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
       </section>
 
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_430px]">
-        <div className="space-y-4">
-          <section className="grid gap-4 xl:grid-cols-3">
-            <Panel title={labels.resources} icon={<Cpu className="h-5 w-5" />}>
-              <div className="grid gap-3">
-                <Meter label="CPU" value={sysMetrics?.system_cpu_percent ?? sysMetrics?.cpu_percent ?? 0} detail={`${labels.process} ${formatPercent(sysMetrics?.cpu_percent)} / ${labels.system} ${formatPercent(sysMetrics?.system_cpu_percent)}`} tone="blue" />
-                <Meter label="GPU" value={sysMetrics?.gpu_percent ?? 0} detail={sysMetrics?.gpu_vendor || labels.gpuUnavailable} tone="emerald" />
-                <Meter label={labels.memory} value={memoryPercent ?? 0} detail={formatMemoryPair(sysMetrics?.system_memory_used_mb, sysMetrics?.system_memory_total_mb)} tone="violet" />
-                <Meter label={labels.vram} value={vramPercent ?? 0} detail={formatMemoryPair(sysMetrics?.vram_used_mb, sysMetrics?.vram_total_mb)} tone="amber" />
+      <section className="grid gap-3 xl:grid-cols-[minmax(0,1.08fr)_minmax(420px,0.92fr)]">
+        <WallPanel title={labels.realtimeThroughput} icon={<Activity className="h-5 w-5" />} action={<Badge tone="blue">5分钟</Badge>}>
+          <div className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)]">
+            <div className="space-y-4">
+              <div>
+                <div className="text-xs text-slate-500">{labels.currentThroughput}</div>
+                <div className="mt-2 text-5xl font-semibold text-blue-300">{formatRate(currentTps).replace(' tok/s', '')}</div>
+                <div className="mt-1 text-sm text-blue-200">tok/s</div>
               </div>
-            </Panel>
-
-            <Panel title={labels.instanceBoard} icon={<Server className="h-5 w-5" />} className="xl:col-span-2">
-              {instances.length === 0 ? (
-                <EmptyLine text={labels.noInstances} />
-              ) : (
-                <div className="grid gap-2 lg:grid-cols-2">
-                  {instances.slice(0, 8).map(instance => (
-                    <InstanceLine key={instance.id} instance={instance} labels={labels} />
-                  ))}
-                </div>
-              )}
-            </Panel>
-          </section>
-
-          <section className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-            <Panel title={labels.downloads} icon={<Download className="h-5 w-5" />}>
-              <div className="mb-3 grid grid-cols-4 gap-2 text-center">
-                <MiniCounter label={labels.active} value={downloadStats.active} tone="text-blue-200" />
-                <MiniCounter label={labels.queued} value={downloadStats.queued} tone="text-violet-200" />
-                <MiniCounter label={labels.failed} value={downloadStats.failed} tone="text-rose-200" />
-                <MiniCounter label={labels.completed} value={downloadStats.completed} tone="text-emerald-200" />
+              <div className="grid gap-2">
+                <MiniWallStat label={labels.peak} value={formatRate(peakTps)} />
+                <MiniWallStat label={labels.avg5m} value={formatRate(avgTps)} />
               </div>
+            </div>
+            <TrendChart values={trendValues} emptyText={labels.noSamples} className="border-slate-700 bg-slate-950/55" />
+          </div>
+          <div className="mt-4 rounded-lg border border-slate-700 bg-slate-950/55 p-3">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <div className="text-sm font-semibold text-slate-100">{labels.activeRequests}</div>
+              <Badge tone={activeRequestTasks.length > 0 ? 'emerald' : 'slate'}>{activeRequestTasks.length}</Badge>
+            </div>
+            {activeRequestTasks.length === 0 ? (
+              <EmptyDark text={labels.noActiveRequests} />
+            ) : (
               <div className="space-y-2">
-                {recentDownloads.length === 0 ? (
-                  <EmptyLine text={labels.noDownloads} />
-                ) : recentDownloads.map(task => (
-                  <DownloadLine key={task.id} task={task} labels={labels} />
+                {activeRequestTasks.map(task => (
+                  <ActiveWallRequest key={`${task.instanceName}-${task.task_id}`} task={task} />
                 ))}
               </div>
-            </Panel>
+            )}
+          </div>
+        </WallPanel>
 
-            <Panel title={labels.performance} icon={<Activity className="h-5 w-5" />}>
-              <div className="mb-3 grid gap-2 md:grid-cols-3">
-                <MiniCounter label={labels.sessions24h} value={overview.sessions_24h} tone="text-cyan-200" />
-                <MiniCounter label={labels.avg24h} value={formatRate(overview.avg_tokens_per_sec_24h)} tone="text-emerald-200" />
-                <MiniCounter label={labels.peakVram} value={formatMemory(overview.peak_vram_mb_24h)} tone="text-amber-200" />
-              </div>
-              <RequestTable activeTasks={activeRequestTasks} requests={requests} labels={labels} />
-            </Panel>
-          </section>
-        </div>
+        <WallPanel title={labels.resourcePressure} icon={<Cpu className="h-5 w-5" />} action={<Badge tone="blue">5分钟</Badge>}>
+          <div className="space-y-3">
+            {resourceSignals.map(signal => (
+              <ResourcePressureRow
+                key={signal.id}
+                label={signal.label}
+                value={signal.value}
+                detail={signal.detail}
+                tone={signal.tone}
+                sparkline={signal.sparkline}
+                icon={signal.id === 'cpu' ? <Cpu className="h-5 w-5" /> : signal.id === 'gpu' ? <Gauge className="h-5 w-5" /> : signal.id === 'memory' ? <Database className="h-5 w-5" /> : <HardDrive className="h-5 w-5" />}
+              />
+            ))}
+          </div>
+        </WallPanel>
+      </section>
 
-        <div className="space-y-4">
-          <Panel title={labels.runtimeLogs} icon={<Terminal className="h-5 w-5" />}>
-            <div className="space-y-2">
-              {logRows.length === 0 ? (
-                <EmptyLine text={labels.noLogs} />
-              ) : logRows.map((entry, index) => (
-                <LogLine key={`${entry.instanceId}-${entry.timestamp}-${index}`} entry={entry} instances={instances} />
+      <section className="grid gap-3 xl:grid-cols-3">
+        <WallPanel
+          title={labels.instanceStatus}
+          icon={<Server className="h-5 w-5" />}
+          action={<div className="flex gap-3 text-sm"><span className="text-emerald-300">{labels.running} {runningInstances.length}</span><span className="text-slate-400">{labels.stopped} {stoppedCount}</span><span className="text-red-300">{labels.error} {errorCount}</span></div>}
+        >
+          <div className="space-y-2">
+            {instances.length === 0 ? (
+              <EmptyDark text={labels.noInstances} />
+            ) : instances.slice(0, 5).map(instance => (
+              <InstanceWallRow key={instance.id} instance={instance} labels={labels} sessions={sessions} />
+            ))}
+          </div>
+        </WallPanel>
+
+        <WallPanel
+          title={labels.downloadQueue}
+          icon={<Download className="h-5 w-5" />}
+          action={<div className="flex gap-3 text-sm"><span className="text-blue-300">{labels.active} {downloadStats.active}</span><span className="text-amber-300">{labels.queued} {downloadStats.queued}</span><span className="text-red-300">{labels.failed} {downloadStats.failed}</span></div>}
+        >
+          <div className="space-y-3">
+            <div className="rounded-lg border border-slate-700 bg-slate-950/55 p-3">
+              <div className="text-xs text-slate-500">{labels.totalSpeed}</div>
+              <div className="mt-1 text-2xl font-semibold text-blue-300">{formatBytesPerSecond(downloadStats.speed)}</div>
+            </div>
+            {recentDownloads.length === 0 ? (
+              <EmptyDark text={labels.noDownloads} />
+            ) : recentDownloads.map(task => (
+              <DownloadWallRow key={task.id} task={task} labels={labels} />
+            ))}
+          </div>
+        </WallPanel>
+
+        <WallPanel title={labels.activityFeed} icon={<Terminal className="h-5 w-5" />} action={<Badge tone="slate">{labels.all}</Badge>}>
+          {activityFeed.length === 0 ? (
+            <EmptyDark text={labels.noActivity} />
+          ) : (
+            <div className="space-y-1">
+              {activityFeed.map(item => (
+                <ActivityWallRow key={item.id} item={item} />
               ))}
             </div>
-          </Panel>
+          )}
+        </WallPanel>
+      </section>
 
-          <Panel title={labels.sessionSnapshot} icon={<HardDrive className="h-5 w-5" />}>
-            <div className="space-y-2">
-              {sessions.length === 0 ? (
-                <EmptyLine text={labels.noSessions} />
-              ) : sessions.slice(0, 5).map(session => (
-                <div key={session.id} className="rounded-lg border border-slate-700 bg-slate-900/85 px-3 py-2">
-                  <div className="flex min-w-0 items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-slate-100" title={session.instance_name}>{session.instance_name}</div>
-                      <div className="mt-1 truncate text-xs text-slate-500" title={session.model_name}>{session.model_name || labels.unknown}</div>
-                    </div>
-                    <Badge tone={session.stopped_at ? 'slate' : 'emerald'} className="shrink-0">
-                      {session.stopped_at ? labels.finished : labels.runningNow}
-                    </Badge>
-                  </div>
-                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                    <MetricMini label={labels.throughput} value={formatRate(session.avg_tokens_per_sec)} />
-                    <MetricMini label={labels.peakVram} value={formatMemory(session.peak_vram_mb)} />
-                    <MetricMini label={labels.duration} value={formatDuration(session.duration_secs)} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Panel>
+      <footer className="grid gap-3 rounded-lg border border-slate-800 bg-slate-900/70 px-4 py-3 text-xs text-slate-500 md:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="flex min-w-0 flex-wrap gap-5">
+          <span>{labels.models}: {modelCount}</span>
+          <span>{labels.engines}: {engines.length}</span>
+          <span>{labels.sessions24h}: {overview.sessions_24h}</span>
+          <span>{labels.lastUpdated}: {formatTime(lastUpdatedAt)}</span>
         </div>
-      </div>
+        <div className="text-emerald-300">{labels.dataLinkNormal}</div>
+      </footer>
     </div>
   )
 }
 
-function Panel({
-  title,
-  icon,
-  children,
-  className = '',
-}: {
-  title: string
-  icon: ReactNode
-  children: ReactNode
-  className?: string
-}) {
+function WallPanel({ title, icon, action, children }: { title: string; icon: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className={joinClassNames('min-w-0 rounded-lg border border-slate-700/80 bg-slate-900/90 text-slate-100 shadow-[0_18px_54px_rgba(2,6,23,0.35)]', className)}>
+    <section className="min-w-0 overflow-hidden rounded-lg border border-slate-700/80 bg-slate-900/90 text-slate-100 shadow-[0_18px_54px_rgba(2,6,23,0.32)]">
       <div className="flex h-12 items-center justify-between gap-3 border-b border-slate-700/80 px-4">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-cyan-300">{icon}</span>
-          <h3 className="truncate text-sm font-semibold uppercase text-slate-100">{title}</h3>
+          <span className="text-blue-300">{icon}</span>
+          <h3 className="truncate text-base font-semibold">{title}</h3>
         </div>
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
       <div className="p-4">{children}</div>
     </section>
   )
 }
 
-function KpiCard({
-  label,
-  value,
-  detail,
-  icon,
-  tone,
-}: {
-  label: string
-  value: ReactNode
-  detail: string
-  icon: ReactNode
-  tone: 'blue' | 'emerald' | 'amber' | 'violet' | 'cyan'
-}) {
-  const toneClass = {
-    blue: 'border-blue-300/20 bg-blue-400/10 text-blue-200',
-    emerald: 'border-emerald-300/20 bg-emerald-400/10 text-emerald-200',
-    amber: 'border-amber-300/20 bg-amber-400/10 text-amber-200',
-    violet: 'border-violet-300/20 bg-violet-400/10 text-violet-200',
-    cyan: 'border-cyan-300/20 bg-cyan-400/10 text-cyan-200',
-  }[tone]
-
+function WallKpi({ label, value, detail, tone, icon }: { label: string; value: ReactNode; detail: string; tone: SignalTone; icon: ReactNode }) {
+  const toneClass = wallTone(tone)
   return (
-    <div className="min-w-0 rounded-lg border border-slate-700 bg-slate-900 px-4 py-3">
-      <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="truncate text-xs uppercase text-slate-400">{label}</div>
-        <div className={joinClassNames('rounded-lg border p-2', toneClass)}>{icon}</div>
+    <div className="min-w-0 rounded-lg border border-slate-700 bg-slate-900/92 px-5 py-4 shadow-[0_12px_42px_rgba(2,6,23,0.22)]">
+      <div className="flex min-w-0 items-center gap-4">
+        <div className={joinClassNames('flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border', toneClass.box)}>
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <div className="truncate text-sm text-slate-400">{label}</div>
+          <div className={joinClassNames('mt-1 truncate text-3xl font-semibold', toneClass.text)} title={String(value)}>{value}</div>
+          <div className="mt-1 truncate text-xs text-slate-500" title={detail}>{detail}</div>
+        </div>
       </div>
-      <div className="mt-3 truncate text-3xl font-semibold text-white" title={String(value)}>{value}</div>
-      <div className="mt-1 truncate text-xs text-slate-500" title={detail}>{detail}</div>
     </div>
   )
 }
 
-function Meter({
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  label: string
-  value: number
-  detail: string
-  tone: 'blue' | 'emerald' | 'amber' | 'violet'
-}) {
+function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { label: string; value: number; detail: string; tone: SignalTone; sparkline: number[]; icon: ReactNode }) {
   const safe = Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)))
-  const bar = {
-    blue: 'bg-blue-400',
-    emerald: 'bg-emerald-400',
-    amber: 'bg-amber-400',
-    violet: 'bg-violet-400',
-  }[tone]
-
+  const toneClass = wallTone(tone)
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-950/60 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <span className="truncate text-sm text-slate-300">{label}</span>
-        <span className="text-lg font-semibold text-white">{safe}%</span>
+    <div className="grid min-w-0 grid-cols-[48px_110px_78px_minmax(120px,1fr)_140px] items-center gap-3 rounded-lg border border-slate-700 bg-slate-950/55 px-4 py-3">
+      <div className={joinClassNames('flex h-10 w-10 items-center justify-center rounded-lg border', toneClass.box)}>{icon}</div>
+      <div className="min-w-0">
+        <div className="truncate text-base font-semibold text-slate-100">{label}</div>
+        <div className="truncate text-xs text-slate-500" title={detail}>{detail}</div>
       </div>
-      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
-        <div className={joinClassNames('h-full rounded-full transition-[width]', bar)} style={{ width: `${safe}%` }} />
+      <div className="text-3xl font-semibold text-white">{safe}%</div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+        <div className={joinClassNames('h-full rounded-full', toneClass.bar)} style={{ width: `${safe}%` }} />
       </div>
-      <div className="mt-2 truncate text-xs text-slate-500" title={detail}>{detail}</div>
+      <MiniSparkline values={sparkline} tone={tone} />
     </div>
   )
 }
 
-function InstanceLine({ instance, labels }: { instance: Instance; labels: ReturnType<typeof getLabels> }) {
-  const isRunning = instance.status === 'running'
-  const unhealthy = instance.status === 'error' || (isRunning && instance.healthCheck === 'fail')
-  const healthy = isRunning && instance.healthCheck === 'ok'
-  const tone = unhealthy ? 'red' : healthy ? 'emerald' : isRunning ? 'amber' : 'slate'
-
+function ActiveWallRequest({ task }: { task: RunningInferenceTask & { instanceName: string } }) {
+  const total = Math.max(task.total_tokens || 8192, task.n_decoded || 1)
+  const progress = Math.max(4, Math.min(100, ((task.n_decoded || 0) / total) * 100))
   return (
-    <div className="grid min-h-[72px] min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2">
+    <div className="grid min-w-0 grid-cols-[72px_minmax(0,1fr)_110px_82px] items-center gap-3 text-sm">
+      <span className="text-emerald-300">#{task.task_id}</span>
+      <div className="min-w-0">
+        <div className="truncate text-slate-200" title={task.instanceName}>{task.instanceName}</div>
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800">
+          <div className="h-full rounded-full bg-blue-400" style={{ width: `${progress}%` }} />
+        </div>
+      </div>
+      <span className="text-blue-200">{formatRate(task.tg)}</span>
+      <span className="text-slate-400">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</span>
+    </div>
+  )
+}
+
+function InstanceWallRow({ instance, labels, sessions }: { instance: Instance; labels: ReturnType<typeof getLabels>; sessions: TelemetrySessionSummary[] }) {
+  const isRunning = instance.status === 'running'
+  const latestSession = sessions.find(session => session.instance_id === instance.id)
+  const tone = instance.status === 'error' ? 'red' : isRunning ? 'emerald' : 'slate'
+  return (
+    <div className="grid min-w-0 grid-cols-[84px_minmax(0,1fr)_112px] items-center gap-3 rounded-lg border border-slate-700 bg-slate-950/55 px-3 py-2">
+      <Badge tone={tone}>{isRunning ? labels.running : instance.status === 'error' ? labels.error : labels.stopped}</Badge>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold text-slate-100" title={instance.name}>{instance.name}</div>
-        <div className="mt-1 truncate text-xs text-slate-500" title={instance.model}>{instance.model || labels.unknown}</div>
-        <div className="mt-1 truncate font-mono text-xs text-cyan-200">{instance.config.host}:{instance.config.port}</div>
+        <div className="truncate font-mono text-xs text-slate-500">{instance.config.host}:{instance.config.port}</div>
       </div>
-      <div className="flex flex-col items-end justify-between gap-2">
-        <Badge tone={tone}>{isRunning ? labels.runningNow : instance.status === 'error' ? labels.error : labels.stopped}</Badge>
-        <span className="text-xs text-slate-500">{formatDuration(instance.startTime ? (Date.now() - instance.startTime) / 1000 : null)}</span>
-      </div>
+      <div className="text-right text-sm text-blue-200">{formatRate(latestSession?.avg_tokens_per_sec)}</div>
     </div>
   )
 }
 
-function DownloadLine({ task, labels }: { task: DownloadProgress; labels: ReturnType<typeof getLabels> }) {
+function DownloadWallRow({ task, labels }: { task: DownloadProgress; labels: ReturnType<typeof getLabels> }) {
   const progress = task.total > 0 ? Math.max(0, Math.min(100, (task.downloaded / task.total) * 100)) : 0
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2">
+    <div className="rounded-lg border border-slate-700 bg-slate-950/55 px-3 py-2">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="min-w-0 truncate text-sm text-slate-200" title={task.fileName}>{task.fileName}</div>
-        <Badge tone={downloadTone(task.status)} className="shrink-0">{downloadStatusText(task.status, labels)}</Badge>
+        <div className="min-w-0 truncate text-sm font-semibold text-slate-100" title={task.fileName}>{task.fileName}</div>
+        <Badge tone={downloadTone(task.status)}>{downloadStatusText(task.status, labels)}</Badge>
       </div>
-      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800">
-        <div className="h-full rounded-full bg-blue-400" style={{ width: `${progress}%` }} />
+      <div className="mt-2 grid grid-cols-[minmax(0,1fr)_54px] items-center gap-3">
+        <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+          <div className="h-full rounded-full bg-blue-400" style={{ width: `${progress}%` }} />
+        </div>
+        <span className="text-right text-xs text-slate-400">{Math.round(progress)}%</span>
       </div>
       <div className="mt-1 flex justify-between gap-3 text-xs text-slate-500">
-        <span className="truncate">{task.repoId || labels.unknown}</span>
-        <span className="shrink-0">{formatBytesPerSecond(task.speed)}</span>
+        <span>{formatBytes(task.downloaded)} / {formatBytes(task.total)}</span>
+        <span>{formatBytesPerSecond(task.speed)}</span>
       </div>
     </div>
   )
 }
 
-function RequestTable({
-  activeTasks,
-  requests,
-  labels,
-}: {
-  activeTasks: Array<RunningInferenceTask & { instanceName: string }>
-  requests: InferenceRequestSummary[]
-  labels: ReturnType<typeof getLabels>
-}) {
-  if (activeTasks.length === 0 && requests.length === 0) {
-    return <EmptyLine text={labels.noRequests} />
-  }
-
+function ActivityWallRow({ item }: { item: ActivityFeedItem }) {
+  const tone = item.severity === 'critical' ? 'red' : item.severity === 'warning' ? 'amber' : item.severity === 'success' ? 'emerald' : 'blue'
   return (
-    <div className="space-y-3">
-      {activeTasks.length > 0 && (
-        <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-3">
-          <div className="mb-2 flex items-center justify-between gap-3 text-xs">
-            <span className="font-medium text-emerald-200">{labels.activeRequests}</span>
-            <Badge tone="emerald">{activeTasks.length}</Badge>
-          </div>
-          <div className="grid gap-2">
-            {activeTasks.map(task => (
-              <div key={`${task.instanceName}-${task.task_id}`} className="grid grid-cols-[minmax(0,1fr)_64px_72px_64px] gap-2 text-xs text-slate-300">
-                <span className="truncate" title={task.instanceName}>#{task.task_id} · {task.instanceName}</span>
-                <span className="truncate">{formatNumber(task.n_decoded)}</span>
-                <span className="truncate">{formatRate(task.tg)}</span>
-                <span className="truncate">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {requests.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-slate-700">
-          <table className="w-full table-fixed text-left text-xs">
-            <thead className="bg-slate-950 text-slate-500">
-              <tr>
-                <th className="px-3 py-2 font-medium">{labels.task}</th>
-                <th className="px-3 py-2 font-medium">{labels.source}</th>
-                <th className="px-3 py-2 font-medium">{labels.tokens}</th>
-                <th className="px-3 py-2 font-medium">{labels.speed}</th>
-                <th className="px-3 py-2 font-medium">{labels.duration}</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-700 bg-slate-900/70 text-slate-300">
-              {requests.map(request => (
-                <tr key={`${request.session_id}-${request.task_id}-${request.completed_at}`}>
-                  <td className="truncate px-3 py-2">{request.source === 'proxy' ? (request.model || `#${request.task_id}`) : `#${request.task_id}`}</td>
-                  <td className="truncate px-3 py-2">{request.source === 'proxy' ? `${labels.proxy}${request.http_status ? ` ${request.http_status}` : ''}` : labels.log}</td>
-                  <td className="truncate px-3 py-2">{formatNumber(request.total_tokens)}</td>
-                  <td className="truncate px-3 py-2">{formatRate(request.generation_tps)}</td>
-                  <td className="truncate px-3 py-2">
-                    {request.source === 'proxy' ? `${labels.firstResponse} ${formatMs(request.total_time_ms)}` : formatMs(request.total_time_ms)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function LogLine({ entry, instances }: { entry: LogEntry; instances: Instance[] }) {
-  const instanceName = instances.find(instance => instance.id === entry.instanceId)?.name || entry.instanceId
-  const important = exceptionPattern.test(entry.text)
-
-  return (
-    <div className={joinClassNames('rounded-lg border px-3 py-2', important ? 'border-amber-400/30 bg-amber-400/10' : 'border-slate-700 bg-slate-950/60')}>
-      <div className="mb-1 flex min-w-0 items-center justify-between gap-3 text-xs">
-        <span className="truncate text-slate-400" title={instanceName}>{instanceName}</span>
-        <span className="shrink-0 text-slate-500">{formatTime(entry.timestamp)}</span>
+    <div className="grid min-w-0 grid-cols-[58px_70px_minmax(0,1fr)] items-center gap-3 border-b border-slate-800 px-1 py-2 last:border-b-0">
+      <span className="text-xs text-slate-500">{formatTime(item.ts).slice(0, 5)}</span>
+      <Badge tone={tone}>{item.label}</Badge>
+      <div className="min-w-0">
+        <div className="truncate text-sm text-slate-200" title={item.title}>{item.title}</div>
+        <div className="truncate text-xs text-slate-500" title={item.detail}>{item.detail}</div>
       </div>
-      <div className="line-clamp-2 break-words font-mono text-xs leading-5 text-slate-200">{entry.text}</div>
     </div>
   )
 }
 
-function MiniCounter({ label, value, tone }: { label: string; value: ReactNode; tone: string }) {
+function MiniWallStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2">
-      <div className="truncate text-[11px] uppercase text-slate-500">{label}</div>
-      <div className={joinClassNames('mt-1 truncate text-lg font-semibold', tone)} title={String(value)}>{value}</div>
+    <div className="rounded-lg border border-slate-700 bg-slate-950/55 p-3">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-slate-100">{value}</div>
     </div>
   )
 }
 
-function MetricMini({ label, value }: { label: string; value: string }) {
+function EmptyDark({ text }: { text: string }) {
   return (
-    <div className="min-w-0">
-      <div className="truncate text-[10px] uppercase text-slate-500" title={label}>{label}</div>
-      <div className="mt-0.5 truncate text-slate-300" title={value}>{value}</div>
-    </div>
-  )
-}
-
-function EmptyLine({ text }: { text: string }) {
-  return (
-    <div className="flex min-h-[92px] items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/45 px-4 text-center text-sm text-slate-500">
+    <div className="flex min-h-[88px] items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/45 px-4 text-center text-sm text-slate-500">
       <CheckCircle2 className="mr-2 h-4 w-4 text-slate-600" />
       {text}
     </div>
@@ -608,126 +542,79 @@ function downloadStatusText(status: DownloadProgress['status'], labels: ReturnTy
   return labels.cancelled
 }
 
-function formatRate(value?: number | null) {
-  if (!value || !Number.isFinite(value)) return '--'
-  return `${value.toFixed(value >= 10 ? 1 : 2)} tok/s`
+function wallTone(tone: SignalTone) {
+  const map: Record<SignalTone, { text: string; box: string; bar: string }> = {
+    blue: { text: 'text-blue-300', box: 'border-blue-300/25 bg-blue-400/10 text-blue-200', bar: 'bg-blue-400' },
+    emerald: { text: 'text-emerald-300', box: 'border-emerald-300/25 bg-emerald-400/10 text-emerald-200', bar: 'bg-emerald-400' },
+    amber: { text: 'text-amber-300', box: 'border-amber-300/25 bg-amber-400/10 text-amber-200', bar: 'bg-amber-400' },
+    red: { text: 'text-red-300', box: 'border-red-300/25 bg-red-400/10 text-red-200', bar: 'bg-red-400' },
+    violet: { text: 'text-violet-300', box: 'border-violet-300/25 bg-violet-400/10 text-violet-200', bar: 'bg-violet-400' },
+    cyan: { text: 'text-cyan-300', box: 'border-cyan-300/25 bg-cyan-400/10 text-cyan-200', bar: 'bg-cyan-400' },
+    slate: { text: 'text-slate-300', box: 'border-slate-600 bg-slate-800/70 text-slate-200', bar: 'bg-slate-500' },
+  }
+  return map[tone]
 }
 
-function formatBytesPerSecond(value?: number | null) {
-  if (!value || !Number.isFinite(value)) return '--'
-  return `${formatBytes(value)}/s`
-}
-
-function formatBytes(value?: number | null) {
-  if (!value || !Number.isFinite(value)) return '--'
-  const gb = value / 1024 / 1024 / 1024
-  if (gb >= 1) return `${gb.toFixed(1)} GB`
-  const mb = value / 1024 / 1024
-  if (mb >= 1) return `${mb.toFixed(0)} MB`
-  return `${Math.max(1, Math.round(value / 1024))} KB`
-}
-
-function formatMemory(value?: number | null) {
-  if (!value || !Number.isFinite(value)) return '--'
-  if (value >= 1024) return `${(value / 1024).toFixed(1)} GB`
-  return `${Math.round(value)} MB`
-}
-
-function formatMemoryPair(used?: number | null, total?: number | null) {
-  if (!used || !total) return '--'
-  return `${formatMemory(used)} / ${formatMemory(total)}`
-}
-
-function formatPercent(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return '--'
-  return `${Math.round(value)}%`
-}
-
-function formatDuration(seconds?: number | null) {
-  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '--'
-  const total = Math.floor(seconds)
-  const hours = Math.floor(total / 3600)
-  const minutes = Math.floor((total % 3600) / 60)
-  const rest = total % 60
-  if (hours > 0) return `${hours}h ${minutes}m`
-  if (minutes > 0) return `${minutes}m ${rest}s`
-  return `${rest}s`
-}
-
-function formatMs(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return '--'
-  if (value < 1000) return `${value.toFixed(0)} ms`
-  return `${(value / 1000).toFixed(1)} s`
-}
-
-function formatNumber(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return '--'
-  return value.toLocaleString()
-}
-
-function formatTime(value: number) {
-  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+function average(values: number[]) {
+  const valid = values.filter(value => Number.isFinite(value) && value > 0)
+  if (valid.length === 0) return 0
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length
 }
 
 function getLabels(zh: boolean) {
   return {
-    title: zh ? '只读大屏模式' : 'Read-Only Big Screen',
-    subtitle: zh ? '面向投屏的本地 llama-server 总览，自动刷新且不执行写操作。' : 'Projection-ready local llama-server overview with automatic read-only refresh.',
-    readOnly: zh ? '只读' : 'Read only',
-    updated: zh ? '更新' : 'Updated',
-    refresh: zh ? '刷新' : 'Refresh',
+    title: zh ? '大屏模式' : 'Big Screen',
+    subtitle: zh ? '运行态势、请求吞吐与资源压力' : 'Runtime posture, request throughput, and resource pressure',
+    wallboard: zh ? '只读态势屏' : 'Read-only wallboard',
+    updated: zh ? '数据已更新' : 'Updated',
     refreshing: zh ? '刷新中' : 'Refreshing',
-    running: zh ? '运行' : 'Running',
-    runningNow: zh ? '运行中' : 'Running',
-    stopped: zh ? '已停止' : 'Stopped',
-    error: zh ? '错误' : 'Error',
-    attention: zh ? '异常' : 'Attention',
-    needsReview: zh ? '需要查看' : 'Needs review',
+    serviceStatus: zh ? '服务状态' : 'Service Status',
     normal: zh ? '正常' : 'Normal',
-    instances: zh ? '实例' : 'instances',
-    modelAssets: zh ? '模型资产' : 'Model Assets',
-    engines: zh ? '个引擎' : 'engines',
-    transfer: zh ? '传输' : 'Transfer',
-    throughput: zh ? '吞吐' : 'Throughput',
-    requests: zh ? '请求' : 'Requests',
-    activeSessions: zh ? '活动会话' : 'active sessions',
-    processingDeferred: zh ? '处理中 / 延迟' : 'Processing / deferred',
-    activeDownloads: zh ? '进行中' : 'active',
-    resources: zh ? '资源' : 'Resources',
+    needsAttention: zh ? '需关注' : 'Needs Attention',
+    abnormal: zh ? '异常' : 'Abnormal',
+    allServicesNormal: zh ? '所有服务运行正常' : 'All services normal',
+    runningInstances: zh ? '运行实例' : 'Running Instances',
+    currentThroughput: zh ? '当前吞吐' : 'Current Throughput',
+    requestPressure: zh ? '请求压力' : 'Request Pressure',
+    alerts: zh ? '告警' : 'Alerts',
+    stopped: zh ? '已停止' : 'Stopped',
+    error: zh ? '异常' : 'Error',
+    failed: zh ? '失败' : 'Failed',
+    peak: zh ? '峰值' : 'Peak',
+    high: zh ? '高' : 'High',
+    medium: zh ? '中等' : 'Medium',
+    realtimeThroughput: zh ? '实时吞吐' : 'Realtime Throughput',
+    avg5m: zh ? '5分钟平均' : '5m Avg',
+    noSamples: zh ? '暂无足够采样' : 'Not enough samples',
+    activeRequests: zh ? '运行中请求' : 'Active Requests',
+    noActiveRequests: zh ? '暂无运行中请求' : 'No active requests',
+    resourcePressure: zh ? '资源压力' : 'Resource Pressure',
     process: zh ? '进程' : 'Process',
     system: zh ? '系统' : 'System',
     memory: zh ? '内存' : 'Memory',
     vram: zh ? '显存' : 'VRAM',
     gpuUnavailable: zh ? '未检测到 GPU' : 'GPU unavailable',
-    instanceBoard: zh ? '实例看板' : 'Instance Board',
+    instanceStatus: zh ? '实例状态' : 'Instance Status',
+    running: zh ? '运行中' : 'Running',
     noInstances: zh ? '暂无实例' : 'No instances',
-    unknown: zh ? '未知' : 'Unknown',
-    downloads: zh ? '下载' : 'Downloads',
+    downloadQueue: zh ? '下载队列' : 'Download Queue',
     active: zh ? '进行中' : 'Active',
-    queued: zh ? '排队' : 'Queued',
-    failed: zh ? '失败' : 'Failed',
-    completed: zh ? '完成' : 'Completed',
-    paused: zh ? '暂停' : 'Paused',
-    cancelled: zh ? '取消' : 'Cancelled',
+    queued: zh ? '排队中' : 'Queued',
+    paused: zh ? '已暂停' : 'Paused',
+    completed: zh ? '已完成' : 'Completed',
+    cancelled: zh ? '已取消' : 'Cancelled',
     noDownloads: zh ? '暂无下载任务' : 'No download tasks',
-    performance: zh ? '请求 / 性能' : 'Requests / Performance',
-    activeRequests: zh ? '运行中请求' : 'Active Requests',
-    sessions24h: zh ? '24小时会话' : 'Sessions 24h',
-    avg24h: zh ? '24小时均速' : 'Avg 24h',
-    peakVram: zh ? '峰值显存' : 'Peak VRAM',
-    task: zh ? '任务' : 'Task',
-    source: zh ? '来源' : 'Source',
-    proxy: zh ? '路由' : 'Proxy',
+    totalSpeed: zh ? '总下载速度' : 'Total Speed',
+    activityFeed: zh ? '活动流' : 'Activity Feed',
+    all: zh ? '全部' : 'All',
+    noActivity: zh ? '暂无活动' : 'No activity',
+    request: zh ? '请求' : 'Request',
+    download: zh ? '下载' : 'Download',
     log: zh ? '日志' : 'Log',
-    tokens: zh ? '令牌' : 'Tokens',
-    speed: zh ? '速度' : 'Speed',
-    duration: zh ? '耗时' : 'Duration',
-    firstResponse: zh ? '首响' : 'First byte',
-    noRequests: zh ? '暂无已完成请求记录' : 'No completed request records',
-    runtimeLogs: zh ? '运行日志' : 'Runtime Logs',
-    noLogs: zh ? '暂无日志' : 'No logs',
-    sessionSnapshot: zh ? '运行会话' : 'Run Sessions',
-    noSessions: zh ? '暂无遥测会话' : 'No telemetry sessions',
-    finished: zh ? '已结束' : 'Finished',
+    models: zh ? '模型' : 'Models',
+    engines: zh ? '引擎' : 'Engines',
+    sessions24h: zh ? '24小时会话' : 'Sessions 24h',
+    lastUpdated: zh ? '最后更新' : 'Last Updated',
+    dataLinkNormal: zh ? '数据连接正常' : 'Data link healthy',
   }
 }

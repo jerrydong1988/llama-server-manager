@@ -596,7 +596,8 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const layoutWide = activeTab === 'logs' || activeTab === 'guide' || activeTab === 'bigscreen' || activeTab === 'proxy'
+  const immersiveContent = activeTab === 'bigscreen'
+  const layoutWide = activeTab === 'logs' || activeTab === 'guide' || immersiveContent || activeTab === 'proxy'
   const statusChips: ShellStatusChip[] = [
     { label: t.nav.up || 'up', value: upCount, tone: 'emerald' },
     { label: t.nav.down || 'down', value: downCount, tone: 'slate' },
@@ -651,8 +652,9 @@ function AppInner() {
       attentionCount={productIssues.length}
       onOpenCommandCenter={() => setCommandCenterOpen(true)}
       wideContent={layoutWide}
+      immersiveContent={immersiveContent}
     >
-      {runtimeWarnings.length > 0 && (
+      {!immersiveContent && runtimeWarnings.length > 0 && (
         <div className="mx-auto mb-4 flex w-full max-w-7xl items-start justify-between gap-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
           <div className="min-w-0">
             <div className="font-semibold">{lang === 'zh-CN' ? '\u8fd0\u884c\u8b66\u544a' : 'Runtime warnings'}</div>

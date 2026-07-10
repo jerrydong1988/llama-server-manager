@@ -41,6 +41,7 @@ export function AppShell({
   attentionCount = 0,
   onOpenCommandCenter,
   wideContent = false,
+  immersiveContent = false,
   children,
 }: {
   appTitle: string
@@ -65,6 +66,7 @@ export function AppShell({
   attentionCount?: number
   onOpenCommandCenter: () => void
   wideContent?: boolean
+  immersiveContent?: boolean
   children: ReactNode
 }) {
   const activeItem = navigation.find(item => item.id === activeId) || navigation[0]
@@ -252,26 +254,34 @@ export function AppShell({
           </header>
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <div className={joinClassNames('min-h-full px-4 py-4 sm:px-5', wideContent ? '' : 'mx-auto w-full max-w-[1480px]')}>
+            <div
+              className={joinClassNames(
+                'min-h-full',
+                immersiveContent ? '' : 'px-4 py-4 sm:px-5',
+                !immersiveContent && !wideContent ? 'mx-auto w-full max-w-[1480px]' : '',
+              )}
+            >
               {children}
             </div>
           </div>
 
-          <footer className="hidden h-9 shrink-0 items-center justify-between border-t border-slate-200 bg-white/85 px-4 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/85 dark:text-slate-400 sm:flex">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="truncate">{appTitle}</span>
-              <span className="h-3 border-l border-slate-300 dark:border-slate-700" />
-              <span className="truncate">{activeItem?.name}</span>
-            </div>
-            <div className="flex shrink-0 items-center gap-3">
-              {statusChips.map(chip => (
-                <span key={String(chip.label)} className="inline-flex items-center gap-1">
-                  <span>{chip.label}</span>
-                  <strong className="font-semibold text-slate-700 dark:text-slate-200">{chip.value}</strong>
-                </span>
-              ))}
-            </div>
-          </footer>
+          {!immersiveContent && (
+            <footer className="hidden h-9 shrink-0 items-center justify-between border-t border-slate-200 bg-white/85 px-4 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/85 dark:text-slate-400 sm:flex">
+              <div className="flex min-w-0 items-center gap-3">
+                <span className="truncate">{appTitle}</span>
+                <span className="h-3 border-l border-slate-300 dark:border-slate-700" />
+                <span className="truncate">{activeItem?.name}</span>
+              </div>
+              <div className="flex shrink-0 items-center gap-3">
+                {statusChips.map(chip => (
+                  <span key={String(chip.label)} className="inline-flex items-center gap-1">
+                    <span>{chip.label}</span>
+                    <strong className="font-semibold text-slate-700 dark:text-slate-200">{chip.value}</strong>
+                  </span>
+                ))}
+              </div>
+            </footer>
+          )}
         </main>
       </div>
     </div>
