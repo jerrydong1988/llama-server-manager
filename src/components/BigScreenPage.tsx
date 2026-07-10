@@ -246,23 +246,23 @@ export default function BigScreenPage() {
   const statusTone: SignalTone = serviceStatus.status === 'critical' ? 'red' : serviceStatus.status === 'attention' ? 'amber' : 'emerald'
 
   return (
-    <div className="min-h-[calc(100vh-96px)] space-y-3 bg-slate-950 p-3 text-slate-100">
-      <header className="grid min-h-[72px] grid-cols-[minmax(220px,1fr)_minmax(260px,1.2fr)_minmax(220px,1fr)] items-center rounded-lg border border-slate-700/80 bg-slate-900/90 px-5 shadow-[0_20px_80px_rgba(2,6,23,0.45)]">
+    <div className="min-h-[calc(100vh-96px)] space-y-3 bg-slate-100 p-3 text-slate-950 dark:bg-slate-950 dark:text-slate-100">
+      <header className="grid min-h-[72px] grid-cols-[minmax(220px,1fr)_minmax(260px,1.2fr)_minmax(220px,1fr)] items-center rounded-lg border border-slate-200 bg-white px-5 shadow-[0_20px_80px_rgba(15,23,42,0.08)] dark:border-slate-700/80 dark:bg-slate-900/90 dark:shadow-[0_20px_80px_rgba(2,6,23,0.45)]">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-300/25 bg-blue-400/10 text-blue-200">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-300/25 dark:bg-blue-400/10 dark:text-blue-200">
             <Monitor className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-lg font-semibold text-white">Llama Server Manager</div>
+            <div className="truncate text-lg font-semibold text-slate-950 dark:text-white">Llama Server Manager</div>
             <div className="truncate text-xs text-slate-500">{labels.wallboard}</div>
           </div>
         </div>
         <div className="text-center">
-          <h1 className="text-3xl font-semibold tracking-wide text-white">{labels.title}</h1>
-          <p className="mt-1 text-sm text-slate-400">{labels.subtitle}</p>
+          <h1 className="text-3xl font-semibold tracking-wide text-slate-950 dark:text-white">{labels.title}</h1>
+          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">{labels.subtitle}</p>
         </div>
         <div className="text-right">
-          <div className="font-mono text-xl font-semibold text-white">{formatTime(lastUpdatedAt)}</div>
+          <div className="font-mono text-xl font-semibold text-slate-950 dark:text-white">{formatTime(lastUpdatedAt)}</div>
           <div className="mt-1 text-xs text-slate-500">{refreshing ? labels.refreshing : labels.updated}</div>
         </div>
       </header>
@@ -281,19 +281,19 @@ export default function BigScreenPage() {
             <div className="space-y-4">
               <div>
                 <div className="text-xs text-slate-500">{labels.currentThroughput}</div>
-                <div className="mt-2 text-5xl font-semibold text-blue-300">{formatRate(currentTps).replace(' tok/s', '')}</div>
-                <div className="mt-1 text-sm text-blue-200">tok/s</div>
+                <div className="mt-2 text-5xl font-semibold text-blue-700 dark:text-blue-300">{formatRate(currentTps).replace(' tok/s', '')}</div>
+                <div className="mt-1 text-sm text-blue-600 dark:text-blue-200">tok/s</div>
               </div>
               <div className="grid gap-2">
                 <MiniWallStat label={labels.peak} value={formatRate(peakTps)} />
                 <MiniWallStat label={labels.avg5m} value={formatRate(avgTps)} />
               </div>
             </div>
-            <TrendChart values={trendValues} emptyText={labels.noSamples} className="border-slate-700 bg-slate-950/55" />
+            <TrendChart values={trendValues} emptyText={labels.noSamples} className="border-slate-200 bg-white/70 dark:border-slate-700 dark:bg-slate-950/55" />
           </div>
-          <div className="mt-4 rounded-lg border border-slate-700 bg-slate-950/55 p-3">
+          <div className="mt-4 rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/55">
             <div className="mb-2 flex items-center justify-between gap-3">
-              <div className="text-sm font-semibold text-slate-100">{labels.activeRequests}</div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{labels.activeRequests}</div>
               <Badge tone={activeRequestTasks.length > 0 ? 'emerald' : 'slate'}>{activeRequestTasks.length}</Badge>
             </div>
             {activeRequestTasks.length === 0 ? (
@@ -329,7 +329,7 @@ export default function BigScreenPage() {
         <WallPanel
           title={labels.instanceStatus}
           icon={<Server className="h-5 w-5" />}
-          action={<div className="flex gap-3 text-sm"><span className="text-emerald-300">{labels.running} {runningInstances.length}</span><span className="text-slate-400">{labels.stopped} {stoppedCount}</span><span className="text-red-300">{labels.error} {errorCount}</span></div>}
+          action={<div className="flex gap-3 text-sm"><span className="text-emerald-700 dark:text-emerald-300">{labels.running} {runningInstances.length}</span><span className="text-slate-500 dark:text-slate-400">{labels.stopped} {stoppedCount}</span><span className="text-red-700 dark:text-red-300">{labels.error} {errorCount}</span></div>}
         >
           <div className="space-y-2">
             {instances.length === 0 ? (
@@ -343,12 +343,12 @@ export default function BigScreenPage() {
         <WallPanel
           title={labels.downloadQueue}
           icon={<Download className="h-5 w-5" />}
-          action={<div className="flex gap-3 text-sm"><span className="text-blue-300">{labels.active} {downloadStats.active}</span><span className="text-amber-300">{labels.queued} {downloadStats.queued}</span><span className="text-red-300">{labels.failed} {downloadStats.failed}</span></div>}
+          action={<div className="flex gap-3 text-sm"><span className="text-blue-700 dark:text-blue-300">{labels.active} {downloadStats.active}</span><span className="text-amber-700 dark:text-amber-300">{labels.queued} {downloadStats.queued}</span><span className="text-red-700 dark:text-red-300">{labels.failed} {downloadStats.failed}</span></div>}
         >
           <div className="space-y-3">
-            <div className="rounded-lg border border-slate-700 bg-slate-950/55 p-3">
+            <div className="rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/55">
               <div className="text-xs text-slate-500">{labels.totalSpeed}</div>
-              <div className="mt-1 text-2xl font-semibold text-blue-300">{formatBytesPerSecond(downloadStats.speed)}</div>
+              <div className="mt-1 text-2xl font-semibold text-blue-700 dark:text-blue-300">{formatBytesPerSecond(downloadStats.speed)}</div>
             </div>
             {recentDownloads.length === 0 ? (
               <EmptyDark text={labels.noDownloads} />
@@ -371,14 +371,14 @@ export default function BigScreenPage() {
         </WallPanel>
       </section>
 
-      <footer className="grid gap-3 rounded-lg border border-slate-800 bg-slate-900/70 px-4 py-3 text-xs text-slate-500 md:grid-cols-[minmax(0,1fr)_auto]">
+      <footer className="grid gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-xs text-slate-500 md:grid-cols-[minmax(0,1fr)_auto] dark:border-slate-800 dark:bg-slate-900/70">
         <div className="flex min-w-0 flex-wrap gap-5">
           <span>{labels.models}: {modelCount}</span>
           <span>{labels.engines}: {engines.length}</span>
           <span>{labels.sessions24h}: {overview.sessions_24h}</span>
           <span>{labels.lastUpdated}: {formatTime(lastUpdatedAt)}</span>
         </div>
-        <div className="text-emerald-300">{labels.dataLinkNormal}</div>
+        <div className="text-emerald-700 dark:text-emerald-300">{labels.dataLinkNormal}</div>
       </footer>
     </div>
   )
@@ -386,10 +386,10 @@ export default function BigScreenPage() {
 
 function WallPanel({ title, icon, action, children }: { title: string; icon: ReactNode; action?: ReactNode; children: ReactNode }) {
   return (
-    <section className="min-w-0 overflow-hidden rounded-lg border border-slate-700/80 bg-slate-900/90 text-slate-100 shadow-[0_18px_54px_rgba(2,6,23,0.32)]">
-      <div className="flex h-12 items-center justify-between gap-3 border-b border-slate-700/80 px-4">
+    <section className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-950 shadow-[0_18px_54px_rgba(15,23,42,0.08)] dark:border-slate-700/80 dark:bg-slate-900/90 dark:text-slate-100 dark:shadow-[0_18px_54px_rgba(2,6,23,0.32)]">
+      <div className="flex h-12 items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-700/80">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="text-blue-300">{icon}</span>
+          <span className="text-blue-700 dark:text-blue-300">{icon}</span>
           <h3 className="truncate text-base font-semibold">{title}</h3>
         </div>
         {action ? <div className="shrink-0">{action}</div> : null}
@@ -402,13 +402,13 @@ function WallPanel({ title, icon, action, children }: { title: string; icon: Rea
 function WallKpi({ label, value, detail, tone, icon }: { label: string; value: ReactNode; detail: string; tone: SignalTone; icon: ReactNode }) {
   const toneClass = wallTone(tone)
   return (
-    <div className="min-w-0 rounded-lg border border-slate-700 bg-slate-900/92 px-5 py-4 shadow-[0_12px_42px_rgba(2,6,23,0.22)]">
+    <div className="min-w-0 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-[0_12px_42px_rgba(15,23,42,0.08)] dark:border-slate-700 dark:bg-slate-900/92 dark:shadow-[0_12px_42px_rgba(2,6,23,0.22)]">
       <div className="flex min-w-0 items-center gap-4">
         <div className={joinClassNames('flex h-14 w-14 shrink-0 items-center justify-center rounded-lg border', toneClass.box)}>
           {icon}
         </div>
         <div className="min-w-0">
-          <div className="truncate text-sm text-slate-400">{label}</div>
+          <div className="truncate text-sm text-slate-600 dark:text-slate-400">{label}</div>
           <div className={joinClassNames('mt-1 truncate text-3xl font-semibold', toneClass.text)} title={String(value)}>{value}</div>
           <div className="mt-1 truncate text-xs text-slate-500" title={detail}>{detail}</div>
         </div>
@@ -421,14 +421,14 @@ function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { 
   const safe = Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)))
   const toneClass = wallTone(tone)
   return (
-    <div className="grid min-w-0 grid-cols-[48px_110px_78px_minmax(120px,1fr)_140px] items-center gap-3 rounded-lg border border-slate-700 bg-slate-950/55 px-4 py-3">
+    <div className="grid min-w-0 grid-cols-[48px_110px_78px_minmax(120px,1fr)_140px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-950/55">
       <div className={joinClassNames('flex h-10 w-10 items-center justify-center rounded-lg border', toneClass.box)}>{icon}</div>
       <div className="min-w-0">
-        <div className="truncate text-base font-semibold text-slate-100">{label}</div>
+        <div className="truncate text-base font-semibold text-slate-900 dark:text-slate-100">{label}</div>
         <div className="truncate text-xs text-slate-500" title={detail}>{detail}</div>
       </div>
-      <div className="text-3xl font-semibold text-white">{safe}%</div>
-      <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+      <div className="text-3xl font-semibold text-slate-950 dark:text-white">{safe}%</div>
+      <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
         <div className={joinClassNames('h-full rounded-full', toneClass.bar)} style={{ width: `${safe}%` }} />
       </div>
       <MiniSparkline values={sparkline} tone={tone} />
@@ -441,15 +441,15 @@ function ActiveWallRequest({ task }: { task: RunningInferenceTask & { instanceNa
   const progress = Math.max(4, Math.min(100, ((task.n_decoded || 0) / total) * 100))
   return (
     <div className="grid min-w-0 grid-cols-[72px_minmax(0,1fr)_110px_82px] items-center gap-3 text-sm">
-      <span className="text-emerald-300">#{task.task_id}</span>
+      <span className="text-emerald-700 dark:text-emerald-300">#{task.task_id}</span>
       <div className="min-w-0">
-        <div className="truncate text-slate-200" title={task.instanceName}>{task.instanceName}</div>
-        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800">
+        <div className="truncate text-slate-700 dark:text-slate-200" title={task.instanceName}>{task.instanceName}</div>
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
           <div className="h-full rounded-full bg-blue-400" style={{ width: `${progress}%` }} />
         </div>
       </div>
-      <span className="text-blue-200">{formatRate(task.tg)}</span>
-      <span className="text-slate-400">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</span>
+      <span className="text-blue-700 dark:text-blue-200">{formatRate(task.tg)}</span>
+      <span className="text-slate-500 dark:text-slate-400">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</span>
     </div>
   )
 }
@@ -459,13 +459,13 @@ function InstanceWallRow({ instance, labels, sessions }: { instance: Instance; l
   const latestSession = sessions.find(session => session.instance_id === instance.id)
   const tone = instance.status === 'error' ? 'red' : isRunning ? 'emerald' : 'slate'
   return (
-    <div className="grid min-w-0 grid-cols-[84px_minmax(0,1fr)_112px] items-center gap-3 rounded-lg border border-slate-700 bg-slate-950/55 px-3 py-2">
+    <div className="grid min-w-0 grid-cols-[84px_minmax(0,1fr)_112px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/55">
       <Badge tone={tone}>{isRunning ? labels.running : instance.status === 'error' ? labels.error : labels.stopped}</Badge>
       <div className="min-w-0">
-        <div className="truncate text-sm font-semibold text-slate-100" title={instance.name}>{instance.name}</div>
+        <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={instance.name}>{instance.name}</div>
         <div className="truncate font-mono text-xs text-slate-500">{instance.config.host}:{instance.config.port}</div>
       </div>
-      <div className="text-right text-sm text-blue-200">{formatRate(latestSession?.avg_tokens_per_sec)}</div>
+      <div className="text-right text-sm text-blue-700 dark:text-blue-200">{formatRate(latestSession?.avg_tokens_per_sec)}</div>
     </div>
   )
 }
@@ -473,16 +473,16 @@ function InstanceWallRow({ instance, labels, sessions }: { instance: Instance; l
 function DownloadWallRow({ task, labels }: { task: DownloadProgress; labels: ReturnType<typeof getLabels> }) {
   const progress = task.total > 0 ? Math.max(0, Math.min(100, (task.downloaded / task.total) * 100)) : 0
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-950/55 px-3 py-2">
+    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/55">
       <div className="flex min-w-0 items-center justify-between gap-3">
-        <div className="min-w-0 truncate text-sm font-semibold text-slate-100" title={task.fileName}>{task.fileName}</div>
+        <div className="min-w-0 truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={task.fileName}>{task.fileName}</div>
         <Badge tone={downloadTone(task.status)}>{downloadStatusText(task.status, labels)}</Badge>
       </div>
       <div className="mt-2 grid grid-cols-[minmax(0,1fr)_54px] items-center gap-3">
-        <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+        <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
           <div className="h-full rounded-full bg-blue-400" style={{ width: `${progress}%` }} />
         </div>
-        <span className="text-right text-xs text-slate-400">{Math.round(progress)}%</span>
+        <span className="text-right text-xs text-slate-500 dark:text-slate-400">{Math.round(progress)}%</span>
       </div>
       <div className="mt-1 flex justify-between gap-3 text-xs text-slate-500">
         <span>{formatBytes(task.downloaded)} / {formatBytes(task.total)}</span>
@@ -495,11 +495,11 @@ function DownloadWallRow({ task, labels }: { task: DownloadProgress; labels: Ret
 function ActivityWallRow({ item }: { item: ActivityFeedItem }) {
   const tone = item.severity === 'critical' ? 'red' : item.severity === 'warning' ? 'amber' : item.severity === 'success' ? 'emerald' : 'blue'
   return (
-    <div className="grid min-w-0 grid-cols-[58px_70px_minmax(0,1fr)] items-center gap-3 border-b border-slate-800 px-1 py-2 last:border-b-0">
+    <div className="grid min-w-0 grid-cols-[58px_70px_minmax(0,1fr)] items-center gap-3 border-b border-slate-200 px-1 py-2 last:border-b-0 dark:border-slate-800">
       <span className="text-xs text-slate-500">{formatTime(item.ts).slice(0, 5)}</span>
       <Badge tone={tone}>{item.label}</Badge>
       <div className="min-w-0">
-        <div className="truncate text-sm text-slate-200" title={item.title}>{item.title}</div>
+        <div className="truncate text-sm text-slate-700 dark:text-slate-200" title={item.title}>{item.title}</div>
         <div className="truncate text-xs text-slate-500" title={item.detail}>{item.detail}</div>
       </div>
     </div>
@@ -508,17 +508,17 @@ function ActivityWallRow({ item }: { item: ActivityFeedItem }) {
 
 function MiniWallStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-700 bg-slate-950/55 p-3">
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-950/55">
       <div className="text-xs text-slate-500">{label}</div>
-      <div className="mt-1 text-lg font-semibold text-slate-100">{value}</div>
+      <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-slate-100">{value}</div>
     </div>
   )
 }
 
 function EmptyDark({ text }: { text: string }) {
   return (
-    <div className="flex min-h-[88px] items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/45 px-4 text-center text-sm text-slate-500">
-      <CheckCircle2 className="mr-2 h-4 w-4 text-slate-600" />
+    <div className="flex min-h-[88px] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 text-center text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950/45">
+      <CheckCircle2 className="mr-2 h-4 w-4 text-slate-400 dark:text-slate-600" />
       {text}
     </div>
   )
@@ -544,13 +544,13 @@ function downloadStatusText(status: DownloadProgress['status'], labels: ReturnTy
 
 function wallTone(tone: SignalTone) {
   const map: Record<SignalTone, { text: string; box: string; bar: string }> = {
-    blue: { text: 'text-blue-300', box: 'border-blue-300/25 bg-blue-400/10 text-blue-200', bar: 'bg-blue-400' },
-    emerald: { text: 'text-emerald-300', box: 'border-emerald-300/25 bg-emerald-400/10 text-emerald-200', bar: 'bg-emerald-400' },
-    amber: { text: 'text-amber-300', box: 'border-amber-300/25 bg-amber-400/10 text-amber-200', bar: 'bg-amber-400' },
-    red: { text: 'text-red-300', box: 'border-red-300/25 bg-red-400/10 text-red-200', bar: 'bg-red-400' },
-    violet: { text: 'text-violet-300', box: 'border-violet-300/25 bg-violet-400/10 text-violet-200', bar: 'bg-violet-400' },
-    cyan: { text: 'text-cyan-300', box: 'border-cyan-300/25 bg-cyan-400/10 text-cyan-200', bar: 'bg-cyan-400' },
-    slate: { text: 'text-slate-300', box: 'border-slate-600 bg-slate-800/70 text-slate-200', bar: 'bg-slate-500' },
+    blue: { text: 'text-blue-700 dark:text-blue-300', box: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-300/25 dark:bg-blue-400/10 dark:text-blue-200', bar: 'bg-blue-500 dark:bg-blue-400' },
+    emerald: { text: 'text-emerald-700 dark:text-emerald-300', box: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-300/25 dark:bg-emerald-400/10 dark:text-emerald-200', bar: 'bg-emerald-500 dark:bg-emerald-400' },
+    amber: { text: 'text-amber-700 dark:text-amber-300', box: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-300/25 dark:bg-amber-400/10 dark:text-amber-200', bar: 'bg-amber-500 dark:bg-amber-400' },
+    red: { text: 'text-red-700 dark:text-red-300', box: 'border-red-200 bg-red-50 text-red-700 dark:border-red-300/25 dark:bg-red-400/10 dark:text-red-200', bar: 'bg-red-500 dark:bg-red-400' },
+    violet: { text: 'text-violet-700 dark:text-violet-300', box: 'border-violet-200 bg-violet-50 text-violet-700 dark:border-violet-300/25 dark:bg-violet-400/10 dark:text-violet-200', bar: 'bg-violet-500 dark:bg-violet-400' },
+    cyan: { text: 'text-cyan-700 dark:text-cyan-300', box: 'border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-300/25 dark:bg-cyan-400/10 dark:text-cyan-200', bar: 'bg-cyan-500 dark:bg-cyan-400' },
+    slate: { text: 'text-slate-700 dark:text-slate-300', box: 'border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-600 dark:bg-slate-800/70 dark:text-slate-200', bar: 'bg-slate-500' },
   }
   return map[tone]
 }

@@ -52,7 +52,7 @@ export function MonitorPanel({
 }) {
   return (
     <section className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900/72 dark:text-slate-100', className)}>
-      <div className="flex h-13 min-h-[52px] items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-800">
+      <div className="flex min-h-[52px] items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-800">
         <div className="flex min-w-0 items-center gap-2">
           {icon ? <span className="shrink-0 text-blue-500 dark:text-blue-300">{icon}</span> : null}
           <h3 className="truncate text-base font-semibold">{title}</h3>
@@ -88,7 +88,7 @@ export function StatusTile({
         </div>
       </div>
       <div className="mt-3 truncate text-3xl font-semibold text-slate-950 dark:text-white" title={String(value)}>{value}</div>
-      <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-500" title={typeof detail === 'string' ? detail : undefined}>{detail}</div>
+      <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={typeof detail === 'string' ? detail : undefined}>{detail}</div>
     </div>
   )
 }
@@ -146,7 +146,7 @@ export function SignalMeter({
           {icon ? <div className={joinClassNames('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border', toneBorder[tone], toneText[tone])}>{icon}</div> : null}
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{label}</div>
-            <div className="truncate text-xs text-slate-500 dark:text-slate-500" title={detail}>{detail}</div>
+            <div className="truncate text-xs text-slate-500 dark:text-slate-400" title={detail}>{detail}</div>
           </div>
         </div>
         <div className="shrink-0 text-2xl font-semibold text-slate-950 dark:text-white">{Math.round(safeValue)}%</div>
@@ -194,7 +194,7 @@ export function TrendChart({
   }).join(' ')
 
   return (
-    <div className={joinClassNames('min-h-[260px] overflow-hidden rounded-lg border border-slate-200 bg-slate-950/0 dark:border-slate-800 dark:bg-slate-950/35', className)}>
+    <div className={joinClassNames('min-h-[260px] overflow-hidden rounded-lg border border-slate-200 bg-white/0 dark:border-slate-800 dark:bg-slate-950/35', className)}>
       <svg viewBox={`0 0 ${width} ${height}`} className={joinClassNames('h-[260px] w-full', toneText[tone])} preserveAspectRatio="none">
         {[0.25, 0.5, 0.75].map(ratio => (
           <line key={ratio} x1="0" y1={height * ratio} x2={width} y2={height * ratio} stroke="currentColor" className="text-slate-200 dark:text-slate-800" strokeWidth="1" strokeDasharray="5 7" />
