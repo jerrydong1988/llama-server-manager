@@ -51,9 +51,83 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Instant;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 static NATIVE_START: OnceLock<Instant> = OnceLock::new();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProxyQuitDecision {
+    ExitNow,
+    RequestConfirmation,
+    KeepAlive,
+}
+
+fn decide_proxy_quit(proxy_running: bool, background_service_mode: bool) -> ProxyQuitDecision {
+    if !proxy_running {
+        ProxyQuitDecision::ExitNow
+    } else if background_service_mode {
+        ProxyQuitDecision::KeepAlive
+    } else {
+        ProxyQuitDecision::RequestConfirmation
+    }
+}
+
+fn proxy_quit_inputs(app: &tauri::AppHandle) -> (bool, bool) {
+    if let Some(state) = app.try_state::<AppState>() {
+        let proxy_running = state.proxy_shutdown.lock().unwrap().is_some();
+        let background_service_mode = state.proxy_config.lock().unwrap().background_service_mode;
+        (proxy_running, background_service_mode)
+    } else {
+        (false, false)
+    }
+}
+
+fn persist_runtime_state(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
+        let running = state.running.lock().unwrap().clone();
+        let engine_names = state.engine_names.lock().unwrap().clone();
+        let proxy_config = state.proxy_config.lock().unwrap().clone();
+        let _ = update_and_persist(&state, |global| {
+            global.running = running;
+            global.engine_names = engine_names;
+            global.proxy_config = proxy_config;
+        });
+    }
+}
+
+fn finalize_app_exit(app: &tauri::AppHandle) {
+    persist_runtime_state(app);
+    flush_download_manager_state(app);
+    crate::commands::nvml::shutdown();
+    app.exit(0);
+}
+
+fn request_proxy_exit_confirmation(app: &tauri::AppHandle) {
+    let payload = serde_json::json!({
+        "reason": "proxy-running",
+    });
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("proxy-exit-confirmation-requested", payload);
+    } else {
+        let _ = app.emit("proxy-exit-confirmation-requested", payload);
+    }
+}
+
+fn keep_proxy_alive_in_tray(app: &tauri::AppHandle) {
+    persist_runtime_state(app);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    let _ = app.emit(
+        "proxy-background-keepalive",
+        serde_json::json!({
+            "reason": "proxy-background-service-mode",
+        }),
+    );
+}
 
 #[tauri::command]
 fn get_startup_elapsed() -> u64 {
@@ -69,6 +143,18 @@ fn show_window(app: tauri::AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+#[tauri::command]
+fn hide_window(app: tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    finalize_app_exit(&app);
 }
 
 fn main() {
@@ -113,7 +199,6 @@ fn main() {
             let mut timings: Vec<(String, u64)> = Vec::new();
             let now = || NATIVE_START.get().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
             timings.push(("setup-enter".into(), now()));
-            use tauri::Emitter;
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
 
@@ -135,19 +220,12 @@ fn main() {
                             }
                         }
                         "quit" => {
-                            if let Some(s) = app.try_state::<AppState>() {
-                                let running = s.running.lock().unwrap().clone();
-                                let engine_names = s.engine_names.lock().unwrap().clone();
-                                let proxy_config = s.proxy_config.lock().unwrap().clone();
-                                let _ = update_and_persist(&s, |global| {
-                                    global.running = running;
-                                    global.engine_names = engine_names;
-                                    global.proxy_config = proxy_config;
-                                });
+                            let (proxy_running, background_service_mode) = proxy_quit_inputs(app);
+                            match decide_proxy_quit(proxy_running, background_service_mode) {
+                                ProxyQuitDecision::ExitNow => finalize_app_exit(app),
+                                ProxyQuitDecision::RequestConfirmation => request_proxy_exit_confirmation(app),
+                                ProxyQuitDecision::KeepAlive => keep_proxy_alive_in_tray(app),
                             }
-                            flush_download_manager_state(&app);
-                            crate::commands::nvml::shutdown();
-                            app.exit(0);
                         }
                         _ => {}
                     }
@@ -310,6 +388,8 @@ fn main() {
             enable_autostart, disable_autostart, is_autostart_enabled,
             get_startup_elapsed,
             show_window,
+            hide_window,
+            quit_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -318,7 +398,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use crate::commands::server::generate_command;
-    use crate::models::InstanceConfig;
+    use crate::models::{InstanceConfig, ProxyConfig};
 
     fn cfg() -> InstanceConfig {
         let mut c = InstanceConfig::default();
@@ -427,5 +507,34 @@ mod tests {
         c.custom_args = vec!["--verbose".into()];
         let cmd = generate_command(&c, "");
         assert!(cmd.iter().any(|a| a == "--verbose"));
+    }
+
+    #[test]
+    fn proxy_quit_prompts_when_route_is_running_without_keep_alive() {
+        assert_eq!(
+            super::decide_proxy_quit(true, false),
+            super::ProxyQuitDecision::RequestConfirmation
+        );
+    }
+
+    #[test]
+    fn proxy_quit_keeps_process_alive_when_keep_alive_is_enabled() {
+        assert_eq!(
+            super::decide_proxy_quit(true, true),
+            super::ProxyQuitDecision::KeepAlive
+        );
+    }
+
+    #[test]
+    fn proxy_quit_exits_when_proxy_is_not_running() {
+        assert_eq!(
+            super::decide_proxy_quit(false, false),
+            super::ProxyQuitDecision::ExitNow
+        );
+    }
+
+    #[test]
+    fn proxy_config_disables_background_keep_alive_by_default() {
+        assert!(!ProxyConfig::default().background_service_mode);
     }
 }

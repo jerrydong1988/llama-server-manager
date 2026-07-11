@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, lazy, Suspense, Component, ReactN
 import { Activity, BarChart3, BookOpen, Cpu, Database, Download, Monitor, Network, Package, Play, RefreshCw, Route, Search, Server, Settings, Square, Terminal, Wrench, X } from 'lucide-react'
 import { version } from '../package.json'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import ModelRepo from './components/ModelRepo'
 import EngineManager from './components/EngineManager'
 import InstanceManager from './components/InstanceManager'
@@ -274,6 +275,7 @@ function AppInner() {
   const [autoStartEnabled, setAutoStartEnabled] = useState(false)
   const [autoStarted, setAutoStarted] = useState(false)
   const [commandCenterOpen, setCommandCenterOpen] = useState(false)
+  const [proxyExitConfirmOpen, setProxyExitConfirmOpen] = useState(false)
 
   useEffect(() => {
     invoke<boolean>('is_autostart_enabled').then(setAutoStartEnabled).catch(() => {})
@@ -493,6 +495,23 @@ function AppInner() {
   }, [loadConfig])
 
   useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+
+    listen('proxy-exit-confirmation-requested', () => {
+      setProxyExitConfirmOpen(true)
+    }).then(cleanup => {
+      if (disposed) cleanup()
+      else unlisten = cleanup
+    }).catch(() => {})
+
+    return () => {
+      disposed = true
+      if (unlisten) unlisten()
+    }
+  }, [])
+
+  useEffect(() => {
     if (autoStarted || instances.length === 0) return
     const toBoot = instances.filter(i => i.config.auto_start && i.status !== 'running')
     if (toBoot.length === 0) {
@@ -627,6 +646,19 @@ function AppInner() {
       }
     })()
   }
+  const handleStopProxyAndQuit = async () => {
+    try {
+      await invoke('stop_proxy')
+      await invoke('quit_app')
+    } catch {
+      setProxyExitConfirmOpen(false)
+      setActiveTab('proxy')
+    }
+  }
+  const handleKeepProxyInTray = () => {
+    setProxyExitConfirmOpen(false)
+    invoke('hide_window').catch(() => {})
+  }
 
   return (
     <AppShell
@@ -685,6 +717,48 @@ function AppInner() {
         commands={commandActions}
         onClose={() => setCommandCenterOpen(false)}
       />
+      {proxyExitConfirmOpen ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-950">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-semibold text-slate-950 dark:text-slate-50">
+                  {lang === 'zh-CN' ? '\u5b9e\u4f8b\u8def\u7531\u6b63\u5728\u8fd0\u884c' : 'Instance routing is running'}
+                </h2>
+                <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+                  {lang === 'zh-CN'
+                    ? '\u76f4\u63a5\u9000\u51fa\u4e3b\u7a0b\u5e8f\u4f1a\u4e2d\u65ad\u7edf\u4e00 API \u5165\u53e3\u3002\u5efa\u8bae\u4fdd\u6301\u6258\u76d8\u8fd0\u884c\uff0c\u6216\u8005\u5148\u505c\u6b62\u8def\u7531\u518d\u9000\u51fa\u3002'
+                    : 'Exiting the main process will interrupt the unified API endpoint. Keep it running in the tray, or stop routing before exiting.'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProxyExitConfirmOpen(false)}
+                className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100"
+                aria-label={lang === 'zh-CN' ? '\u5173\u95ed' : 'Close'}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Button onClick={handleKeepProxyInTray}>
+                {lang === 'zh-CN' ? '\u4fdd\u6301\u6258\u76d8\u8fd0\u884c' : 'Keep running in tray'}
+              </Button>
+              <Button
+                onClick={() => {
+                  setActiveTab('proxy')
+                  setProxyExitConfirmOpen(false)
+                }}
+              >
+                {lang === 'zh-CN' ? '\u6253\u5f00\u8def\u7531\u8bbe\u7f6e' : 'Open routing settings'}
+              </Button>
+              <Button variant="danger" onClick={() => void handleStopProxyAndQuit()}>
+                {lang === 'zh-CN' ? '\u505c\u6b62\u8def\u7531\u5e76\u9000\u51fa' : 'Stop routing and exit'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   )
 }

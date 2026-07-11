@@ -21,6 +21,7 @@ type ProxyConfig = {
   defaultInstanceId: string
   routingStrategy: string
   timeoutMs: number
+  backgroundServiceMode: boolean
   routes: ProxyRoute[]
 }
 
@@ -48,6 +49,7 @@ const defaultConfig: ProxyConfig = {
   defaultInstanceId: '',
   routingStrategy: 'firstHealthy',
   timeoutMs: 600000,
+  backgroundServiceMode: false,
   routes: [],
 }
 
@@ -106,6 +108,7 @@ function normalizeConfig(value: unknown): ProxyConfig {
     defaultInstanceId: getString(record, ['default_instance_id', 'defaultInstanceId', 'default_target_id', 'defaultTargetId']),
     routingStrategy: getString(record, ['routing_strategy', 'routingStrategy'], defaultConfig.routingStrategy),
     timeoutMs: getNumber(record, ['timeout_ms', 'timeoutMs'], defaultConfig.timeoutMs),
+    backgroundServiceMode: getBoolean(record, ['background_service_mode', 'backgroundServiceMode'], defaultConfig.backgroundServiceMode),
     routes: routesValue.map(normalizeRoute),
   }
 }
@@ -151,6 +154,7 @@ function toCommandConfig(config: ProxyConfig) {
     default_instance_id: config.defaultInstanceId,
     routing_strategy: config.routingStrategy,
     timeout_ms: config.timeoutMs,
+    background_service_mode: config.backgroundServiceMode,
     routes: config.routes.map(route => ({
       id: route.id,
       enabled: route.enabled,
@@ -224,6 +228,10 @@ export default function ProxyPage() {
     publicKeyRequired: zh ? '\u76d1\u542c\u975e\u672c\u673a\u5730\u5740\u65f6\u5fc5\u987b\u8bbe\u7f6e\u4ee3\u7406 API Key\u3002' : 'A proxy API key is required when listening on a non-local address.',
     timeout: zh ? '\u8d85\u65f6\uff08\u6beb\u79d2\uff09' : 'Timeout (ms)',
     lastError: zh ? '\u6700\u8fd1\u9519\u8bef' : 'Last Error',
+    keepAliveTitle: zh ? '\u540e\u53f0\u4fdd\u6d3b\u6a21\u5f0f' : 'Background keep-alive',
+    keepAliveDesc: zh
+      ? '\u6258\u76d8\u9000\u51fa\u65f6\u4fdd\u6301\u7ba1\u7406\u5668\u8fdb\u7a0b\u5728\u540e\u53f0\u8fd0\u884c\uff0c\u907f\u514d\u4e2d\u65ad\u5b9e\u4f8b\u8def\u7531\u3002\u5f53\u524d\u9636\u6bb5\u4e0d\u662f\u72ec\u7acb Windows \u670d\u52a1\u3002'
+      : 'Keep the manager process alive from the tray so the route is not interrupted. This phase is not a detached Windows service.',
   }
 
   const isLocalHost = (host: string) => ['', 'localhost', '127.0.0.1', '::1', '[::1]'].includes(host.trim())
@@ -609,6 +617,34 @@ export default function ProxyPage() {
                   {target.alias ? <div className="mt-2 truncate text-xs text-slate-500 dark:text-slate-400" title={target.alias}>{zh ? '\u522b\u540d' : 'Alias'}: {target.alias}</div> : null}
                 </div>
               ))}
+            </div>
+          </Surface>
+
+          <Surface as="section" className="p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.keepAliveTitle}</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">{labels.keepAliveDesc}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => updateDraft({ backgroundServiceMode: !draft.backgroundServiceMode })}
+                className={`relative mt-1 inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition ${
+                  draft.backgroundServiceMode
+                    ? 'border-blue-500 bg-blue-600'
+                    : 'border-slate-300 bg-slate-200 dark:border-slate-700 dark:bg-slate-800'
+                }`}
+                aria-pressed={draft.backgroundServiceMode}
+              >
+                <span
+                  className={`inline-block h-5 w-5 rounded-full bg-white shadow transition ${
+                    draft.backgroundServiceMode ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
+            </div>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-300">
+              {draft.backgroundServiceMode ? labels.enabled : labels.disabled}
             </div>
           </Surface>
         </div>

@@ -628,6 +628,7 @@ pub struct ProxyConfig {
     pub routes: Vec<ProxyRoute>,
     pub routing_strategy: String,
     pub timeout_ms: u64,
+    pub background_service_mode: bool,
 }
 
 impl Default for ProxyConfig {
@@ -641,6 +642,7 @@ impl Default for ProxyConfig {
             routes: Vec::new(),
             routing_strategy: "firstHealthy".into(),
             timeout_ms: 600_000,
+            background_service_mode: false,
         }
     }
 }
