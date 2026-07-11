@@ -83,7 +83,7 @@ export default function PerformancePage() {
   const selectedSessionIdRef = useRef('')
 
   const selectedSession = sessions.find(session => session.id === selectedSessionId)
-  const selectedInstance = instances.find(instance => instance.id === selectedInstanceId)
+  const selectedInstance = running.find(instance => instance.id === selectedInstanceId)
     || instances.find(instance => instance.id === selectedSession?.instance_id)
     || null
   const latestSample = overview.latest_samples[0] || null
@@ -148,12 +148,20 @@ export default function PerformancePage() {
   }, [refreshTelemetry])
 
   useEffect(() => {
+    if (running.length === 0) {
+      if (selectedInstanceId) setSelectedInstanceId('')
+      setLiveSystem(null)
+      setLiveLlama(null)
+      return
+    }
     if (running.length > 0 && (!selectedInstanceId || !running.some(instance => instance.id === selectedInstanceId))) {
       setSelectedInstanceId(running[0].id)
     }
   }, [running, selectedInstanceId])
 
   useEffect(() => {
+    setLiveSystem(null)
+    setLiveLlama(null)
     if (!selectedInstanceId) return
     invoke<SystemMetrics>('get_system_metrics', { instanceId: selectedInstanceId })
       .then(setLiveSystem)

@@ -346,12 +346,21 @@ export default function ProxyPage() {
     }
   }
 
+  const persistDraftConfig = async () => {
+    await invoke('save_proxy_config', { config: toCommandConfig(draft) })
+    setConfig(draft)
+    setCommandsReady(true)
+  }
+
   const setProxyRunning = async (action: 'start' | 'stop') => {
     setBusyAction(action)
     setError('')
     setNotice('')
 
     try {
+      if (action === 'start' && dirty) {
+        await persistDraftConfig()
+      }
       await invoke(action === 'start' ? 'start_proxy' : 'stop_proxy')
       const nextStatus = await invoke<unknown>('get_proxy_status').catch(() => null)
       setStatus(normalizeStatus(nextStatus, draft))

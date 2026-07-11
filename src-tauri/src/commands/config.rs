@@ -7,6 +7,25 @@ use tauri::Emitter;
 
 static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+fn default_global_config() -> GlobalConfig {
+    GlobalConfig {
+        instances: HashMap::new(),
+        model_dirs: vec![],
+        engine_dirs: vec![],
+        default_engine_id: String::new(),
+        running: HashMap::new(),
+        instance_order: vec![],
+        last_tab: "model-repo".into(),
+        dark_mode: true,
+        engine_names: HashMap::new(),
+        download_resume_policy: "manual".into(),
+        download_max_concurrent: 1,
+        download_bandwidth_limit_bytes_per_sec: 0,
+        download_low_priority_throttle: false,
+        proxy_config: ProxyConfig::default(),
+    }
+}
+
 fn persist_global_config_unlocked(
     config_dir: &std::path::Path,
     global: &GlobalConfig,
@@ -99,43 +118,20 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
     let json = match load_json() {
         Ok(j) => j,
         Err(_) => {
-            return GlobalConfig {
-                instances: HashMap::new(),
-                model_dirs: vec![],
-                engine_dirs: vec![],
-                default_engine_id: String::new(),
-                running: HashMap::new(),
-                instance_order: vec![],
-                last_tab: "model-repo".into(),
-                dark_mode: true,
-                engine_names: HashMap::new(),
-                download_resume_policy: "manual".into(),
-                download_max_concurrent: 1,
-                download_bandwidth_limit_bytes_per_sec: 0,
-                download_low_priority_throttle: false,
-                proxy_config: ProxyConfig::default(),
-            }
+            return default_global_config()
         }
     };
 
     let mut global: GlobalConfig = match serde_json::from_str(&json) {
         Ok(g) => g,
         Err(_) => {
-            return GlobalConfig {
-                instances: HashMap::new(),
-                model_dirs: vec![],
-                engine_dirs: vec![],
-                default_engine_id: String::new(),
-                running: HashMap::new(),
-                instance_order: vec![],
-                last_tab: "model-repo".into(),
-                dark_mode: true,
-                engine_names: HashMap::new(),
-                download_resume_policy: "manual".into(),
-                download_max_concurrent: 1,
-                download_bandwidth_limit_bytes_per_sec: 0,
-                download_low_priority_throttle: false,
-                proxy_config: ProxyConfig::default(),
+            let bak = config_dir.join("instances.json.bak");
+            let Ok(backup_json) = std::fs::read_to_string(&bak) else {
+                return default_global_config();
+            };
+            match serde_json::from_str(&backup_json) {
+                Ok(g) => g,
+                Err(_) => return default_global_config(),
             }
         }
     };
@@ -277,13 +273,8 @@ pub async fn load_config(
             let stored = state.instances.lock().unwrap();
             stored
                 .get(&id_hc)
-                .and_then(|c| {
-                    if c.api_key.is_empty() {
-                        None
-                    } else {
-                        Some(c.api_key.clone())
-                    }
-                })
+                .map(crate::commands::server::effective_api_key)
+                .filter(|key| !key.is_empty())
                 .unwrap_or_default()
         };
         let api_key_reconnect = api_key_health.clone();
@@ -378,5 +369,62 @@ pub fn resolve_path(path: String) -> String {
             .to_string()
     } else {
         path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_config_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-config-test-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn sample_config() -> GlobalConfig {
+        GlobalConfig {
+            instances: HashMap::new(),
+            model_dirs: vec!["models-a".into()],
+            engine_dirs: vec!["engines-a".into()],
+            default_engine_id: "engine-a".into(),
+            running: HashMap::new(),
+            instance_order: vec![],
+            last_tab: "proxy".into(),
+            dark_mode: false,
+            engine_names: HashMap::new(),
+            download_resume_policy: "manual".into(),
+            download_max_concurrent: 2,
+            download_bandwidth_limit_bytes_per_sec: 0,
+            download_low_priority_throttle: false,
+            proxy_config: ProxyConfig::default(),
+        }
+    }
+
+    #[test]
+    fn read_config_falls_back_to_backup_when_primary_json_is_corrupt() {
+        let dir = temp_config_dir("backup-fallback");
+        let expected = sample_config();
+        std::fs::write(dir.join("instances.json"), "{not-json").unwrap();
+        std::fs::write(
+            dir.join("instances.json.bak"),
+            serde_json::to_string_pretty(&expected).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = read_config_from_disk(&dir);
+
+        assert_eq!(loaded.default_engine_id, expected.default_engine_id);
+        assert_eq!(loaded.last_tab, expected.last_tab);
+        assert_eq!(
+            loaded.download_max_concurrent,
+            expected.download_max_concurrent
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

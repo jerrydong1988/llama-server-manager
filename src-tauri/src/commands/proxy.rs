@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 use crate::commands::config::update_and_persist;
+use crate::commands::server::effective_api_key;
 use crate::commands::telemetry::{record_proxy_request, ProxyRequestRecord};
 use crate::models::{AppState, InstanceConfig, ProxyConfig, ProxyStatus, ProxyTarget};
 
@@ -25,6 +26,44 @@ struct ResolvedProxyTarget {
     api_key: String,
     api_prefix: String,
     telemetry_session_id: Option<String>,
+}
+
+struct ProxyTelemetryGuard {
+    session_id: Option<String>,
+    task_id: u32,
+    model: Option<String>,
+    target_instance_id: String,
+    http_status: u16,
+    started_at: std::time::Instant,
+    recorded: bool,
+}
+
+impl ProxyTelemetryGuard {
+    fn record_once(&mut self, error_text: Option<String>) {
+        if self.recorded {
+            return;
+        }
+        self.recorded = true;
+        let _ = record_proxy_request(
+            self.session_id.as_deref(),
+            &ProxyRequestRecord {
+                task_id: self.task_id,
+                model: self.model.clone(),
+                target_instance_id: self.target_instance_id.clone(),
+                http_status: Some(self.http_status),
+                duration_ms: self.started_at.elapsed().as_secs_f64() * 1000.0,
+                error_text,
+            },
+        );
+    }
+}
+
+impl Drop for ProxyTelemetryGuard {
+    fn drop(&mut self) {
+        self.record_once(Some(
+            "client disconnected before upstream stream completed".to_string(),
+        ));
+    }
 }
 
 fn proxy_bound_addr(config: &ProxyConfig) -> String {
@@ -223,7 +262,7 @@ fn resolve_proxy_target(
             };
             return Some(ResolvedProxyTarget {
                 public,
-                api_key: config.api_key.clone(),
+                api_key: effective_api_key(config),
                 api_prefix: config.api_prefix.clone(),
                 telemetry_session_id: running_info.telemetry_session_id.clone(),
             });
@@ -452,58 +491,41 @@ async fn proxy_openai(
         }
     }
 
-    let telemetry_session_id = target.telemetry_session_id.clone();
-    let target_instance_id = target.public.instance_id.clone();
-    let model = requested_model.clone();
     let http_status = status.as_u16();
     let status_success = status.is_success();
+    let telemetry_guard = ProxyTelemetryGuard {
+        session_id: target.telemetry_session_id.clone(),
+        task_id: proxy_task_id,
+        model: requested_model.clone(),
+        target_instance_id: target.public.instance_id.clone(),
+        http_status,
+        started_at,
+        recorded: false,
+    };
     let upstream_stream = Box::pin(response.bytes_stream());
     let stream = futures_util::stream::unfold(
-        (upstream_stream, false),
-        move |(mut upstream_stream, finalized)| {
-            let telemetry_session_id = telemetry_session_id.clone();
-            let target_instance_id = target_instance_id.clone();
-            let model = model.clone();
+        (upstream_stream, false, telemetry_guard),
+        move |(mut upstream_stream, finalized, mut telemetry_guard)| {
             async move {
                 if finalized {
                     return None;
                 }
                 match upstream_stream.as_mut().next().await {
-                    Some(Ok(bytes)) => Some((Ok(bytes), (upstream_stream, false))),
+                    Some(Ok(bytes)) => Some((Ok(bytes), (upstream_stream, false, telemetry_guard))),
                     Some(Err(err)) => {
                         let error_text = err.to_string();
-                        let _ = record_proxy_request(
-                            telemetry_session_id.as_deref(),
-                            &ProxyRequestRecord {
-                                task_id: proxy_task_id,
-                                model,
-                                target_instance_id,
-                                http_status: Some(http_status),
-                                duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
-                                error_text: Some(error_text.clone()),
-                            },
-                        );
+                        telemetry_guard.record_once(Some(error_text.clone()));
                         Some((
                             Err(std::io::Error::new(std::io::ErrorKind::Other, error_text)),
-                            (upstream_stream, true),
+                            (upstream_stream, true, telemetry_guard),
                         ))
                     }
                     None => {
-                        let _ = record_proxy_request(
-                            telemetry_session_id.as_deref(),
-                            &ProxyRequestRecord {
-                                task_id: proxy_task_id,
-                                model,
-                                target_instance_id,
-                                http_status: Some(http_status),
-                                duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
-                                error_text: if status_success {
-                                    None
-                                } else {
-                                    Some(format!("upstream returned {}", http_status))
-                                },
-                            },
-                        );
+                        telemetry_guard.record_once(if status_success {
+                            None
+                        } else {
+                            Some(format!("upstream returned {}", http_status))
+                        });
                         None
                     }
                 }
@@ -594,15 +616,18 @@ pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, S
         }
     };
 
+    if let Err(err) = update_and_persist(&state, |global| {
+        global.proxy_config = config.clone();
+    }) {
+        *state.proxy_last_error.lock().unwrap() = Some(err.clone());
+        return Err(err);
+    }
+
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
     *state.proxy_shutdown.lock().unwrap() = Some(shutdown_tx);
     *state.proxy_bound_addr.lock().unwrap() = Some(bind_addr.clone());
     *state.proxy_last_error.lock().unwrap() = None;
     *state.proxy_config.lock().unwrap() = config.clone();
-    update_and_persist(&state, |global| {
-        global.proxy_config = config.clone();
-    })?;
-
     let app_for_server = app.clone();
     let server_task = tokio::spawn(async move {
         let result = axum::serve(listener, proxy_router(app_for_server.clone()))

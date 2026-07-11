@@ -289,7 +289,8 @@ fn main() {
                 let config_dir_clone = config_dir.clone();
 
                 let api_key_health = config.instances.get(&id_hc)
-                    .and_then(|c| if c.api_key.is_empty() { None } else { Some(c.api_key.clone()) })
+                    .map(crate::commands::server::effective_api_key)
+                    .filter(|key| !key.is_empty())
                     .unwrap_or_default();
                 let api_key_reconnect = api_key_health.clone();
                 std::thread::spawn(move || {

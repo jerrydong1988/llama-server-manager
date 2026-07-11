@@ -74,7 +74,7 @@ export default function BigScreenPage() {
   const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
   const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
   const [runningTasksByInstance, setRunningTasksByInstance] = useState<Record<string, RunningInferenceTask[]>>({})
-  const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
+  const [liveLlamaByInstance, setLiveLlamaByInstance] = useState<Record<string, MetricsEvent['llama']>>({})
   const [lastUpdatedAt, setLastUpdatedAt] = useState(Date.now())
   const [refreshing, setRefreshing] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
@@ -119,7 +119,10 @@ export default function BigScreenPage() {
 
   useEffect(() => {
     const unlisten = listen<MetricsEvent>('metrics-update', event => {
-      setLiveLlama(event.payload.llama || null)
+      setLiveLlamaByInstance(current => ({
+        ...current,
+        [event.payload.instanceId]: event.payload.llama || null,
+      }))
       setLastUpdatedAt(Date.now())
       if (Date.now() - lastTelemetryRefreshRef.current > BIG_SCREEN_EVENT_REFRESH_MS) {
         void refreshTelemetry({ silent: true })
@@ -145,6 +148,22 @@ export default function BigScreenPage() {
 
   const allDownloads = useMemo(() => Object.values(downloadTasks), [downloadTasks])
   const runningInstances = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
+  const liveLlama = useMemo(() => {
+    const values = runningInstances
+      .map(instance => liveLlamaByInstance[instance.id])
+      .filter((item): item is NonNullable<MetricsEvent['llama']> => !!item)
+
+    if (values.length === 0) return null
+
+    return {
+      tokens_per_sec: sumMetric(values, 'tokens_per_sec'),
+      prompt_tokens_per_sec: sumMetric(values, 'prompt_tokens_per_sec'),
+      requests: sumMetric(values, 'requests'),
+      requests_processing: sumMetric(values, 'requests_processing'),
+      requests_deferred: sumMetric(values, 'requests_deferred'),
+      busy_slots_per_decode: average(values.map(value => value.busy_slots_per_decode || 0)),
+    }
+  }, [liveLlamaByInstance, runningInstances])
   const stoppedCount = instances.filter(instance => instance.status === 'stopped').length
   const errorCount = instances.filter(instance => instance.status === 'error').length
   const latestSample = overview.latest_samples[0] || null
@@ -188,14 +207,18 @@ export default function BigScreenPage() {
     const active = allDownloads.filter(task => task.status === 'active')
     const failed = allDownloads.filter(task => task.status === 'error')
     const completed = allDownloads.filter(task => task.status === 'completed')
+    const queuedTasks = allDownloads.filter(task => task.status === 'queued').length
+    const queueFilesWithoutTask = downloadQueue.reduce((sum, entry) => (
+      sum + entry.files.filter(file => !file.task_id || !downloadTasks[file.task_id]).length
+    ), 0)
     return {
       active: active.length,
       failed: failed.length,
       completed: completed.length,
-      queued: allDownloads.filter(task => task.status === 'queued').length + downloadQueue.length,
+      queued: queuedTasks + queueFilesWithoutTask,
       speed: active.reduce((sum, task) => sum + (task.speed || 0), 0),
     }
-  }, [allDownloads, downloadQueue.length])
+  }, [allDownloads, downloadQueue, downloadTasks])
 
   const recentDownloads = useMemo(() => {
     const priority: Record<DownloadProgress['status'], number> = {
@@ -559,6 +582,10 @@ function average(values: number[]) {
   const valid = values.filter(value => Number.isFinite(value) && value > 0)
   if (valid.length === 0) return 0
   return valid.reduce((sum, value) => sum + value, 0) / valid.length
+}
+
+function sumMetric<T extends Record<string, number | undefined>>(values: T[], key: keyof T) {
+  return values.reduce((sum, value) => sum + (Number(value[key]) || 0), 0)
 }
 
 function getLabels(zh: boolean) {

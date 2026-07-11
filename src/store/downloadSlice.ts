@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { mergeRestoredDownloadTask } from './downloadMerge'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, DownloadProgress, MsFileEntry, PersistedQueueEntry } from './types'
 
@@ -211,26 +212,12 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
           const taskId = file.task_id || crypto.randomUUID()
           if (tasks[taskId]?.status === 'completed') continue
 
-          tasks[taskId] = {
-            id: taskId,
-            fileName: file.name,
-            remotePath: taskRemotePath(file),
-            fileType: file.file_type,
-            saveDir,
+          tasks[taskId] = mergeRestoredDownloadTask(tasks[taskId], file, {
             repoId: entry.repo_id,
             source,
-            runId: file.run_id,
-            downloaded: file.downloaded ?? 0,
-            total: file.size,
-            speed: 0,
-            status: (file.status as DownloadProgress['status'])
-              || (entry.status === 'active' ? 'active'
-                : entry.status === 'queued' ? 'queued'
-                : entry.status === 'pausing' ? 'paused'
-                : (entry.status as DownloadProgress['status']) || 'queued'),
-            version: file.version ?? 0,
-            error: file.error,
-          }
+            saveDir,
+            entryStatus: entry.status,
+          })
         }
       }
       set({ downloadTasks: tasks })

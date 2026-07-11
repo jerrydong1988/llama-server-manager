@@ -166,7 +166,7 @@ const InstanceManager = () => {
     if (portCheckTimerRef.current) clearTimeout(portCheckTimerRef.current)
     setPortStatus(labels.checkingPort)
     portCheckTimerRef.current = setTimeout(() => {
-      invoke<boolean>('check_port', { port })
+      invoke<boolean>('check_port', { port, host: '127.0.0.1' })
         .then(free => setPortStatus(free ? labels.portAvailable : labels.portInUse))
         .catch(() => setPortStatus(''))
     }, 300)
@@ -177,7 +177,7 @@ const InstanceManager = () => {
     if (!model || !newInst.modelPath) return
 
     try {
-      const portFree = await invoke<boolean>('check_port', { port: newInst.port })
+      const portFree = await invoke<boolean>('check_port', { port: newInst.port, host: '127.0.0.1' })
       if (!portFree) {
         setPortStatus(labels.portInUse)
         return
@@ -249,7 +249,12 @@ const InstanceManager = () => {
   const handleTestConnection = async (inst: Instance) => {
     setTestResults(state => ({ ...state, [inst.id]: 'checking' }))
     try {
-      const result = await invoke('test_connection', { host: inst.config.host, port: inst.config.port, apiKey: inst.config.api_key || null })
+      const result = await invoke('test_connection', {
+        host: inst.config.host,
+        port: inst.config.port,
+        apiKey: inst.config.api_key || null,
+        apiKeyFile: inst.config.api_key_file || null,
+      })
       if (!mountedRef.current) return
       setTestResults(state => ({ ...state, [inst.id]: `ok:${String(result)}` }))
     } catch (e: any) {

@@ -39,6 +39,31 @@ fn mask_api_key_in_cmd(cmd: &str) -> String {
     result
 }
 
+pub(crate) fn effective_api_key(config: &InstanceConfig) -> String {
+    let inline = config.api_key.trim();
+    if !inline.is_empty() {
+        return inline.to_string();
+    }
+
+    if config.api_key_file.trim().is_empty() {
+        return String::new();
+    }
+
+    std::fs::read_to_string(config.api_key_file.trim())
+        .ok()
+        .and_then(|content| {
+            content.lines().find_map(|line| {
+                let key = line.trim().trim_start_matches('\u{feff}');
+                if key.is_empty() {
+                    None
+                } else {
+                    Some(key.to_string())
+                }
+            })
+        })
+        .unwrap_or_default()
+}
+
 fn telemetry_config_hash(config: &InstanceConfig) -> String {
     let mut hasher = DefaultHasher::new();
     serde_json::to_string(config)
@@ -797,6 +822,16 @@ pub async fn start_server(
                     status.code(),
                     "startup-failed",
                 );
+                let _ = crate::commands::config::update_and_persist(&st, |global| {
+                    if global
+                        .running
+                        .get(&id)
+                        .map(|current| current.pid == pid)
+                        .unwrap_or(false)
+                    {
+                        global.running.remove(&id);
+                    }
+                });
                 // Emit captured stderr/log content so errors are never lost on quick exit
                 if let Ok(log_content) = std::fs::read_to_string(&log_path_mon) {
                     if !log_content.trim().is_empty() {
@@ -837,6 +872,16 @@ pub async fn start_server(
                     exit_code,
                     "process-exited",
                 );
+                let _ = crate::commands::config::update_and_persist(&st2, |global| {
+                    if global
+                        .running
+                        .get(&id)
+                        .map(|current| current.pid == pid)
+                        .unwrap_or(false)
+                    {
+                        global.running.remove(&id);
+                    }
+                });
                 let _ = app_clone.emit("server-stopped", serde_json::json!({ "instanceId": id }));
             }
         }
@@ -850,7 +895,7 @@ pub async fn start_server(
         config.host.clone()
     };
     let port = config.port;
-    let api_key_health = config.api_key.clone();
+    let api_key_health = effective_api_key(&config);
     std::thread::spawn(move || {
         health_check_loop(&id, &host, port, pid, &api_key_health, app_for_health);
     });
@@ -864,7 +909,7 @@ pub async fn start_server(
         config.host.clone()
     };
     let port_metrics = config.port;
-    let api_key_metrics = config.api_key.clone();
+    let api_key_metrics = effective_api_key(&config);
     let telemetry_session_metrics = telemetry_session_id.clone();
     std::thread::spawn(move || {
         monitor_loop(
@@ -1257,6 +1302,18 @@ pub async fn stop_server(
             None,
             "manual-stop",
         );
+        if let Some(ref ri) = ri {
+            let _ = crate::commands::config::update_and_persist(&state, |global| {
+                if global
+                    .running
+                    .get(&instance_id)
+                    .map(|current| current.pid == ri.pid)
+                    .unwrap_or(false)
+                {
+                    global.running.remove(&instance_id);
+                }
+            });
+        }
         app.emit(
             "server-stopped",
             serde_json::json!({
@@ -1403,7 +1460,31 @@ pub async fn test_connection(
     host: String,
     port: u16,
     api_key: Option<String>,
+    api_key_file: Option<String>,
 ) -> Result<String, String> {
+    let effective_api_key = api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            api_key_file
+                .as_deref()
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .and_then(|path| {
+                    std::fs::read_to_string(path).ok().and_then(|content| {
+                        content.lines().find_map(|line| {
+                            let key = line.trim().trim_start_matches('\u{feff}');
+                            if key.is_empty() {
+                                None
+                            } else {
+                                Some(key.to_string())
+                            }
+                        })
+                    })
+                })
+        });
     let base_url = format!(
         "http://{}:{}",
         if host == "0.0.0.0" {
@@ -1414,7 +1495,7 @@ pub async fn test_connection(
         port
     );
     let health_url = format!("{}/health", base_url);
-    let health_status = match http_get(&health_url, api_key.as_deref())
+    let health_status = match http_get(&health_url, effective_api_key.as_deref())
         .timeout(std::time::Duration::from_secs(3))
         .send()
         .await
@@ -1429,7 +1510,7 @@ pub async fn test_connection(
     }
 
     let models_url = format!("{}/v1/models", base_url);
-    let models_status = match http_get(&models_url, api_key.as_deref())
+    let models_status = match http_get(&models_url, effective_api_key.as_deref())
         .timeout(std::time::Duration::from_secs(3))
         .send()
         .await
@@ -1465,9 +1546,14 @@ fn classify_test_connection_result(
 }
 
 #[tauri::command]
-pub async fn check_port(port: u16) -> Result<bool, String> {
+pub async fn check_port(port: u16, host: Option<String>) -> Result<bool, String> {
     use std::net::TcpListener;
-    match TcpListener::bind(format!("127.0.0.1:{}", port)) {
+    let bind_host = host
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("127.0.0.1");
+    match TcpListener::bind(format!("{}:{}", bind_host, port)) {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -2256,5 +2342,32 @@ mod perf_parser_tests {
     fn browser_url_maps_wildcard_host_to_localhost() {
         let url = browser_url_for_host("0.0.0.0", 8080).unwrap();
         assert_eq!(url, "http://localhost:8080");
+    }
+
+    #[test]
+    fn effective_api_key_prefers_inline_key() {
+        let mut config = InstanceConfig::default();
+        config.api_key = " inline-key ".into();
+        config.api_key_file = "missing-key-file.txt".into();
+
+        assert_eq!(effective_api_key(&config), "inline-key");
+    }
+
+    #[test]
+    fn effective_api_key_reads_first_non_empty_file_line() {
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-api-key-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("api-key.txt");
+        std::fs::write(&path, "\n file-key \n second-key \n").unwrap();
+
+        let mut config = InstanceConfig::default();
+        config.api_key_file = path.to_string_lossy().to_string();
+
+        assert_eq!(effective_api_key(&config), "file-key");
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir(dir);
     }
 }

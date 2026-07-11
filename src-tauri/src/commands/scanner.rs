@@ -711,7 +711,7 @@ pub async fn delete_model_file(
 ) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if std::fs::symlink_metadata(p)
-        .map_err(|e| format!("璺緞鏃犳晥: {}", e))?
+        .map_err(|e| format!("路径无效: {}", e))?
         .file_type()
         .is_symlink()
     {
