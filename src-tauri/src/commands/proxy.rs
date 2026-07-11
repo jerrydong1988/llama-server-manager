@@ -9,7 +9,7 @@ use axum::{
 use futures_util::StreamExt;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 use crate::commands::config::update_and_persist;
@@ -17,6 +17,8 @@ use crate::commands::telemetry::{record_proxy_request, ProxyRequestRecord};
 use crate::models::{AppState, InstanceConfig, ProxyConfig, ProxyStatus, ProxyTarget};
 
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
+const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
 
 struct ResolvedProxyTarget {
     public: ProxyTarget,
@@ -27,6 +29,80 @@ struct ResolvedProxyTarget {
 
 fn proxy_bound_addr(config: &ProxyConfig) -> String {
     format!("{}:{}", config.host, config.port)
+}
+
+fn proxy_bind_error_message(bind_addr: &str, err: &std::io::Error) -> String {
+    if err.kind() == std::io::ErrorKind::AddrInUse {
+        format!(
+            "failed to bind proxy {}: address is already in use. If background keep-alive was enabled, another manager process may still be serving this route from the tray. Exit the old tray process or choose another port.",
+            bind_addr
+        )
+    } else {
+        format!("failed to bind proxy {}: {}", bind_addr, err)
+    }
+}
+
+async fn await_proxy_task_shutdown(
+    shutdown_sender: Option<tokio::sync::oneshot::Sender<()>>,
+    server_task: Option<tokio::task::JoinHandle<()>>,
+) -> Result<(), String> {
+    if let Some(sender) = shutdown_sender {
+        let _ = sender.send(());
+    }
+
+    if let Some(mut task) = server_task {
+        tokio::select! {
+            result = &mut task => {
+                result.map_err(|err| format!("proxy server task failed during shutdown: {}", err))?;
+            }
+            _ = tokio::time::sleep(PROXY_SHUTDOWN_TIMEOUT) => {
+                task.abort();
+                let abort_result = tokio::time::timeout(PROXY_ABORT_TIMEOUT, task)
+                    .await
+                    .map_err(|_| "proxy server did not stop after abort".to_string())?;
+                if let Err(err) = abort_result {
+                    if !err.is_cancelled() {
+                        return Err(format!("proxy server task failed during abort: {}", err));
+                    }
+                }
+                return Err("proxy server did not stop within 3 seconds; forced shutdown was requested".to_string());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn discard_finished_proxy_task(state: &AppState) {
+    let task = {
+        let mut guard = state.proxy_task.lock().unwrap();
+        if guard
+            .as_ref()
+            .map(|task| task.is_finished())
+            .unwrap_or(false)
+        {
+            guard.take()
+        } else {
+            None
+        }
+    };
+
+    if let Some(task) = task {
+        let _ = task.await;
+    }
+}
+
+async fn shutdown_proxy_runtime(state: &AppState) -> Result<(), String> {
+    let sender = state.proxy_shutdown.lock().unwrap().take();
+    let task = state.proxy_task.lock().unwrap().take();
+    let result = await_proxy_task_shutdown(sender, task).await;
+
+    *state.proxy_bound_addr.lock().unwrap() = None;
+    if let Err(err) = &result {
+        *state.proxy_last_error.lock().unwrap() = Some(err.clone());
+    }
+
+    result
 }
 
 fn next_proxy_task_id() -> u32 {
@@ -496,6 +572,7 @@ pub async fn test_proxy_route(
 
 pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
     let state = app.state::<AppState>();
+    discard_finished_proxy_task(state.inner()).await;
     if state.proxy_shutdown.lock().unwrap().is_some() {
         return Ok(proxy_status_from_state(&state));
     }
@@ -511,7 +588,7 @@ pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, S
     let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
         Ok(listener) => listener,
         Err(err) => {
-            let msg = format!("failed to bind proxy {}: {}", bind_addr, err);
+            let msg = proxy_bind_error_message(&bind_addr, &err);
             *state.proxy_last_error.lock().unwrap() = Some(msg.clone());
             return Err(msg);
         }
@@ -527,21 +604,23 @@ pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, S
     })?;
 
     let app_for_server = app.clone();
-    tokio::spawn(async move {
+    let server_task = tokio::spawn(async move {
         let result = axum::serve(listener, proxy_router(app_for_server.clone()))
             .with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
             })
             .await;
-        if let Err(err) = result {
-            if let Some(state) = app_for_server.try_state::<AppState>() {
+        if let Some(state) = app_for_server.try_state::<AppState>() {
+            if let Err(err) = result {
                 *state.proxy_last_error.lock().unwrap() =
                     Some(format!("proxy server error: {}", err));
-                *state.proxy_shutdown.lock().unwrap() = None;
-                *state.proxy_bound_addr.lock().unwrap() = None;
             }
+            *state.proxy_shutdown.lock().unwrap() = None;
+            *state.proxy_bound_addr.lock().unwrap() = None;
+            let _ = state.proxy_task.lock().unwrap().take();
         }
     });
+    *state.proxy_task.lock().unwrap() = Some(server_task);
 
     Ok(proxy_status_from_state(&state))
 }
@@ -553,10 +632,7 @@ pub async fn start_proxy(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
 
 #[tauri::command]
 pub async fn stop_proxy(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
-    if let Some(sender) = state.proxy_shutdown.lock().unwrap().take() {
-        let _ = sender.send(());
-    }
-    *state.proxy_bound_addr.lock().unwrap() = None;
+    shutdown_proxy_runtime(state.inner()).await?;
     {
         let mut config = state.proxy_config.lock().unwrap();
         config.enabled = false;
@@ -573,9 +649,39 @@ pub async fn restart_proxy(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ProxyStatus, String> {
-    if let Some(sender) = state.proxy_shutdown.lock().unwrap().take() {
-        let _ = sender.send(());
-    }
-    *state.proxy_bound_addr.lock().unwrap() = None;
+    shutdown_proxy_runtime(state.inner()).await?;
     start_proxy_for_app(app).await
+}
+
+pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<AppState>() {
+        shutdown_proxy_runtime(state.inner()).await
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bind_error_mentions_background_keepalive_when_address_is_in_use() {
+        let err = std::io::Error::new(std::io::ErrorKind::AddrInUse, "address already in use");
+        let message = super::proxy_bind_error_message("127.0.0.1:11435", &err);
+
+        assert!(message.contains("127.0.0.1:11435"));
+        assert!(message.contains("already in use"));
+        assert!(message.contains("background keep-alive"));
+    }
+
+    #[tokio::test]
+    async fn proxy_shutdown_sends_signal_and_waits_for_server_task() {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(async move {
+            let _ = shutdown_rx.await;
+        });
+
+        let result = super::await_proxy_task_shutdown(Some(shutdown_tx), Some(task)).await;
+
+        assert!(result.is_ok());
+    }
 }

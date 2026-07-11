@@ -139,7 +139,8 @@ fn hide_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn quit_app(app: tauri::AppHandle) {
+async fn quit_app(app: tauri::AppHandle) {
+    let _ = crate::commands::proxy::shutdown_proxy_for_app(&app).await;
     finalize_app_exit(&app);
 }
 
@@ -338,6 +339,7 @@ fn main() {
             usb4_adapters: Mutex::new(Vec::new()),
             proxy_config: Mutex::new(initial_config.proxy_config),
             proxy_shutdown: Mutex::new(None),
+            proxy_task: Mutex::new(None),
             proxy_bound_addr: Mutex::new(None),
             proxy_last_error: Mutex::new(None),
             restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),

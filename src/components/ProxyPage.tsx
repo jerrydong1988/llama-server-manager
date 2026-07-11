@@ -339,7 +339,7 @@ export default function ProxyPage() {
       setNotice(labels.saved)
       setCommandsReady(true)
     } catch (saveError) {
-      setCommandsReady(false)
+      setCommandsReady(true)
       setError(errorMessage(saveError))
     } finally {
       setSaving(false)
@@ -357,7 +357,7 @@ export default function ProxyPage() {
       setStatus(normalizeStatus(nextStatus, draft))
       setCommandsReady(true)
     } catch (actionError) {
-      setCommandsReady(false)
+      setCommandsReady(true)
       setError(errorMessage(actionError))
     } finally {
       setBusyAction(null)

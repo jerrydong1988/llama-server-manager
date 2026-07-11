@@ -687,6 +687,7 @@ pub struct AppState {
     pub usb4_adapters: Mutex<Vec<Usb4Adapter>>,
     pub proxy_config: Mutex<ProxyConfig>,
     pub proxy_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    pub proxy_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub proxy_bound_addr: Mutex<Option<String>>,
     pub proxy_last_error: Mutex<Option<String>>,
     pub restored_runtime_instances: Mutex<std::collections::HashSet<String>>,
