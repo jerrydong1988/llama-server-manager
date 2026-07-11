@@ -59,14 +59,11 @@ static NATIVE_START: OnceLock<Instant> = OnceLock::new();
 enum ProxyQuitDecision {
     ExitNow,
     RequestConfirmation,
-    KeepAlive,
 }
 
-fn decide_proxy_quit(proxy_running: bool, background_service_mode: bool) -> ProxyQuitDecision {
+fn decide_proxy_quit(proxy_running: bool, _background_service_mode: bool) -> ProxyQuitDecision {
     if !proxy_running {
         ProxyQuitDecision::ExitNow
-    } else if background_service_mode {
-        ProxyQuitDecision::KeepAlive
     } else {
         ProxyQuitDecision::RequestConfirmation
     }
@@ -102,9 +99,11 @@ fn finalize_app_exit(app: &tauri::AppHandle) {
     app.exit(0);
 }
 
-fn request_proxy_exit_confirmation(app: &tauri::AppHandle) {
+fn request_proxy_exit_confirmation(app: &tauri::AppHandle, background_service_mode: bool) {
     let payload = serde_json::json!({
         "reason": "proxy-running",
+        "backgroundServiceMode": background_service_mode,
+        "background_service_mode": background_service_mode,
     });
 
     if let Some(window) = app.get_webview_window("main") {
@@ -114,19 +113,6 @@ fn request_proxy_exit_confirmation(app: &tauri::AppHandle) {
     } else {
         let _ = app.emit("proxy-exit-confirmation-requested", payload);
     }
-}
-
-fn keep_proxy_alive_in_tray(app: &tauri::AppHandle) {
-    persist_runtime_state(app);
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.hide();
-    }
-    let _ = app.emit(
-        "proxy-background-keepalive",
-        serde_json::json!({
-            "reason": "proxy-background-service-mode",
-        }),
-    );
 }
 
 #[tauri::command]
@@ -223,8 +209,9 @@ fn main() {
                             let (proxy_running, background_service_mode) = proxy_quit_inputs(app);
                             match decide_proxy_quit(proxy_running, background_service_mode) {
                                 ProxyQuitDecision::ExitNow => finalize_app_exit(app),
-                                ProxyQuitDecision::RequestConfirmation => request_proxy_exit_confirmation(app),
-                                ProxyQuitDecision::KeepAlive => keep_proxy_alive_in_tray(app),
+                                ProxyQuitDecision::RequestConfirmation => {
+                                    request_proxy_exit_confirmation(app, background_service_mode)
+                                }
                             }
                         }
                         _ => {}
@@ -518,10 +505,10 @@ mod tests {
     }
 
     #[test]
-    fn proxy_quit_keeps_process_alive_when_keep_alive_is_enabled() {
+    fn proxy_quit_prompts_even_when_keep_alive_is_enabled() {
         assert_eq!(
             super::decide_proxy_quit(true, true),
-            super::ProxyQuitDecision::KeepAlive
+            super::ProxyQuitDecision::RequestConfirmation
         );
     }
 

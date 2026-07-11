@@ -276,6 +276,7 @@ function AppInner() {
   const [autoStarted, setAutoStarted] = useState(false)
   const [commandCenterOpen, setCommandCenterOpen] = useState(false)
   const [proxyExitConfirmOpen, setProxyExitConfirmOpen] = useState(false)
+  const [proxyExitKeepAliveEnabled, setProxyExitKeepAliveEnabled] = useState(false)
 
   useEffect(() => {
     invoke<boolean>('is_autostart_enabled').then(setAutoStartEnabled).catch(() => {})
@@ -498,7 +499,11 @@ function AppInner() {
     let disposed = false
     let unlisten: (() => void) | undefined
 
-    listen('proxy-exit-confirmation-requested', () => {
+    listen('proxy-exit-confirmation-requested', event => {
+      const payload = event.payload && typeof event.payload === 'object'
+        ? event.payload as Record<string, unknown>
+        : {}
+      setProxyExitKeepAliveEnabled(payload.backgroundServiceMode === true || payload.background_service_mode === true)
       setProxyExitConfirmOpen(true)
     }).then(cleanup => {
       if (disposed) cleanup()
@@ -652,11 +657,13 @@ function AppInner() {
       await invoke('quit_app')
     } catch {
       setProxyExitConfirmOpen(false)
+      setProxyExitKeepAliveEnabled(false)
       setActiveTab('proxy')
     }
   }
   const handleKeepProxyInTray = () => {
     setProxyExitConfirmOpen(false)
+    setProxyExitKeepAliveEnabled(false)
     invoke('hide_window').catch(() => {})
   }
 
@@ -726,14 +733,21 @@ function AppInner() {
                   {lang === 'zh-CN' ? '\u5b9e\u4f8b\u8def\u7531\u6b63\u5728\u8fd0\u884c' : 'Instance routing is running'}
                 </h2>
                 <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {lang === 'zh-CN'
-                    ? '\u76f4\u63a5\u9000\u51fa\u4e3b\u7a0b\u5e8f\u4f1a\u4e2d\u65ad\u7edf\u4e00 API \u5165\u53e3\u3002\u5efa\u8bae\u4fdd\u6301\u6258\u76d8\u8fd0\u884c\uff0c\u6216\u8005\u5148\u505c\u6b62\u8def\u7531\u518d\u9000\u51fa\u3002'
-                    : 'Exiting the main process will interrupt the unified API endpoint. Keep it running in the tray, or stop routing before exiting.'}
+                  {proxyExitKeepAliveEnabled
+                    ? (lang === 'zh-CN'
+                        ? '\u540e\u53f0\u4fdd\u6d3b\u6a21\u5f0f\u5df2\u5f00\u542f\u3002\u9009\u62e9\u4fdd\u6301\u6258\u76d8\u8fd0\u884c\u4f1a\u7ee7\u7eed\u63d0\u4f9b\u8def\u7531\uff1b\u5982\u679c\u8981\u771f\u6b63\u9000\u51fa\u4e3b\u7a0b\u5e8f\uff0c\u8bf7\u9009\u62e9\u505c\u6b62\u8def\u7531\u5e76\u9000\u51fa\u3002'
+                        : 'Background keep-alive is enabled. Keeping the app in the tray will continue serving routes; to truly quit the main process, stop routing and exit.')
+                    : (lang === 'zh-CN'
+                        ? '\u76f4\u63a5\u9000\u51fa\u4e3b\u7a0b\u5e8f\u4f1a\u4e2d\u65ad\u7edf\u4e00 API \u5165\u53e3\u3002\u5efa\u8bae\u4fdd\u6301\u6258\u76d8\u8fd0\u884c\uff0c\u6216\u8005\u5148\u505c\u6b62\u8def\u7531\u518d\u9000\u51fa\u3002'
+                        : 'Exiting the main process will interrupt the unified API endpoint. Keep it running in the tray, or stop routing before exiting.')}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setProxyExitConfirmOpen(false)}
+                onClick={() => {
+                  setProxyExitConfirmOpen(false)
+                  setProxyExitKeepAliveEnabled(false)
+                }}
                 className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100"
                 aria-label={lang === 'zh-CN' ? '\u5173\u95ed' : 'Close'}
               >
@@ -742,12 +756,15 @@ function AppInner() {
             </div>
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
               <Button onClick={handleKeepProxyInTray}>
-                {lang === 'zh-CN' ? '\u4fdd\u6301\u6258\u76d8\u8fd0\u884c' : 'Keep running in tray'}
+                {proxyExitKeepAliveEnabled
+                  ? (lang === 'zh-CN' ? '\u4fdd\u6301\u540e\u53f0\u8def\u7531\u8fd0\u884c' : 'Keep route running')
+                  : (lang === 'zh-CN' ? '\u4fdd\u6301\u6258\u76d8\u8fd0\u884c' : 'Keep running in tray')}
               </Button>
               <Button
                 onClick={() => {
                   setActiveTab('proxy')
                   setProxyExitConfirmOpen(false)
+                  setProxyExitKeepAliveEnabled(false)
                 }}
               >
                 {lang === 'zh-CN' ? '\u6253\u5f00\u8def\u7531\u8bbe\u7f6e' : 'Open routing settings'}
