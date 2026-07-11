@@ -1073,15 +1073,29 @@ pub fn health_check_loop(
     app: tauri::AppHandle,
 ) {
     let url = format!("http://{}:{}/health", host, port);
+    let models_url = format!("http://{}:{}/v1/models", host, port);
     let client = reqwest::blocking::Client::new();
 
-    let health_req = |timeout_secs: u64| {
-        let mut req = client.get(&url);
+    let probe_req = |probe_url: &str, timeout_secs: u64| {
+        let mut req = client.get(probe_url);
         if !api_key.is_empty() {
             req = req.header("Authorization", format!("Bearer {}", api_key));
         }
         req.timeout(std::time::Duration::from_secs(timeout_secs))
             .send()
+    };
+
+    let service_ready = |timeout_secs: u64| {
+        let health = probe_req(&url, timeout_secs)
+            .map(|resp| resp.status())
+            .map_err(|err| err.to_string());
+        if probe_status_is_success(&health) {
+            return true;
+        }
+        let models = probe_req(&models_url, timeout_secs)
+            .map(|resp| resp.status())
+            .map_err(|err| err.to_string());
+        probe_status_is_success(&models)
     };
 
     let is_my_instance = || {
@@ -1102,57 +1116,46 @@ pub fn health_check_loop(
             cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
             return;
         }
-        if let Ok(resp) = health_req(2) {
-            if resp.status().is_success() {
-                let _ = app.emit(
-                    "health-status",
-                    serde_json::json!({
-                        "instanceId": instance_id, "status": "ok",
-                    }),
-                );
-                let mut fail_count = 0u32;
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    if !is_my_instance() {
-                        return;
-                    }
+        if service_ready(2) {
+            let _ = app.emit(
+                "health-status",
+                serde_json::json!({
+                    "instanceId": instance_id, "status": "ok",
+                }),
+            );
+            let mut fail_count = 0u32;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if !is_my_instance() {
+                    return;
+                }
+                if !is_recorded_process_alive(expected_pid) {
+                    cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
+                    return;
+                }
+                if service_ready(5) {
+                    fail_count = 0;
+                    let _ = app.emit(
+                        "health-status",
+                        serde_json::json!({
+                            "instanceId": instance_id, "status": "ok",
+                        }),
+                    );
+                } else {
+                    fail_count += 1;
+                }
+                if fail_count >= 3 {
                     if !is_recorded_process_alive(expected_pid) {
                         cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
                         return;
                     }
-                    if let Ok(resp) = health_req(5) {
-                        if !resp.status().is_success() {
-                            fail_count += 1;
-                        } else {
-                            fail_count = 0;
-                            let _ = app.emit(
-                                "health-status",
-                                serde_json::json!({
-                                    "instanceId": instance_id, "status": "ok",
-                                }),
-                            );
-                        }
-                    } else {
-                        fail_count += 1;
-                    }
-                    if fail_count >= 3 {
-                        if !is_recorded_process_alive(expected_pid) {
-                            cleanup_running_instance(
-                                &app,
-                                instance_id,
-                                expected_pid,
-                                "process-exited",
-                            );
-                            return;
-                        }
-                        let _ = app.emit(
-                            "health-status",
-                            serde_json::json!({
-                                "instanceId": instance_id, "status": "fail",
-                            }),
-                        );
-                        fail_count = 0;
-                    }
+                    let _ = app.emit(
+                        "health-status",
+                        serde_json::json!({
+                            "instanceId": instance_id, "status": "fail",
+                        }),
+                    );
+                    fail_count = 0;
                 }
             }
         }
@@ -1165,45 +1168,39 @@ pub fn health_check_loop(
         if !is_my_instance() {
             return;
         }
-        if let Ok(resp) = health_req(5) {
-            if resp.status().is_success() {
-                let _ = app.emit(
-                    "health-status",
-                    serde_json::json!({
-                        "instanceId": instance_id, "status": "ok",
-                    }),
-                );
-                // Enter stable monitoring loop
-                let mut fail_count = 0u32;
-                loop {
-                    std::thread::sleep(std::time::Duration::from_secs(5));
-                    if !is_my_instance() {
-                        return;
-                    }
-                    if let Ok(resp) = health_req(5) {
-                        if !resp.status().is_success() {
-                            fail_count += 1;
-                        } else {
-                            fail_count = 0;
-                            let _ = app.emit(
-                                "health-status",
-                                serde_json::json!({
-                                    "instanceId": instance_id, "status": "ok",
-                                }),
-                            );
-                        }
-                    } else {
-                        fail_count += 1;
-                    }
-                    if fail_count >= 3 {
-                        let _ = app.emit(
-                            "health-status",
-                            serde_json::json!({
-                                "instanceId": instance_id, "status": "fail",
-                            }),
-                        );
-                        fail_count = 0;
-                    }
+        if service_ready(5) {
+            let _ = app.emit(
+                "health-status",
+                serde_json::json!({
+                    "instanceId": instance_id, "status": "ok",
+                }),
+            );
+            // Enter stable monitoring loop
+            let mut fail_count = 0u32;
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if !is_my_instance() {
+                    return;
+                }
+                if service_ready(5) {
+                    fail_count = 0;
+                    let _ = app.emit(
+                        "health-status",
+                        serde_json::json!({
+                            "instanceId": instance_id, "status": "ok",
+                        }),
+                    );
+                } else {
+                    fail_count += 1;
+                }
+                if fail_count >= 3 {
+                    let _ = app.emit(
+                        "health-status",
+                        serde_json::json!({
+                            "instanceId": instance_id, "status": "fail",
+                        }),
+                    );
+                    fail_count = 0;
                 }
             }
         }
@@ -1407,8 +1404,8 @@ pub async fn test_connection(
     port: u16,
     api_key: Option<String>,
 ) -> Result<String, String> {
-    let url = format!(
-        "http://{}:{}/health",
+    let base_url = format!(
+        "http://{}:{}",
         if host == "0.0.0.0" {
             "localhost"
         } else {
@@ -1416,20 +1413,55 @@ pub async fn test_connection(
         },
         port
     );
-    match http_get(&url, api_key.as_deref())
+    let health_url = format!("{}/health", base_url);
+    let health_status = match http_get(&health_url, api_key.as_deref())
         .timeout(std::time::Duration::from_secs(3))
         .send()
         .await
     {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                Ok("✓ 连接成功，服务正常".into())
-            } else {
-                Err(format!("服务返回 HTTP {}", resp.status()))
-            }
-        }
-        Err(e) => Err(format!("无法连接: {}", e)),
+        Ok(resp) if resp.status().is_success() => Ok(resp.status()),
+        Ok(resp) => Err(format!("HTTP {}", resp.status())),
+        Err(e) => Err(e.to_string()),
+    };
+
+    if health_status.is_ok() {
+        return classify_test_connection_result(health_status, Err("not checked".to_string()));
     }
+
+    let models_url = format!("{}/v1/models", base_url);
+    let models_status = match http_get(&models_url, api_key.as_deref())
+        .timeout(std::time::Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => Ok(resp.status()),
+        Ok(resp) => Err(format!("HTTP {}", resp.status())),
+        Err(e) => Err(e.to_string()),
+    };
+
+    classify_test_connection_result(health_status, models_status)
+}
+
+fn classify_test_connection_result(
+    health: Result<reqwest::StatusCode, String>,
+    models: Result<reqwest::StatusCode, String>,
+) -> Result<String, String> {
+    if health.is_ok() {
+        return Ok("✓ 连接成功，服务正常".into());
+    }
+
+    if models.is_ok() {
+        return Ok(format!(
+            "连接成功，OpenAI API 可访问（/health 返回：{}）",
+            health.unwrap_err()
+        ));
+    }
+
+    Err(format!(
+        "服务健康检查失败：{}；/v1/models 也失败：{}",
+        health.unwrap_err(),
+        models.unwrap_err()
+    ))
 }
 
 #[tauri::command]
@@ -1637,6 +1669,13 @@ fn http_get(url: &str, api_key: Option<&str>) -> reqwest::RequestBuilder {
     } else {
         req
     }
+}
+
+fn probe_status_is_success(status: &Result<reqwest::StatusCode, String>) -> bool {
+    status
+        .as_ref()
+        .map(|status| status.is_success())
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -2193,6 +2232,24 @@ mod perf_parser_tests {
     fn browser_url_rejects_command_metacharacters_in_host() {
         let err = browser_url_for_host("127.0.0.1 & calc", 8080).unwrap_err();
         assert!(err.contains("Invalid host"));
+    }
+
+    #[test]
+    fn test_connection_accepts_models_when_health_is_bad_gateway() {
+        let result = classify_test_connection_result(
+            Err("HTTP 502 Bad Gateway".to_string()),
+            Ok(reqwest::StatusCode::OK),
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn fallback_probe_treats_successful_models_as_ready() {
+        assert!(!probe_status_is_success(&Err(
+            "HTTP 502 Bad Gateway".to_string()
+        )));
+        assert!(probe_status_is_success(&Ok(reqwest::StatusCode::OK)));
     }
 
     #[test]

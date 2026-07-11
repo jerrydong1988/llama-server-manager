@@ -1,6 +1,7 @@
 import { startTransition } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { pathBasename } from '../utils/path'
+import { resolveHydratedHealth } from './bootstrapHealth'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type {
   DownloadManagerSnapshot,
@@ -97,16 +98,18 @@ async function processConfig(
   const runningIds = new Set(Object.keys(global.running || {}))
   const order = global.instance_order || Object.keys(global.instances)
   const orderIndex = new Map(order.map((id, index) => [id, index]))
+  const existingInstances = get().instances
 
   const instances: Instance[] = Object.entries(global.instances).map(([id, config]) => {
     const startedAt = global.running?.[id]?.start_time ?? 0
+    const status: Instance['status'] = runningIds.has(id) ? 'running' : 'stopped'
     return {
       id,
       name: config.name || 'Unnamed instance',
-      status: runningIds.has(id) ? 'running' : 'stopped',
+      status,
       model: pathBasename(config.model_path),
       port: config.port,
-      healthCheck: 'pending',
+      healthCheck: resolveHydratedHealth(id, status, existingInstances),
       config,
       startTime: startedAt > 0 ? startedAt * 1000 : undefined,
     }
