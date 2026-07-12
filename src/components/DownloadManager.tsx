@@ -1176,7 +1176,7 @@ export default function DownloadManager() {
                   <button
                     onClick={handleBrowse}
                     disabled={browsing}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900 dark:hover:bg-white"
+                    className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <Download className="h-4 w-4" />
                     <span>{t.modelRepo.browseFiles}</span>
