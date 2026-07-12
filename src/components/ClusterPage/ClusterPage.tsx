@@ -549,7 +549,7 @@ export default function ClusterPage() {
               </div>
             </InsetSurface>
 
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm leading-6 text-amber-100">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
               {t.clusterPage.sshWarning}
             </div>
           </div>
@@ -595,7 +595,7 @@ export default function ClusterPage() {
             <div className="space-y-4 p-6">
               {launchStep === 0 && (
                 <>
-                  <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-xs text-amber-200">{t.clusterPage.sshWarning}</div>
+                  <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">{t.clusterPage.sshWarning}</div>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-400">{labels.workerHost}</label>
                     <TextInput type="text" value={launchForm.host} onChange={event => setLaunchForm({ ...launchForm, host: event.target.value })} placeholder="192.168.x.x" className="h-10" />

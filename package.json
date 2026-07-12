@@ -8,9 +8,10 @@
     "build": "tsc && vite build",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:guide": "node scripts/check-guide.cjs",
+    "check:cluster-theme": "node scripts/check-cluster-theme.mjs",
     "check:monitoring-theme": "node scripts/check-monitoring-theme.mjs",
     "test:regressions": "node scripts/test-bootstrap-health.cjs && node scripts/test-download-restore-merge.cjs && node scripts/test-redownload-sequencing.cjs && node scripts/test-config-save-sequencing.cjs",
-    "check:release": "npm run check:encoding && npm run check:guide && npm run check:monitoring-theme && npm run test:regressions && tsc --noEmit",
+    "check:release": "npm run check:encoding && npm run check:guide && npm run check:cluster-theme && npm run check:monitoring-theme && npm run test:regressions && tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri"
   },
