@@ -31,6 +31,8 @@ jobs:
         run: npm ci
       - name: Validate release
         run: npm run check:release
+      - name: Build frontend
+        run: npm run build
       - name: Audit frontend dependencies
         run: npm audit --audit-level=moderate --registry=https://registry.npmjs.org
       - name: Test Rust
