@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "check:encoding": "node scripts/check-encoding.mjs",
+    "check:guide": "node scripts/check-guide.cjs",
     "check:monitoring-theme": "node scripts/check-monitoring-theme.mjs",
     "preview": "vite preview",
     "tauri": "tauri"
