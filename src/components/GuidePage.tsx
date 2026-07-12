@@ -242,6 +242,12 @@ export default function GuidePage() {
         const isLast = index === tourSteps.length - 1
 
         await new Promise<void>((resolve) => {
+          let settled = false
+          const settle = () => {
+            if (settled) return
+            settled = true
+            resolve()
+          }
           const walkthrough = driver({
             animate: true,
             showProgress: true,
@@ -256,8 +262,13 @@ export default function GuidePage() {
             onCloseClick: () => {
               cancelled = true
               walkthrough.destroy()
+              settle()
             },
-            onDestroyed: () => resolve(),
+            onDoneClick: () => {
+              walkthrough.destroy()
+              settle()
+            },
+            onDestroyed: settle,
           })
           walkthrough.drive()
         })

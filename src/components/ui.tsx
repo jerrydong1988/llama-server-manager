@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, CSSProperties, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 
 export const surfaceClassName = 'rounded-lg border border-slate-200 bg-white text-slate-900 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/70 dark:text-slate-100 dark:shadow-[0_16px_48px_rgba(15,23,42,0.28)]'
 export const insetSurfaceClassName = 'rounded-lg border border-slate-200 bg-slate-50 text-slate-900 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-100'
@@ -12,13 +12,14 @@ export function Surface({
   as = 'div',
   className = '',
   children,
+  ...elementProps
 }: {
   as?: 'div' | 'section' | 'aside'
   className?: string
   children: ReactNode
-}) {
+} & Omit<HTMLAttributes<HTMLElement>, 'children' | 'className'>) {
   const Component = as
-  return <Component className={`${surfaceClassName} ${className}`}>{children}</Component>
+  return <Component {...elementProps} className={`${surfaceClassName} ${className}`}>{children}</Component>
 }
 
 export function InsetSurface({

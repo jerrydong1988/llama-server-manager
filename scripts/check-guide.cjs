@@ -5,7 +5,9 @@ const ROOT = path.resolve(__dirname, '..')
 const GUIDE_PATH = path.join(ROOT, 'GUIDE.md')
 const README_PATH = path.join(ROOT, 'README.md')
 const APP_PATH = path.join(ROOT, 'src', 'App.tsx')
+const GUIDE_PAGE_PATH = path.join(ROOT, 'src', 'components', 'GuidePage.tsx')
 const TOUR_PATH = path.join(ROOT, 'src', 'components', 'guide', 'guideTour.ts')
+const UI_PATH = path.join(ROOT, 'src', 'components', 'ui.tsx')
 const ASSET_DIR = path.join(ROOT, 'public', 'docs', 'guide')
 
 const REQUIRED_SECTIONS = [
@@ -86,7 +88,9 @@ const packageJson = JSON.parse(readText(path.join(ROOT, 'package.json'), 'packag
 const guide = readText(GUIDE_PATH, 'GUIDE.md')
 const readme = readText(README_PATH, 'README.md')
 const app = readText(APP_PATH, 'src/App.tsx')
+const guidePage = readText(GUIDE_PAGE_PATH, 'src/components/GuidePage.tsx')
 const tour = readText(TOUR_PATH, 'src/components/guide/guideTour.ts')
+const ui = readText(UI_PATH, 'src/components/ui.tsx')
 const expectedVersion = packageJson.version || 'unknown'
 
 if (!guide.includes(`> v${expectedVersion}`)) {
@@ -152,6 +156,14 @@ for (const selector of tourSelectors) {
   const count = (sourceText.match(new RegExp(`data-guide\\s*=\\s*["']${escaped}["']`, 'g')) || []).length
   if (count === 0) errors.add(`Guide tour selector has no target: ${selector}`)
   if (count > 1) errors.add(`Guide tour selector must be unique: ${selector} (${count} targets)`)
+}
+
+if (!/export function Surface\([\s\S]*?\.\.\.elementProps[\s\S]*?<Component[^>]*\{\.\.\.elementProps\}/.test(ui)) {
+  errors.add('Surface must forward DOM attributes so data-guide tour targets are rendered')
+}
+
+if (!guidePage.includes('onDoneClick')) {
+  errors.add('Interactive guide must explicitly complete each single-step driver popover')
 }
 
 if (errors.size > 0) {

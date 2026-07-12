@@ -29,6 +29,8 @@ jobs:
           workspaces: src-tauri
       - name: Install dependencies
         run: npm ci
+      - name: Validate user guide
+        run: npm run check:guide
       - name: Build Tauri
         run: npm run tauri build
       - name: Upload artifacts
@@ -62,6 +64,8 @@ jobs:
           workspaces: src-tauri
       - name: Install dependencies
         run: npm ci
+      - name: Validate user guide
+        run: npm run check:guide
       - name: Build Tauri
         run: npm run tauri build
       - name: Upload artifacts
@@ -99,6 +103,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - name: Install dependencies
         run: npm ci
+      - name: Validate user guide
+        run: npm run check:guide
       - name: Build Tauri
         run: npm run tauri build
       - name: Upload artifacts
@@ -136,6 +142,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - name: Install dependencies
         run: npm ci
+      - name: Validate user guide
+        run: npm run check:guide
       - name: Build Tauri
         run: npm run tauri build
       - name: Upload artifacts
