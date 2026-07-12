@@ -1,257 +1,159 @@
 # Llama Server Manager / Llama 服务器管理器
-## Windows · macOS · Linux 三平台均已实测验证通过
-> 现代化 Llama.cpp 服务器图形化管理器 | Modern GUI for managing llama.cpp servers
 
-一个功能完整的桌面应用程序，用于管理 `llama-server` 的全生命周期：**下载模型 → 选择引擎 → 配置参数 → 启动监控 → 性能分析**。告别复杂的命令行参数。
+> Windows、macOS、Linux 已验证 | Verified on Windows, macOS, and Linux
 
-A fully-featured desktop application for managing the `llama-server` lifecycle: **download models → select engines → configure parameters → start & monitor → performance analytics**. Say goodbye to complex CLI arguments.
+Llama Server Manager 是面向 `llama-server` 的桌面管理器，覆盖模型下载与扫描、引擎管理、实例配置与启停、集群 Worker、统一 API 路由、性能遥测和日志诊断。
 
-[📥 **下载最新版 / Download Latest**](https://github.com/jerrydong1988/llama-server-manager/releases/latest) | [📖 **使用教程 / User Guide**](GUIDE.md)
+Llama Server Manager is a desktop manager for `llama-server`, covering model downloads and inventory, engine management, instance lifecycle, cluster workers, unified API routing, performance telemetry, and logs.
 
----
+[下载最新版 / Download Latest](https://github.com/jerrydong1988/llama-server-manager/releases/latest) | [完整使用说明 / Full User Guide](GUIDE.md)
 
-## 界面预览 / Screenshots
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/23ab9965-8939-44de-a0d5-c32043c31886" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/ce91cf93-d65e-4ca9-be42-f5e243090dab" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/d9fefe94-5221-4cf4-aad5-85b09bcaa16d" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/97700da9-3910-41e1-87a2-fc64060085f6" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/33e1d815-fbce-47bd-947e-8b0cb13ee0cc" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/488b1263-18e5-42bf-8e4c-02e021b233e1" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/c9692084-c6f4-4ccd-bc37-2b6f7656ec2b" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/06d17944-06ec-4139-bc81-e2f89bc59d3b" />
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/9618ded1-d360-4c94-8b81-b62a447d15e0" />
+## 快速开始 / Quick Start
 
+1. 在“模型仓库”添加本地 GGUF 目录，或从“下载管理”获取模型。
+2. 在“引擎管理”扫描包含 `llama-server` 的目录并设置默认引擎。
+3. 在“实例管理”创建实例，选择模型、引擎和可用端口。
+4. 在“参数配置”检查上下文、GPU 层数、鉴权和服务参数，然后保存。
+5. 启动实例，通过“性能监控”和“服务器日志”确认运行状态。
 
-- 明暗主题切换（持久化）+ 窗口尺寸/位置记忆
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/321176a3-9bd5-4b37-bcb7-c465910f7f6b" />
-- 完整中英双语界面
-<img width="1724" height="1390" alt="image" src="https://github.com/user-attachments/assets/025c8056-22ca-4778-a24a-b74b3f010303" />
+1. Add a local GGUF directory or download a model.
+2. Scan `llama-server` builds and choose a default engine.
+3. Create an instance with a model, engine, and free port.
+4. Review context, GPU layers, authentication, and service options, then save.
+5. Start the instance and verify it in Performance and Logs.
 
+![首次运行设置顺序 / First-run setup sequence](public/docs/guide/flow-01-first-run.png)
 
+## 界面预览 / Interface Preview
 
+### 系统总览 / Dashboard
 
+汇总系统资源、实例状态、模型、引擎、下载和需要处理的问题。
 
+System resources, instances, models, engines, downloads, and actionable issues in one view.
 
+![系统总览 / Dashboard](public/docs/guide/01-dashboard.png)
 
----
+### 模型与下载 / Models and Downloads
 
-## 功能特性 / Features
+递归扫描 GGUF 目录，识别模型、分片和投影器；支持 ModelScope 与 HuggingFace 队列下载、断点续传、并发和限速策略。
+
+Scan GGUF models, shards, and projectors; manage ModelScope and HuggingFace queues with resume, concurrency, and bandwidth policies.
+
+![模型仓库 / Model Repository](public/docs/guide/02-model-repository.png)
+
+![下载管理 / Download Manager](public/docs/guide/03-download-manager.png)
+
+### 实例配置 / Instance Configuration
+
+为每个实例独立选择模型、引擎和端口，通过参数搜索、场景预设和分级校验调整约 159 个 llama.cpp 参数。
+
+Choose model, engine, and port per instance, then tune about 159 llama.cpp options with search, presets, and validation.
+
+![参数配置 / Parameter Configuration](public/docs/guide/06-configuration.png)
+
+### 实例路由 / Instance Routing
+
+把多个运行实例聚合为统一 OpenAI 兼容入口，按模型名或别名分发，并支持鉴权与后台保活。
+
+Expose running instances through one OpenAI-compatible endpoint with aliases, authentication, and background keep-alive.
+
+![实例路由 / Instance Routing](public/docs/guide/08-instance-routing.png)
 
 ### 性能监控 / Performance Monitoring
-- **系统健康仪表**：总览页启动即显示 CPU/内存/GPU/显存实时数据（不依赖运行实例）
-- 实时 CPU/GPU/显存指标（AMD GPU 通过 ADLX，NVIDIA GPU 通过 NVML）
-- 系统级 CPU/RAM 上下文（进程占用 / 系统总量对比）
-- 推理吞吐（tokens/s / 提示速度 / 排队深度 / 活跃槽位）
-- 累计 token 统计（提示+生成+总计）
-- **性能分析面板**：日志驱动的每请求剖面（提示/生成阶段吞吐、推测解码接受率、速度曲线）
-- 自适应降级：ADLX → NVML → sysinfo → 静默回退
-- **System health dashboard**: CPU/Memory/GPU/VRAM visible immediately on launch (no instance required)
-- Real-time CPU/GPU/VRAM metrics (AMD via ADLX, NVIDIA via NVML)
-- System-level CPU/RAM context (process vs total)
-- Inference throughput (tokens/s, prompt speed, queue depth, busy slots)
-- Cumulative token stats (prompt + generation + total)
-- **Performance Analysis panel**: per-request profiling from logs (prompt/gen throughput, spec decode acceptance rate, speed curve)
-- Graceful degradation: ADLX → NVML → sysinfo → silent fallback
-  
-### 模型仓库 / Model Repository
-- 多目录递归扫描，支持 LM Studio / NovaMax 等任意目录结构
-- GGUF 元信息自动解析（架构 / 上下文长度 / 量化类型）
-- 自适应递归树结构，按实际文件系统层级展示
-- **分片模型智能检测**：自动识别 -NNNNN-of-NNNNN 分片文件，Dashboard 排除重复统计
-- 一键在资源管理器中打开、从磁盘删除
-- Multi-directory recursive scanning, supports LM Studio/NovaMax
-- Automatic GGUF metadata parsing (architecture / context length / quantization)
-- Adaptive recursive tree matching actual filesystem hierarchy
-- **Sharded model detection**: auto-identifies shard files, excludes from model count
-- Open in Explorer, delete from disk
 
-### 下载管理 / Download Manager
-- 独立的下载管理页面，统一管理所有模型下载任务
-- 支持 ModelScope（魔搭社区）和 HuggingFace 双源浏览和下载
-- 下载队列管理，最多 3 并发，支持暂停/继续/取消
-- 断点续传，500ms 限流进度推送，速度 + ETA 显示
-- 自动检测本地已下载文件，避免重复下载
-- Standalone download manager for all model download tasks
-- ModelScope + HuggingFace dual-source browsing and downloading
-- Download queue with 3 concurrent limit, pause/resume/cancel
-- Resume support with 500ms throttled progress, speed + ETA display
-- Auto-detect locally downloaded files to prevent re-download
+查看 CPU、内存、GPU、显存、tokens/s、slots、请求历史、会话对比和诊断建议。
 
-### 引擎管理 / Engine Management
-- 多引擎递归扫描，自动识别子目录中的 `llama-server`
-- 后端类型自动检测（CUDA / ROCm / Vulkan / CPU）
-- 多引擎根目录管理，设为默认引擎
-- Recursive engine scanning, auto-discovers llama-server in subdirectories
-- Automatic backend detection (CUDA / ROCm / Vulkan / CPU)
-- Multi-root directory management, set default engine
+Inspect CPU, memory, GPU, VRAM, tokens per second, slots, request history, session comparisons, and diagnostics.
 
-### 实例管理 / Instance Management
-- 多实例并行运行，每个实例独立配置
-- 每个实例可独立选择引擎，覆盖全局默认
-- 一键启停，进程实时监控（1 秒快速故障检测），测试连接
-- 健康检查，自动识别启动失败
-- 生成命令行预览，一键复制/直接启动
-- 一键在浏览器打开 API 页面
-- 实例排序（↑↓），名称可编辑（✏️）
-- 键盘快捷键：`Ctrl+Enter` 启动/停止，`Ctrl+S` 保存配置
-- Multiple parallel instances with independent configs
-- Per-instance engine selection, overriding global default
-- One-click start/stop with real-time process monitoring (1s fault detection), test connection
-- Health check with automatic startup failure detection
-- Command-line preview with copy & direct launch
-- Open API page in browser
-- Instance reordering (↑↓), name editing (✏️)
-- Keyboard shortcuts: `Ctrl+Enter` start/stop, `Ctrl+S` save configs
+![性能监控 / Performance Monitoring](public/docs/guide/09-performance.png)
 
-### 参数配置 / Configuration
-- 统一参数配置页面，按实例关联
-- **159 个参数**完整覆盖 llama.cpp 最新主分支（71% 覆盖率，覆盖全部生成/采样/缓存/推测解码/服务核心场景），含 RoPE/YaRN 上下文缩放、推测解码、GPU 设备、多模型路由等全部参数
-- **智能参数校验**：保存时自动检测 26 条规则，分 high/medium/low 三级彩色横幅警告
-- **参数搜索**：输入参数名或 CLI 标志（如 -cms），自动展开分组、amber 高亮匹配字段、脉冲闪现 + 自动滚屏定位
-- 高级采样总开关 + 推测解码/专家设置子开关，一键启用/禁用相关参数
-- 向量模型自动检测，锁定不适用参数
-- 模型路径仓库树选择器，自动关联 mmproj
-- 所有参数带悬停提示说明（中英双语）
-- Unified config page associated per instance
-- **159 parameters** covering llama.cpp latest master, including RoPE/YaRN scaling, speculative decoding, GPU devices, multi-model routing
-- **Smart validation**: 26 rules auto-checked on save, high/medium/low severity color-coded banners
-- **Parameter search**: type name or CLI flag, auto-expand sections, amber highlight + flash animation + auto-scroll
-- Advanced sampling master toggle + speculative decoding/expert settings sub-toggles
-- Embedding model auto-detection with irrelevant parameter locking
-- Model path tree picker with automatic mmproj association
-- Bilingual tooltip hints on all parameters
+## 功能地图 / Feature Map
 
-### 其他 / Other
-- 服务器日志实时捕获，关键词彩色高亮，**自动滚动 + 暂停/恢复**
-- 启动命令自动记录到日志（含完整命令行和 PID）
-- 系统托盘支持，关闭窗口隐藏到托盘
-- **单实例检测**：重复打开自动聚焦已有窗口
-- **Tauri 原生确认对话框**：删除/移除操作均有原生警告弹窗
-- 明暗主题切换（持久化）+ 窗口尺寸/位置记忆
-- 完整中英双语界面
-- 配置持久化（JSON）+ **自动备份恢复** + 自动更新检查
-- 模型并发下载限制（避免资源耗尽）
-- 端口冲突检测
-- Real-time server log capture with keyword color highlighting, **auto-scroll + pause/resume**
-- Startup command auto-logged to console (full CLI + PID)
-- System tray support, close to tray
-- **Single instance detection**: auto-focus existing window on re-launch
-- **Tauri native confirm dialogs**: native warning popups for all delete/remove operations
-- Light/dark theme toggle (persistent) + window size/position memory
-- Full i18n support (Chinese / English)
-- Config persistence (JSON) + **auto backup/restore** + auto-update check
-- Concurrent download limiting (prevents resource exhaustion)
-- Port conflict detection
+| 页面 | 主要能力 | Page | Main capability |
+|---|---|---|---|
+| 系统总览 | 系统健康、实例控制、关注中心、近期活动 | Dashboard | Health, instance controls, attention items, recent activity |
+| 模型仓库 | GGUF 递归扫描、元信息、分片与投影器识别 | Models | Recursive inventory, metadata, shards, and projectors |
+| 下载管理 | 双源浏览、队列、暂停恢复、并发、限速 | Downloads | Dual-source browsing, queues, resume, concurrency, throttling |
+| 引擎管理 | 多版本扫描、后端识别、默认引擎 | Engines | Multi-version scanning, backend detection, defaults |
+| 实例管理 | 多实例、端口检查、启停、连接测试、命令预览 | Instances | Multi-instance lifecycle, port checks, health, command preview |
+| 参数配置 | 搜索、预设、校验、鉴权、缓存和推测解码 | Configuration | Search, presets, validation, auth, cache, speculative decoding |
+| 集群管理 | Worker 发现、本地与 SSH 启动、RPC 配置 | Cluster | Worker discovery, local or SSH launch, RPC configuration |
+| 实例路由 | 统一 API、模型别名、鉴权、后台保活 | Routing | Unified API, aliases, authentication, keep-alive |
+| 性能监控 | 实时指标、SQLite 遥测、请求分析和诊断 | Performance | Live metrics, SQLite telemetry, request analysis, diagnostics |
+| 监控大屏 | 服务健康、吞吐、压力、下载和告警 | Monitoring Wall | Health, throughput, pressure, downloads, alerts |
+| 服务器日志 | 实时 stdout/stderr、筛选、跟随和持久化 | Logs | Live output, filtering, tail follow, persistence |
+| 使用说明 | 离线图文手册、启用检查和 11 步引导 | Guide | Offline illustrated manual, checklist, 11-step tour |
 
----
+## 关键特性 / Key Features
 
-## 技术栈 / Tech Stack
+- Tauri 2 + React 18 + TypeScript 桌面应用。
+- 完整中英双语界面、深色 / 明亮主题、窗口状态记忆。
+- AMD ADLX、NVIDIA NVML 和系统指标自适应降级。
+- 实例 API Key 与 API Key 文件支持，统一路由可独立鉴权。
+- 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
+- 端口冲突、路径、配置规则和启动健康检查。
+- 系统托盘、实例自动启动、路由后台保活和更新检查。
 
-| 层 / Layer | 技术 / Technology |
-|-------------|-------------------|
-| 后端 / Backend | Rust + Tauri 2.x |
-| 前端 / Frontend | React 18 + TypeScript + Vite |
-| UI 样式 / Styling | Tailwind CSS |
-| 状态管理 / State | Zustand |
-| 图标 / Icons | Lucide React |
-| 系统监控 / System Metrics | sysinfo (CPU/RAM) + ADLX (AMD GPU) + NVML (NVIDIA GPU) |
-
----
+- Tauri 2, React 18, and TypeScript desktop application.
+- Full Chinese and English UI, light and dark themes, persisted window state.
+- AMD ADLX, NVIDIA NVML, and system-metric fallback.
+- Inline or file-based instance keys plus separate routing authentication.
+- Atomic configuration saves, backup fallback, persistent downloads and logs.
+- Port, path, configuration, startup, and health validation.
+- System tray, instance auto-start, routing keep-alive, and update checks.
 
 ## 系统要求 / Requirements
 
-- Windows 10/11
-- macOS 13+（Apple Silicon）
-- Linux (Ubuntu 22.04+)
-- Rust 1.75+
-- Node.js 18+
+运行已构建安装包不需要安装 Rust 或 Node.js。你需要：
 
----
+- Windows 10/11、macOS 13+（Apple Silicon）或 Ubuntu 22.04+。
+- 与硬件和驱动匹配的 `llama-server`。
+- 至少一个 GGUF 模型，或可访问 ModelScope / HuggingFace 的网络。
+- 足够容纳模型、上下文和 KV 缓存的内存或显存。
+
+Built packages do not require Rust or Node.js. You need a supported OS, a compatible `llama-server`, a GGUF model or repository access, and enough memory for the model and KV cache.
 
 ## 从源码构建 / Build from Source
 
+源码构建需要 Node.js 20、Rust stable 和对应平台的 Tauri 系统依赖。
+
+Source builds require Node.js 20, stable Rust, and platform-specific Tauri dependencies.
+
 ```bash
-# 克隆仓库 / Clone repo
 git clone https://github.com/jerrydong1988/llama-server-manager.git
 cd llama-server-manager
-
-# 安装依赖 / Install dependencies
 npm install
-
-# 开发模式 / Dev mode
 npm run tauri dev
+```
 
-# 生产构建 / Production build
+生产构建 / Production build:
+
+```bash
 npm run tauri build
 ```
 
-Linux 构建需先安装系统依赖 / Linux requires system dependencies:
+Ubuntu / Debian 构建依赖：
+
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 ```
 
-macOS 编译后运行需解除 Gatekeeper / macOS requires removing quarantine:
+macOS 首次运行自行构建的应用时，如被 Gatekeeper 隔离：
+
 ```bash
 xattr -cr /Applications/LlamaServerManager.app
 ```
 
----
+## 使用说明与问题反馈 / Guide and Support
 
-## 项目结构 / Project Structure
+- [完整图文使用说明 / Full Illustrated User Guide](GUIDE.md)
+- 应用内左侧“使用说明”可离线查看同一内容，并启动交互式引导。
+- 提交问题前请附版本、平台、后端类型和已脱敏的服务器日志；不要上传 API Key、私有路径或 SSH 凭据。
 
-```
-llama-server-manager/
-├── src/                    # React 前端 / Frontend
-│   ├── components/
-│   │   ├── ConfigPage/     # 参数配置子组件
-│   │   ├── PerformancePage/ # 性能监控 + 性能分析面板
-│   │   ├── ClusterPage/    # 集群管理
-│   │   ├── DownloadManager.tsx  # 下载管理
-│   │   ├── InstanceManager.tsx
-│   │   ├── ModelRepo.tsx
-│   │   ├── EngineManager.tsx
-│   │   └── LogsViewer.tsx
-│   ├── store/              # 状态管理 / State (Zustand)
-│   │   ├── types.ts        # 类型定义
-│   │   └── defaults.ts     # 默认配置
-│   ├── i18n/               # 国际化 (中/英)
-│   │   └── utils/           # 跨平台路径工具
-│   ├── validators.ts       # 参数校验引擎 (26 规则)
-│   ├── App.tsx
-│   └── main.tsx
-├── src-tauri/              # Rust 后端 / Backend
-│   ├── src/
-│   │   ├── main.rs         # 入口 + 窗口/托盘
-│   │   ├── models.rs       # 数据结构定义
-│   │   ├── utils.rs        # GGUF 解析 / 后端检测 / 路径
-│   │   ├── build.rs        # 构建脚本
-│   │   └── commands/       # 命令模块 (11 文件)
-│   │       ├── config.rs   # 配置持久化 + 备份恢复
-│   │       ├── server.rs   # 命令生成 + 启停 + 健康检查 + 指标采集 + 日志性能解析
-│   │       ├── scanner.rs  # 模型/引擎扫描
-│   │       ├── download.rs # ModelScope/HuggingFace 下载
-│   │       ├── adlx.rs     # ADLX GPU 指标采集 (AMD)
-│   │       ├── nvml.rs     # NVML GPU 指标采集 (NVIDIA)
-│   │       ├── cluster.rs  # 集群管理
-│   │       ├── cluster_network.rs
-│   │       ├── cluster_mdns.rs
-│   │       └── cluster_ssh.rs
-│   └── Cargo.toml
-├── .github/workflows/      # CI/CD 三平台自动构建
-├── package.json
-└── vite.config.ts
-```
+- The in-app Guide provides the same content offline and launches the interactive walkthrough.
+- Include version, platform, backend, and redacted logs in issue reports. Never expose keys, private paths, or SSH credentials.
 
----
-
-## 使用教程 / User Guide
-
-详细操作指南请参阅 [GUIDE.md](GUIDE.md)
-
-Please refer to [GUIDE.md](GUIDE.md) for a detailed user guide.
-
----
-
-## 许可证 / License
+## License
 
 MIT

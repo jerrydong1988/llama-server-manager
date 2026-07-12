@@ -56,11 +56,11 @@ const REQUIRED_TOUR_TABS = [
   'logs',
 ]
 
-const errors = []
+const errors = new Set()
 
 function readText(filePath, label) {
   if (!fs.existsSync(filePath)) {
-    errors.push(`${label} is missing: ${path.relative(ROOT, filePath)}`)
+    errors.add(`${label} is missing: ${path.relative(ROOT, filePath)}`)
     return ''
   }
   return fs.readFileSync(filePath, 'utf8')
@@ -90,12 +90,12 @@ const tour = readText(TOUR_PATH, 'src/components/guide/guideTour.ts')
 const expectedVersion = packageJson.version || 'unknown'
 
 if (!guide.includes(`> v${expectedVersion}`)) {
-  errors.push(`GUIDE.md must declare release version v${expectedVersion}`)
+  errors.add(`GUIDE.md must declare release version v${expectedVersion}`)
 }
 
 for (const section of REQUIRED_SECTIONS) {
   if (!guide.includes(`## ${section}`)) {
-    errors.push(`GUIDE.md is missing section: ${section}`)
+    errors.add(`GUIDE.md is missing section: ${section}`)
   }
 }
 
@@ -106,7 +106,7 @@ for (const match of guide.matchAll(/^## (.+)$/gm)) {
 
 for (const match of guide.matchAll(/\[[^\]]+\]\(#([^)]+)\)/g)) {
   if (!headings.has(match[1])) {
-    errors.push(`GUIDE.md table-of-contents anchor has no heading: #${match[1]}`)
+    errors.add(`GUIDE.md table-of-contents anchor has no heading: #${match[1]}`)
   }
 }
 
@@ -116,21 +116,22 @@ for (const imagePath of imageReferences) {
   if (/^https?:\/\//i.test(imagePath)) continue
   const normalized = imagePath.replace(/\\/g, '/')
   if (!normalized.startsWith('public/docs/guide/') || normalized.includes('..')) {
-    errors.push(`Guide image path must stay under public/docs/guide/: ${imagePath}`)
+    errors.add(`Guide image path must stay under public/docs/guide/: ${imagePath}`)
     continue
   }
   if (!fs.existsSync(path.join(ROOT, normalized))) {
-    errors.push(`Referenced guide image is missing: ${normalized}`)
+    errors.add(`Referenced guide image is missing: ${normalized}`)
   }
 }
 
 for (const imageName of REQUIRED_IMAGES) {
   const relativePath = `public/docs/guide/${imageName}`
-  if (!imageReferences.includes(relativePath)) {
-    errors.push(`Required guide image is not referenced: ${relativePath}`)
+  const isReferenced = imageReferences.includes(relativePath)
+  if (!isReferenced) {
+    errors.add(`Required guide image is not referenced: ${relativePath}`)
   }
-  if (!fs.existsSync(path.join(ASSET_DIR, imageName))) {
-    errors.push(`Required guide image is missing: ${relativePath}`)
+  if (!isReferenced && !fs.existsSync(path.join(ASSET_DIR, imageName))) {
+    errors.add(`Required guide image is missing: ${relativePath}`)
   }
 }
 
@@ -142,19 +143,19 @@ const sourceText = collectFiles(path.join(ROOT, 'src'), '.tsx')
   .join('\n')
 
 for (const tab of REQUIRED_TOUR_TABS) {
-  if (!navigationTabs.has(tab)) errors.push(`Application navigation is missing tour tab: ${tab}`)
-  if (!tourTabs.has(tab)) errors.push(`Guide tour is missing tab: ${tab}`)
+  if (!navigationTabs.has(tab)) errors.add(`Application navigation is missing tour tab: ${tab}`)
+  if (!tourTabs.has(tab)) errors.add(`Guide tour is missing tab: ${tab}`)
 }
 
 for (const selector of tourSelectors) {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const count = (sourceText.match(new RegExp(`data-guide\\s*=\\s*["']${escaped}["']`, 'g')) || []).length
-  if (count === 0) errors.push(`Guide tour selector has no target: ${selector}`)
-  if (count > 1) errors.push(`Guide tour selector must be unique: ${selector} (${count} targets)`)
+  if (count === 0) errors.add(`Guide tour selector has no target: ${selector}`)
+  if (count > 1) errors.add(`Guide tour selector must be unique: ${selector} (${count} targets)`)
 }
 
-if (errors.length > 0) {
-  console.error(`Guide check failed with ${errors.length} issue(s):`)
+if (errors.size > 0) {
+  console.error(`Guide check failed with ${errors.size} issue(s):`)
   for (const error of errors) console.error(`- ${error}`)
   process.exit(1)
 }

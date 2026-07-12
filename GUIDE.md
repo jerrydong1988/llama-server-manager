@@ -1,432 +1,558 @@
-# Llama Server Manager 使用教程 / User Guide
+# Llama Server Manager 使用说明 / User Guide
 
-> v2.9.15
+> v2.9.22 · Windows / macOS / Linux
+
+本说明按实际操作顺序介绍模型、引擎、实例、路由和监控功能。应用内“使用说明”页面会随安装包离线提供同一份内容和图片。
+
+This guide follows the real workflow from models and engines to instances, routing, and monitoring. The in-app Guide ships the same content and images for offline use.
 
 ---
 
 ## 目录 / Table of Contents
 
-1. [快速开始 / Quick Start](#快速开始--quick-start)
-2. [模型仓库 / Model Repository](#模型仓库--model-repository)
-3. [下载管理 / Download Manager](#下载管理--download-manager)
-4. [引擎管理 / Engine Management](#引擎管理--engine-management)
-5. [实例管理 / Instance Management](#实例管理--instance-management)
-6. [参数配置 / Parameter Configuration](#参数配置--parameter-configuration)
-7. [性能监控 / Performance Monitoring](#性能监控--performance-monitoring)
-8. [服务器日志 / Server Logs](#服务器日志--server-logs)
-9. [集群管理 / Cluster Management](#集群管理--cluster-management)
-10. [高级功能 / Advanced Features](#高级功能--advanced-features)
-11. [常见问题 / FAQ](#常见问题--faq)
+1. [快速开始 / Quick Start](#快速开始-quick-start)
+2. [系统总览 / Dashboard](#系统总览-dashboard)
+3. [模型仓库 / Model Repository](#模型仓库-model-repository)
+4. [下载管理 / Download Manager](#下载管理-download-manager)
+5. [引擎管理 / Engine Management](#引擎管理-engine-management)
+6. [实例管理 / Instance Management](#实例管理-instance-management)
+7. [参数配置 / Parameter Configuration](#参数配置-parameter-configuration)
+8. [集群管理 / Cluster Management](#集群管理-cluster-management)
+9. [实例路由 / Instance Routing](#实例路由-instance-routing)
+10. [性能监控 / Performance Monitoring](#性能监控-performance-monitoring)
+11. [监控大屏 / Monitoring Wall](#监控大屏-monitoring-wall)
+12. [服务器日志 / Server Logs](#服务器日志-server-logs)
+13. [应用设置与数据安全 / Application Settings and Data Safety](#应用设置与数据安全-application-settings-and-data-safety)
+14. [常见问题 / FAQ](#常见问题-faq)
+15. [发版前自检 / Release Validation](#发版前自检-release-validation)
 
 ---
 
 ## 快速开始 / Quick Start
 
-### 下载与安装 / Download & Install
+### 安装 / Install
 
-1. 从 [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) 下载最新安装包
-2. 双击安装或直接运行便携版
-3. 确保系统已安装 [llama.cpp](https://github.com/ggerganov/llama.cpp) 的 `llama-server`
+1. 从 [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) 下载对应平台安装包。
+2. Windows 使用 MSI 或 NSIS 安装包；macOS 使用 DMG；Linux 使用 DEB 或 AppImage。
+3. 准备与本机后端匹配的 `llama-server`，例如 CUDA、ROCm、Vulkan 或 CPU 构建。
+4. 准备本地 GGUF 模型，或稍后从 ModelScope / HuggingFace 下载。
 
-1. Download the latest installer from [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest)
-2. Double-click to install or run portable version
-3. Make sure you have `llama-server` from [llama.cpp](https://github.com/ggerganov/llama.cpp) installed
+1. Download the package for your platform from [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest).
+2. Use MSI or NSIS on Windows, DMG on macOS, and DEB or AppImage on Linux.
+3. Prepare a `llama-server` build for your backend, such as CUDA, ROCm, Vulkan, or CPU.
+4. Prepare a local GGUF model, or download one later from ModelScope or HuggingFace.
 
-### 界面布局 / Interface Layout
+### 首次运行的五个步骤 / Five First-Run Steps
 
-程序有 8 个标签页，左侧导航栏按操作流程排列：
+1. 在“模型仓库”添加 GGUF 模型目录并完成扫描。
+2. 在“引擎管理”添加包含 `llama-server` 的目录，并设置默认引擎。
+3. 在“实例管理”创建实例，选择模型、引擎和可用端口。
+4. 在“参数配置”检查模型路径、上下文、GPU 层数和服务参数，然后保存。
+5. 回到“实例管理”启动实例，通过“性能监控”和“服务器日志”确认运行状态。
 
-```
-模型仓库 → 下载管理 → 引擎管理 → 实例管理 → 参数配置 → 集群管理 → 性能监控 → 服务器日志
-```
+1. Add and scan a GGUF directory in Model Repository.
+2. Add a directory containing `llama-server` in Engine Management and choose the default engine.
+3. Create an instance with a model, engine, and free port.
+4. Review the model path, context, GPU layers, and service options in Configuration, then save.
+5. Start the instance and verify it in Performance Monitoring and Server Logs.
 
-**建议操作顺序：**
+![首次运行：模型、引擎和实例的设置顺序 / First run: model, engine, and instance setup](public/docs/guide/flow-01-first-run.png)
 
-1. ① **模型仓库**：添加你存放 GGUF 模型的本地目录
-2. ② **下载管理**：从 ModelScope/HuggingFace 下载模型（如无可跳过）
-3. ③ **引擎管理**：添加 llama-server 所在的目录
-4. ④ **实例管理**：创建一个实例（选择模型 + 引擎 + 端口）
-5. ⑤ **参数配置**：根据需要调整启动参数
-6. ⑥ **启动实例**：回到实例管理，点击启动
-7. ⑦ **性能监控**：查看实时指标和性能分析
+### 界面导航 / Navigation
 
-The app has 8 tabs in the sidebar, ordered by workflow:
+左侧导航按“运行概况、资源准备、服务配置、分布式与路由、诊断、帮助”的顺序排列，共 12 个入口：系统总览、模型仓库、下载管理、引擎管理、实例管理、参数配置、集群管理、实例路由、性能监控、监控大屏、服务器日志和使用说明。
 
-```
-Model Repo → Downloads → Engines → Instances → Config → Cluster → Performance → Server Logs
-```
+The sidebar contains 12 entries ordered around status, resources, service configuration, distributed routing, diagnostics, and help: Dashboard, Model Repository, Downloads, Engines, Instances, Configuration, Cluster, Instance Routing, Performance, Monitoring Wall, Logs, and Guide.
 
-**Recommended workflow:**
+按 `Ctrl+K` 打开任务中心，可快速跳转页面、启动或停止实例、处理下载和查看诊断。`Ctrl+Enter` 启动或停止一个实例，`Ctrl+S` 保存配置。
 
-1. ① **Model Repo**: Add your local GGUF model directories
-2. ② **Downloads**: Download models from ModelScope/HuggingFace (skip if already have models)
-3. ③ **Engines**: Add your llama-server directory
-4. ④ **Instances**: Create an instance (select model + engine + port)
-5. ⑤ **Config**: Adjust startup parameters as needed
-6. ⑥ **Start**: Go back to Instances and click Start
-7. ⑦ **Performance**: View real-time metrics and performance analysis
+Press `Ctrl+K` for the command center. `Ctrl+Enter` starts or stops an instance, and `Ctrl+S` saves configuration.
+
+---
+
+## 系统总览 / Dashboard
+
+系统总览是启动后的运行控制台。即使没有实例运行，也会显示系统 CPU、内存以及可用的 GPU / 显存信息；同时汇总实例、模型、引擎、下载和需要处理的问题。
+
+Dashboard is the launch-time control surface. It shows system CPU, memory, and available GPU or VRAM signals even before an instance is running, together with instance, model, engine, download, and attention summaries.
+
+![系统总览展示资源、实例和运行状态 / Dashboard with resources, instances, and service health](public/docs/guide/01-dashboard.png)
+
+### 主要区域 / Main Areas
+
+- 顶部指标：运行实例、已登记模型与引擎、活动下载。
+- 系统健康：CPU、内存、GPU 和显存的实时压力。
+- 实例控制：直接查看状态并启动或停止实例。
+- 关注中心：引擎缺失、模型为空、实例异常或下载失败等可操作提示。
+- 最近活动：请求、下载和日志摘要。
+
+- Top metrics for running instances, registered models and engines, and active downloads.
+- System health for CPU, memory, GPU, and VRAM pressure.
+- Instance controls for status and start or stop actions.
+- Actionable attention items for missing resources, unhealthy instances, or failed downloads.
+- Recent request, download, and log activity.
+
+如果总览提示“未登记运行引擎”或“模型仓库为空”，先按提示按钮跳转并完成资源扫描，不要直接在实例页反复启动。
+
+When Dashboard reports a missing engine or empty model inventory, follow the action to register the resource before retrying an instance start.
 
 ---
 
 ## 模型仓库 / Model Repository
 
-### 添加模型目录 / Adding Model Directories
+模型仓库递归扫描本地目录，识别 GGUF 模型、分片、`mmproj` 投影器和 imatrix 文件，并从 GGUF 头读取架构、上下文长度、量化类型和能力摘要。
 
-点击「添加模型目录」，选择你存放 `.gguf` 模型文件的文件夹。程序会递归扫描子目录（最多 5 层）。
+Model Repository recursively scans local folders for GGUF models, shards, `mmproj` projectors, and imatrix files, and reads architecture, context length, quantization, and capability metadata from GGUF headers.
 
-Click "Add Directory" and select the folder containing your `.gguf` model files. The app will recursively scan subdirectories (up to 5 levels deep).
+![模型仓库的目录树、搜索和元信息 / Model repository tree, search, and metadata](public/docs/guide/02-model-repository.png)
 
-### 模型树结构 / Model Tree Structure
+### 添加和扫描目录 / Add and Scan Directories
 
-扫描完成后，模型按实际文件系统层级展示为树状结构：
+1. 点击“添加模型目录”。
+2. 选择包含一个或多个模型子目录的根目录。
+3. 等待递归扫描完成；后续重新扫描会复用未变化目录的缓存。
+4. 使用搜索框按文件名、架构或量化类型过滤。
+5. 展开目录树查看模型、投影器和分片关系。
 
-```
-📂 C:\Models\llm\
-  📁 unsloth\
-    📁 Qwen3.6-35B-A3B-GGUF\
-      📄 Qwen3.6-35B-A3B-Q4_K_M.gguf     模型    Q4_K    18.2 GB
-      📷 mmproj-BF16.gguf                  投影器   BF16    640 MB
-```
+1. Select Add Model Directory.
+2. Choose a root containing one or more model subfolders.
+3. Wait for recursive scanning; later scans reuse unchanged directory results.
+4. Filter by file name, architecture, or quantization.
+5. Expand the tree to inspect models, projectors, and shards.
 
-- 📂 黄色文件夹 = 根目录 / Root directory
-- 📁 = 子目录 / Subdirectory（可按需折叠/展开 / collapsible）
-- 📄 蓝色 = 模型文件 / Model file
-- 📷 紫色 = 多模态投影器 / Multimodal projector (mmproj)
+### 管理操作 / Management
 
-### GGUF 元信息 / GGUF Metadata
+- “在资源管理器中打开”定位文件。
+- 删除操作会显示原生确认框；确认后从磁盘永久删除，请先确认没有实例正在使用该文件。
+- 分片模型按一组展示，统计时不会把每个分片重复算作独立模型。
+- 视觉模型通常需要匹配的 `mmproj`；在实例或参数页选择主模型时可自动关联同目录投影器。
 
-程序自动从 GGUF 文件头读取以下信息：
-
-- **架构** / Architecture（如 llama、qwen、mistral）
-- **上下文长度** / Context Length（如 32768）
-- **量化类型** / Quantization Type（如 Q4_K、Q4_K_XL、F16、BF16）
-- **MTP 推测解码** / MTP speculative decoding support
-
-### 管理操作 / File Operations
-
-- 📂 按钮 = 在资源管理器中打开 / Open in Explorer
-- 🗑 按钮 = 确认后从磁盘永久删除 / Delete permanently from disk (with confirmation)
+- Open in Explorer or Finder locates the file.
+- Delete uses a native confirmation and permanently removes the file; make sure no instance is using it.
+- Sharded models are grouped and not double-counted as separate models.
+- Vision models commonly need a matching `mmproj`, which can be associated from the same directory.
 
 ---
 
 ## 下载管理 / Download Manager
 
-下载管理是**独立的模型下载中心**，支持 ModelScope（魔搭社区）和 HuggingFace 双源下载。
+下载管理支持 ModelScope 和 HuggingFace，可浏览仓库文件、选择单文件或批量下载，并在应用重启后恢复队列状态。
 
-The Download Manager is a **dedicated download center** supporting both ModelScope and HuggingFace.
+Downloads supports ModelScope and HuggingFace repository browsing, single or batch downloads, and persistent queue restoration after an app restart.
 
-### 浏览仓库 / Browse Repo
+![下载队列、传输策略和仓库浏览 / Download queue, transfer policy, and repository browser](public/docs/guide/03-download-manager.png)
 
-1. 选择下载源（ModelScope / HuggingFace）
-2. 输入仓库 ID（如 `unsloth/Qwen3.6-35B-A3B-GGUF`）
-3. 点击「Browse」浏览文件列表
-4. 设置保存目录（默认 `models`，支持文件夹选择器）
+### 浏览与下载 / Browse and Download
 
-1. Select source (ModelScope / HuggingFace)
-2. Enter repo ID (e.g. `unsloth/Qwen3.6-35B-A3B-GGUF`)
-3. Click "Browse" to list files
-4. Set save directory (default `models`, folder picker supported)
+1. 选择 ModelScope 或 HuggingFace。
+2. 输入仓库 ID，例如 `Qwen/Qwen3-8B-GGUF`。
+3. 选择保存目录并点击“浏览”。
+4. 在文件列表中选择单文件下载，或批量加入队列。
+5. 使用任务卡片暂停、继续、重试或取消。
 
-### 下载操作 / Download Operations
+1. Select ModelScope or HuggingFace.
+2. Enter a repository ID such as `Qwen/Qwen3-8B-GGUF`.
+3. Choose a save directory and browse the repository.
+4. Download one file or enqueue a batch.
+5. Pause, resume, retry, or cancel from task cards.
 
-| 操作 | 说明 |
-|------|------|
-| 单文件下载 | 点击文件旁的 Download 按钮 |
-| 全部下载 | 点击 Download All（自动跳过已完成的文件） |
-| 暂停 | 下载中点击 Pause，保留已下载进度 |
-| 继续 | 点击 Resume，从断点续传 |
-| 取消 | 点击 Cancel 删除文件 |
+### 传输策略 / Transfer Policy
 
-| Operation | Description |
-|-----------|-------------|
-| Single download | Click Download next to each file |
-| Download All | Click Download All (auto-skips completed files) |
-| Pause | Click Pause during download, keeps partial progress |
-| Resume | Click Resume to continue from breakpoint |
-| Cancel | Click Cancel to delete the file |
+- 默认恢复策略为“手动”：应用重启后保留队列，由用户决定何时恢复。
+- “启动时自动恢复”会在应用启动后恢复可继续的任务。
+- 默认并发数为 1，可在策略面板调整；增加并发会提高带宽和磁盘压力。
+- 带宽限制为 0 时不限速，可按所选单位设置全局上限。
+- 低优先级节流适合边下载边推理，代价是下载时间增加。
+- 服务端支持 Range 时会使用断点续传；已存在且大小匹配的文件会标记完成，避免重复下载。
 
-### 智能特性 / Smart Features
+- Manual resume is the default: queues persist across restarts and resume only when requested.
+- Auto on launch resumes eligible tasks after startup.
+- Concurrency defaults to 1 and can be raised at the cost of bandwidth and disk pressure.
+- A bandwidth limit of 0 means unlimited.
+- Low-priority throttling reduces interference with inference but extends download time.
+- Range-capable servers support resume, and matching local files are detected to avoid duplicate downloads.
 
-- **并发控制**：最多 3 个文件同时下载，其余排队
-- **已下载检测**：浏览时自动识别本地已存在的文件，标记为 ✓ Done，避免重复下载
-- **下载路径记忆**：保存目录设置会在下次启动时自动恢复
-- **断点续传**：支持 Range 请求，中断后从上次位置继续
+下载失败时先展开错误信息；鉴权失败检查仓库权限，空间不足清理目标磁盘，网络中断则保留任务后重试。取消任务会停止传输；删除最终文件前会确认目标路径属于该下载任务。
 
-- **Concurrency**: Max 3 simultaneous downloads, others queued
-- **Downloaded detection**: Auto-detects locally existing files, marks as ✓ Done
-- **Path memory**: Save directory setting persists across restarts
-- **Resume support**: Range requests for continuing interrupted downloads
+For failed downloads, inspect the error details. Check repository access for authorization failures, free disk space for write failures, and retry retained tasks after a network interruption.
 
 ---
 
 ## 引擎管理 / Engine Management
 
-### 添加引擎目录 / Adding Engine Directories
+引擎管理扫描 `llama-server` 可执行文件，自动识别 CUDA、ROCm、Vulkan 或 CPU 后端，并允许多个版本并存。
 
-点击「添加引擎根目录」，选择包含 `llama-server` 的目录。程序会递归扫描子目录，自动发现所有版本。
+Engine Management scans `llama-server` executables, detects CUDA, ROCm, Vulkan, or CPU backends, and supports multiple installed versions.
 
-Click "Add Engine Directory" and select the folder containing `llama-server`. The app scans subdirectories to auto-discover all versions.
+![引擎扫描、后端识别和默认引擎 / Engine scanning, backend detection, and default selection](public/docs/guide/04-engine-manager.png)
 
-### 引擎类型识别 / Backend Detection
+### 登记引擎 / Register Engines
 
-| 标记 | 说明 |
-|------|------|
-| CUDA | NVIDIA GPU 加速 |
-| ROCm | AMD GPU 加速 |
-| Vulkan | 跨平台 GPU 加速 |
-| CPU | 纯 CPU 推理 |
+1. 点击“添加引擎根目录”。
+2. 选择包含一个或多个 `llama-server` 构建目录的父目录。
+3. 扫描后检查可执行路径和后端标签。
+4. 为常用版本设置易识别名称，并设为默认引擎。
 
-### 设为默认引擎 / Set as Default
+1. Select Add Engine Root.
+2. Choose a parent folder containing one or more `llama-server` builds.
+3. Verify executable paths and backend labels after scanning.
+4. Name the common version and set it as default.
 
-点击引擎卡片下的「设为默认」按钮。新创建的实例会自动选用默认引擎。
+新实例优先使用默认引擎；每个实例仍可覆盖为不同版本。升级 llama.cpp 后重新扫描即可保留多个版本并逐实例切换。
 
-Click "Set as Default" on an engine card. New instances will use this engine by default.
+New instances prefer the default engine, while each instance can override it. Rescan after a llama.cpp upgrade to keep versions side by side.
 
 ---
 
 ## 实例管理 / Instance Management
 
-### 创建实例 / Creating an Instance
+实例把模型、引擎、端口和独立参数组合成一个可启动服务。多个实例可以同时运行，但必须使用不同端口，并考虑显存和内存总量。
 
-1. 点击「创建实例」
-2. 填写实例名称
-3. 点击 📂 按钮从模型仓库树中选择模型
-4. 选择引擎
-5. 设置端口（程序会自动检测端口冲突）
-6. 点击「创建」
+An instance combines a model, engine, port, and independent configuration into a runnable service. Multiple instances may run together with unique ports and sufficient memory.
 
-1. Click "Create Instance"
-2. Enter a name
-3. Click 📂 to select a model from the repository tree
-4. Select an engine
-5. Set port (port conflict auto-detected)
-6. Click "Create"
+![实例列表、创建入口和运行控制 / Instance list, creation, and runtime controls](public/docs/guide/05-instance-manager.png)
 
-### 启动/停止 / Start / Stop
+### 创建实例 / Create an Instance
 
-- 绿色 `▶ 启动` → 红色 `■ 停止`
-- 状态图标：◯ 已停止 / ◌ 启动中 / ✓ 运行正常 / ✕ 错误
+1. 点击“创建实例”。
+2. 输入实例名称。
+3. 从模型树选择主模型，并确认需要的 `mmproj`。
+4. 选择引擎；留空时使用默认引擎。
+5. 输入端口并等待端口可用性检查。
+6. 创建后进入参数配置检查详细参数。
 
-- Green `▶ Start` → Red `■ Stop`
-- Status: ◯ Stopped / ◌ Starting / ✓ Healthy / ✕ Error
+1. Select Create Instance.
+2. Enter an instance name.
+3. Choose the main model and any required `mmproj`.
+4. Select an engine or use the default.
+5. Enter a port and wait for availability validation.
+6. Open Configuration to review detailed parameters.
 
-### 实例卡片功能 / Instance Card Functions
+### 运行控制 / Runtime Controls
 
-| 按钮 | 功能 |
-|------|------|
-| ▶/■ | 启动/停止 |
-| 🌐 | 在浏览器中打开 API 页面 |
-| 📶 | 测试连接 |
-| ⌨ | 查看生成的命令行 |
-| ⚙ | 跳转到参数配置页 |
-| ↑↓ | 排序 |
-| ✏️ | 编辑名称 |
-| 🗑 | 删除实例 |
+- 启动前会生成命令、检查端口和必要路径。
+- 状态依次可能为已停止、启动中、运行中或错误。
+- “测试连接”使用实例鉴权设置检查健康或模型接口。
+- “打开 API 页面”会把通配监听地址转换为本机可访问地址。
+- 命令预览可复制完整启动参数，便于复现问题。
+- 可重命名、排序或删除实例；删除前会原生确认。
 
-### 快捷键 / Keyboard Shortcuts
+- Startup generates the command and validates ports and required paths.
+- Status may be stopped, starting, running, or error.
+- Test Connection checks health or model endpoints using the instance authentication settings.
+- Open API maps wildcard bind hosts to a local browser address.
+- Command Preview copies the complete launch command for diagnosis.
+- Instances can be renamed, reordered, or deleted with confirmation.
 
-| 快捷键 | 功能 |
-|--------|------|
-| `Ctrl + Enter` | 启动/停止实例 |
-| `Ctrl + S` | 保存全部配置 |
+![启动、健康检查、性能和日志诊断流程 / Start, health, performance, and log diagnosis](public/docs/guide/flow-02-start-and-diagnose.png)
+
+启动失败时不要只重复点击启动。先看实例错误状态，再打开服务器日志检查完整命令和 stderr；常见原因是端口占用、路径不存在、后端与硬件不匹配或显存不足。
+
+When startup fails, inspect the instance state and server logs instead of repeatedly retrying. Common causes are port conflicts, missing paths, backend mismatch, or insufficient VRAM.
 
 ---
 
 ## 参数配置 / Parameter Configuration
 
-### 配置页结构 / Config Page Structure
+参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等约 159 个 llama.cpp 参数。
 
-配置页包含 **6 个折叠组**，覆盖 **159 个参数**：
+Configuration is stored per instance and covers about 159 llama.cpp options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing.
 
-| 组 | 内容 |
-|------|------|
-| **基本参数** Basic | 模型路径、LoRA、投影器、聊天模板、推理参数 |
-| **生成参数** Generation | 温度、Top-K/P、重复惩罚、种子、Min-P 等 |
-| **高级采样** Advanced Sampling | Mirostat、XTC、DRY、动态温度（总开关控制） |
-| **性能 & 上下文** Performance | 线程、GPU 层数、批处理、上下文、RoPE/YaRN、Flash Attention |
-| **服务 & 网络** Server | 主机、端口、API 密钥、SSL、Embedding |
-| **高级参数** Advanced | 内存、KV 缓存、推测解码、GPU 设备、多模型路由 |
+![参数搜索、预设、分组和校验提示 / Configuration search, presets, groups, and validation](public/docs/guide/06-configuration.png)
 
-### 智能参数校验 / Smart Validation
+### 推荐操作 / Recommended Workflow
 
-保存配置时自动检测 **26 条规则**，按严重度分三级：
+1. 在页面顶部确认当前实例。
+2. 先使用场景预设作为起点，再按硬件调整。
+3. 使用搜索框输入参数名或 CLI 标志，例如 `ctx`、`gpu-layers` 或 `api-key-file`。
+4. 查看参数悬停提示和右侧活动参数摘要。
+5. 点击保存并处理红、黄、蓝三级校验提示。
 
-| 严重度 | 颜色 | 示例 |
-|--------|------|------|
-| **高** | 红色 | Backend Sampling 在 ROCm GPU 上会产生警告 |
-| **中** | 黄色 | 上下文大小超过模型原始上下文 4 倍 |
-| **低** | 蓝色 | 同时设置聊天模板和模板文件（冗余） |
+1. Confirm the selected instance.
+2. Start from a scenario preset, then tune for the hardware.
+3. Search by option name or CLI flag such as `ctx`, `gpu-layers`, or `api-key-file`.
+4. Review tooltips and the active-parameter summary.
+5. Save and address red, amber, or blue validation findings.
 
-### 参数悬停提示 / Tooltips
+### 关键配置 / Important Settings
 
-所有参数名称和输入框都有中英双语悬停提示，说明参数作用和推荐值。
+- 上下文越大，KV 缓存占用越高；显存紧张时优先降低上下文、批大小或 GPU 层数。
+- API Key 可以直接填写，也可以通过 API Key 文件提供；健康检查、测试连接、指标读取和实例路由会使用有效密钥。
+- 非本机监听会扩大访问范围，应配置鉴权并检查防火墙。
+- 向量模型会锁定不适用的生成参数。
+- 推测解码需要主模型和草稿模型兼容；出现异常时先禁用推测解码验证基础运行。
+- 自定义参数会原样追加，使用前核对当前 `llama-server --help`。
 
-All parameter labels have bilingual hover tooltips explaining purpose and recommended values.
-
----
-
-## 性能监控 / Performance Monitoring
-
-### 实时指标 / Real-time Metrics
-
-- **CPU / 内存**：进程占用 + 系统总量对比
-- **GPU / 显存**：AMD（ADLX）/ NVIDIA（NVML）自动检测
-- **推理指标**：tokens/s、提示速度、排队深度、活跃槽位
-- **自适应降级**：ADLX → NVML → sysinfo
-
-- **CPU / Memory**: Process usage + system total
-- **GPU / VRAM**: AMD (ADLX) / NVIDIA (NVML) auto-detection
-- **Inference**: tokens/s, prompt speed, queue depth, busy slots
-- **Graceful degradation**: ADLX → NVML → sysinfo
-
-### 性能分析面板 / Performance Analysis
-
-从日志中**实时提取**每请求的性能剖面：
-
-- **生成进度**：当前 token 数 + 预估总量，tg（瞬时生成速度）
-- **速度曲线**：n_decoded vs tg 的 SVG 实时折线图
-- **推测解码**：接受率 + 接受/生成 token 数
-- **完成汇总**：提示阶段（tokens、耗时、t/s）+ 生成阶段 + 总计时
-
-Real-time **per-request profiling** extracted from server logs:
-
-- **Progress**: current tokens + estimated total, tg (instant gen speed)
-- **Speed curve**: SVG line chart of n_decoded vs tg
-- **Spec decode**: acceptance rate + accepted/generated counts
-- **Summary**: prompt phase (tokens, time, t/s) + gen phase + total
-
----
-
-## 服务器日志 / Server Logs
-
-- 实时显示实例 stdout/stderr 输出
-- 关键词自动高亮：红色=错误、黄色=警告、绿色=就绪、青色=性能
-- **自动滚动**到最新输出（跟随模式）
-- **上滑暂停**：手动上滑查看历史时自动暂停
-- **回到底部**：暂停时浮出「⬇ 最新」按钮
-- 实例启动时自动打印完整命令行 + PID
-- 可按实例筛选 / 清空日志
-- **应用重启后日志无缝恢复**
-
-- Real-time stdout/stderr display
-- Keyword highlighting: red=error, yellow=warning, green=ready, cyan=performance
-- Auto-scroll follow mode + pause on scroll up
-- Startup command + PID auto-logged
-- Filter by instance / clear logs
-- **Logs recover seamlessly after app restart**
+- Larger context increases KV cache usage; reduce context, batch size, or GPU layers when memory is tight.
+- API keys may be inline or file-based; health, connection tests, metrics, and routing use the effective key.
+- Non-local binding increases exposure and should use authentication and firewall controls.
+- Embedding models lock irrelevant generation options.
+- Speculative decoding requires compatible main and draft models.
+- Custom arguments are appended as entered and should be checked against the current `llama-server --help`.
 
 ---
 
 ## 集群管理 / Cluster Management
 
-### 功能概述 / Overview
+集群管理用于发现和维护 llama.cpp RPC Worker，并把 Worker 地址写入实例的 RPC 配置。支持局域网发现、TCP 扫描、本机启动和 SSH 远程启动。
 
-- **局域网扫描**：自动发现局域网内运行 rpc-server 的 Worker
-- **本地启动**：一键启动本机 rpc-server
-- **SSH 远程启动**：通过 SSH 在远程机器启动 Worker
-- **USB4 网卡检测**：自动检测高速直连网络适配器
-- **Worker 管理**：添加/删除/测试连接/查看设备信息
+Cluster Management discovers and maintains llama.cpp RPC workers and feeds worker addresses into instance RPC configuration. It supports LAN discovery, TCP scanning, local launch, and SSH launch.
 
-- **LAN scan**: Auto-discover Workers running rpc-server on LAN
-- **Local launch**: One-click start rpc-server on this machine
-- **SSH remote**: Launch Worker on remote machines via SSH
-- **USB4 detection**: Auto-detect high-speed direct network adapters
-- **Worker management**: Add/remove/test connection/view device info
+![Worker 发现、网络信息和启动方式 / Worker discovery, network details, and launch methods](public/docs/guide/07-cluster-manager.png)
+
+### 使用步骤 / Workflow
+
+1. 扫描局域网 Worker，或手动添加主机和端口。
+2. 测试连接并检查设备、内存和在线状态。
+3. 本机 Worker 可选择引擎后启动；远程 Worker 需填写 SSH 连接与远端可执行路径。
+4. 在实例参数配置中选择 Worker，生成 `rpc_servers`。
+5. 启动实例后从日志确认 RPC 设备已连接。
+
+1. Scan the LAN or manually add a worker host and port.
+2. Test connectivity and review device, memory, and online state.
+3. Launch a local worker from an engine, or provide SSH and remote executable details.
+4. Select workers in instance configuration to generate `rpc_servers`.
+5. Confirm RPC devices in logs after starting the instance.
+
+USB4 适配器信息用于识别高速直连网络，但不会替代操作系统网络配置。扫描不到 Worker 时检查同网段、防火墙、RPC 端口和远端进程。
+
+USB4 adapter details help identify high-speed direct links but do not replace OS network configuration. Check subnet, firewall, RPC port, and remote process when discovery fails.
 
 ---
 
-## 高级功能 / Advanced Features
+## 实例路由 / Instance Routing
 
-### 中英双语 / i18n
+实例路由提供一个统一的 OpenAI 兼容入口，根据请求中的模型名或别名，把流量转发到正在运行的 llama-server 实例。默认监听 `127.0.0.1:11435`。
 
-侧边栏底部的 `EN`/`中` 按钮可切换界面语言。所有界面文字完整支持中英双语，包括集群管理和性能分析面板。
+Instance Routing exposes one OpenAI-compatible endpoint and forwards requests to running llama-server instances by requested model name or alias. The default listener is `127.0.0.1:11435`.
 
-The `EN`/`中` button switches the entire UI between Chinese and English, covering all pages including cluster management and performance analysis.
+![统一端点、路由规则和后端目标 / Unified endpoint, route rules, and backend targets](public/docs/guide/08-instance-routing.png)
 
-### 主题切换 / Theme Toggle
+### 配置和启动 / Configure and Start
 
-点击 ☀/🌙 按钮切换深色/浅色主题。主题偏好持久化。
+1. 先启动至少一个后端实例。
+2. 设置监听主机和端口。
+3. 为路由规则选择目标实例，并填写客户端使用的模型别名。
+4. 需要时设置代理 API Key。
+5. 保存配置，然后启动实例路由。
+6. 复制统一 API 入口并用 `/v1/models` 或聊天请求测试。
 
-Click ☀/🌙 to toggle dark/light theme. Preference persists.
+1. Start at least one backend instance.
+2. Set the listen host and port.
+3. Choose a target instance and define the model alias clients will send.
+4. Configure a proxy API key when needed.
+5. Save, then start routing.
+6. Copy the endpoint and test `/v1/models` or a chat request.
 
-### 系统托盘 / System Tray
+![实例、别名和统一 API 的请求路径 / Request path from instances and aliases to the unified API](public/docs/guide/flow-03-route-requests.png)
 
-关闭窗口时程序最小化到系统托盘。左键点击托盘图标显示窗口，右键显示菜单。
+### 安全与后台保活 / Security and Background Keep-Alive
 
-Closing the window minimizes to system tray. Left click = show, right click = menu.
+- 监听非本机地址时必须设置代理 API Key，否则不允许启动。
+- 路由只选择当前有效目标；目标实例停止后，对应请求会失败或没有可用目标。
+- 开启后台保活后，关闭窗口可继续在托盘提供统一端点。
+- 当路由运行时退出应用会出现确认：可以保持托盘运行，或停止路由后真正退出。
+- 修改未保存的路由草稿后直接启动时，应用会先保存有效配置，避免界面与后台状态不一致。
 
-### 配置文件 / Config Persistence
+- A proxy API key is mandatory for non-local listeners.
+- Routing resolves active targets; requests fail when the selected backend is unavailable.
+- Background keep-alive can continue serving from the system tray.
+- Exiting while routing is active prompts to keep it in the tray or stop routing and exit.
+- Starting with a valid unsaved draft persists it before launch.
 
-所有配置自动保存在 `configs/` 目录的 JSON 文件中。采用**原子写入**（先写临时文件再 rename），崩溃不损坏配置。每次保存自动创建 `.bak` 备份。
+---
 
-All configs auto-saved as JSON in `configs/`. Uses **atomic write** (tmp → rename), crash-safe. Auto `.bak` backup on every save.
+## 性能监控 / Performance Monitoring
 
-### NVIDIA GPU 支持 / NVIDIA GPU Support
+性能监控结合系统指标、实例指标、slots、日志时序和 SQLite 遥测，展示当前吞吐、历史会话、请求分析和诊断建议。
 
-程序通过 NVML（NVIDIA Management Library）自动检测 NVIDIA GPU，无需额外配置。GPU 利用率和显存占用实时显示在性能监控页。
+Performance Monitoring combines system signals, instance metrics, slots, log timing, and SQLite telemetry for current throughput, historical sessions, request analysis, and diagnostics.
 
-The app auto-detects NVIDIA GPUs via NVML. GPU utilization and VRAM usage are displayed in real-time on the Performance page.
+![实例选择、资源指标、吞吐和诊断 / Instance selection, resource metrics, throughput, and diagnostics](public/docs/guide/09-performance.png)
 
-### 自动更新检查 / Auto-update
+### 查看指标 / Read the Metrics
 
-程序启动时自动检测 GitHub Release 是否有新版本。如有更新，侧边栏底部显示绿色提示横幅。
+1. 从左侧选择正在运行的实例。
+2. 查看 CPU / 内存和 GPU / 显存压力。
+3. 查看当前 tokens/s、提示处理速度、排队深度和忙碌槽位。
+4. 在会话历史中选择一次运行，对比请求吞吐和峰值显存。
+5. 查看诊断卡片，再结合日志判断是否需要调整上下文、批大小或并发。
 
-The app auto-checks GitHub Releases on startup. If an update is available, a green banner appears at the bottom of the sidebar.
+1. Select a running instance.
+2. Review CPU, memory, GPU, and VRAM pressure.
+3. Inspect tokens per second, prompt speed, queue depth, and busy slots.
+4. Select a session to compare request throughput and peak VRAM.
+5. Use diagnostics together with logs before tuning context, batch size, or concurrency.
+
+AMD 指标优先使用 ADLX，NVIDIA 使用 NVML，无法取得 GPU 指标时会回退到系统指标。页面没有实例时不会保留上一个实例的过期实时数据。
+
+AMD signals prefer ADLX and NVIDIA uses NVML; the app falls back to system metrics when GPU telemetry is unavailable. Stale live instance metrics are cleared when no instance is selected.
+
+---
+
+## 监控大屏 / Monitoring Wall
+
+监控大屏把实例、吞吐、请求压力、下载、日志和告警压缩到一页，适合持续观察，不用于修改配置。
+
+Monitoring Wall condenses instances, throughput, request pressure, downloads, logs, and alerts into one read-only operational view.
+
+![监控大屏的服务健康、吞吐、压力和活动 / Monitoring wall with health, throughput, pressure, and activity](public/docs/guide/10-monitoring-wall.png)
+
+- 顶部显示更新时间和整体服务状态。
+- KPI 展示运行实例、当前与峰值吞吐、请求压力和告警数。
+- 实例吞吐按实例聚合，避免把同一请求或排队数重复计算。
+- 下载和日志区域用于发现近期失败，不替代下载页或日志页的详细操作。
+- 数据不可用时显示真实空状态或降级信息，不填充模拟指标。
+
+- The header shows update time and overall service status.
+- KPIs cover running instances, current and peak throughput, request pressure, and alerts.
+- Throughput is aggregated per instance without double-counting request or queue data.
+- Download and log summaries surface recent failures but do not replace detailed pages.
+- Unavailable data remains an honest empty or degraded state.
+
+---
+
+## 服务器日志 / Server Logs
+
+服务器日志集中显示实例 stdout / stderr、启动命令、PID、健康检查和性能时序。日志按实例写入文件，应用重启后可恢复查看。
+
+Server Logs collects instance stdout and stderr, startup commands, PIDs, health checks, and timing output. Per-instance logs persist and can be restored after restart.
+
+![实时日志、实例筛选和自动跟随 / Live logs, instance filtering, and tail follow](public/docs/guide/11-server-logs.png)
+
+### 使用方法 / Usage
+
+- 按实例筛选，或查看全部实例。
+- 自动跟随开启时保持在最新日志；向上滚动会暂停跟随，返回底部后可恢复。
+- 错误、警告、就绪和性能关键词使用不同颜色。
+- 清空日志只清理当前视图对应内容，操作前确认筛选范围。
+- 启动失败先查完整命令，再查紧随其后的 stderr。
+
+- Filter by one instance or view all.
+- Tail follow stays on the newest line; scrolling up pauses it until returning to the bottom.
+- Errors, warnings, readiness, and performance terms use distinct colors.
+- Clear applies to the selected log scope.
+- For startup failures, inspect the full command and the following stderr lines.
+
+常见信号：`address already in use` 表示端口冲突；模型文件打开失败表示路径或权限问题；GPU 分配失败通常需要降低 GPU 层数、上下文或批大小；健康接口暂时返回错误但模型接口可用时，连接测试会使用兼容回退判断。
+
+Common signals include port conflicts, model path or permission errors, GPU allocation failures, and transient health endpoint errors. Connection tests can use compatible model endpoint fallback when appropriate.
+
+---
+
+## 应用设置与数据安全 / Application Settings and Data Safety
+
+![应用内使用说明、进度检查和交互式引导 / In-app guide, setup checklist, and interactive tour](public/docs/guide/12-in-app-guide.png)
+
+### 使用说明与交互引导 / Guide and Interactive Tour
+
+应用内“使用说明”提供本地目录、启用进度检查和 11 步交互式引导。引导只切换页面和高亮控件，不创建、修改、启动或停止资源；关闭或完成后返回说明页。
+
+The in-app Guide provides an offline table of contents, setup checklist, and 11-step walkthrough. It only navigates and highlights; it does not mutate resources and returns to Guide when closed or completed.
+
+### 主题、语言和窗口 / Theme, Language, and Window
+
+- 侧边栏底部可切换深色 / 明亮主题和中文 / 英文。
+- 主题、最后页面、窗口尺寸和位置会保存。
+- 关闭窗口默认隐藏到系统托盘；托盘菜单可重新显示或退出。
+- 自动启动开关用于应用启动后恢复应当运行的实例；缺少引擎、模型或集群 Worker 时会跳过并记录警告。
+- 应用启动时检查 GitHub Release，新版本提示显示在侧边栏。
+
+- Toggle theme and language from the sidebar footer.
+- Theme, last page, window size, and position persist.
+- Closing hides to the tray by default; the tray can restore or exit.
+- Auto-start restores eligible instances and skips those missing engines, models, or required workers.
+- Startup checks GitHub Releases and shows an update notice when available.
+
+### 配置、备份和日志 / Configuration, Backup, and Logs
+
+- 主配置保存在应用配置目录下的 `configs/instances.json`。
+- 保存采用临时文件加原子替换，并保留 `instances.json.bak`。
+- 如果主配置 JSON 损坏，启动时会尝试从 `.bak` 读取并恢复可用配置。
+- 下载队列、窗口状态、路由配置和遥测数据库分别持久化。
+- API Key 文件可能包含敏感信息，不应提交到仓库或共享截图。
+- 配置目录和日志中可能包含本机路径，反馈问题前请先脱敏。
+
+- Main configuration is stored in `configs/instances.json` under the application configuration location.
+- Saves use a temporary file and atomic replacement while retaining `instances.json.bak`.
+- A corrupt primary JSON file triggers backup fallback on launch.
+- Download queues, window state, routing configuration, and telemetry are persisted separately.
+- API key files are sensitive and must not be committed or exposed in screenshots.
+- Redact local paths before sharing configuration or logs.
 
 ---
 
 ## 常见问题 / FAQ
 
-**Q: 为什么启动后提示"未检测到引擎"？**
-A: 请先在「引擎管理」中添加 llama-server 所在的目录。
+### 为什么没有检测到引擎？ / Why is no engine detected?
 
-**Q: Why does it say "No engines detected"?**
-A: Go to "Engine Management" and add the directory containing llama-server first.
+进入“引擎管理”，添加包含实际 `llama-server` 可执行文件的根目录并重新扫描。若只选择了源码目录而没有构建产物，不会识别为引擎。
+
+Add and rescan a root containing the actual `llama-server` executable. A source-only directory is not an engine.
+
+### 为什么实例端口不可用？ / Why is the instance port unavailable?
+
+该端口正在被其他实例或进程监听。选择新端口，或停止占用端口的进程后等待检查刷新。实例路由端口也不能与后端实例端口重复。
+
+Another process is listening on the port. Choose another port or stop the owner. The routing listener also needs a unique port.
+
+### 为什么实例立即进入错误状态？ / Why does an instance fail immediately?
+
+打开服务器日志，检查启动命令后的第一条错误。依次核对模型路径、引擎路径、后端类型、端口、GPU 层数、上下文和可用内存。
+
+Open Server Logs and inspect the first error after the startup command. Check model and engine paths, backend, port, GPU layers, context, and memory.
+
+### API 返回未授权怎么办？ / What if the API returns unauthorized?
+
+确认客户端使用的是实例 API Key 或实例路由的代理 API Key。若实例通过 `api_key_file` 提供密钥，检查文件存在、可读，并确认第一条非空内容正确。
+
+Use the instance key or the routing proxy key as appropriate. For `api_key_file`, verify the file and its first non-empty line.
+
+### 为什么非本机路由无法启动？ / Why can routing not bind publicly?
+
+实例路由在监听非本机地址时强制要求代理 API Key。设置密钥、保存配置，再检查端口和防火墙后启动。
+
+Non-local routing requires a proxy API key. Set and save it, then verify the port and firewall.
+
+### 应用重启后下载怎么办？ / What happens to downloads after restart?
+
+队列和断点状态会保存。默认“手动”策略等待你点击恢复；选择“启动时自动恢复”后，符合条件的任务会自动继续。
+
+Queue and partial state persist. Manual policy waits for user action; Auto on Launch resumes eligible tasks.
+
+### 性能页为什么没有 GPU 数据？ / Why is GPU telemetry missing?
+
+确认驱动正常并且当前平台可使用 ADLX 或 NVML。采集失败时应用会回退系统指标；这不一定表示实例未使用 GPU，应结合服务器日志确认后端加载。
+
+Verify the driver and ADLX or NVML availability. System fallback does not by itself mean the server is not using a GPU; confirm backend loading in logs.
+
+### 主配置损坏怎么办？ / What if the main configuration is corrupt?
+
+应用会自动尝试 `instances.json.bak`。仍无法启动时，先备份整个配置目录，再检查两个 JSON 文件；不要直接删除日志、下载状态或遥测数据库来猜测修复。
+
+The app automatically tries `instances.json.bak`. If recovery still fails, back up the full configuration directory before inspecting both JSON files.
+
+### 应用内图片是否需要联网？ / Do in-app guide images require a network connection?
+
+不需要。说明截图位于安装包的 `docs/guide` 资源目录中；GitHub README 和手册也引用仓库内同一批文件。
+
+No. Guide images ship under `docs/guide` in the frontend bundle and are shared with repository documentation.
 
 ---
 
-**Q: 如何添加多个版本的引擎？**
-A: 选择包含多个引擎子目录的父级目录，程序会自动发现所有版本。
+## 发版前自检 / Release Validation
 
-**Q: How to add multiple engine versions?**
-A: Select the parent directory containing multiple engine subdirectories - the app auto-discovers all.
+在准备发布或排查环境问题时，可按以下顺序做一次完整自检：
 
----
+1. 模型仓库能扫描并显示主模型元信息。
+2. 引擎管理能识别正确后端。
+3. 新实例端口检查通过，命令预览符合预期。
+4. 参数保存后没有未处理的高严重度警告。
+5. 实例启动、连接测试、API 页面和停止操作正常。
+6. 性能页显示当前实例，日志持续更新。
+7. 实例路由能列出目标并转发一次 `/v1/models` 或聊天请求。
+8. 下载暂停、恢复和重启后的策略符合设置。
+9. 应用内说明在离线状态显示全部图片，11 步引导能结束并返回说明页。
+10. 退出或托盘行为与实例路由后台保活设置一致。
 
-**Q: 如何从 ModelScope / HuggingFace 下载模型？**
-A: 进入「下载管理」页面，选择下载源，输入仓库 ID，点击 Browse 浏览文件后进行下载。
-
-**Q: How to download models from ModelScope / HuggingFace?**
-A: Go to "Downloads" page, select source, enter repo ID, click Browse, then download.
-
----
-
-**Q: 配置文件在哪里？**
-A: 在 `configs/` 文件夹中。`instances.json` 是主配置文件。
-
-**Q: Where are the config files?**
-A: In the `configs/` folder. `instances.json` is the main config file.
-
----
-
-**Q: 如何同时运行多个模型？**
-A: 创建多个实例，设置不同的端口即可。每个实例独立运行。
-
-**Q: How to run multiple models simultaneously?**
-A: Create multiple instances with different ports. Each runs independently.
-
----
-
-**Q: NVIDIA GPU 需要额外配置吗？**
-A: 不需要。程序通过 NVML 自动检测，驱动正常安装即可。
-
-**Q: Does NVIDIA GPU need extra configuration?**
-A: No. The app auto-detects via NVML as long as the driver is installed.
-
----
-
-**Q: 应用重启后日志还在吗？**
-A: 在。程序将 llama-server 的输出写入日志文件，重启后自动恢复。
-
-**Q: Are logs preserved after app restart?**
-A: Yes. The app writes llama-server output to log files and auto-recovers them on restart.
+For release or environment validation, verify model metadata, engine backend, port checks, configuration warnings, instance lifecycle, telemetry, logs, routing, download recovery, offline guide assets, walkthrough completion, and tray or routing exit behavior.
