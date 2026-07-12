@@ -173,8 +173,8 @@ fn skip_gguf_value(file: &mut std::fs::File, value_type: u32) -> Result<(), Stri
     match value_type {
         0 | 1 | 7 => skip_bytes(file, 1),
         2 | 3 => skip_bytes(file, 2),
-        4 | 5 | 6 => skip_bytes(file, 4),
-        10 | 11 | 12 => skip_bytes(file, 8),
+        4..=6 => skip_bytes(file, 4),
+        10..=12 => skip_bytes(file, 8),
         8 => {
             let _ = read_gguf_string(file)?;
             Ok(())
@@ -188,8 +188,8 @@ fn skip_gguf_value(file: &mut std::fs::File, value_type: u32) -> Result<(), Stri
             match array_type {
                 0 | 1 | 7 => skip_bytes(file, array_len),
                 2 | 3 => skip_bytes(file, array_len.saturating_mul(2)),
-                4 | 5 | 6 => skip_bytes(file, array_len.saturating_mul(4)),
-                10 | 11 | 12 => skip_bytes(file, array_len.saturating_mul(8)),
+                4..=6 => skip_bytes(file, array_len.saturating_mul(4)),
+                10..=12 => skip_bytes(file, array_len.saturating_mul(8)),
                 8 => {
                     for _ in 0..array_len {
                         let _ = read_gguf_string(file)?;

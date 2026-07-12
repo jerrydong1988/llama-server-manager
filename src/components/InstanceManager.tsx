@@ -216,7 +216,7 @@ const InstanceManager = () => {
   const handleDelete = async (id: string) => {
     if (!await confirm(t.instance.confirmDelete, { title: t.instance.delete, kind: 'warning' })) return
     deleteInstance(id)
-    useAppStore.getState().saveConfig()
+    void useAppStore.getState().saveConfig().catch(() => {})
   }
 
   const [copyFeedback, setCopyFeedback] = useState(false)
@@ -278,7 +278,7 @@ const InstanceManager = () => {
     const next = [...state.instances]
     next[idx] = { ...next[idx], config: { ...next[idx].config, auto_start: !inst.config.auto_start } }
     useAppStore.setState({ instances: next })
-    useAppStore.getState().saveConfig()
+    void useAppStore.getState().saveConfig().catch(() => {})
   }
 
   const commitRename = (inst: Instance) => {
@@ -949,7 +949,7 @@ const InstanceManager = () => {
                       const next = [...state.instances]
                       next[idx] = { ...next[idx], config: { ...next[idx].config, engine_id: engine.id } }
                       useAppStore.setState({ instances: next })
-                      useAppStore.getState().saveConfig()
+                      void useAppStore.getState().saveConfig().catch(() => {})
                       setEnginePickerForId('')
                     }}
                     className={`w-full rounded px-4 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800 ${(inst.config.engine_id || defaultEngineId) === engine.id ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300' : ''}`}
@@ -965,7 +965,7 @@ const InstanceManager = () => {
                     const next = [...state.instances]
                     next[idx] = { ...next[idx], config: { ...next[idx].config, engine_id: '' } }
                     useAppStore.setState({ instances: next })
-                    useAppStore.getState().saveConfig()
+                    void useAppStore.getState().saveConfig().catch(() => {})
                     setEnginePickerForId('')
                   }}
                   className={`w-full border-t border-slate-200 px-4 py-2 text-left text-sm hover:bg-slate-100 dark:border-slate-800 dark:hover:bg-slate-800 ${!inst.config.engine_id ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300' : ''}`}

@@ -608,7 +608,7 @@ function AppInner() {
       }
       if (e.key === 's' || e.key === 'S') {
         e.preventDefault()
-        useAppStore.getState().saveConfig()
+        void useAppStore.getState().saveConfig().catch(() => {})
       }
       if (e.key === 'k' || e.key === 'K') {
         e.preventDefault()

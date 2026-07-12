@@ -432,7 +432,7 @@ export interface AppState {
   clearCompletedDownloadTasks: () => void
   clearFailedDownloadTasks: () => void
   retryFailedDownload: (taskId: string) => void
-  redownloadFile: (taskId: string) => void
+  redownloadFile: (taskId: string) => Promise<void>
   moveQueueEntry: (id: string, direction: 'up' | 'down') => void
   // Cluster
   setWorkers: (workers: WorkerInfo[]) => void

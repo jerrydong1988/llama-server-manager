@@ -11,7 +11,35 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.19.0'
+          cache: 'npm'
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate release
+        run: npm run check:release
+      - name: Audit frontend dependencies
+        run: npm audit --audit-level=moderate --registry=https://registry.npmjs.org
+      - name: Test Rust
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked
+      - name: Lint Rust
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
   build-windows:
+    needs: quality
     runs-on: windows-latest
     permissions:
       contents: write
@@ -19,7 +47,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -47,6 +75,7 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi
 
   build-macos:
+    needs: quality
     runs-on: macos-latest
     permissions:
       contents: write
@@ -54,7 +83,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -80,6 +109,7 @@ jobs:
           files: src-tauri/target/release/bundle/dmg/*.dmg
 
   build-linux:
+    needs: quality
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -87,7 +117,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -121,6 +151,7 @@ jobs:
             src-tauri/target/release/bundle/deb/*.deb
 
   build-linux-arm64:
+    needs: quality
     runs-on: ubuntu-24.04-arm
     permissions:
       contents: write
@@ -128,7 +159,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

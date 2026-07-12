@@ -68,8 +68,8 @@ export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
     id: 'proxy',
     tab: 'proxy',
     selector: '[data-guide="proxy-overview"]',
-    zh: { title: '实例路由', description: '把多个运行实例统一到 OpenAI 兼容入口。' },
-    en: { title: 'Instance Routing', description: 'Expose running instances through one OpenAI-compatible endpoint.' },
+    zh: { title: '实例路由', description: '把多个实例统一到 OpenAI 兼容入口，并用代理密钥保护全部端点。' },
+    en: { title: 'Instance Routing', description: 'Expose one OpenAI-compatible endpoint with key protection across all routes.' },
   },
   {
     id: 'performance',

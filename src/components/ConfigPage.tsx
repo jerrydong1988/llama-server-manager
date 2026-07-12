@@ -334,7 +334,11 @@ const ConfigPage = () => {
     const warnings = validateConfig(local, model, engine)
 
     updateInstance(inst.id, { config: local })
-    await saveConfig()
+    try {
+      await saveConfig()
+    } catch {
+      return
+    }
     setSaved(true)
     setSaveWarnings(warnings)
 

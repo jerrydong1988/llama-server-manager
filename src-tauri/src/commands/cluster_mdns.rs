@@ -38,37 +38,34 @@ async fn run_mdns_discovery() -> Result<(), String> {
         .map_err(|e| format!("mdns browse: {}", e))?;
 
     while *DISCOVERY_ACTIVE.lock().await {
-        match tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv_async()).await {
-            Ok(Ok(event)) => {
-                if let mdns_sd::ServiceEvent::ServiceResolved(info) = event {
-                    let host = info
-                        .get_addresses()
-                        .iter()
-                        .find(|a| a.is_ipv4())
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|| info.get_hostname().to_string());
-                    let port = info.get_port();
+        if let Ok(Ok(mdns_sd::ServiceEvent::ServiceResolved(info))) =
+            tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv_async()).await
+        {
+            let host = info
+                .get_addresses()
+                .iter()
+                .find(|a| a.is_ipv4())
+                .map(|a| a.to_string())
+                .unwrap_or_else(|| info.get_hostname().to_string());
+            let port = info.get_port();
 
-                    let mut workers = load_workers();
-                    if !workers.iter().any(|w| w.host == host && w.port == port) {
-                        workers.push(WorkerInfo {
-                            id: format!("mdns-{}", host.replace('.', "-")),
-                            host,
-                            port,
-                            name: info
-                                .get_fullname()
-                                .trim_end_matches("._rpc._tcp.local.")
-                                .to_string(),
-                            devices: Vec::new(),
-                            status: WorkerStatus::Online,
-                            last_seen: Some(chrono::Utc::now().to_rfc3339()),
-                            auto_discovered: true,
-                        });
-                        save_workers(&workers);
-                    }
-                }
+            let mut workers = load_workers();
+            if !workers.iter().any(|w| w.host == host && w.port == port) {
+                workers.push(WorkerInfo {
+                    id: format!("mdns-{}", host.replace('.', "-")),
+                    host,
+                    port,
+                    name: info
+                        .get_fullname()
+                        .trim_end_matches("._rpc._tcp.local.")
+                        .to_string(),
+                    devices: Vec::new(),
+                    status: WorkerStatus::Online,
+                    last_seen: Some(chrono::Utc::now().to_rfc3339()),
+                    auto_discovered: true,
+                });
+                save_workers(&workers);
             }
-            Ok(Err(_)) | Err(_) => {}
         }
     }
 

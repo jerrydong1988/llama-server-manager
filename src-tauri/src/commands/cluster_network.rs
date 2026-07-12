@@ -9,7 +9,7 @@ pub async fn detect_usb4_adapters(state: State<'_, AppState>) -> Result<Vec<Usb4
         if let Ok(mut a) = state.usb4_adapters.lock() {
             *a = adapters.clone();
         }
-        return Ok(adapters);
+        Ok(adapters)
     }
 
     #[cfg(not(target_os = "windows"))]

@@ -87,10 +87,8 @@ fn save_workers_to(path: &std::path::Path, workers: &[WorkerInfo]) {
     // Atomic write: write a temporary file first, then rename it.
     let tmp = path.with_extension("json.tmp");
     if let Ok(json) = serde_json::to_string_pretty(workers) {
-        if std::fs::write(&tmp, json).is_ok() {
-            if std::fs::rename(&tmp, path).is_err() {
-                let _ = std::fs::remove_file(&tmp);
-            }
+        if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 }
@@ -187,6 +185,13 @@ fn get_physical_ips() -> Vec<Ipv4Addr> {
 // Tauri commands.
 // -------------------------------------------------------------------
 
+async fn tcp_connect_succeeded(socket_addr: SocketAddr, connect_timeout: Duration) -> bool {
+    matches!(
+        tokio::time::timeout(connect_timeout, tokio::net::TcpStream::connect(socket_addr)).await,
+        Ok(Ok(_))
+    )
+}
+
 #[tauri::command]
 pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerInfo>, String> {
     let prefixes = get_lan_prefixes();
@@ -228,13 +233,9 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                     // Try connecting through a physical adapter to bypass VPN/TUN routes.
                     let connected = if physical_ips.is_empty() {
                         // Common case: tokio async connect plus timeout.
-                        tokio::time::timeout(
-                            connect_timeout,
-                            tokio::net::TcpStream::connect(socket_addr),
-                        )
-                        .await
-                        .ok()
-                        .map(|_| ()) // discard stream, just check reachability
+                        tcp_connect_succeeded(socket_addr, connect_timeout)
+                            .await
+                            .then_some(())
                     } else {
                         // Bind physical adapter: use spawn_blocking for socket2.
                         tokio::task::spawn_blocking(move || {
@@ -265,7 +266,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                         if parts.len() >= 2 {
                             let host = parts[0].to_string();
                             let worker_name =
-                                format!("Worker-{}", host.split('.').last().unwrap_or("?"));
+                                format!("Worker-{}", host.split('.').next_back().unwrap_or("?"));
                             // Use lock().await instead of try_lock() so high concurrency cannot silently drop discovered workers.
                             let mut list = discovered.lock().await;
                             list.push(WorkerInfo {
@@ -404,7 +405,7 @@ pub async fn get_worker_info(host: String, _port: u16) -> Result<Vec<WorkerDevic
         let mut devices = Vec::new();
         let mut in_devices = false;
 
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             if line.starts_with("Devices:") {
                 in_devices = true;
                 continue;
@@ -426,11 +427,11 @@ pub async fn get_worker_info(host: String, _port: u16) -> Result<Vec<WorkerDevic
                     let parts: Vec<&str> = vram_info.split(',').collect();
                     let total = parts
                         .first()
-                        .and_then(|s| s.trim().split_whitespace().next()?.parse::<u64>().ok())
+                        .and_then(|s| s.split_whitespace().next()?.parse::<u64>().ok())
                         .unwrap_or(0);
                     let free = parts
                         .get(1)
-                        .and_then(|s| s.trim().split_whitespace().next()?.parse::<u64>().ok())
+                        .and_then(|s| s.split_whitespace().next()?.parse::<u64>().ok())
                         .unwrap_or(0);
                     devices.push(WorkerDevice {
                         device_type,
@@ -819,6 +820,15 @@ mod tests {
         let cmd = generate_rpc_launch_cmd_internal(50052);
         assert!(cmd.contains("50052"));
         assert!(cmd.contains("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn tcp_probe_rejects_a_refused_connection() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        assert!(!tcp_connect_succeeded(address, std::time::Duration::from_millis(200)).await);
     }
 
     fn generate_rpc_launch_cmd_internal(port: u16) -> String {

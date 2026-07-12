@@ -360,15 +360,21 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         saveDir: task.saveDir,
       })
     },
-    redownloadFile: (taskId) => {
+    redownloadFile: async (taskId) => {
       const task = get().downloadTasks[taskId]
       if (!task || task.status !== 'error') return
 
-      invoke('reset_download_for_redownload', {
-        taskId,
-        fileName: task.fileName,
-        saveDir: task.saveDir,
-      }).catch(() => {})
+      try {
+        await invoke('reset_download_for_redownload', {
+          taskId,
+          fileName: task.fileName,
+          repoId: task.repoId,
+          saveDir: task.saveDir,
+        })
+      } catch (error) {
+        get().addRuntimeWarning(`重新下载准备失败：${String(error)}`)
+        return
+      }
 
       const tasks = { ...get().downloadTasks }
       delete tasks[taskId]

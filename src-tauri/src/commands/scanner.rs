@@ -420,7 +420,7 @@ fn mark_sharded_models(models: &mut [ModelInfo]) {
                 .push(i);
         }
     }
-    for (_base, (expected_total, indices)) in &groups {
+    for (expected_total, indices) in groups.values() {
         if indices.len() as u32 == *expected_total && *expected_total > 1 {
             for &idx in indices {
                 models[idx].is_shard = true;
@@ -641,20 +641,20 @@ pub async fn scan_models(
 }
 
 // Batch load: scan and restore downloads in one IPC call.
+type AppDataSnapshot = (
+    Vec<ModelInfo>,
+    Vec<EngineInfo>,
+    Vec<crate::models::PersistedQueueEntry>,
+);
+type CachedScan = (Vec<ModelInfo>, Vec<EngineInfo>);
+
 #[tauri::command]
 pub async fn load_app_data(
     paths: Vec<String>,
     engine_paths: Vec<String>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<
-    (
-        Vec<ModelInfo>,
-        Vec<EngineInfo>,
-        Vec<crate::models::PersistedQueueEntry>,
-    ),
-    String,
-> {
+) -> Result<AppDataSnapshot, String> {
     let (models_result, engines_result) = tokio::join!(
         scan_models(paths, state.clone(), app.clone()),
         scan_engines(engine_paths, state.clone())
@@ -669,7 +669,7 @@ pub async fn load_app_data(
 #[tauri::command]
 pub async fn get_cached_scan(
     state: tauri::State<'_, AppState>,
-) -> Result<Option<(Vec<ModelInfo>, Vec<EngineInfo>)>, String> {
+) -> Result<Option<CachedScan>, String> {
     let mut models = model_inventory::list_cached_models()?;
     mark_sharded_models(&mut models);
 

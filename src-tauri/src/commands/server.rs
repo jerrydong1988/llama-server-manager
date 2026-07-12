@@ -3,11 +3,89 @@ use crate::commands::nvml;
 use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
-use sysinfo::System;
+use std::sync::{Arc, Mutex};
+use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{Emitter, Manager};
+
+const MAX_SERVER_LOG_BYTES: u64 = 32 * 1024 * 1024;
+const RETAINED_SERVER_LOG_BYTES: u64 = 8 * 1024 * 1024;
+
+struct CappedLogState {
+    file: std::fs::File,
+    size: u64,
+    max_bytes: u64,
+    retained_bytes: u64,
+}
+
+struct CappedLogWriter {
+    state: Mutex<CappedLogState>,
+}
+
+impl CappedLogWriter {
+    fn new(path: std::path::PathBuf, max_bytes: u64, retained_bytes: u64) -> std::io::Result<Self> {
+        if retained_bytes >= max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "retained log size must be smaller than maximum log size",
+            ));
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(true)
+            .open(path)?;
+        Ok(Self {
+            state: Mutex::new(CappedLogState {
+                file,
+                size: 0,
+                max_bytes,
+                retained_bytes,
+            }),
+        })
+    }
+
+    fn append(&self, bytes: &[u8]) -> std::io::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        if state.size.saturating_add(bytes.len() as u64) > state.max_bytes {
+            let keep = state.size.min(state.retained_bytes);
+            let mut tail = vec![0_u8; keep as usize];
+            let tail_start = state.size.saturating_sub(keep);
+            state.file.flush()?;
+            state.file.seek(SeekFrom::Start(tail_start))?;
+            state.file.read_exact(&mut tail)?;
+            state.file.set_len(0)?;
+            state.file.seek(SeekFrom::Start(0))?;
+            state.file.write_all(&tail)?;
+            state.size = keep;
+        }
+        state.file.seek(SeekFrom::End(0))?;
+        state.file.write_all(bytes)?;
+        state.size = state.size.saturating_add(bytes.len() as u64);
+        Ok(())
+    }
+}
+
+fn spawn_log_pump<R>(mut source: R, writer: Arc<CappedLogWriter>)
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match source.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if writer.append(&buffer[..read]).is_err() {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+}
 
 // Generate CLI command.
 
@@ -709,17 +787,20 @@ pub async fn start_server(
     let log_dir = config_dir.join("logs");
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join(format!("{}.log", instance_id));
-    let log_file =
-        std::fs::File::create(&log_path).map_err(|e| format!("无法创建日志文件: {}", e))?;
-    let log_stderr = log_file
-        .try_clone()
-        .map_err(|e| format!("无法复制文件句柄: {}", e))?;
+    let log_writer = Arc::new(
+        CappedLogWriter::new(
+            log_path.clone(),
+            MAX_SERVER_LOG_BYTES,
+            RETAINED_SERVER_LOG_BYTES,
+        )
+        .map_err(|e| format!("无法创建日志文件: {}", e))?,
+    );
 
     let mut child = {
         let mut c = Command::new(&cmd[0]);
         c.args(&cmd[1..])
-            .stdout(Stdio::from(log_file))
-            .stderr(Stdio::from(log_stderr));
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -730,11 +811,25 @@ pub async fn start_server(
     };
 
     let pid = child.id();
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "Unable to capture server stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Unable to capture server stderr".to_string())?;
+    spawn_log_pump(stdout, log_writer.clone());
+    spawn_log_pump(stderr, log_writer);
 
-    let start_time = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let (start_time, executable_path) = match read_process_identity(pid) {
+        Some(identity) => identity,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Unable to verify the started server process identity".to_string());
+        }
+    };
     let telemetry_session_id = crate::commands::telemetry::begin_run_session(
         &instance_id,
         &config.name,
@@ -766,6 +861,7 @@ pub async fn start_server(
                 port: config.port,
                 host: config.host.clone(),
                 start_time,
+                executable_path: executable_path.to_string_lossy().to_string(),
                 telemetry_session_id: telemetry_session_id.clone(),
             },
         );
@@ -1262,6 +1358,10 @@ pub async fn stop_server(
     let mut killed = false;
 
     if let Some(ref ri) = ri {
+        if !running_instance_matches_live_process(ri) {
+            cleanup_running_instance(&app, &instance_id, ri.pid, "identity-mismatch");
+            return Ok(());
+        }
         // Prefer taskkill /T, including child processes; PowerShell by port is the fallback.
         #[cfg(target_os = "windows")]
         {
@@ -1349,6 +1449,44 @@ fn is_recorded_process_alive(pid: u32) -> bool {
     {
         unsafe { libc::kill(pid as i32, 0) == 0 }
     }
+}
+
+fn read_process_identity(pid: u32) -> Option<(u64, std::path::PathBuf)> {
+    let pid = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    let process = system.process(pid)?;
+    Some((process.start_time(), process.exe()?.to_path_buf()))
+}
+
+fn normalized_executable_path(path: &std::path::Path) -> String {
+    let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let value = normalized.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        value.to_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        value
+    }
+}
+
+fn process_identity_matches(
+    running: &RunningInstance,
+    actual_start_time: u64,
+    actual_executable: &std::path::Path,
+) -> bool {
+    !running.executable_path.trim().is_empty()
+        && running.start_time == actual_start_time
+        && normalized_executable_path(std::path::Path::new(&running.executable_path))
+            == normalized_executable_path(actual_executable)
+}
+
+pub(crate) fn running_instance_matches_live_process(running: &RunningInstance) -> bool {
+    read_process_identity(running.pid)
+        .map(|(start_time, executable)| process_identity_matches(running, start_time, &executable))
+        .unwrap_or(false)
 }
 
 fn cleanup_running_instance(
@@ -1562,9 +1700,7 @@ pub async fn check_port(port: u16, host: Option<String>) -> Result<bool, String>
 // System performance metrics via sysinfo.
 
 static SYSINFO_CACHE: Mutex<Option<System>> = Mutex::new(None);
-
-/// Collect GPU + system-level metrics. Uses cached System instance, no sleep.
-fn collect_gpu_and_system() -> (
+type GpuSystemSnapshot = (
     Option<f32>,
     Option<f32>,
     Option<f64>,
@@ -1574,9 +1710,12 @@ fn collect_gpu_and_system() -> (
     Option<f32>,
     Option<f64>,
     Option<f64>,
-) {
+);
+
+/// Collect GPU + system-level metrics. Uses cached System instance, no sleep.
+fn collect_gpu_and_system() -> GpuSystemSnapshot {
     let mut guard = SYSINFO_CACHE.lock().unwrap();
-    let sys = guard.get_or_insert_with(|| System::new_all());
+    let sys = guard.get_or_insert_with(System::new_all);
     sys.refresh_cpu_all();
     sys.refresh_memory();
     let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(sys);
@@ -1625,8 +1764,10 @@ fn collect_gpu_and_system() -> (
 
 /// #6: Reuse the System instance to avoid repeated new -> refresh -> sleep -> refresh 300ms stalls.
 fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
+    let pid = Pid::from_u32(pid);
+    sys.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
     sys.refresh_cpu_all();
-    if let Some(p) = sys.processes().values().find(|p| p.pid().as_u32() == pid) {
+    if let Some(p) = sys.process(pid) {
         let raw = p.cpu_usage();
         // Always normalize by CPU count because sysinfo reports total across all cores.
         let cpu = if sys.cpus().is_empty() {
@@ -2164,7 +2305,7 @@ fn tail_log_file(
 
     // Phase 1: replay the last 2000 existing lines, covering the frontend 1000-line cap.
     if log_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&log_path) {
+        if let Ok(content) = std::fs::read_to_string(log_path) {
             let lines: Vec<&str> = content.lines().collect();
             let start = if lines.len() > 2000 {
                 lines.len() - 2000
@@ -2226,22 +2367,20 @@ fn tail_log_file(
             if let Ok(mut file) = std::fs::File::open(log_path) {
                 if file.seek(SeekFrom::Start(last_size)).is_ok() {
                     let reader = BufReader::new(file);
-                    for line in reader.lines() {
-                        if let Ok(text) = line {
-                            if text.trim().is_empty() {
-                                continue;
-                            }
-                            let _ = app.emit(
-                                "server-log",
-                                serde_json::json!({
-                                    "instanceId": instance_id,
-                                    "text": format!("{}\n", text),
-                                }),
-                            );
-                            if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
-                                perf_changed = true;
-                                record_completed(&last_completed, &mut last_recorded_task_id);
-                            }
+                    for text in reader.lines().map_while(Result::ok) {
+                        if text.trim().is_empty() {
+                            continue;
+                        }
+                        let _ = app.emit(
+                            "server-log",
+                            serde_json::json!({
+                                "instanceId": instance_id,
+                                "text": format!("{}\n", text),
+                            }),
+                        );
+                        if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
+                            perf_changed = true;
+                            record_completed(&last_completed, &mut last_recorded_task_id);
                         }
                     }
                 }
@@ -2346,27 +2485,87 @@ mod perf_parser_tests {
 
     #[test]
     fn effective_api_key_prefers_inline_key() {
-        let mut config = InstanceConfig::default();
-        config.api_key = " inline-key ".into();
-        config.api_key_file = "missing-key-file.txt".into();
+        let config = InstanceConfig {
+            api_key: " inline-key ".into(),
+            api_key_file: "missing-key-file.txt".into(),
+            ..InstanceConfig::default()
+        };
 
         assert_eq!(effective_api_key(&config), "inline-key");
     }
 
     #[test]
     fn effective_api_key_reads_first_non_empty_file_line() {
-        let dir = std::env::temp_dir().join(format!(
-            "lsm-api-key-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("lsm-api-key-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("api-key.txt");
         std::fs::write(&path, "\n file-key \n second-key \n").unwrap();
 
-        let mut config = InstanceConfig::default();
-        config.api_key_file = path.to_string_lossy().to_string();
+        let config = InstanceConfig {
+            api_key_file: path.to_string_lossy().to_string(),
+            ..InstanceConfig::default()
+        };
 
         assert_eq!(effective_api_key(&config), "file-key");
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir(dir);
+    }
+
+    #[test]
+    fn recorded_process_identity_rejects_pid_reuse() {
+        let running = RunningInstance {
+            instance_id: "instance-1".into(),
+            pid: 42,
+            port: 8080,
+            host: "127.0.0.1".into(),
+            start_time: 100,
+            executable_path: "C:\\tools\\llama-server.exe".into(),
+            telemetry_session_id: None,
+        };
+
+        assert!(!process_identity_matches(
+            &running,
+            101,
+            std::path::Path::new("C:\\tools\\llama-server.exe")
+        ));
+        assert!(!process_identity_matches(
+            &running,
+            100,
+            std::path::Path::new("C:\\other\\process.exe")
+        ));
+    }
+
+    #[test]
+    fn process_metrics_refresh_discovers_a_new_process() {
+        let mut system = System::new_all();
+        #[cfg(target_os = "windows")]
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping -n 4 127.0.0.1 >NUL"])
+            .spawn()
+            .unwrap();
+        #[cfg(not(target_os = "windows"))]
+        let mut child = Command::new("sleep").arg("3").spawn().unwrap();
+
+        let (_, memory_mb) = get_process_metrics(&mut system, child.id());
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(memory_mb > 0.0);
+    }
+
+    #[test]
+    fn capped_log_writer_keeps_recent_output_within_limit() {
+        let dir = std::env::temp_dir().join(format!("lsm-capped-log-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.log");
+        let writer = CappedLogWriter::new(path.clone(), 64, 16).unwrap();
+
+        writer.append(&[b'a'; 48]).unwrap();
+        writer.append(&[b'b'; 48]).unwrap();
+
+        let content = std::fs::read(&path).unwrap();
+        assert!(content.len() <= 64);
+        assert!(content.ends_with(&[b'b'; 48]));
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir(dir);
     }

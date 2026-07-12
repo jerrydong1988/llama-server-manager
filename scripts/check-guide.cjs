@@ -85,6 +85,11 @@ function collectFiles(directory, extension) {
 }
 
 const packageJson = JSON.parse(readText(path.join(ROOT, 'package.json'), 'package.json') || '{}')
+const packageLock = JSON.parse(readText(path.join(ROOT, 'package-lock.json'), 'package-lock.json') || '{}')
+const cargoToml = readText(path.join(ROOT, 'src-tauri', 'Cargo.toml'), 'Cargo.toml')
+const tauriConfig = JSON.parse(
+  readText(path.join(ROOT, 'src-tauri', 'tauri.conf.json'), 'tauri.conf.json') || '{}',
+)
 const guide = readText(GUIDE_PATH, 'GUIDE.md')
 const readme = readText(README_PATH, 'README.md')
 const app = readText(APP_PATH, 'src/App.tsx')
@@ -92,6 +97,17 @@ const guidePage = readText(GUIDE_PAGE_PATH, 'src/components/GuidePage.tsx')
 const tour = readText(TOUR_PATH, 'src/components/guide/guideTour.ts')
 const ui = readText(UI_PATH, 'src/components/ui.tsx')
 const expectedVersion = packageJson.version || 'unknown'
+const cargoVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1]
+const lockedVersion = packageLock.packages?.['']?.version || packageLock.version
+for (const [label, version] of [
+  ['package-lock.json', lockedVersion],
+  ['Cargo.toml', cargoVersion],
+  ['tauri.conf.json', tauriConfig.version],
+]) {
+  if (version !== expectedVersion) {
+    errors.add(`${label} version ${version || 'missing'} must match package.json ${expectedVersion}`)
+  }
+}
 
 if (!guide.includes(`> v${expectedVersion}`)) {
   errors.add(`GUIDE.md must declare release version v${expectedVersion}`)

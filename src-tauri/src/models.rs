@@ -526,6 +526,8 @@ pub struct RunningInstance {
     #[serde(default)]
     pub start_time: u64,
     #[serde(default)]
+    pub executable_path: String,
+    #[serde(default)]
     pub telemetry_session_id: Option<String>,
 }
 
@@ -556,18 +558,13 @@ pub struct WorkerDevice {
     pub free_mb: u64,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum WorkerStatus {
     Online,
     Offline,
     Testing,
+    #[default]
     Unknown,
-}
-
-impl Default for WorkerStatus {
-    fn default() -> Self {
-        WorkerStatus::Unknown
-    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

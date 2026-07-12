@@ -90,7 +90,7 @@ Inspect CPU, memory, GPU, VRAM, tokens per second, slots, request history, sessi
 - Tauri 2 + React 18 + TypeScript 桌面应用。
 - 完整中英双语界面、深色 / 明亮主题、窗口状态记忆。
 - AMD ADLX、NVIDIA NVML 和系统指标自适应降级。
-- 实例 API Key 与 API Key 文件支持，统一路由可独立鉴权。
+- 实例 API Key 与 API Key 文件支持，统一路由可独立鉴权并保护全部代理端点。
 - 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
 - 端口冲突、路径、配置规则和启动健康检查。
 - 系统托盘、实例自动启动、路由后台保活和更新检查。
@@ -98,7 +98,7 @@ Inspect CPU, memory, GPU, VRAM, tokens per second, slots, request history, sessi
 - Tauri 2, React 18, and TypeScript desktop application.
 - Full Chinese and English UI, light and dark themes, persisted window state.
 - AMD ADLX, NVIDIA NVML, and system-metric fallback.
-- Inline or file-based instance keys plus separate routing authentication.
+- Inline or file-based instance keys plus routing authentication across every proxy endpoint.
 - Atomic configuration saves, backup fallback, persistent downloads and logs.
 - Port, path, configuration, startup, and health validation.
 - System tray, instance auto-start, routing keep-alive, and update checks.

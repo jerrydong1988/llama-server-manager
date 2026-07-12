@@ -39,15 +39,15 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     setEngines: (engines) => set({ engines }),
     setModelDirs: (dirs) => {
       set({ modelDirs: dirs })
-      get().saveConfig()
+      void get().saveConfig().catch(() => {})
     },
     setEngineDirs: (dirs) => {
       set({ engineDirs: dirs })
-      get().saveConfig()
+      void get().saveConfig().catch(() => {})
     },
     setDefaultEngineId: (id) => {
       set({ defaultEngineId: id })
-      get().saveConfig()
+      void get().saveConfig().catch(() => {})
     },
     setActiveConfigInstanceId: (id) => set({ activeConfigInstanceId: id }),
     setActiveTab: (tab) => {
@@ -59,7 +59,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     setDarkMode: (darkMode) => {
       set({ darkMode })
       document.documentElement.classList.toggle('dark', darkMode)
-      get().saveConfig()
+      void get().saveConfig().catch(() => {})
     },
     loadInitialData: async () => {
       set({ isLoading: true })

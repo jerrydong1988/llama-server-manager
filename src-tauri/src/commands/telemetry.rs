@@ -674,19 +674,48 @@ pub async fn get_telemetry_session_samples(
 #[tauri::command]
 pub async fn prune_telemetry(retention_days: Option<u32>) -> Result<u32, String> {
     let days = retention_days.unwrap_or(14).clamp(1, 365);
-    tokio::task::spawn_blocking(move || {
-        let conn = open_connection()?;
-        let before = now_ms() - days as i64 * 24 * 60 * 60 * 1000;
-        let affected = conn
+    tokio::task::spawn_blocking(move || prune_telemetry_storage(days))
+        .await
+        .map_err(|e| format!("遥测清理失败: {}", e))?
+}
+
+fn prune_connection(conn: &mut Connection, before: i64) -> Result<u32, String> {
+    let tx = conn
+        .transaction()
+        .map_err(|e| format!("Unable to begin telemetry cleanup transaction: {}", e))?;
+    let mut affected = 0_u32;
+    for (table, column) in [
+        ("metric_samples", "ts"),
+        ("slot_snapshots", "ts"),
+        ("inference_requests", "completed_at"),
+    ] {
+        affected += tx
             .execute(
-                "DELETE FROM run_sessions WHERE stopped_at IS NOT NULL AND stopped_at < ?1",
+                &format!("DELETE FROM {} WHERE {} < ?1", table, column),
                 params![before],
             )
-            .map_err(|e| format!("无法清理遥测数据: {}", e))?;
-        Ok(affected as u32)
-    })
-    .await
-    .map_err(|e| format!("遥测清理失败: {}", e))?
+            .map_err(|e| format!("Unable to prune {}: {}", table, e))? as u32;
+    }
+    affected += tx
+        .execute(
+            "DELETE FROM run_sessions WHERE stopped_at IS NOT NULL AND stopped_at < ?1",
+            params![before],
+        )
+        .map_err(|e| format!("Unable to prune telemetry sessions: {}", e))? as u32;
+    tx.commit()
+        .map_err(|e| format!("Unable to commit telemetry cleanup: {}", e))?;
+    Ok(affected)
+}
+
+pub(crate) fn prune_telemetry_storage(retention_days: u32) -> Result<u32, String> {
+    let days = retention_days.clamp(1, 365);
+    let before = now_ms() - days as i64 * 24 * 60 * 60 * 1000;
+    let mut conn = open_connection()?;
+    let affected = prune_connection(&mut conn, before)?;
+    if affected > 0 {
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;");
+    }
+    Ok(affected)
 }
 
 #[tauri::command]
@@ -1335,4 +1364,40 @@ fn sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TelemetrySampleS
         requests_deferred: row.get(17)?,
         busy_slots_per_decode: row.get(18)?,
     })
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    #[test]
+    fn pruning_removes_old_samples_from_active_sessions() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO run_sessions
+                (id, instance_id, instance_name, model_name, model_path, engine_id, backend,
+                 config_hash, command_line, started_at)
+             VALUES ('active', 'instance', 'Instance', 'Model', 'model.gguf', 'engine', 'cpu',
+                     'hash', 'cmd', 1)",
+            [],
+        )
+        .unwrap();
+        for ts in [100_i64, 1_000_i64] {
+            conn.execute(
+                "INSERT INTO metric_samples (session_id, instance_id, ts)
+                 VALUES ('active', 'instance', ?1)",
+                params![ts],
+            )
+            .unwrap();
+        }
+
+        let removed = prune_connection(&mut conn, 500).unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM metric_samples", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(removed, 1);
+        assert_eq!(remaining, 1);
+    }
 }

@@ -66,75 +66,33 @@ where
     persist_global_config_unlocked(&config_dir, &global)
 }
 
-/// Lightweight process liveness check using Windows OpenProcess or Unix kill(0), avoiding a full sysinfo refresh.
-fn is_process_alive(pid: u32) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::Foundation::CloseHandle;
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-        };
-        unsafe {
-            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
-            if handle.is_null() {
-                return false;
-            }
-            CloseHandle(handle);
-            true
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        // kill(pid, 0) returns 0 if process exists, -1 with ESRCH if not
-        unsafe { libc::kill(pid as i32, 0) == 0 }
-    }
-}
-
 // Config persistence.
+
+fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
+    let path = config_dir.join("instances.json");
+    let primary_result = std::fs::read_to_string(&path);
+    let json = match primary_result {
+        Ok(json) => Some(json),
+        Err(_) => {
+            let backup_path = config_dir.join("instances.json.bak");
+            std::fs::read_to_string(backup_path).ok()
+        }
+    };
+    let Some(json) = json else {
+        return default_global_config();
+    };
+    serde_json::from_str(&json).unwrap_or_else(|_| {
+        let backup_path = config_dir.join("instances.json.bak");
+        std::fs::read_to_string(backup_path)
+            .ok()
+            .and_then(|backup| serde_json::from_str(&backup).ok())
+            .unwrap_or_else(default_global_config)
+    })
+}
 
 /// Reads config from disk and resolves paths without AppState so main.rs setup() can call it early.
 pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
-    let path = config_dir.join("instances.json");
-
-    let load_json = || -> Result<String, String> {
-        let primary_result = std::fs::read_to_string(&path);
-        if let Ok(json) = primary_result {
-            return Ok(json);
-        }
-        // If the primary file cannot be read, possibly because it is locked, fall back to .bak.
-        let bak = config_dir.join("instances.json.bak");
-        if bak.exists() {
-            let json = std::fs::read_to_string(&bak).map_err(|e| format!("{}", e))?;
-            return Ok(json);
-        }
-        // If the primary file exists but cannot be read and .bak is missing, return the primary error.
-        if path.exists() {
-            primary_result.map_err(|e| format!("{}", e))
-        } else {
-            Err("no config".into())
-        }
-    };
-
-    let json = match load_json() {
-        Ok(j) => j,
-        Err(_) => {
-            return default_global_config()
-        }
-    };
-
-    let mut global: GlobalConfig = match serde_json::from_str(&json) {
-        Ok(g) => g,
-        Err(_) => {
-            let bak = config_dir.join("instances.json.bak");
-            let Ok(backup_json) = std::fs::read_to_string(&bak) else {
-                return default_global_config();
-            };
-            match serde_json::from_str(&backup_json) {
-                Ok(g) => g,
-                Err(_) => return default_global_config(),
-            }
-        }
-    };
+    let mut global = load_global_config_file(config_dir);
 
     // Resolve relative paths.
     let app_dir = crate::utils::get_data_dir();
@@ -167,7 +125,7 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
     let mut restored = HashMap::new();
     let mut stale_sessions = Vec::new();
     for (id, ri) in &global.running {
-        if is_process_alive(ri.pid) {
+        if crate::commands::server::running_instance_matches_live_process(ri) {
             restored.insert(id.clone(), ri.clone());
         } else if let Some(session_id) = &ri.telemetry_session_id {
             stale_sessions.push(session_id.clone());
@@ -189,7 +147,35 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
     global
 }
 
+struct FrontendConfigSnapshot {
+    instances: HashMap<String, InstanceConfig>,
+    model_dirs: Vec<String>,
+    engine_dirs: Vec<String>,
+    default_engine_id: String,
+    instance_order: Vec<String>,
+    last_tab: String,
+    dark_mode: bool,
+}
+
+fn apply_frontend_config(
+    global: &mut GlobalConfig,
+    snapshot: FrontendConfigSnapshot,
+    running: HashMap<String, crate::models::RunningInstance>,
+    engine_names: HashMap<String, String>,
+) {
+    global.instances = snapshot.instances;
+    global.model_dirs = snapshot.model_dirs;
+    global.engine_dirs = snapshot.engine_dirs;
+    global.default_engine_id = snapshot.default_engine_id;
+    global.running = running;
+    global.instance_order = snapshot.instance_order;
+    global.last_tab = snapshot.last_tab;
+    global.dark_mode = snapshot.dark_mode;
+    global.engine_names = engine_names;
+}
+
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri expands IPC fields into command parameters.
 pub async fn save_config(
     instances: HashMap<String, InstanceConfig>,
     model_dirs: Vec<String>,
@@ -203,25 +189,22 @@ pub async fn save_config(
     let running_snapshot = state.running.lock().unwrap().clone();
     let engine_names = state.engine_names.lock().unwrap().clone();
     let config_dir = state.config_dir.lock().unwrap().clone();
-    let existing = read_config_from_disk(&config_dir);
-    let global = GlobalConfig {
+    let snapshot = FrontendConfigSnapshot {
         instances: instances.clone(),
         model_dirs,
         engine_dirs,
         default_engine_id,
-        running: running_snapshot,
         instance_order,
         last_tab,
         dark_mode,
-        engine_names,
-        download_resume_policy: existing.download_resume_policy,
-        download_max_concurrent: existing.download_max_concurrent,
-        download_bandwidth_limit_bytes_per_sec: existing.download_bandwidth_limit_bytes_per_sec,
-        download_low_priority_throttle: existing.download_low_priority_throttle,
-        proxy_config: existing.proxy_config,
     };
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
-    persist_global_config(&config_dir, &global)?;
+    {
+        let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        let mut global = load_global_config_file(&config_dir);
+        apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
+        persist_global_config_unlocked(&config_dir, &global)?;
+    }
     let mut stored = state.instances.lock().unwrap();
     *stored = instances;
     Ok(())
@@ -290,7 +273,7 @@ pub async fn load_config(
         });
 
         crate::commands::server::reconnect_running_instance(
-            &id,
+            id,
             pid,
             &host2,
             port,
@@ -377,11 +360,8 @@ mod tests {
     use super::*;
 
     fn temp_config_dir(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "lsm-config-test-{}-{}",
-            name,
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("lsm-config-test-{}-{}", name, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -426,5 +406,28 @@ mod tests {
             expected.download_max_concurrent
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn frontend_config_merge_preserves_backend_owned_fields() {
+        let mut config = sample_config();
+        config.download_max_concurrent = 7;
+        config.proxy_config.public_api_key = "proxy-secret".into();
+        let snapshot = FrontendConfigSnapshot {
+            instances: HashMap::new(),
+            model_dirs: vec!["models-new".into()],
+            engine_dirs: vec!["engines-new".into()],
+            default_engine_id: "engine-new".into(),
+            instance_order: vec!["instance-new".into()],
+            last_tab: "dashboard".into(),
+            dark_mode: true,
+        };
+
+        apply_frontend_config(&mut config, snapshot, HashMap::new(), HashMap::new());
+
+        assert_eq!(config.download_max_concurrent, 7);
+        assert_eq!(config.proxy_config.public_api_key, "proxy-secret");
+        assert_eq!(config.default_engine_id, "engine-new");
+        assert_eq!(config.last_tab, "dashboard");
     }
 }

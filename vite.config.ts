@@ -24,9 +24,14 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_DEBUG,
     rollupOptions: {
       output: {
-        manualChunks: {
-          vendor: ['react', 'react-dom', 'zustand'],
-          icons: ['lucide-react'],
+        manualChunks(id) {
+          const normalized = id.replace(/\\/g, '/')
+          if (normalized.includes('/node_modules/lucide-react/')) {
+            return 'icons'
+          }
+          if (/\/node_modules\/(react|react-dom|zustand)\//.test(normalized)) {
+            return 'vendor'
+          }
         },
       },
     },

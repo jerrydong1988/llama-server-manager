@@ -228,11 +228,9 @@ fn normalize_path_for_compare(path: &Path) -> PathBuf {
 }
 
 fn queue_entry_download_dir(base_dir: &Path, entry: &PersistedQueueEntry) -> PathBuf {
-    base_dir.join(&entry.save_dir).join(
-        entry
-            .repo_id
-            .replace('/', &std::path::MAIN_SEPARATOR.to_string()),
-    )
+    base_dir
+        .join(&entry.save_dir)
+        .join(entry.repo_id.replace('/', std::path::MAIN_SEPARATOR_STR))
 }
 
 fn refresh_download_file_identity(file: &mut MsFileEntry) -> ResumeDownloadTaskResult {
@@ -404,10 +402,24 @@ fn resolve_repo_save_path(
             .to_path_buf()
             .join(save_dir)
     };
-    let save_path = base_path.join(repo_id.replace('/', &std::path::MAIN_SEPARATOR.to_string()));
+    let save_path = base_path.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR));
     std::fs::create_dir_all(&save_path)
         .map_err(|e| format!("Failed to create download directory: {}", e))?;
     Ok(save_path)
+}
+
+fn resolve_redownload_save_path(
+    config_dir: &Path,
+    save_dir: &str,
+    repo_id: &str,
+) -> Result<PathBuf, String> {
+    let repo_id = sanitize_repo_id(repo_id)?;
+    let base_path = if Path::new(save_dir).is_absolute() {
+        PathBuf::from(save_dir)
+    } else {
+        config_dir.parent().unwrap_or(Path::new(".")).join(save_dir)
+    };
+    Ok(base_path.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR)))
 }
 
 fn clear_control_flags_for_files(state: &AppState, files: &[MsFileEntry]) {
@@ -1041,7 +1053,6 @@ async fn download_single_file(
                             version: Some(ctx.version),
                             status: Some("active".into()),
                             error: Some(None),
-                            ..Default::default()
                         },
                     );
                     let _ = app.emit("download-progress", serde_json::json!({
@@ -1407,7 +1418,7 @@ pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, Str
             if e.entry_type != "file" {
                 return None;
             }
-            let name = e.path.split('/').last()?.to_string();
+            let name = e.path.split('/').next_back()?.to_string();
             if !name.ends_with(".gguf") && !name.ends_with(".txt") {
                 return None;
             }
@@ -1746,7 +1757,7 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
         let mut queue = state.download_queue.lock().unwrap();
         // Drop non-runnable entries once so they cannot block later queue items.
         let old_len = queue.len();
-        queue.retain(|e| is_restore_runnable(e));
+        queue.retain(is_restore_runnable);
         if queue.is_empty() {
             if queue.len() != old_len {
                 drop(queue);
@@ -1963,11 +1974,9 @@ pub(crate) fn restore_runtime_queue_from_disk(
     let save_dir_base = config_dir.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     for entry in queue.iter_mut() {
-        let repo_dir = save_dir_base.join(&entry.save_dir).join(
-            entry
-                .repo_id
-                .replace('/', &std::path::MAIN_SEPARATOR.to_string()),
-        );
+        let repo_dir = save_dir_base
+            .join(&entry.save_dir)
+            .join(entry.repo_id.replace('/', std::path::MAIN_SEPARATOR_STR));
         for file in entry.files.iter_mut() {
             if matches!(file.status.as_deref(), Some("active" | "pausing")) {
                 file.status = Some("paused".into());
@@ -2432,6 +2441,21 @@ mod audit_remediation_tests {
 
         assert!(err.contains("does not match"));
     }
+
+    #[test]
+    fn redownload_cleanup_path_includes_repository_directory() {
+        let config_dir = Path::new("/app-data/configs");
+
+        let path = resolve_redownload_save_path(config_dir, "models", "org/model").unwrap();
+
+        assert_eq!(
+            path,
+            Path::new("/app-data")
+                .join("models")
+                .join("org")
+                .join("model")
+        );
+    }
 }
 
 // Batch control commands.
@@ -2495,7 +2519,7 @@ pub async fn set_download_concurrency(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    if n < 1 || n > 8 {
+    if !(1..=8).contains(&n) {
         return Err("concurrency must be 1-8".into());
     }
     *state.download_max_concurrent.lock().unwrap() = n;
@@ -2556,7 +2580,6 @@ pub async fn set_download_low_priority_throttle(
     crate::commands::config::update_and_persist(&state, |global| {
         global.download_low_priority_throttle = enabled;
     })?;
-    drop(state);
     if !enabled {
         fill_download_queue_slots(app);
     }
@@ -2574,20 +2597,13 @@ pub async fn get_download_low_priority_throttle(
 pub async fn reset_download_for_redownload(
     _task_id: String,
     file_name: String,
+    repo_id: String,
     save_dir: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let _ = sanitize_file_name(&file_name)?;
-    let save_path = if Path::new(&save_dir).is_absolute() {
-        PathBuf::from(&save_dir)
-    } else {
-        let managed = state.config_dir.lock().unwrap();
-        managed
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf()
-            .join(&save_dir)
-    };
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let save_path = resolve_redownload_save_path(&config_dir, &save_dir, &repo_id)?;
     let (_final_path, temp_path, _meta_path) = build_download_paths(&save_path, &file_name);
     cleanup_artifact_state(&temp_path);
     Ok(())

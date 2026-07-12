@@ -5,6 +5,7 @@ import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, InstanceConfig, LogEntry } from './types'
 
 const MAX_LOG_ENTRIES = 1000
+let configSaveQueue: Promise<void> = Promise.resolve()
 
 export function createInstanceSlice(
   set: AppStoreSet,
@@ -29,7 +30,7 @@ export function createInstanceSlice(
   return {
     addInstance: (instance) => {
       set((state) => ({ instances: [...state.instances, instance] }))
-      get().saveConfig()
+      void get().saveConfig().catch(() => {})
     },
     updateInstance: (id, partial) => set((state) => ({
       instances: state.instances.map((instance) => (
@@ -50,7 +51,7 @@ export function createInstanceSlice(
       const next = [...state.instances]
       ;[next[index], next[target]] = [next[target], next[index]]
       set({ instances: next })
-      get().saveConfig()
+      void get().saveConfig().catch(() => {})
     },
     renameInstance: (id, name) => {
       const state = get()
@@ -63,7 +64,7 @@ export function createInstanceSlice(
           item.id === id ? { ...item, name, config } : item
         )),
       })
-      get().saveConfig()
+      void get().saveConfig().catch(() => {})
     },
     addLog: (entry: LogEntry) => set((state) => {
       const existing = state.logs[entry.instanceId] || []
@@ -126,15 +127,22 @@ export function createInstanceSlice(
         order.push(instance.id)
       })
 
-      await invoke('save_config', {
-        instances: instancesById,
-        modelDirs,
-        engineDirs,
-        defaultEngineId: defaultEngineId || '',
-        instanceOrder: order,
-        lastTab: activeTab,
-        darkMode,
+      const operation = configSaveQueue.catch(() => {}).then(async () => {
+        await invoke('save_config', {
+          instances: instancesById,
+          modelDirs,
+          engineDirs,
+          defaultEngineId: defaultEngineId || '',
+          instanceOrder: order,
+          lastTab: activeTab,
+          darkMode,
+        })
+      }).catch((error) => {
+        get().addRuntimeWarning(`配置保存失败：${String(error)}`)
+        throw error
       })
+      configSaveQueue = operation
+      return operation
     },
     loadConfig: async () => {
       await loadAppBootstrap(

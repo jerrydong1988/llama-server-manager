@@ -67,6 +67,7 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri expands IPC fields into command parameters.
 pub async fn ssh_launch_rpc(
     host: String,
     ssh_user: String,

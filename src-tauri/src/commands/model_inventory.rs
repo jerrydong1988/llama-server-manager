@@ -357,7 +357,7 @@ pub fn load_model_index() -> Result<HashMap<String, InventoryModelRecord>, Strin
 
 pub fn list_cached_models() -> Result<Vec<ModelInfo>, String> {
     let mut records = load_model_index()?.into_values().collect::<Vec<_>>();
-    records.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    records.sort_by_key(|record| record.name.to_lowercase());
     Ok(records
         .into_iter()
         .map(|record| record.to_model_info())
@@ -493,7 +493,7 @@ pub fn load_engine_index() -> Result<HashMap<String, InventoryEngineRecord>, Str
 
 pub fn list_cached_engines() -> Result<Vec<EngineInfo>, String> {
     let mut records = load_engine_index()?.into_values().collect::<Vec<_>>();
-    records.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    records.sort_by_key(|record| record.name.to_lowercase());
     Ok(records
         .into_iter()
         .map(|record| record.to_engine_info())

@@ -157,7 +157,7 @@ export function registerGlobalStoreListeners(
       text: `${formatStartupCommand(event.payload.command)}\n-- PID: ${event.payload.pid} | Port: ${event.payload.port}`,
       timestamp: Date.now(),
     })
-    state.saveConfig()
+    void state.saveConfig().catch(() => {})
   }).catch((error) => warnListenerFailure(store, 'server-started', error))
 
   listen<{ instanceId: string }>('server-stopped', (event) => {
@@ -170,7 +170,7 @@ export function registerGlobalStoreListeners(
         healthCheck: isError ? 'fail' : 'pending',
       })
     }
-    state.saveConfig()
+    void state.saveConfig().catch(() => {})
   }).catch((error) => warnListenerFailure(store, 'server-stopped', error))
 
   listen<{ instanceId: string; error: string }>('server-error', (event) => {
@@ -179,7 +179,7 @@ export function registerGlobalStoreListeners(
       status: 'error',
       healthCheck: 'fail',
     })
-    state.saveConfig()
+    void state.saveConfig().catch(() => {})
   }).catch((error) => warnListenerFailure(store, 'server-error', error))
 
   listen<{ instanceId: string; status: string }>('health-status', (event) => {

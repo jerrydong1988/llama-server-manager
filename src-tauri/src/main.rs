@@ -186,6 +186,13 @@ fn main() {
             let mut timings: Vec<(String, u64)> = Vec::new();
             let now = || NATIVE_START.get().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
             timings.push(("setup-enter".into(), now()));
+            std::thread::spawn(|| {
+                if let Err(error) =
+                    crate::commands::telemetry::prune_telemetry_storage(14)
+                {
+                    eprintln!("Telemetry retention cleanup failed: {}", error);
+                }
+            });
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
 
@@ -296,7 +303,7 @@ fn main() {
                 std::thread::spawn(move || {
                     crate::commands::server::health_check_loop(&id_hc, &host, port, pid, &api_key_health, app_hc);
                 });
-                crate::commands::server::reconnect_running_instance(&id, pid, &host2, port, &config_dir_clone, &api_key_reconnect, app_reconnect);
+                crate::commands::server::reconnect_running_instance(id, pid, &host2, port, &config_dir_clone, &api_key_reconnect, app_reconnect);
             }
 
             if config.proxy_config.enabled {
@@ -391,10 +398,11 @@ mod tests {
     use crate::models::{InstanceConfig, ProxyConfig};
 
     fn cfg() -> InstanceConfig {
-        let mut c = InstanceConfig::default();
-        c.model_path = "/test/model.gguf".into();
-        c.gpu_layers_auto = false;
-        c
+        InstanceConfig {
+            model_path: "/test/model.gguf".into(),
+            gpu_layers_auto: false,
+            ..InstanceConfig::default()
+        }
     }
 
     #[test]

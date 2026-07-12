@@ -9,6 +9,8 @@
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:guide": "node scripts/check-guide.cjs",
     "check:monitoring-theme": "node scripts/check-monitoring-theme.mjs",
+    "test:regressions": "node scripts/test-bootstrap-health.cjs && node scripts/test-download-restore-merge.cjs && node scripts/test-redownload-sequencing.cjs && node scripts/test-config-save-sequencing.cjs",
+    "check:release": "npm run check:encoding && npm run check:guide && npm run check:monitoring-theme && npm run test:regressions && tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri"
   },
@@ -27,11 +29,12 @@
     "@tauri-apps/cli": "^2.0.0",
     "@types/react": "^18.2.15",
     "@types/react-dom": "^18.2.7",
-    "@vitejs/plugin-react": "^4.2.1",
+    "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.4.17",
+    "esbuild": "^0.28.1",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.2.2",
-    "vite": "^5.3.1"
+    "vite": "^8.1.4"
   }
 }

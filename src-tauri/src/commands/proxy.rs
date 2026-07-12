@@ -1,7 +1,8 @@
 use axum::{
     body::{Body, Bytes},
-    extract::State,
+    extract::{Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{any, get},
     Json, Router,
@@ -302,18 +303,31 @@ fn is_proxy_authorized(config: &ProxyConfig, headers: &HeaderMap) -> bool {
     auth_ok || api_key_ok
 }
 
+fn proxy_request_is_authorized(config: &ProxyConfig, _path: &str, headers: &HeaderMap) -> bool {
+    is_proxy_authorized(config, headers)
+}
+
+async fn proxy_auth_middleware(
+    State(app): State<tauri::AppHandle>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let state = app.state::<AppState>();
+    let config = state.proxy_config.lock().unwrap().clone();
+    if !proxy_request_is_authorized(&config, request.uri().path(), request.headers()) {
+        return plain_response(StatusCode::UNAUTHORIZED, "unauthorized");
+    }
+    next.run(request).await
+}
+
 fn target_url(target: &ResolvedProxyTarget, uri: &Uri) -> String {
     let original_path = uri
         .path_and_query()
         .map(|pq| pq.as_str())
         .unwrap_or(uri.path());
     let prefix = target.api_prefix.trim_matches('/');
-    if prefix.is_empty() {
-        format!(
-            "http://{}:{}{}",
-            target.public.host, target.public.port, original_path
-        )
-    } else if original_path == format!("/{}", prefix)
+    if prefix.is_empty()
+        || original_path == format!("/{}", prefix)
         || original_path.starts_with(&format!("/{}/", prefix))
         || original_path.starts_with(&format!("/{}?", prefix))
     {
@@ -505,29 +519,27 @@ async fn proxy_openai(
     let upstream_stream = Box::pin(response.bytes_stream());
     let stream = futures_util::stream::unfold(
         (upstream_stream, false, telemetry_guard),
-        move |(mut upstream_stream, finalized, mut telemetry_guard)| {
-            async move {
-                if finalized {
-                    return None;
+        move |(mut upstream_stream, finalized, mut telemetry_guard)| async move {
+            if finalized {
+                return None;
+            }
+            match upstream_stream.as_mut().next().await {
+                Some(Ok(bytes)) => Some((Ok(bytes), (upstream_stream, false, telemetry_guard))),
+                Some(Err(err)) => {
+                    let error_text = err.to_string();
+                    telemetry_guard.record_once(Some(error_text.clone()));
+                    Some((
+                        Err(std::io::Error::other(error_text)),
+                        (upstream_stream, true, telemetry_guard),
+                    ))
                 }
-                match upstream_stream.as_mut().next().await {
-                    Some(Ok(bytes)) => Some((Ok(bytes), (upstream_stream, false, telemetry_guard))),
-                    Some(Err(err)) => {
-                        let error_text = err.to_string();
-                        telemetry_guard.record_once(Some(error_text.clone()));
-                        Some((
-                            Err(std::io::Error::new(std::io::ErrorKind::Other, error_text)),
-                            (upstream_stream, true, telemetry_guard),
-                        ))
-                    }
-                    None => {
-                        telemetry_guard.record_once(if status_success {
-                            None
-                        } else {
-                            Some(format!("upstream returned {}", http_status))
-                        });
+                None => {
+                    telemetry_guard.record_once(if status_success {
                         None
-                    }
+                    } else {
+                        Some(format!("upstream returned {}", http_status))
+                    });
+                    None
                 }
             }
         },
@@ -543,6 +555,7 @@ async fn proxy_openai(
 }
 
 fn proxy_router(app: tauri::AppHandle) -> Router {
+    let auth_layer = middleware::from_fn_with_state(app.clone(), proxy_auth_middleware);
     Router::new()
         .route("/", get(proxy_index))
         .route("/health", get(proxy_health))
@@ -550,6 +563,7 @@ fn proxy_router(app: tauri::AppHandle) -> Router {
         .route("/v1/chat/completions", any(proxy_openai))
         .route("/v1/completions", any(proxy_openai))
         .route("/v1/embeddings", any(proxy_openai))
+        .route_layer(auth_layer)
         .with_state(app)
 }
 
@@ -688,6 +702,9 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
+    use crate::models::ProxyConfig;
+    use axum::http::HeaderMap;
+
     #[test]
     fn bind_error_mentions_background_keepalive_when_address_is_in_use() {
         let err = std::io::Error::new(std::io::ErrorKind::AddrInUse, "address already in use");
@@ -708,5 +725,18 @@ mod tests {
         let result = super::await_proxy_task_shutdown(Some(shutdown_tx), Some(task)).await;
 
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn proxy_auth_policy_applies_to_discovery_endpoints() {
+        let config = ProxyConfig {
+            public_api_key: "secret".into(),
+            ..ProxyConfig::default()
+        };
+        let headers = HeaderMap::new();
+
+        for path in ["/", "/health", "/v1/models", "/v1/chat/completions"] {
+            assert!(!super::proxy_request_is_authorized(&config, path, &headers));
+        }
     }
 }

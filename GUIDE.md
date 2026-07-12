@@ -333,28 +333,30 @@ Instance Routing exposes one OpenAI-compatible endpoint and forwards requests to
 1. 先启动至少一个后端实例。
 2. 设置监听主机和端口。
 3. 为路由规则选择目标实例，并填写客户端使用的模型别名。
-4. 需要时设置代理 API Key。
+4. 需要时设置代理 API Key；设置后所有代理端点都需要鉴权。
 5. 保存配置，然后启动实例路由。
-6. 复制统一 API 入口并用 `/v1/models` 或聊天请求测试。
+6. 复制统一 API 入口并用 `/v1/models` 或聊天请求测试；已配置密钥时请携带 Bearer Token 或 `x-api-key`。
 
 1. Start at least one backend instance.
 2. Set the listen host and port.
 3. Choose a target instance and define the model alias clients will send.
-4. Configure a proxy API key when needed.
+4. Configure a proxy API key when needed; once set, every proxy endpoint requires authentication.
 5. Save, then start routing.
-6. Copy the endpoint and test `/v1/models` or a chat request.
+6. Copy the endpoint and test `/v1/models` or a chat request, sending a Bearer token or `x-api-key` when configured.
 
 ![实例、别名和统一 API 的请求路径 / Request path from instances and aliases to the unified API](public/docs/guide/flow-03-route-requests.png)
 
 ### 安全与后台保活 / Security and Background Keep-Alive
 
 - 监听非本机地址时必须设置代理 API Key，否则不允许启动。
+- 配置代理 API Key 后，服务首页、健康检查、模型列表和推理接口统一鉴权。
 - 路由只选择当前有效目标；目标实例停止后，对应请求会失败或没有可用目标。
 - 开启后台保活后，关闭窗口可继续在托盘提供统一端点。
 - 当路由运行时退出应用会出现确认：可以保持托盘运行，或停止路由后真正退出。
 - 修改未保存的路由草稿后直接启动时，应用会先保存有效配置，避免界面与后台状态不一致。
 
 - A proxy API key is mandatory for non-local listeners.
+- Once configured, the proxy key protects the index, health, model-list, and inference endpoints.
 - Routing resolves active targets; requests fail when the selected backend is unavailable.
 - Background keep-alive can continue serving from the system tray.
 - Exiting while routing is active prompts to keep it in the tray or stop routing and exit.
