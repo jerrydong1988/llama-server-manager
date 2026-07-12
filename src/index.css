@@ -183,6 +183,7 @@ html.dark body {
 .dark .guide-content hr { border-color: #475569; }
 .guide-content a { color: #2563eb; text-decoration: underline; }
 .guide-content strong { font-weight: 600; }
+.guide-content img { display: block; width: 100%; height: auto; margin: 1rem 0 1.5rem; border: 1px solid #334155; border-radius: 0.5rem; background: #0f172a; color: #cbd5e1; }
 
 /* Config search highlight */
 @keyframes search-flash {

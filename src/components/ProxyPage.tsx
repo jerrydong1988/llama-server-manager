@@ -386,7 +386,7 @@ export default function ProxyPage() {
 
   return (
     <div className="space-y-5">
-      <Surface as="section" className="p-5">
+      <Surface as="section" className="p-5" data-guide="proxy-overview">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2">

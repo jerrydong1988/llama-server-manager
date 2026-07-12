@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { marked } from 'marked'
 import { driver } from 'driver.js'
 import 'driver.js/dist/driver.css'
+import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { BookOpen, CheckCircle2, Circle, Compass, PlayCircle } from 'lucide-react'
 import { version } from '../../package.json'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
 import { Button, InsetSurface, Surface } from './ui'
+import { getGuideTourSteps } from './guide/guideTour'
 
 import guideMd from '../../GUIDE.md?raw'
 
@@ -21,8 +23,12 @@ function parseTOC(markdown: string): { id: string; title: string }[] {
     })
 }
 
+function normalizeGuideAssetPaths(markdown: string): string {
+  return markdown.replace(/\(public\/docs\/guide\//g, '(/docs/guide/')
+}
+
 function renderMD(markdown: string): string {
-  const processed = markdown.replace(/^## (.+)$/gm, (_, title: string) => {
+  const processed = normalizeGuideAssetPaths(markdown).replace(/^## (.+)$/gm, (_, title: string) => {
     const id = title.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
     return `<h2 id="${id}">${title}</h2>`
   })
@@ -36,7 +42,7 @@ function sanitize(html: string): string {
     'HR', 'I', 'IMG', 'LI', 'OL', 'P', 'PRE', 'SPAN', 'STRONG', 'TABLE',
     'TBODY', 'TD', 'TH', 'THEAD', 'TR', 'UL',
   ])
-  const allowedAttrs = new Set(['href', 'src', 'alt', 'title', 'id', 'class'])
+  const allowedAttrs = new Set(['href', 'src', 'alt', 'title', 'id', 'class', 'loading', 'decoding', 'width', 'height'])
   const template = document.createElement('template')
   template.innerHTML = html
 
@@ -55,9 +61,17 @@ function sanitize(html: string): string {
       for (const attr of Array.from(element.attributes)) {
         const name = attr.name.toLowerCase()
         const value = attr.value.trim().toLowerCase()
-        if (!allowedAttrs.has(name) || name.startsWith('on') || value.startsWith('javascript:') || value.startsWith('vbscript:')) {
+        const unsafeProtocol = value.startsWith('javascript:') || value.startsWith('vbscript:')
+        const unsafeHref = name === 'href' && value !== '' && !value.startsWith('#') && !value.startsWith('https://')
+        const unsafeSrc = name === 'src' && value !== '' && !value.startsWith('/docs/guide/') && !value.startsWith('https://') && !value.startsWith('data:image/')
+        if (!allowedAttrs.has(name) || name.startsWith('on') || unsafeProtocol || unsafeHref || unsafeSrc) {
           element.removeAttribute(attr.name)
         }
+      }
+
+      if (element.tagName === 'IMG') {
+        element.setAttribute('loading', 'lazy')
+        element.setAttribute('decoding', 'async')
       }
 
       cleanNode(element)
@@ -177,30 +191,7 @@ export default function GuidePage() {
     setHtml(renderMD(guideContent))
   }, [guideContent])
 
-  const tourSteps = useMemo(
-    () => (zh
-      ? [
-          { sel: '[data-guide="dashboard"]', title: '\u603b\u89c8', desc: '\u67e5\u770b\u7cfb\u7edf\u8d44\u6e90\u3001\u5b9e\u4f8b\u72b6\u6001\u4e0e\u6574\u4f53\u8fd0\u884c\u6982\u51b5\u3002', tab: 'dashboard' },
-          { sel: '[data-guide="model-search"]', title: '\u6a21\u578b\u4ed3\u5e93', desc: '\u641c\u7d22\u672c\u5730\u6a21\u578b\u3001\u6295\u5f71\u5668\u4e0e\u6743\u91cd\u6587\u4ef6\u3002', tab: 'model-repo' },
-          { sel: '[data-guide="download-source"]', title: '\u4e0b\u8f7d\u7ba1\u7406', desc: '\u4ece\u8fdc\u7a0b\u4ed3\u5e93\u6d4f\u89c8\u6587\u4ef6\u5e76\u7ba1\u7406\u672c\u5730\u4e0b\u8f7d\u961f\u5217\u3002', tab: 'downloads' },
-          { sel: '[data-guide="engine-scan"]', title: '\u5f15\u64ce\u7ba1\u7406', desc: '\u626b\u63cf llama-server \u6240\u5728\u76ee\u5f55\u5e76\u8bbe\u7f6e\u9ed8\u8ba4\u5f15\u64ce\u3002', tab: 'engine' },
-          { sel: '[data-guide="instance-create"]', title: '\u5b9e\u4f8b\u7ba1\u7406', desc: '\u521b\u5efa\u3001\u542f\u52a8\u3001\u91cd\u547d\u540d\u5e76\u7ef4\u62a4\u670d\u52a1\u5b9e\u4f8b\u3002', tab: 'instances' },
-          { sel: '[data-guide="cluster-scan"]', title: '\u96c6\u7fa4\u7ba1\u7406', desc: '\u53d1\u73b0\u5c40\u57df\u7f51 Worker\uff0c\u5e76\u901a\u8fc7\u672c\u5730\u6216 SSH \u65b9\u5f0f\u542f\u52a8\u8282\u70b9\u3002', tab: 'cluster' },
-          { sel: '[data-guide="perf-select"]', title: '\u6027\u80fd\u76d1\u63a7', desc: '\u89c2\u5bdf\u7cfb\u7edf\u8d44\u6e90\u3001slots \u72b6\u6001\u4e0e\u8fd1\u671f\u63a8\u7406\u541e\u5410\u3002', tab: 'perf' },
-          { sel: '[data-guide="logs-clear"]', title: '\u670d\u52a1\u5668\u65e5\u5fd7', desc: '\u6309\u5b9e\u4f8b\u8fc7\u6ee4\u65e5\u5fd7\uff0c\u5e76\u4fdd\u6301\u5c3e\u90e8\u5b9e\u65f6\u8ddf\u968f\u3002', tab: 'logs' },
-        ]
-      : [
-          { sel: '[data-guide="dashboard"]', title: 'Dashboard', desc: 'Review system resources, instance state, and overall health at a glance.', tab: 'dashboard' },
-          { sel: '[data-guide="model-search"]', title: 'Model Repo', desc: 'Search local models, projectors, and matrix assets.', tab: 'model-repo' },
-          { sel: '[data-guide="download-source"]', title: 'Downloads', desc: 'Browse remote repositories and manage the local download queue.', tab: 'downloads' },
-          { sel: '[data-guide="engine-scan"]', title: 'Engines', desc: 'Scan runtime folders and choose a default engine.', tab: 'engine' },
-          { sel: '[data-guide="instance-create"]', title: 'Instances', desc: 'Create, launch, rename, and manage server instances.', tab: 'instances' },
-          { sel: '[data-guide="cluster-scan"]', title: 'Cluster', desc: 'Discover LAN workers and launch nodes locally or through SSH.', tab: 'cluster' },
-          { sel: '[data-guide="perf-select"]', title: 'Performance', desc: 'Inspect system pressure, slots, and recent throughput.', tab: 'perf' },
-          { sel: '[data-guide="logs-clear"]', title: 'Logs', desc: 'Filter live logs by instance and keep the tail pinned.', tab: 'logs' },
-        ]),
-    [lang],
-  )
+  const tourSteps = useMemo(() => getGuideTourSteps(lang), [lang])
 
   const handleTocClick = (id: string) => {
     const element = contentRef.current?.querySelector(`#${id}`)
@@ -209,43 +200,72 @@ export default function GuidePage() {
     }
   }
 
+  const handleContentClick = (event: ReactMouseEvent<HTMLDivElement>) => {
+    const target = event.target instanceof Element ? event.target.closest('a') : null
+    const href = target?.getAttribute('href')
+    if (!href) return
+
+    if (href.startsWith('#')) {
+      event.preventDefault()
+      handleTocClick(decodeURIComponent(href.slice(1)))
+      return
+    }
+
+    if (href.startsWith('https://')) {
+      event.preventDefault()
+      void openExternal(href).catch((error) => console.warn(`Unable to open guide link: ${href}`, error))
+    }
+  }
+
   const startTour = async () => {
-    for (let index = 0; index < tourSteps.length; index += 1) {
-      const step = tourSteps[index]
-      if (step.tab === 'config') {
-        const store = useAppStore.getState()
-        if (store.instances.length === 0) {
+    let cancelled = false
+    try {
+      for (let index = 0; index < tourSteps.length; index += 1) {
+        const step = tourSteps[index]
+        if (step.tab === 'config') {
+          const store = useAppStore.getState()
+          if (store.instances.length === 0) {
+            continue
+          }
+          store.setActiveConfigInstanceId(store.instances[0].id)
+        }
+
+        setActiveTab(step.tab)
+        const element = await waitDOM(step.selector, 5000).catch((error) => {
+          console.warn(`Guide tour target unavailable: ${step.selector}`, error)
+          return null
+        })
+        if (!element) {
           continue
         }
-        store.setActiveConfigInstanceId(store.instances[0].id)
-      }
 
-      setActiveTab(step.tab)
-      const element = await waitDOM(step.sel, 5000).catch(() => null)
-      if (!element) {
-        continue
-      }
+        const isLast = index === tourSteps.length - 1
 
-      const isLast = index === tourSteps.length - 1
-
-      await new Promise<void>((resolve) => {
-        const walkthrough = driver({
-          animate: true,
-          showProgress: true,
-          steps: [{
-            element: element as HTMLElement,
-            popover: {
-              title: step.title,
-              description: step.desc,
-              doneBtnText: isLast
-                ? (labels.done)
-                : (labels.next),
+        await new Promise<void>((resolve) => {
+          const walkthrough = driver({
+            animate: true,
+            showProgress: true,
+            steps: [{
+              element: element as HTMLElement,
+              popover: {
+                title: step.title,
+                description: step.description,
+                doneBtnText: isLast ? labels.done : labels.next,
+              },
+            }],
+            onCloseClick: () => {
+              cancelled = true
+              walkthrough.destroy()
             },
-          }],
-          onDestroyed: () => resolve(),
+            onDestroyed: () => resolve(),
+          })
+          walkthrough.drive()
         })
-        walkthrough.drive()
-      })
+
+        if (cancelled) break
+      }
+    } finally {
+      setActiveTab('guide')
     }
   }
 
@@ -328,7 +348,12 @@ export default function GuidePage() {
 
       <div className="flex-1 overflow-y-auto bg-slate-950 px-8 py-6">
         <Surface className="mx-auto max-w-5xl p-8">
-          <div ref={contentRef} className="guide-content prose prose-invert max-w-none text-slate-200" dangerouslySetInnerHTML={{ __html: html }} />
+          <div
+            ref={contentRef}
+            className="guide-content prose prose-invert max-w-none text-slate-200"
+            onClick={handleContentClick}
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
         </Surface>
       </div>
     </div>

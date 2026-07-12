@@ -269,7 +269,7 @@ export default function BigScreenPage() {
   const statusTone: SignalTone = serviceStatus.status === 'critical' ? 'red' : serviceStatus.status === 'attention' ? 'amber' : 'emerald'
 
   return (
-    <div className="min-h-[calc(100vh-96px)] space-y-3 bg-slate-100 p-3 text-slate-950 dark:bg-slate-950 dark:text-slate-100">
+    <div className="min-h-[calc(100vh-96px)] space-y-3 bg-slate-100 p-3 text-slate-950 dark:bg-slate-950 dark:text-slate-100" data-guide="monitoring-wall">
       <header className="grid min-h-[72px] grid-cols-[minmax(220px,1fr)_minmax(260px,1.2fr)_minmax(220px,1fr)] items-center rounded-lg border border-slate-200 bg-white px-5 shadow-[0_20px_80px_rgba(15,23,42,0.08)] dark:border-slate-700/80 dark:bg-slate-900/90 dark:shadow-[0_20px_80px_rgba(2,6,23,0.45)]">
         <div className="flex min-w-0 items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-300/25 dark:bg-blue-400/10 dark:text-blue-200">

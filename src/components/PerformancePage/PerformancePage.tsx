@@ -265,7 +265,7 @@ export default function PerformancePage() {
           <aside className="min-w-0 space-y-4">
             <MonitorPanel title={labels.monitoringObject} icon={<Server className="h-5 w-5" />} action={<Badge tone="emerald">{running.length}</Badge>}>
               <div className="space-y-4">
-                <div>
+                <div data-guide="perf-select">
                   <label className="mb-2 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.runningInstance}</label>
                   <select
                     value={selectedInstanceId}
