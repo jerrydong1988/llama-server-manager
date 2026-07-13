@@ -4,6 +4,7 @@
 /// Linux:   ~/.config/autostart/llama-server-manager.desktop
 use std::path::PathBuf;
 
+#[cfg(target_os = "windows")]
 const APP_NAME: &str = "LlamaServerManager";
 
 fn exe_path() -> Result<String, String> {
