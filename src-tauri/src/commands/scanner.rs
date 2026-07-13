@@ -987,12 +987,12 @@ mod incremental_scan_tests {
 
     #[test]
     fn path_under_directory_uses_component_boundaries() {
-        let parent = Path::new(r"C:\models\foo");
-        let child = Path::new(r"C:\models\foo\bar\model.gguf");
-        let sibling = Path::new(r"C:\models\foo2\model.gguf");
+        let parent = PathBuf::from("models").join("foo");
+        let child = parent.join("bar").join("model.gguf");
+        let sibling = PathBuf::from("models").join("foo2").join("model.gguf");
 
-        assert!(path_is_under_directory(child, parent));
-        assert!(!path_is_under_directory(sibling, parent));
+        assert!(path_is_under_directory(&child, &parent));
+        assert!(!path_is_under_directory(&sibling, &parent));
     }
 
     #[test]
