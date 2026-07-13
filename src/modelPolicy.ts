@@ -10,6 +10,10 @@ export interface VectorCleanupChange {
   after: unknown
 }
 
+export interface NormalizeInstanceConfigOptions {
+  context?: 'create' | 'update'
+}
+
 type VectorCleanupGroup = VectorCleanupChange['group']
 
 const EMBEDDING_HINTS = [
@@ -83,6 +87,17 @@ function hasHint(value: string, hints: string[]): boolean {
   return hints.some(hint => normalized.includes(hint))
 }
 
+function modelBasename(value: string | undefined): string {
+  return value?.split(/[\\/]/).pop() ?? ''
+}
+
+function hasAuthoritativeInference(model: ModelInfo | null | undefined): boolean {
+  const capabilities = model?.capabilities
+  return capabilities?.metadata_complete === true &&
+    capabilities.is_embedding_model === false &&
+    capabilities.is_reranker_model === false
+}
+
 export function detectModelWorkload(
   model?: ModelInfo | null,
   modelPath = '',
@@ -91,12 +106,16 @@ export function detectModelWorkload(
   const capabilities = model?.capabilities
   if (capabilities?.is_reranker_model) return 'reranker'
   if (capabilities?.is_embedding_model) return 'embedding'
+  if (hasAuthoritativeInference(model)) return 'inference'
 
-  if (!capabilities?.metadata_complete) {
-    const fallback = `${model?.architecture ?? ''} ${modelPath || model?.path || ''}`
-    if (hasHint(fallback, RERANKER_HINTS)) return 'reranker'
-    if (hasHint(fallback, EMBEDDING_HINTS)) return 'embedding'
-  }
+  const fallback = [
+    model?.architecture ?? '',
+    modelBasename(model?.name),
+    modelBasename(modelPath),
+    modelBasename(model?.path),
+  ].join(' ')
+  if (hasHint(fallback, RERANKER_HINTS)) return 'reranker'
+  if (hasHint(fallback, EMBEDDING_HINTS)) return 'embedding'
 
   if (config?.reranking) return 'reranker'
   if (config?.embedding) return 'embedding'
@@ -125,10 +144,26 @@ function diffVectorCleanup(before: InstanceConfig, after: InstanceConfig): Vecto
     .map(key => ({ key, group: cleanupGroup(key), before: before[key], after: after[key] }))
 }
 
-export function normalizeInstanceConfig(config: InstanceConfig, model?: ModelInfo | null) {
+export function normalizeInstanceConfig(
+  config: InstanceConfig,
+  model?: ModelInfo | null,
+  options: NormalizeInstanceConfigOptions = {},
+) {
   const workload = detectModelWorkload(model, config.model_path, config)
   if (workload === 'inference') {
-    return { config: { ...config }, workload, vectorMode: false, changes: [] as VectorCleanupChange[] }
+    const next: InstanceConfig = { ...config }
+    if (hasAuthoritativeInference(model)) {
+      const defaults = defaultInstanceConfig()
+      next.embedding = defaults.embedding
+      next.pooling = defaults.pooling
+      next.reranking = defaults.reranking
+    }
+    return {
+      config: next,
+      workload,
+      vectorMode: false,
+      changes: options.context === 'create' ? [] : diffVectorCleanup(config, next),
+    }
   }
 
   const defaults = defaultInstanceConfig()
@@ -140,6 +175,7 @@ export function normalizeInstanceConfig(config: InstanceConfig, model?: ModelInf
     next.pooling = 'rank'
   } else {
     next.reranking = false
+    if (next.pooling === 'rank') next.pooling = defaults.pooling
   }
 
   if (next.batch_size > next.ubatch_size) next.batch_size = next.ubatch_size
@@ -148,6 +184,6 @@ export function normalizeInstanceConfig(config: InstanceConfig, model?: ModelInf
     config: next,
     workload,
     vectorMode: true,
-    changes: diffVectorCleanup(config, next),
+    changes: options.context === 'create' ? [] : diffVectorCleanup(config, next),
   }
 }

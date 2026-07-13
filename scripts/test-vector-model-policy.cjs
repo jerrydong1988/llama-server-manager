@@ -20,7 +20,14 @@ const entry = `
 
   assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true, is_embedding_model: true } })), 'embedding')
   assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true, is_embedding_model: true, is_reranker_model: true } })), 'reranker')
-  assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true }, path: 'C:/models/nomic-embed-text.gguf' })), 'inference')
+  assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true }, name: 'nomic-embed-text.gguf', path: 'C:/models/Qwen3-Instruct.gguf' })), 'embedding')
+  assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true }, architecture: 'sentence-bert' })), 'embedding')
+  assert.equal(detectModelWorkload(null, 'C:\\\\models\\\\embedding\\\\Qwen3-Instruct.gguf'), 'inference')
+  assert.equal(detectModelWorkload(
+    model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false }, name: 'nomic-embed-text.gguf' }),
+    '',
+    { embedding: true, reranking: false },
+  ), 'inference')
   assert.equal(detectModelWorkload(null, 'C:/models/bge-reranker-v2-m3.gguf'), 'reranker')
   assert.equal(detectModelWorkload(null, 'C:/models/nomic-embed-text-v1.5.gguf'), 'embedding')
   assert.equal(detectModelWorkload(model({ architecture: 'sentence-bert' })), 'embedding')
@@ -35,6 +42,24 @@ const entry = `
   const pooled = normalizeInstanceConfig({ ...defaultInstanceConfig(), embedding: true, pooling: 'cls' }, null)
   assert.equal(pooled.config.pooling, 'cls')
   assert.equal(pooled.config.reranking, false)
+
+  const embedding = normalizeInstanceConfig(
+    { ...defaultInstanceConfig(), embedding: true, reranking: true, pooling: 'rank' },
+    model({ capabilities: { metadata_complete: true, is_embedding_model: true, is_reranker_model: false } }),
+  )
+  assert.equal(embedding.workload, 'embedding')
+  assert.equal(embedding.config.reranking, false)
+  assert.equal(embedding.config.pooling, '')
+
+  const switchedToInference = normalizeInstanceConfig(
+    { ...defaultInstanceConfig(), embedding: true, reranking: true, pooling: 'rank' },
+    model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false } }),
+  )
+  assert.equal(switchedToInference.workload, 'inference')
+  assert.equal(switchedToInference.vectorMode, false)
+  assert.equal(switchedToInference.config.embedding, false)
+  assert.equal(switchedToInference.config.reranking, false)
+  assert.equal(switchedToInference.config.pooling, '')
 
   const polluted = {
     ...defaultInstanceConfig(),
@@ -65,6 +90,10 @@ const entry = `
   assert.ok(result.changes.some(change => change.key === 'spec_type' && change.group === 'speculative'))
   assert.ok(result.changes.some(change => change.key === 'temp' && change.group === 'generation'))
   assert.ok(result.changes.some(change => change.key === 'custom_args' && change.group === 'custom'))
+
+  const created = normalizeInstanceConfig(polluted, null, { context: 'create' })
+  assert.equal(created.config.spec_type, '')
+  assert.deepEqual(created.changes, [])
 `
 
 const bundled = esbuild.buildSync({
