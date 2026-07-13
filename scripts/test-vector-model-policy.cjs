@@ -109,6 +109,7 @@ const entry = `
   assert.equal(normalizeModelPath('\\\\\\\\Server\\\\Share\\\\Model.GGUF'), '//server/share/model.gguf')
   assert.equal(normalizeModelPath('\\\\\\\\?\\\\C:\\\\Models\\\\Model.GGUF'), 'c:/models/model.gguf')
   assert.equal(normalizeModelPath('\\\\\\\\?\\\\UNC\\\\Server\\\\Share\\\\Model.GGUF'), '//server/share/model.gguf')
+  assert.equal(normalizeModelPath('//Models/Model.GGUF'), '//Models/Model.GGUF')
 
   const staleInventoryRequest = beginModelInventoryRequest()
   const currentInventoryRequest = beginModelInventoryRequest()
@@ -233,11 +234,16 @@ assert.match(initialScanSource, /applyModelInventory\(/, 'initial async model sc
 assert.match(initialScanSource, /beginModelInventoryRequest\(/, 'initial scan must supersede older inventory requests')
 
 const coreSliceSource = readSource('src', 'store', 'coreSlice.ts')
+const setModelsSource = section(coreSliceSource, 'setModels:', 'setEngines:')
 const loadInitialDataSource = section(coreSliceSource, 'loadInitialData:', 'scanModels:')
 const scanModelsSource = section(coreSliceSource, 'scanModels:', 'deleteModelFile:')
+assert.match(setModelsSource, /isLoading:\s*false/, 'synchronous inventory replacement must end superseded loading')
 assert.match(loadInitialDataSource, /applyModelInventory\(/, 'get_models results must reconcile instances')
 assert.match(loadInitialDataSource, /beginModelInventoryRequest\(/, 'get_models must claim a request generation')
 assert.match(scanModelsSource, /applyModelInventory\(/, 'manual model scans must reconcile instances')
 assert.match(scanModelsSource, /beginModelInventoryRequest\(/, 'manual scans must supersede older inventory requests')
+
+const processConfigSource = section(bootstrapSource, 'async function processConfig', "invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')")
+assert.match(processConfigSource, /models:\s*\[\]/, 'hydration must not expose stale cached capabilities before fresh scan')
 
 console.log('vector model policy tests passed')

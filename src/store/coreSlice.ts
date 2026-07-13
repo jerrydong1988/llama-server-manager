@@ -38,7 +38,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     clearRuntimeWarnings: () => set({ runtimeWarnings: [] }),
     setModels: (models) => {
       const requestGeneration = beginModelInventoryRequest()
-      applyModelInventory(models, get, set, {}, requestGeneration)
+      applyModelInventory(models, get, set, { isLoading: false }, requestGeneration)
     },
     setEngines: (engines) => set({ engines }),
     setModelDirs: (dirs) => {

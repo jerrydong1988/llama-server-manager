@@ -53,7 +53,9 @@ export function isCurrentModelInventoryRequest(requestGeneration: number): boole
 }
 
 export function normalizeModelPath(value: string): string {
-  let normalized = value.trim().replace(/\\/g, '/')
+  const raw = value.trim()
+  const isWindowsUnc = /^\\\\/.test(raw) || /^\/\/\?\//.test(raw)
+  let normalized = raw.replace(/\\/g, '/')
   if (/^\/\/\?\/UNC\//i.test(normalized)) {
     normalized = `//${normalized.slice(8)}`
   } else if (/^\/\/\?\//.test(normalized)) {
@@ -63,7 +65,7 @@ export function normalizeModelPath(value: string): string {
   const isUnc = normalized.startsWith('//')
   normalized = `${isUnc ? '//' : ''}${normalized.slice(isUnc ? 2 : 0).replace(/\/{2,}/g, '/')}`
   if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1)
-  return (/^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//'))
+  return (/^[A-Za-z]:\//.test(normalized) || isWindowsUnc)
     ? normalized.toLowerCase()
     : normalized
 }
@@ -196,6 +198,7 @@ async function processConfig(
   startTransition(() => {
     set({
       instances,
+      models: [],
       modelDirs: global.model_dirs || [],
       engineDirs: global.engine_dirs || [],
       defaultEngineId: global.default_engine_id || null,
