@@ -3,6 +3,7 @@
 mod commands;
 mod models;
 mod utils;
+mod vector_policy;
 
 use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
 use crate::commands::cluster::{
@@ -396,6 +397,8 @@ fn main() {
 mod tests {
     use crate::commands::server::generate_command;
     use crate::models::{InstanceConfig, ProxyConfig};
+    use crate::vector_policy::{classify_model_workload, ModelWorkload};
+    use std::path::Path;
 
     fn cfg() -> InstanceConfig {
         InstanceConfig {
@@ -424,6 +427,63 @@ mod tests {
         assert!(cmd.iter().any(|a| a == "--embedding"));
         assert!(!cmd.iter().any(|a| a == "--temp"));
         assert!(!cmd.iter().any(|a| a == "--top-k"));
+    }
+
+    #[test]
+    fn embedding_command_rejects_all_inference_only_flags() {
+        let mut c = cfg();
+        c.embedding = true;
+        c.spec_type = "draft-mtp".into();
+        c.draft_model_path = "/test/draft.gguf".into();
+        c.cache_type_draft_k = "q8_0".into();
+        c.cache_type_draft_v = "q8_0".into();
+        c.chat_template = "chatml".into();
+        c.temp = 1.5;
+        c.mmproj_path = "/test/mmproj.gguf".into();
+        c.agent = true;
+        c.tools = "tool.json".into();
+        c.slot_prompt_similarity = 0.9;
+        c.custom_args = vec![
+            "--spec-type draft-mtp".into(),
+            "--temp 1.5".into(),
+            "--draft-model /test/draft.gguf".into(),
+            "-ctkd q8_0".into(),
+        ];
+
+        let cmd = generate_command(&c, "");
+
+        for forbidden in [
+            "--spec-type",
+            "--temp",
+            "--draft-model",
+            "-ctkd",
+            "--chat-template",
+            "--mmproj",
+            "--agent",
+            "--tools",
+            "-sps",
+        ] {
+            assert!(
+                !cmd.iter().any(|arg| arg == forbidden),
+                "leaked {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_vector_workloads_without_matching_directories() {
+        assert_eq!(
+            classify_model_workload(Some("bert"), Path::new("C:/models/model.gguf")),
+            ModelWorkload::Embedding
+        );
+        assert_eq!(
+            classify_model_workload(None, Path::new("C:/models/bge-reranker-v2.gguf")),
+            ModelWorkload::Reranker
+        );
+        assert_eq!(
+            classify_model_workload(None, Path::new("C:/embedding/model.gguf")),
+            ModelWorkload::Inference
+        );
     }
 
     #[test]

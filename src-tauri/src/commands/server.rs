@@ -1,6 +1,7 @@
 use crate::commands::adlx;
 use crate::commands::nvml;
 use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
+use crate::vector_policy::normalize_for_launch;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -151,6 +152,11 @@ fn telemetry_config_hash(config: &InstanceConfig) -> String {
 }
 
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
+    let config = normalize_for_launch(config.clone()).into_config();
+    generate_normalized_command(&config, engine_path)
+}
+
+fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
     let exe = if engine_path.is_empty() {
         "llama-server".to_string()
     } else {
@@ -760,12 +766,19 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     cmd
 }
 
+fn prepare_launch(config: InstanceConfig, engine_path: &str) -> (InstanceConfig, Vec<String>) {
+    let config = normalize_for_launch(config).into_config();
+    let command = generate_command(&config, engine_path);
+    (config, command)
+}
+
 #[tauri::command]
 pub async fn generate_server_command(
     config: InstanceConfig,
     engine_exe: String,
 ) -> Result<Vec<String>, String> {
-    Ok(generate_command(&config, &engine_exe))
+    let (_, command) = prepare_launch(config, &engine_exe);
+    Ok(command)
 }
 
 #[tauri::command]
@@ -778,7 +791,7 @@ pub async fn start_server(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     // Hold lock across check+insert to prevent TOCTOU race
-    let cmd = generate_command(&config, &engine_exe);
+    let (config, cmd) = prepare_launch(config, &engine_exe);
     let cmd_str = cmd.join(" ");
     let cmd_display = mask_api_key_in_cmd(&cmd_str);
 
@@ -868,9 +881,19 @@ pub async fn start_server(
     }
 
     // Persist running state to disk immediately via unified atomic writes to avoid races.
+    state
+        .instances
+        .lock()
+        .unwrap()
+        .insert(instance_id.clone(), config.clone());
     let running_snapshot = state.running.lock().unwrap().clone();
+    let persisted_instance_id = instance_id.clone();
+    let persisted_config = config.clone();
     let _ = crate::commands::config::update_and_persist(&state, |global| {
         global.running = running_snapshot;
+        global
+            .instances
+            .insert(persisted_instance_id, persisted_config);
     });
 
     app.emit(
@@ -2416,6 +2439,43 @@ fn split_args(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod perf_parser_tests {
     use super::*;
+
+    fn polluted_embedding_config() -> InstanceConfig {
+        InstanceConfig {
+            model_path: "C:/models/bge-small.gguf".into(),
+            spec_type: "draft-mtp".into(),
+            custom_args: vec!["--temp 1.5".into()],
+            ..InstanceConfig::default()
+        }
+    }
+
+    #[test]
+    fn generate_server_command_uses_launch_normalization() {
+        let cmd = tauri::async_runtime::block_on(generate_server_command(
+            polluted_embedding_config(),
+            String::new(),
+        ))
+        .unwrap();
+
+        assert!(cmd.iter().any(|arg| arg == "--embedding"));
+        assert!(!cmd.iter().any(|arg| arg == "--spec-type"));
+        assert!(!cmd.iter().any(|arg| arg == "--temp"));
+    }
+
+    #[test]
+    fn start_preparation_hashes_and_launches_the_normalized_config() {
+        let (config, cmd) = prepare_launch(polluted_embedding_config(), "");
+
+        assert!(config.embedding);
+        assert!(config.spec_type.is_empty());
+        assert!(config.custom_args.is_empty());
+        assert!(cmd.iter().any(|arg| arg == "--embedding"));
+        assert!(!cmd.iter().any(|arg| arg == "--spec-type"));
+        assert_eq!(
+            telemetry_config_hash(&config),
+            telemetry_config_hash(&normalize_for_launch(config.clone()).config)
+        );
+    }
 
     #[test]
     fn parses_llama_cpp_print_timing_token_stats() {
