@@ -25,6 +25,11 @@ for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-a
   }
   if (!body.includes('components: clippy')) failures.push(`${job} does not install Clippy`)
   if (!body.includes('cargo test --manifest-path src-tauri/Cargo.toml --locked')) failures.push(`${job} does not run Rust tests`)
+  const frontendBuildIndex = body.indexOf('run: npm run build')
+  const rustTestIndex = body.indexOf('cargo test --manifest-path src-tauri/Cargo.toml --locked')
+  if (frontendBuildIndex < 0 || frontendBuildIndex > rustTestIndex) {
+    failures.push(`${job} does not create frontendDist before compiling Rust tests`)
+  }
   if (!body.includes('cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features --locked -- -D warnings')) {
     failures.push(`${job} does not enforce warning-free Clippy`)
   }
@@ -57,6 +62,7 @@ for (const token of [
 }
 
 const macJob = jobBody('build-macos')
+if (!macJob.includes('runs-on: macos-15')) failures.push('macOS runner is not pinned and may migrate without review')
 for (const token of [
   'Detect Apple signing configuration',
   'Import Apple signing certificate',
