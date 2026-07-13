@@ -464,7 +464,11 @@ const ConfigPage = () => {
     .filter(group => group.count > 0)
 
   const savedBaseline = { ...defaultInstanceConfig(), ...(inst?.config ?? {}) }
-  const vectorCleanupKeys = new Set(vectorCleanupChanges.map(change => change.key))
+  const vectorCleanupKeys = new Set(
+    vectorCleanupChanges
+      .filter(change => isEqualValue(local[change.key], change.after))
+      .map(change => change.key),
+  )
   const configChanges = getConfigChanges(local, savedBaseline, t, labels)
     .filter(change => !vectorCleanupKeys.has(change.key))
   const liveWarnings = validateConfig(local, currentModel, currentEngine)

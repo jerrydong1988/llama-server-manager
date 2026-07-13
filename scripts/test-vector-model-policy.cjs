@@ -267,10 +267,15 @@ assert.doesNotMatch(pickModelSource, /set\('model_path'/, 'primary model switchi
 
 const configDiffSource = section(configPageSource, 'const savedBaseline', 'const liveWarnings')
 assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must be filtered from the ordinary config diff')
+assert.match(configDiffSource, /isEqualValue\(local\[change\.key\],\s*change\.after\)/, 'manual edits after cleanup must remain visible in the ordinary diff')
 assert.match(configPageSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
 const saveSource = section(configPageSource, 'const save =', 'const sectionProps')
 assert.match(saveSource, /validateConfig\(local, currentModel, engine\)/, 'save validation must reuse normalized model matching')
 assert.match(saveSource, /setVectorCleanupChanges\(\[\]\)/, 'cleanup summary must clear only after a successful save')
+assert.ok(
+  saveSource.indexOf('await saveConfig()') < saveSource.indexOf('setVectorCleanupChanges([])'),
+  'cleanup summary must clear after persistence succeeds',
+)
 
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {
   const source = readSource('src', 'i18n', locale)
