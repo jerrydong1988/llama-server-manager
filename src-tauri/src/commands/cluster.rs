@@ -591,7 +591,7 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
             // #11: Avoid grep -P and use sed for minimal Linux compatibility.
             let output = std::process::Command::new("sh")
                 .arg("-c")
-                .arg(&format!(
+                .arg(format!(
                     "ss -tlnp | grep ':{}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'",
                     port
                 ))
@@ -603,7 +603,7 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
                 // Kill child processes too.
                 let _ = std::process::Command::new("sh")
                     .arg("-c")
-                    .arg(&format!("ps --ppid {} -o pid= 2>/dev/null", out))
+                    .arg(format!("ps --ppid {} -o pid= 2>/dev/null", out))
                     .output()
                     .map(|o| {
                         String::from_utf8_lossy(&o.stdout).lines().for_each(|p| {
