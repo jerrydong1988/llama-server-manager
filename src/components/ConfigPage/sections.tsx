@@ -6,7 +6,7 @@ import { Section, Input, Num, Switch, Select, CollapsibleGroup, ResetButton, RES
 import { KNOWN_FLAGS } from '../../validators'
 import WorkerSelector from './WorkerSelector'
 import { Button, TextInput } from '../ui'
-import { VECTOR_ALLOWED_FIELDS, type ModelWorkload } from '../../modelPolicy'
+import { getResettableFields, type ModelWorkload } from '../../modelPolicy'
 
 const formGridClassName = 'grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3'
 const wideGridClassName = 'grid grid-cols-1 gap-3 md:grid-cols-2'
@@ -100,6 +100,7 @@ interface Props {
   t: any
   isEmbedding: boolean
   workload: ModelWorkload
+  modelWorkloadLocked: boolean
   onShowPicker?: () => void
   onShowDraftPicker?: () => void
   activeParams: Set<keyof InstanceConfig>
@@ -108,7 +109,7 @@ interface Props {
 
 // ━━━━━━━━━━━━━━━━━━━━━━ COMMON SECTIONS ━━━━━━━━━━━━━━━━━━━━━━
 
-export function BasicSection({ local, set, t, isEmbedding, workload, onShowPicker, activeParams, searchQuery }: Props) {
+export function BasicSection({ local, set, t, isEmbedding, workload, modelWorkloadLocked, onShowPicker, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   return (
     <Section id="config-basic" title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery} summary={countSummary(countActive(activeParams, BASIC_CONFIG_KEYS))}>
@@ -128,7 +129,13 @@ export function BasicSection({ local, set, t, isEmbedding, workload, onShowPicke
         <Switch label={`${t.configPage.gpuLayersAuto}`} value={local.gpu_layers_auto} onChange={v => set('gpu_layers_auto', v)} title={t.configPage.gpuLayersAutoTip}  active={a('gpu_layers_auto')} />
         <Num label={`${t.configPage.ctxSize} (--ctx-size, -c)`} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} disabled={local.ctx_size_auto}  active={a('ctx_size')} />
         <Switch label={`${t.configPage.ctxAuto}`} value={local.ctx_size_auto} onChange={v => set('ctx_size_auto', v)} title={t.configPage.ctxAutoTip}  active={a('ctx_size_auto')} />
-        <Switch label={`${t.configPage.embedding} (--embedding)`} value={local.embedding} onChange={v => set('embedding', v)} title={t.configPage.embeddingTip} disabled={isEmbedding} active={a('embedding')} />
+        <Switch label={`${t.configPage.embedding} (--embedding)`} value={local.embedding} onChange={v => {
+          set('embedding', v)
+          if (!v) {
+            set('reranking', false)
+            set('pooling', '')
+          }
+        }} title={t.configPage.embeddingTip} disabled={modelWorkloadLocked} active={a('embedding')} />
         <Select label={`${t.configPage.pooling} (--pooling)`} value={local.pooling} onChange={v => set('pooling', v)} options={['', 'none', 'mean', 'cls', 'last', 'rank']} title={t.configPage.poolingTip} defaultLabel={t.common.default} disabled={workload === 'reranker'} active={a('pooling')} />
       </div>
     </Section>
@@ -181,27 +188,19 @@ export function PerformanceSection({ local, set, t, activeParams, searchQuery }:
 
 // ━━━━━━━━━━━━━━━━━━━━━━ ADVANCED CONTAINER ━━━━━━━━━━━━━━━━━━━━━━
 
-export function AdvancedSection({ local, set, t, isEmbedding, workload, onShowDraftPicker, activeParams, searchQuery }: Props) {
+export function AdvancedSection({ local, set, t, isEmbedding, modelWorkloadLocked, onShowDraftPicker, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   const resetAll = () => {
     const cfg = defaultInstanceConfig()
-    for (const fieldMap of Object.values(RESET_MAP)) {
-      for (const k of Object.keys(fieldMap)) {
-        const key = k as keyof InstanceConfig
-        if (!isEmbedding || VECTOR_ALLOWED_FIELDS.has(key)) set(key, (cfg as any)[key])
-      }
-    }
+    for (const key of getResettableFields(ADVANCED_CONFIG_KEYS, isEmbedding, modelWorkloadLocked)) set(key, cfg[key])
   }
 
   const resetGroup = (id: string) => {
-    const fieldMap = (RESET_MAP as any)[id]
-    if (fieldMap) {
-      const cfg = defaultInstanceConfig()
-      for (const k of Object.keys(fieldMap)) {
-        const key = k as keyof InstanceConfig
-        if (!isEmbedding || VECTOR_ALLOWED_FIELDS.has(key)) set(key, (cfg as any)[key])
-      }
-    }
+    const keys = ADVANCED_GROUP_CONFIG_KEYS[id]
+    if (!keys) return
+
+    const cfg = defaultInstanceConfig()
+    for (const key of getResettableFields(keys, isEmbedding, modelWorkloadLocked)) set(key, cfg[key])
   }
 
   // ── 自定义参数：结构化键值对编辑器 ──
@@ -293,7 +292,10 @@ export function AdvancedSection({ local, set, t, isEmbedding, workload, onShowDr
           <CollapsibleGroup id="config-advanced-vector" title={t.configPage.subEmbedding} defaultOpen={true} summary={countSummary(countActive(activeParams, ['embd_normalize', 'reranking']))}>
             <div className={formGridClassName}>
               <Num label={`${t.configPage.embdNormalize} (--embd-normalize)`} value={local.embd_normalize} onChange={v => set('embd_normalize', v)} min={0} max={2} title={t.configPage.embdNormalizeTip} active={a('embd_normalize')} />
-              <Switch label={`${t.configPage.reranking} (--reranking)`} value={local.reranking} onChange={v => set('reranking', v)} title={t.configPage.rerankingTip} disabled={workload !== 'inference'} active={a('reranking')} />
+              <Switch label={`${t.configPage.reranking} (--reranking)`} value={local.reranking} onChange={v => {
+                set('reranking', v)
+                set('pooling', v ? 'rank' : '')
+              }} title={t.configPage.rerankingTip} disabled={modelWorkloadLocked} active={a('reranking')} />
             </div>
           </CollapsibleGroup>
         )}
@@ -428,6 +430,7 @@ export function AdvancedSection({ local, set, t, isEmbedding, workload, onShowDr
             <Num label={`${t.configPage.mainGpu} (--main-gpu, -mg)`} value={local.main_gpu} onChange={v => set('main_gpu', v)} min={0} max={9} title={t.configPage.mainGpuTip}  active={a('main_gpu')} />
             <Switch label={`${t.configPage.perf} (--perf)`} value={local.perf} onChange={v => set('perf', v)} title={t.configPage.perfTip}  active={a('perf')} />
             <Switch label={`${t.configPage.checkTensors} (--check-tensors)`} value={local.check_tensors} onChange={v => set('check_tensors', v)} title={t.configPage.checkTensorsTip}  active={a('check_tensors')} />
+            <Switch label={`${t.configPage.directIo} (--direct-io)`} value={local.direct_io} onChange={v => set('direct_io', v)} title={t.configPage.directIoTip} active={a('direct_io')} />
             <Switch label={`${t.configPage.fit} (--fit)`} value={local.fit} onChange={v => set('fit', v)} title={t.configPage.fitTip}  active={a('fit')} />
             <Input label={`${t.configPage.fitTarget} (--fit-target, -fitt)`} value={local.fit_target} onChange={v => set('fit_target', v)} title={t.configPage.fitTargetTip} disabled={!local.fit}  active={a('fit_target')} />
             <Num label={`${t.configPage.fitCtx} (--fit-ctx, -fitc)`} value={local.fit_ctx} onChange={v => set('fit_ctx', v)} min={0} title={t.configPage.fitCtxTip} disabled={!local.fit}  active={a('fit_ctx')} />

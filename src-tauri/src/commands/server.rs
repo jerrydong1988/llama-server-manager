@@ -331,11 +331,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     }
 
     // Flash Attention.
-    if !is_emb {
-        let fa = config.flash_attn.as_str();
-        if fa != "auto" && !fa.is_empty() {
-            cmd.extend_from_slice(&["-fa".into(), fa.to_string()]);
-        }
+    let fa = config.flash_attn.as_str();
+    if fa != "auto" && !fa.is_empty() {
+        cmd.extend_from_slice(&["-fa".into(), fa.to_string()]);
     }
 
     // Memory and loading.
@@ -2453,6 +2451,7 @@ mod perf_parser_tests {
     fn polluted_embedding_config() -> InstanceConfig {
         InstanceConfig {
             model_path: "C:/models/bge-small.gguf".into(),
+            flash_attn: "on".into(),
             spec_type: "draft-mtp".into(),
             custom_args: vec!["--temp 1.5".into()],
             ..InstanceConfig::default()
@@ -2468,6 +2467,7 @@ mod perf_parser_tests {
         .unwrap();
 
         assert!(cmd.iter().any(|arg| arg == "--embedding"));
+        assert!(cmd.windows(2).any(|args| args == ["-fa", "on"]));
         assert!(!cmd.iter().any(|arg| arg == "--spec-type"));
         assert!(!cmd.iter().any(|arg| arg == "--temp"));
     }
@@ -2480,6 +2480,7 @@ mod perf_parser_tests {
         assert!(config.spec_type.is_empty());
         assert!(config.custom_args.is_empty());
         assert!(cmd.iter().any(|arg| arg == "--embedding"));
+        assert!(cmd.windows(2).any(|args| args == ["-fa", "on"]));
         assert!(!cmd.iter().any(|arg| arg == "--spec-type"));
         assert_eq!(
             telemetry_config_hash(&config),

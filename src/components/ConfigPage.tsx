@@ -17,7 +17,7 @@ import {
 import { getActiveParams } from './ConfigPage/activeParams'
 import { isPathWithinRoot, normalizePath, pathBasename, pathDirname, pathJoin } from '../utils/path'
 import { formatHostPort } from '../utils/network'
-import { detectModelWorkload, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
+import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
 import { _matchedElements } from './ConfigPage/shared'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
@@ -294,6 +294,9 @@ const ConfigPage = () => {
     local ? detectModelWorkload(currentModel, local.model_path, local) : 'inference'
   ), [currentModel, local])
   const isEmbedding = workload !== 'inference'
+  const modelWorkloadLocked = useMemo(() => (
+    local ? isModelWorkloadLocked(currentModel, local.model_path) : false
+  ), [currentModel, local?.model_path])
 
   if (!local) {
     return (
@@ -315,7 +318,7 @@ const ConfigPage = () => {
       const directory = pathDirname(modelPath)
       const mmproj = models.find(model => pathDirname(model.path) === directory && model.file_type === 'mmproj')
       const candidate = { ...local, model_path: modelPath, mmproj_path: mmproj?.path ?? '' }
-      const normalized = normalizeInstanceConfig(candidate, selectedModel)
+      const normalized = normalizeConfigForSelectedModel(candidate, selectedModel)
       setAppliedTemplateId(null)
       setLastTemplateSnapshot(null)
       setLocal(normalized.config)
@@ -332,9 +335,11 @@ const ConfigPage = () => {
     }
 
     const engine = engines.find(item => item.id === (local.engine_id || defaultEngineId || '')) || engines[0]
-    const warnings = validateConfig(local, currentModel, engine)
+    const normalized = normalizeInstanceConfig(local, currentModel)
+    const warnings = validateConfig(normalized.config, currentModel, engine)
 
-    updateInstance(inst.id, { config: local })
+    setLocal(normalized.config)
+    updateInstance(inst.id, { config: normalized.config })
     try {
       await saveConfig()
     } catch {
@@ -358,6 +363,7 @@ const ConfigPage = () => {
     t,
     isEmbedding,
     workload,
+    modelWorkloadLocked,
     onShowPicker: () => {
       setPickerTarget('model')
       setShowPicker(true)

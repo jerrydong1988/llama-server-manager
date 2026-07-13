@@ -179,6 +179,7 @@
     mlock: '\u5185\u5B58\u9501\u5B9A', mlockTip: '防操作系统将模型权重交换到磁盘(页面文件)。[场景] 内存有限系统上启用以避免交换致延迟尖峰。[原理] 使用 mlock() 系统调用锁定内存。',
     noMmap: '\u7981\u7528 mmap', noMmapTip: '\u6A21\u578B\u9884\u52A0\u8F7D\u5230\u5185\u5B58\u3002\u5173\u95ED\u65F6\uFF1A\u6A21\u578B\u4ECE\u78C1\u76D8\u76F4\u63A5\u9001\u5165\u663E\u5B58\uFF0C\u4E0D\u5360\u5185\u5B58\uFF0C\u542F\u52A8\u5FEB\u3002[\u5F00\u542F] \u5148\u628A\u6574\u4E2A\u6A21\u578B\u8BFB\u5165\u5185\u5B58 RAM\uFF0C\u518D\u4F20\u7ED9\u663E\u5B58 VRAM\u3002[\u4EE3\u4EF7] \u591A\u5360\u51E0\u5341GB\u5185\u5B58\uFF0C\u542F\u52A8\u6162\u6570\u79D2\u3002\u9ED8\u8BA4\u5173\u95ED\u5373\u53EF\u3002',
   noRepack: '\u7981\u7528\u91CD\u6253\u5305', noRepackTip: '跳过加载时的权重重打包。[原理] 重打包优化权重布局以获更快推理但消耗启动时间。[场景] 启动时间至关重要时禁用——代价是推理慢 5-10%。',
+    directIo: '直接 I/O', directIoTip: '绕过操作系统文件页缓存直接读取模型。[场景] 专用高速存储或需要避免模型文件挤占系统缓存时启用。[权衡] 效果取决于操作系统和存储设备，普通环境建议保持关闭。',
     numa: 'NUMA', numaTip: 'NUMA 感知优化，仅多路 CPU 服务器需要(双路 AMD EPYC 或 Intel Xeon)。[原理] 将线程绑定到特定 NUMA 节点以避免跨 socket 内存延迟。',
     perf: '性能计时', perfTip: '启用内部 libllama 性能计时。[场景] 调试推理瓶颈——显示各处理阶段耗时。[权衡] 有轻微运行时开销——生产环境请关闭。',
     checkTensors: '\u68C0\u67E5\u5F20\u91CF', checkTensorsTip: '加载前验证张量数据是否有无效值(NaN, Inf)。[场景] 调试模型质量问题时启用。[权衡] 加载略慢。',

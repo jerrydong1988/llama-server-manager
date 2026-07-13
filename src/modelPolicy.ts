@@ -50,6 +50,12 @@ export const VECTOR_CLASSIFIED_FIELDS = new Set<keyof InstanceConfig>([
   ...VECTOR_INCOMPATIBLE_FIELDS,
 ])
 
+const MODEL_WORKLOAD_FIELDS = new Set<keyof InstanceConfig>([
+  'embedding',
+  'pooling',
+  'reranking',
+])
+
 const SPECULATIVE_FIELDS = new Set<keyof InstanceConfig>([
   'cache_type_draft_k', 'cache_type_draft_v', 'draft_model_path',
   'draft_gpu_layers', 'draft_tokens', 'spec_draft_n_min', 'spec_type',
@@ -122,6 +128,24 @@ export function detectModelWorkload(
   return 'inference'
 }
 
+export function isModelWorkloadLocked(
+  model?: ModelInfo | null,
+  modelPath = '',
+): boolean {
+  return hasAuthoritativeInference(model) || detectModelWorkload(model, modelPath) !== 'inference'
+}
+
+export function getResettableFields(
+  fields: Array<keyof InstanceConfig>,
+  vectorMode: boolean,
+  modelWorkloadLocked: boolean,
+): Array<keyof InstanceConfig> {
+  return fields.filter(key =>
+    (!vectorMode || VECTOR_ALLOWED_FIELDS.has(key)) &&
+    (!modelWorkloadLocked || !MODEL_WORKLOAD_FIELDS.has(key)),
+  )
+}
+
 function cleanupGroup(key: keyof InstanceConfig): VectorCleanupGroup {
   if (SPECULATIVE_FIELDS.has(key)) return 'speculative'
   if (GENERATION_FIELDS.has(key)) return 'generation'
@@ -185,5 +209,25 @@ export function normalizeInstanceConfig(
     workload,
     vectorMode: true,
     changes: options.context === 'create' ? [] : diffVectorCleanup(config, next),
+  }
+}
+
+export function normalizeConfigForSelectedModel(
+  config: InstanceConfig,
+  model?: ModelInfo | null,
+  options: NormalizeInstanceConfigOptions = {},
+) {
+  const defaults = defaultInstanceConfig()
+  const candidate: InstanceConfig = {
+    ...config,
+    embedding: defaults.embedding,
+    pooling: defaults.pooling,
+    reranking: defaults.reranking,
+  }
+  const normalized = normalizeInstanceConfig(candidate, model, options)
+
+  return {
+    ...normalized,
+    changes: options.context === 'create' ? [] : diffVectorCleanup(config, normalized.config),
   }
 }

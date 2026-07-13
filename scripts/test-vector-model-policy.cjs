@@ -11,6 +11,9 @@ const entry = `
   import { validateConfig } from './src/validators'
   import {
     detectModelWorkload,
+    getResettableFields,
+    isModelWorkloadLocked,
+    normalizeConfigForSelectedModel,
     normalizeInstanceConfig,
     VECTOR_ALLOWED_FIELDS,
     VECTOR_CLASSIFIED_FIELDS,
@@ -43,6 +46,11 @@ const entry = `
   assert.equal(detectModelWorkload(null, 'C:/models/nomic-embed-text-v1.5.gguf'), 'embedding')
   assert.equal(detectModelWorkload(model({ architecture: 'sentence-bert' })), 'embedding')
   assert.equal(detectModelWorkload(null, 'C:/models/Qwen3-8B-Instruct.gguf'), 'inference')
+  assert.equal(isModelWorkloadLocked(model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false } })), true)
+  assert.equal(isModelWorkloadLocked(model({ name: 'nomic-embed-text.gguf' })), true)
+  assert.equal(isModelWorkloadLocked(model({ name: 'custom-model.gguf', capabilities: { metadata_complete: false } })), false)
+  assert.deepEqual(getResettableFields(['embd_normalize', 'reranking'], true, true), ['embd_normalize'])
+  assert.deepEqual(getResettableFields(['embd_normalize', 'reranking'], true, false), ['embd_normalize', 'reranking'])
 
   const reranker = normalizeInstanceConfig(defaultInstanceConfig(), model({ capabilities: { metadata_complete: true, is_reranker_model: true } }))
   assert.equal(reranker.workload, 'reranker')
@@ -77,6 +85,19 @@ const entry = `
   assert.equal(switchedToInference.config.embedding, false)
   assert.equal(switchedToInference.config.reranking, false)
   assert.equal(switchedToInference.config.pooling, '')
+
+  const switchedToUnknownInference = normalizeConfigForSelectedModel(
+    { ...defaultInstanceConfig(), embedding: true, reranking: true, pooling: 'rank' },
+    model({
+      name: 'custom-model.gguf',
+      path: 'C:/models/custom-model.gguf',
+      capabilities: { metadata_complete: false },
+    }),
+  )
+  assert.equal(switchedToUnknownInference.workload, 'inference')
+  assert.equal(switchedToUnknownInference.config.embedding, false)
+  assert.equal(switchedToUnknownInference.config.reranking, false)
+  assert.equal(switchedToUnknownInference.config.pooling, '')
 
   const polluted = {
     ...defaultInstanceConfig(),
@@ -276,7 +297,7 @@ const configPageSource = readSource('src', 'components', 'ConfigPage.tsx')
 const pickModelSource = section(configPageSource, 'const pickModel', 'const save =')
 assert.match(pickModelSource, /const candidate/, 'model switching must build one atomic candidate')
 assert.match(pickModelSource, /candidate\s*=\s*\{[^}]*model_path:[^}]*mmproj_path:/s, 'the atomic candidate must include model and projector paths')
-assert.match(pickModelSource, /normalizeInstanceConfig\(/, 'existing model switching must apply the vector policy')
+assert.match(pickModelSource, /normalizeConfigForSelectedModel\(/, 'existing model switching must reset stale workload flags before applying vector policy')
 assert.match(pickModelSource, /setLocal\(normalized\.config\)/, 'existing model switching must replace the local draft atomically')
 assert.match(pickModelSource, /setVectorCleanupChanges\(/, 'existing model switching must retain a cleanup summary')
 assert.doesNotMatch(pickModelSource, /set\('model_path'/, 'primary model switching must not apply sequential partial updates')
@@ -286,7 +307,13 @@ assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must b
 assert.match(configDiffSource, /isEqualValue\(local\[change\.key\],\s*change\.after\)/, 'manual edits after cleanup must remain visible in the ordinary diff')
 assert.match(configPageSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
 const saveSource = section(configPageSource, 'const save =', 'const sectionProps')
-assert.match(saveSource, /validateConfig\(local, currentModel, engine\)/, 'save validation must reuse normalized model matching')
+assert.match(saveSource, /const normalized = normalizeInstanceConfig\(local, currentModel\)/, 'save must normalize the local draft before validation')
+assert.match(saveSource, /validateConfig\(normalized\.config, currentModel, engine\)/, 'save validation must inspect the normalized configuration')
+assert.match(saveSource, /config:\s*normalized\.config/, 'save must persist the same normalized configuration that was validated')
+assert.ok(
+  saveSource.indexOf('normalizeInstanceConfig(local, currentModel)') < saveSource.indexOf('validateConfig(normalized.config'),
+  'save normalization must happen before validation',
+)
 assert.match(saveSource, /setVectorCleanupChanges\(\[\]\)/, 'cleanup summary must clear only after a successful save')
 assert.ok(
   saveSource.indexOf('await saveConfig()') < saveSource.indexOf('setVectorCleanupChanges([])'),
@@ -297,6 +324,8 @@ assert.match(configPageSource, /\{!isEmbedding && \(\s*<Surface[^>]*data-guide="
 assert.match(configPageSource, /showPresetAssistant && !isEmbedding/, 'preset assistant must not render in vector mode')
 
 const sectionsSource = readSource('src', 'components', 'ConfigPage', 'sections.tsx')
+const basicSectionSource = section(sectionsSource, 'export function BasicSection', 'export function ReasoningSection')
+assert.match(basicSectionSource, /disabled=\{modelWorkloadLocked\}/, 'classified model workloads must lock the embedding switch')
 const advancedSectionSource = section(sectionsSource, 'export function AdvancedSection', '\n}\n')
 for (const id of ['reasoning', 'model', 'sampling', 'sampling-ext', 'spec', 'multi', 'custom']) {
   const marker = `config-advanced-${id}`
@@ -305,7 +334,13 @@ for (const id of ['reasoning', 'model', 'sampling', 'sampling-ext', 'spec', 'mul
   assert.match(advancedSectionSource.slice(Math.max(0, markerIndex - 180), markerIndex), /!isEmbedding/, `${marker} must be hidden in vector mode`)
 }
 assert.match(advancedSectionSource, /config-advanced-vector/, 'vector mode must expose a dedicated vector group')
-assert.match(advancedSectionSource, /VECTOR_ALLOWED_FIELDS/, 'vector reset behavior must use the shared allowlist')
+const vectorGroupSource = advancedSectionSource.slice(advancedSectionSource.indexOf('config-advanced-vector'))
+assert.match(vectorGroupSource, /reranking[^\n]*disabled=\{modelWorkloadLocked\}/, 'manually configured vector workloads must retain a reranking control')
+assert.match(vectorGroupSource, /set\('pooling', v \? 'rank' : ''\)/, 'manual reranking changes must update pooling atomically')
+assert.match(advancedSectionSource, /ADVANCED_CONFIG_KEYS/, 'reset all must cover every advanced field exposed by the UI')
+assert.match(advancedSectionSource, /ADVANCED_GROUP_CONFIG_KEYS\[id\]/, 'group reset must cover fields added beyond RESET_MAP')
+assert.match(advancedSectionSource, /getResettableFields/, 'reset handlers must preserve locked workload identity fields')
+assert.match(advancedSectionSource, /direct_io/, 'shared direct I/O configuration must have a visible control')
 
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {
   const source = readSource('src', 'i18n', locale)
