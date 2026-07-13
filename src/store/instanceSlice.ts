@@ -1,6 +1,10 @@
 import { invoke } from '@tauri-apps/api/core'
 import { message } from '@tauri-apps/plugin-dialog'
-import { loadAppBootstrap } from './bootstrap'
+import {
+  loadAppBootstrap,
+  normalizeStoredConfig,
+  reconcileInstancesWithModels,
+} from './bootstrap'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, InstanceConfig, LogEntry } from './types'
 
@@ -74,19 +78,30 @@ export function createInstanceSlice(
     clearLogs: (instanceId) => set((state) => ({
       logs: { ...state.logs, [instanceId]: [] },
     })),
-    generateCommand: async (config: InstanceConfig, engineExe: string) => (
-      invoke<string[]>('generate_server_command', { config, engineExe })
-    ),
+    generateCommand: async (config: InstanceConfig, engineExe: string) => {
+      const normalized = normalizeStoredConfig(config, get().models)
+      return invoke<string[]>('generate_server_command', { config: normalized.config, engineExe })
+    },
     startInstance: async (id) => {
       try {
-        const { instances, engines, defaultEngineId } = get()
+        const { instances, models, engines, defaultEngineId } = get()
         const instance = instances.find((item) => item.id === id)
         if (!instance) {
           message('Instance not found.', { title: 'Error', kind: 'error' })
           return
         }
 
-        const engine = engines.find((item) => item.id === instance.config.engine_id)
+        const normalized = normalizeStoredConfig(instance.config, models)
+        if (normalized.changes.length > 0) {
+          set((state) => ({
+            instances: state.instances.map((item) => (
+              item.id === id ? { ...item, config: normalized.config } : item
+            )),
+          }))
+          await get().saveConfig()
+        }
+
+        const engine = engines.find((item) => item.id === normalized.config.engine_id)
           || engines.find((item) => item.id === defaultEngineId)
           || engines[0]
 
@@ -97,7 +112,7 @@ export function createInstanceSlice(
 
         await invoke('start_server', {
           instanceId: id,
-          config: instance.config,
+          config: normalized.config,
           engineExe: engine.exe,
           engineBackend: engine.backend,
         })
@@ -118,11 +133,14 @@ export function createInstanceSlice(
       await invoke('open_browser', { host, port })
     },
     saveConfig: async () => {
-      const { instances, modelDirs, engineDirs, defaultEngineId, activeTab, darkMode } = get()
+      const state = get()
+      const reconciled = reconcileInstancesWithModels(state.instances, state.models)
+      if (reconciled.changed) set({ instances: reconciled.instances })
+
       const instancesById: Record<string, InstanceConfig> = {}
       const order: string[] = []
 
-      instances.forEach((instance) => {
+      reconciled.instances.forEach((instance) => {
         instancesById[instance.id] = instance.config
         order.push(instance.id)
       })
@@ -130,12 +148,12 @@ export function createInstanceSlice(
       const operation = configSaveQueue.catch(() => {}).then(async () => {
         await invoke('save_config', {
           instances: instancesById,
-          modelDirs,
-          engineDirs,
-          defaultEngineId: defaultEngineId || '',
+          modelDirs: state.modelDirs,
+          engineDirs: state.engineDirs,
+          defaultEngineId: state.defaultEngineId || '',
           instanceOrder: order,
-          lastTab: activeTab,
-          darkMode,
+          lastTab: state.activeTab,
+          darkMode: state.darkMode,
         })
       }).catch((error) => {
         get().addRuntimeWarning(`配置保存失败：${String(error)}`)

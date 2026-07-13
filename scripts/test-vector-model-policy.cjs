@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const Module = require('node:module')
 const path = require('node:path')
 const esbuild = require('esbuild')
@@ -12,6 +13,11 @@ const entry = `
     VECTOR_ALLOWED_FIELDS,
     VECTOR_CLASSIFIED_FIELDS,
   } from './src/modelPolicy'
+  import {
+    normalizeModelPath,
+    normalizeStoredConfig,
+    reconcileInstancesWithModels,
+  } from './src/store/bootstrap'
 
   const model = (overrides = {}) => ({
     id: 'model', name: 'model.gguf', path: 'C:/models/model.gguf', size: 1, file_type: 'gguf',
@@ -94,6 +100,63 @@ const entry = `
   const created = normalizeInstanceConfig(polluted, null, { context: 'create' })
   assert.equal(created.config.spec_type, '')
   assert.deepEqual(created.changes, [])
+
+  assert.equal(normalizeModelPath('C:\\\\Models\\\\Qwen3-Instruct.gguf'), 'c:/models/qwen3-instruct.gguf')
+  assert.equal(normalizeModelPath('/Models/Qwen3-Instruct.gguf'), '/Models/Qwen3-Instruct.gguf')
+
+  const indexedVectorModel = model({
+    name: 'Qwen3-Instruct.gguf',
+    path: 'C:\\\\Models\\\\Qwen3-Instruct.gguf',
+    capabilities: { metadata_complete: true, is_embedding_model: true, is_reranker_model: false },
+  })
+  const storedVectorConfig = {
+    ...defaultInstanceConfig(),
+    id: 'vector',
+    name: 'Vector instance',
+    model_path: 'c:/models/Qwen3-Instruct.gguf',
+    embedding: false,
+    temp: 1.5,
+    custom_args: ['--temp', '1.5'],
+  }
+  const normalizedStored = normalizeStoredConfig(storedVectorConfig, [indexedVectorModel])
+  assert.equal(normalizedStored.workload, 'embedding')
+  assert.equal(normalizedStored.config.embedding, true)
+  assert.equal(normalizedStored.config.temp, defaultInstanceConfig().temp)
+  assert.deepEqual(normalizedStored.config.custom_args, [])
+
+  const missingInferenceConfig = {
+    ...defaultInstanceConfig(),
+    id: 'inference',
+    name: 'Inference instance',
+    model_path: 'C:\\\\missing\\\\Qwen3-8B-Instruct.gguf',
+    temp: 1.25,
+  }
+  const missingInference = normalizeStoredConfig(missingInferenceConfig, [])
+  assert.equal(missingInference.workload, 'inference')
+  assert.equal(missingInference.changes.length, 0)
+  assert.equal(missingInference.config.temp, 1.25)
+
+  const vectorInstance = {
+    id: 'vector', name: 'Vector instance', status: 'running', model: 'Qwen3-Instruct.gguf',
+    port: 18080, healthCheck: 'ok', startTime: 123456, config: storedVectorConfig,
+  }
+  const inferenceInstance = {
+    id: 'inference', name: 'Inference instance', status: 'stopped', model: 'Qwen3-8B-Instruct.gguf',
+    port: 18081, healthCheck: 'pending', config: missingInferenceConfig,
+  }
+  const originalInstances = [vectorInstance, inferenceInstance]
+  const reconciled = reconcileInstancesWithModels(originalInstances, [indexedVectorModel])
+  assert.equal(reconciled.changed, true)
+  assert.notStrictEqual(reconciled.instances, originalInstances)
+  assert.notStrictEqual(reconciled.instances[0], vectorInstance)
+  assert.strictEqual(reconciled.instances[1], inferenceInstance)
+  assert.equal(reconciled.instances[0].status, 'running')
+  assert.equal(reconciled.instances[0].healthCheck, 'ok')
+  assert.equal(reconciled.instances[0].startTime, 123456)
+
+  const unchanged = reconcileInstancesWithModels([inferenceInstance], [])
+  assert.equal(unchanged.changed, false)
+  assert.strictEqual(unchanged.instances[0], inferenceInstance)
 `
 
 const bundled = esbuild.buildSync({
@@ -115,5 +178,40 @@ testModule.filename = path.join(process.cwd(), 'vector-model-policy.test.cjs')
 testModule.paths = Module._nodeModulePaths(process.cwd())
 testModule._compile(bundled.outputFiles[0].text, testModule.filename)
 
-assert.ok(true)
+function readSource(...segments) {
+  return fs.readFileSync(path.join(__dirname, '..', ...segments), 'utf8')
+}
+
+function section(source, start, end) {
+  const startIndex = source.indexOf(start)
+  const endIndex = source.indexOf(end, startIndex + start.length)
+  assert.ok(startIndex >= 0 && endIndex > startIndex, `missing source section: ${start}`)
+  return source.slice(startIndex, endIndex)
+}
+
+const instanceSliceSource = readSource('src', 'store', 'instanceSlice.ts')
+const generateCommandSource = section(instanceSliceSource, 'generateCommand:', 'startInstance:')
+const startInstanceSource = section(instanceSliceSource, 'startInstance:', 'stopInstance:')
+const saveConfigSource = section(instanceSliceSource, 'saveConfig:', 'loadConfig:')
+
+assert.match(generateCommandSource, /normalizeStoredConfig\(/, 'command preview must normalize its config')
+assert.match(generateCommandSource, /config:\s*normalized\.config/, 'command preview must invoke with normalized config')
+assert.match(startInstanceSource, /normalizeStoredConfig\(/, 'start must normalize the stored config')
+assert.match(startInstanceSource, /config:\s*normalized\.config/, 'start must invoke with normalized config')
+assert.match(startInstanceSource, /set\(/, 'start cleanup must update Zustand state')
+assert.match(startInstanceSource, /await get\(\)\.saveConfig\(\)/, 'start cleanup must be persisted before launch')
+assert.match(saveConfigSource, /reconcileInstancesWithModels\(/, 'save must normalize every instance')
+
+const bootstrapSource = readSource('src', 'store', 'bootstrap.ts')
+const cachedScanSource = section(bootstrapSource, "invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan')", 'const injected')
+const initialScanSource = section(bootstrapSource, "invoke<ModelInfo[]>('scan_models'", "invoke<EngineInfo[]>('scan_engines'")
+assert.match(cachedScanSource, /applyModelInventory\(/, 'cached model inventory must reconcile instances')
+assert.match(initialScanSource, /applyModelInventory\(/, 'initial async model scan must reconcile instances')
+
+const coreSliceSource = readSource('src', 'store', 'coreSlice.ts')
+const loadInitialDataSource = section(coreSliceSource, 'loadInitialData:', 'scanModels:')
+const scanModelsSource = section(coreSliceSource, 'scanModels:', 'deleteModelFile:')
+assert.match(loadInitialDataSource, /applyModelInventory\(/, 'get_models results must reconcile instances')
+assert.match(scanModelsSource, /applyModelInventory\(/, 'manual model scans must reconcile instances')
+
 console.log('vector model policy tests passed')

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { applyModelInventory } from './bootstrap'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'
 
@@ -35,7 +36,9 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       }))
     },
     clearRuntimeWarnings: () => set({ runtimeWarnings: [] }),
-    setModels: (models) => set({ models }),
+    setModels: (models) => {
+      applyModelInventory(models, get, set)
+    },
     setEngines: (engines) => set({ engines }),
     setModelDirs: (dirs) => {
       set({ modelDirs: dirs })
@@ -68,7 +71,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
           invoke<ModelInfo[]>('get_models').catch(() => [] as ModelInfo[]),
           invoke<EngineInfo[]>('get_engines').catch(() => [] as EngineInfo[]),
         ])
-        set({ models, engines, isLoading: false })
+        applyModelInventory(models, get, set, { engines, isLoading: false })
       } catch {
         set({ isLoading: false })
       }
@@ -77,7 +80,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       set({ isLoading: true })
       try {
         const models = await invoke<ModelInfo[]>('scan_models', { paths })
-        set({ models, modelDirs: paths, isLoading: false })
+        applyModelInventory(models, get, set, { modelDirs: paths, isLoading: false })
         return null
       } catch (error: any) {
         console.error('scan_models error:', error)

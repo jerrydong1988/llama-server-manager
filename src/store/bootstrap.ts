@@ -1,9 +1,11 @@
 import { startTransition } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { normalizeInstanceConfig } from '../modelPolicy'
 import { pathBasename } from '../utils/path'
 import { resolveHydratedHealth } from './bootstrapHealth'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type {
+  AppState,
   DownloadManagerSnapshot,
   DownloadProgress,
   EngineInfo,
@@ -37,6 +39,50 @@ declare global {
       low_priority_throttle: boolean
     }
   }
+}
+
+export function normalizeModelPath(value: string): string {
+  let normalized = value.trim().replace(/\\/g, '/').replace(/\/{2,}/g, '/')
+  if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1)
+  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized
+}
+
+export function normalizeStoredConfig(config: InstanceConfig, models: ModelInfo[]) {
+  const modelPath = normalizeModelPath(config.model_path)
+  const model = modelPath
+    ? models.find(item => normalizeModelPath(item.path) === modelPath)
+    : undefined
+  return normalizeInstanceConfig(config, model)
+}
+
+export function reconcileInstancesWithModels(instances: Instance[], models: ModelInfo[]) {
+  let changed = false
+  const next = instances.map((instance) => {
+    const normalized = normalizeStoredConfig(instance.config, models)
+    if (normalized.changes.length === 0) return instance
+
+    changed = true
+    return { ...instance, config: normalized.config }
+  })
+
+  return { instances: changed ? next : instances, changed }
+}
+
+export function applyModelInventory(
+  models: ModelInfo[],
+  get: AppStoreGet,
+  set: AppStoreSet,
+  additionalState: Partial<AppState> = {},
+): boolean {
+  const reconciled = reconcileInstancesWithModels(get().instances, models)
+  set({
+    ...additionalState,
+    models,
+    ...(reconciled.changed ? { instances: reconciled.instances } : {}),
+  })
+
+  if (reconciled.changed) void get().saveConfig().catch(() => {})
+  return reconciled.changed
 }
 
 function hydrateDownloadTasksFromSnapshot(
@@ -129,6 +175,13 @@ async function processConfig(
     })
   })
 
+  const cachedModels = get().models
+  if (cachedModels.length > 0) {
+    startTransition(() => {
+      applyModelInventory(cachedModels, get, set)
+    })
+  }
+
   if (global.dark_mode !== undefined) {
     document.documentElement.classList.toggle('dark', global.dark_mode)
     startTransition(() => {
@@ -161,7 +214,7 @@ async function processConfig(
   invoke<ModelInfo[]>('scan_models', { paths: global.model_dirs || [] })
     .then((models) => {
       startTransition(() => {
-        set({ models })
+        applyModelInventory(models, get, set)
       })
     })
     .catch((error) => {
@@ -200,7 +253,7 @@ export async function loadAppBootstrap(
       .then((data) => {
         if (data) {
           startTransition(() => {
-            set({ models: data[0], engines: data[1] })
+            applyModelInventory(data[0], get, set, { engines: data[1] })
           })
         }
       })
