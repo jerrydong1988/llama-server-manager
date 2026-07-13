@@ -1,5 +1,5 @@
-import type { InstanceConfig, ModelInfo, EngineInfo } from './store'
-import { defaultInstanceConfig } from './store'
+import type { InstanceConfig, ModelInfo, EngineInfo } from './store/types'
+import { defaultInstanceConfig } from './store/defaults'
 
 export interface Warning {
   field: keyof InstanceConfig
@@ -202,10 +202,6 @@ export function validateConfig(
     w.push({ field: 'api_key', severity: 'low', key: 'warnA13' })
 
   // Group B: redundant or meaningless settings.
-
-  // B1: warmup + embedding
-  if (config.warmup && config.embedding)
-    w.push({ field: 'warmup', severity: 'low', key: 'warnB1' })
 
   // B2: cache_ram or cache_reuse is set while cache_prompt is disabled.
   if ((config.cache_ram > 0 || config.cache_reuse > 0) && !config.cache_prompt)

@@ -7,6 +7,8 @@ const esbuild = require('esbuild')
 const entry = `
   import assert from 'node:assert/strict'
   import { defaultInstanceConfig } from './src/store/defaults'
+  import { getActiveParams } from './src/components/ConfigPage/activeParams'
+  import { validateConfig } from './src/validators'
   import {
     detectModelWorkload,
     normalizeInstanceConfig,
@@ -47,6 +49,12 @@ const entry = `
   assert.equal(reranker.config.embedding, true)
   assert.equal(reranker.config.reranking, true)
   assert.equal(reranker.config.pooling, 'rank')
+  const cleanVectorWarnings = validateConfig(
+    reranker.config,
+    model({ capabilities: { metadata_complete: true, is_reranker_model: true } }),
+    null,
+  )
+  assert.deepEqual(cleanVectorWarnings, [])
 
   const pooled = normalizeInstanceConfig({ ...defaultInstanceConfig(), embedding: true, pooling: 'cls' }, null)
   assert.equal(pooled.config.pooling, 'cls')
@@ -103,6 +111,14 @@ const entry = `
   const created = normalizeInstanceConfig(polluted, null, { context: 'create' })
   assert.equal(created.config.spec_type, '')
   assert.deepEqual(created.changes, [])
+
+  const activeVectorParams = getActiveParams(polluted, true)
+  for (const key of activeVectorParams) {
+    assert.ok(VECTOR_ALLOWED_FIELDS.has(key), 'vector active params exposed an incompatible field: ' + key)
+  }
+  assert.equal(activeVectorParams.has('spec_type'), false)
+  assert.equal(activeVectorParams.has('custom_args'), false)
+  assert.equal(activeVectorParams.has('prefill_assistant'), false)
 
   assert.equal(normalizeModelPath('C:\\\\Models\\\\Qwen3-Instruct.gguf'), 'c:/models/qwen3-instruct.gguf')
   assert.equal(normalizeModelPath('/Models/Qwen3-Instruct.gguf'), '/Models/Qwen3-Instruct.gguf')
@@ -276,6 +292,20 @@ assert.ok(
   saveSource.indexOf('await saveConfig()') < saveSource.indexOf('setVectorCleanupChanges([])'),
   'cleanup summary must clear after persistence succeeds',
 )
+assert.match(configPageSource, /\{!isEmbedding && <ReasoningSection/, 'reasoning section must be absent in vector mode')
+assert.match(configPageSource, /\{!isEmbedding && \(\s*<Surface[^>]*data-guide="config-presets"/s, 'inference presets must be absent in vector mode')
+assert.match(configPageSource, /showPresetAssistant && !isEmbedding/, 'preset assistant must not render in vector mode')
+
+const sectionsSource = readSource('src', 'components', 'ConfigPage', 'sections.tsx')
+const advancedSectionSource = section(sectionsSource, 'export function AdvancedSection', '\n}\n')
+for (const id of ['reasoning', 'model', 'sampling', 'sampling-ext', 'spec', 'multi', 'custom']) {
+  const marker = `config-advanced-${id}`
+  const markerIndex = advancedSectionSource.indexOf(marker)
+  assert.ok(markerIndex >= 0, `missing advanced group marker: ${marker}`)
+  assert.match(advancedSectionSource.slice(Math.max(0, markerIndex - 180), markerIndex), /!isEmbedding/, `${marker} must be hidden in vector mode`)
+}
+assert.match(advancedSectionSource, /config-advanced-vector/, 'vector mode must expose a dedicated vector group')
+assert.match(advancedSectionSource, /VECTOR_ALLOWED_FIELDS/, 'vector reset behavior must use the shared allowlist')
 
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {
   const source = readSource('src', 'i18n', locale)

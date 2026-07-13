@@ -290,9 +290,10 @@ const ConfigPage = () => {
       : null
   }, [local?.model_path, models])
 
-  const isEmbedding = useMemo(() => (
-    local ? detectModelWorkload(currentModel, local.model_path, local) !== 'inference' : false
+  const workload = useMemo(() => (
+    local ? detectModelWorkload(currentModel, local.model_path, local) : 'inference'
   ), [currentModel, local])
+  const isEmbedding = workload !== 'inference'
 
   if (!local) {
     return (
@@ -356,6 +357,7 @@ const ConfigPage = () => {
     set,
     t,
     isEmbedding,
+    workload,
     onShowPicker: () => {
       setPickerTarget('model')
       setShowPicker(true)
@@ -587,29 +589,36 @@ const ConfigPage = () => {
     setSaveWarnings([])
   }
 
+  const advancedDirectoryGroups = [
+    ...(!isEmbedding ? [
+      { id: 'config-advanced-reasoning', title: t.configPage.subAdvReasoning, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedReasoningConfig) },
+      { id: 'config-advanced-model', title: t.configPage.subAdvModelAdapt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt) },
+      { id: 'config-advanced-sampling', title: t.configPage.subAdvSampling, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSampling) },
+      { id: 'config-advanced-sampling-ext', title: t.configPage.subAdvSamplingExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSamplingExt) },
+      { id: 'config-advanced-spec', title: t.configPage.subAdvSpec, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSpec) },
+    ] : [
+      { id: 'config-advanced-vector', title: t.configPage.subEmbedding, count: countActive(activeParams, ['embd_normalize', 'reranking']) },
+    ]),
+    { id: 'config-advanced-rope', title: t.configPage.subAdvRope, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedRope) },
+    { id: 'config-advanced-kv', title: t.configPage.subAdvKvCache, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedKvCache) },
+    { id: 'config-advanced-context', title: t.configPage.subAdvContextMgmt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedContextMgmt) },
+    { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedHardware) },
+    { id: 'config-advanced-server', title: t.configPage.subAdvServer, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
+    { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
+    ...(!isEmbedding ? [
+      { id: 'config-advanced-multi', title: t.configPage.subAdvMulti, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) },
+      { id: 'config-advanced-custom', title: t.configPage.customArgs, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
+    ] : []),
+  ]
   const directoryGroups = [
     { id: 'config-basic', title: t.configPage.basic, count: countActive(activeParams, BASIC_CONFIG_KEYS) },
-    { id: 'config-reasoning', title: t.configPage.reasoning, count: countActive(activeParams, REASONING_CONFIG_KEYS) },
+    ...(!isEmbedding ? [{ id: 'config-reasoning', title: t.configPage.reasoning, count: countActive(activeParams, REASONING_CONFIG_KEYS) }] : []),
     { id: 'config-performance', title: t.configPage.performance, count: countActive(activeParams, PERFORMANCE_CONFIG_KEYS) },
     {
       id: 'config-advanced',
       title: t.configPage.advSectionTitle,
       count: countActive(activeParams, ADVANCED_CONFIG_KEYS),
-      children: [
-        { id: 'config-advanced-reasoning', title: t.configPage.subAdvReasoning, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedReasoningConfig) },
-        { id: 'config-advanced-model', title: t.configPage.subAdvModelAdapt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt) },
-        { id: 'config-advanced-sampling', title: t.configPage.subAdvSampling, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSampling) },
-        { id: 'config-advanced-sampling-ext', title: t.configPage.subAdvSamplingExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSamplingExt) },
-        { id: 'config-advanced-spec', title: t.configPage.subAdvSpec, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSpec) },
-        { id: 'config-advanced-rope', title: t.configPage.subAdvRope, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedRope) },
-        { id: 'config-advanced-kv', title: t.configPage.subAdvKvCache, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedKvCache) },
-        { id: 'config-advanced-context', title: t.configPage.subAdvContextMgmt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedContextMgmt) },
-        { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedHardware) },
-        { id: 'config-advanced-server', title: t.configPage.subAdvServer, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
-        { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
-        { id: 'config-advanced-multi', title: t.configPage.subAdvMulti, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) },
-        { id: 'config-advanced-custom', title: t.configPage.customArgs, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
-      ],
+      children: advancedDirectoryGroups,
     },
   ]
 
@@ -732,7 +741,7 @@ const ConfigPage = () => {
             </div>
           )}
 
-          {lastTemplateSnapshot && (
+          {!isEmbedding && lastTemplateSnapshot && (
             <div className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200 sm:flex-row sm:items-center sm:justify-between">
               <span className="inline-flex min-w-0 items-center gap-2">
                 <Sparkles className="h-4 w-4 shrink-0" />
@@ -746,6 +755,7 @@ const ConfigPage = () => {
             </div>
           )}
 
+          {!isEmbedding && (
           <Surface className="p-5" data-guide="config-presets">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
@@ -768,6 +778,7 @@ const ConfigPage = () => {
               </InsetSurface>
             </div>
           </Surface>
+          )}
 
           <Surface className="p-5">
             <div className="mb-4">
@@ -783,7 +794,7 @@ const ConfigPage = () => {
           </Surface>
 
           <BasicSection {...sectionProps} />
-          <ReasoningSection {...sectionProps} />
+          {!isEmbedding && <ReasoningSection {...sectionProps} />}
           <PerformanceSection {...sectionProps} />
           <AdvancedSection {...sectionProps} />
         </div>
@@ -935,7 +946,7 @@ const ConfigPage = () => {
         </Surface>
       </div>
 
-      {showPresetAssistant && selectedTemplate && (
+      {showPresetAssistant && !isEmbedding && selectedTemplate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
           <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.25)] dark:border-slate-800 dark:bg-slate-900 dark:shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/90">
