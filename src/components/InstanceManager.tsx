@@ -7,6 +7,7 @@ import { confirm } from '@tauri-apps/plugin-dialog'
 import { useI18n } from '../i18n'
 import { isPathWithinRoot, normalizePath, pathJoin, pathDirname } from '../utils/path'
 import { formatHostPort } from '../utils/network'
+import { normalizeInstanceConfig } from '../modelPolicy'
 import type { Instance, ModelInfo } from '../store/types'
 import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
@@ -196,6 +197,7 @@ const InstanceManager = () => {
     config.port = newInst.port
     config.host = '127.0.0.1'
     config.engine_id = newInst.engineId || defaultEngineId || ''
+    const normalized = normalizeInstanceConfig(config, model, { context: 'create' })
 
     if (!defaultEngineId && engines[0]) useAppStore.setState({ defaultEngineId: engines[0].id })
 
@@ -206,7 +208,7 @@ const InstanceManager = () => {
       model: model.name,
       port: newInst.port,
       healthCheck: 'pending',
-      config,
+      config: normalized.config,
     })
 
     setShowCreateModal(false)

@@ -246,4 +246,25 @@ assert.match(scanModelsSource, /beginModelInventoryRequest\(/, 'manual scans mus
 const processConfigSource = section(bootstrapSource, 'async function processConfig', "invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')")
 assert.match(processConfigSource, /models:\s*\[\]/, 'hydration must not expose stale cached capabilities before fresh scan')
 
+const instanceManagerSource = readSource('src', 'components', 'InstanceManager.tsx')
+const createInstanceSource = section(instanceManagerSource, 'const handleCreate', 'const handleDelete')
+assert.match(createInstanceSource, /normalizeInstanceConfig\(/, 'new instances must use the vector policy')
+assert.match(createInstanceSource, /context:\s*'create'/, 'new instance cleanup must be silent')
+assert.match(createInstanceSource, /config:\s*normalized\.config/, 'new instances must store the normalized config')
+
+const configPageSource = readSource('src', 'components', 'ConfigPage.tsx')
+const pickModelSource = section(configPageSource, 'const pickModel', 'const save =')
+assert.match(pickModelSource, /const candidate/, 'model switching must build one atomic candidate')
+assert.match(pickModelSource, /normalizeInstanceConfig\(/, 'existing model switching must apply the vector policy')
+assert.match(pickModelSource, /setLocal\(normalized\.config\)/, 'existing model switching must replace the local draft atomically')
+assert.match(pickModelSource, /setVectorCleanupChanges\(/, 'existing model switching must retain a cleanup summary')
+assert.doesNotMatch(pickModelSource, /set\('model_path'/, 'primary model switching must not apply sequential partial updates')
+
+for (const locale of ['zh-CN.ts', 'en-US.ts']) {
+  const source = readSource('src', 'i18n', locale)
+  assert.match(source, /vectorCleanupTitle:/, `${locale} must include the vector cleanup title`)
+  assert.match(source, /vectorCleanupSpeculative:/, `${locale} must label speculative cleanup`)
+  assert.match(source, /vectorCleanupCustom:/, `${locale} must label custom cleanup without exposing values`)
+}
+
 console.log('vector model policy tests passed')

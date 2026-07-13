@@ -17,10 +17,10 @@ import {
 import { getActiveParams } from './ConfigPage/activeParams'
 import { isPathWithinRoot, normalizePath, pathBasename, pathDirname, pathJoin } from '../utils/path'
 import { formatHostPort } from '../utils/network'
+import { detectModelWorkload, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
+import { normalizeModelPath } from '../store/bootstrap'
 import { _matchedElements } from './ConfigPage/shared'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
-
-const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
 
 interface PickerNode {
   name: string
@@ -221,6 +221,7 @@ const ConfigPage = () => {
   const [pickerTarget, setPickerTarget] = useState<'model' | 'draft'>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
+  const [vectorCleanupChanges, setVectorCleanupChanges] = useState<VectorCleanupChange[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [appliedTemplateId, setAppliedTemplateId] = useState<string | null>(null)
   const [showPresetAssistant, setShowPresetAssistant] = useState(false)
@@ -264,6 +265,7 @@ const ConfigPage = () => {
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
     setShowPresetAssistant(false)
+    setVectorCleanupChanges([])
   }, [activeConfigInstanceId, inst])
 
   const set = (key: keyof InstanceConfig, value: any) => {
@@ -272,30 +274,16 @@ const ConfigPage = () => {
     setLocal(current => (current ? { ...current, [key]: value } : current))
   }
 
-  const isEmbedding = useMemo(() => {
-    if (!local?.model_path) {
-      return false
-    }
-
-    const fileName = pathBasename(local.model_path)
-    if (fileName.toLowerCase().includes('embed')) {
-      return true
-    }
-
-    const model = models.find(item => item.path === local.model_path)
-    return !!(model?.architecture && EMBED_ARCHS.some(arch => model.architecture!.toLowerCase().includes(arch)))
+  const currentModel = useMemo(() => {
+    const modelPath = local?.model_path ? normalizeModelPath(local.model_path) : ''
+    return modelPath
+      ? models.find(model => normalizeModelPath(model.path) === modelPath) ?? null
+      : null
   }, [local?.model_path, models])
 
-  useEffect(() => {
-    if (isEmbedding && local) {
-      if (!local.embedding) {
-        set('embedding', true)
-      }
-      if (!local.pooling) {
-        set('pooling', 'mean')
-      }
-    }
-  }, [isEmbedding, local?.embedding, local?.model_path, local?.pooling])
+  const isEmbedding = useMemo(() => (
+    local ? detectModelWorkload(currentModel, local.model_path, local) !== 'inference' : false
+  ), [currentModel, local])
 
   if (!local) {
     return (
@@ -306,7 +294,6 @@ const ConfigPage = () => {
   }
 
   const activeParams = getActiveParams(local, isEmbedding)
-  const currentModel = models.find(model => model.path === local.model_path) ?? null
   const currentEngine = engines.find(engine => engine.id === (local.engine_id || defaultEngineId || '')) ?? engines[0] ?? null
   const primaryModelPath = currentModel?.path || local.model_path || ''
   const draftModelPath = local.draft_model_path || ''
@@ -314,10 +301,15 @@ const ConfigPage = () => {
 
   const pickModel = (modelPath: string) => {
     if (pickerTarget === 'model') {
-      set('model_path', modelPath)
+      const selectedModel = models.find(model => normalizeModelPath(model.path) === normalizeModelPath(modelPath))
       const directory = pathDirname(modelPath)
       const mmproj = models.find(model => pathDirname(model.path) === directory && model.file_type === 'mmproj')
-      set('mmproj_path', mmproj?.path ?? '')
+      const candidate = { ...local, model_path: modelPath, mmproj_path: mmproj?.path ?? '' }
+      const normalized = normalizeInstanceConfig(candidate, selectedModel)
+      setAppliedTemplateId(null)
+      setLastTemplateSnapshot(null)
+      setLocal(normalized.config)
+      setVectorCleanupChanges(normalized.vectorMode ? normalized.changes : [])
     } else {
       set('draft_model_path', modelPath)
     }
@@ -341,6 +333,7 @@ const ConfigPage = () => {
     }
     setSaved(true)
     setSaveWarnings(warnings)
+    setVectorCleanupChanges([])
 
     setTimeout(() => {
       if (mountedRef.current) {
@@ -446,6 +439,21 @@ const ConfigPage = () => {
     pickDesc: zh ? '\u4ece\u8d44\u6e90\u5e93\u4e2d\u9009\u62e9\u6587\u4ef6\uff1a' : 'Choose a repository asset for',
     parameterGroups: zh ? '\u53c2\u6570\u5206\u7ec4' : 'Parameter Groups',
   }
+
+  const vectorCleanupGroups: Array<{ group: VectorCleanupChange['group']; label: string }> = [
+    { group: 'speculative', label: t.configPage.vectorCleanupSpeculative },
+    { group: 'generation', label: t.configPage.vectorCleanupGeneration },
+    { group: 'chat', label: t.configPage.vectorCleanupChat },
+    { group: 'multimodal', label: t.configPage.vectorCleanupMultimodal },
+    { group: 'custom', label: t.configPage.vectorCleanupCustom },
+    { group: 'runtime', label: t.configPage.vectorCleanupRuntime },
+  ]
+  const visibleVectorCleanupGroups = vectorCleanupGroups
+    .map(group => ({
+      ...group,
+      count: vectorCleanupChanges.filter(change => change.group === group.group).length,
+    }))
+    .filter(group => group.count > 0)
 
   const savedBaseline = { ...defaultInstanceConfig(), ...(inst?.config ?? {}) }
   const configChanges = getConfigChanges(local, savedBaseline, t, labels)
@@ -688,8 +696,25 @@ const ConfigPage = () => {
           )}
 
           {isEmbedding && (
-            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm text-blue-200">
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
               {t.configPage.embeddingBanner}
+            </div>
+          )}
+
+          {visibleVectorCleanupGroups.length > 0 && (
+            <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="min-w-0">
+                <p className="font-medium">{t.configPage.vectorCleanupTitle}</p>
+                <p className="mt-1 text-emerald-700/80 dark:text-emerald-200/80">{t.configPage.vectorCleanupDescription}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {visibleVectorCleanupGroups.map(group => (
+                    <span key={group.group} className="rounded-md border border-emerald-200 bg-white/70 px-2 py-1 text-xs dark:border-emerald-500/20 dark:bg-slate-950/30">
+                      {group.label}: {group.count} {t.configPage.vectorCleanupItems}
+                    </span>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
 
