@@ -1,5 +1,7 @@
 export interface ModelCapabilities {
   metadata_complete?: boolean
+  is_embedding_model?: boolean
+  is_reranker_model?: boolean
   has_builtin_mtp?: boolean
   mtp_layers?: number
   is_vision_model?: boolean

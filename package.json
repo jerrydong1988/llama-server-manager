@@ -13,7 +13,7 @@
     "check:monitoring-theme": "node scripts/check-monitoring-theme.mjs",
     "check:cross-platform-release": "node scripts/check-cross-platform-release.cjs",
     "test:cross-platform": "node scripts/test-cross-platform-paths.cjs",
-    "test:regressions": "node scripts/test-bootstrap-health.cjs && node scripts/test-download-restore-merge.cjs && node scripts/test-redownload-sequencing.cjs && node scripts/test-config-save-sequencing.cjs && npm run test:cross-platform",
+    "test:regressions": "node scripts/test-bootstrap-health.cjs && node scripts/test-download-restore-merge.cjs && node scripts/test-redownload-sequencing.cjs && node scripts/test-config-save-sequencing.cjs && node scripts/test-vector-model-policy.cjs && npm run test:cross-platform",
     "check:release": "npm run check:encoding && npm run check:guide && npm run check:cluster-theme && npm run check:download-theme && npm run check:monitoring-theme && npm run check:cross-platform-release && npm run test:regressions && tsc --noEmit",
     "preview": "vite preview",
     "tauri": "tauri"
