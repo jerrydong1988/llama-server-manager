@@ -386,7 +386,9 @@ export default function GuidePage() {
             {labels.startTour}
           </Button>
 
-          <InsetSurface className="flex min-h-0 flex-1 flex-col overflow-hidden p-3">
+          <InsetSurface
+            className={`flex min-h-0 flex-1 flex-col p-3 ${isChecklistOpen ? 'overflow-y-auto' : 'overflow-hidden'}`}
+          >
             <button
               type="button"
               aria-controls="guide-setup-checklist"
@@ -404,7 +406,7 @@ export default function GuidePage() {
             </button>
 
             {isChecklistOpen && (
-              <div id="guide-setup-checklist" className="mb-4 max-h-32 shrink-0 overflow-y-auto pr-1">
+              <div id="guide-setup-checklist" className="mb-3 shrink-0 pr-1">
                 <p className="mb-3 text-xs leading-5 text-slate-500">{labels.checklistDesc}</p>
                 <div className="space-y-2">
                   {checklist.map(item => (

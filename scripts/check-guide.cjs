@@ -214,8 +214,16 @@ if (!guidePage.includes('const targetTop = container.scrollTop')) {
   errors.add('Guide chapter jumps must target the dedicated content scroller')
 }
 
-if (!guidePage.includes('max-h-32 shrink-0 overflow-y-auto')) {
-  errors.add('Expanded setup checklist must leave room for chapter navigation')
+if (guidePage.includes('id="guide-setup-checklist" className="mb-4 max-h-')) {
+  errors.add('Expanded setup checklist must not clip items inside a fixed-height scroller')
+}
+
+if (!guidePage.includes("isChecklistOpen ? 'overflow-y-auto' : 'overflow-hidden'")) {
+  errors.add('Guide sidebar must scroll as a whole only when the expanded checklist needs more room')
+}
+
+if (!guidePage.includes('id="guide-setup-checklist" className="mb-3 shrink-0 pr-1"')) {
+  errors.add('Expanded setup checklist spacing must avoid a redundant sidebar scrollbar at common heights')
 }
 
 if (!app.includes("constrainContent={activeTab === 'guide'}")) {
