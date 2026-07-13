@@ -693,6 +693,7 @@ function AppInner() {
       onOpenCommandCenter={() => setCommandCenterOpen(true)}
       wideContent={layoutWide}
       immersiveContent={immersiveContent}
+      constrainContent={activeTab === 'guide'}
     >
       {!immersiveContent && runtimeWarnings.length > 0 && (
         <div className="mx-auto mb-4 flex w-full max-w-7xl items-start justify-between gap-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">

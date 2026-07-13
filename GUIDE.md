@@ -24,7 +24,6 @@ This guide follows the real workflow from models and engines to instances, routi
 12. [服务器日志 / Server Logs](#服务器日志-server-logs)
 13. [应用设置与数据安全 / Application Settings and Data Safety](#应用设置与数据安全-application-settings-and-data-safety)
 14. [常见问题 / FAQ](#常见问题-faq)
-15. [发版前自检 / Release Validation](#发版前自检-release-validation)
 
 ---
 
@@ -551,22 +550,3 @@ The app automatically tries `instances.json.bak`. If recovery still fails, back 
 不需要。说明截图位于安装包的 `docs/guide` 资源目录中；GitHub README 和手册也引用仓库内同一批文件。
 
 No. Guide images ship under `docs/guide` in the frontend bundle and are shared with repository documentation.
-
----
-
-## 发版前自检 / Release Validation
-
-在准备发布或排查环境问题时，可按以下顺序做一次完整自检：
-
-1. 模型仓库能扫描并显示主模型元信息。
-2. 引擎管理能识别正确后端。
-3. 新实例端口检查通过，命令预览符合预期。
-4. 参数保存后没有未处理的高严重度警告。
-5. 实例启动、连接测试、API 页面和停止操作正常。
-6. 性能页显示当前实例，日志持续更新。
-7. 实例路由能列出目标并转发一次 `/v1/models` 或聊天请求。
-8. 下载暂停、恢复和重启后的策略符合设置。
-9. 应用内说明在离线状态显示全部图片，11 步引导能结束并返回说明页。
-10. 退出或托盘行为与实例路由后台保活设置一致。
-
-For release or environment validation, verify model metadata, engine backend, port checks, configuration warnings, instance lifecycle, telemetry, logs, routing, download recovery, offline guide assets, walkthrough completion, and tray or routing exit behavior.

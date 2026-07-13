@@ -42,6 +42,7 @@ export function AppShell({
   onOpenCommandCenter,
   wideContent = false,
   immersiveContent = false,
+  constrainContent = false,
   children,
 }: {
   appTitle: string
@@ -67,6 +68,7 @@ export function AppShell({
   onOpenCommandCenter: () => void
   wideContent?: boolean
   immersiveContent?: boolean
+  constrainContent?: boolean
   children: ReactNode
 }) {
   const activeItem = navigation.find(item => item.id === activeId) || navigation[0]
@@ -253,10 +255,10 @@ export function AppShell({
             </div>
           </header>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className={joinClassNames('min-h-0 flex-1', constrainContent ? 'overflow-hidden' : 'overflow-y-auto')}>
             <div
               className={joinClassNames(
-                'min-h-full',
+                constrainContent ? 'flex h-full min-h-0 flex-col' : 'min-h-full',
                 immersiveContent ? '' : 'px-4 py-4 sm:px-5',
                 !immersiveContent && !wideContent ? 'mx-auto w-full max-w-[1480px]' : '',
               )}

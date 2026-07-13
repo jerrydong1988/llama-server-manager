@@ -163,7 +163,7 @@ html.dark body {
 }
 
 /* Guide page Markdown styles */
-.guide-content h2 { font-size: 1.25rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.5rem; scroll-margin-top: 1rem; }
+.guide-content h2 { font-size: 1.25rem; font-weight: 700; margin-top: 1.5rem; margin-bottom: 0.5rem; scroll-margin-top: 1.5rem; }
 .guide-content h3 { font-size: 1rem; font-weight: 600; margin-top: 1rem; margin-bottom: 0.25rem; }
 .guide-content h4 { font-size: 0.875rem; font-weight: 600; margin-top: 0.75rem; }
 .guide-content p { margin-bottom: 0.5rem; line-height: 1.6; }
@@ -183,7 +183,8 @@ html.dark body {
 .dark .guide-content hr { border-color: #475569; }
 .guide-content a { color: #2563eb; text-decoration: underline; }
 .guide-content strong { font-weight: 600; }
-.guide-content img { display: block; width: 100%; height: auto; margin: 1rem 0 1.5rem; border: 1px solid #334155; border-radius: 0.5rem; background: #0f172a; color: #cbd5e1; }
+.guide-content img { display: block; width: 100%; height: auto; margin: 1rem 0 1.5rem; border: 1px solid #cbd5e1; border-radius: 0.5rem; background: #f8fafc; color: #475569; }
+.dark .guide-content img { border-color: #334155; background: #0f172a; color: #cbd5e1; }
 
 /* Config search highlight */
 @keyframes search-flash {

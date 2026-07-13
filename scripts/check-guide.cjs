@@ -5,6 +5,7 @@ const ROOT = path.resolve(__dirname, '..')
 const GUIDE_PATH = path.join(ROOT, 'GUIDE.md')
 const README_PATH = path.join(ROOT, 'README.md')
 const APP_PATH = path.join(ROOT, 'src', 'App.tsx')
+const APP_SHELL_PATH = path.join(ROOT, 'src', 'components', 'shell', 'AppShell.tsx')
 const GUIDE_PAGE_PATH = path.join(ROOT, 'src', 'components', 'GuidePage.tsx')
 const TOUR_PATH = path.join(ROOT, 'src', 'components', 'guide', 'guideTour.ts')
 const UI_PATH = path.join(ROOT, 'src', 'components', 'ui.tsx')
@@ -93,6 +94,7 @@ const tauriConfig = JSON.parse(
 const guide = readText(GUIDE_PATH, 'GUIDE.md')
 const readme = readText(README_PATH, 'README.md')
 const app = readText(APP_PATH, 'src/App.tsx')
+const appShell = readText(APP_SHELL_PATH, 'src/components/shell/AppShell.tsx')
 const guidePage = readText(GUIDE_PAGE_PATH, 'src/components/GuidePage.tsx')
 const tour = readText(TOUR_PATH, 'src/components/guide/guideTour.ts')
 const ui = readText(UI_PATH, 'src/components/ui.tsx')
@@ -111,6 +113,14 @@ for (const [label, version] of [
 
 if (!guide.includes(`> v${expectedVersion}`)) {
   errors.add(`GUIDE.md must declare release version v${expectedVersion}`)
+}
+
+if (guide.includes('发版前自检 / Release Validation')) {
+  errors.add('GUIDE.md must not expose the maintainer-only release validation section')
+}
+
+if (guide.includes('#发版前自检-release-validation')) {
+  errors.add('GUIDE.md table of contents must not link to release validation')
 }
 
 for (const section of REQUIRED_SECTIONS) {
@@ -180,6 +190,40 @@ if (!/export function Surface\([\s\S]*?\.\.\.elementProps[\s\S]*?<Component[^>]*
 
 if (!guidePage.includes('onDoneClick')) {
   errors.add('Interactive guide must explicitly complete each single-step driver popover')
+}
+
+for (const [token, message] of [
+  ['stripInAppTableOfContents', 'In-app guide must hide the duplicated static Markdown table of contents'],
+  ['data-guide-scroll', 'In-app guide must expose a dedicated content scroll container'],
+  ['data-guide-toc', 'In-app guide must expose an independently scrollable chapter list'],
+  [
+    "aria-current={activeSectionId === item.id ? 'location' : undefined}",
+    'In-app guide must identify the active chapter',
+  ],
+  ['aria-expanded={isChecklistOpen}', 'In-app guide setup checklist must be collapsible'],
+  ['scrollToTop', 'In-app guide must provide a back-to-top action'],
+]) {
+  if (!guidePage.includes(token)) errors.add(message)
+}
+
+if (guidePage.includes('element.scrollIntoView')) {
+  errors.add('Guide chapter jumps must not scroll ancestor containers')
+}
+
+if (!guidePage.includes('const targetTop = container.scrollTop')) {
+  errors.add('Guide chapter jumps must target the dedicated content scroller')
+}
+
+if (!guidePage.includes('max-h-32 shrink-0 overflow-y-auto')) {
+  errors.add('Expanded setup checklist must leave room for chapter navigation')
+}
+
+if (!app.includes("constrainContent={activeTab === 'guide'}")) {
+  errors.add('App must opt the guide into a viewport-constrained content layout')
+}
+
+if (!appShell.includes("constrainContent ? 'flex h-full min-h-0 flex-col'")) {
+  errors.add('App shell must constrain guide content so its internal scrollers can work')
 }
 
 if (errors.size > 0) {
