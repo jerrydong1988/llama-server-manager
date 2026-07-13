@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { Activity, AlertTriangle, BarChart3, Clock, Cpu, Gauge, HardDrive, Radio, RefreshCw, Server, Zap } from 'lucide-react'
 import { useAppStore } from '../../store'
+import { formatHostPort } from '../../utils/network'
 import { useI18n } from '../../i18n'
 import type {
   DiagnosticFinding,
@@ -331,7 +332,7 @@ export default function PerformancePage() {
                         </Badge>
                       </div>
                       <div className="mt-1 truncate font-mono text-xs text-blue-600 dark:text-blue-300">
-                        {selectedInstance ? `${selectedInstance.config.host}:${selectedInstance.config.port}` : selectedSession?.model_name || '--'}
+                        {selectedInstance ? formatHostPort(selectedInstance.config.host, selectedInstance.config.port) : selectedSession?.model_name || '--'}
                       </div>
                     </div>
                   </div>

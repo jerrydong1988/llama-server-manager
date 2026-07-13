@@ -1,4 +1,3 @@
-use std::net::TcpStream;
 use std::process::Command;
 
 fn detect_remote_os(
@@ -45,11 +44,18 @@ fn escape_shell_single_quote(s: &str) -> String {
 
 fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
     match remote_os {
-        "linux" | "macos" => {
+        "linux" => {
             let safe_binary = escape_shell_single_quote(binary);
             format!(
-                "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
+                "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; if ss -tlnp 2>/dev/null | grep -q ':{}'; then echo 'PORT-OK'; elif netstat -tlnp 2>/dev/null | grep -q ':{}'; then echo 'PORT-OK'; else echo 'PORT-NOT-FOUND'; fi",
                 safe_binary, port, port, port, port, port
+            )
+        },
+        "macos" => {
+            let safe_binary = escape_shell_single_quote(binary);
+            format!(
+                "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; if lsof -nP -iTCP:{} -sTCP:LISTEN >/dev/null 2>&1; then echo 'PORT-OK'; else echo 'PORT-NOT-FOUND'; fi",
+                safe_binary, port, port, port, port
             )
         },
         "windows" => format!(
@@ -59,7 +65,7 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
         _ => {
             let safe_binary = escape_shell_single_quote(binary);
             format!(
-                "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; ss -tlnp 2>/dev/null | grep :{} || netstat -tlnp 2>/dev/null | grep :{} || echo 'PORT-NOT-FOUND'",
+                "nohup '{}' --host 0.0.0.0 --port {} > /tmp/rpc-server-{}.log 2>&1 & sleep 2; cat /tmp/rpc-server-{}.log 2>/dev/null; echo '---PORT-CHECK---'; if ss -tlnp 2>/dev/null | grep -q ':{}'; then echo 'PORT-OK'; elif netstat -tlnp 2>/dev/null | grep -q ':{}'; then echo 'PORT-OK'; else echo 'PORT-NOT-FOUND'; fi",
                 safe_binary, port, port, port, port, port
             )
         },
@@ -134,12 +140,7 @@ pub async fn ssh_launch_rpc(
         }
 
         // Remote validation passed; verify locally once more.
-        let sock_addr = format!("{}:{}", host, rpc_port).parse::<std::net::SocketAddr>()
-            .map_err(|e| format!("地址解析失败 ({}:{}): {}", host, rpc_port, e))?;
-        match TcpStream::connect_timeout(
-            &sock_addr,
-            std::time::Duration::from_secs(5),
-        ) {
+        match crate::utils::connect_tcp(&host, rpc_port, std::time::Duration::from_secs(5)) {
             Ok(_) => Ok(serde_json::json!({ "ok": true, "host": host, "port": rpc_port, "remote_os": os })),
             Err(e) => Err(format!("rpc-server 启动后无法连接 ({}): {}", os, e)),
         }
@@ -147,4 +148,25 @@ pub async fn ssh_launch_rpc(
     .map_err(|e| format!("SSH 任务失败: {}", e))?;
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_remote_command_uses_linux_socket_tools() {
+        let command = build_remote_cmd("/opt/llama/rpc-server", 50052, "linux");
+        assert!(command.contains("ss -tlnp"));
+        assert!(command.contains("PORT-OK"));
+    }
+
+    #[test]
+    fn macos_remote_command_uses_lsof_instead_of_linux_netstat_flags() {
+        let command = build_remote_cmd("/Applications/llama rpc/rpc-server", 50052, "macos");
+        assert!(command.contains("lsof -nP -iTCP:50052 -sTCP:LISTEN"));
+        assert!(!command.contains("ss -tlnp"));
+        assert!(!command.contains("netstat -tlnp"));
+        assert!(command.contains("PORT-OK"));
+    }
 }

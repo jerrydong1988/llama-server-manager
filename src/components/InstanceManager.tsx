@@ -5,7 +5,8 @@ import { formatStartupCommand } from '../store'
 import { invoke } from '@tauri-apps/api/core'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { useI18n } from '../i18n'
-import { normalizePath, pathJoin, pathDirname } from '../utils/path'
+import { isPathWithinRoot, normalizePath, pathJoin, pathDirname } from '../utils/path'
+import { formatHostPort } from '../utils/network'
 import type { Instance, ModelInfo } from '../store/types'
 import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
@@ -491,7 +492,7 @@ const InstanceManager = () => {
                     </div>
 
                     <div className="min-w-0 text-xs text-slate-500 dark:text-slate-400">
-                      <div className="truncate font-mono text-slate-700 dark:text-slate-200" title={`${inst.config.host}:${inst.config.port}`}>{inst.config.host}:{inst.config.port}</div>
+                      <div className="truncate font-mono text-slate-700 dark:text-slate-200" title={formatHostPort(inst.config.host, inst.config.port)}>{formatHostPort(inst.config.host, inst.config.port)}</div>
                       <div className="mt-1">{isRunning ? formatUptime(inst.startTime) : '--'}</div>
                     </div>
 
@@ -655,7 +656,7 @@ const InstanceManager = () => {
               <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950/60">
                 <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] gap-3">
                   <span className="text-xs text-slate-500">{labels.endpoint}</span>
-                  <span className="truncate font-mono text-xs text-slate-700 dark:text-slate-200" title={`${selectedInstance.config.host}:${selectedInstance.config.port}`}>{selectedInstance.config.host}:{selectedInstance.config.port}</span>
+                  <span className="truncate font-mono text-xs text-slate-700 dark:text-slate-200" title={formatHostPort(selectedInstance.config.host, selectedInstance.config.port)}>{formatHostPort(selectedInstance.config.host, selectedInstance.config.port)}</span>
                 </div>
                 <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] gap-3">
                   <span className="text-xs text-slate-500">{labels.engine}</span>
@@ -822,11 +823,10 @@ const InstanceManager = () => {
                 function buildTree(rootDir: string): TNode {
                   const normDir = normalizePath(rootDir)
                   const root: TNode = { name: rootDir, path: normDir, isDir: true, children: new Map() }
-                  const normRoot = normDir.toLowerCase()
                   for (const model of models) {
-                    const path = normalizePath(model.path).toLowerCase()
-                    if (!path.startsWith(normRoot)) continue
-                    const rel = normalizePath(model.path.substring(rootDir.length)).replace(/^\/+/, '')
+                    const path = normalizePath(model.path)
+                    if (!isPathWithinRoot(path, normDir)) continue
+                    const rel = path.slice(normDir.length).replace(/^\/+/, '')
                     if (!rel) continue
                     const parts = rel.split('/')
                     let cur = root

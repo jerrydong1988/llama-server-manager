@@ -23,6 +23,18 @@ fn canonical_key(path: &Path) -> String {
         .to_string()
 }
 
+fn engine_path_identity(path: &Path) -> String {
+    let key = canonical_key(path);
+    #[cfg(target_os = "windows")]
+    {
+        key.to_lowercase()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        key
+    }
+}
+
 #[derive(Debug, Clone)]
 struct DirectoryEntryFingerprint {
     path: PathBuf,
@@ -819,7 +831,7 @@ pub async fn scan_engines(
                     }
                     let exe = dir.join(ENGINE_EXE_NAME);
                     if exe.exists() {
-                        let norm = dir.to_string_lossy().to_lowercase();
+                        let norm = engine_path_identity(&dir);
                         if seen.insert(norm) {
                             push_indexed_engine(
                                 &dir,
@@ -858,7 +870,7 @@ pub async fn scan_engines(
             }
             let direct_exe = root.join(ENGINE_EXE_NAME);
             if direct_exe.exists() {
-                let norm = root.to_string_lossy().to_lowercase();
+                let norm = engine_path_identity(&root);
                 if seen.insert(norm) {
                     push_indexed_engine(
                         &root,
@@ -879,7 +891,7 @@ pub async fn scan_engines(
                     }
                     let exe = sub.join(ENGINE_EXE_NAME);
                     if exe.exists() {
-                        let norm = sub.to_string_lossy().to_lowercase();
+                        let norm = engine_path_identity(&sub);
                         if seen.insert(norm) {
                             push_indexed_engine(
                                 &sub,
@@ -900,7 +912,7 @@ pub async fn scan_engines(
                             }
                             let exe2 = sub2.join(ENGINE_EXE_NAME);
                             if exe2.exists() {
-                                let norm = sub2.to_string_lossy().to_lowercase();
+                                let norm = engine_path_identity(&sub2);
                                 if seen.insert(norm) {
                                     push_indexed_engine(
                                         &sub2,
@@ -996,6 +1008,16 @@ mod incremental_scan_tests {
         assert_ne!(initial, updated);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn engine_path_identity_respects_platform_case_rules() {
+        let upper = Path::new("/opt/llama/CUDA");
+        let lower = Path::new("/opt/llama/cuda");
+        #[cfg(target_os = "windows")]
+        assert_eq!(engine_path_identity(upper), engine_path_identity(lower));
+        #[cfg(not(target_os = "windows"))]
+        assert_ne!(engine_path_identity(upper), engine_path_identity(lower));
     }
 }
 

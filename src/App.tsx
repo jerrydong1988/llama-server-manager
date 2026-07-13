@@ -17,6 +17,7 @@ import Dashboard from './components/Dashboard/Dashboard'
 const GuidePage = lazy(() => import('./components/GuidePage'))
 import { _startupTimings } from './store'
 import { useAppStore } from './store'
+import { parseHostPort } from './utils/network'
 import type { WorkerInfo } from './store'
 import { I18nProvider, useI18n } from './i18n'
 import { Badge, Button, TextInput } from './components/ui'
@@ -537,8 +538,8 @@ function AppInner() {
           const configuredServers = inst.config.rpc_servers.split(/[, ]+/).filter(Boolean)
           const hasMatchingWorker = currentWorkers.some(w =>
             configuredServers.some(s => {
-              const [h, p] = s.includes(':') ? s.split(':') : [s, '50052']
-              return w.host === h && (w.port === parseInt(p) || w.port === 50052)
+              const endpoint = parseHostPort(s, 50052)
+              return w.host === endpoint.host && w.port === endpoint.port
             }),
           )
           if (!hasMatchingWorker) {

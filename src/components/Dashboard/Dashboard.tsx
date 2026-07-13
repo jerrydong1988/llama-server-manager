@@ -20,6 +20,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useAppStore } from '../../store'
+import { formatHostPort } from '../../utils/network'
 import type { DownloadProgress, Instance } from '../../store'
 import { useI18n } from '../../i18n'
 import { Badge, Button, InsetSurface, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
@@ -635,7 +636,7 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                   {filteredInstances.map(instance => {
                     const isRunning = instance.status === 'running'
-                    const endpoint = `${instance.config.host}:${instance.config.port}`
+                    const endpoint = formatHostPort(instance.config.host, instance.config.port)
                     const engineName = engineNameFor(instance)
 
                     return (

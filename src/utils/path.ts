@@ -23,8 +23,20 @@ export function pathDirname(p: string): string {
 
 /** Join path segments using forward slash. Strips leading/trailing slashes from intermediate segments. */
 export function pathJoin(...segments: string[]): string {
-  return segments
-    .map(s => normalizePath(s).replace(/^\/+|\/+$/g, ''))
+  const normalized = segments
+    .map(normalizePath)
     .filter(s => s.length > 0)
-    .join('/');
+  const first = normalized[0] || ''
+  const root = first.startsWith('//') ? '//' : first.startsWith('/') ? '/' : ''
+  const joined = normalized
+    .map(s => s.replace(/^\/+|\/+$/g, ''))
+    .filter(s => s.length > 0)
+    .join('/')
+  return `${root}${joined}`
+}
+
+export function isPathWithinRoot(path: string, root: string): boolean {
+  const normalizedPath = normalizePath(path)
+  const normalizedRoot = normalizePath(root).replace(/\/+$/, '') || '/'
+  return normalizedPath === normalizedRoot || normalizedPath.startsWith(`${normalizedRoot === '/' ? '' : normalizedRoot}/`)
 }

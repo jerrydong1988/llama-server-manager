@@ -42,6 +42,10 @@ This guide follows the real workflow from models and engines to instances, routi
 3. Prepare a `llama-server` build for your backend, such as CUDA, ROCm, Vulkan, or CPU.
 4. Prepare a local GGUF model, or download one later from ModelScope or HuggingFace.
 
+Linux AppImage 的“开机自启动”会记录 AppImage 原始文件位置；启用后不要移动或删除该文件。正式 Windows 与 macOS 发布包由标签构建执行代码签名和公证，普通 CI 产物仅用于测试。
+
+AppImage autostart records the original AppImage location; do not move or delete that file after enabling it. Tagged Windows and macOS releases use code signing and notarization, while regular CI artifacts are for testing only.
+
 ### 首次运行的五个步骤 / Five First-Run Steps
 
 1. 在“模型仓库”添加 GGUF 模型目录并完成扫描。
@@ -318,6 +322,10 @@ USB4 适配器信息用于识别高速直连网络，但不会替代操作系统
 
 USB4 adapter details help identify high-speed direct links but do not replace OS network configuration. Check subnet, firewall, RPC port, and remote process when discovery fails.
 
+Worker 地址支持 IPv4、主机名和 IPv6。手动填写带端口的 IPv6 地址时使用 `[::1]:50052` 形式，避免与 IPv6 地址自身的冒号混淆。
+
+Worker addresses support IPv4, hostnames, and IPv6. When entering an IPv6 address with a port manually, use `[::1]:50052` so the port is unambiguous.
+
 ---
 
 ## 实例路由 / Instance Routing
@@ -527,6 +535,10 @@ Queue and partial state persist. Manual policy waits for user action; Auto on La
 确认驱动正常并且当前平台可使用 ADLX 或 NVML。采集失败时应用会回退系统指标；这不一定表示实例未使用 GPU，应结合服务器日志确认后端加载。
 
 Verify the driver and ADLX or NVML availability. System fallback does not by itself mean the server is not using a GPU; confirm backend loading in logs.
+
+macOS 当前没有 ADLX 或 NVML 数据源，因此 Apple GPU/统一内存不会显示为独立显存指标；CPU、系统内存、吞吐、slots 和日志遥测仍可使用。
+
+macOS currently has no ADLX or NVML source, so Apple GPU and unified memory are not reported as separate VRAM metrics. CPU, system memory, throughput, slots, and log telemetry remain available.
 
 ### 主配置损坏怎么办？ / What if the main configuration is corrupt?
 

@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useAppStore } from '../../store'
 import { Button, TextInput, InsetSurface } from '../ui'
+import { formatHostPort, parseHostPort } from '../../utils/network'
 
 interface Props {
   value: string
@@ -19,8 +20,8 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
     return new Set(
       value.split(/[, ]+/).filter(Boolean).map(s => {
         const trimmed = s.trim()
-        if (trimmed.includes(':')) return trimmed
-        return trimmed + ':50052'
+        const endpoint = parseHostPort(trimmed, 50052)
+        return formatHostPort(endpoint.host, endpoint.port)
       })
     )
   }, [value])
@@ -31,7 +32,7 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
   )
 
   const toggleWorker = (host: string, port: number) => {
-    const addr = `${host}:${port}`
+    const addr = formatHostPort(host, port)
     const current = new Set(selected)
     if (current.has(addr)) {
       current.delete(addr)
@@ -50,15 +51,15 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
 
   const syncFromCluster = () => {
     // Select all online workers
-    const online = workers.filter(w => w.status === 'Online').map(w => `${w.host}:${w.port}`)
+    const online = workers.filter(w => w.status === 'Online').map(w => formatHostPort(w.host, w.port))
     onChange(online.join(','))
   }
 
   const selectedList = useMemo(() =>
     Array.from(selected).map(addr => {
-      const [h, p] = addr.split(':')
-      const worker = workers.find(w => w.host === h && (w.port === parseInt(p) || !p))
-      return { addr, host: h, port: p, name: worker?.name || h }
+      const endpoint = parseHostPort(addr, 50052)
+      const worker = workers.find(w => w.host === endpoint.host && w.port === endpoint.port)
+      return { addr, host: endpoint.host, port: endpoint.port, name: worker?.name || endpoint.host }
     }),
     [selected, workers]
   )
@@ -103,7 +104,7 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
       ) : (
         <InsetSurface className="max-h-40 space-y-1 overflow-y-auto p-2">
           {onlineWorkers.map(w => {
-            const addr = `${w.host}:${w.port}`
+            const addr = formatHostPort(w.host, w.port)
             const isChecked = selected.has(addr)
             const statusColor = w.status === 'Online' ? 'bg-emerald-400' : 'bg-slate-500'
             return (
@@ -129,7 +130,7 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
           {selectedList.map(s => (
             <span key={s.addr} className="inline-flex items-center gap-1 rounded-md border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-xs text-blue-300">
               {s.name}
-              <Button onClick={() => toggleWorker(s.host, parseInt(s.port))} variant="subtle" size="sm" className="h-5 px-1 py-0 text-blue-300 hover:text-red-300">&times;</Button>
+              <Button onClick={() => toggleWorker(s.host, s.port)} variant="subtle" size="sm" className="h-5 px-1 py-0 text-blue-300 hover:text-red-300">&times;</Button>
             </span>
           ))}
         </div>

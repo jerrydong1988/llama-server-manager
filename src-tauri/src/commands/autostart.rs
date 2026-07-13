@@ -12,6 +12,34 @@ fn exe_path() -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+#[cfg(any(target_os = "linux", test))]
+fn linux_autostart_executable(
+    appimage: Option<&std::ffi::OsStr>,
+    current_exe: &std::path::Path,
+) -> PathBuf {
+    appimage
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| current_exe.to_path_buf())
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn desktop_exec_value(executable: &std::path::Path) -> String {
+    let mut quoted = String::from("\"");
+    for ch in executable.to_string_lossy().chars() {
+        match ch {
+            '\\' | '"' | '`' | '$' => {
+                quoted.push('\\');
+                quoted.push(ch);
+            }
+            '%' => quoted.push_str("%%"),
+            _ => quoted.push(ch),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
 #[allow(dead_code)]
 fn home_dir() -> Result<PathBuf, String> {
     std::env::var("HOME")
@@ -70,10 +98,13 @@ pub fn enable_autostart() -> Result<(), String> {
 
     #[cfg(target_os = "linux")]
     {
+        let current_exe = PathBuf::from(&exe);
+        let executable =
+            linux_autostart_executable(std::env::var_os("APPIMAGE").as_deref(), &current_exe);
         let desktop = format!(
             "[Desktop Entry]\nType=Application\nName=Llama Server Manager\nExec={}\n\
              Hidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
-            exe
+            desktop_exec_value(&executable)
         );
         let dir = home_dir()?.join(".config/autostart");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -155,11 +186,38 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
     #[cfg(target_os = "linux")]
     {
         if let Ok(dir) = home_dir() {
-            Ok(dir
-                .join(".config/autostart/llama-server-manager.desktop")
-                .exists())
+            let path = dir.join(".config/autostart/llama-server-manager.desktop");
+            let current_exe = PathBuf::from(exe_path()?);
+            let executable =
+                linux_autostart_executable(std::env::var_os("APPIMAGE").as_deref(), &current_exe);
+            let expected = format!("Exec={}", desktop_exec_value(&executable));
+            Ok(std::fs::read_to_string(path)
+                .map(|contents| contents.lines().any(|line| line == expected))
+                .unwrap_or(false))
         } else {
             Ok(false)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn appimage_autostart_uses_persistent_bundle_path() {
+        let executable = linux_autostart_executable(
+            Some(std::ffi::OsStr::new("/home/Jerry Apps/Llama.AppImage")),
+            std::path::Path::new("/tmp/.mount_Llama/usr/bin/llama-server-manager"),
+        );
+        assert_eq!(executable, PathBuf::from("/home/Jerry Apps/Llama.AppImage"));
+    }
+
+    #[test]
+    fn desktop_exec_quotes_reserved_characters_and_field_codes() {
+        assert_eq!(
+            desktop_exec_value(std::path::Path::new("/home/A B/app$`\\\"100%")),
+            "\"/home/A B/app\\$\\`\\\\\\\"100%%\""
+        );
     }
 }

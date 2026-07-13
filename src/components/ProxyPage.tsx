@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { Activity, AlertTriangle, Copy, Plus, RefreshCw, Route, Save, Server, Square, Trash2, Zap } from 'lucide-react'
 import { useAppStore } from '../store'
+import { formatHostPort, httpUrl } from '../utils/network'
 import { useI18n } from '../i18n'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
 
@@ -117,7 +118,7 @@ function normalizeStatus(value: unknown, config: ProxyConfig): ProxyStatus {
   const record = asRecord(value)
   return {
     running: getBoolean(record, ['running', 'is_running', 'isRunning'], false),
-    boundAddr: getString(record, ['bound_addr', 'boundAddr', 'endpoint', 'url'], `${config.host}:${config.port}`),
+    boundAddr: getString(record, ['bound_addr', 'boundAddr', 'endpoint', 'url'], formatHostPort(config.host, config.port)),
     activeRoutes: getNumber(record, ['active_routes', 'activeRoutes'], config.routes.filter(route => route.enabled).length),
     lastError: getString(record, ['last_error', 'lastError', 'error']) || null,
   }
@@ -127,7 +128,7 @@ function normalizeTarget(value: unknown, index: number): ProxyTarget {
   const record = asRecord(value)
   const host = getString(record, ['host'], '127.0.0.1')
   const port = getNumber(record, ['port'], 0)
-  const endpoint = getString(record, ['endpoint', 'url'], port > 0 ? `http://${host}:${port}` : '')
+  const endpoint = getString(record, ['endpoint', 'url'], port > 0 ? httpUrl(host, port) : '')
   const rawStatus = getString(record, ['status'], 'unknown').toLowerCase()
   const status: ProxyTarget['status'] = rawStatus === 'running' || rawStatus === 'online'
     ? 'running'
@@ -172,7 +173,7 @@ function errorMessage(error: unknown) {
 }
 
 function endpointUrl(boundAddr: string, config: ProxyConfig) {
-  const value = boundAddr || `${config.host}:${config.port}`
+  const value = boundAddr || formatHostPort(config.host, config.port)
   return value.startsWith('http://') || value.startsWith('https://') ? value : `http://${value}`
 }
 
@@ -241,7 +242,7 @@ export default function ProxyPage() {
     instanceId: instance.id,
     name: instance.name,
     alias: instance.config.alias,
-    endpoint: `http://${instance.config.host}:${instance.config.port}`,
+    endpoint: httpUrl(instance.config.host, instance.config.port),
     status: instance.status === 'running' ? 'running' : instance.status === 'stopped' ? 'stopped' : 'unknown',
     source: 'instances',
   })), [instances])

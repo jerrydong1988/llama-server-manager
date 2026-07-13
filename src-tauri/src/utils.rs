@@ -437,6 +437,70 @@ pub fn get_app_dir() -> PathBuf {
         .to_path_buf()
 }
 
+fn unbracket_host(host: &str) -> &str {
+    let trimmed = host.trim();
+    trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(trimmed)
+}
+
+pub fn format_host_port(host: &str, port: u16) -> String {
+    let normalized = unbracket_host(host);
+    if normalized.contains(':') {
+        format!("[{}]:{}", normalized, port)
+    } else {
+        format!("{}:{}", normalized, port)
+    }
+}
+
+pub fn http_url(host: &str, port: u16, path: &str) -> String {
+    let suffix = if path.is_empty() || path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    };
+    format!("http://{}{}", format_host_port(host, port), suffix)
+}
+
+pub fn resolve_socket_addrs(host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, String> {
+    use std::net::ToSocketAddrs;
+
+    let normalized = unbracket_host(host);
+    let addresses = (normalized, port)
+        .to_socket_addrs()
+        .map_err(|e| {
+            format!(
+                "Unable to resolve {}: {}",
+                format_host_port(normalized, port),
+                e
+            )
+        })?
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        Err(format!(
+            "No address found for {}",
+            format_host_port(normalized, port)
+        ))
+    } else {
+        Ok(addresses)
+    }
+}
+
+pub fn connect_tcp(host: &str, port: u16, timeout: std::time::Duration) -> Result<(), String> {
+    let addresses = resolve_socket_addrs(host, port)?;
+    let mut last_error = None;
+    for address in addresses {
+        match std::net::TcpStream::connect_timeout(&address, timeout) {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| "Connection failed".to_string()))
+}
+
 pub fn get_data_dir() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
@@ -558,5 +622,26 @@ mod tests {
             "imatrix"
         );
         assert_eq!(classify_gguf_file(&path("model-Q4_K_M.gguf")), "model");
+    }
+
+    #[test]
+    fn network_authority_brackets_ipv6_hosts() {
+        assert_eq!(format_host_port("127.0.0.1", 8080), "127.0.0.1:8080");
+        assert_eq!(
+            format_host_port("worker.local", 50052),
+            "worker.local:50052"
+        );
+        assert_eq!(format_host_port("::1", 50052), "[::1]:50052");
+        assert_eq!(format_host_port("[::1]", 50052), "[::1]:50052");
+        assert_eq!(http_url("::1", 8080, "/health"), "http://[::1]:8080/health");
+    }
+
+    #[test]
+    fn socket_resolution_accepts_ipv6_and_hostnames() {
+        assert!(resolve_socket_addrs("::1", 50052)
+            .unwrap()
+            .iter()
+            .any(std::net::SocketAddr::is_ipv6));
+        assert!(!resolve_socket_addrs("localhost", 50052).unwrap().is_empty());
     }
 }

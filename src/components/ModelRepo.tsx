@@ -3,7 +3,7 @@ import { AlertTriangle, Database, File, FolderOpen, FolderTree, HardDrive, Image
 import { confirm, open } from '@tauri-apps/plugin-dialog'
 import { useAppStore, type ModelInfo } from '../store'
 import { useI18n } from '../i18n'
-import { normalizePath, pathJoin } from '../utils/path'
+import { isPathWithinRoot, normalizePath, pathJoin } from '../utils/path'
 import { formatSize } from '../utils/format'
 import { Button, InsetSurface, MetricCard, PathText, Surface, TextInput } from './ui'
 
@@ -18,15 +18,14 @@ interface TreeNode {
 const buildTree = (rootDir: string, models: ModelInfo[]): TreeNode => {
   const normalizedRoot = normalizePath(rootDir)
   const root: TreeNode = { name: rootDir, path: normalizedRoot, isDir: true, children: new Map() }
-  const normalizedRootLower = normalizedRoot.toLowerCase()
 
   for (const model of models) {
     const normalizedPath = normalizePath(model.path)
-    if (!normalizedPath.toLowerCase().startsWith(normalizedRootLower)) {
+    if (!isPathWithinRoot(normalizedPath, normalizedRoot)) {
       continue
     }
 
-    const relative = normalizePath(model.path.substring(rootDir.length)).replace(/^\/+/, '')
+    const relative = normalizedPath.slice(normalizedRoot.length).replace(/^\/+/, '')
     if (!relative) {
       continue
     }

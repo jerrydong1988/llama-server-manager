@@ -15,7 +15,8 @@ import {
   ADVANCED_GROUP_CONFIG_KEYS,
 } from './ConfigPage/sections'
 import { getActiveParams } from './ConfigPage/activeParams'
-import { normalizePath, pathBasename, pathDirname, pathJoin } from '../utils/path'
+import { isPathWithinRoot, normalizePath, pathBasename, pathDirname, pathJoin } from '../utils/path'
+import { formatHostPort } from '../utils/network'
 import { _matchedElements } from './ConfigPage/shared'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
 
@@ -32,15 +33,14 @@ interface PickerNode {
 const buildPickerTree = (rootDir: string, models: ModelInfo[]): PickerNode => {
   const normalizedRoot = normalizePath(rootDir)
   const root: PickerNode = { name: rootDir, path: normalizedRoot, isDir: true, children: new Map() }
-  const normalizedRootLower = normalizedRoot.toLowerCase()
 
   for (const model of models) {
-    const normalizedPath = normalizePath(model.path).toLowerCase()
-    if (!normalizedPath.startsWith(normalizedRootLower)) {
+    const normalizedPath = normalizePath(model.path)
+    if (!isPathWithinRoot(normalizedPath, normalizedRoot)) {
       continue
     }
 
-    const relative = normalizePath(model.path.substring(rootDir.length)).replace(/^\/+/, '')
+    const relative = normalizedPath.slice(normalizedRoot.length).replace(/^\/+/, '')
     if (!relative) {
       continue
     }
@@ -310,7 +310,7 @@ const ConfigPage = () => {
   const currentEngine = engines.find(engine => engine.id === (local.engine_id || defaultEngineId || '')) ?? engines[0] ?? null
   const primaryModelPath = currentModel?.path || local.model_path || ''
   const draftModelPath = local.draft_model_path || ''
-  const endpoint = `${local.host || '127.0.0.1'}:${local.port}`
+  const endpoint = formatHostPort(local.host || '127.0.0.1', local.port)
 
   const pickModel = (modelPath: string) => {
     if (pickerTarget === 'model') {

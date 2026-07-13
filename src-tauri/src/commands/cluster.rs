@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -334,47 +334,40 @@ pub async fn test_worker(
     port: u16,
     state: State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
-    let addr = format!("{}:{}", host, port);
     let timeout = Duration::from_secs(3);
 
-    match addr.parse::<SocketAddr>() {
-        Ok(socket_addr) => {
-            match TcpStream::connect_timeout(&socket_addr, timeout) {
-                Ok(_) => {
-                    // Update worker status.
-                    let mut workers = load_workers();
-                    if let Some(w) = workers
-                        .iter_mut()
-                        .find(|w| w.host == host && w.port == port)
-                    {
-                        w.status = WorkerStatus::Online;
-                        w.last_seen = Some(chrono::Utc::now().to_rfc3339());
-                    }
-                    save_workers(&workers);
-                    if let Ok(mut w) = state.workers.lock() {
-                        *w = workers;
-                    }
-
-                    Ok(serde_json::json!({ "ok": true }))
-                }
-                Err(e) => {
-                    let mut workers = load_workers();
-                    if let Some(w) = workers
-                        .iter_mut()
-                        .find(|w| w.host == host && w.port == port)
-                    {
-                        w.status = WorkerStatus::Offline;
-                    }
-                    save_workers(&workers);
-                    if let Ok(mut w) = state.workers.lock() {
-                        *w = workers;
-                    }
-
-                    Ok(serde_json::json!({ "ok": false, "error": e.to_string() }))
-                }
+    match utils::connect_tcp(&host, port, timeout) {
+        Ok(_) => {
+            let mut workers = load_workers();
+            if let Some(w) = workers
+                .iter_mut()
+                .find(|w| w.host == host && w.port == port)
+            {
+                w.status = WorkerStatus::Online;
+                w.last_seen = Some(chrono::Utc::now().to_rfc3339());
             }
+            save_workers(&workers);
+            if let Ok(mut w) = state.workers.lock() {
+                *w = workers;
+            }
+
+            Ok(serde_json::json!({ "ok": true }))
         }
-        Err(e) => Ok(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        Err(e) => {
+            let mut workers = load_workers();
+            if let Some(w) = workers
+                .iter_mut()
+                .find(|w| w.host == host && w.port == port)
+            {
+                w.status = WorkerStatus::Offline;
+            }
+            save_workers(&workers);
+            if let Ok(mut w) = state.workers.lock() {
+                *w = workers;
+            }
+
+            Ok(serde_json::json!({ "ok": false, "error": e }))
+        }
     }
 }
 
@@ -678,14 +671,8 @@ pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_js
     let mut worker_metrics = Vec::new();
     let mut reachable_count = 0u32;
     for w in &online {
-        let addr = format!("{}:{}", w.host, w.port);
-        let reachable = addr
-            .parse::<std::net::SocketAddr>()
-            .ok()
-            .and_then(|a| {
-                std::net::TcpStream::connect_timeout(&a, std::time::Duration::from_millis(500)).ok()
-            })
-            .is_some();
+        let reachable =
+            utils::connect_tcp(&w.host, w.port, std::time::Duration::from_millis(500)).is_ok();
         if reachable {
             reachable_count += 1;
         }

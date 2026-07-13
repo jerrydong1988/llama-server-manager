@@ -1045,8 +1045,8 @@ fn monitor_loop(
     };
 
     let client = reqwest::blocking::Client::new();
-    let metrics_url = format!("http://{}:{}/metrics", host, port);
-    let slots_url = format!("http://{}:{}/slots", host, port);
+    let metrics_url = crate::utils::http_url(host, port, "/metrics");
+    let slots_url = crate::utils::http_url(host, port, "/slots");
 
     // Startup timestamp used to compute uptime.
     let start_instant = std::time::Instant::now();
@@ -1213,8 +1213,8 @@ pub fn health_check_loop(
     api_key: &str,
     app: tauri::AppHandle,
 ) {
-    let url = format!("http://{}:{}/health", host, port);
-    let models_url = format!("http://{}:{}/v1/models", host, port);
+    let url = crate::utils::http_url(host, port, "/health");
+    let models_url = crate::utils::http_url(host, port, "/v1/models");
     let client = reqwest::blocking::Client::new();
 
     let probe_req = |probe_url: &str, timeout_secs: u64| {
@@ -1623,15 +1623,12 @@ pub async fn test_connection(
                     })
                 })
         });
-    let base_url = format!(
-        "http://{}:{}",
-        if host == "0.0.0.0" {
-            "localhost"
-        } else {
-            &host
-        },
-        port
-    );
+    let connect_host = if host == "0.0.0.0" || host == "::" {
+        "localhost"
+    } else {
+        &host
+    };
+    let base_url = crate::utils::http_url(connect_host, port, "");
     let health_url = format!("{}/health", base_url);
     let health_status = match http_get(&health_url, effective_api_key.as_deref())
         .timeout(std::time::Duration::from_secs(3))
@@ -1691,7 +1688,7 @@ pub async fn check_port(port: u16, host: Option<String>) -> Result<bool, String>
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("127.0.0.1");
-    match TcpListener::bind(format!("{}:{}", bind_host, port)) {
+    match TcpListener::bind((bind_host, port)) {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }
@@ -1916,7 +1913,7 @@ pub async fn get_slots(
     } else {
         &host
     };
-    let url = format!("http://{}:{}/slots", h, port);
+    let url = crate::utils::http_url(h, port, "/slots");
     let resp = http_get(&url, api_key.as_deref())
         .send()
         .await
@@ -1959,7 +1956,7 @@ pub async fn get_metrics(
     } else {
         &host
     };
-    let url = format!("http://{}:{}/metrics", h, port);
+    let url = crate::utils::http_url(h, port, "/metrics");
     let resp = match http_get(&url, api_key.as_deref()).send().await {
         Ok(r) if r.status().is_success() => r,
         Ok(r) if r.status().as_u16() == 404 => return Ok(None),
