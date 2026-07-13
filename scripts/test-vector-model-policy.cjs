@@ -294,12 +294,12 @@ assert.ok(
 )
 
 const configPageSource = readSource('src', 'components', 'ConfigPage.tsx')
+const applyPrimaryModelSource = section(configPageSource, 'const applyPrimaryModelPath', 'const pickModel')
+assert.match(applyPrimaryModelSource, /normalizeConfigForSelectedModel\(/, 'all primary model path commits must use atomic workload selection')
+assert.match(applyPrimaryModelSource, /setVectorCleanupChanges\(/, 'manual primary model paths must retain cleanup feedback')
+assert.match(applyPrimaryModelSource, /committedModelPathRef\.current/, 'repeated blur events must not reclassify an unchanged manual model path')
 const pickModelSource = section(configPageSource, 'const pickModel', 'const save =')
-assert.match(pickModelSource, /const candidate/, 'model switching must build one atomic candidate')
-assert.match(pickModelSource, /candidate\s*=\s*\{[^}]*model_path:[^}]*mmproj_path:/s, 'the atomic candidate must include model and projector paths')
-assert.match(pickModelSource, /normalizeConfigForSelectedModel\(/, 'existing model switching must reset stale workload flags before applying vector policy')
-assert.match(pickModelSource, /setLocal\(normalized\.config\)/, 'existing model switching must replace the local draft atomically')
-assert.match(pickModelSource, /setVectorCleanupChanges\(/, 'existing model switching must retain a cleanup summary')
+assert.match(pickModelSource, /applyPrimaryModelPath\(modelPath\)/, 'the model picker must reuse the primary model path commit policy')
 assert.doesNotMatch(pickModelSource, /set\('model_path'/, 'primary model switching must not apply sequential partial updates')
 
 const configDiffSource = section(configPageSource, 'const savedBaseline', 'const liveWarnings')
@@ -307,11 +307,12 @@ assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must b
 assert.match(configDiffSource, /isEqualValue\(local\[change\.key\],\s*change\.after\)/, 'manual edits after cleanup must remain visible in the ordinary diff')
 assert.match(configPageSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
 const saveSource = section(configPageSource, 'const save =', 'const sectionProps')
-assert.match(saveSource, /const normalized = normalizeInstanceConfig\(local, currentModel\)/, 'save must normalize the local draft before validation')
+assert.match(saveSource, /const normalized = modelPathChanged/, 'save must select normalization based on whether the model path changed')
+assert.match(saveSource, /modelPathChanged[\s\S]*normalizeConfigForSelectedModel/, 'save must treat a manually edited model path as an explicit model switch')
 assert.match(saveSource, /validateConfig\(normalized\.config, currentModel, engine\)/, 'save validation must inspect the normalized configuration')
 assert.match(saveSource, /config:\s*normalized\.config/, 'save must persist the same normalized configuration that was validated')
 assert.ok(
-  saveSource.indexOf('normalizeInstanceConfig(local, currentModel)') < saveSource.indexOf('validateConfig(normalized.config'),
+  saveSource.indexOf('const normalized = modelPathChanged') < saveSource.indexOf('validateConfig(normalized.config'),
   'save normalization must happen before validation',
 )
 assert.match(saveSource, /setVectorCleanupChanges\(\[\]\)/, 'cleanup summary must clear only after a successful save')
@@ -325,6 +326,7 @@ assert.match(configPageSource, /showPresetAssistant && !isEmbedding/, 'preset as
 
 const sectionsSource = readSource('src', 'components', 'ConfigPage', 'sections.tsx')
 const basicSectionSource = section(sectionsSource, 'export function BasicSection', 'export function ReasoningSection')
+assert.match(basicSectionSource, /onBlur=\{e => onCommitModelPath\?\.\(e\.target\.value\)\}/, 'manual model path edits must commit through the model policy')
 assert.match(basicSectionSource, /disabled=\{modelWorkloadLocked\}/, 'classified model workloads must lock the embedding switch')
 const advancedSectionSource = section(sectionsSource, 'export function AdvancedSection', '\n}\n')
 for (const id of ['reasoning', 'model', 'sampling', 'sampling-ext', 'spec', 'multi', 'custom']) {
@@ -341,6 +343,11 @@ assert.match(advancedSectionSource, /ADVANCED_CONFIG_KEYS/, 'reset all must cove
 assert.match(advancedSectionSource, /ADVANCED_GROUP_CONFIG_KEYS\[id\]/, 'group reset must cover fields added beyond RESET_MAP')
 assert.match(advancedSectionSource, /getResettableFields/, 'reset handlers must preserve locked workload identity fields')
 assert.match(advancedSectionSource, /direct_io/, 'shared direct I/O configuration must have a visible control')
+
+assert.doesNotMatch(configPageSource, /\[activeConfigInstanceId, inst\?\.config\]/, 'inventory reconciliation must not overwrite an active local draft')
+assert.match(configPageSource, /const \[baseline, setBaseline\]/, 'the editor must retain a stable local baseline')
+assert.match(configPageSource, /const committedModelPathRef = useRef/, 'the editor must distinguish typed paths from committed model selections')
+assert.match(configPageSource, /const savedBaseline = baseline \?\?/, 'unsaved diffs must compare against the stable local baseline')
 
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {
   const source = readSource('src', 'i18n', locale)

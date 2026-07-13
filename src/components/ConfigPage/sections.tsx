@@ -102,6 +102,7 @@ interface Props {
   workload: ModelWorkload
   modelWorkloadLocked: boolean
   onShowPicker?: () => void
+  onCommitModelPath?: (modelPath: string) => void
   onShowDraftPicker?: () => void
   activeParams: Set<keyof InstanceConfig>
   searchQuery: string
@@ -109,7 +110,7 @@ interface Props {
 
 // ━━━━━━━━━━━━━━━━━━━━━━ COMMON SECTIONS ━━━━━━━━━━━━━━━━━━━━━━
 
-export function BasicSection({ local, set, t, isEmbedding, workload, modelWorkloadLocked, onShowPicker, activeParams, searchQuery }: Props) {
+export function BasicSection({ local, set, t, isEmbedding, workload, modelWorkloadLocked, onShowPicker, onCommitModelPath, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   return (
     <Section id="config-basic" title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery} summary={countSummary(countActive(activeParams, BASIC_CONFIG_KEYS))}>
@@ -117,7 +118,7 @@ export function BasicSection({ local, set, t, isEmbedding, workload, modelWorklo
         <div title={t.configPage.modelPathTip}>
           <label className={`mb-1 block text-xs font-medium ${a('model_path') ? 'text-emerald-300' : 'text-slate-400'}`}>{`${t.configPage.modelPath} (--model, -m)`}</label>
           <div className="flex gap-1">
-            <TextInput type="text" value={local.model_path} onChange={e => set('model_path', e.target.value)} className="h-10 flex-1" />
+            <TextInput type="text" value={local.model_path} onChange={e => set('model_path', e.target.value)} onBlur={e => onCommitModelPath?.(e.target.value)} className="h-10 flex-1" />
             <Button onClick={onShowPicker} variant="primary" size="icon" title={t.configPage.modelPathBtn}><FolderOpen className="h-4 w-4" /></Button>
           </div>
         </div>

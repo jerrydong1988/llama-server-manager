@@ -222,6 +222,7 @@ const ConfigPage = () => {
   const inst = instances.find(instance => instance.id === activeConfigInstanceId)
 
   const [local, setLocal] = useState<InstanceConfig | null>(null)
+  const [baseline, setBaseline] = useState<InstanceConfig | null>(null)
   const [saved, setSaved] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<'model' | 'draft'>('model')
@@ -235,6 +236,7 @@ const ConfigPage = () => {
   const [lastTemplateSnapshot, setLastTemplateSnapshot] = useState<TemplateSnapshot | null>(null)
   const mountedRef = useRef(true)
   const prevQuery = useRef('')
+  const committedModelPathRef = useRef('')
 
   useEffect(() => {
     return () => {
@@ -264,11 +266,16 @@ const ConfigPage = () => {
 
   useEffect(() => {
     if (inst) {
-      setLocal({ ...defaultInstanceConfig(), ...inst.config })
+      const next = { ...defaultInstanceConfig(), ...inst.config }
+      setLocal(next)
+      setBaseline(next)
+      committedModelPathRef.current = normalizeModelPath(next.model_path)
     } else {
       setLocal(null)
+      setBaseline(null)
+      committedModelPathRef.current = ''
     }
-  }, [activeConfigInstanceId, inst?.config])
+  }, [activeConfigInstanceId, inst?.id])
 
   useEffect(() => {
     setAppliedTemplateId(null)
@@ -312,17 +319,25 @@ const ConfigPage = () => {
   const draftModelPath = local.draft_model_path || ''
   const endpoint = formatHostPort(local.host || '127.0.0.1', local.port)
 
+  const applyPrimaryModelPath = (modelPath: string) => {
+    const normalizedPath = normalizeModelPath(modelPath)
+    if (normalizedPath === committedModelPathRef.current) return
+
+    const selectedModel = models.find(model => normalizeModelPath(model.path) === normalizedPath)
+    const directory = pathDirname(modelPath)
+    const mmproj = models.find(model => pathDirname(model.path) === directory && model.file_type === 'mmproj')
+    const candidate = { ...local, model_path: modelPath, mmproj_path: mmproj?.path ?? '' }
+    const normalized = normalizeConfigForSelectedModel(candidate, selectedModel)
+    committedModelPathRef.current = normalizedPath
+    setAppliedTemplateId(null)
+    setLastTemplateSnapshot(null)
+    setLocal(normalized.config)
+    setVectorCleanupChanges(normalized.vectorMode ? normalized.changes : [])
+  }
+
   const pickModel = (modelPath: string) => {
     if (pickerTarget === 'model') {
-      const selectedModel = models.find(model => normalizeModelPath(model.path) === normalizeModelPath(modelPath))
-      const directory = pathDirname(modelPath)
-      const mmproj = models.find(model => pathDirname(model.path) === directory && model.file_type === 'mmproj')
-      const candidate = { ...local, model_path: modelPath, mmproj_path: mmproj?.path ?? '' }
-      const normalized = normalizeConfigForSelectedModel(candidate, selectedModel)
-      setAppliedTemplateId(null)
-      setLastTemplateSnapshot(null)
-      setLocal(normalized.config)
-      setVectorCleanupChanges(normalized.vectorMode ? normalized.changes : [])
+      applyPrimaryModelPath(modelPath)
     } else {
       set('draft_model_path', modelPath)
     }
@@ -335,9 +350,13 @@ const ConfigPage = () => {
     }
 
     const engine = engines.find(item => item.id === (local.engine_id || defaultEngineId || '')) || engines[0]
-    const normalized = normalizeInstanceConfig(local, currentModel)
+    const modelPathChanged = normalizeModelPath(local.model_path) !== committedModelPathRef.current
+    const normalized = modelPathChanged
+      ? normalizeConfigForSelectedModel(local, currentModel)
+      : normalizeInstanceConfig(local, currentModel)
     const warnings = validateConfig(normalized.config, currentModel, engine)
 
+    committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
     setLocal(normalized.config)
     updateInstance(inst.id, { config: normalized.config })
     try {
@@ -346,6 +365,7 @@ const ConfigPage = () => {
       return
     }
     setSaved(true)
+    setBaseline(normalized.config)
     setSaveWarnings(warnings)
     setVectorCleanupChanges([])
 
@@ -364,6 +384,7 @@ const ConfigPage = () => {
     isEmbedding,
     workload,
     modelWorkloadLocked,
+    onCommitModelPath: applyPrimaryModelPath,
     onShowPicker: () => {
       setPickerTarget('model')
       setShowPicker(true)
@@ -471,7 +492,7 @@ const ConfigPage = () => {
     }))
     .filter(group => group.count > 0)
 
-  const savedBaseline = { ...defaultInstanceConfig(), ...(inst?.config ?? {}) }
+  const savedBaseline = baseline ?? defaultInstanceConfig()
   const vectorCleanupKeys = new Set(
     vectorCleanupChanges
       .filter(change => isEqualValue(local[change.key], change.after))
