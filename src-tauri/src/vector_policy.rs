@@ -135,6 +135,14 @@ pub fn classify_model_workload(architecture: Option<&str>, path: &Path) -> Model
 }
 
 pub fn normalize_for_vector(config: InstanceConfig) -> VectorNormalization {
+    let detected = classify_model_workload(None, Path::new(&config.model_path));
+    normalize_for_vector_workload(config, detected)
+}
+
+fn normalize_for_vector_workload(
+    config: InstanceConfig,
+    detected: ModelWorkload,
+) -> VectorNormalization {
     let before = serde_json::to_value(&config).expect("InstanceConfig must serialize");
     let mut normalized = serde_json::to_value(InstanceConfig::default())
         .expect("default InstanceConfig must serialize");
@@ -150,7 +158,6 @@ pub fn normalize_for_vector(config: InstanceConfig) -> VectorNormalization {
         }
     }
 
-    let detected = classify_model_workload(None, Path::new(&config.model_path));
     let workload = match detected {
         ModelWorkload::Inference if config.reranking => ModelWorkload::Reranker,
         ModelWorkload::Inference => ModelWorkload::Embedding,
@@ -174,8 +181,15 @@ pub fn normalize_for_vector(config: InstanceConfig) -> VectorNormalization {
     VectorNormalization { config, workload }
 }
 
-pub fn normalize_for_launch(config: InstanceConfig) -> VectorNormalization {
-    let detected = classify_model_workload(None, Path::new(&config.model_path));
+pub fn normalize_for_launch(mut config: InstanceConfig) -> VectorNormalization {
+    let path = Path::new(&config.model_path);
+    let metadata = crate::utils::parse_gguf_metadata(path).ok();
+    let detected = classify_model_workload(
+        metadata
+            .as_ref()
+            .and_then(|summary| summary.architecture.as_deref()),
+        path,
+    );
     if !config.embedding && !config.reranking && !detected.is_vector() {
         return VectorNormalization {
             config,
@@ -183,6 +197,10 @@ pub fn normalize_for_launch(config: InstanceConfig) -> VectorNormalization {
         };
     }
 
+    if detected.is_vector() {
+        config.embedding = true;
+        config.reranking = detected == ModelWorkload::Reranker;
+    }
     normalize_for_vector(config)
 }
 
@@ -194,6 +212,43 @@ fn has_hint(value: &str, hints: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_minimal_gguf(path: &Path, architecture: &str) {
+        let key = b"general.architecture";
+        let value = architecture.as_bytes();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn launch_normalization_uses_readable_gguf_architecture() {
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-vector-launch-architecture-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.gguf");
+        write_minimal_gguf(&path, "bert");
+        let config = InstanceConfig {
+            model_path: path.to_string_lossy().to_string(),
+            ..InstanceConfig::default()
+        };
+
+        let normalized = normalize_for_launch(config);
+
+        assert_eq!(normalized.workload, ModelWorkload::Embedding);
+        assert!(normalized.config.embedding);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn launch_normalization_enforces_vector_invariants_and_preserves_inference_mtp() {

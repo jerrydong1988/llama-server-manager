@@ -437,10 +437,27 @@ mod tests {
         c.draft_model_path = "/test/draft.gguf".into();
         c.cache_type_draft_k = "q8_0".into();
         c.cache_type_draft_v = "q8_0".into();
+        c.cache_prompt = false;
+        c.keep = 32;
+        c.cache_reuse = 64;
+        c.ctx_checkpoints = 16;
+        c.swa_full = true;
         c.chat_template = "chatml".into();
         c.temp = 1.5;
         c.mmproj_path = "/test/mmproj.gguf".into();
+        c.ui_config_file = "/test/ui.json".into();
+        c.ui_config = "{}".into();
+        c.ui_mcp_proxy = true;
         c.agent = true;
+        c.slot_save_path = "/test/slots".into();
+        c.models_dir = "/test/models".into();
+        c.models_preset = "preset".into();
+        c.models_max = 8;
+        c.image_min_tokens = 32;
+        c.image_max_tokens = 512;
+        c.mtmd_batch_max_tokens = 2048;
+        c.tags = "vision".into();
+        c.media_path = "/test/media".into();
         c.tools = "tool.json".into();
         c.slot_prompt_similarity = 0.9;
         c.custom_args = vec![
@@ -457,11 +474,33 @@ mod tests {
             "--temp",
             "--draft-model",
             "-ctkd",
+            "-ctvd",
+            "--no-cache-prompt",
+            "--keep",
+            "--cache-reuse",
+            "-ctxcp",
+            "--swa-full",
             "--chat-template",
             "--mmproj",
+            "--ui-config-file",
+            "--ui-config",
+            "--ui-mcp-proxy",
             "--agent",
+            "--slot-save-path",
             "--tools",
             "-sps",
+            "--models-dir",
+            "--models-preset",
+            "--models-max",
+            "--image-min-tokens",
+            "--image-max-tokens",
+            "--mtmd-batch-max-tokens",
+            "--tags",
+            "--media-path",
+            "-cram",
+            "-cms",
+            "--prefill-assistant",
+            "--models-autoload",
         ] {
             assert!(
                 !cmd.iter().any(|arg| arg == forbidden),

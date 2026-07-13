@@ -152,8 +152,7 @@ fn telemetry_config_hash(config: &InstanceConfig) -> String {
 }
 
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
-    let config = normalize_for_launch(config.clone()).into_config();
-    generate_normalized_command(&config, engine_path)
+    prepare_launch(config.clone(), engine_path).1
 }
 
 fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
@@ -258,7 +257,7 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if config.cont_batching {
         cmd.push("-cb".into());
     }
-    if !config.cache_prompt {
+    if !is_emb && !config.cache_prompt {
         cmd.push("--no-cache-prompt".into());
     }
     if config.threads_batch > 0 {
@@ -267,26 +266,30 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if config.threads_http >= 0 {
         cmd.extend_from_slice(&["--threads-http".into(), config.threads_http.to_string()]);
     }
-    if config.keep > 0 {
-        cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
-    }
-    if config.cache_reuse > 0 {
-        cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
-    }
-    if config.cache_ram > 0 {
-        cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
+    if !is_emb {
+        if config.keep > 0 {
+            cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
+        }
+        if config.cache_reuse > 0 {
+            cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
+        }
+        if config.cache_ram > 0 {
+            cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
+        }
     }
     if config.warmup {
         cmd.push("--warmup".into());
     }
-    if config.ctx_checkpoints != 32 {
-        cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
-    }
-    if config.checkpoint_min_step > 0 {
-        cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
-    }
-    if config.swa_full {
-        cmd.push("--swa-full".into());
+    if !is_emb {
+        if config.ctx_checkpoints != 32 {
+            cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
+        }
+        if config.checkpoint_min_step > 0 {
+            cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
+        }
+        if config.swa_full {
+            cmd.push("--swa-full".into());
+        }
     }
 
     // RoPE / YaRN.
@@ -380,11 +383,13 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if !config.cache_type_v.is_empty() {
         cmd.extend_from_slice(&["-ctv".into(), config.cache_type_v.clone()]);
     }
-    if !config.cache_type_draft_k.is_empty() {
-        cmd.extend_from_slice(&["-ctkd".into(), config.cache_type_draft_k.clone()]);
-    }
-    if !config.cache_type_draft_v.is_empty() {
-        cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]);
+    if !is_emb {
+        if !config.cache_type_draft_k.is_empty() {
+            cmd.extend_from_slice(&["-ctkd".into(), config.cache_type_draft_k.clone()]);
+        }
+        if !config.cache_type_draft_v.is_empty() {
+            cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]);
+        }
     }
     if config.kv_unified {
         cmd.push("--kv-unified".into());
@@ -501,17 +506,19 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if !config.api_prefix.is_empty() {
         cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]);
     }
-    if !config.ui_config_file.is_empty() {
-        cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]);
-    }
-    if !config.ui_config.is_empty() {
-        cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]);
-    }
-    if config.ui_mcp_proxy {
-        cmd.push("--ui-mcp-proxy".into());
-    }
-    if config.agent {
-        cmd.push("--agent".into());
+    if !is_emb {
+        if !config.ui_config_file.is_empty() {
+            cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]);
+        }
+        if !config.ui_config.is_empty() {
+            cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]);
+        }
+        if config.ui_mcp_proxy {
+            cmd.push("--ui-mcp-proxy".into());
+        }
+        if config.agent {
+            cmd.push("--agent".into());
+        }
     }
 
     // Embedding / generation.
@@ -676,7 +683,7 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if config.sleep_idle >= 0 {
         cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]);
     }
-    if config.context_shift {
+    if !is_emb && config.context_shift {
         cmd.push("--context-shift".into());
     }
     if config.verbose {
@@ -691,14 +698,16 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if !config.slots_enabled {
         cmd.push("--no-slots".into());
     }
-    if !config.slot_save_path.is_empty() {
-        cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]);
-    }
-    if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON {
-        cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
-    }
-    if config.prefill_assistant {
-        cmd.push("--prefill-assistant".into());
+    if !is_emb {
+        if !config.slot_save_path.is_empty() {
+            cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]);
+        }
+        if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON {
+            cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
+        }
+        if config.prefill_assistant {
+            cmd.push("--prefill-assistant".into());
+        }
     }
 
     // New server features aligned with llama.cpp master.
@@ -715,51 +724,53 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
         cmd.push("--reuse-port".into());
     }
 
-    // Multi-model and media.
-    if !config.models_dir.is_empty() {
-        cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]);
-    }
-    if !config.models_preset.is_empty() {
-        cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]);
-    }
-    if config.models_max != 4 {
-        cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
-    }
-    if config.models_autoload {
-        cmd.push("--models-autoload".into());
-    }
-    if config.image_min_tokens > 0 {
-        cmd.extend_from_slice(&[
-            "--image-min-tokens".into(),
-            config.image_min_tokens.to_string(),
-        ]);
-    }
-    if config.image_max_tokens > 0 {
-        cmd.extend_from_slice(&[
-            "--image-max-tokens".into(),
-            config.image_max_tokens.to_string(),
-        ]);
-    }
-    if config.mtmd_batch_max_tokens != 1024 {
-        cmd.extend_from_slice(&[
-            "--mtmd-batch-max-tokens".into(),
-            config.mtmd_batch_max_tokens.to_string(),
-        ]);
-    }
-    if !config.tags.is_empty() {
-        cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]);
-    }
-    if !config.media_path.is_empty() {
-        cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]);
-    }
-    if !config.tools.is_empty() {
-        cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]);
-    }
+    if !is_emb {
+        // Multi-model and media.
+        if !config.models_dir.is_empty() {
+            cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]);
+        }
+        if !config.models_preset.is_empty() {
+            cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]);
+        }
+        if config.models_max != 4 {
+            cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
+        }
+        if config.models_autoload {
+            cmd.push("--models-autoload".into());
+        }
+        if config.image_min_tokens > 0 {
+            cmd.extend_from_slice(&[
+                "--image-min-tokens".into(),
+                config.image_min_tokens.to_string(),
+            ]);
+        }
+        if config.image_max_tokens > 0 {
+            cmd.extend_from_slice(&[
+                "--image-max-tokens".into(),
+                config.image_max_tokens.to_string(),
+            ]);
+        }
+        if config.mtmd_batch_max_tokens != 1024 {
+            cmd.extend_from_slice(&[
+                "--mtmd-batch-max-tokens".into(),
+                config.mtmd_batch_max_tokens.to_string(),
+            ]);
+        }
+        if !config.tags.is_empty() {
+            cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]);
+        }
+        if !config.media_path.is_empty() {
+            cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]);
+        }
+        if !config.tools.is_empty() {
+            cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]);
+        }
 
-    // Custom args (#13: support double-quoted arguments).
-    for arg in &config.custom_args {
-        if !arg.is_empty() {
-            cmd.extend(split_args(arg));
+        // Custom args (#13: support double-quoted arguments).
+        for arg in &config.custom_args {
+            if !arg.is_empty() {
+                cmd.extend(split_args(arg));
+            }
         }
     }
 
@@ -768,7 +779,7 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
 
 fn prepare_launch(config: InstanceConfig, engine_path: &str) -> (InstanceConfig, Vec<String>) {
     let config = normalize_for_launch(config).into_config();
-    let command = generate_command(&config, engine_path);
+    let command = generate_normalized_command(&config, engine_path);
     (config, command)
 }
 
@@ -777,8 +788,7 @@ pub async fn generate_server_command(
     config: InstanceConfig,
     engine_exe: String,
 ) -> Result<Vec<String>, String> {
-    let (_, command) = prepare_launch(config, &engine_exe);
-    Ok(command)
+    Ok(generate_command(&config, &engine_exe))
 }
 
 #[tauri::command]
