@@ -2488,6 +2488,19 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn normalized_embedding_generator_rejects_context_shift() {
+        let config = InstanceConfig {
+            embedding: true,
+            context_shift: true,
+            ..InstanceConfig::default()
+        };
+
+        let cmd = generate_normalized_command(&config, "");
+
+        assert!(!cmd.iter().any(|arg| arg == "--context-shift"));
+    }
+
+    #[test]
     fn parses_llama_cpp_print_timing_token_stats() {
         let parser = PerfParser::new();
         let mut tasks = HashMap::new();

@@ -181,7 +181,7 @@ fn normalize_for_vector_workload(
     VectorNormalization { config, workload }
 }
 
-pub fn normalize_for_launch(mut config: InstanceConfig) -> VectorNormalization {
+pub fn normalize_for_launch(config: InstanceConfig) -> VectorNormalization {
     let path = Path::new(&config.model_path);
     let metadata = crate::utils::parse_gguf_metadata(path).ok();
     let detected = classify_model_workload(
@@ -198,8 +198,7 @@ pub fn normalize_for_launch(mut config: InstanceConfig) -> VectorNormalization {
     }
 
     if detected.is_vector() {
-        config.embedding = true;
-        config.reranking = detected == ModelWorkload::Reranker;
+        return normalize_for_vector_workload(config, detected);
     }
     normalize_for_vector(config)
 }
@@ -247,6 +246,29 @@ mod tests {
 
         assert_eq!(normalized.workload, ModelWorkload::Embedding);
         assert!(normalized.config.embedding);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn launch_normalization_preserves_architecture_reranker_over_embedding_basename() {
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-vector-launch-reranker-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bge-model.gguf");
+        write_minimal_gguf(&path, "cross-encoder");
+        let config = InstanceConfig {
+            model_path: path.to_string_lossy().to_string(),
+            ..InstanceConfig::default()
+        };
+
+        let normalized = normalize_for_launch(config);
+
+        assert_eq!(normalized.workload, ModelWorkload::Reranker);
+        assert!(normalized.config.embedding);
+        assert!(normalized.config.reranking);
+        assert_eq!(normalized.config.pooling, "rank");
         let _ = std::fs::remove_dir_all(dir);
     }
 

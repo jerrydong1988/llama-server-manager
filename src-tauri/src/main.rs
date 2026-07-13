@@ -442,6 +442,7 @@ mod tests {
         c.cache_reuse = 64;
         c.ctx_checkpoints = 16;
         c.swa_full = true;
+        c.context_shift = true;
         c.chat_template = "chatml".into();
         c.temp = 1.5;
         c.mmproj_path = "/test/mmproj.gguf".into();
@@ -480,6 +481,7 @@ mod tests {
             "--cache-reuse",
             "-ctxcp",
             "--swa-full",
+            "--context-shift",
             "--chat-template",
             "--mmproj",
             "--ui-config-file",
