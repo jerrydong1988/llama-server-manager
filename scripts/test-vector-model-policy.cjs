@@ -14,6 +14,9 @@ const entry = `
     VECTOR_CLASSIFIED_FIELDS,
   } from './src/modelPolicy'
   import {
+    applyModelInventory,
+    beginModelInventoryRequest,
+    isCurrentModelInventoryRequest,
     normalizeModelPath,
     normalizeStoredConfig,
     reconcileInstancesWithModels,
@@ -103,6 +106,24 @@ const entry = `
 
   assert.equal(normalizeModelPath('C:\\\\Models\\\\Qwen3-Instruct.gguf'), 'c:/models/qwen3-instruct.gguf')
   assert.equal(normalizeModelPath('/Models/Qwen3-Instruct.gguf'), '/Models/Qwen3-Instruct.gguf')
+  assert.equal(normalizeModelPath('\\\\\\\\Server\\\\Share\\\\Model.GGUF'), '//server/share/model.gguf')
+  assert.equal(normalizeModelPath('\\\\\\\\?\\\\C:\\\\Models\\\\Model.GGUF'), 'c:/models/model.gguf')
+  assert.equal(normalizeModelPath('\\\\\\\\?\\\\UNC\\\\Server\\\\Share\\\\Model.GGUF'), '//server/share/model.gguf')
+
+  const staleInventoryRequest = beginModelInventoryRequest()
+  const currentInventoryRequest = beginModelInventoryRequest()
+  assert.equal(isCurrentModelInventoryRequest(staleInventoryRequest), false)
+  assert.equal(isCurrentModelInventoryRequest(currentInventoryRequest), true)
+  const inventoryState = { instances: [], models: [] }
+  const staleApplied = applyModelInventory(
+    [model({ capabilities: { metadata_complete: true, is_embedding_model: true } })],
+    () => inventoryState as any,
+    (partial) => Object.assign(inventoryState, partial),
+    {},
+    staleInventoryRequest,
+  )
+  assert.equal(staleApplied, false)
+  assert.deepEqual(inventoryState.models, [])
 
   const indexedVectorModel = model({
     name: 'Qwen3-Instruct.gguf',
@@ -200,18 +221,23 @@ assert.match(startInstanceSource, /normalizeStoredConfig\(/, 'start must normali
 assert.match(startInstanceSource, /config:\s*normalized\.config/, 'start must invoke with normalized config')
 assert.match(startInstanceSource, /set\(/, 'start cleanup must update Zustand state')
 assert.match(startInstanceSource, /await get\(\)\.saveConfig\(\)/, 'start cleanup must be persisted before launch')
+assert.match(startInstanceSource, /await configSaveQueue/, 'start must await an in-flight inventory migration save')
 assert.match(saveConfigSource, /reconcileInstancesWithModels\(/, 'save must normalize every instance')
 
 const bootstrapSource = readSource('src', 'store', 'bootstrap.ts')
-const cachedScanSource = section(bootstrapSource, "invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan')", 'const injected')
-const initialScanSource = section(bootstrapSource, "invoke<ModelInfo[]>('scan_models'", "invoke<EngineInfo[]>('scan_engines'")
+const cachedScanSource = section(bootstrapSource, 'const cachedScanRequest', 'const injected')
+const initialScanSource = section(bootstrapSource, 'const modelScanRequest', "invoke<EngineInfo[]>('scan_engines'")
 assert.match(cachedScanSource, /applyModelInventory\(/, 'cached model inventory must reconcile instances')
+assert.match(cachedScanSource, /beginModelInventoryRequest\(/, 'cached inventory must claim a request generation')
 assert.match(initialScanSource, /applyModelInventory\(/, 'initial async model scan must reconcile instances')
+assert.match(initialScanSource, /beginModelInventoryRequest\(/, 'initial scan must supersede older inventory requests')
 
 const coreSliceSource = readSource('src', 'store', 'coreSlice.ts')
 const loadInitialDataSource = section(coreSliceSource, 'loadInitialData:', 'scanModels:')
 const scanModelsSource = section(coreSliceSource, 'scanModels:', 'deleteModelFile:')
 assert.match(loadInitialDataSource, /applyModelInventory\(/, 'get_models results must reconcile instances')
+assert.match(loadInitialDataSource, /beginModelInventoryRequest\(/, 'get_models must claim a request generation')
 assert.match(scanModelsSource, /applyModelInventory\(/, 'manual model scans must reconcile instances')
+assert.match(scanModelsSource, /beginModelInventoryRequest\(/, 'manual scans must supersede older inventory requests')
 
 console.log('vector model policy tests passed')

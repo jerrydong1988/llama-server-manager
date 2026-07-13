@@ -100,6 +100,7 @@ export function createInstanceSlice(
           }))
           await get().saveConfig()
         }
+        await configSaveQueue
 
         const engine = engines.find((item) => item.id === normalized.config.engine_id)
           || engines.find((item) => item.id === defaultEngineId)

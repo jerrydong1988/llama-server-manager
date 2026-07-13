@@ -41,10 +41,31 @@ declare global {
   }
 }
 
+let modelInventoryRequestGeneration = 0
+
+export function beginModelInventoryRequest(): number {
+  modelInventoryRequestGeneration += 1
+  return modelInventoryRequestGeneration
+}
+
+export function isCurrentModelInventoryRequest(requestGeneration: number): boolean {
+  return requestGeneration === modelInventoryRequestGeneration
+}
+
 export function normalizeModelPath(value: string): string {
-  let normalized = value.trim().replace(/\\/g, '/').replace(/\/{2,}/g, '/')
+  let normalized = value.trim().replace(/\\/g, '/')
+  if (/^\/\/\?\/UNC\//i.test(normalized)) {
+    normalized = `//${normalized.slice(8)}`
+  } else if (/^\/\/\?\//.test(normalized)) {
+    normalized = normalized.slice(4)
+  }
+
+  const isUnc = normalized.startsWith('//')
+  normalized = `${isUnc ? '//' : ''}${normalized.slice(isUnc ? 2 : 0).replace(/\/{2,}/g, '/')}`
   if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1)
-  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized
+  return (/^[A-Za-z]:\//.test(normalized) || normalized.startsWith('//'))
+    ? normalized.toLowerCase()
+    : normalized
 }
 
 export function normalizeStoredConfig(config: InstanceConfig, models: ModelInfo[]) {
@@ -73,7 +94,12 @@ export function applyModelInventory(
   get: AppStoreGet,
   set: AppStoreSet,
   additionalState: Partial<AppState> = {},
+  requestGeneration?: number,
 ): boolean {
+  if (requestGeneration !== undefined && !isCurrentModelInventoryRequest(requestGeneration)) {
+    return false
+  }
+
   const reconciled = reconcileInstancesWithModels(get().instances, models)
   set({
     ...additionalState,
@@ -141,6 +167,7 @@ async function processConfig(
   get: AppStoreGet,
   set: AppStoreSet,
 ) {
+  const modelScanRequest = beginModelInventoryRequest()
   const runningIds = new Set(Object.keys(global.running || {}))
   const order = global.instance_order || Object.keys(global.instances)
   const orderIndex = new Map(order.map((id, index) => [id, index]))
@@ -175,13 +202,6 @@ async function processConfig(
     })
   })
 
-  const cachedModels = get().models
-  if (cachedModels.length > 0) {
-    startTransition(() => {
-      applyModelInventory(cachedModels, get, set)
-    })
-  }
-
   if (global.dark_mode !== undefined) {
     document.documentElement.classList.toggle('dark', global.dark_mode)
     startTransition(() => {
@@ -214,7 +234,7 @@ async function processConfig(
   invoke<ModelInfo[]>('scan_models', { paths: global.model_dirs || [] })
     .then((models) => {
       startTransition(() => {
-        applyModelInventory(models, get, set)
+        applyModelInventory(models, get, set, {}, modelScanRequest)
       })
     })
     .catch((error) => {
@@ -249,11 +269,12 @@ export async function loadAppBootstrap(
         get().addRuntimeWarning(`startup timing failed: ${error?.message || String(error)}`)
       })
 
+    const cachedScanRequest = beginModelInventoryRequest()
     invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan')
       .then((data) => {
         if (data) {
           startTransition(() => {
-            applyModelInventory(data[0], get, set, { engines: data[1] })
+            applyModelInventory(data[0], get, set, { engines: data[1] }, cachedScanRequest)
           })
         }
       })
