@@ -123,6 +123,12 @@ const formatValue = (value: unknown, labels: Record<string, string>) => {
   return String(value)
 }
 
+const formatConfigValue = (key: keyof InstanceConfig, value: unknown, labels: Record<string, string>, t: any) => (
+  key === 'custom_args'
+    ? `${Array.isArray(value) ? value.length : 0} ${t.configPage.vectorCleanupItems}`
+    : formatValue(value, labels)
+)
+
 const fieldLabel = (key: keyof InstanceConfig, t: any) => {
   const labelMap: Partial<Record<keyof InstanceConfig, string>> = {
     model_path: t.configPage.modelPath,
@@ -179,8 +185,8 @@ const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig, t: an
     .map(key => ({
       key,
       label: fieldLabel(key, t),
-      before: formatValue(baseline[key], labels),
-      after: formatValue(local[key], labels),
+      before: formatConfigValue(key, baseline[key], labels, t),
+      after: formatConfigValue(key, local[key], labels, t),
     }))
 
 const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConfig>, t: any, labels: Record<string, string>): ConfigChange[] =>
@@ -189,8 +195,8 @@ const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConf
     .map(key => ({
       key,
       label: fieldLabel(key, t),
-      before: formatValue(local[key], labels),
-      after: formatValue(changes[key], labels),
+      before: formatConfigValue(key, local[key], labels, t),
+      after: formatConfigValue(key, changes[key], labels, t),
     }))
 
 const groupTemplateChanges = (changes: ConfigChange[], groups: ChangeGroup[], otherTitle: string) => {
@@ -262,11 +268,14 @@ const ConfigPage = () => {
     } else {
       setLocal(null)
     }
+  }, [activeConfigInstanceId, inst?.config])
+
+  useEffect(() => {
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
     setShowPresetAssistant(false)
     setVectorCleanupChanges([])
-  }, [activeConfigInstanceId, inst])
+  }, [activeConfigInstanceId])
 
   const set = (key: keyof InstanceConfig, value: any) => {
     setAppliedTemplateId(null)
@@ -321,9 +330,8 @@ const ConfigPage = () => {
       return
     }
 
-    const model = models.find(item => item.path === local.model_path)
     const engine = engines.find(item => item.id === (local.engine_id || defaultEngineId || '')) || engines[0]
-    const warnings = validateConfig(local, model, engine)
+    const warnings = validateConfig(local, currentModel, engine)
 
     updateInstance(inst.id, { config: local })
     try {
@@ -456,7 +464,9 @@ const ConfigPage = () => {
     .filter(group => group.count > 0)
 
   const savedBaseline = { ...defaultInstanceConfig(), ...(inst?.config ?? {}) }
+  const vectorCleanupKeys = new Set(vectorCleanupChanges.map(change => change.key))
   const configChanges = getConfigChanges(local, savedBaseline, t, labels)
+    .filter(change => !vectorCleanupKeys.has(change.key))
   const liveWarnings = validateConfig(local, currentModel, currentEngine)
   const visibleWarnings = saved ? saveWarnings : liveWarnings
   const warningCounts = {

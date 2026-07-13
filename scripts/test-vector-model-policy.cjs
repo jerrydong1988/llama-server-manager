@@ -251,14 +251,26 @@ const createInstanceSource = section(instanceManagerSource, 'const handleCreate'
 assert.match(createInstanceSource, /normalizeInstanceConfig\(/, 'new instances must use the vector policy')
 assert.match(createInstanceSource, /context:\s*'create'/, 'new instance cleanup must be silent')
 assert.match(createInstanceSource, /config:\s*normalized\.config/, 'new instances must store the normalized config')
+assert.ok(
+  createInstanceSource.indexOf('config.engine_id') < createInstanceSource.indexOf('normalizeInstanceConfig('),
+  'new instance identity and launch fields must be assigned before normalization',
+)
 
 const configPageSource = readSource('src', 'components', 'ConfigPage.tsx')
 const pickModelSource = section(configPageSource, 'const pickModel', 'const save =')
 assert.match(pickModelSource, /const candidate/, 'model switching must build one atomic candidate')
+assert.match(pickModelSource, /candidate\s*=\s*\{[^}]*model_path:[^}]*mmproj_path:/s, 'the atomic candidate must include model and projector paths')
 assert.match(pickModelSource, /normalizeInstanceConfig\(/, 'existing model switching must apply the vector policy')
 assert.match(pickModelSource, /setLocal\(normalized\.config\)/, 'existing model switching must replace the local draft atomically')
 assert.match(pickModelSource, /setVectorCleanupChanges\(/, 'existing model switching must retain a cleanup summary')
 assert.doesNotMatch(pickModelSource, /set\('model_path'/, 'primary model switching must not apply sequential partial updates')
+
+const configDiffSource = section(configPageSource, 'const savedBaseline', 'const liveWarnings')
+assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must be filtered from the ordinary config diff')
+assert.match(configPageSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
+const saveSource = section(configPageSource, 'const save =', 'const sectionProps')
+assert.match(saveSource, /validateConfig\(local, currentModel, engine\)/, 'save validation must reuse normalized model matching')
+assert.match(saveSource, /setVectorCleanupChanges\(\[\]\)/, 'cleanup summary must clear only after a successful save')
 
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {
   const source = readSource('src', 'i18n', locale)
