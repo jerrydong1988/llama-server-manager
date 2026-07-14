@@ -12,6 +12,18 @@ import type {
 export type ServiceStatus = 'healthy' | 'attention' | 'critical'
 export type RequestPressureLevel = 'normal' | 'medium' | 'high'
 export type SignalTone = 'blue' | 'emerald' | 'amber' | 'red' | 'violet' | 'cyan' | 'slate'
+export type LiveThroughputSource = 'active-tasks' | 'llama-metrics' | 'mixed' | 'idle'
+
+export type ThroughputPoint = {
+  ts: number
+  value: number
+}
+
+export type LiveThroughput = {
+  value: number
+  source: LiveThroughputSource
+  activeCount: number
+}
 
 export type ActivityFeedItem = {
   id: string
@@ -35,10 +47,107 @@ export type ResourceSignal = {
 const criticalLogPattern = /(error|fail|failed|fatal|panic|exception|错误|失败|异常)/i
 const warningLogPattern = /(warn|warning|警告|提醒)/i
 
-export function selectCurrentThroughput(liveTps?: number | null, fallbackTps?: number | null): number {
-  if (liveTps != null && Number.isFinite(liveTps) && liveTps > 0) return liveTps
-  if (fallbackTps != null && Number.isFinite(fallbackTps) && fallbackTps > 0) return fallbackTps
-  return 0
+function validThroughput(value?: number | null): value is number {
+  return value != null && Number.isFinite(value) && value >= 0
+}
+
+export function buildLiveThroughput(
+  tasks: RunningInferenceTask[],
+  llamaTps?: number | null,
+  requestsProcessing?: number | null,
+  taskStreamObserved = false,
+): LiveThroughput {
+  const activeTasks = tasks.filter(task => !task.completed)
+  if (activeTasks.length > 0) {
+    const value = activeTasks.reduce((total, task) => {
+      if (validThroughput(task.tg_3s)) return total + task.tg_3s
+      return validThroughput(task.tg) ? total + task.tg : total
+    }, 0)
+    return { value, source: 'active-tasks', activeCount: activeTasks.length }
+  }
+
+  if (taskStreamObserved) return { value: 0, source: 'idle', activeCount: 0 }
+
+  if ((requestsProcessing || 0) > 0) {
+    return {
+      value: validThroughput(llamaTps) ? llamaTps : 0,
+      source: 'llama-metrics',
+      activeCount: Math.max(requestsProcessing || 0, 0),
+    }
+  }
+
+  return { value: 0, source: 'idle', activeCount: 0 }
+}
+
+export function aggregateLiveThroughput(values: LiveThroughput[]): LiveThroughput {
+  const value = values.reduce((total, item) => total + item.value, 0)
+  const activeCount = values.reduce((total, item) => total + item.activeCount, 0)
+  const hasActiveTasks = values.some(item => item.source === 'active-tasks' || item.source === 'mixed')
+  const hasLlamaMetrics = values.some(item => item.source === 'llama-metrics' || item.source === 'mixed')
+  const source: LiveThroughputSource = hasActiveTasks && hasLlamaMetrics
+    ? 'mixed'
+    : hasActiveTasks
+      ? 'active-tasks'
+      : hasLlamaMetrics
+        ? 'llama-metrics'
+        : 'idle'
+  return { value, source, activeCount }
+}
+
+export function appendThroughputPoint(
+  points: ThroughputPoint[],
+  point: ThroughputPoint,
+  maxAgeMs = 60 * 60 * 1000,
+  maxPoints = 720,
+): ThroughputPoint[] {
+  if (!Number.isFinite(point.ts) || !validThroughput(point.value)) return points
+  const cutoff = point.ts - maxAgeMs
+  const next = points.filter(item => item.ts >= cutoff && item.ts !== point.ts)
+  next.push(point)
+  return next.slice(-maxPoints)
+}
+
+export function mergeThroughputPoints(
+  historical: ThroughputPoint[],
+  live: ThroughputPoint[],
+  cutoff = 0,
+  maxPoints = 720,
+): ThroughputPoint[] {
+  const byTimestamp = new Map<number, ThroughputPoint>()
+  for (const point of [...historical, ...live]) {
+    if (point.ts < cutoff || !Number.isFinite(point.ts) || !validThroughput(point.value)) continue
+    byTimestamp.set(point.ts, point)
+  }
+  const sorted = [...byTimestamp.values()].sort((left, right) => left.ts - right.ts)
+  if (sorted.length <= maxPoints) return sorted
+  if (maxPoints <= 1) return sorted.slice(-1)
+  const lastIndex = sorted.length - 1
+  return Array.from(
+    { length: maxPoints },
+    (_, index) => sorted[Math.round((index / (maxPoints - 1)) * lastIndex)],
+  )
+}
+
+export function buildChartAxis(values: number[], targetIntervals = 4) {
+  const safeValues = values.filter(value => validThroughput(value))
+  const dataMax = Math.max(...safeValues, 1)
+  const rawStep = dataMax / Math.max(targetIntervals, 1)
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep))
+  const normalized = rawStep / magnitude
+  const niceNormalized = normalized <= 1
+    ? 1
+    : normalized <= 2
+      ? 2
+      : normalized <= 2.5
+        ? 2.5
+        : normalized <= 5
+          ? 5
+          : 10
+  const step = niceNormalized * magnitude
+  const max = Math.ceil(dataMax / step) * step
+  const intervalCount = Math.max(1, Math.round(max / step))
+  const ticks = Array.from({ length: intervalCount + 1 }, (_, index) => index * step)
+  return { min: 0, max, step, ticks }
 }
 
 export function buildRequestPressure(processing?: number | null, deferred?: number | null) {

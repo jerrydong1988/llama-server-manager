@@ -314,6 +314,7 @@ export interface RunningInferenceTask {
   updated_at_ms: number
   n_decoded: number
   tg: number
+  tg_3s: number | null
   history: [number, number][]
   prompt_tokens: number | null
   prompt_time_ms: number | null

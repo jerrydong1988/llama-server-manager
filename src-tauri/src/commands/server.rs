@@ -2186,6 +2186,7 @@ struct TaskPerfState {
     updated_at_ms: i64,
     n_decoded: u64,
     tg: f64,
+    tg_3s: Option<f64>,
     /// Historical (n_decoded, tg) samples used for speed curves.
     history: Vec<(u64, f64)>,
     // Final summary.
@@ -2224,6 +2225,7 @@ struct PerfParser {
     re_launch: regex_lite::Regex,
     re_release: regex_lite::Regex,
     re_decoded: regex_lite::Regex,
+    re_tg_3s: regex_lite::Regex,
     re_prompt: regex_lite::Regex,
     re_eval: regex_lite::Regex,
     re_total: regex_lite::Regex,
@@ -2240,6 +2242,7 @@ impl PerfParser {
             re_launch: regex_lite::Regex::new(r"launch_slot_.*processing\s+task").unwrap(),
             re_release: regex_lite::Regex::new(r"slot\s+release.*id\s+\d+\s*\|\s*task\s+\d+\s*\|\s*stop").unwrap(),
             re_decoded: regex_lite::Regex::new(r"n_decoded\s*=\s*(\d+).*?tg\s*=\s*([\d.]+)\s*t/s").unwrap(),
+            re_tg_3s: regex_lite::Regex::new(r"tg_3s\s*=\s*([\d.]+)\s*t/s").unwrap(),
             re_prompt: regex_lite::Regex::new(r"prompt eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?,\s*([\d.]+)\s*tokens per second\)").unwrap(),
             re_eval: regex_lite::Regex::new(r"eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?,\s*([\d.]+)\s*tokens per second\)").unwrap(),
             re_total: regex_lite::Regex::new(r"total time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens").unwrap(),
@@ -2360,6 +2363,7 @@ fn parse_perf_line(
                 updated_at_ms: timestamp,
                 n_decoded: 0,
                 tg: 0.0,
+                tg_3s: None,
                 history: Vec::new(),
                 prompt_tokens: None,
                 prompt_time_ms: None,
@@ -2394,6 +2398,11 @@ fn parse_perf_line(
         ) {
             task.n_decoded = n;
             task.tg = tg;
+            task.tg_3s = parser
+                .re_tg_3s
+                .captures(line)
+                .and_then(|captures| captures.get(1))
+                .and_then(|value| value.as_str().parse::<f64>().ok());
             if task.history.len() < 500 {
                 task.history.push((n, tg));
             }
@@ -2783,6 +2792,7 @@ mod perf_parser_tests {
 
         let lines = [
             "0.34.994.322 I slot launch_slot_: id  3 | task 6 | processing task, is_child = 0",
+            "0.38.002.100 I slot print_timing: id  3 | task 6 | n_decoded = 120, tg = 40.00 t/s, tg_3s = 52.50 t/s",
             "1.29.406.958 I slot print_timing: id  3 | task 6 | prompt eval time =    1193.36 ms /   707 tokens (    1.69 ms per token,   592.45 tokens per second)",
             "1.29.406.983 I slot print_timing: id  3 | task 6 |        eval time =   53204.70 ms /  3519 tokens (   15.12 ms per token,    66.14 tokens per second)",
             "1.29.406.993 I slot print_timing: id  3 | task 6 |       total time =   54398.06 ms /  4226 tokens",
@@ -2805,7 +2815,31 @@ mod perf_parser_tests {
         assert_eq!(task.total_tokens, Some(4226));
         assert_eq!(task.prompt_tps, Some(592.45));
         assert_eq!(task.gen_tps, Some(66.14));
+        assert_eq!(task.tg_3s, Some(52.5));
         assert_eq!(task.spec_accept_rate, Some(0.92624));
+    }
+
+    #[test]
+    fn older_timing_lines_without_rolling_rate_remain_supported() {
+        let parser = PerfParser::new(ModelWorkload::Inference);
+        let mut tasks = HashMap::new();
+        let mut last_completed = None;
+        assert!(parse_perf_line(
+            &parser,
+            "0 I slot launch_slot_: id 0 | task 7 | processing task, is_child = 0",
+            &mut tasks,
+            &mut last_completed,
+        ));
+        assert!(parse_perf_line(
+            &parser,
+            "3 I slot print_timing: id 0 | task 7 | n_decoded = 90, tg = 30.00 t/s",
+            &mut tasks,
+            &mut last_completed,
+        ));
+
+        let task = &tasks[&7];
+        assert_eq!(task.tg, 30.0);
+        assert_eq!(task.tg_3s, None);
     }
 
     #[test]

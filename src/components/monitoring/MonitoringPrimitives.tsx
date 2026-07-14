@@ -3,7 +3,7 @@ import { Activity, CheckCircle2 } from 'lucide-react'
 import type { ModelWorkload, RunningInferenceTask } from '../../store/types'
 import { Badge, joinClassNames } from '../ui'
 import { clampPercent, formatCompactNumber, formatDuration, formatRate } from './monitoringFormat'
-import type { ActivityFeedItem, SignalTone } from './monitoringViewModel'
+import { buildChartAxis, type ActivityFeedItem, type SignalTone } from './monitoringViewModel'
 
 const toneText: Record<SignalTone, string> = {
   blue: 'text-blue-600 dark:text-blue-300',
@@ -166,11 +166,15 @@ export function TrendChart({
   emptyText,
   tone = 'blue',
   className = '',
+  unit,
+  valueFormatter = formatAxisValue,
 }: {
   values: Array<number | null>
   emptyText: string
   tone?: SignalTone
   className?: string
+  unit?: string
+  valueFormatter?: (value: number) => string
 }) {
   const safeValues = values.filter((value): value is number => value != null && Number.isFinite(value))
   if (safeValues.length < 2) {
@@ -184,25 +188,43 @@ export function TrendChart({
 
   const width = 900
   const height = 260
-  const max = Math.max(...safeValues, 1)
-  const min = Math.min(...safeValues, 0)
-  const range = Math.max(max - min, 1)
+  const chartPadding = 18
+  const axis = buildChartAxis(safeValues)
+  const chartHeight = height - chartPadding * 2
   const points = safeValues.map((value, index) => {
     const x = safeValues.length === 1 ? 0 : (index / (safeValues.length - 1)) * width
-    const y = height - ((value - min) / range) * (height - 36) - 18
+    const y = height - chartPadding - (value / axis.max) * chartHeight
     return `${x},${y}`
   }).join(' ')
+  const descendingTicks = [...axis.ticks].reverse()
 
   return (
-    <div className={joinClassNames('min-h-[260px] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40', className)}>
-      <svg viewBox={`0 0 ${width} ${height}`} className={joinClassNames('h-[260px] w-full', toneText[tone])} preserveAspectRatio="none">
-        {[0.25, 0.5, 0.75].map(ratio => (
-          <line key={ratio} x1="0" y1={height * ratio} x2={width} y2={height * ratio} stroke="currentColor" className="text-slate-300 dark:text-slate-800" strokeWidth="1" strokeDasharray="5 7" />
-        ))}
-        <polyline points={points} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+    <div className={joinClassNames('grid min-h-[260px] grid-cols-[68px_minmax(0,1fr)] overflow-hidden rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-950/40', className)}>
+      <div className="flex h-[260px] flex-col justify-between py-[10px] pr-2 text-right font-mono text-[11px] tabular-nums text-slate-500 dark:text-slate-400" aria-hidden="true">
+        {descendingTicks.map(tick => <span key={tick}>{valueFormatter(tick)}</span>)}
+      </div>
+      <div className="relative min-w-0 border-l border-slate-200 dark:border-slate-800">
+        {unit ? <span className="absolute right-3 top-2 z-10 rounded bg-slate-50/90 px-1 text-[11px] text-slate-500 dark:bg-slate-950/80 dark:text-slate-400">{unit}</span> : null}
+        <svg viewBox={`0 0 ${width} ${height}`} className={joinClassNames('h-[260px] w-full', toneText[tone])} preserveAspectRatio="none" aria-hidden="true">
+          {axis.ticks.map(tick => {
+            const y = height - chartPadding - (tick / axis.max) * chartHeight
+            return <line key={tick} x1="0" y1={y} x2={width} y2={y} stroke="currentColor" className="text-slate-300 dark:text-slate-800" strokeWidth="1" strokeDasharray="5 7" />
+          })}
+          <polyline points={points} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </div>
     </div>
   )
+}
+
+function formatAxisValue(value: number) {
+  if (Math.abs(value) >= 1000) {
+    const scaled = value / 1000
+    return `${scaled.toFixed(Math.abs(scaled) >= 10 ? 0 : 1).replace(/\.0$/, '')}k`
+  }
+  if (Math.abs(value) >= 100) return Math.round(value).toString()
+  if (Math.abs(value) >= 10) return value.toFixed(1).replace(/\.0$/, '')
+  return value.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
 }
 
 export function ActivityRow({ item }: { item: ActivityFeedItem }) {
@@ -250,7 +272,7 @@ export function ActiveRequestRow({
         <div className="text-xs text-slate-500">slot {task.slot_id}</div>
       </div>
       <div className="truncate text-slate-600 dark:text-slate-300">{formatCompactNumber(task.n_decoded)}</div>
-      <div className="truncate text-emerald-600 dark:text-emerald-300">{formatRate(task.tg)}</div>
+      <div className="truncate text-emerald-600 dark:text-emerald-300">{formatRate(task.tg_3s ?? task.tg)}</div>
       <div className="truncate text-slate-500">{elapsed}</div>
     </div>
   )

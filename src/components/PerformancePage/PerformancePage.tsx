@@ -21,7 +21,14 @@ import type {
 import { Badge, Button, EmptyPanel, PageFrame, PageHeader } from '../ui'
 import { ActiveRequestRow, ComparisonTable, MonitorPanel, SessionCard, SignalMeter, StatusTile, TrendChart } from '../monitoring/MonitoringPrimitives'
 import { formatDuration, formatMemory, formatMs, formatRate, formatTime } from '../monitoring/monitoringFormat'
-import { buildRequestPressure, buildResourceSignals, selectCurrentThroughput } from '../monitoring/monitoringViewModel'
+import {
+  appendThroughputPoint,
+  buildLiveThroughput,
+  buildRequestPressure,
+  buildResourceSignals,
+  mergeThroughputPoints,
+  type ThroughputPoint,
+} from '../monitoring/monitoringViewModel'
 import {
   buildPerformanceMode,
   buildVectorComparisonRows,
@@ -84,6 +91,7 @@ export default function PerformancePage() {
   const [analysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
   const [runningTasksByInstance, setRunningTasksByInstance] = useState<Record<string, RunningInferenceTask[]>>({})
+  const [liveThroughputByInstance, setLiveThroughputByInstance] = useState<Record<string, ThroughputPoint[]>>({})
   const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
   const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [loading, setLoading] = useState(false)
@@ -100,11 +108,15 @@ export default function PerformancePage() {
     || instances.find(instance => instance.id === selectedSession?.instance_id)
     || null
   const latestSample = overview.latest_samples[0] || null
-  const activeTasks = selectedSession && !selectedSession.stopped_at
-    ? runningTasksByInstance[selectedSession.instance_id] || []
-    : selectedInstance
-      ? runningTasksByInstance[selectedInstance.id] || []
-      : []
+  const liveTargetInstance = selectedSession
+    ? selectedSession.stopped_at
+      ? null
+      : running.find(instance => instance.id === selectedSession.instance_id) || null
+    : running.find(instance => instance.id === selectedInstanceId) || null
+  const activeTasks = liveTargetInstance ? runningTasksByInstance[liveTargetInstance.id] || [] : []
+  const taskStreamObserved = liveTargetInstance
+    ? Object.prototype.hasOwnProperty.call(runningTasksByInstance, liveTargetInstance.id)
+    : false
 
   const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
     if (telemetryInFlightRef.current) return
@@ -251,8 +263,41 @@ export default function PerformancePage() {
     analysis,
     lang,
   )
-  const currentThroughput = selectCurrentThroughput(liveLlama?.tokens_per_sec, latestSample?.tokens_per_sec ?? selectedSession?.avg_tokens_per_sec)
-  const pressure = buildRequestPressure(liveLlama?.requests_processing ?? latestSample?.requests_processing, liveLlama?.requests_deferred ?? latestSample?.requests_deferred)
+  const currentThroughput = useMemo(
+    () => liveTargetInstance
+      ? buildLiveThroughput(activeTasks, liveLlama?.tokens_per_sec, liveLlama?.requests_processing, taskStreamObserved)
+      : { value: 0, source: 'idle' as const, activeCount: 0 },
+    [activeTasks, liveLlama?.requests_processing, liveLlama?.tokens_per_sec, liveTargetInstance, taskStreamObserved],
+  )
+  const liveThroughputInstanceId = liveTargetInstance?.id || ''
+  useEffect(() => {
+    if (!liveThroughputInstanceId) return
+    const point = { ts: Date.now(), value: currentThroughput.value }
+    setLiveThroughputByInstance(current => ({
+      ...current,
+      [liveThroughputInstanceId]: appendThroughputPoint(current[liveThroughputInstanceId] || [], point),
+    }))
+  }, [activeTasks, currentThroughput.activeCount, currentThroughput.source, currentThroughput.value, liveThroughputInstanceId])
+  const inferenceTrendPoints = useMemo(
+    () => mergeThroughputPoints(
+      trendSamples.map(sample => ({ ts: sample.ts, value: sample.tokens_per_sec ?? 0 })),
+      liveThroughputByInstance[liveThroughputInstanceId] || [],
+      Date.now() - trendRangeToMs(trendRange),
+      240,
+    ),
+    [liveThroughputByInstance, liveThroughputInstanceId, trendRange, trendSamples],
+  )
+  const currentThroughputDetail = currentThroughput.source === 'active-tasks'
+    ? labels.fromLiveTasks
+    : currentThroughput.source === 'mixed'
+      ? labels.fromMixedLiveSources
+      : currentThroughput.source === 'llama-metrics'
+        ? labels.fromLlamaMetrics
+        : labels.idleThroughput
+  const pressure = buildRequestPressure(
+    liveTargetInstance ? liveLlama?.requests_processing ?? latestSample?.requests_processing : 0,
+    liveTargetInstance ? liveLlama?.requests_deferred ?? latestSample?.requests_deferred : 0,
+  )
   const sessionBenchmark = useMemo(() => buildSessionBenchmark(selectedSession, sessions), [selectedSession, sessions])
   const comparisonRows = performanceMode.kind === 'vector' && performanceMode.analysis && analysis?.vector_baseline
     ? buildVectorComparisonRows(performanceMode.analysis, analysis.vector_baseline, lang).map(row => ({
@@ -402,7 +447,7 @@ export default function PerformancePage() {
                     className="py-3"
                   />
                 )) : (
-                  <StatusTile label={labels.currentTps} value={formatRate(currentThroughput)} detail={labels.fromLlamaMetrics} icon={<Gauge className="h-5 w-5" />} tone="blue" className="py-3" />
+                  <StatusTile label={labels.currentTps} value={formatRate(currentThroughput.value)} detail={currentThroughputDetail} icon={<Gauge className="h-5 w-5" />} tone="blue" className="py-3" />
                 )}
                 <StatusTile
                   label={labels.queuePressure}
@@ -460,9 +505,12 @@ export default function PerformancePage() {
               <TrendChart
                 values={performanceMode.kind === 'vector'
                   ? vectorTrend.map(point => point.value)
-                  : trendSamples.map(sample => sample.tokens_per_sec ?? 0)}
+                  : inferenceTrendPoints.map(point => point.value)}
                 emptyText={performanceMode.kind === 'vector' ? performanceMode.source.summary : labels.noSamplesYet}
                 tone={performanceMode.kind === 'vector' && vectorTrendMetric === 'items' ? 'violet' : 'blue'}
+                unit={performanceMode.kind === 'vector' && vectorTrendMetric === 'items'
+                  ? performanceMode.itemName === 'document' ? labels.documentsPerSecondShort : labels.itemsPerSecondShort
+                  : 'tok/s'}
               />
               {performanceMode.kind === 'vector' ? (
                 <div data-vector-source-state={performanceMode.source.kind} className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">
@@ -590,9 +638,16 @@ function formatRatio(value?: number | null): string {
 function filterSamplesByRange(samples: TelemetrySampleSummary[], range: '1m' | '5m' | '15m' | '1h') {
   if (samples.length === 0) return []
   const now = Math.max(...samples.map(sample => sample.ts || 0), Date.now())
-  const rangeMs = range === '1m' ? 60000 : range === '5m' ? 300000 : range === '15m' ? 900000 : 3600000
+  const rangeMs = trendRangeToMs(range)
   const filtered = samples.filter(sample => now - sample.ts <= rangeMs)
   return filtered.length >= 2 ? filtered : samples.slice(-80)
+}
+
+function trendRangeToMs(range: '1m' | '5m' | '15m' | '1h') {
+  if (range === '1m') return 60000
+  if (range === '5m') return 300000
+  if (range === '15m') return 900000
+  return 3600000
 }
 
 function buildSessionBenchmark(selectedSession: TelemetrySessionSummary | undefined, sessions: TelemetrySessionSummary[]): SessionBenchmark {
@@ -723,10 +778,15 @@ function getLabels(zh: boolean) {
     finished: zh ? '已结束' : 'Finished',
     currentTps: zh ? '当前吞吐' : 'Current Throughput',
     fromLlamaMetrics: zh ? '来自 llama-server /metrics' : 'From llama-server /metrics',
+    fromLiveTasks: zh ? '活动任务最近 3 秒聚合' : 'Live 3-second task aggregate',
+    fromMixedLiveSources: zh ? '实时任务与 /metrics 聚合' : 'Live tasks and /metrics aggregate',
+    idleThroughput: zh ? '当前没有生成请求' : 'No generation request is active',
     fromTaskLog: zh ? '来自 llama-server 任务日志' : 'From llama-server task logs',
     inputThroughput: zh ? '输入吞吐' : 'Input Throughput',
     vectorThroughput: zh ? '向量项吞吐' : 'Vector Throughput',
     documentThroughput: zh ? '文档项吞吐' : 'Document Throughput',
+    itemsPerSecondShort: zh ? '项/s' : 'items/s',
+    documentsPerSecondShort: zh ? '文档/s' : 'docs/s',
     queuePressure: zh ? '请求压力' : 'Request Pressure',
     processingDeferred: zh ? '处理中 / 排队' : 'processing / queued',
     process: zh ? '进程' : 'Process',

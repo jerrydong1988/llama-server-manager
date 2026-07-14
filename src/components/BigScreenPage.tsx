@@ -30,7 +30,19 @@ import type {
 import { Badge, joinClassNames } from './ui'
 import { MiniSparkline, TrendChart } from './monitoring/MonitoringPrimitives'
 import { formatBytes, formatBytesPerSecond, formatDuration, formatRate, formatTime } from './monitoring/monitoringFormat'
-import { buildActivityFeed, buildRequestPressure, buildResourceSignals, buildServiceStatus, selectCurrentThroughput, type ActivityFeedItem, type SignalTone } from './monitoring/monitoringViewModel'
+import {
+  aggregateLiveThroughput,
+  appendThroughputPoint,
+  buildActivityFeed,
+  buildLiveThroughput,
+  buildRequestPressure,
+  buildResourceSignals,
+  buildServiceStatus,
+  mergeThroughputPoints,
+  type ActivityFeedItem,
+  type SignalTone,
+  type ThroughputPoint,
+} from './monitoring/monitoringViewModel'
 
 type MetricsEvent = {
   instanceId: string
@@ -76,6 +88,7 @@ export default function BigScreenPage() {
   const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
   const [runningTasksByInstance, setRunningTasksByInstance] = useState<Record<string, RunningInferenceTask[]>>({})
   const [liveLlamaByInstance, setLiveLlamaByInstance] = useState<Record<string, MetricsEvent['llama']>>({})
+  const [liveThroughputPoints, setLiveThroughputPoints] = useState<ThroughputPoint[]>([])
   const [lastUpdatedAt, setLastUpdatedAt] = useState(Date.now())
   const [refreshing, setRefreshing] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
@@ -149,6 +162,10 @@ export default function BigScreenPage() {
 
   const allDownloads = useMemo(() => Object.values(downloadTasks), [downloadTasks])
   const runningInstances = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
+  const allActiveTasks = useMemo(
+    () => runningInstances.flatMap(instance => runningTasksByInstance[instance.id] || []),
+    [runningInstances, runningTasksByInstance],
+  )
   const liveLlama = useMemo(() => {
     const values = runningInstances
       .map(instance => liveLlamaByInstance[instance.id])
@@ -171,10 +188,46 @@ export default function BigScreenPage() {
     () => [...overview.latest_samples].sort((left, right) => left.ts - right.ts),
     [overview.latest_samples],
   )
-  const trendValues = trendSamples.map(sample => sample.tokens_per_sec || 0)
-  const currentTps = selectCurrentThroughput(liveLlama?.tokens_per_sec, latestSample?.tokens_per_sec ?? overview.avg_tokens_per_sec_24h)
+  const currentThroughput = useMemo(
+    () => aggregateLiveThroughput(runningInstances.map(instance => {
+      const llama = liveLlamaByInstance[instance.id]
+      return buildLiveThroughput(
+        runningTasksByInstance[instance.id] || [],
+        llama?.tokens_per_sec,
+        llama?.requests_processing,
+        Object.prototype.hasOwnProperty.call(runningTasksByInstance, instance.id),
+      )
+    })),
+    [liveLlamaByInstance, runningInstances, runningTasksByInstance],
+  )
+  useEffect(() => {
+    setLiveThroughputPoints(current => appendThroughputPoint(
+      current,
+      { ts: Date.now(), value: currentThroughput.value },
+      5 * 60 * 1000,
+      720,
+    ))
+  }, [allActiveTasks, currentThroughput.activeCount, currentThroughput.source, currentThroughput.value])
+  const trendPoints = useMemo(
+    () => mergeThroughputPoints(
+      trendSamples.map(sample => ({ ts: sample.ts, value: sample.tokens_per_sec ?? 0 })),
+      liveThroughputPoints,
+      Date.now() - 5 * 60 * 1000,
+      240,
+    ),
+    [liveThroughputPoints, trendSamples],
+  )
+  const trendValues = trendPoints.map(point => point.value)
+  const currentTps = currentThroughput.value
+  const currentThroughputDetail = currentThroughput.source === 'active-tasks'
+    ? labels.fromLiveTasks
+    : currentThroughput.source === 'mixed'
+      ? labels.fromMixedLiveSources
+      : currentThroughput.source === 'llama-metrics'
+        ? labels.fromLlamaMetrics
+        : labels.idleThroughput
   const peakTps = Math.max(...trendValues, currentTps, 0)
-  const avgTps = average(trendValues.slice(-12))
+  const avgTps = averageThroughput(trendValues)
   const pressure = buildRequestPressure(liveLlama?.requests_processing ?? latestSample?.requests_processing, liveLlama?.requests_deferred ?? latestSample?.requests_deferred)
 
   const flatLogs = useMemo(
@@ -193,14 +246,14 @@ export default function BigScreenPage() {
   )
 
   const activeRequestTasks = useMemo(
-    () => Object.entries(runningTasksByInstance)
-      .flatMap(([instanceId, tasks]) => {
-        const instanceName = instances.find(instance => instance.id === instanceId)?.name || instanceId
-        return tasks.map(task => ({ ...task, instanceName }))
+    () => runningInstances
+      .flatMap(instance => {
+        const tasks = runningTasksByInstance[instance.id] || []
+        return tasks.filter(task => !task.completed).map(task => ({ ...task, instanceName: instance.name }))
       })
       .sort((left, right) => right.updated_at_ms - left.updated_at_ms)
       .slice(0, 4),
-    [instances, runningTasksByInstance],
+    [runningInstances, runningTasksByInstance],
   )
 
   const downloadStats = useMemo(() => {
@@ -293,7 +346,7 @@ export default function BigScreenPage() {
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <WallKpi label={labels.serviceStatus} value={statusLabel} detail={telemetryError || labels.allServicesNormal} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
         <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
-        <WallKpi label={labels.currentThroughput} value={formatRate(currentTps)} detail={`${labels.peak} ${formatRate(peakTps)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />
+        <WallKpi label={labels.currentThroughput} value={formatRate(currentTps)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />
         <WallKpi label={labels.requestPressure} value={`${pressure.percent}%`} detail={pressure.level === 'high' ? labels.high : pressure.level === 'medium' ? labels.medium : labels.normal} tone={pressure.level === 'high' ? 'amber' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
         <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
       </section>
@@ -306,18 +359,19 @@ export default function BigScreenPage() {
                 <div className="text-xs text-slate-500">{labels.currentThroughput}</div>
                 <div className="mt-2 text-5xl font-semibold text-blue-700 dark:text-blue-300">{formatRate(currentTps).replace(' tok/s', '')}</div>
                 <div className="mt-1 text-sm text-blue-600 dark:text-blue-200">tok/s</div>
+                <div className="mt-1 truncate text-xs text-slate-500" title={currentThroughputDetail}>{currentThroughputDetail}</div>
               </div>
               <div className="grid gap-2">
                 <MiniWallStat label={labels.peak} value={formatRate(peakTps)} />
                 <MiniWallStat label={labels.avg5m} value={formatRate(avgTps)} />
               </div>
             </div>
-            <TrendChart values={trendValues} emptyText={labels.noSamples} className="border-slate-200 bg-white/70 dark:border-slate-700 dark:bg-slate-950/50" />
+            <TrendChart values={trendValues} emptyText={labels.noSamples} unit="tok/s" className="border-slate-200 bg-white/70 dark:border-slate-700 dark:bg-slate-950/50" />
           </div>
           <div className="mt-4 rounded-lg border border-slate-200 bg-white/70 p-3 dark:border-slate-700 dark:bg-slate-950/50">
             <div className="mb-2 flex items-center justify-between gap-3">
               <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{labels.activeRequests}</div>
-              <Badge tone={activeRequestTasks.length > 0 ? 'emerald' : 'slate'}>{activeRequestTasks.length}</Badge>
+              <Badge tone={currentThroughput.activeCount > 0 ? 'emerald' : 'slate'}>{currentThroughput.activeCount}</Badge>
             </div>
             {activeRequestTasks.length === 0 ? (
               <EmptyDark text={labels.noActiveRequests} />
@@ -471,7 +525,7 @@ function ActiveWallRequest({ task }: { task: RunningInferenceTask & { instanceNa
           <div className="h-full rounded-full bg-blue-400" style={{ width: `${progress}%` }} />
         </div>
       </div>
-      <span className="text-blue-700 dark:text-blue-200">{formatRate(task.tg)}</span>
+      <span className="text-blue-700 dark:text-blue-200">{formatRate(task.tg_3s ?? task.tg)}</span>
       <span className="text-slate-500 dark:text-slate-400">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</span>
     </div>
   )
@@ -584,6 +638,12 @@ function average(values: number[]) {
   return valid.reduce((sum, value) => sum + value, 0) / valid.length
 }
 
+function averageThroughput(values: number[]) {
+  const valid = values.filter(value => Number.isFinite(value) && value >= 0)
+  if (valid.length === 0) return 0
+  return valid.reduce((sum, value) => sum + value, 0) / valid.length
+}
+
 function sumMetric<T extends Record<string, number | undefined>>(values: T[], key: keyof T) {
   return values.reduce((sum, value) => sum + (Number(value[key]) || 0), 0)
 }
@@ -602,6 +662,10 @@ function getLabels(zh: boolean) {
     allServicesNormal: zh ? '所有服务运行正常' : 'All services normal',
     runningInstances: zh ? '运行实例' : 'Running Instances',
     currentThroughput: zh ? '当前吞吐' : 'Current Throughput',
+    fromLiveTasks: zh ? '活动任务最近 3 秒聚合' : 'Live 3-second task aggregate',
+    fromMixedLiveSources: zh ? '实时任务与 /metrics 聚合' : 'Live tasks and /metrics aggregate',
+    fromLlamaMetrics: zh ? '来自 llama-server /metrics' : 'From llama-server /metrics',
+    idleThroughput: zh ? '当前没有生成请求' : 'No generation request is active',
     requestPressure: zh ? '请求压力' : 'Request Pressure',
     alerts: zh ? '告警' : 'Alerts',
     stopped: zh ? '已停止' : 'Stopped',
