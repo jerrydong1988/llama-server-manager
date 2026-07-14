@@ -1,7 +1,7 @@
 use crate::commands::adlx;
 use crate::commands::nvml;
 use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
-use crate::vector_policy::normalize_for_launch;
+use crate::vector_policy::{normalize_for_launch, ModelWorkload};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -152,7 +152,7 @@ fn telemetry_config_hash(config: &InstanceConfig) -> String {
 }
 
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
-    prepare_launch(config.clone(), engine_path).1
+    prepare_launch(config.clone(), engine_path).2
 }
 
 fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
@@ -775,10 +775,15 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     cmd
 }
 
-fn prepare_launch(config: InstanceConfig, engine_path: &str) -> (InstanceConfig, Vec<String>) {
-    let config = normalize_for_launch(config).into_config();
+fn prepare_launch(
+    config: InstanceConfig,
+    engine_path: &str,
+) -> (InstanceConfig, ModelWorkload, Vec<String>) {
+    let normalized = normalize_for_launch(config);
+    let workload = normalized.workload;
+    let config = normalized.into_config();
     let command = generate_normalized_command(&config, engine_path);
-    (config, command)
+    (config, workload, command)
 }
 
 fn reserve_start_slot(
@@ -834,7 +839,7 @@ pub async fn start_server(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
-    let (config, cmd) = prepare_launch(config, &engine_exe);
+    let (config, workload, cmd) = prepare_launch(config, &engine_exe);
     let cmd_str = cmd.join(" ");
     let cmd_display = mask_api_key_in_cmd(&cmd_str);
 
@@ -888,12 +893,11 @@ pub async fn start_server(
     };
     let telemetry_session_id = crate::commands::telemetry::begin_run_session(
         &instance_id,
-        &config.name,
-        &config.model_path,
-        &config.engine_id,
+        &config,
         &engine_backend,
         &telemetry_config_hash(&config),
         &cmd_display,
+        workload,
     )
     .ok();
 
@@ -956,7 +960,13 @@ pub async fn start_server(
     let log_path_tail = log_path.clone();
     let telemetry_session_tail = telemetry_session_id.clone();
     std::thread::spawn(move || {
-        tail_log_file(&log_path_tail, &id_tail, telemetry_session_tail, app_tail);
+        tail_log_file(
+            &log_path_tail,
+            &id_tail,
+            telemetry_session_tail,
+            workload,
+            app_tail,
+        );
     });
 
     // Process liveness monitoring and exit cleanup.
@@ -1172,27 +1182,13 @@ fn monitor_loop(
         if let Ok(resp) = req.timeout(std::time::Duration::from_secs(2)).send() {
             if resp.status().is_success() {
                 if let Ok(body) = resp.text() {
-                    let extract = |key: &str| -> f64 {
-                        body.lines()
-                            .find(|l| l.starts_with(key))
-                            .and_then(|l| l.split_whitespace().last()?.parse().ok())
-                            .unwrap_or(0.0)
-                    };
-                    let sample = crate::commands::telemetry::LlamaMetricSample {
-                        tokens_per_sec: extract("llamacpp:predicted_tokens_seconds"),
-                        prompt_tokens: extract("llamacpp:prompt_tokens_total") as u64,
-                        gen_tokens: extract("llamacpp:tokens_predicted_total") as u64,
-                        requests: extract("llamacpp:n_decode_total") as u64,
-                        prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds"),
-                        requests_processing: extract("llamacpp:requests_processing") as u64,
-                        requests_deferred: extract("llamacpp:requests_deferred") as u64,
-                        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode"),
-                    };
+                    let sample = parse_llama_metric_sample(&body);
                     llama_metrics = Some(serde_json::json!({
                         "tokens_per_sec": sample.tokens_per_sec,
                         "prompt_tokens": sample.prompt_tokens,
                         "gen_tokens": sample.gen_tokens,
-                        "requests": sample.requests,
+                        "decode_calls_total": sample.decode_calls_total,
+                        "max_tokens_observed": sample.max_tokens_observed,
                         "prompt_tokens_per_sec": sample.prompt_tokens_per_sec,
                         "requests_processing": sample.requests_processing,
                         "requests_deferred": sample.requests_deferred,
@@ -2004,7 +2000,8 @@ pub struct MetricsInfo {
     pub tokens_per_sec: f64,
     pub prompt_tokens: u64,
     pub gen_tokens: u64,
-    pub requests: u64,
+    pub decode_calls_total: u64,
+    pub max_tokens_observed: u64,
     pub prompt_tokens_per_sec: f64,
     pub requests_processing: u64,
     pub requests_deferred: u64,
@@ -2029,22 +2026,38 @@ pub async fn get_metrics(
         _ => return Ok(None),
     };
     let body = resp.text().await.map_err(|e| format!("读取失败: {}", e))?;
+    let sample = parse_llama_metric_sample(&body);
+    Ok(Some(MetricsInfo {
+        tokens_per_sec: sample.tokens_per_sec,
+        prompt_tokens: sample.prompt_tokens,
+        gen_tokens: sample.gen_tokens,
+        decode_calls_total: sample.decode_calls_total,
+        max_tokens_observed: sample.max_tokens_observed,
+        prompt_tokens_per_sec: sample.prompt_tokens_per_sec,
+        requests_processing: sample.requests_processing,
+        requests_deferred: sample.requests_deferred,
+        busy_slots_per_decode: sample.busy_slots_per_decode,
+    }))
+}
+
+fn parse_llama_metric_sample(body: &str) -> crate::commands::telemetry::LlamaMetricSample {
     let extract = |key: &str| -> f64 {
         body.lines()
-            .find(|l| l.starts_with(key))
-            .and_then(|l| l.split_whitespace().last()?.parse().ok())
+            .find(|line| line.starts_with(key))
+            .and_then(|line| line.split_whitespace().last()?.parse().ok())
             .unwrap_or(0.0)
     };
-    Ok(Some(MetricsInfo {
+    crate::commands::telemetry::LlamaMetricSample {
         tokens_per_sec: extract("llamacpp:predicted_tokens_seconds"),
         prompt_tokens: extract("llamacpp:prompt_tokens_total") as u64,
         gen_tokens: extract("llamacpp:tokens_predicted_total") as u64,
-        requests: extract("llamacpp:n_decode_total") as u64,
+        decode_calls_total: extract("llamacpp:n_decode_total") as u64,
+        max_tokens_observed: extract("llamacpp:n_tokens_max") as u64,
         prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds"),
         requests_processing: extract("llamacpp:requests_processing") as u64,
         requests_deferred: extract("llamacpp:requests_deferred") as u64,
         busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode"),
-    }))
+    }
 }
 
 // Restore logs and monitoring after app restart.
@@ -2081,8 +2094,11 @@ pub fn reconnect_running_instance(
         let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log)
             .ok()
             .flatten();
+        let workload =
+            crate::commands::telemetry::session_workload(telemetry_session_id.as_deref())
+                .unwrap_or(ModelWorkload::Inference);
         std::thread::spawn(move || {
-            tail_log_file(&log_path, &id_log, telemetry_session_id, app_log);
+            tail_log_file(&log_path, &id_log, telemetry_session_id, workload, app_log);
         });
     }
 
@@ -2313,6 +2329,7 @@ fn tail_log_file(
     log_path: &std::path::Path,
     instance_id: &str,
     telemetry_session_id: Option<String>,
+    _workload: ModelWorkload,
     app: tauri::AppHandle,
 ) {
     use std::io::{Seek, SeekFrom};
@@ -2509,8 +2526,9 @@ mod perf_parser_tests {
 
     #[test]
     fn start_preparation_hashes_and_launches_the_normalized_config() {
-        let (config, cmd) = prepare_launch(polluted_embedding_config(), "");
+        let (config, workload, cmd) = prepare_launch(polluted_embedding_config(), "");
 
+        assert_eq!(workload, crate::vector_policy::ModelWorkload::Embedding);
         assert!(config.embedding);
         assert!(config.spec_type.is_empty());
         assert!(config.custom_args.is_empty());
@@ -2521,6 +2539,26 @@ mod perf_parser_tests {
             telemetry_config_hash(&config),
             telemetry_config_hash(&normalize_for_launch(config.clone()).config)
         );
+    }
+
+    #[test]
+    fn llama_metrics_use_unambiguous_decode_names() {
+        let sample = parse_llama_metric_sample(
+            "llamacpp:predicted_tokens_seconds 12.5\n\
+             llamacpp:prompt_tokens_total 120\n\
+             llamacpp:tokens_predicted_total 80\n\
+             llamacpp:n_decode_total 9\n\
+             llamacpp:n_tokens_max 4096\n\
+             llamacpp:prompt_tokens_seconds 48.0\n\
+             llamacpp:requests_processing 2\n\
+             llamacpp:requests_deferred 1\n\
+             llamacpp:n_busy_slots_per_decode 1.5\n",
+        );
+
+        assert_eq!(sample.decode_calls_total, 9);
+        assert_eq!(sample.max_tokens_observed, 4096);
+        assert_eq!(sample.tokens_per_sec, 12.5);
+        assert_eq!(sample.prompt_tokens_per_sec, 48.0);
     }
 
     #[test]

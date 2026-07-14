@@ -1,4 +1,4 @@
-use crate::models::SystemMetrics;
+use crate::models::{InstanceConfig, SystemMetrics};
 use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -52,6 +52,8 @@ pub struct TelemetrySampleSummary {
     pub prompt_tokens_total: Option<i64>,
     pub generated_tokens_total: Option<i64>,
     pub requests_total: Option<i64>,
+    pub decode_calls_total: Option<i64>,
+    pub max_tokens_observed: Option<i64>,
     pub requests_processing: Option<i64>,
     pub requests_deferred: Option<i64>,
     pub busy_slots_per_decode: Option<f64>,
@@ -151,7 +153,8 @@ pub struct LlamaMetricSample {
     pub tokens_per_sec: f64,
     pub prompt_tokens: u64,
     pub gen_tokens: u64,
-    pub requests: u64,
+    pub decode_calls_total: u64,
+    pub max_tokens_observed: u64,
     pub prompt_tokens_per_sec: f64,
     pub requests_processing: u64,
     pub requests_deferred: u64,
@@ -427,40 +430,95 @@ fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+struct RunSessionStart<'a> {
+    id: &'a str,
+    instance_id: &'a str,
+    instance_name: &'a str,
+    model_path: &'a str,
+    engine_id: &'a str,
+    backend: &'a str,
+    config_hash: &'a str,
+    command_line: &'a str,
+    workload: ModelWorkload,
+    started_at: i64,
+}
+
+fn insert_run_session(conn: &Connection, session: &RunSessionStart<'_>) -> Result<(), String> {
+    let model_name = std::path::Path::new(session.model_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(session.model_path);
+    conn.execute(
+        "INSERT INTO run_sessions
+            (id, instance_id, instance_name, model_name, model_path, engine_id, backend,
+             config_hash, command_line, workload, started_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            session.id,
+            session.instance_id,
+            session.instance_name,
+            model_name,
+            session.model_path,
+            session.engine_id,
+            session.backend,
+            session.config_hash,
+            session.command_line,
+            session.workload.as_str(),
+            session.started_at,
+        ],
+    )
+    .map_err(|e| format!("无法创建运行遥测会话: {e}"))?;
+    Ok(())
+}
+
+fn session_workload_from_connection(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<ModelWorkload>, String> {
+    let stored = conn
+        .query_row(
+            "SELECT workload FROM run_sessions WHERE id = ?1",
+            params![session_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .map_err(|e| format!("无法读取运行遥测工作负载: {e}"))?;
+    Ok(stored.map(|value| ModelWorkload::from_storage(&value)))
+}
+
+pub fn session_workload(session_id: Option<&str>) -> Result<ModelWorkload, String> {
+    let Some(session_id) = session_id else {
+        return Ok(ModelWorkload::Inference);
+    };
+    let conn = open_connection()?;
+    Ok(session_workload_from_connection(&conn, session_id)?.unwrap_or(ModelWorkload::Inference))
+}
+
 pub fn begin_run_session(
     instance_id: &str,
-    instance_name: &str,
-    model_path: &str,
-    engine_id: &str,
+    config: &InstanceConfig,
     backend: &str,
     config_hash: &str,
     command_line: &str,
+    workload: ModelWorkload,
 ) -> Result<String, String> {
     let conn = open_connection()?;
     let id = uuid::Uuid::new_v4().to_string();
-    let model_name = std::path::Path::new(model_path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(model_path)
-        .to_string();
-    conn.execute(
-        "INSERT INTO run_sessions
-            (id, instance_id, instance_name, model_name, model_path, engine_id, backend, config_hash, command_line, started_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![
-            id,
+    insert_run_session(
+        &conn,
+        &RunSessionStart {
+            id: &id,
             instance_id,
-            instance_name,
-            model_name,
-            model_path,
-            engine_id,
+            instance_name: &config.name,
+            model_path: &config.model_path,
+            engine_id: &config.engine_id,
             backend,
             config_hash,
             command_line,
-            now_ms(),
-        ],
-    )
-    .map_err(|e| format!("无法创建运行遥测会话: {}", e))?;
+            workload,
+            started_at: now_ms(),
+        },
+    )?;
     Ok(id)
 }
 
@@ -493,6 +551,17 @@ pub fn record_metric_sample(
         return Ok(());
     };
     let conn = open_connection()?;
+    insert_metric_sample(&conn, session_id, instance_id, now_ms(), system, llama)
+}
+
+fn insert_metric_sample(
+    conn: &Connection,
+    session_id: &str,
+    instance_id: &str,
+    timestamp: i64,
+    system: &SystemMetrics,
+    llama: Option<&LlamaMetricSample>,
+) -> Result<(), String> {
     let cpu = Some(system.cpu_percent as f64);
     let memory = Some(system.memory_mb);
     let gpu = system.gpu_percent.map(|v| v as f64);
@@ -501,13 +570,15 @@ pub fn record_metric_sample(
         "INSERT INTO metric_samples
             (session_id, instance_id, ts, cpu_percent, memory_mb, gpu_percent, vram_used_mb, vram_total_mb,
              system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, tokens_per_sec,
-             prompt_tokens_total, generated_tokens_total, requests_total, prompt_tokens_per_sec,
-             requests_processing, requests_deferred, busy_slots_per_decode)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+             prompt_tokens_total, generated_tokens_total, requests_total, decode_calls_total,
+             max_tokens_observed, prompt_tokens_per_sec, requests_processing, requests_deferred,
+             busy_slots_per_decode)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
+                 ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         params![
             session_id,
             instance_id,
-            now_ms(),
+            timestamp,
             cpu,
             memory,
             gpu,
@@ -520,7 +591,9 @@ pub fn record_metric_sample(
             llama.map(|m| m.tokens_per_sec),
             llama.map(|m| m.prompt_tokens as i64),
             llama.map(|m| m.gen_tokens as i64),
-            llama.map(|m| m.requests as i64),
+            llama.map(|m| m.decode_calls_total as i64),
+            llama.map(|m| m.decode_calls_total as i64),
+            llama.map(|m| m.max_tokens_observed as i64),
             llama.map(|m| m.prompt_tokens_per_sec),
             llama.map(|m| m.requests_processing as i64),
             llama.map(|m| m.requests_deferred as i64),
@@ -1402,7 +1475,8 @@ fn latest_samples(conn: &Connection, limit: u32) -> Result<Vec<TelemetrySampleSu
             "SELECT session_id, instance_id, ts, cpu_percent, memory_mb, gpu_percent, vram_used_mb, vram_total_mb,
                     system_cpu_percent, system_memory_used_mb, system_memory_total_mb, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
-                    requests_processing, requests_deferred, busy_slots_per_decode
+                    decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
+                    busy_slots_per_decode
              FROM metric_samples
              ORDER BY ts DESC
              LIMIT ?1",
@@ -1428,7 +1502,8 @@ fn samples_for_session(
             "SELECT session_id, instance_id, ts, cpu_percent, memory_mb, gpu_percent, vram_used_mb, vram_total_mb,
                     system_cpu_percent, system_memory_used_mb, system_memory_total_mb, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
-                    requests_processing, requests_deferred, busy_slots_per_decode
+                    decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
+                    busy_slots_per_decode
              FROM metric_samples
              WHERE session_id = ?1
              ORDER BY ts DESC
@@ -1464,9 +1539,11 @@ fn sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TelemetrySampleS
         prompt_tokens_total: row.get(13)?,
         generated_tokens_total: row.get(14)?,
         requests_total: row.get(15)?,
-        requests_processing: row.get(16)?,
-        requests_deferred: row.get(17)?,
-        busy_slots_per_decode: row.get(18)?,
+        decode_calls_total: row.get(16)?,
+        max_tokens_observed: row.get(17)?,
+        requests_processing: row.get(18)?,
+        requests_deferred: row.get(19)?,
+        busy_slots_per_decode: row.get(20)?,
     })
 }
 
@@ -1528,6 +1605,111 @@ mod tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap()
+    }
+
+    #[test]
+    fn run_session_insert_persists_workload() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "session-reranker",
+                instance_id: "instance-reranker",
+                instance_name: "Reranker",
+                model_path: "C:/models/reranker.gguf",
+                engine_id: "engine",
+                backend: "vulkan",
+                config_hash: "hash",
+                command_line: "llama-server --embedding --reranking",
+                workload: ModelWorkload::Reranker,
+                started_at: 42,
+            },
+        )
+        .unwrap();
+
+        let workload: String = conn
+            .query_row(
+                "SELECT workload FROM run_sessions WHERE id = 'session-reranker'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(workload, "reranker");
+        assert_eq!(
+            session_workload_from_connection(&conn, "session-reranker").unwrap(),
+            Some(ModelWorkload::Reranker)
+        );
+        assert_eq!(
+            session_workload_from_connection(&conn, "missing").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn metric_sample_persists_decode_calls_and_max_tokens() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "session-metrics",
+                instance_id: "instance-metrics",
+                instance_name: "Metrics",
+                model_path: "model.gguf",
+                engine_id: "engine",
+                backend: "cpu",
+                config_hash: "hash",
+                command_line: "llama-server --model model.gguf",
+                workload: ModelWorkload::Inference,
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let system = SystemMetrics {
+            cpu_percent: 1.0,
+            memory_mb: 2.0,
+            uptime_secs: 3,
+            gpu_percent: None,
+            vram_used_mb: None,
+            vram_total_mb: None,
+            system_cpu_percent: None,
+            system_memory_total_mb: None,
+            system_memory_used_mb: None,
+            gpu_vendor: None,
+        };
+        let llama = LlamaMetricSample {
+            tokens_per_sec: 4.0,
+            prompt_tokens: 5,
+            gen_tokens: 6,
+            decode_calls_total: 17,
+            max_tokens_observed: 4096,
+            prompt_tokens_per_sec: 7.0,
+            requests_processing: 1,
+            requests_deferred: 0,
+            busy_slots_per_decode: 1.0,
+        };
+
+        insert_metric_sample(
+            &conn,
+            "session-metrics",
+            "instance-metrics",
+            100,
+            &system,
+            Some(&llama),
+        )
+        .unwrap();
+
+        let values: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT requests_total, decode_calls_total, max_tokens_observed
+                 FROM metric_samples WHERE session_id = 'session-metrics'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(values, (17, 17, 4096));
     }
 
     #[test]

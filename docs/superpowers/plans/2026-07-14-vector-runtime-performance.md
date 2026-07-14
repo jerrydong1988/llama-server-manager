@@ -232,11 +232,11 @@ git commit -m "feat: aggregate vector runtime metrics"
 - Consumes: `normalize_for_launch(config).workload`, `llamacpp:n_decode_total`, `llamacpp:n_tokens_max`.
 - Produces: workload-pinned run sessions, restored workload context, unambiguous common sample fields.
 
-- [ ] **Step 1: Add failing session and metrics parser tests**
+- [x] **Step 1: Add failing session and metrics parser tests**
 
 Assert that a reranker session persists `reranker`, an embedding restart keeps `embedding`, and Prometheus parsing maps `n_decode_total` to `decode_calls_total` and `n_tokens_max` to `max_tokens_observed` without calling either an HTTP request count.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run:
 
@@ -247,7 +247,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked commands::server::tests
 
 Expected: FAIL on missing workload argument and sample fields.
 
-- [ ] **Step 3: Thread workload through all session creation paths**
+- [x] **Step 3: Thread workload through all session creation paths**
 
 Retain the `VectorNormalization` result in `start_server` instead of immediately calling `.into_config()`. Change `begin_run_session` to accept `ModelWorkload`. Pass the same value into log collection and store it on `RunningInstance` only if restoration needs it; prefer the persisted session value when reconnecting an existing telemetry session.
 
@@ -260,11 +260,11 @@ let session_id = telemetry::begin_run_session(&app, &config, workload, &command_
 
 Audit manual start, auto-start, restored-running-instance and log-tail attachment paths so no call site silently defaults a vector launch to inference.
 
-- [ ] **Step 4: Rename new common sample semantics**
+- [x] **Step 4: Rename new common sample semantics**
 
 Extend `LlamaMetricSample`, insert/query structs and serialized summaries with `decode_calls_total` and `max_tokens_observed`. Continue populating legacy `requests_total` only as required for old rows, but stop using its label or value in new frontend analysis.
 
-- [ ] **Step 5: Run server and telemetry tests**
+- [x] **Step 5: Run server and telemetry tests**
 
 Run:
 
@@ -275,7 +275,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked commands::telemetry
 
 Expected: all tests pass and inference session creation remains unchanged.
 
-- [ ] **Step 6: Commit workload propagation**
+- [x] **Step 6: Commit workload propagation**
 
 ```bash
 git add src-tauri/src/commands/server.rs src-tauri/src/commands/telemetry.rs src-tauri/src/models.rs
