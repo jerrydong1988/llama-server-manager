@@ -104,6 +104,38 @@ impl ModelWorkload {
     pub fn is_vector(self) -> bool {
         self != Self::Inference
     }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inference => "inference",
+            Self::Embedding => "embedding",
+            Self::Reranker => "reranker",
+        }
+    }
+
+    pub fn from_storage(value: &str) -> Self {
+        match value {
+            "embedding" => Self::Embedding,
+            "reranker" => Self::Reranker,
+            _ => Self::Inference,
+        }
+    }
+
+    pub fn from_command_line(command_line: &str) -> Self {
+        let mut embedding = false;
+        for argument in command_line.split_whitespace() {
+            match argument.trim_matches('"') {
+                "--reranking" => return Self::Reranker,
+                "--embedding" => embedding = true,
+                _ => {}
+            }
+        }
+        if embedding {
+            Self::Embedding
+        } else {
+            Self::Inference
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -211,6 +243,37 @@ fn has_hint(value: &str, hints: &[&str]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workload_storage_round_trip_is_stable() {
+        assert_eq!(ModelWorkload::Inference.as_str(), "inference");
+        assert_eq!(ModelWorkload::Embedding.as_str(), "embedding");
+        assert_eq!(ModelWorkload::Reranker.as_str(), "reranker");
+        assert_eq!(
+            ModelWorkload::from_storage("embedding"),
+            ModelWorkload::Embedding
+        );
+        assert_eq!(
+            ModelWorkload::from_storage("reranker"),
+            ModelWorkload::Reranker
+        );
+        assert_eq!(
+            ModelWorkload::from_storage("unknown"),
+            ModelWorkload::Inference
+        );
+        assert_eq!(
+            ModelWorkload::from_command_line("llama-server --embedding"),
+            ModelWorkload::Embedding
+        );
+        assert_eq!(
+            ModelWorkload::from_command_line("llama-server --embedding --reranking"),
+            ModelWorkload::Reranker
+        );
+        assert_eq!(
+            ModelWorkload::from_command_line("llama-server --model llama.gguf"),
+            ModelWorkload::Inference
+        );
+    }
 
     fn write_minimal_gguf(path: &Path, architecture: &str) {
         let key = b"general.architecture";

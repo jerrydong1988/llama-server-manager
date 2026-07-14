@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TelemetryOverview {
@@ -199,6 +199,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             backend TEXT NOT NULL,
             config_hash TEXT NOT NULL,
             command_line TEXT NOT NULL,
+            workload TEXT NOT NULL DEFAULT 'inference',
             started_at INTEGER NOT NULL,
             stopped_at INTEGER,
             exit_code INTEGER,
@@ -223,6 +224,8 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             prompt_tokens_total INTEGER,
             generated_tokens_total INTEGER,
             requests_total INTEGER,
+            decode_calls_total INTEGER,
+            max_tokens_observed INTEGER,
             prompt_tokens_per_sec REAL,
             requests_processing INTEGER,
             requests_deferred INTEGER,
@@ -277,10 +280,34 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
 
         CREATE INDEX IF NOT EXISTS idx_slot_snapshots_session_ts
             ON slot_snapshots(session_id, ts);
+
+        CREATE TABLE IF NOT EXISTS vector_activity_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            source TEXT NOT NULL CHECK(source IN ('log', 'proxy')),
+            source_event_id INTEGER NOT NULL,
+            workload TEXT NOT NULL CHECK(workload IN ('embedding', 'reranker')),
+            endpoint TEXT,
+            started_at INTEGER NOT NULL,
+            completed_at INTEGER NOT NULL,
+            duration_ms REAL NOT NULL,
+            item_count INTEGER NOT NULL DEFAULT 1 CHECK(item_count >= 0),
+            input_tokens INTEGER CHECK(input_tokens IS NULL OR input_tokens >= 0),
+            http_status INTEGER,
+            error_text TEXT,
+            UNIQUE(session_id, source, source_event_id),
+            FOREIGN KEY(session_id) REFERENCES run_sessions(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_vector_activity_session_completed
+            ON vector_activity_events(session_id, completed_at);
+        CREATE INDEX IF NOT EXISTS idx_vector_activity_session_source_completed
+            ON vector_activity_events(session_id, source, completed_at);
         "#,
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
     migrate_inference_request_columns(conn)?;
+    migrate_vector_schema(conn)?;
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
             ON inference_requests(source, completed_at DESC)",
@@ -292,15 +319,19 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn migrate_inference_request_columns(conn: &Connection) -> Result<(), String> {
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
     let mut stmt = conn
-        .prepare("PRAGMA table_info(inference_requests)")
-        .map_err(|e| format!("failed to read inference request schema: {}", e))?;
-    let columns = stmt
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("failed to read {table} schema: {e}"))?;
+    let rows = stmt
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|e| format!("failed to query inference request schema: {}", e))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("failed to parse inference request schema: {}", e))?;
+        .map_err(|e| format!("failed to query {table} schema: {e}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to parse {table} schema: {e}"))
+}
+
+fn migrate_inference_request_columns(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "inference_requests")?;
 
     let additions = [
         ("source", "TEXT NOT NULL DEFAULT 'log'"),
@@ -319,6 +350,43 @@ fn migrate_inference_request_columns(conn: &Connection) -> Result<(), String> {
                 [],
             )
             .map_err(|e| format!("failed to migrate inference request schema: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
+    let session_columns = table_columns(conn, "run_sessions")?;
+    if !session_columns.iter().any(|column| column == "workload") {
+        conn.execute(
+            "ALTER TABLE run_sessions ADD COLUMN workload TEXT NOT NULL DEFAULT 'inference'",
+            [],
+        )
+        .map_err(|e| format!("failed to add telemetry workload column: {e}"))?;
+    }
+    conn.execute(
+        "UPDATE run_sessions
+         SET workload = CASE
+             WHEN instr(command_line, '--reranking') > 0 THEN 'reranker'
+             WHEN instr(command_line, '--embedding') > 0 THEN 'embedding'
+             ELSE 'inference'
+         END
+         WHERE workload IS NULL OR workload = '' OR workload = 'inference'",
+        [],
+    )
+    .map_err(|e| format!("failed to backfill telemetry workload: {e}"))?;
+
+    let sample_columns = table_columns(conn, "metric_samples")?;
+    for (name, definition) in [
+        ("decode_calls_total", "INTEGER"),
+        ("max_tokens_observed", "INTEGER"),
+    ] {
+        if !sample_columns.iter().any(|column| column == name) {
+            conn.execute(
+                &format!("ALTER TABLE metric_samples ADD COLUMN {name} {definition}"),
+                [],
+            )
+            .map_err(|e| format!("failed to migrate metric sample schema: {e}"))?;
         }
     }
     Ok(())
@@ -688,6 +756,7 @@ fn prune_connection(conn: &mut Connection, before: i64) -> Result<u32, String> {
         ("metric_samples", "ts"),
         ("slot_snapshots", "ts"),
         ("inference_requests", "completed_at"),
+        ("vector_activity_events", "completed_at"),
     ] {
         affected += tx
             .execute(
@@ -1367,8 +1436,143 @@ fn sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TelemetrySampleS
 }
 
 #[cfg(test)]
-mod retention_tests {
+mod tests {
     use super::*;
+
+    fn version_four_connection() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            PRAGMA foreign_keys = ON;
+            PRAGMA user_version = 4;
+            CREATE TABLE run_sessions (
+                id TEXT PRIMARY KEY,
+                instance_id TEXT NOT NULL,
+                instance_name TEXT NOT NULL,
+                model_name TEXT NOT NULL,
+                model_path TEXT NOT NULL,
+                engine_id TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                config_hash TEXT NOT NULL,
+                command_line TEXT NOT NULL,
+                started_at INTEGER NOT NULL,
+                stopped_at INTEGER,
+                exit_code INTEGER,
+                stop_reason TEXT
+            );
+            CREATE TABLE metric_samples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                instance_id TEXT NOT NULL,
+                ts INTEGER NOT NULL,
+                requests_total INTEGER,
+                FOREIGN KEY(session_id) REFERENCES run_sessions(id) ON DELETE CASCADE
+            );
+            INSERT INTO run_sessions
+                (id, instance_id, instance_name, model_name, model_path, engine_id, backend,
+                 config_hash, command_line, started_at)
+            VALUES
+                ('inference', 'i1', 'Inference', 'llama.gguf', 'llama.gguf', 'e1', 'cpu',
+                 'h1', 'llama-server --model llama.gguf', 1),
+                ('embedding', 'i2', 'Embedding', 'embed.gguf', 'embed.gguf', 'e1', 'cuda',
+                 'h2', 'llama-server --embedding --model embed.gguf', 2),
+                ('reranker', 'i3', 'Reranker', 'rerank.gguf', 'rerank.gguf', 'e1', 'vulkan',
+                 'h3', 'llama-server --embedding --reranking --model rerank.gguf', 3);
+            "#,
+        )
+        .unwrap();
+        conn
+    }
+
+    fn column_names(conn: &Connection, table: &str) -> Vec<String> {
+        let mut statement = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        statement
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn version_four_database_migrates_vector_schema_once() {
+        let conn = version_four_connection();
+
+        init_schema(&conn).unwrap();
+        init_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 5);
+        assert_eq!(
+            column_names(&conn, "run_sessions")
+                .iter()
+                .filter(|column| column.as_str() == "workload")
+                .count(),
+            1
+        );
+        for (session_id, expected) in [
+            ("inference", "inference"),
+            ("embedding", "embedding"),
+            ("reranker", "reranker"),
+        ] {
+            let workload: String = conn
+                .query_row(
+                    "SELECT workload FROM run_sessions WHERE id = ?1",
+                    params![session_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(workload, expected);
+        }
+        let sample_columns = column_names(&conn, "metric_samples");
+        assert!(sample_columns
+            .iter()
+            .any(|column| column == "decode_calls_total"));
+        assert!(sample_columns
+            .iter()
+            .any(|column| column == "max_tokens_observed"));
+        for index_name in [
+            "idx_vector_activity_session_completed",
+            "idx_vector_activity_session_source_completed",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    params![index_name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(count, 1);
+        }
+
+        conn.execute(
+            "INSERT INTO vector_activity_events
+                (session_id, source, source_event_id, workload, started_at, completed_at,
+                 duration_ms, item_count, input_tokens)
+             VALUES ('embedding', 'log', 7, 'embedding', 10, 20, 10.0, 1, 8)",
+            [],
+        )
+        .unwrap();
+        let duplicate = conn.execute(
+            "INSERT INTO vector_activity_events
+                (session_id, source, source_event_id, workload, started_at, completed_at,
+                 duration_ms, item_count, input_tokens)
+             VALUES ('embedding', 'log', 7, 'embedding', 10, 20, 10.0, 1, 8)",
+            [],
+        );
+        assert!(duplicate.is_err());
+        conn.execute("DELETE FROM run_sessions WHERE id = 'embedding'", [])
+            .unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vector_activity_events", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(remaining, 0);
+    }
 
     #[test]
     fn pruning_removes_old_samples_from_active_sessions() {
@@ -1395,6 +1599,42 @@ mod retention_tests {
         let removed = prune_connection(&mut conn, 500).unwrap();
         let remaining: i64 = conn
             .query_row("SELECT COUNT(*) FROM metric_samples", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(removed, 1);
+        assert_eq!(remaining, 1);
+    }
+
+    #[test]
+    fn pruning_removes_old_vector_events_from_active_sessions() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        init_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO run_sessions
+                (id, instance_id, instance_name, model_name, model_path, engine_id, backend,
+                 config_hash, command_line, workload, started_at)
+             VALUES ('active-vector', 'instance', 'Instance', 'Model', 'model.gguf', 'engine',
+                     'cpu', 'hash', 'cmd --embedding', 'embedding', 1)",
+            [],
+        )
+        .unwrap();
+        for (source_event_id, completed_at) in [(1_i64, 100_i64), (2_i64, 1_000_i64)] {
+            conn.execute(
+                "INSERT INTO vector_activity_events
+                    (session_id, source, source_event_id, workload, started_at, completed_at,
+                     duration_ms, item_count)
+                 VALUES ('active-vector', 'log', ?1, 'embedding', ?2 - 10, ?2, 10.0, 1)",
+                params![source_event_id, completed_at],
+            )
+            .unwrap();
+        }
+
+        let removed = prune_connection(&mut conn, 500).unwrap();
+        let remaining: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vector_activity_events", [], |row| {
+                row.get(0)
+            })
             .unwrap();
 
         assert_eq!(removed, 1);

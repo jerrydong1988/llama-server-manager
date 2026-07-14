@@ -34,7 +34,7 @@
 - Consumes: `ModelWorkload`, normalized launch configuration, existing telemetry database versions 1-4.
 - Produces: stable storage values `inference | embedding | reranker`, schema version 5, workload-aware sessions, vector event storage, explicit decode sample fields.
 
-- [ ] **Step 1: Add failing workload and migration tests**
+- [x] **Step 1: Add failing workload and migration tests**
 
 Add tests for stable workload strings, historical command-line inference, fresh schema creation, version-4 migration, repeated migration, workload backfill, indexes, uniqueness, and session cascade deletion.
 
@@ -58,7 +58,7 @@ fn version_four_database_migrates_vector_schema_once() {
 }
 ```
 
-- [ ] **Step 2: Run focused Rust tests and verify failure**
+- [x] **Step 2: Run focused Rust tests and verify failure**
 
 Run:
 
@@ -69,7 +69,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked commands::telemetry::te
 
 Expected: FAIL because workload serialization and schema version 5 do not exist.
 
-- [ ] **Step 3: Add stable workload conversion helpers**
+- [x] **Step 3: Add stable workload conversion helpers**
 
 Extend `ModelWorkload` without changing current classification precedence.
 
@@ -88,7 +88,7 @@ impl ModelWorkload {
 }
 ```
 
-- [ ] **Step 4: Implement idempotent schema version 5**
+- [x] **Step 4: Implement idempotent schema version 5**
 
 Increase `SCHEMA_VERSION` to 5. Add `run_sessions.workload`, `metric_samples.decode_calls_total`, `metric_samples.max_tokens_observed`, and `vector_activity_events`. Use column-existence checks before `ALTER TABLE`, backfill session workload from `command_line`, create both event indexes with `IF NOT EXISTS`, and retain `requests_total` unchanged for compatibility.
 
@@ -112,11 +112,11 @@ CREATE TABLE IF NOT EXISTS vector_activity_events (
 );
 ```
 
-- [ ] **Step 5: Keep pruning and deletion lifecycle complete**
+- [x] **Step 5: Keep pruning and deletion lifecycle complete**
 
 Verify old-session deletion cascades to vector events. Extend active-session retention pruning to delete vector events older than the cutoff, matching the current behavior for metric samples and request rows.
 
-- [ ] **Step 6: Run migration, retention, and complete Rust tests**
+- [x] **Step 6: Run migration, retention, and complete Rust tests**
 
 Run:
 
@@ -127,7 +127,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked vector_policy
 
 Expected: all focused tests pass; repeated migration leaves one workload column and one copy of each index.
 
-- [ ] **Step 7: Commit schema and workload storage**
+- [x] **Step 7: Commit schema and workload storage**
 
 ```bash
 git add src-tauri/src/vector_policy.rs src-tauri/src/commands/telemetry.rs
