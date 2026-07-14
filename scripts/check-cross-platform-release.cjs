@@ -7,6 +7,26 @@ const signingPolicy = fs.readFileSync('CODE_SIGNING_POLICY.md', 'utf8')
 const privacyPolicy = fs.readFileSync('PRIVACY.md', 'utf8')
 const signingGuide = fs.readFileSync('docs/RELEASE_SIGNING.md', 'utf8')
 const failures = []
+const rustsecNode24Commit = '858dc40f52ca2b8570b7a997c1c4e35c6fc9a432'
+const approvedRustsecAdvisories = [
+  'RUSTSEC-2024-0370',
+  'RUSTSEC-2024-0411',
+  'RUSTSEC-2024-0412',
+  'RUSTSEC-2024-0413',
+  'RUSTSEC-2024-0414',
+  'RUSTSEC-2024-0415',
+  'RUSTSEC-2024-0416',
+  'RUSTSEC-2024-0417',
+  'RUSTSEC-2024-0418',
+  'RUSTSEC-2024-0419',
+  'RUSTSEC-2024-0420',
+  'RUSTSEC-2024-0429',
+  'RUSTSEC-2025-0075',
+  'RUSTSEC-2025-0080',
+  'RUSTSEC-2025-0081',
+  'RUSTSEC-2025-0098',
+  'RUSTSEC-2025-0100',
+]
 
 function jobBody(name) {
   const marker = `  ${name}:`
@@ -36,11 +56,30 @@ for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-a
 }
 
 const qualityJob = jobBody('quality')
-if (!qualityJob.includes('rustsec/audit-check@v2.0.0')) {
-  failures.push('quality job does not audit Rust dependencies with RustSec')
+if (!qualityJob.includes(`RustSec/audit-check@${rustsecNode24Commit}`)) {
+  failures.push('quality job does not pin the reviewed Node 24 RustSec action commit')
 }
 if (!qualityJob.includes('working-directory: src-tauri')) {
   failures.push('RustSec audit is not scoped to the Tauri Cargo.lock')
+}
+const rustsecIgnoreMatch = qualityJob.match(/^\s+ignore:\s*([^\r\n]+)$/m)
+const configuredAdvisories = rustsecIgnoreMatch
+  ? rustsecIgnoreMatch[1].split(',').map(value => value.trim()).filter(Boolean)
+  : []
+const uniqueConfiguredAdvisories = [...new Set(configuredAdvisories)].sort()
+const expectedAdvisories = [...approvedRustsecAdvisories].sort()
+if (JSON.stringify(uniqueConfiguredAdvisories) !== JSON.stringify(expectedAdvisories)) {
+  failures.push('RustSec audit exceptions do not exactly match the 17 approved upstream advisories')
+}
+if (configuredAdvisories.length !== uniqueConfiguredAdvisories.length) {
+  failures.push('RustSec audit exceptions contain duplicate advisory IDs')
+}
+for (const forbidden of [
+  'rustsec/audit-check@v2.0.0',
+  'ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION',
+  'informational_warnings = []',
+]) {
+  if (workflow.includes(forbidden)) failures.push(`RustSec workflow contains forbidden broad bypass ${forbidden}`)
 }
 
 const windowsJob = jobBody('build-windows')
