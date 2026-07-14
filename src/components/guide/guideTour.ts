@@ -75,8 +75,8 @@ export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
     id: 'performance',
     tab: 'perf',
     selector: '[data-guide="perf-select"]',
-    zh: { title: '性能监控', description: '查看资源信号、吞吐、槽位与请求分析。' },
-    en: { title: 'Performance', description: 'Inspect resources, throughput, slots, and request analysis.' },
+    zh: { title: '性能监控', description: '按生成或 Embedding / Reranker 工作负载查看资源、吞吐、任务日志与代理请求。' },
+    en: { title: 'Performance', description: 'Inspect workload-aware resources and throughput from task logs and proxied requests.' },
   },
   {
     id: 'bigscreen',

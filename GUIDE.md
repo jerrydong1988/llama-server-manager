@@ -373,25 +373,31 @@ Instance Routing exposes one OpenAI-compatible endpoint and forwards requests to
 
 ## 性能监控 / Performance Monitoring
 
-性能监控结合系统指标、实例指标、slots、日志时序和 SQLite 遥测，展示当前吞吐、历史会话、请求分析和诊断建议。
+性能监控结合系统指标、实例指标、slots、日志时序和 SQLite 遥测，并按会话锁定生成、Embedding 或 Reranker 工作负载，展示与当前服务类型匹配的运行吞吐、历史基线和诊断建议。
 
-Performance Monitoring combines system signals, instance metrics, slots, log timing, and SQLite telemetry for current throughput, historical sessions, request analysis, and diagnostics.
+Performance Monitoring combines system signals, instance metrics, slots, log timing, and SQLite telemetry. Each session is pinned to its generation, Embedding, or Reranker workload so throughput, history, and diagnostics keep the correct meaning after configuration changes.
 
 ![实例选择、资源指标、吞吐和诊断 / Instance selection, resource metrics, throughput, and diagnostics](public/docs/guide/09-performance.png)
 
 ### 查看指标 / Read the Metrics
 
-1. 从左侧选择正在运行的实例。
-2. 查看 CPU / 内存和 GPU / 显存压力。
-3. 查看当前 tokens/s、提示处理速度、排队深度和忙碌槽位。
-4. 在会话历史中选择一次运行，对比请求吞吐和峰值显存。
-5. 查看诊断卡片，再结合日志判断是否需要调整上下文、批大小或并发。
+1. 从左侧选择正在运行的实例，工作负载徽标会显示本次会话实际记录的服务类型。
+2. CPU、内存、GPU 和显存是三类工作负载共用的资源信号。
+3. 生成模型查看输出 tokens/s、提示处理速度、排队深度和忙碌槽位。
+4. Embedding：输入 tokens/s、向量项/s、任务耗时 P50 / P95 和已完成向量项数。
+5. Reranker：输入 tokens/s、文档项/s、任务耗时 P50 / P95 和已完成文档项数。
+6. 任务日志覆盖应用内代理请求和绕过代理的直连请求，用于统计任务吞吐与耗时；代理请求统计仅覆盖经过实例路由的 HTTP 请求，并补充请求数、失败率及请求耗时。
+7. 页面会分别标明日志来源和代理来源。某个来源没有可确认的数据时显示“不可用”或 `--`，不会用 `0` 冒充已测量结果；已测量时间桶内确实空闲时才显示零值。
+8. 历史基线只比较相同模型、工作负载和后端的会话。向量服务的诊断聚焦资源压力、吞吐和 P95 变化，不显示生成模型专用的 KV 缓存、上下文和解码建议。
 
-1. Select a running instance.
-2. Review CPU, memory, GPU, and VRAM pressure.
-3. Inspect tokens per second, prompt speed, queue depth, and busy slots.
-4. Select a session to compare request throughput and peak VRAM.
-5. Use diagnostics together with logs before tuning context, batch size, or concurrency.
+1. Select a running instance; the workload badge shows the service type recorded for that session.
+2. CPU, memory, GPU, and VRAM are common resource signals across all workloads.
+3. Generation workloads show output tokens/s, prompt processing speed, queue depth, and busy slots.
+4. Embedding: input tokens/s and vector items/s, plus task P50/P95 latency and completed vector items.
+5. Reranker: input tokens/s and document items/s, plus task P50/P95 latency and completed document items.
+6. Task logs cover both proxied requests and direct requests that bypass the app proxy, providing task throughput and latency. Proxied request telemetry covers only HTTP traffic routed by the app and adds request count, failure rate, and request latency.
+7. Log and proxy source availability are shown separately. Missing evidence is labeled unavailable or `--`, never presented as a measured zero; zero is used only for an observed idle bucket.
+8. Historical baselines compare sessions with the same model, workload, and backend. Vector diagnostics focus on resource pressure, throughput, and P95 changes without generation-only KV-cache, context, or decoding advice.
 
 AMD 指标优先使用 ADLX，NVIDIA 使用 NVML，无法取得 GPU 指标时会回退到系统指标。页面没有实例时不会保留上一个实例的过期实时数据。
 

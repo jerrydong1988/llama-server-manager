@@ -62,9 +62,9 @@ Expose running instances through one OpenAI-compatible endpoint with aliases, au
 
 ### 性能监控 / Performance Monitoring
 
-查看 CPU、内存、GPU、显存、tokens/s、slots、请求历史、会话对比和诊断建议。
+查看 CPU、内存、GPU、显存、历史会话和诊断建议；生成模型显示输出 tokens/s 与 slots，Embedding 输入 tokens/s、向量项/s，Reranker 输入 tokens/s、文档项/s。任务日志覆盖直连请求和应用内流量，代理请求统计补充 HTTP 请求数、耗时和失败率；未取得的来源会明确显示为不可用。
 
-Inspect CPU, memory, GPU, VRAM, tokens per second, slots, request history, session comparisons, and diagnostics.
+Inspect resources, history, and diagnostics with workload-aware metrics: output tokens/s and slots for generation, input tokens/s and vector items/s for Embedding, and input tokens/s and document items/s for Reranker. Task logs include direct traffic, while proxy telemetry adds HTTP request counts, latency, and failures; missing sources remain explicitly unavailable.
 
 ![性能监控 / Performance Monitoring](public/docs/guide/09-performance.png)
 
@@ -80,7 +80,7 @@ Inspect CPU, memory, GPU, VRAM, tokens per second, slots, request history, sessi
 | 参数配置 | 搜索、预设、校验、鉴权、缓存和推测解码 | Configuration | Search, presets, validation, auth, cache, speculative decoding |
 | 集群管理 | Worker 发现、本地与 SSH 启动、RPC 配置 | Cluster | Worker discovery, local or SSH launch, RPC configuration |
 | 实例路由 | 统一 API、模型别名、鉴权、后台保活 | Routing | Unified API, aliases, authentication, keep-alive |
-| 性能监控 | 实时指标、SQLite 遥测、请求分析和诊断 | Performance | Live metrics, SQLite telemetry, request analysis, diagnostics |
+| 性能监控 | 生成与向量吞吐、双来源遥测、历史基线和诊断 | Performance | Generation and vector throughput, dual-source telemetry, baselines, diagnostics |
 | 监控大屏 | 服务健康、吞吐、压力、下载和告警 | Monitoring Wall | Health, throughput, pressure, downloads, alerts |
 | 服务器日志 | 实时 stdout/stderr、筛选、跟随和持久化 | Logs | Live output, filtering, tail follow, persistence |
 | 使用说明 | 离线图文手册、启用检查和 11 步引导 | Guide | Offline illustrated manual, checklist, 11-step tour |

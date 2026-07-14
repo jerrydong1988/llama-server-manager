@@ -85,6 +85,25 @@ function collectFiles(directory, extension) {
   })
 }
 
+function extractSection(markdown, englishHeading) {
+  const headings = [...markdown.matchAll(/^(#{2,6}) (.+)$/gm)]
+  const heading = headings.find((match) => match[2].includes(englishHeading))
+  if (!heading) return ''
+
+  const level = heading[1].length
+  const sectionStart = (heading.index || 0) + heading[0].length
+  const nextHeading = headings.find(
+    (match) => (match.index || 0) > sectionStart && match[1].length <= level,
+  )
+  return markdown.slice(sectionStart, nextHeading?.index || markdown.length)
+}
+
+function requireMarkers(source, markers, label) {
+  for (const marker of markers) {
+    if (!source.includes(marker)) errors.add(`${label} must document: ${marker}`)
+  }
+}
+
 const packageJson = JSON.parse(readText(path.join(ROOT, 'package.json'), 'package.json') || '{}')
 const packageLock = JSON.parse(readText(path.join(ROOT, 'package-lock.json'), 'package-lock.json') || '{}')
 const cargoToml = readText(path.join(ROOT, 'src-tauri', 'Cargo.toml'), 'Cargo.toml')
@@ -98,6 +117,8 @@ const appShell = readText(APP_SHELL_PATH, 'src/components/shell/AppShell.tsx')
 const guidePage = readText(GUIDE_PAGE_PATH, 'src/components/GuidePage.tsx')
 const tour = readText(TOUR_PATH, 'src/components/guide/guideTour.ts')
 const ui = readText(UI_PATH, 'src/components/ui.tsx')
+const guidePerformance = extractSection(guide, 'Performance Monitoring')
+const readmePerformance = extractSection(readme, 'Performance Monitoring')
 const expectedVersion = packageJson.version || 'unknown'
 const cargoVersion = cargoToml.match(/^version\s*=\s*"([^"]+)"/m)?.[1]
 const lockedVersion = packageLock.packages?.['']?.version || packageLock.version
@@ -143,6 +164,43 @@ for (const section of REQUIRED_SECTIONS) {
     errors.add(`GUIDE.md is missing section: ${section}`)
   }
 }
+
+requireMarkers(
+  guidePerformance,
+  [
+    'Embedding：输入 tokens/s、向量项/s',
+    'Reranker：输入 tokens/s、文档项/s',
+    '直连请求',
+    '任务日志',
+    '代理请求',
+    '不可用',
+    'Embedding: input tokens/s and vector items/s',
+    'Reranker: input tokens/s and document items/s',
+    'direct requests',
+    'Task logs',
+    'proxied requests',
+    'unavailable',
+  ],
+  'GUIDE.md performance section',
+)
+
+requireMarkers(
+  readmePerformance,
+  [
+    'Embedding 输入 tokens/s、向量项/s',
+    'Reranker 输入 tokens/s、文档项/s',
+    '日志覆盖直连请求',
+    '代理请求统计',
+    'unavailable',
+  ],
+  'README.md performance section',
+)
+
+requireMarkers(
+  tour,
+  ['Embedding / Reranker', '任务日志与代理请求', 'task logs and proxied requests'],
+  'Performance walkthrough step',
+)
 
 const headings = new Map()
 for (const match of guide.matchAll(/^## (.+)$/gm)) {
