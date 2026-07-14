@@ -532,7 +532,7 @@ git commit -m "feat: expose vector telemetry analysis"
 - Consumes: additive Rust telemetry contracts and current language.
 - Produces: workload labels, source availability state, vector KPI rows, trend series, session comparison rows and diagnostic gating.
 
-- [ ] **Step 1: Add a failing bundled TypeScript test**
+- [x] **Step 1: Add a failing bundled TypeScript test**
 
 Follow `scripts/test-vector-model-policy.cjs`: bundle a TypeScript entry with esbuild and assert all three workloads plus only-log, only-proxy, full-data and no-data states.
 
@@ -549,29 +549,29 @@ assert.equal(buildPerformanceMode(inferenceSession).kind, 'inference')
 assert.equal(buildPerformanceMode(noLogVectorSession).inputThroughput, null)
 ```
 
-- [ ] **Step 2: Run script and verify failure**
+- [x] **Step 2: Run script and verify failure**
 
 Run: `node scripts/test-vector-performance.cjs`
 
 Expected: FAIL because `vectorPerformance.ts` and vector telemetry types do not exist.
 
-- [ ] **Step 3: Add TypeScript contracts matching Rust exactly**
+- [x] **Step 3: Add TypeScript contracts matching Rust exactly**
 
 Add `ModelWorkload = 'inference' | 'embedding' | 'reranker'` to shared store types if the existing frontend policy type cannot be imported without a cycle. Extend `TelemetrySessionSummary`, `TelemetrySampleSummary` and `TelemetrySessionAnalysis` additively. Use `number | null` for unavailable numeric values; do not coerce with `|| 0`.
 
-- [ ] **Step 4: Implement pure view-model helpers**
+- [x] **Step 4: Implement pure view-model helpers**
 
 Build workload-specific labels (`生成`, `Embedding`, `Reranker`), KPI selection, trend selection, source-state text, historical comparison rows and active-request column selection. Keep all branching outside the JSX where practical.
 
-- [ ] **Step 5: Add source-level safeguards to regression script**
+- [x] **Step 5: Add source-level safeguards to regression script**
 
 Assert that vector helpers never read `tokens_per_sec`, speculative acceptance or KV/context fields; assert that request count comes only from `proxy_request_count`; assert no helper labels `requests_total` as a request count.
 
-- [ ] **Step 6: Add test to release chain**
+- [x] **Step 6: Add test to release chain**
 
 Append `node scripts/test-vector-performance.cjs` to `test:regressions` near the existing vector policy test.
 
-- [ ] **Step 7: Run test, TypeScript and encoding checks**
+- [x] **Step 7: Run test, TypeScript and encoding checks**
 
 Run:
 
@@ -583,7 +583,7 @@ npm run check:encoding
 
 Expected: all checks pass with Chinese source intact.
 
-- [ ] **Step 8: Commit frontend model**
+- [x] **Step 8: Commit frontend model**
 
 ```bash
 git add src/components/PerformancePage/vectorPerformance.ts scripts/test-vector-performance.cjs src/store/types.ts package.json

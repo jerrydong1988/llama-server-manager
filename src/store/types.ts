@@ -230,6 +230,8 @@ export interface SystemMetrics {
   gpu_vendor: string | null
 }
 
+export type ModelWorkload = 'inference' | 'embedding' | 'reranker'
+
 export interface TelemetrySampleSummary {
   session_id: string
   instance_id: string
@@ -247,6 +249,8 @@ export interface TelemetrySampleSummary {
   prompt_tokens_total: number | null
   generated_tokens_total: number | null
   requests_total: number | null
+  decode_calls_total: number | null
+  max_tokens_observed: number | null
   requests_processing: number | null
   requests_deferred: number | null
   busy_slots_per_decode: number | null
@@ -268,6 +272,7 @@ export interface TelemetrySessionSummary {
   model_path: string
   engine_id: string
   backend: string
+  workload: ModelWorkload
   started_at: number
   stopped_at: number | null
   duration_secs: number | null
@@ -345,6 +350,32 @@ export interface TelemetrySessionAnalysis {
   avg_cached_slots: number
   max_context_tokens: number
   slot_sample_count: number
+  vector_analysis: VectorTelemetryAnalysis | null
+}
+
+export interface VectorTrendBucket {
+  timestamp: number
+  inputTokensPerSecond: number | null
+  itemsPerSecond: number
+}
+
+export interface VectorTelemetryAnalysis {
+  workload: Exclude<ModelWorkload, 'inference'>
+  logAvailable: boolean
+  proxyAvailable: boolean
+  completedItems: number | null
+  inputTokens: number | null
+  averageInputTokensPerSecond: number | null
+  averageItemsPerSecond: number | null
+  taskDurationP50Ms: number | null
+  taskDurationP95Ms: number | null
+  proxyRequestCount: number | null
+  proxyItemCount: number | null
+  proxyDurationP50Ms: number | null
+  proxyDurationP95Ms: number | null
+  proxySuccessRate: number | null
+  proxyFailureRate: number | null
+  trend: VectorTrendBucket[]
 }
 
 export interface DiagnosticFinding {
