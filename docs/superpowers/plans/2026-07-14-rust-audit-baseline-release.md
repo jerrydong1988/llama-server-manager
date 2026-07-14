@@ -29,27 +29,27 @@
 - Consumes: current Cargo dependency graph and Build workflow.
 - Produces: Node 24 RustSec audit with an exact advisory baseline and a non-yanked lockfile.
 
-- [ ] **Step 1: Add failing workflow policy assertions**
+- [x] **Step 1: Add failing workflow policy assertions**
 
 Require the Node 24 RustSec commit, every approved advisory ID, exactly 17 unique IDs, no `@v2.0.0`, no `ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION`, and no broad audit disable switch.
 
-- [ ] **Step 2: Run the release policy test and verify failure**
+- [x] **Step 2: Run the release policy test and verify failure**
 
 Run: `node scripts/check-cross-platform-release.cjs`
 
 Expected: failure because the workflow still uses `rustsec/audit-check@v2.0.0` and has no exact baseline.
 
-- [ ] **Step 3: Update compatible Rust dependencies**
+- [x] **Step 3: Update compatible Rust dependencies**
 
 Run: `cargo update --manifest-path src-tauri/Cargo.toml`
 
 Verify `spin 0.9.8` is absent and `spin 0.9.9` is present.
 
-- [ ] **Step 4: Pin the audit Action and exact advisory list**
+- [x] **Step 4: Pin the audit Action and exact advisory list**
 
 Use `RustSec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432` and its comma-separated `ignore` input. Document Tauri GTK3 and tauri-utils/urlpattern ownership next to the list.
 
-- [ ] **Step 5: Run focused and complete policy checks**
+- [x] **Step 5: Run focused and complete policy checks**
 
 Run:
 
@@ -76,11 +76,11 @@ Expected: all checks pass with no compiler warnings.
 - Consumes: verified dependency policy.
 - Produces: internally consistent v2.9.26 metadata and user guide.
 
-- [ ] **Step 1: Update all version sources to 2.9.26**
+- [x] **Step 1: Update all version sources to 2.9.26**
 
 Change only the application package versions; do not rewrite dependency package versions manually.
 
-- [ ] **Step 2: Run version and guide checks**
+- [x] **Step 2: Run version and guide checks**
 
 Run:
 
@@ -101,7 +101,7 @@ Expected: all checks pass and GUIDE declares v2.9.26.
 - Consumes: Tasks 1 and 2.
 - Produces: clean cross-platform test artifacts and zero unexpected audit annotations.
 
-- [ ] **Step 1: Run final local release checks**
+- [x] **Step 1: Run final local release checks**
 
 Run formatting, `npm run check:release`, `npm run build`, all Rust tests and strict Clippy.
 
