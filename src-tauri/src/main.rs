@@ -3,6 +3,7 @@
 mod commands;
 mod models;
 mod utils;
+mod vector_policy;
 
 use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
 use crate::commands::cluster::{
@@ -332,6 +333,7 @@ fn main() {
             engine_names: Mutex::new(HashMap::new()),
             instances: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
+            starting: Mutex::new(std::collections::HashSet::new()),
             config_dir: Mutex::new(config_dir),
             cancel_flags: Mutex::new(HashMap::new()),
             pause_flags: Mutex::new(HashMap::new()),
@@ -396,6 +398,8 @@ fn main() {
 mod tests {
     use crate::commands::server::generate_command;
     use crate::models::{InstanceConfig, ProxyConfig};
+    use crate::vector_policy::{classify_model_workload, ModelWorkload};
+    use std::path::Path;
 
     fn cfg() -> InstanceConfig {
         InstanceConfig {
@@ -424,6 +428,104 @@ mod tests {
         assert!(cmd.iter().any(|a| a == "--embedding"));
         assert!(!cmd.iter().any(|a| a == "--temp"));
         assert!(!cmd.iter().any(|a| a == "--top-k"));
+    }
+
+    #[test]
+    fn embedding_command_rejects_all_inference_only_flags() {
+        let mut c = cfg();
+        c.embedding = true;
+        c.spec_type = "draft-mtp".into();
+        c.draft_model_path = "/test/draft.gguf".into();
+        c.cache_type_draft_k = "q8_0".into();
+        c.cache_type_draft_v = "q8_0".into();
+        c.cache_prompt = false;
+        c.keep = 32;
+        c.cache_reuse = 64;
+        c.ctx_checkpoints = 16;
+        c.swa_full = true;
+        c.context_shift = true;
+        c.chat_template = "chatml".into();
+        c.temp = 1.5;
+        c.mmproj_path = "/test/mmproj.gguf".into();
+        c.ui_config_file = "/test/ui.json".into();
+        c.ui_config = "{}".into();
+        c.ui_mcp_proxy = true;
+        c.agent = true;
+        c.slot_save_path = "/test/slots".into();
+        c.models_dir = "/test/models".into();
+        c.models_preset = "preset".into();
+        c.models_max = 8;
+        c.image_min_tokens = 32;
+        c.image_max_tokens = 512;
+        c.mtmd_batch_max_tokens = 2048;
+        c.tags = "vision".into();
+        c.media_path = "/test/media".into();
+        c.tools = "tool.json".into();
+        c.slot_prompt_similarity = 0.9;
+        c.custom_args = vec![
+            "--spec-type draft-mtp".into(),
+            "--temp 1.5".into(),
+            "--draft-model /test/draft.gguf".into(),
+            "-ctkd q8_0".into(),
+        ];
+
+        let cmd = generate_command(&c, "");
+
+        for forbidden in [
+            "--spec-type",
+            "--temp",
+            "--draft-model",
+            "-ctkd",
+            "-ctvd",
+            "--no-cache-prompt",
+            "--keep",
+            "--cache-reuse",
+            "-ctxcp",
+            "--swa-full",
+            "--context-shift",
+            "--chat-template",
+            "--mmproj",
+            "--ui-config-file",
+            "--ui-config",
+            "--ui-mcp-proxy",
+            "--agent",
+            "--slot-save-path",
+            "--tools",
+            "-sps",
+            "--models-dir",
+            "--models-preset",
+            "--models-max",
+            "--image-min-tokens",
+            "--image-max-tokens",
+            "--mtmd-batch-max-tokens",
+            "--tags",
+            "--media-path",
+            "-cram",
+            "-cms",
+            "--prefill-assistant",
+            "--models-autoload",
+        ] {
+            assert!(
+                !cmd.iter().any(|arg| arg == forbidden),
+                "leaked {forbidden}"
+            );
+        }
+    }
+
+    #[test]
+    fn classifies_vector_workloads_without_matching_directories() {
+        assert_eq!(
+            classify_model_workload(Some("bert"), Path::new("C:/models/model.gguf")),
+            ModelWorkload::Embedding
+        );
+        assert_eq!(
+            classify_model_workload(None, Path::new("C:/models/bge-reranker-v2.gguf")),
+            ModelWorkload::Reranker
+        );
+        assert_eq!(
+            classify_model_workload(None, Path::new("C:/embedding/model.gguf")),
+            ModelWorkload::Inference
+        );
     }
 
     #[test]

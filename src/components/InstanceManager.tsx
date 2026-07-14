@@ -7,6 +7,7 @@ import { confirm } from '@tauri-apps/plugin-dialog'
 import { useI18n } from '../i18n'
 import { isPathWithinRoot, normalizePath, pathJoin, pathDirname } from '../utils/path'
 import { formatHostPort } from '../utils/network'
+import { normalizeInstanceConfig } from '../modelPolicy'
 import type { Instance, ModelInfo } from '../store/types'
 import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
@@ -196,6 +197,7 @@ const InstanceManager = () => {
     config.port = newInst.port
     config.host = '127.0.0.1'
     config.engine_id = newInst.engineId || defaultEngineId || ''
+    const normalized = normalizeInstanceConfig(config, model, { context: 'create' })
 
     if (!defaultEngineId && engines[0]) useAppStore.setState({ defaultEngineId: engines[0].id })
 
@@ -206,7 +208,7 @@ const InstanceManager = () => {
       model: model.name,
       port: newInst.port,
       healthCheck: 'pending',
-      config,
+      config: normalized.config,
     })
 
     setShowCreateModal(false)
@@ -509,7 +511,7 @@ const InstanceManager = () => {
                       </button>
                       {isRunning ? (
                         <Button
-                          onClick={() => stopInstance(inst.id)}
+                          onClick={() => void stopInstance(inst.id).catch(() => {})}
                           variant="danger"
                           size="sm"
                           className="h-8 w-[70px]"
@@ -519,7 +521,7 @@ const InstanceManager = () => {
                         </Button>
                       ) : (
                         <Button
-                          onClick={() => startInstance(inst.id)}
+                          onClick={() => void startInstance(inst.id).catch(() => {})}
                           variant="success"
                           size="sm"
                           className="h-8 w-[70px]"
@@ -683,9 +685,9 @@ const InstanceManager = () => {
                 <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{labels.primaryActions}</div>
                 <div className="grid grid-cols-2 gap-2">
                   {selectedInstance.status === 'running' ? (
-                    <Button onClick={() => stopInstance(selectedInstance.id)} variant="danger" icon={<Square className="h-4 w-4" />}>{t.instance.stop}</Button>
+                    <Button onClick={() => void stopInstance(selectedInstance.id).catch(() => {})} variant="danger" icon={<Square className="h-4 w-4" />}>{t.instance.stop}</Button>
                   ) : (
-                    <Button onClick={() => startInstance(selectedInstance.id)} variant="success" icon={<Play className="h-4 w-4" />}>{t.instance.start}</Button>
+                    <Button onClick={() => void startInstance(selectedInstance.id).catch(() => {})} variant="success" icon={<Play className="h-4 w-4" />}>{t.instance.start}</Button>
                   )}
                   <Button onClick={() => openBrowser(selectedInstance.config.host, selectedInstance.config.port)} disabled={selectedInstance.status !== 'running'} icon={<Globe className="h-4 w-4" />}>{t.instance.openBrowser}</Button>
                 </div>
@@ -922,7 +924,7 @@ const InstanceManager = () => {
             {copyFeedback && <div className="mt-3 text-center text-xs font-medium text-emerald-500">{t.common.copySuccess}</div>}
             <div className="mt-4 flex gap-2">
               <Button onClick={() => handleCopyCommand(cmdRaw)} variant="primary" icon={<Copy className="h-4 w-4" />}>{t.instance.copyClipboard}</Button>
-              <Button onClick={() => { const inst = instances.find(x => x.id === showCmdModal); if (inst) startInstance(inst.id); setShowCmdModal('') }} variant="success">{t.instance.directStart}</Button>
+              <Button onClick={() => { const inst = instances.find(x => x.id === showCmdModal); if (inst) void startInstance(inst.id).catch(() => {}); setShowCmdModal('') }} variant="success">{t.instance.directStart}</Button>
             </div>
           </Surface>
         </div>

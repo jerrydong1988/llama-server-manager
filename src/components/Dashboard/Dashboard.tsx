@@ -668,7 +668,7 @@ export default function Dashboard() {
                           <div className="ml-auto grid w-[172px] grid-cols-[92px_34px_34px] items-center justify-end gap-2">
                             {isRunning ? (
                               <Button
-                                onClick={() => stopInstance(instance.id)}
+                                onClick={() => void stopInstance(instance.id).catch(() => {})}
                                 variant="danger"
                                 size="sm"
                                 className="h-8 whitespace-nowrap px-2"
@@ -678,7 +678,7 @@ export default function Dashboard() {
                               </Button>
                             ) : (
                               <Button
-                                onClick={() => startInstance(instance.id)}
+                                onClick={() => void startInstance(instance.id).catch(() => {})}
                                 variant="primary"
                                 size="sm"
                                 className="h-8 whitespace-nowrap px-2"

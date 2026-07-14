@@ -1,6 +1,7 @@
 use crate::commands::adlx;
 use crate::commands::nvml;
 use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
+use crate::vector_policy::normalize_for_launch;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -151,6 +152,10 @@ fn telemetry_config_hash(config: &InstanceConfig) -> String {
 }
 
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
+    prepare_launch(config.clone(), engine_path).1
+}
+
+fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
     let exe = if engine_path.is_empty() {
         "llama-server".to_string()
     } else {
@@ -252,7 +257,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.cont_batching {
         cmd.push("-cb".into());
     }
-    if !config.cache_prompt {
+    if !is_emb && !config.cache_prompt {
         cmd.push("--no-cache-prompt".into());
     }
     if config.threads_batch > 0 {
@@ -261,26 +266,30 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.threads_http >= 0 {
         cmd.extend_from_slice(&["--threads-http".into(), config.threads_http.to_string()]);
     }
-    if config.keep > 0 {
-        cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
-    }
-    if config.cache_reuse > 0 {
-        cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
-    }
-    if config.cache_ram > 0 {
-        cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
+    if !is_emb {
+        if config.keep > 0 {
+            cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
+        }
+        if config.cache_reuse > 0 {
+            cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
+        }
+        if config.cache_ram > 0 {
+            cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
+        }
     }
     if config.warmup {
         cmd.push("--warmup".into());
     }
-    if config.ctx_checkpoints != 32 {
-        cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
-    }
-    if config.checkpoint_min_step > 0 {
-        cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
-    }
-    if config.swa_full {
-        cmd.push("--swa-full".into());
+    if !is_emb {
+        if config.ctx_checkpoints != 32 {
+            cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
+        }
+        if config.checkpoint_min_step > 0 {
+            cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
+        }
+        if config.swa_full {
+            cmd.push("--swa-full".into());
+        }
     }
 
     // RoPE / YaRN.
@@ -322,11 +331,9 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     }
 
     // Flash Attention.
-    if !is_emb {
-        let fa = config.flash_attn.as_str();
-        if fa != "auto" && !fa.is_empty() {
-            cmd.extend_from_slice(&["-fa".into(), fa.to_string()]);
-        }
+    let fa = config.flash_attn.as_str();
+    if fa != "auto" && !fa.is_empty() {
+        cmd.extend_from_slice(&["-fa".into(), fa.to_string()]);
     }
 
     // Memory and loading.
@@ -374,11 +381,13 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.cache_type_v.is_empty() {
         cmd.extend_from_slice(&["-ctv".into(), config.cache_type_v.clone()]);
     }
-    if !config.cache_type_draft_k.is_empty() {
-        cmd.extend_from_slice(&["-ctkd".into(), config.cache_type_draft_k.clone()]);
-    }
-    if !config.cache_type_draft_v.is_empty() {
-        cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]);
+    if !is_emb {
+        if !config.cache_type_draft_k.is_empty() {
+            cmd.extend_from_slice(&["-ctkd".into(), config.cache_type_draft_k.clone()]);
+        }
+        if !config.cache_type_draft_v.is_empty() {
+            cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]);
+        }
     }
     if config.kv_unified {
         cmd.push("--kv-unified".into());
@@ -495,17 +504,19 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.api_prefix.is_empty() {
         cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]);
     }
-    if !config.ui_config_file.is_empty() {
-        cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]);
-    }
-    if !config.ui_config.is_empty() {
-        cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]);
-    }
-    if config.ui_mcp_proxy {
-        cmd.push("--ui-mcp-proxy".into());
-    }
-    if config.agent {
-        cmd.push("--agent".into());
+    if !is_emb {
+        if !config.ui_config_file.is_empty() {
+            cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]);
+        }
+        if !config.ui_config.is_empty() {
+            cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]);
+        }
+        if config.ui_mcp_proxy {
+            cmd.push("--ui-mcp-proxy".into());
+        }
+        if config.agent {
+            cmd.push("--agent".into());
+        }
     }
 
     // Embedding / generation.
@@ -670,7 +681,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if config.sleep_idle >= 0 {
         cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]);
     }
-    if config.context_shift {
+    if !is_emb && config.context_shift {
         cmd.push("--context-shift".into());
     }
     if config.verbose {
@@ -685,14 +696,16 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     if !config.slots_enabled {
         cmd.push("--no-slots".into());
     }
-    if !config.slot_save_path.is_empty() {
-        cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]);
-    }
-    if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON {
-        cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
-    }
-    if config.prefill_assistant {
-        cmd.push("--prefill-assistant".into());
+    if !is_emb {
+        if !config.slot_save_path.is_empty() {
+            cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]);
+        }
+        if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON {
+            cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
+        }
+        if config.prefill_assistant {
+            cmd.push("--prefill-assistant".into());
+        }
     }
 
     // New server features aligned with llama.cpp master.
@@ -709,55 +722,98 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
         cmd.push("--reuse-port".into());
     }
 
-    // Multi-model and media.
-    if !config.models_dir.is_empty() {
-        cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]);
-    }
-    if !config.models_preset.is_empty() {
-        cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]);
-    }
-    if config.models_max != 4 {
-        cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
-    }
-    if config.models_autoload {
-        cmd.push("--models-autoload".into());
-    }
-    if config.image_min_tokens > 0 {
-        cmd.extend_from_slice(&[
-            "--image-min-tokens".into(),
-            config.image_min_tokens.to_string(),
-        ]);
-    }
-    if config.image_max_tokens > 0 {
-        cmd.extend_from_slice(&[
-            "--image-max-tokens".into(),
-            config.image_max_tokens.to_string(),
-        ]);
-    }
-    if config.mtmd_batch_max_tokens != 1024 {
-        cmd.extend_from_slice(&[
-            "--mtmd-batch-max-tokens".into(),
-            config.mtmd_batch_max_tokens.to_string(),
-        ]);
-    }
-    if !config.tags.is_empty() {
-        cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]);
-    }
-    if !config.media_path.is_empty() {
-        cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]);
-    }
-    if !config.tools.is_empty() {
-        cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]);
-    }
+    if !is_emb {
+        // Multi-model and media.
+        if !config.models_dir.is_empty() {
+            cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]);
+        }
+        if !config.models_preset.is_empty() {
+            cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]);
+        }
+        if config.models_max != 4 {
+            cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
+        }
+        if config.models_autoload {
+            cmd.push("--models-autoload".into());
+        }
+        if config.image_min_tokens > 0 {
+            cmd.extend_from_slice(&[
+                "--image-min-tokens".into(),
+                config.image_min_tokens.to_string(),
+            ]);
+        }
+        if config.image_max_tokens > 0 {
+            cmd.extend_from_slice(&[
+                "--image-max-tokens".into(),
+                config.image_max_tokens.to_string(),
+            ]);
+        }
+        if config.mtmd_batch_max_tokens != 1024 {
+            cmd.extend_from_slice(&[
+                "--mtmd-batch-max-tokens".into(),
+                config.mtmd_batch_max_tokens.to_string(),
+            ]);
+        }
+        if !config.tags.is_empty() {
+            cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]);
+        }
+        if !config.media_path.is_empty() {
+            cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]);
+        }
+        if !config.tools.is_empty() {
+            cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]);
+        }
 
-    // Custom args (#13: support double-quoted arguments).
-    for arg in &config.custom_args {
-        if !arg.is_empty() {
-            cmd.extend(split_args(arg));
+        // Custom args (#13: support double-quoted arguments).
+        for arg in &config.custom_args {
+            if !arg.is_empty() {
+                cmd.extend(split_args(arg));
+            }
         }
     }
 
     cmd
+}
+
+fn prepare_launch(config: InstanceConfig, engine_path: &str) -> (InstanceConfig, Vec<String>) {
+    let config = normalize_for_launch(config).into_config();
+    let command = generate_normalized_command(&config, engine_path);
+    (config, command)
+}
+
+fn reserve_start_slot(
+    running: &std::collections::HashMap<String, RunningInstance>,
+    starting: &mut std::collections::HashSet<String>,
+    instance_id: &str,
+) -> Result<(), String> {
+    if running.contains_key(instance_id) || !starting.insert(instance_id.to_string()) {
+        return Err("Instance is already running or starting".to_string());
+    }
+    Ok(())
+}
+
+struct StartReservation<'a> {
+    instance_id: String,
+    starting: &'a Mutex<std::collections::HashSet<String>>,
+}
+
+impl Drop for StartReservation<'_> {
+    fn drop(&mut self) {
+        self.starting.lock().unwrap().remove(&self.instance_id);
+    }
+}
+
+fn reserve_instance_start<'a>(
+    state: &'a AppState,
+    instance_id: &str,
+) -> Result<StartReservation<'a>, String> {
+    let running = state.running.lock().unwrap();
+    let mut starting = state.starting.lock().unwrap();
+    reserve_start_slot(&running, &mut starting, instance_id)?;
+    Ok(StartReservation {
+        instance_id: instance_id.to_string(),
+        starting: &state.starting,
+    })
 }
 
 #[tauri::command]
@@ -777,8 +833,8 @@ pub async fn start_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    // Hold lock across check+insert to prevent TOCTOU race
-    let cmd = generate_command(&config, &engine_exe);
+    let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
+    let (config, cmd) = prepare_launch(config, &engine_exe);
     let cmd_str = cmd.join(" ");
     let cmd_display = mask_api_key_in_cmd(&cmd_str);
 
@@ -868,9 +924,19 @@ pub async fn start_server(
     }
 
     // Persist running state to disk immediately via unified atomic writes to avoid races.
+    state
+        .instances
+        .lock()
+        .unwrap()
+        .insert(instance_id.clone(), config.clone());
     let running_snapshot = state.running.lock().unwrap().clone();
+    let persisted_instance_id = instance_id.clone();
+    let persisted_config = config.clone();
     let _ = crate::commands::config::update_and_persist(&state, |global| {
         global.running = running_snapshot;
+        global
+            .instances
+            .insert(persisted_instance_id, persisted_config);
     });
 
     app.emit(
@@ -2416,6 +2482,70 @@ fn split_args(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod perf_parser_tests {
     use super::*;
+
+    fn polluted_embedding_config() -> InstanceConfig {
+        InstanceConfig {
+            model_path: "C:/models/bge-small.gguf".into(),
+            flash_attn: "on".into(),
+            spec_type: "draft-mtp".into(),
+            custom_args: vec!["--temp 1.5".into()],
+            ..InstanceConfig::default()
+        }
+    }
+
+    #[test]
+    fn generate_server_command_uses_launch_normalization() {
+        let cmd = tauri::async_runtime::block_on(generate_server_command(
+            polluted_embedding_config(),
+            String::new(),
+        ))
+        .unwrap();
+
+        assert!(cmd.iter().any(|arg| arg == "--embedding"));
+        assert!(cmd.windows(2).any(|args| args == ["-fa", "on"]));
+        assert!(!cmd.iter().any(|arg| arg == "--spec-type"));
+        assert!(!cmd.iter().any(|arg| arg == "--temp"));
+    }
+
+    #[test]
+    fn start_preparation_hashes_and_launches_the_normalized_config() {
+        let (config, cmd) = prepare_launch(polluted_embedding_config(), "");
+
+        assert!(config.embedding);
+        assert!(config.spec_type.is_empty());
+        assert!(config.custom_args.is_empty());
+        assert!(cmd.iter().any(|arg| arg == "--embedding"));
+        assert!(cmd.windows(2).any(|args| args == ["-fa", "on"]));
+        assert!(!cmd.iter().any(|arg| arg == "--spec-type"));
+        assert_eq!(
+            telemetry_config_hash(&config),
+            telemetry_config_hash(&normalize_for_launch(config.clone()).config)
+        );
+    }
+
+    #[test]
+    fn start_slot_rejects_duplicate_reservations_and_recovers_after_release() {
+        let running = HashMap::new();
+        let mut starting = std::collections::HashSet::new();
+
+        assert!(reserve_start_slot(&running, &mut starting, "instance-a").is_ok());
+        assert!(reserve_start_slot(&running, &mut starting, "instance-a").is_err());
+        starting.remove("instance-a");
+        assert!(reserve_start_slot(&running, &mut starting, "instance-a").is_ok());
+    }
+
+    #[test]
+    fn normalized_embedding_generator_rejects_context_shift() {
+        let config = InstanceConfig {
+            embedding: true,
+            context_shift: true,
+            ..InstanceConfig::default()
+        };
+
+        let cmd = generate_normalized_command(&config, "");
+
+        assert!(!cmd.iter().any(|arg| arg == "--context-shift"));
+    }
 
     #[test]
     fn parses_llama_cpp_print_timing_token_stats() {

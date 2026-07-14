@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, ListChecks, RotateCcw, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, ListChecks, LoaderCircle, RotateCcw, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { useAppStore, type InstanceConfig, type ModelInfo, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
@@ -17,10 +17,10 @@ import {
 import { getActiveParams } from './ConfigPage/activeParams'
 import { isPathWithinRoot, normalizePath, pathBasename, pathDirname, pathJoin } from '../utils/path'
 import { formatHostPort } from '../utils/network'
+import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
+import { normalizeModelPath } from '../store/bootstrap'
 import { _matchedElements } from './ConfigPage/shared'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
-
-const EMBED_ARCHS = ['bge', 'gte', 'e5', 'text-embedding', 'sentence-bert', 'sentence-t5', 'instructor', 'bert', 'nomic', 'jina']
 
 interface PickerNode {
   name: string
@@ -123,6 +123,12 @@ const formatValue = (value: unknown, labels: Record<string, string>) => {
   return String(value)
 }
 
+const formatConfigValue = (key: keyof InstanceConfig, value: unknown, labels: Record<string, string>, t: any) => (
+  key === 'custom_args'
+    ? `${Array.isArray(value) ? value.length : 0} ${t.configPage.vectorCleanupItems}`
+    : formatValue(value, labels)
+)
+
 const fieldLabel = (key: keyof InstanceConfig, t: any) => {
   const labelMap: Partial<Record<keyof InstanceConfig, string>> = {
     model_path: t.configPage.modelPath,
@@ -179,8 +185,8 @@ const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig, t: an
     .map(key => ({
       key,
       label: fieldLabel(key, t),
-      before: formatValue(baseline[key], labels),
-      after: formatValue(local[key], labels),
+      before: formatConfigValue(key, baseline[key], labels, t),
+      after: formatConfigValue(key, local[key], labels, t),
     }))
 
 const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConfig>, t: any, labels: Record<string, string>): ConfigChange[] =>
@@ -189,8 +195,8 @@ const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConf
     .map(key => ({
       key,
       label: fieldLabel(key, t),
-      before: formatValue(local[key], labels),
-      after: formatValue(changes[key], labels),
+      before: formatConfigValue(key, local[key], labels, t),
+      after: formatConfigValue(key, changes[key], labels, t),
     }))
 
 const groupTemplateChanges = (changes: ConfigChange[], groups: ChangeGroup[], otherTitle: string) => {
@@ -216,11 +222,14 @@ const ConfigPage = () => {
   const inst = instances.find(instance => instance.id === activeConfigInstanceId)
 
   const [local, setLocal] = useState<InstanceConfig | null>(null)
+  const [baseline, setBaseline] = useState<InstanceConfig | null>(null)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<'model' | 'draft'>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [saveWarnings, setSaveWarnings] = useState<Warning[]>([])
+  const [vectorCleanupChanges, setVectorCleanupChanges] = useState<VectorCleanupChange[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [appliedTemplateId, setAppliedTemplateId] = useState<string | null>(null)
   const [showPresetAssistant, setShowPresetAssistant] = useState(false)
@@ -228,8 +237,10 @@ const ConfigPage = () => {
   const [lastTemplateSnapshot, setLastTemplateSnapshot] = useState<TemplateSnapshot | null>(null)
   const mountedRef = useRef(true)
   const prevQuery = useRef('')
+  const committedModelPathRef = useRef('')
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
     }
@@ -257,14 +268,23 @@ const ConfigPage = () => {
 
   useEffect(() => {
     if (inst) {
-      setLocal({ ...defaultInstanceConfig(), ...inst.config })
+      const next = { ...defaultInstanceConfig(), ...inst.config }
+      setLocal(next)
+      setBaseline(next)
+      committedModelPathRef.current = normalizeModelPath(next.model_path)
     } else {
       setLocal(null)
+      setBaseline(null)
+      committedModelPathRef.current = ''
     }
+  }, [activeConfigInstanceId, inst?.id])
+
+  useEffect(() => {
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
     setShowPresetAssistant(false)
-  }, [activeConfigInstanceId, inst])
+    setVectorCleanupChanges([])
+  }, [activeConfigInstanceId])
 
   const set = (key: keyof InstanceConfig, value: any) => {
     setAppliedTemplateId(null)
@@ -272,30 +292,20 @@ const ConfigPage = () => {
     setLocal(current => (current ? { ...current, [key]: value } : current))
   }
 
-  const isEmbedding = useMemo(() => {
-    if (!local?.model_path) {
-      return false
-    }
-
-    const fileName = pathBasename(local.model_path)
-    if (fileName.toLowerCase().includes('embed')) {
-      return true
-    }
-
-    const model = models.find(item => item.path === local.model_path)
-    return !!(model?.architecture && EMBED_ARCHS.some(arch => model.architecture!.toLowerCase().includes(arch)))
+  const currentModel = useMemo(() => {
+    const modelPath = local?.model_path ? normalizeModelPath(local.model_path) : ''
+    return modelPath
+      ? models.find(model => normalizeModelPath(model.path) === modelPath) ?? null
+      : null
   }, [local?.model_path, models])
 
-  useEffect(() => {
-    if (isEmbedding && local) {
-      if (!local.embedding) {
-        set('embedding', true)
-      }
-      if (!local.pooling) {
-        set('pooling', 'mean')
-      }
-    }
-  }, [isEmbedding, local?.embedding, local?.model_path, local?.pooling])
+  const workload = useMemo(() => (
+    local ? detectModelWorkload(currentModel, local.model_path, local) : 'inference'
+  ), [currentModel, local])
+  const isEmbedding = workload !== 'inference'
+  const modelWorkloadLocked = useMemo(() => (
+    local ? isModelWorkloadLocked(currentModel, local.model_path) : false
+  ), [currentModel, local?.model_path])
 
   if (!local) {
     return (
@@ -306,18 +316,30 @@ const ConfigPage = () => {
   }
 
   const activeParams = getActiveParams(local, isEmbedding)
-  const currentModel = models.find(model => model.path === local.model_path) ?? null
   const currentEngine = engines.find(engine => engine.id === (local.engine_id || defaultEngineId || '')) ?? engines[0] ?? null
   const primaryModelPath = currentModel?.path || local.model_path || ''
   const draftModelPath = local.draft_model_path || ''
   const endpoint = formatHostPort(local.host || '127.0.0.1', local.port)
 
+  const applyPrimaryModelPath = (modelPath: string) => {
+    const normalizedPath = normalizeModelPath(modelPath)
+    if (normalizedPath === committedModelPathRef.current) return
+
+    const selectedModel = models.find(model => normalizeModelPath(model.path) === normalizedPath)
+    const directory = pathDirname(modelPath)
+    const mmproj = models.find(model => pathDirname(model.path) === directory && model.file_type === 'mmproj')
+    const candidate = { ...local, model_path: modelPath, mmproj_path: mmproj?.path ?? '' }
+    const normalized = normalizeConfigForSelectedModel(candidate, selectedModel)
+    committedModelPathRef.current = normalizedPath
+    setAppliedTemplateId(null)
+    setLastTemplateSnapshot(null)
+    setLocal(normalized.config)
+    setVectorCleanupChanges(normalized.vectorMode ? normalized.changes : [])
+  }
+
   const pickModel = (modelPath: string) => {
     if (pickerTarget === 'model') {
-      set('model_path', modelPath)
-      const directory = pathDirname(modelPath)
-      const mmproj = models.find(model => pathDirname(model.path) === directory && model.file_type === 'mmproj')
-      set('mmproj_path', mmproj?.path ?? '')
+      applyPrimaryModelPath(modelPath)
     } else {
       set('draft_model_path', modelPath)
     }
@@ -325,22 +347,36 @@ const ConfigPage = () => {
   }
 
   const save = async () => {
-    if (!inst) {
+    if (!inst || saving) {
       return
     }
 
-    const model = models.find(item => item.path === local.model_path)
     const engine = engines.find(item => item.id === (local.engine_id || defaultEngineId || '')) || engines[0]
-    const warnings = validateConfig(local, model, engine)
-
-    updateInstance(inst.id, { config: local })
+    const modelPathChanged = normalizeModelPath(local.model_path) !== committedModelPathRef.current
+    const normalized = modelPathChanged
+      ? normalizeConfigForSelectedModel(local, currentModel)
+      : normalizeInstanceConfig(local, currentModel)
+    committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
+    setLocal(normalized.config)
+    setSaving(true)
+    setSaved(false)
+    updateInstance(inst.id, { config: normalized.config })
     try {
       await saveConfig()
     } catch {
       return
+    } finally {
+      if (mountedRef.current) setSaving(false)
     }
+    if (!mountedRef.current || useAppStore.getState().activeConfigInstanceId !== inst.id) return
+    const persistedConfig = useAppStore.getState().instances
+      .find(item => item.id === inst.id)?.config ?? normalized.config
+    committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
+    setLocal(persistedConfig)
     setSaved(true)
-    setSaveWarnings(warnings)
+    setBaseline(persistedConfig)
+    setSaveWarnings(validateConfig(persistedConfig, currentModel, engine))
+    setVectorCleanupChanges([])
 
     setTimeout(() => {
       if (mountedRef.current) {
@@ -355,6 +391,9 @@ const ConfigPage = () => {
     set,
     t,
     isEmbedding,
+    workload,
+    modelWorkloadLocked,
+    onCommitModelPath: applyPrimaryModelPath,
     onShowPicker: () => {
       setPickerTarget('model')
       setShowPicker(true)
@@ -447,8 +486,29 @@ const ConfigPage = () => {
     parameterGroups: zh ? '\u53c2\u6570\u5206\u7ec4' : 'Parameter Groups',
   }
 
-  const savedBaseline = { ...defaultInstanceConfig(), ...(inst?.config ?? {}) }
+  const vectorCleanupGroups: Array<{ group: VectorCleanupChange['group']; label: string }> = [
+    { group: 'speculative', label: t.configPage.vectorCleanupSpeculative },
+    { group: 'generation', label: t.configPage.vectorCleanupGeneration },
+    { group: 'chat', label: t.configPage.vectorCleanupChat },
+    { group: 'multimodal', label: t.configPage.vectorCleanupMultimodal },
+    { group: 'custom', label: t.configPage.vectorCleanupCustom },
+    { group: 'runtime', label: t.configPage.vectorCleanupRuntime },
+  ]
+  const visibleVectorCleanupGroups = vectorCleanupGroups
+    .map(group => ({
+      ...group,
+      count: vectorCleanupChanges.filter(change => change.group === group.group).length,
+    }))
+    .filter(group => group.count > 0)
+
+  const savedBaseline = baseline ?? defaultInstanceConfig()
+  const vectorCleanupKeys = new Set(
+    vectorCleanupChanges
+      .filter(change => isEqualValue(local[change.key], change.after))
+      .map(change => change.key),
+  )
   const configChanges = getConfigChanges(local, savedBaseline, t, labels)
+    .filter(change => !vectorCleanupKeys.has(change.key))
   const liveWarnings = validateConfig(local, currentModel, currentEngine)
   const visibleWarnings = saved ? saveWarnings : liveWarnings
   const warningCounts = {
@@ -565,29 +625,36 @@ const ConfigPage = () => {
     setSaveWarnings([])
   }
 
+  const advancedDirectoryGroups = [
+    ...(!isEmbedding ? [
+      { id: 'config-advanced-reasoning', title: t.configPage.subAdvReasoning, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedReasoningConfig) },
+      { id: 'config-advanced-model', title: t.configPage.subAdvModelAdapt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt) },
+      { id: 'config-advanced-sampling', title: t.configPage.subAdvSampling, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSampling) },
+      { id: 'config-advanced-sampling-ext', title: t.configPage.subAdvSamplingExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSamplingExt) },
+      { id: 'config-advanced-spec', title: t.configPage.subAdvSpec, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSpec) },
+    ] : [
+      { id: 'config-advanced-vector', title: t.configPage.subEmbedding, count: countActive(activeParams, ['embd_normalize', 'reranking']) },
+    ]),
+    { id: 'config-advanced-rope', title: t.configPage.subAdvRope, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedRope) },
+    { id: 'config-advanced-kv', title: t.configPage.subAdvKvCache, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedKvCache) },
+    { id: 'config-advanced-context', title: t.configPage.subAdvContextMgmt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedContextMgmt) },
+    { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedHardware) },
+    { id: 'config-advanced-server', title: t.configPage.subAdvServer, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
+    { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
+    ...(!isEmbedding ? [
+      { id: 'config-advanced-multi', title: t.configPage.subAdvMulti, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) },
+      { id: 'config-advanced-custom', title: t.configPage.customArgs, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
+    ] : []),
+  ]
   const directoryGroups = [
     { id: 'config-basic', title: t.configPage.basic, count: countActive(activeParams, BASIC_CONFIG_KEYS) },
-    { id: 'config-reasoning', title: t.configPage.reasoning, count: countActive(activeParams, REASONING_CONFIG_KEYS) },
+    ...(!isEmbedding ? [{ id: 'config-reasoning', title: t.configPage.reasoning, count: countActive(activeParams, REASONING_CONFIG_KEYS) }] : []),
     { id: 'config-performance', title: t.configPage.performance, count: countActive(activeParams, PERFORMANCE_CONFIG_KEYS) },
     {
       id: 'config-advanced',
       title: t.configPage.advSectionTitle,
       count: countActive(activeParams, ADVANCED_CONFIG_KEYS),
-      children: [
-        { id: 'config-advanced-reasoning', title: t.configPage.subAdvReasoning, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedReasoningConfig) },
-        { id: 'config-advanced-model', title: t.configPage.subAdvModelAdapt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt) },
-        { id: 'config-advanced-sampling', title: t.configPage.subAdvSampling, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSampling) },
-        { id: 'config-advanced-sampling-ext', title: t.configPage.subAdvSamplingExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSamplingExt) },
-        { id: 'config-advanced-spec', title: t.configPage.subAdvSpec, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSpec) },
-        { id: 'config-advanced-rope', title: t.configPage.subAdvRope, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedRope) },
-        { id: 'config-advanced-kv', title: t.configPage.subAdvKvCache, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedKvCache) },
-        { id: 'config-advanced-context', title: t.configPage.subAdvContextMgmt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedContextMgmt) },
-        { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedHardware) },
-        { id: 'config-advanced-server', title: t.configPage.subAdvServer, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
-        { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
-        { id: 'config-advanced-multi', title: t.configPage.subAdvMulti, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) },
-        { id: 'config-advanced-custom', title: t.configPage.customArgs, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
-      ],
+      children: advancedDirectoryGroups,
     },
   ]
 
@@ -617,13 +684,13 @@ const ConfigPage = () => {
 
           <Button
             onClick={save}
-            disabled={!inst}
+            disabled={!inst || saving}
             variant="primary"
             data-guide="config-save"
-            icon={saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+            icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
             className="shrink-0"
           >
-            {saved ? t.configPage.saved : t.configPage.save}
+            {saving ? t.configPage.saving : saved ? t.configPage.saved : t.configPage.save}
           </Button>
         </div>
       </Surface>
@@ -688,12 +755,29 @@ const ConfigPage = () => {
           )}
 
           {isEmbedding && (
-            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 px-4 py-3 text-sm text-blue-200">
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
               {t.configPage.embeddingBanner}
             </div>
           )}
 
-          {lastTemplateSnapshot && (
+          {visibleVectorCleanupGroups.length > 0 && (
+            <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="min-w-0">
+                <p className="font-medium">{t.configPage.vectorCleanupTitle}</p>
+                <p className="mt-1 text-emerald-700/80 dark:text-emerald-200/80">{t.configPage.vectorCleanupDescription}</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {visibleVectorCleanupGroups.map(group => (
+                    <span key={group.group} className="rounded-md border border-emerald-200 bg-white/70 px-2 py-1 text-xs dark:border-emerald-500/20 dark:bg-slate-950/30">
+                      {group.label}: {group.count} {t.configPage.vectorCleanupItems}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!isEmbedding && lastTemplateSnapshot && (
             <div className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200 sm:flex-row sm:items-center sm:justify-between">
               <span className="inline-flex min-w-0 items-center gap-2">
                 <Sparkles className="h-4 w-4 shrink-0" />
@@ -707,6 +791,7 @@ const ConfigPage = () => {
             </div>
           )}
 
+          {!isEmbedding && (
           <Surface className="p-5" data-guide="config-presets">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
@@ -729,6 +814,7 @@ const ConfigPage = () => {
               </InsetSurface>
             </div>
           </Surface>
+          )}
 
           <Surface className="p-5">
             <div className="mb-4">
@@ -744,7 +830,7 @@ const ConfigPage = () => {
           </Surface>
 
           <BasicSection {...sectionProps} />
-          <ReasoningSection {...sectionProps} />
+          {!isEmbedding && <ReasoningSection {...sectionProps} />}
           <PerformanceSection {...sectionProps} />
           <AdvancedSection {...sectionProps} />
         </div>
@@ -896,7 +982,7 @@ const ConfigPage = () => {
         </Surface>
       </div>
 
-      {showPresetAssistant && selectedTemplate && (
+      {showPresetAssistant && !isEmbedding && selectedTemplate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
           <div className="flex max-h-[88vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-[0_30px_80px_rgba(15,23,42,0.25)] dark:border-slate-800 dark:bg-slate-900 dark:shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
             <div className="flex items-start justify-between gap-4 border-b border-slate-200 bg-slate-50 px-5 py-4 dark:border-slate-800 dark:bg-slate-950/90">

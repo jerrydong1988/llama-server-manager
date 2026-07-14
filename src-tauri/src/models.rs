@@ -9,6 +9,10 @@ use std::time::Instant;
 pub struct ModelCapabilities {
     #[serde(default)]
     pub metadata_complete: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_embedding_model: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_reranker_model: Option<bool>,
     #[serde(default)]
     pub has_builtin_mtp: bool,
     #[serde(default)]
@@ -21,6 +25,32 @@ pub struct ModelCapabilities {
     pub is_mmproj: bool,
     #[serde(default)]
     pub projector_family: Option<String>,
+}
+
+#[cfg(test)]
+mod model_capability_tests {
+    use super::ModelCapabilities;
+
+    #[test]
+    fn vector_capabilities_distinguish_missing_cache_fields_from_explicit_false() {
+        let cached: ModelCapabilities =
+            serde_json::from_str(r#"{"metadata_complete":true}"#).unwrap();
+        assert_eq!(cached.is_embedding_model, None);
+        assert_eq!(cached.is_reranker_model, None);
+        let cached_json = serde_json::to_value(&cached).unwrap();
+        assert!(cached_json.get("is_embedding_model").is_none());
+        assert!(cached_json.get("is_reranker_model").is_none());
+
+        let scanned: ModelCapabilities = serde_json::from_str(
+            r#"{"metadata_complete":true,"is_embedding_model":false,"is_reranker_model":false}"#,
+        )
+        .unwrap();
+        assert_eq!(scanned.is_embedding_model, Some(false));
+        assert_eq!(scanned.is_reranker_model, Some(false));
+        let scanned_json = serde_json::to_value(&scanned).unwrap();
+        assert_eq!(scanned_json["is_embedding_model"], false);
+        assert_eq!(scanned_json["is_reranker_model"], false);
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -669,6 +699,7 @@ pub struct AppState {
     pub engine_names: Mutex<HashMap<String, String>>,
     pub instances: Mutex<HashMap<String, InstanceConfig>>,
     pub running: Mutex<HashMap<String, RunningInstance>>,
+    pub starting: Mutex<std::collections::HashSet<String>>,
     pub config_dir: Mutex<PathBuf>,
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,

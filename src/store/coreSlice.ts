@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { applyModelInventory, beginModelInventoryRequest } from './bootstrap'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'
 
@@ -35,7 +36,10 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       }))
     },
     clearRuntimeWarnings: () => set({ runtimeWarnings: [] }),
-    setModels: (models) => set({ models }),
+    setModels: (models) => {
+      const requestGeneration = beginModelInventoryRequest()
+      applyModelInventory(models, get, set, { isLoading: false }, requestGeneration)
+    },
     setEngines: (engines) => set({ engines }),
     setModelDirs: (dirs) => {
       set({ modelDirs: dirs })
@@ -63,21 +67,23 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     loadInitialData: async () => {
       set({ isLoading: true })
+      const requestGeneration = beginModelInventoryRequest()
       try {
         const [models, engines] = await Promise.all([
           invoke<ModelInfo[]>('get_models').catch(() => [] as ModelInfo[]),
           invoke<EngineInfo[]>('get_engines').catch(() => [] as EngineInfo[]),
         ])
-        set({ models, engines, isLoading: false })
+        applyModelInventory(models, get, set, { engines, isLoading: false }, requestGeneration)
       } catch {
         set({ isLoading: false })
       }
     },
     scanModels: async (paths) => {
       set({ isLoading: true })
+      const requestGeneration = beginModelInventoryRequest()
       try {
         const models = await invoke<ModelInfo[]>('scan_models', { paths })
-        set({ models, modelDirs: paths, isLoading: false })
+        applyModelInventory(models, get, set, { modelDirs: paths, isLoading: false }, requestGeneration)
         return null
       } catch (error: any) {
         console.error('scan_models error:', error)

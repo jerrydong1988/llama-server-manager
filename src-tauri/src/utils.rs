@@ -1,4 +1,5 @@
 use crate::models::{GgufMetadataSummary, ModelCapabilities};
+use crate::vector_policy::{classify_model_workload, ModelWorkload};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -108,6 +109,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
     let family = arch_family.or(family_hint);
     let is_mmproj = file_kind == "mmproj" || has_projector_key && architecture.is_none();
     let is_vision_model = !is_mmproj && (has_vision_key || is_vision_family(family.as_deref()));
+    let workload = classify_model_workload(architecture.as_deref(), path);
 
     Ok(GgufMetadataSummary {
         architecture,
@@ -115,6 +117,8 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
         quant_type: quant_type_from_file_type(file_type, path),
         capabilities: ModelCapabilities {
             metadata_complete: true,
+            is_embedding_model: Some(workload == ModelWorkload::Embedding),
+            is_reranker_model: Some(workload == ModelWorkload::Reranker),
             has_builtin_mtp: mtp_layers.unwrap_or(0) > 0,
             mtp_layers,
             is_vision_model,
@@ -529,6 +533,33 @@ pub fn get_data_dir() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parsed_metadata_sets_explicit_vector_capabilities() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-vector-capability-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.gguf");
+        let key = b"general.architecture";
+        let value = b"bert";
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(key);
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(value);
+        std::fs::write(&path, bytes).unwrap();
+
+        let summary = parse_gguf_metadata(&path).unwrap();
+
+        assert_eq!(summary.capabilities.is_embedding_model, Some(true));
+        assert_eq!(summary.capabilities.is_reranker_model, Some(false));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     fn path(name: &str) -> PathBuf {
         PathBuf::from(name)

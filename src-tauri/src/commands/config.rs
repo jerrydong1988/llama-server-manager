@@ -1,4 +1,5 @@
 use crate::models::{AppState, GlobalConfig, InstanceConfig, ProxyConfig, WindowState};
+use crate::vector_policy::normalize_for_launch;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use tauri::Emitter;
@@ -174,6 +175,15 @@ fn apply_frontend_config(
     global.engine_names = engine_names;
 }
 
+fn normalize_instances_for_save(
+    instances: HashMap<String, InstanceConfig>,
+) -> HashMap<String, InstanceConfig> {
+    instances
+        .into_iter()
+        .map(|(id, config)| (id, normalize_for_launch(config).into_config()))
+        .collect()
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri expands IPC fields into command parameters.
 pub async fn save_config(
@@ -185,7 +195,8 @@ pub async fn save_config(
     last_tab: String,
     dark_mode: bool,
     state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<HashMap<String, InstanceConfig>, String> {
+    let instances = normalize_instances_for_save(instances);
     let running_snapshot = state.running.lock().unwrap().clone();
     let engine_names = state.engine_names.lock().unwrap().clone();
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -206,8 +217,8 @@ pub async fn save_config(
         persist_global_config_unlocked(&config_dir, &global)?;
     }
     let mut stored = state.instances.lock().unwrap();
-    *stored = instances;
-    Ok(())
+    *stored = instances.clone();
+    Ok(instances)
 }
 
 #[tauri::command]
@@ -358,6 +369,27 @@ pub fn resolve_path(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_config_normalizes_vector_instances_before_storage() {
+        let mut instances = HashMap::new();
+        instances.insert(
+            "embedding".into(),
+            InstanceConfig {
+                id: "embedding".into(),
+                model_path: "C:/models/bge-small.gguf".into(),
+                spec_type: "draft-mtp".into(),
+                custom_args: vec!["--temp 1.5".into()],
+                ..InstanceConfig::default()
+            },
+        );
+
+        let normalized = normalize_instances_for_save(instances);
+        let config = &normalized["embedding"];
+        assert!(config.embedding);
+        assert!(config.spec_type.is_empty());
+        assert!(config.custom_args.is_empty());
+    }
 
     fn temp_config_dir(name: &str) -> std::path::PathBuf {
         let dir =

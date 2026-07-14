@@ -1,4 +1,5 @@
 import type { InstanceConfig } from '../../store'
+import { VECTOR_ALLOWED_FIELDS } from '../../modelPolicy'
 
 /**
  * Mirror of server.rs generate_command() conditions.
@@ -68,7 +69,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.yarn_orig_ctx > 0) a.add('yarn_orig_ctx')
 
   // ── Flash Attention ──
-  if (!e && config.flash_attn !== 'auto' && config.flash_attn !== '') a.add('flash_attn')
+  if (config.flash_attn !== 'auto' && config.flash_attn !== '') a.add('flash_attn')
 
   // ── Memory & Loading ──
   if (config.moe_cpu_layers > 0) a.add('moe_cpu_layers')
@@ -221,6 +222,12 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
 
   // ── Custom args ──
   if (config.custom_args.length > 0) a.add('custom_args')
+
+  if (e) {
+    for (const key of a) {
+      if (!VECTOR_ALLOWED_FIELDS.has(key)) a.delete(key)
+    }
+  }
 
   return a
 }

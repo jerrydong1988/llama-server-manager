@@ -1,9 +1,12 @@
 import { startTransition } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import { normalizeInstanceConfig } from '../modelPolicy'
 import { pathBasename } from '../utils/path'
 import { resolveHydratedHealth } from './bootstrapHealth'
 import type { AppStoreGet, AppStoreSet } from './helpers'
+import { synchronizeInstanceSummary } from './instanceSummary'
 import type {
+  AppState,
   DownloadManagerSnapshot,
   DownloadProgress,
   EngineInfo,
@@ -37,6 +40,82 @@ declare global {
       low_priority_throttle: boolean
     }
   }
+}
+
+let modelInventoryRequestGeneration = 0
+
+export function beginModelInventoryRequest(): number {
+  modelInventoryRequestGeneration += 1
+  return modelInventoryRequestGeneration
+}
+
+export function isCurrentModelInventoryRequest(requestGeneration: number): boolean {
+  return requestGeneration === modelInventoryRequestGeneration
+}
+
+export function normalizeModelPath(value: string): string {
+  const raw = value.trim()
+  const isWindowsUnc = /^(?:\\\\|\/\/)/.test(raw)
+  let normalized = raw.replace(/\\/g, '/')
+  if (/^\/\/\?\/UNC\//i.test(normalized)) {
+    normalized = `//${normalized.slice(8)}`
+  } else if (/^\/\/\?\//.test(normalized)) {
+    normalized = normalized.slice(4)
+  }
+
+  const isUnc = normalized.startsWith('//')
+  normalized = `${isUnc ? '//' : ''}${normalized.slice(isUnc ? 2 : 0).replace(/\/{2,}/g, '/')}`
+  if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1)
+  return (/^[A-Za-z]:\//.test(normalized) || isWindowsUnc || isUnc)
+    ? normalized.toLowerCase()
+    : normalized
+}
+
+export function normalizeStoredConfig(config: InstanceConfig, models: ModelInfo[]) {
+  const modelPath = normalizeModelPath(config.model_path)
+  const model = modelPath
+    ? models.find(item => normalizeModelPath(item.path) === modelPath)
+    : undefined
+  return normalizeInstanceConfig(config, model)
+}
+
+export function reconcileInstancesWithModels(instances: Instance[], models: ModelInfo[]) {
+  let changed = false
+  const next = instances.map((instance) => {
+    const normalized = normalizeStoredConfig(instance.config, models)
+    const normalizedInstance = normalized.changes.length === 0
+      ? instance
+      : { ...instance, config: normalized.config }
+    const synchronized = synchronizeInstanceSummary(normalizedInstance)
+    if (synchronized === instance) return instance
+
+    changed = true
+    return synchronized
+  })
+
+  return { instances: changed ? next : instances, changed }
+}
+
+export function applyModelInventory(
+  models: ModelInfo[],
+  get: AppStoreGet,
+  set: AppStoreSet,
+  additionalState: Partial<AppState> = {},
+  requestGeneration?: number,
+): boolean {
+  if (requestGeneration !== undefined && !isCurrentModelInventoryRequest(requestGeneration)) {
+    return false
+  }
+
+  const reconciled = reconcileInstancesWithModels(get().instances, models)
+  set({
+    ...additionalState,
+    models,
+    ...(reconciled.changed ? { instances: reconciled.instances } : {}),
+  })
+
+  if (reconciled.changed) void get().saveConfig().catch(() => {})
+  return reconciled.changed
 }
 
 function hydrateDownloadTasksFromSnapshot(
@@ -95,6 +174,7 @@ async function processConfig(
   get: AppStoreGet,
   set: AppStoreSet,
 ) {
+  const modelScanRequest = beginModelInventoryRequest()
   const runningIds = new Set(Object.keys(global.running || {}))
   const order = global.instance_order || Object.keys(global.instances)
   const orderIndex = new Map(order.map((id, index) => [id, index]))
@@ -123,6 +203,7 @@ async function processConfig(
   startTransition(() => {
     set({
       instances,
+      models: [],
       modelDirs: global.model_dirs || [],
       engineDirs: global.engine_dirs || [],
       defaultEngineId: global.default_engine_id || null,
@@ -161,7 +242,7 @@ async function processConfig(
   invoke<ModelInfo[]>('scan_models', { paths: global.model_dirs || [] })
     .then((models) => {
       startTransition(() => {
-        set({ models })
+        applyModelInventory(models, get, set, {}, modelScanRequest)
       })
     })
     .catch((error) => {
@@ -196,11 +277,12 @@ export async function loadAppBootstrap(
         get().addRuntimeWarning(`startup timing failed: ${error?.message || String(error)}`)
       })
 
+    const cachedScanRequest = beginModelInventoryRequest()
     invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan')
       .then((data) => {
         if (data) {
           startTransition(() => {
-            set({ models: data[0], engines: data[1] })
+            applyModelInventory(data[0], get, set, { engines: data[1] }, cachedScanRequest)
           })
         }
       })
