@@ -12,3 +12,5 @@ pub mod proxy;
 pub mod scanner;
 pub mod server;
 pub mod telemetry;
+#[allow(dead_code)]
+pub mod vector_metrics;

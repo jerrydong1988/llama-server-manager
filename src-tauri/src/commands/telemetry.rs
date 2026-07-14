@@ -1,4 +1,5 @@
 use crate::models::SystemMetrics;
+use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -364,17 +365,51 @@ fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("failed to add telemetry workload column: {e}"))?;
     }
-    conn.execute(
-        "UPDATE run_sessions
-         SET workload = CASE
-             WHEN instr(command_line, '--reranking') > 0 THEN 'reranker'
-             WHEN instr(command_line, '--embedding') > 0 THEN 'embedding'
-             ELSE 'inference'
-         END
-         WHERE workload IS NULL OR workload = '' OR workload = 'inference'",
-        [],
-    )
-    .map_err(|e| format!("failed to backfill telemetry workload: {e}"))?;
+    let sessions = {
+        let mut statement = conn
+            .prepare(
+                "SELECT id, command_line FROM run_sessions
+                 WHERE workload IS NULL OR workload = '' OR workload = 'inference'",
+            )
+            .map_err(|e| format!("failed to prepare telemetry workload backfill: {e}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("failed to query telemetry workload backfill: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("failed to read telemetry workload backfill: {e}"))?
+    };
+    for (session_id, command_line) in sessions {
+        let workload = ModelWorkload::from_command_line(&command_line);
+        conn.execute(
+            "UPDATE run_sessions SET workload = ?2 WHERE id = ?1",
+            params![session_id, workload.as_str()],
+        )
+        .map_err(|e| format!("failed to backfill telemetry workload: {e}"))?;
+    }
+    let stored_workloads = {
+        let mut statement = conn
+            .prepare("SELECT id, workload FROM run_sessions")
+            .map_err(|e| format!("failed to prepare telemetry workload validation: {e}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| format!("failed to query telemetry workload validation: {e}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("failed to read telemetry workload validation: {e}"))?
+    };
+    for (session_id, stored) in stored_workloads {
+        let canonical = ModelWorkload::from_storage(&stored).as_str();
+        if canonical != stored {
+            conn.execute(
+                "UPDATE run_sessions SET workload = ?2 WHERE id = ?1",
+                params![session_id, canonical],
+            )
+            .map_err(|e| format!("failed to normalize telemetry workload: {e}"))?;
+        }
+    }
 
     let sample_columns = table_columns(conn, "metric_samples")?;
     for (name, definition) in [

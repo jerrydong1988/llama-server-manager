@@ -144,7 +144,7 @@ git commit -m "feat: add workload-aware telemetry schema"
 - Consumes: completed vector events, time range, bucket width, source selector.
 - Produces: sanitized percentiles, fixed time buckets, log-task summary, proxy-HTTP summary, explicit source availability.
 
-- [ ] **Step 1: Add failing aggregation tests**
+- [x] **Step 1: Add failing aggregation tests**
 
 Cover empty input, boundary timestamps, concurrent completions, empty buckets, P50/P95, even sample counts, invalid durations, source separation, and input token absence.
 
@@ -169,13 +169,13 @@ fn log_and_proxy_summaries_do_not_double_count() {
 }
 ```
 
-- [ ] **Step 2: Run focused test and verify failure**
+- [x] **Step 2: Run focused test and verify failure**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml --locked commands::vector_metrics`
 
 Expected: FAIL because the module does not exist.
 
-- [ ] **Step 3: Implement small pure data types**
+- [x] **Step 3: Implement small pure data types**
 
 ```rust
 pub(crate) enum VectorEventSource { Log, Proxy }
@@ -199,11 +199,11 @@ pub(crate) struct VectorTrendBucket {
 
 Provide a nearest-rank percentile helper with an explicit documented rule. Reject negative/non-finite durations and invalid ranges before aggregation. Preserve `None` for input throughput when no token samples exist.
 
-- [ ] **Step 4: Implement source-specific summaries**
+- [x] **Step 4: Implement source-specific summaries**
 
 Log summary owns completed items, input tokens, item throughput and task P50/P95. Proxy summary owns HTTP request count, proxy item count, success/failure counts, success/failure rates and HTTP P50/P95. Do not expose a combined total.
 
-- [ ] **Step 5: Run focused tests and Clippy for the module**
+- [x] **Step 5: Run focused tests and Clippy for the module**
 
 Run:
 
@@ -214,7 +214,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -
 
 Expected: tests pass and no dead-code or float warnings remain.
 
-- [ ] **Step 6: Commit aggregation primitives**
+- [x] **Step 6: Commit aggregation primitives**
 
 ```bash
 git add src-tauri/src/commands/vector_metrics.rs src-tauri/src/commands/mod.rs
