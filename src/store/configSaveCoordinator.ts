@@ -1,33 +1,40 @@
-type SaveWaiter = {
+type SaveWaiter<R> = {
+  resolve: (result: R) => void
+  reject: (error: unknown) => void
+}
+
+type IdleWaiter = {
   resolve: () => void
   reject: (error: unknown) => void
 }
 
-type PendingSave<T> = {
+type PendingSave<T, R> = {
   snapshot: T
-  waiters: SaveWaiter[]
+  waiters: SaveWaiter<R>[]
 }
 
-export type LatestSaveCoordinator<T> = {
-  save: (snapshot: T) => Promise<void>
+export type LatestSaveCoordinator<T, R> = {
+  save: (snapshot: T) => Promise<R>
   waitForIdle: () => Promise<void>
 }
 
-export function createLatestSaveCoordinator<T>(
-  persist: (snapshot: T) => Promise<void>,
-): LatestSaveCoordinator<T> {
+export function createLatestSaveCoordinator<T, R>(
+  persist: (snapshot: T) => Promise<R>,
+): LatestSaveCoordinator<T, R> {
   let active = false
   let drainScheduled = false
-  let pending: PendingSave<T> | null = null
+  let pending: PendingSave<T, R> | null = null
   let lastError: unknown = null
-  let idleWaiters: SaveWaiter[] = []
+  let idleWaiters: IdleWaiter[] = []
 
   const settleIdle = () => {
     const waiters = idleWaiters
+    const error = lastError
     idleWaiters = []
+    lastError = null
     for (const waiter of waiters) {
-      if (lastError === null) waiter.resolve()
-      else waiter.reject(lastError)
+      if (error === null) waiter.resolve()
+      else waiter.reject(error)
     }
   }
 
@@ -40,9 +47,9 @@ export function createLatestSaveCoordinator<T>(
       const current = pending
       pending = null
       try {
-        await persist(current.snapshot)
+        const result = await persist(current.snapshot)
         lastError = null
-        current.waiters.forEach(waiter => waiter.resolve())
+        current.waiters.forEach(waiter => waiter.resolve(result))
       } catch (error) {
         lastError = error
         current.waiters.forEach(waiter => waiter.reject(error))
@@ -60,7 +67,7 @@ export function createLatestSaveCoordinator<T>(
   }
 
   return {
-    save: (snapshot) => new Promise<void>((resolve, reject) => {
+    save: (snapshot) => new Promise<R>((resolve, reject) => {
       const waiter = { resolve, reject }
       if (pending) {
         pending.snapshot = snapshot
@@ -72,7 +79,7 @@ export function createLatestSaveCoordinator<T>(
     }),
     waitForIdle: () => {
       if (!active && !pending && !drainScheduled) {
-        return lastError === null ? Promise.resolve() : Promise.reject(lastError)
+        return Promise.resolve()
       }
       return new Promise<void>((resolve, reject) => {
         idleWaiters.push({ resolve, reject })

@@ -1,6 +1,6 @@
 # Llama Server Manager 使用说明 / User Guide
 
-> v2.9.24 · Windows / macOS / Linux
+> v2.9.25 · Windows / macOS / Linux
 
 本说明按实际操作顺序介绍模型、引擎、实例、路由和监控功能。应用内“使用说明”页面会随安装包离线提供同一份内容和图片。
 
@@ -41,9 +41,9 @@ This guide follows the real workflow from models and engines to instances, routi
 3. Prepare a `llama-server` build for your backend, such as CUDA, ROCm, Vulkan, or CPU.
 4. Prepare a local GGUF model, or download one later from ModelScope or HuggingFace.
 
-Linux AppImage 的“开机自启动”会记录 AppImage 原始文件位置；启用后不要移动或删除该文件。正式 Windows 与 macOS 发布包由标签构建执行代码签名和公证，普通 CI 产物仅用于测试。
+Linux AppImage 的“开机自启动”会记录 AppImage 原始文件位置；启用后不要移动或删除该文件。正式标签构建在配置证书时执行 Windows 签名与 macOS 签名和公证；未配置时仍会发布文件名带 `-unsigned` 的 Windows 安装包和带 `-adhoc` 的 macOS DMG。普通 CI 产物仅用于测试。
 
-AppImage autostart records the original AppImage location; do not move or delete that file after enabling it. Tagged Windows and macOS releases use code signing and notarization, while regular CI artifacts are for testing only.
+AppImage autostart records the original AppImage location; do not move or delete that file after enabling it. Tagged builds use formal Windows signing and macOS signing or notarization only when credentials are configured; otherwise the release publishes clearly labeled `-unsigned` Windows installers and `-adhoc` macOS DMGs. Regular CI artifacts are for testing only.
 
 ### 首次运行的五个步骤 / Five First-Run Steps
 

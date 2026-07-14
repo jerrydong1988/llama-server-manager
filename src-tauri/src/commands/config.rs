@@ -195,7 +195,7 @@ pub async fn save_config(
     last_tab: String,
     dark_mode: bool,
     state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+) -> Result<HashMap<String, InstanceConfig>, String> {
     let instances = normalize_instances_for_save(instances);
     let running_snapshot = state.running.lock().unwrap().clone();
     let engine_names = state.engine_names.lock().unwrap().clone();
@@ -217,8 +217,8 @@ pub async fn save_config(
         persist_global_config_unlocked(&config_dir, &global)?;
     }
     let mut stored = state.instances.lock().unwrap();
-    *stored = instances;
-    Ok(())
+    *stored = instances.clone();
+    Ok(instances)
 }
 
 #[tauri::command]

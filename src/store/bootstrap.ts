@@ -55,7 +55,7 @@ export function isCurrentModelInventoryRequest(requestGeneration: number): boole
 
 export function normalizeModelPath(value: string): string {
   const raw = value.trim()
-  const isWindowsUnc = /^\\\\/.test(raw) || /^\/\/\?\//.test(raw)
+  const isWindowsUnc = /^(?:\\\\|\/\/)/.test(raw)
   let normalized = raw.replace(/\\/g, '/')
   if (/^\/\/\?\/UNC\//i.test(normalized)) {
     normalized = `//${normalized.slice(8)}`
@@ -66,7 +66,7 @@ export function normalizeModelPath(value: string): string {
   const isUnc = normalized.startsWith('//')
   normalized = `${isUnc ? '//' : ''}${normalized.slice(isUnc ? 2 : 0).replace(/\/{2,}/g, '/')}`
   if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1)
-  return (/^[A-Za-z]:\//.test(normalized) || isWindowsUnc)
+  return (/^[A-Za-z]:\//.test(normalized) || isWindowsUnc || isUnc)
     ? normalized.toLowerCase()
     : normalized
 }

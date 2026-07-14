@@ -1,6 +1,6 @@
 [package]
 name = "llama-server-manager"
-version = "2.9.24"
+version = "2.9.25"
 description = "现代化 Llama.cpp 服务器图形化管理器"
 authors = ["开发者"]
 license = "MIT"
@@ -19,7 +19,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1.8", features = ["v4", "serde"] }
 tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "fs", "process"] }
-reqwest = { version = "0.11", features = ["json", "stream", "blocking"] }
+reqwest = { version = "0.12", features = ["json", "stream", "blocking"] }
 walkdir = "2.0"
 bytes = "1.0"
 futures-util = "0.3"
@@ -30,7 +30,7 @@ chrono = { version = "0.4", features = ["serde"] }
 regex-lite = "0.1"
 if-addrs = "0.13"
 socket2 = "0.5"
-mdns-sd = "0.11"
+mdns-sd = "0.20"
 rusqlite = { version = "0.32", features = ["bundled"] }
 axum = "0.7"
 http-body-util = "0.1"

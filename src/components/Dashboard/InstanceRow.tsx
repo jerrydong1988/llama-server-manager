@@ -18,11 +18,11 @@ export default function InstanceRow({ instance }: { instance: Instance }) {
       </div>
       <div className="flex items-center gap-2 shrink-0 ml-2">
         {isRunning ? (
-          <button onClick={() => stopInstance(instance.id)} className="px-3 py-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors">
+          <button onClick={() => void stopInstance(instance.id).catch(() => {})} className="px-3 py-1 text-xs bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400 rounded-lg hover:bg-red-200 dark:hover:bg-red-900/50 transition-colors">
             {t.instance.stop}
           </button>
         ) : (
-          <button onClick={() => startInstance(instance.id)} className="px-3 py-1 text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-lg hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">
+          <button onClick={() => void startInstance(instance.id).catch(() => {})} className="px-3 py-1 text-xs bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 rounded-lg hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">
             {t.instance.start}
           </button>
         )}

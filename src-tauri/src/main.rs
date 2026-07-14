@@ -333,6 +333,7 @@ fn main() {
             engine_names: Mutex::new(HashMap::new()),
             instances: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
+            starting: Mutex::new(std::collections::HashSet::new()),
             config_dir: Mutex::new(config_dir),
             cancel_flags: Mutex::new(HashMap::new()),
             pause_flags: Mutex::new(HashMap::new()),

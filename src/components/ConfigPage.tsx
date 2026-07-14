@@ -356,8 +356,6 @@ const ConfigPage = () => {
     const normalized = modelPathChanged
       ? normalizeConfigForSelectedModel(local, currentModel)
       : normalizeInstanceConfig(local, currentModel)
-    const warnings = validateConfig(normalized.config, currentModel, engine)
-
     committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
     setLocal(normalized.config)
     setSaving(true)
@@ -371,9 +369,13 @@ const ConfigPage = () => {
       if (mountedRef.current) setSaving(false)
     }
     if (!mountedRef.current || useAppStore.getState().activeConfigInstanceId !== inst.id) return
+    const persistedConfig = useAppStore.getState().instances
+      .find(item => item.id === inst.id)?.config ?? normalized.config
+    committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
+    setLocal(persistedConfig)
     setSaved(true)
-    setBaseline(normalized.config)
-    setSaveWarnings(warnings)
+    setBaseline(persistedConfig)
+    setSaveWarnings(validateConfig(persistedConfig, currentModel, engine))
     setVectorCleanupChanges([])
 
     setTimeout(() => {

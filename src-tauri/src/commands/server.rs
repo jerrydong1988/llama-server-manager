@@ -781,6 +781,41 @@ fn prepare_launch(config: InstanceConfig, engine_path: &str) -> (InstanceConfig,
     (config, command)
 }
 
+fn reserve_start_slot(
+    running: &std::collections::HashMap<String, RunningInstance>,
+    starting: &mut std::collections::HashSet<String>,
+    instance_id: &str,
+) -> Result<(), String> {
+    if running.contains_key(instance_id) || !starting.insert(instance_id.to_string()) {
+        return Err("Instance is already running or starting".to_string());
+    }
+    Ok(())
+}
+
+struct StartReservation<'a> {
+    instance_id: String,
+    starting: &'a Mutex<std::collections::HashSet<String>>,
+}
+
+impl Drop for StartReservation<'_> {
+    fn drop(&mut self) {
+        self.starting.lock().unwrap().remove(&self.instance_id);
+    }
+}
+
+fn reserve_instance_start<'a>(
+    state: &'a AppState,
+    instance_id: &str,
+) -> Result<StartReservation<'a>, String> {
+    let running = state.running.lock().unwrap();
+    let mut starting = state.starting.lock().unwrap();
+    reserve_start_slot(&running, &mut starting, instance_id)?;
+    Ok(StartReservation {
+        instance_id: instance_id.to_string(),
+        starting: &state.starting,
+    })
+}
+
 #[tauri::command]
 pub async fn generate_server_command(
     config: InstanceConfig,
@@ -798,7 +833,7 @@ pub async fn start_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    // Hold lock across check+insert to prevent TOCTOU race
+    let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let (config, cmd) = prepare_launch(config, &engine_exe);
     let cmd_str = cmd.join(" ");
     let cmd_display = mask_api_key_in_cmd(&cmd_str);
@@ -2486,6 +2521,17 @@ mod perf_parser_tests {
             telemetry_config_hash(&config),
             telemetry_config_hash(&normalize_for_launch(config.clone()).config)
         );
+    }
+
+    #[test]
+    fn start_slot_rejects_duplicate_reservations_and_recovers_after_release() {
+        let running = HashMap::new();
+        let mut starting = std::collections::HashSet::new();
+
+        assert!(reserve_start_slot(&running, &mut starting, "instance-a").is_ok());
+        assert!(reserve_start_slot(&running, &mut starting, "instance-a").is_err());
+        starting.remove("instance-a");
+        assert!(reserve_start_slot(&running, &mut starting, "instance-a").is_ok());
     }
 
     #[test]

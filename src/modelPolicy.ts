@@ -97,13 +97,6 @@ function modelBasename(value: string | undefined): string {
   return value?.split(/[\\/]/).pop() ?? ''
 }
 
-function hasAuthoritativeInference(model: ModelInfo | null | undefined): boolean {
-  const capabilities = model?.capabilities
-  return capabilities?.metadata_complete === true &&
-    capabilities.is_embedding_model === false &&
-    capabilities.is_reranker_model === false
-}
-
 export function detectModelWorkload(
   model?: ModelInfo | null,
   modelPath = '',
@@ -112,7 +105,6 @@ export function detectModelWorkload(
   const capabilities = model?.capabilities
   if (capabilities?.is_reranker_model) return 'reranker'
   if (capabilities?.is_embedding_model) return 'embedding'
-  if (hasAuthoritativeInference(model)) return 'inference'
 
   const fallback = [
     model?.architecture ?? '',
@@ -132,7 +124,7 @@ export function isModelWorkloadLocked(
   model?: ModelInfo | null,
   modelPath = '',
 ): boolean {
-  return hasAuthoritativeInference(model) || detectModelWorkload(model, modelPath) !== 'inference'
+  return detectModelWorkload(model, modelPath) !== 'inference'
 }
 
 export function getResettableFields(
@@ -176,12 +168,6 @@ export function normalizeInstanceConfig(
   const workload = detectModelWorkload(model, config.model_path, config)
   if (workload === 'inference') {
     const next: InstanceConfig = { ...config }
-    if (hasAuthoritativeInference(model)) {
-      const defaults = defaultInstanceConfig()
-      next.embedding = defaults.embedding
-      next.pooling = defaults.pooling
-      next.reranking = defaults.reranking
-    }
     return {
       config: next,
       workload,

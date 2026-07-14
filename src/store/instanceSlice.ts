@@ -7,11 +7,13 @@ import {
 } from './bootstrap'
 import { createLatestSaveCoordinator } from './configSaveCoordinator'
 import type { AppStoreGet, AppStoreSet } from './helpers'
+import { runInstanceStart } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
 import type { AppState, InstanceConfig, LogEntry } from './types'
 
 const MAX_LOG_ENTRIES = 1000
 type ConfigSaveSnapshot = {
+  revision: number
   instances: Record<string, InstanceConfig>
   modelDirs: string[]
   engineDirs: string[]
@@ -21,8 +23,18 @@ type ConfigSaveSnapshot = {
   darkMode: boolean
 }
 
-const configSaveCoordinator = createLatestSaveCoordinator<ConfigSaveSnapshot>(
-  snapshot => invoke('save_config', snapshot),
+type PersistedConfigResult = {
+  revision: number
+  instances: Record<string, InstanceConfig>
+}
+
+let latestConfigSaveRevision = 0
+
+const configSaveCoordinator = createLatestSaveCoordinator<ConfigSaveSnapshot, PersistedConfigResult>(
+  async ({ revision, ...snapshot }) => ({
+    revision,
+    instances: await invoke<Record<string, InstanceConfig>>('save_config', snapshot),
+  }),
 )
 
 export function createInstanceSlice(
@@ -97,7 +109,7 @@ export function createInstanceSlice(
       const normalized = normalizeStoredConfig(config, get().models)
       return invoke<string[]>('generate_server_command', { config: normalized.config, engineExe })
     },
-    startInstance: async (id) => {
+    startInstance: (id) => runInstanceStart(id, async () => {
       try {
         const { instances, models, engines, defaultEngineId } = get()
         const instance = instances.find((item) => item.id === id)
@@ -135,14 +147,18 @@ export function createInstanceSlice(
         get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
       } catch (error) {
         console.error('start_server error:', error)
+        get().addRuntimeWarning(`\u5b9e\u4f8b\u542f\u52a8\u5931\u8d25\uff1a${String(error)}`)
+        throw error
       }
-    },
+    }),
     stopInstance: async (id) => {
       try {
         await invoke('stop_server', { instanceId: id })
         get().updateInstance(id, { status: 'stopped', healthCheck: 'pending' })
       } catch (error) {
         console.error('stop_server error:', error)
+        get().addRuntimeWarning(`\u5b9e\u4f8b\u505c\u6b62\u5931\u8d25\uff1a${String(error)}`)
+        throw error
       }
     },
     openBrowser: async (host, port) => {
@@ -161,7 +177,9 @@ export function createInstanceSlice(
         order.push(instance.id)
       })
 
+      const revision = ++latestConfigSaveRevision
       const operation = configSaveCoordinator.save({
+        revision,
         instances: instancesById,
         modelDirs: state.modelDirs,
         engineDirs: state.engineDirs,
@@ -169,6 +187,17 @@ export function createInstanceSlice(
         instanceOrder: order,
         lastTab: state.activeTab,
         darkMode: state.darkMode,
+      }).then((result) => {
+        if (result.revision === latestConfigSaveRevision) {
+          set((current) => ({
+            instances: current.instances.map((instance) => {
+              const persistedConfig = result.instances[instance.id]
+              return persistedConfig
+                ? synchronizeInstanceSummary({ ...instance, config: persistedConfig })
+                : instance
+            }),
+          }))
+        }
       }).catch((error) => {
         get().addRuntimeWarning(`配置保存失败：${String(error)}`)
         throw error

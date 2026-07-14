@@ -33,11 +33,11 @@
 - Produces: `LatestSaveCoordinator<T, R>` and `save_config -> HashMap<String, InstanceConfig>`.
 - Consumes: existing `synchronizeInstanceSummary` and vector normalization.
 
-- [ ] Add failing tests proving a reported save failure does not poison a later idle check and a backend-normalized result becomes the accepted newest frontend snapshot.
-- [ ] Run `node scripts/test-config-save-sequencing.cjs` and the focused Rust config test; confirm the new assertions fail for the expected behavior.
-- [ ] Generalize the coordinator result type, clear historical drain errors after settling waiters, return normalized instances from Rust, and apply only the newest save revision in Zustand.
-- [ ] Update ConfigPage saved state from the accepted store configuration.
-- [ ] Re-run focused tests and commit the passing task.
+- [x] Add failing tests proving a reported save failure does not poison a later idle check and a backend-normalized result becomes the accepted newest frontend snapshot.
+- [x] Run `node scripts/test-config-save-sequencing.cjs` and the focused Rust config test; confirm the new assertions fail for the expected behavior.
+- [x] Generalize the coordinator result type, clear historical drain errors after settling waiters, return normalized instances from Rust, and apply only the newest save revision in Zustand.
+- [x] Update ConfigPage saved state from the accepted store configuration.
+- [x] Re-run focused tests and commit the passing task.
 
 ### Task 2: Workload Detection And Path Equivalence
 
@@ -52,10 +52,10 @@
 - Produces: explicit workload fallback for unknown architectures and `normalizeModelPath(value, platform)`.
 - Consumes: `ModelInfo.capabilities` positive detection and model-selection transitions.
 
-- [ ] Add failing behavior tests for an unknown architecture with explicit `embedding`/`reranking`, switching to identified inference, and mixed Windows UNC separators/casing.
-- [ ] Run both scripts and confirm each new assertion fails for the audited reason.
-- [ ] Make only positive capability detection authoritative, preserve explicit fallback, and pass platform semantics into model-path matching.
-- [ ] Re-run focused tests and commit the passing task.
+- [x] Add failing behavior tests for an unknown architecture with explicit `embedding`/`reranking`, switching to identified inference, and mixed Windows UNC separators/casing.
+- [x] Run both scripts and confirm each new assertion fails for the audited reason.
+- [x] Make only positive capability detection authoritative, preserve explicit fallback, and pass platform semantics into model-path matching.
+- [x] Re-run focused tests and commit the passing task.
 
 ### Task 3: Startup Single-Flight And Visible Lifecycle Errors
 
@@ -73,10 +73,10 @@
 - Produces: per-instance frontend start guard and backend pre-spawn reservation lifecycle.
 - Consumes: runtime warnings, `startInstance`, `stopInstance`, and `AppState.running`.
 
-- [ ] Add failing tests proving duplicate frontend starts share one operation, errors reject and create a runtime warning, and Rust refuses a reserved instance before opening its log.
-- [ ] Run focused Node and Rust tests; confirm expected failures.
-- [ ] Implement frontend single-flight, propagate lifecycle failures, and reserve/release backend instance IDs around every launch path.
-- [ ] Re-run focused tests and commit the passing task.
+- [x] Add failing tests proving duplicate frontend starts share one operation, errors reject and create a runtime warning, and Rust refuses a reserved instance before opening its log.
+- [x] Run focused Node and Rust tests; confirm expected failures.
+- [x] Implement frontend single-flight, propagate lifecycle failures, and reserve/release backend instance IDs around every launch path.
+- [x] Re-run focused tests and commit the passing task.
 
 ### Task 4: Dependency And Release Policy
 
@@ -92,10 +92,10 @@
 **Interfaces:**
 - Produces: tag/version validation and RustSec CI policy.
 
-- [ ] Add failing release-script checks for mismatched `GITHUB_REF_NAME` and the obsolete signing statement.
-- [ ] Run the checks with a fake tag and confirm failure is caused by the new requirements.
-- [ ] Upgrade compatible direct dependencies, add RustSec audit with documented upstream exceptions, enforce tag equality, and correct signing text.
-- [ ] Run release checks, dependency audits, and actionlint; commit the passing task.
+- [x] Add failing release-script checks for mismatched `GITHUB_REF_NAME` and the obsolete signing statement.
+- [x] Run the checks with a fake tag and confirm failure is caused by the new requirements.
+- [x] Upgrade compatible direct dependencies, add RustSec audit with documented upstream exceptions, enforce tag equality, and correct signing text.
+- [x] Run release checks, dependency audits, and actionlint; commit the passing task.
 
 ### Task 5: Version, Full Verification, And Release
 
@@ -110,9 +110,8 @@
 **Interfaces:**
 - Produces: version `2.9.25` and tag `v2.9.25`.
 
-- [ ] Set all version sources to `2.9.25` and run the fake-tag/version check with `v2.9.25`.
-- [ ] Run `npm run check:release`, `npm run build`, Rust format/test/Clippy, npm audit, RustSec audit, actionlint, and `git diff --check`.
-- [ ] Perform an independent read-only review of the complete diff and resolve every validated finding.
+- [x] Set all version sources to `2.9.25` and run the fake-tag/version check with `v2.9.25`.
+- [x] Run `npm run check:release`, `npm run build`, Rust format/test/Clippy, npm audit, RustSec audit, actionlint, and `git diff --check`.
+- [x] Perform an independent read-only review of the complete diff and resolve every validated finding.
 - [ ] Commit and push the release branch, wait for all five CI jobs, merge to `master`, create and push `v2.9.25`.
 - [ ] Monitor the tagged workflow, verify release assets and checksums, and report the published release URL.
-

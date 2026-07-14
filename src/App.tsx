@@ -465,7 +465,7 @@ function AppInner() {
         description: zh ? '快速启动第一个未运行实例。' : 'Quickly start the first stopped instance.',
         group: zh ? '运行' : 'Runtime',
         icon: <Play className="h-4 w-4" />,
-        action: () => void startInstance(firstStopped.id),
+        action: () => void startInstance(firstStopped.id).catch(() => {}),
       })
     }
 
@@ -476,7 +476,7 @@ function AppInner() {
         description: zh ? '快速停止当前第一个运行实例。' : 'Quickly stop the first running instance.',
         group: zh ? '运行' : 'Runtime',
         icon: <Square className="h-4 w-4" />,
-        action: () => void stopInstance(firstRunning.id),
+        action: () => void stopInstance(firstRunning.id).catch(() => {}),
       })
     }
 
@@ -603,8 +603,8 @@ function AppInner() {
         if (instances.length > 0) {
           const running = instances.find(i => i.status === 'running')
           const stopped = instances.find(i => i.status !== 'running')
-          if (running) stopInstance(running.id)
-          else if (stopped) startInstance(stopped.id)
+          if (running) void stopInstance(running.id).catch(() => {})
+          else if (stopped) void startInstance(stopped.id).catch(() => {})
         }
       }
       if (e.key === 's' || e.key === 'S') {

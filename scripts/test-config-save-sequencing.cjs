@@ -32,10 +32,18 @@ const instanceSliceSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'store', 'instanceSlice.ts'),
   'utf8',
 )
-assert.match(instanceSliceSource, /createLatestSaveCoordinator<ConfigSaveSnapshot>/)
+assert.match(instanceSliceSource, /createLatestSaveCoordinator<ConfigSaveSnapshot,\s*PersistedConfigResult>/)
 assert.match(instanceSliceSource, /configSaveCoordinator\.save\(\{/)
 assert.match(instanceSliceSource, /configSaveCoordinator\.waitForIdle\(\)/)
+assert.match(instanceSliceSource, /result\.revision === latestConfigSaveRevision/)
+assert.match(instanceSliceSource, /synchronizeInstanceSummary/)
 assert.doesNotMatch(instanceSliceSource, /configSaveQueue/)
+
+assert.match(
+  configPageSource,
+  /await saveConfig\(\)[\s\S]*useAppStore\.getState\(\)\.instances[\s\S]*setBaseline\(persistedConfig\)/,
+  'save feedback must use the backend-normalized configuration',
+)
 
 const entry = `
   import assert from 'node:assert/strict'
@@ -60,6 +68,7 @@ const entry = `
     const gate = deferred()
     gates.push(gate)
     await gate.promise
+    return snapshot.revision
   })
 
   const first = coordinator.save({ revision: 1 })
@@ -72,7 +81,7 @@ const entry = `
   assert.deepEqual(writes, [{ revision: 1 }], 'pending saves must not start concurrently')
 
   gates[0].resolve()
-  await first
+  assert.equal(await first, 1)
   await Promise.resolve()
   assert.deepEqual(
     writes,
@@ -81,7 +90,9 @@ const entry = `
   )
 
   gates[1].resolve()
-  await Promise.all([second, third, coordinator.waitForIdle()])
+  const [secondResult, thirdResult] = await Promise.all([second, third, coordinator.waitForIdle()])
+  assert.equal(secondResult, 3)
+  assert.equal(thirdResult, 3)
 
   const recoveryWrites = []
   const recovery = createLatestSaveCoordinator(async (snapshot) => {
@@ -103,10 +114,14 @@ const entry = `
   const idleRecovery = createLatestSaveCoordinator(async (snapshot) => {
     idleRecoveryWrites.push(snapshot)
     if (snapshot.revision === 1) throw new Error('idle failure')
+    return snapshot.revision
   })
-  await assert.rejects(idleRecovery.save({ revision: 1 }), /idle failure/)
-  await assert.rejects(idleRecovery.waitForIdle(), /idle failure/)
-  await idleRecovery.save({ revision: 2 })
+  const idleFailureSave = idleRecovery.save({ revision: 1 })
+  const activeDrain = idleRecovery.waitForIdle()
+  await assert.rejects(idleFailureSave, /idle failure/)
+  await assert.rejects(activeDrain, /idle failure/)
+  await idleRecovery.waitForIdle()
+  assert.equal(await idleRecovery.save({ revision: 2 }), 2)
   await idleRecovery.waitForIdle()
   assert.deepEqual(idleRecoveryWrites, [{ revision: 1 }, { revision: 2 }])
 

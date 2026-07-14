@@ -699,6 +699,7 @@ pub struct AppState {
     pub engine_names: Mutex<HashMap<String, String>>,
     pub instances: Mutex<HashMap<String, InstanceConfig>>,
     pub running: Mutex<HashMap<String, RunningInstance>>,
+    pub starting: Mutex<std::collections::HashSet<String>>,
     pub config_dir: Mutex<PathBuf>,
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,

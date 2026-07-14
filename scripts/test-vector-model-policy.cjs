@@ -42,12 +42,22 @@ const entry = `
     model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false }, name: 'nomic-embed-text.gguf' }),
     '',
     { embedding: true, reranking: false },
-  ), 'inference')
+  ), 'embedding')
+  assert.equal(detectModelWorkload(
+    model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false }, name: 'custom-model.gguf' }),
+    '',
+    { embedding: true, reranking: false },
+  ), 'embedding')
+  assert.equal(detectModelWorkload(
+    model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false }, name: 'custom-model.gguf' }),
+    '',
+    { embedding: true, reranking: true },
+  ), 'reranker')
   assert.equal(detectModelWorkload(null, 'C:/models/bge-reranker-v2-m3.gguf'), 'reranker')
   assert.equal(detectModelWorkload(null, 'C:/models/nomic-embed-text-v1.5.gguf'), 'embedding')
   assert.equal(detectModelWorkload(model({ architecture: 'sentence-bert' })), 'embedding')
   assert.equal(detectModelWorkload(null, 'C:/models/Qwen3-8B-Instruct.gguf'), 'inference')
-  assert.equal(isModelWorkloadLocked(model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false } })), true)
+  assert.equal(isModelWorkloadLocked(model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false } })), false)
   assert.equal(isModelWorkloadLocked(model({ name: 'nomic-embed-text.gguf' })), true)
   assert.equal(isModelWorkloadLocked(model({ name: 'custom-model.gguf', capabilities: { metadata_complete: false } })), false)
   assert.deepEqual(getResettableFields(['embd_normalize', 'reranking'], true, true), ['embd_normalize'])
@@ -77,7 +87,17 @@ const entry = `
   assert.equal(embedding.config.reranking, false)
   assert.equal(embedding.config.pooling, '')
 
-  const switchedToInference = normalizeInstanceConfig(
+  const manuallyMarkedVector = normalizeInstanceConfig(
+    { ...defaultInstanceConfig(), embedding: true, reranking: true, pooling: 'rank' },
+    model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false } }),
+  )
+  assert.equal(manuallyMarkedVector.workload, 'reranker')
+  assert.equal(manuallyMarkedVector.vectorMode, true)
+  assert.equal(manuallyMarkedVector.config.embedding, true)
+  assert.equal(manuallyMarkedVector.config.reranking, true)
+  assert.equal(manuallyMarkedVector.config.pooling, 'rank')
+
+  const switchedToInference = normalizeConfigForSelectedModel(
     { ...defaultInstanceConfig(), embedding: true, reranking: true, pooling: 'rank' },
     model({ capabilities: { metadata_complete: true, is_embedding_model: false, is_reranker_model: false } }),
   )
@@ -147,7 +167,11 @@ const entry = `
   assert.equal(normalizeModelPath('\\\\\\\\Server\\\\Share\\\\Model.GGUF'), '//server/share/model.gguf')
   assert.equal(normalizeModelPath('\\\\\\\\?\\\\C:\\\\Models\\\\Model.GGUF'), 'c:/models/model.gguf')
   assert.equal(normalizeModelPath('\\\\\\\\?\\\\UNC\\\\Server\\\\Share\\\\Model.GGUF'), '//server/share/model.gguf')
-  assert.equal(normalizeModelPath('//Models/Model.GGUF'), '//Models/Model.GGUF')
+  assert.equal(normalizeModelPath('//Server/Share/Model.GGUF'), '//server/share/model.gguf')
+  assert.equal(
+    normalizeModelPath('//Server/Share/Model.GGUF'),
+    normalizeModelPath('\\\\\\\\server\\\\share\\\\model.gguf'),
+  )
 
   const staleInventoryRequest = beginModelInventoryRequest()
   const currentInventoryRequest = beginModelInventoryRequest()
@@ -333,11 +357,11 @@ assert.match(configPageSource, /key === 'custom_args'/, 'custom argument diffs m
 const saveSource = section(configPageSource, 'const save =', 'const sectionProps')
 assert.match(saveSource, /const normalized = modelPathChanged/, 'save must select normalization based on whether the model path changed')
 assert.match(saveSource, /modelPathChanged[\s\S]*normalizeConfigForSelectedModel/, 'save must treat a manually edited model path as an explicit model switch')
-assert.match(saveSource, /validateConfig\(normalized\.config, currentModel, engine\)/, 'save validation must inspect the normalized configuration')
+assert.match(saveSource, /validateConfig\(persistedConfig, currentModel, engine\)/, 'save validation must inspect the backend-normalized configuration')
 assert.match(saveSource, /config:\s*normalized\.config/, 'save must persist the same normalized configuration that was validated')
 assert.ok(
-  saveSource.indexOf('const normalized = modelPathChanged') < saveSource.indexOf('validateConfig(normalized.config'),
-  'save normalization must happen before validation',
+  saveSource.indexOf('await saveConfig()') < saveSource.indexOf('validateConfig(persistedConfig'),
+  'save validation must happen after the persisted configuration is accepted',
 )
 assert.match(saveSource, /setVectorCleanupChanges\(\[\]\)/, 'cleanup summary must clear only after a successful save')
 assert.ok(

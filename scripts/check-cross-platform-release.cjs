@@ -35,6 +35,14 @@ for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-a
   }
 }
 
+const qualityJob = jobBody('quality')
+if (!qualityJob.includes('rustsec/audit-check@v2.0.0')) {
+  failures.push('quality job does not audit Rust dependencies with RustSec')
+}
+if (!qualityJob.includes('working-directory: src-tauri')) {
+  failures.push('RustSec audit is not scoped to the Tauri Cargo.lock')
+}
+
 const windowsJob = jobBody('build-windows')
 if (!windowsJob.includes('actions: read')) failures.push('Windows SignPath job cannot read GitHub Actions build metadata')
 for (const token of [
@@ -85,7 +93,7 @@ if (!macJob.includes('building an ad-hoc signed macOS package')) {
   failures.push('macOS workflow does not explain the unsigned release fallback')
 }
 
-for (const link of ['PRIVACY.md', 'CODE_SIGNING_POLICY.md', 'docs/RELEASE_SIGNING.md']) {
+for (const link of ['PRIVACY.md', 'CODE_SIGNING_POLICY.md', 'docs/RELEASE_SIGNING.md', 'docs/DEPENDENCY_AUDIT.md']) {
   if (!readme.includes(link)) failures.push(`README does not link to ${link}`)
 }
 if (!signingPolicy.includes('Free code signing provided by SignPath.io, certificate by SignPath Foundation')) {

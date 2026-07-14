@@ -111,8 +111,23 @@ for (const [label, version] of [
   }
 }
 
+const releaseTag = process.env.GITHUB_REF_TYPE === 'tag'
+  ? process.env.GITHUB_REF_NAME
+  : process.env.GITHUB_REF?.match(/^refs\/tags\/(.+)$/)?.[1]
+if (releaseTag && releaseTag !== `v${expectedVersion}`) {
+  errors.add(`Git tag ${releaseTag} must match release version v${expectedVersion}`)
+}
+
 if (!guide.includes(`> v${expectedVersion}`)) {
   errors.add(`GUIDE.md must declare release version v${expectedVersion}`)
+}
+
+if (guide.includes('Tagged Windows and macOS releases use code signing and notarization')) {
+  errors.add('GUIDE.md must not claim every tagged Windows and macOS build is formally signed')
+}
+
+for (const marker of ['-unsigned', '-adhoc']) {
+  if (!guide.includes(marker)) errors.add(`GUIDE.md must document the ${marker} release fallback`)
 }
 
 if (guide.includes('发版前自检 / Release Validation')) {

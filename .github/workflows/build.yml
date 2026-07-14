@@ -13,6 +13,9 @@ permissions:
 jobs:
   quality:
     runs-on: windows-latest
+    permissions:
+      checks: write
+      contents: read
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v6
@@ -35,6 +38,11 @@ jobs:
         run: npm run build
       - name: Audit frontend dependencies
         run: npm audit --audit-level=moderate --registry=https://registry.npmjs.org
+      - name: Audit Rust dependencies
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          working-directory: src-tauri
       - name: Test Rust
         run: cargo test --manifest-path src-tauri/Cargo.toml --locked
       - name: Lint Rust
