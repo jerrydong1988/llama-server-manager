@@ -8,6 +8,15 @@ pub enum VectorEventSource {
     Proxy,
 }
 
+impl VectorEventSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Log => "log",
+            Self::Proxy => "proxy",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VectorEventPoint {
     pub source: VectorEventSource,

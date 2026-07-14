@@ -292,7 +292,7 @@ git commit -m "feat: propagate workload into telemetry sessions"
 - Consumes: representative current `llama-server` task launch, `stop processing: n_tokens = N`, release and cancellation logs.
 - Produces: one `source=log` vector event per completed task item, local task duration, input token count, replay-safe source event IDs.
 
-- [ ] **Step 1: Add representative failing parser tests**
+- [x] **Step 1: Add representative failing parser tests**
 
 Use complete log fixtures for a batch Embedding request, a multi-document Reranker request, a cancelled task, a replayed line, and the existing inference log fixture.
 
@@ -313,17 +313,17 @@ fn inference_fixture_does_not_emit_vector_events() {
 }
 ```
 
-- [ ] **Step 2: Run parser tests and verify failure**
+- [x] **Step 2: Run parser tests and verify failure**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml --locked commands::server::tests::embedding_child_tasks_emit_one_log_event_each`
 
 Expected: FAIL because `PerfParser` has no workload-aware vector event.
 
-- [ ] **Step 3: Extend parser state conservatively**
+- [x] **Step 3: Extend parser state conservatively**
 
 Track task ID, slot ID, local `Instant`/epoch start, optional input token count and terminal state. The parser must emit only after a valid vector task completion. Do not infer HTTP batch boundaries from child tasks. Bound retained pending tasks and clear terminal/cancelled entries to avoid unbounded memory on malformed logs.
 
-- [ ] **Step 4: Add idempotent event recording**
+- [x] **Step 4: Add idempotent event recording**
 
 Introduce `VectorActivityRecord` and `record_vector_activity`. Use `(session_id, source, source_event_id)` uniqueness with `INSERT OR IGNORE`; return whether a row was inserted so tests can prove replay safety. Sanitize error text through the existing telemetry error boundary.
 
@@ -344,11 +344,11 @@ pub(crate) struct VectorActivityRecord<'a> {
 }
 ```
 
-- [ ] **Step 5: Keep collection resilient**
+- [x] **Step 5: Keep collection resilient**
 
 On one database write failure, write a concise server log message and continue parsing subsequent lines. Ensure stopped instances flush or discard unfinished parser state without synthetic completed events.
 
-- [ ] **Step 6: Run parser, persistence, and generation regression tests**
+- [x] **Step 6: Run parser, persistence, and generation regression tests**
 
 Run:
 
@@ -359,7 +359,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked commands::telemetry
 
 Expected: vector fixtures pass, replay inserts once, and existing inference request timing tests remain green.
 
-- [ ] **Step 7: Commit log collection**
+- [x] **Step 7: Commit log collection**
 
 ```bash
 git add src-tauri/src/commands/server.rs src-tauri/src/commands/telemetry.rs

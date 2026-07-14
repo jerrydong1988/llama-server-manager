@@ -12,6 +12,7 @@ use tauri::{Emitter, Manager};
 
 const MAX_SERVER_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const RETAINED_SERVER_LOG_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_TRACKED_PERF_TASKS: usize = 1_024;
 
 struct CappedLogState {
     file: std::fs::File,
@@ -2153,6 +2154,7 @@ struct TaskPerfState {
     gen_tps: Option<f64>,
     total_tokens: Option<u64>,
     total_time_ms: Option<f64>,
+    input_tokens: Option<u64>,
     // Speculative decoding.
     spec_accept_rate: Option<f64>,
     spec_accepted: Option<u64>,
@@ -2161,8 +2163,20 @@ struct TaskPerfState {
     completed: bool,
 }
 
+#[derive(Debug, Clone)]
+struct VectorTaskEvent {
+    task_id: u32,
+    workload: ModelWorkload,
+    started_at: i64,
+    completed_at: i64,
+    duration_ms: f64,
+    item_count: u64,
+    input_tokens: Option<u64>,
+}
+
 /// Precompiled regex collection to avoid recompiling for every line.
 struct PerfParser {
+    workload: ModelWorkload,
     re_ids: regex_lite::Regex,
     re_launch: regex_lite::Regex,
     re_release: regex_lite::Regex,
@@ -2172,11 +2186,13 @@ struct PerfParser {
     re_total: regex_lite::Regex,
     re_draft: regex_lite::Regex,
     re_stats: regex_lite::Regex,
+    re_stop_tokens: regex_lite::Regex,
 }
 
 impl PerfParser {
-    fn new() -> Self {
+    fn new(workload: ModelWorkload) -> Self {
         PerfParser {
+            workload,
             re_ids: regex_lite::Regex::new(r"id\s+(\d+)\s*\|\s*task\s+(\d+)").unwrap(),
             re_launch: regex_lite::Regex::new(r"launch_slot_.*processing\s+task").unwrap(),
             re_release: regex_lite::Regex::new(r"slot\s+release.*id\s+\d+\s*\|\s*task\s+\d+\s*\|\s*stop").unwrap(),
@@ -2186,6 +2202,10 @@ impl PerfParser {
             re_total: regex_lite::Regex::new(r"total time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens").unwrap(),
             re_draft: regex_lite::Regex::new(r"draft acceptance\s*=\s*([\d.]+)\s*\(\s*(\d+)\s*accepted\s*/\s*(\d+)\s*generated\)").unwrap(),
             re_stats: regex_lite::Regex::new(r"statistics\s+draft-mtp.*?#gen tokens\s*=\s*(\d+).*?#acc tokens\s*=\s*(\d+).*?dur\(g\)\s*=\s*([\d.]+)").unwrap(),
+            re_stop_tokens: regex_lite::Regex::new(
+                r"stop processing:\s*n_tokens\s*=\s*(\d+)",
+            )
+            .unwrap(),
         }
     }
 
@@ -2203,6 +2223,66 @@ impl PerfParser {
     fn is_release(&self, line: &str) -> bool {
         self.re_release.is_match(line)
     }
+
+    fn vector_event(&self, task: &TaskPerfState) -> Option<VectorTaskEvent> {
+        if !self.workload.is_vector() || !task.completed || task.input_tokens.is_none() {
+            return None;
+        }
+        Some(VectorTaskEvent {
+            task_id: task.task_id,
+            workload: self.workload,
+            started_at: task.started_at_ms,
+            completed_at: task.updated_at_ms,
+            duration_ms: task.updated_at_ms.saturating_sub(task.started_at_ms) as f64,
+            item_count: 1,
+            input_tokens: task.input_tokens,
+        })
+    }
+}
+
+fn persist_completed_task(
+    telemetry_session_id: Option<&str>,
+    parser: &PerfParser,
+    task: &TaskPerfState,
+) -> Result<(), String> {
+    if let Some(event) = parser.vector_event(task) {
+        let record = crate::commands::telemetry::VectorActivityRecord {
+            source: crate::commands::vector_metrics::VectorEventSource::Log,
+            source_event_id: i64::from(event.task_id),
+            workload: event.workload,
+            endpoint: None,
+            started_at: event.started_at,
+            completed_at: event.completed_at,
+            duration_ms: event.duration_ms,
+            item_count: event.item_count,
+            input_tokens: event.input_tokens,
+            http_status: None,
+            error_text: None,
+        };
+        crate::commands::telemetry::record_vector_activity(telemetry_session_id, &record)?;
+        return Ok(());
+    }
+    if parser.workload.is_vector() {
+        return Ok(());
+    }
+
+    let record = crate::commands::telemetry::InferenceRequestRecord {
+        task_id: task.task_id,
+        slot_id: task.slot_id,
+        prompt_tokens: task.prompt_tokens,
+        prompt_time_ms: task.prompt_time_ms,
+        prompt_tps: task.prompt_tps,
+        generated_tokens: task.gen_tokens,
+        generation_time_ms: task.gen_time_ms,
+        generation_tps: task.gen_tps,
+        total_tokens: task.total_tokens,
+        total_time_ms: task.total_time_ms,
+        spec_accept_rate: task.spec_accept_rate,
+        spec_accepted: task.spec_accepted,
+        spec_generated: task.spec_generated,
+        spec_gen_time_ms: task.spec_gen_time_ms,
+    };
+    crate::commands::telemetry::record_inference_request(telemetry_session_id, &record)
 }
 
 /// Parses one log line and updates task performance state. Returns whether perf-update should be emitted.
@@ -2219,6 +2299,15 @@ fn parse_perf_line(
     // Task creation.
     if parser.is_launch(line) {
         let timestamp = crate::commands::telemetry::current_time_ms();
+        if tasks.len() >= MAX_TRACKED_PERF_TASKS {
+            if let Some(oldest_task_id) = tasks
+                .values()
+                .min_by_key(|task| task.updated_at_ms)
+                .map(|task| task.task_id)
+            {
+                tasks.remove(&oldest_task_id);
+            }
+        }
         tasks.insert(
             task_id,
             TaskPerfState {
@@ -2237,6 +2326,7 @@ fn parse_perf_line(
                 gen_tps: None,
                 total_tokens: None,
                 total_time_ms: None,
+                input_tokens: None,
                 spec_accept_rate: None,
                 spec_accepted: None,
                 spec_generated: None,
@@ -2315,6 +2405,11 @@ fn parse_perf_line(
 
     // Task completion.
     if parser.is_release(line) {
+        task.input_tokens = parser
+            .re_stop_tokens
+            .captures(line)
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<u64>().ok());
         task.completed = true;
         *last_completed = Some(task.clone());
         return true;
@@ -2329,12 +2424,12 @@ fn tail_log_file(
     log_path: &std::path::Path,
     instance_id: &str,
     telemetry_session_id: Option<String>,
-    _workload: ModelWorkload,
+    workload: ModelWorkload,
     app: tauri::AppHandle,
 ) {
     use std::io::{Seek, SeekFrom};
 
-    let parser = PerfParser::new();
+    let parser = PerfParser::new(workload);
     let mut tasks: HashMap<u32, TaskPerfState> = HashMap::new();
     let mut last_completed: Option<TaskPerfState> = None;
     let mut last_recorded_task_id: Option<u32> = None;
@@ -2346,26 +2441,15 @@ fn tail_log_file(
         if *recorded == Some(task.task_id) {
             return;
         }
-        let record = crate::commands::telemetry::InferenceRequestRecord {
-            task_id: task.task_id,
-            slot_id: task.slot_id,
-            prompt_tokens: task.prompt_tokens,
-            prompt_time_ms: task.prompt_time_ms,
-            prompt_tps: task.prompt_tps,
-            generated_tokens: task.gen_tokens,
-            generation_time_ms: task.gen_time_ms,
-            generation_tps: task.gen_tps,
-            total_tokens: task.total_tokens,
-            total_time_ms: task.total_time_ms,
-            spec_accept_rate: task.spec_accept_rate,
-            spec_accepted: task.spec_accepted,
-            spec_generated: task.spec_generated,
-            spec_gen_time_ms: task.spec_gen_time_ms,
-        };
-        let _ = crate::commands::telemetry::record_inference_request(
-            telemetry_session_id.as_deref(),
-            &record,
-        );
+        if let Err(error) = persist_completed_task(telemetry_session_id.as_deref(), &parser, task) {
+            let _ = app.emit(
+                "server-log",
+                serde_json::json!({
+                    "instanceId": instance_id,
+                    "text": format!("Telemetry warning: {error}\n"),
+                }),
+            );
+        }
         *recorded = Some(task.task_id);
     };
 
@@ -2500,6 +2584,30 @@ fn split_args(input: &str) -> Vec<String> {
 mod perf_parser_tests {
     use super::*;
 
+    fn collect_vector_events(workload: ModelWorkload, lines: &[&str]) -> Vec<VectorTaskEvent> {
+        let parser = PerfParser::new(workload);
+        let mut tasks = HashMap::new();
+        let mut last_completed = None;
+        let mut last_event_id = None;
+        let mut events = Vec::new();
+        for line in lines {
+            if !parse_perf_line(&parser, line, &mut tasks, &mut last_completed) {
+                continue;
+            }
+            let Some(task) = last_completed.as_ref() else {
+                continue;
+            };
+            if last_event_id == Some(task.task_id) {
+                continue;
+            }
+            if let Some(event) = parser.vector_event(task) {
+                last_event_id = Some(task.task_id);
+                events.push(event);
+            }
+        }
+        events
+    }
+
     fn polluted_embedding_config() -> InstanceConfig {
         InstanceConfig {
             model_path: "C:/models/bge-small.gguf".into(),
@@ -2587,7 +2695,7 @@ mod perf_parser_tests {
 
     #[test]
     fn parses_llama_cpp_print_timing_token_stats() {
-        let parser = PerfParser::new();
+        let parser = PerfParser::new(ModelWorkload::Inference);
         let mut tasks = HashMap::new();
         let mut last_completed = None;
 
@@ -2616,6 +2724,87 @@ mod perf_parser_tests {
         assert_eq!(task.prompt_tps, Some(592.45));
         assert_eq!(task.gen_tps, Some(66.14));
         assert_eq!(task.spec_accept_rate, Some(0.92624));
+    }
+
+    #[test]
+    fn embedding_child_tasks_emit_one_log_event_each() {
+        let lines = [
+            "0 I slot launch_slot_: id 0 | task 10 | processing task, is_child = 1",
+            "1 I slot release: id 0 | task 10 | stop processing: n_tokens = 12, truncated = 0",
+            "2 I slot launch_slot_: id 1 | task 11 | processing task, is_child = 1",
+            "3 I slot release: id 1 | task 11 | stop processing: n_tokens = 20, truncated = 0",
+            "4 I slot launch_slot_: id 2 | task 12 | processing task, is_child = 1",
+            "5 I slot release: id 2 | task 12 | stop processing: n_tokens = 64, truncated = 0",
+        ];
+
+        let events = collect_vector_events(ModelWorkload::Embedding, &lines);
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events.iter().map(|event| event.item_count).sum::<u64>(), 3);
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.input_tokens.unwrap())
+                .sum::<u64>(),
+            96
+        );
+        assert!(events
+            .iter()
+            .all(|event| event.workload == ModelWorkload::Embedding));
+    }
+
+    #[test]
+    fn reranker_documents_emit_document_item_events() {
+        let lines = [
+            "0 I slot launch_slot_: id 0 | task 20 | processing task, is_child = 1",
+            "1 I slot release: id 0 | task 20 | stop processing: n_tokens = 40, truncated = 0",
+            "2 I slot launch_slot_: id 1 | task 21 | processing task, is_child = 1",
+            "3 I slot release: id 1 | task 21 | stop processing: n_tokens = 48, truncated = 0",
+        ];
+
+        let events = collect_vector_events(ModelWorkload::Reranker, &lines);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events.iter().map(|event| event.item_count).sum::<u64>(), 2);
+        assert!(events
+            .iter()
+            .all(|event| event.workload == ModelWorkload::Reranker));
+    }
+
+    #[test]
+    fn inference_and_incomplete_vector_tasks_do_not_emit_vector_events() {
+        let completed = [
+            "0 I slot launch_slot_: id 0 | task 30 | processing task, is_child = 0",
+            "1 I slot release: id 0 | task 30 | stop processing: n_tokens = 10, truncated = 0",
+        ];
+        let incomplete = [
+            "0 I slot launch_slot_: id 0 | task 31 | processing task, is_child = 1",
+            "1 I slot release: id 0 | task 31 | stop without token summary",
+        ];
+
+        assert!(collect_vector_events(ModelWorkload::Inference, &completed).is_empty());
+        assert!(collect_vector_events(ModelWorkload::Embedding, &incomplete).is_empty());
+    }
+
+    #[test]
+    fn malformed_logs_cannot_grow_pending_task_state_without_bound() {
+        let parser = PerfParser::new(ModelWorkload::Embedding);
+        let mut tasks = HashMap::new();
+        let mut last_completed = None;
+
+        for task_id in 0..(MAX_TRACKED_PERF_TASKS as u32 + 50) {
+            let line = format!(
+                "0 I slot launch_slot_: id 0 | task {task_id} | processing task, is_child = 1"
+            );
+            assert!(parse_perf_line(
+                &parser,
+                &line,
+                &mut tasks,
+                &mut last_completed
+            ));
+        }
+
+        assert_eq!(tasks.len(), MAX_TRACKED_PERF_TASKS);
     }
 
     #[test]

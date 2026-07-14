@@ -1,3 +1,4 @@
+use crate::commands::vector_metrics::VectorEventSource;
 use crate::models::{InstanceConfig, SystemMetrics};
 use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -145,6 +146,21 @@ pub struct ProxyRequestRecord {
     pub target_instance_id: String,
     pub http_status: Option<u16>,
     pub duration_ms: f64,
+    pub error_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VectorActivityRecord {
+    pub source: VectorEventSource,
+    pub source_event_id: i64,
+    pub workload: ModelWorkload,
+    pub endpoint: Option<String>,
+    pub started_at: i64,
+    pub completed_at: i64,
+    pub duration_ms: f64,
+    pub item_count: u64,
+    pub input_tokens: Option<u64>,
+    pub http_status: Option<u16>,
     pub error_text: Option<String>,
 }
 
@@ -691,6 +707,81 @@ pub fn record_proxy_request(
     )
     .map_err(|e| format!("failed to write proxy request telemetry: {}", e))?;
     Ok(())
+}
+
+pub fn record_vector_activity(
+    session_id: Option<&str>,
+    record: &VectorActivityRecord,
+) -> Result<bool, String> {
+    let Some(session_id) = session_id else {
+        return Ok(false);
+    };
+    let conn = open_connection()?;
+    record_vector_activity_in_connection(&conn, session_id, record)
+}
+
+fn record_vector_activity_in_connection(
+    conn: &Connection,
+    session_id: &str,
+    record: &VectorActivityRecord,
+) -> Result<bool, String> {
+    if !record.workload.is_vector() {
+        return Err("vector activity requires a vector workload".to_string());
+    }
+    if record.source_event_id < 0 {
+        return Err("vector activity source event id must be non-negative".to_string());
+    }
+    if record.started_at < 0 || record.completed_at < record.started_at {
+        return Err("vector activity timestamps are invalid".to_string());
+    }
+    if !record.duration_ms.is_finite() || record.duration_ms < 0.0 {
+        return Err("vector activity duration is invalid".to_string());
+    }
+    let item_count = i64::try_from(record.item_count)
+        .map_err(|_| "vector activity item count is too large".to_string())?;
+    let input_tokens = record
+        .input_tokens
+        .map(i64::try_from)
+        .transpose()
+        .map_err(|_| "vector activity input token count is too large".to_string())?;
+    let error_text = record.error_text.as_deref().map(sanitize_telemetry_error);
+    let inserted = conn
+        .execute(
+            "INSERT OR IGNORE INTO vector_activity_events
+                (session_id, source, source_event_id, workload, endpoint, started_at,
+                 completed_at, duration_ms, item_count, input_tokens, http_status, error_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                session_id,
+                record.source.as_str(),
+                record.source_event_id,
+                record.workload.as_str(),
+                record.endpoint.as_deref(),
+                record.started_at,
+                record.completed_at,
+                record.duration_ms,
+                item_count,
+                input_tokens,
+                record.http_status,
+                error_text,
+            ],
+        )
+        .map_err(|e| format!("无法写入向量活动遥测: {e}"))?;
+    Ok(inserted == 1)
+}
+
+fn sanitize_telemetry_error(value: &str) -> String {
+    value
+        .chars()
+        .take(512)
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 pub fn record_slot_snapshots(
@@ -1710,6 +1801,65 @@ mod tests {
             )
             .unwrap();
         assert_eq!(values, (17, 17, 4096));
+    }
+
+    #[test]
+    fn vector_activity_insert_is_idempotent_and_validated() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "session-vector-event",
+                instance_id: "instance-vector-event",
+                instance_name: "Vector",
+                model_path: "embedding.gguf",
+                engine_id: "engine",
+                backend: "cpu",
+                config_hash: "hash",
+                command_line: "llama-server --embedding",
+                workload: ModelWorkload::Embedding,
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let record = VectorActivityRecord {
+            source: VectorEventSource::Log,
+            source_event_id: 9,
+            workload: ModelWorkload::Embedding,
+            endpoint: None,
+            started_at: 10,
+            completed_at: 20,
+            duration_ms: 10.0,
+            item_count: 1,
+            input_tokens: Some(32),
+            http_status: None,
+            error_text: None,
+        };
+
+        assert!(
+            record_vector_activity_in_connection(&conn, "session-vector-event", &record).unwrap()
+        );
+        assert!(
+            !record_vector_activity_in_connection(&conn, "session-vector-event", &record).unwrap()
+        );
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM vector_activity_events", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let mut invalid = record.clone();
+        invalid.workload = ModelWorkload::Inference;
+        assert!(
+            record_vector_activity_in_connection(&conn, "session-vector-event", &invalid).is_err()
+        );
+        invalid.workload = ModelWorkload::Embedding;
+        invalid.duration_ms = f64::NAN;
+        assert!(
+            record_vector_activity_in_connection(&conn, "session-vector-event", &invalid).is_err()
+        );
     }
 
     #[test]
