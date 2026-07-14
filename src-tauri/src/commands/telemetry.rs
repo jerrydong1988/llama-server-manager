@@ -1,4 +1,7 @@
-use crate::commands::vector_metrics::VectorEventSource;
+use crate::commands::vector_metrics::{
+    aggregate_log_buckets, summarize_vector_events, VectorEventPoint, VectorEventSource,
+    VectorTrendBucket,
+};
 use crate::models::{InstanceConfig, SystemMetrics};
 use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -26,6 +29,7 @@ pub struct TelemetrySessionSummary {
     pub model_path: String,
     pub engine_id: String,
     pub backend: String,
+    pub workload: String,
     pub started_at: i64,
     pub stopped_at: Option<i64>,
     pub duration_secs: Option<i64>,
@@ -100,6 +104,28 @@ pub struct TelemetrySessionAnalysis {
     pub avg_cached_slots: f64,
     pub max_context_tokens: u32,
     pub slot_sample_count: u32,
+    pub vector_analysis: Option<VectorTelemetryAnalysis>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VectorTelemetryAnalysis {
+    pub workload: String,
+    pub log_available: bool,
+    pub proxy_available: bool,
+    pub completed_items: Option<u64>,
+    pub input_tokens: Option<u64>,
+    pub average_input_tokens_per_second: Option<f64>,
+    pub average_items_per_second: Option<f64>,
+    pub task_duration_p50_ms: Option<f64>,
+    pub task_duration_p95_ms: Option<f64>,
+    pub proxy_request_count: Option<u64>,
+    pub proxy_item_count: Option<u64>,
+    pub proxy_duration_p50_ms: Option<f64>,
+    pub proxy_duration_p95_ms: Option<f64>,
+    pub proxy_success_rate: Option<f64>,
+    pub proxy_failure_rate: Option<f64>,
+    pub trend: Vec<VectorTrendBucket>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -875,53 +901,61 @@ pub async fn list_telemetry_sessions(
     let limit = limit.unwrap_or(20).clamp(1, 200);
     tokio::task::spawn_blocking(move || {
         let conn = open_connection()?;
-        let current_time = now_ms();
-        let mut stmt = conn
-            .prepare(
-                "SELECT
-                    s.id, s.instance_id, s.instance_name, s.model_name, s.model_path, s.engine_id, s.backend,
-                    s.started_at, s.stopped_at,
-                    CASE
-                        WHEN COALESCE(s.stopped_at, ?1) <= s.started_at THEN 0
-                        ELSE CAST((COALESCE(s.stopped_at, ?1) - s.started_at) / 1000 AS INTEGER)
-                    END,
-                    COALESCE((SELECT AVG(m.tokens_per_sec) FROM metric_samples m WHERE m.session_id = s.id AND m.tokens_per_sec > 0), 0),
-                    COALESCE((SELECT MAX(m.vram_used_mb) FROM metric_samples m WHERE m.session_id = s.id), 0),
-                    COALESCE((SELECT COUNT(*) FROM metric_samples m WHERE m.session_id = s.id), 0),
-                    s.stop_reason
-                 FROM run_sessions s
-                 ORDER BY s.started_at DESC
-                 LIMIT ?2",
-            )
-            .map_err(|e| format!("无法准备遥测会话查询: {}", e))?;
-        let rows = stmt
-            .query_map(params![current_time, limit], |row| {
-                Ok(TelemetrySessionSummary {
-                    id: row.get(0)?,
-                    instance_id: row.get(1)?,
-                    instance_name: row.get(2)?,
-                    model_name: row.get(3)?,
-                    model_path: row.get(4)?,
-                    engine_id: row.get(5)?,
-                    backend: row.get(6)?,
-                    started_at: row.get(7)?,
-                    stopped_at: row.get(8)?,
-                    duration_secs: row.get(9)?,
-                    avg_tokens_per_sec: row.get(10)?,
-                    peak_vram_mb: row.get(11)?,
-                    sample_count: row.get::<_, i64>(12)? as u32,
-                    stop_reason: row.get(13)?,
-                })
-            })
-            .map_err(|e| format!("无法查询遥测会话: {}", e))?;
-        let mut sessions = Vec::new();
-        for row in rows {
-            sessions.push(row.map_err(|e| format!("无法读取遥测会话: {}", e))?);
-        }
-        Ok(sessions)
+        query_telemetry_sessions(&conn, now_ms(), limit)
     })
     .await
     .map_err(|e| format!("遥测会话查询失败: {}", e))?
+}
+
+fn query_telemetry_sessions(
+    conn: &Connection,
+    current_time: i64,
+    limit: u32,
+) -> Result<Vec<TelemetrySessionSummary>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT
+                s.id, s.instance_id, s.instance_name, s.model_name, s.model_path, s.engine_id,
+                s.backend, s.workload, s.started_at, s.stopped_at,
+                CASE
+                    WHEN COALESCE(s.stopped_at, ?1) <= s.started_at THEN 0
+                    ELSE CAST((COALESCE(s.stopped_at, ?1) - s.started_at) / 1000 AS INTEGER)
+                END,
+                COALESCE((SELECT AVG(m.tokens_per_sec) FROM metric_samples m WHERE m.session_id = s.id AND m.tokens_per_sec > 0), 0),
+                COALESCE((SELECT MAX(m.vram_used_mb) FROM metric_samples m WHERE m.session_id = s.id), 0),
+                COALESCE((SELECT COUNT(*) FROM metric_samples m WHERE m.session_id = s.id), 0),
+                s.stop_reason
+             FROM run_sessions s
+             ORDER BY s.started_at DESC
+             LIMIT ?2",
+        )
+        .map_err(|e| format!("无法准备遥测会话查询: {e}"))?;
+    let rows = stmt
+        .query_map(params![current_time, limit], |row| {
+            Ok(TelemetrySessionSummary {
+                id: row.get(0)?,
+                instance_id: row.get(1)?,
+                instance_name: row.get(2)?,
+                model_name: row.get(3)?,
+                model_path: row.get(4)?,
+                engine_id: row.get(5)?,
+                backend: row.get(6)?,
+                workload: row.get(7)?,
+                started_at: row.get(8)?,
+                stopped_at: row.get(9)?,
+                duration_secs: row.get(10)?,
+                avg_tokens_per_sec: row.get(11)?,
+                peak_vram_mb: row.get(12)?,
+                sample_count: row.get::<_, i64>(13)?.max(0) as u32,
+                stop_reason: row.get(14)?,
+            })
+        })
+        .map_err(|e| format!("无法查询遥测会话: {e}"))?;
+    let mut sessions = Vec::new();
+    for row in rows {
+        sessions.push(row.map_err(|e| format!("无法读取遥测会话: {e}"))?);
+    }
+    Ok(sessions)
 }
 
 #[tauri::command]
@@ -992,82 +1026,7 @@ pub async fn get_telemetry_session_analysis(
 ) -> Result<TelemetrySessionAnalysis, String> {
     tokio::task::spawn_blocking(move || {
         let conn = open_connection()?;
-        let request_stats = conn
-            .query_row(
-                "SELECT
-                    COUNT(*),
-                    COALESCE(AVG(prompt_tokens), 0),
-                    COALESCE(AVG(generated_tokens), 0),
-                    COALESCE(AVG(total_tokens), 0),
-                    COALESCE(AVG(prompt_tps), 0),
-                    COALESCE(AVG(generation_tps), 0),
-                    COALESCE(AVG(total_time_ms), 0),
-                    COALESCE(MAX(total_tokens), 0)
-                 FROM inference_requests
-                 WHERE session_id = ?1 AND source = 'log'",
-                params![session_id],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, f64>(1)?,
-                        row.get::<_, f64>(2)?,
-                        row.get::<_, f64>(3)?,
-                        row.get::<_, f64>(4)?,
-                        row.get::<_, f64>(5)?,
-                        row.get::<_, f64>(6)?,
-                        row.get::<_, i64>(7)?,
-                    ))
-                },
-            )
-            .map_err(|e| format!("无法查询请求分析摘要: {}", e))?;
-
-        let slot_stats = conn
-            .query_row(
-                "WITH per_ts AS (
-                    SELECT
-                        ts,
-                        SUM(CASE WHEN is_processing != 0 THEN 1 ELSE 0 END) AS busy_slots,
-                        SUM(CASE WHEN is_processing = 0 AND n_ctx > 0 THEN 1 ELSE 0 END) AS cached_slots,
-                        MAX(COALESCE(n_past, n_ctx, 0)) AS context_tokens
-                    FROM slot_snapshots
-                    WHERE session_id = ?1
-                    GROUP BY ts
-                 )
-                 SELECT
-                    COALESCE(AVG(busy_slots), 0),
-                    COALESCE(MAX(busy_slots), 0),
-                    COALESCE(AVG(cached_slots), 0),
-                    COALESCE(MAX(context_tokens), 0),
-                    COUNT(*)
-                 FROM per_ts",
-                params![session_id],
-                |row| {
-                    Ok((
-                        row.get::<_, f64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, f64>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, i64>(4)?,
-                    ))
-                },
-            )
-            .map_err(|e| format!("无法查询 slot 分析摘要: {}", e))?;
-
-        Ok(TelemetrySessionAnalysis {
-            request_count: request_stats.0.max(0) as u32,
-            avg_prompt_tokens: request_stats.1,
-            avg_generated_tokens: request_stats.2,
-            avg_total_tokens: request_stats.3,
-            avg_prompt_tps: request_stats.4,
-            avg_generation_tps: request_stats.5,
-            avg_total_time_ms: request_stats.6,
-            max_total_tokens: request_stats.7.max(0) as u64,
-            avg_busy_slots: slot_stats.0,
-            max_busy_slots: slot_stats.1.max(0) as u32,
-            avg_cached_slots: slot_stats.2,
-            max_context_tokens: slot_stats.3.max(0) as u32,
-            slot_sample_count: slot_stats.4.max(0) as u32,
-        })
+        query_session_analysis(&conn, &session_id)
     })
     .await
     .map_err(|e| format!("会话分析查询失败: {}", e))?
@@ -1169,6 +1128,197 @@ fn query_session_analysis(
         avg_cached_slots: slot_stats.2,
         max_context_tokens: slot_stats.3.max(0) as u32,
         slot_sample_count: slot_stats.4.max(0) as u32,
+        vector_analysis: query_vector_analysis(conn, session_id)?,
+    })
+}
+
+fn query_vector_analysis(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<VectorTelemetryAnalysis>, String> {
+    let session = conn
+        .query_row(
+            "SELECT workload, started_at, stopped_at FROM run_sessions WHERE id = ?1",
+            params![session_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| format!("无法读取向量遥测会话: {e}"))?;
+    let Some((stored_workload, started_at, stopped_at)) = session else {
+        return Ok(None);
+    };
+    let workload = ModelWorkload::from_storage(&stored_workload);
+    if !workload.is_vector() {
+        return Ok(None);
+    }
+
+    let range_start = started_at.max(0);
+    let range_end = stopped_at
+        .unwrap_or_else(now_ms)
+        .max(range_start.saturating_add(1_000));
+    let range_ms = range_end.saturating_sub(range_start).max(1_000);
+    let bucket_ms = range_ms.saturating_add(119) / 120;
+    let bucket_ms = bucket_ms.max(1_000);
+    let mut statement = conn
+        .prepare(
+            "SELECT source, completed_at, duration_ms, item_count, input_tokens,
+                    http_status, error_text
+             FROM vector_activity_events
+             WHERE session_id = ?1 AND completed_at >= ?2 AND completed_at < ?3
+             ORDER BY completed_at",
+        )
+        .map_err(|e| format!("无法准备向量活动查询: {e}"))?;
+    let rows = statement
+        .query_map(params![session_id, range_start, range_end], |row| {
+            let source = row.get::<_, String>(0)?;
+            let http_status = row.get::<_, Option<u16>>(5)?;
+            let error_text = row.get::<_, Option<String>>(6)?;
+            Ok((
+                source,
+                row.get::<_, i64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                http_status,
+                error_text,
+            ))
+        })
+        .map_err(|e| format!("无法查询向量活动: {e}"))?;
+    let mut events = Vec::new();
+    for row in rows {
+        let (source, completed_at, duration_ms, item_count, input_tokens, http_status, error) =
+            row.map_err(|e| format!("无法读取向量活动: {e}"))?;
+        let Some(source) = VectorEventSource::from_storage(&source) else {
+            continue;
+        };
+        let Ok(item_count) = u64::try_from(item_count) else {
+            continue;
+        };
+        events.push(VectorEventPoint {
+            source,
+            completed_at,
+            duration_ms,
+            item_count,
+            input_tokens: input_tokens.and_then(|value| u64::try_from(value).ok()),
+            http_status,
+            has_error: error.is_some()
+                || http_status.is_some_and(|status| !(200..300).contains(&status)),
+        });
+    }
+    let window_seconds = range_ms as f64 / 1_000.0;
+    let summary = summarize_vector_events(&events, window_seconds);
+    let trend = if summary.log.available {
+        aggregate_log_buckets(&events, range_start, range_end, bucket_ms)
+    } else {
+        Vec::new()
+    };
+
+    Ok(Some(VectorTelemetryAnalysis {
+        workload: workload.as_str().to_string(),
+        log_available: summary.log.available,
+        proxy_available: summary.proxy.available,
+        completed_items: summary.log.available.then_some(summary.log.completed_items),
+        input_tokens: summary.log.input_tokens,
+        average_input_tokens_per_second: summary.log.average_input_tokens_per_second,
+        average_items_per_second: summary.log.average_items_per_second,
+        task_duration_p50_ms: summary.log.task_duration_p50_ms,
+        task_duration_p95_ms: summary.log.task_duration_p95_ms,
+        proxy_request_count: summary
+            .proxy
+            .available
+            .then_some(summary.proxy.request_count),
+        proxy_item_count: summary.proxy.available.then_some(summary.proxy.item_count),
+        proxy_duration_p50_ms: summary.proxy.http_duration_p50_ms,
+        proxy_duration_p95_ms: summary.proxy.http_duration_p95_ms,
+        proxy_success_rate: summary.proxy.success_rate,
+        proxy_failure_rate: summary.proxy.failure_rate,
+        trend,
+    }))
+}
+
+#[derive(Debug, Default)]
+struct VectorBaselineStats {
+    session_count: u32,
+    average_input_tokens_per_second: Option<f64>,
+    average_items_per_second: Option<f64>,
+    task_duration_p95_ms: Option<f64>,
+}
+
+fn average_available(values: &[f64]) -> Option<f64> {
+    (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
+}
+
+fn query_vector_baseline(
+    conn: &Connection,
+    session_id: &str,
+    model_name: &str,
+    model_path: &str,
+    workload: ModelWorkload,
+    backend: &str,
+) -> Result<VectorBaselineStats, String> {
+    let mut statement = conn
+        .prepare(
+            "SELECT id
+             FROM run_sessions
+             WHERE id != ?1
+               AND workload = ?2
+               AND backend = ?3
+               AND (model_path = ?4 OR model_name = ?5)
+             ORDER BY started_at DESC
+             LIMIT 50",
+        )
+        .map_err(|e| format!("无法准备向量历史基线查询: {e}"))?;
+    let rows = statement
+        .query_map(
+            params![
+                session_id,
+                workload.as_str(),
+                backend,
+                model_path,
+                model_name
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|e| format!("无法查询向量历史基线: {e}"))?;
+    let mut session_ids = Vec::new();
+    for row in rows {
+        session_ids.push(row.map_err(|e| format!("无法读取向量历史会话: {e}"))?);
+    }
+
+    let mut input_rates = Vec::new();
+    let mut item_rates = Vec::new();
+    let mut p95_durations = Vec::new();
+    let mut session_count = 0_u32;
+    for historical_id in session_ids {
+        let Some(analysis) = query_vector_analysis(conn, &historical_id)? else {
+            continue;
+        };
+        if !analysis.log_available {
+            continue;
+        }
+        session_count = session_count.saturating_add(1);
+        if let Some(value) = analysis.average_input_tokens_per_second {
+            input_rates.push(value);
+        }
+        if let Some(value) = analysis.average_items_per_second {
+            item_rates.push(value);
+        }
+        if let Some(value) = analysis.task_duration_p95_ms {
+            p95_durations.push(value);
+        }
+    }
+
+    Ok(VectorBaselineStats {
+        session_count,
+        average_input_tokens_per_second: average_available(&input_rates),
+        average_items_per_second: average_available(&item_rates),
+        task_duration_p95_ms: average_available(&p95_durations),
     })
 }
 
@@ -1251,26 +1401,57 @@ fn fmt_diag_percent(value: f64) -> String {
     }
 }
 
+#[derive(Debug)]
+struct SessionDiagnosticContext {
+    model_name: String,
+    model_path: String,
+    engine_id: String,
+    backend: String,
+    workload: ModelWorkload,
+}
+
 #[tauri::command]
 pub async fn get_telemetry_session_diagnostics(
     session_id: String,
 ) -> Result<Vec<DiagnosticFinding>, String> {
     tokio::task::spawn_blocking(move || {
         let conn = open_connection()?;
-        let session = conn
-            .query_row(
-                "SELECT model_name, engine_id, backend FROM run_sessions WHERE id = ?1",
-                params![session_id.as_str()],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
-            )
-            .optional()
-            .map_err(|e| format!("无法读取诊断会话: {}", e))?
-            .ok_or_else(|| "找不到对应的遥测会话".to_string())?;
-        let analysis = query_session_analysis(&conn, &session_id)?;
-        let metrics = query_session_metric_stats(&conn, &session_id)?;
-        let baseline = conn
-            .query_row(
-                "WITH per_session AS (
+        query_session_diagnostics(&conn, &session_id)
+    })
+    .await
+    .map_err(|e| format!("会话诊断查询失败: {}", e))?
+}
+
+fn query_session_diagnostics(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<DiagnosticFinding>, String> {
+    let session = conn
+        .query_row(
+            "SELECT model_name, model_path, engine_id, backend, workload
+                 FROM run_sessions WHERE id = ?1",
+            params![session_id],
+            |row| {
+                Ok(SessionDiagnosticContext {
+                    model_name: row.get(0)?,
+                    model_path: row.get(1)?,
+                    engine_id: row.get(2)?,
+                    backend: row.get(3)?,
+                    workload: ModelWorkload::from_storage(&row.get::<_, String>(4)?),
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| format!("无法读取诊断会话: {}", e))?
+        .ok_or_else(|| "找不到对应的遥测会话".to_string())?;
+    let analysis = query_session_analysis(conn, session_id)?;
+    let metrics = query_session_metric_stats(conn, session_id)?;
+    if session.workload.is_vector() {
+        return build_vector_diagnostics(conn, session_id, &session, &analysis, &metrics);
+    }
+    let baseline = conn
+        .query_row(
+            "WITH per_session AS (
                     SELECT s.id, AVG(m.tokens_per_sec) AS avg_tps, COUNT(*) AS samples
                     FROM run_sessions s
                     JOIN metric_samples m ON m.session_id = s.id
@@ -1279,81 +1460,95 @@ pub async fn get_telemetry_session_diagnostics(
                     HAVING samples >= 3
                  )
                  SELECT COALESCE(AVG(avg_tps), 0), COUNT(*) FROM per_session",
-                params![session.0.as_str(), session_id.as_str()],
-                |row| Ok((row.get::<_, f64>(0)?, row.get::<_, i64>(1)?.max(0) as u32)),
-            )
-            .map_err(|e| format!("无法查询历史基线: {}", e))?;
+            params![session.model_name.as_str(), session_id],
+            |row| Ok((row.get::<_, f64>(0)?, row.get::<_, i64>(1)?.max(0) as u32)),
+        )
+        .map_err(|e| format!("无法查询历史基线: {}", e))?;
 
-        let mut findings = Vec::new();
+    let mut findings = Vec::new();
 
-        if metrics.sample_count == 0 {
-            findings.push(diagnostic_finding(
-                "no_metric_samples",
-                "info",
-                0.98,
-                "遥测样本不足",
-                "当前会话还没有可用于分析的资源或吞吐采样。",
-                vec!["采样数 0".to_string()],
-                vec!["保持实例运行一段时间，或发起一次推理请求后再查看诊断。".to_string()],
-            ));
-            return Ok(findings);
-        }
+    if metrics.sample_count == 0 {
+        findings.push(diagnostic_finding(
+            "no_metric_samples",
+            "info",
+            0.98,
+            "遥测样本不足",
+            "当前会话还没有可用于分析的资源或吞吐采样。",
+            vec!["采样数 0".to_string()],
+            vec!["保持实例运行一段时间，或发起一次推理请求后再查看诊断。".to_string()],
+        ));
+        return Ok(findings);
+    }
 
-        if baseline.1 >= 2 && baseline.0 > 0.0 && metrics.avg_tps > 0.0 && metrics.avg_tps < baseline.0 * 0.75 {
-            findings.push(diagnostic_finding(
-                "throughput_regression",
-                "warning",
-                0.82,
-                "吞吐低于历史基线",
-                "同一模型的本次平均吞吐明显低于历史会话，可能存在参数、后端或系统负载差异。",
-                vec![
-                    format!("本次平均 {}", fmt_diag_rate(metrics.avg_tps)),
-                    format!("历史基线 {}", fmt_diag_rate(baseline.0)),
-                    format!("历史样本 {} 个会话", baseline.1),
-                ],
-                vec![
-                    "对比本次与历史会话的引擎、后端、上下文长度、批处理参数和 GPU 层数。".to_string(),
-                    "检查是否有其他进程占用 CPU/GPU 或显存。".to_string(),
-                ],
-            ));
-        }
+    if baseline.1 >= 2
+        && baseline.0 > 0.0
+        && metrics.avg_tps > 0.0
+        && metrics.avg_tps < baseline.0 * 0.75
+    {
+        findings.push(diagnostic_finding(
+            "throughput_regression",
+            "warning",
+            0.82,
+            "吞吐低于历史基线",
+            "同一模型的本次平均吞吐明显低于历史会话，可能存在参数、后端或系统负载差异。",
+            vec![
+                format!("本次平均 {}", fmt_diag_rate(metrics.avg_tps)),
+                format!("历史基线 {}", fmt_diag_rate(baseline.0)),
+                format!("历史样本 {} 个会话", baseline.1),
+            ],
+            vec![
+                "对比本次与历史会话的引擎、后端、上下文长度、批处理参数和 GPU 层数。".to_string(),
+                "检查是否有其他进程占用 CPU/GPU 或显存。".to_string(),
+            ],
+        ));
+    }
 
-        if metrics.max_vram_ratio >= 0.92 {
-            findings.push(diagnostic_finding(
-                "vram_pressure",
-                if metrics.max_vram_ratio >= 0.98 { "critical" } else { "warning" },
-                0.9,
-                "显存压力偏高",
-                "会话期间显存占用接近上限，可能导致后续请求失败、回退到 CPU 或响应抖动。",
-                vec![format!("显存峰值占比 {}", fmt_diag_percent(metrics.max_vram_ratio * 100.0))],
-                vec![
-                    "降低上下文长度、并发槽位或 GPU offload 层数。".to_string(),
-                    "避免同一 GPU 上同时运行多个大模型实例。".to_string(),
-                ],
-            ));
-        }
+    if metrics.max_vram_ratio >= 0.92 {
+        findings.push(diagnostic_finding(
+            "vram_pressure",
+            if metrics.max_vram_ratio >= 0.98 {
+                "critical"
+            } else {
+                "warning"
+            },
+            0.9,
+            "显存压力偏高",
+            "会话期间显存占用接近上限，可能导致后续请求失败、回退到 CPU 或响应抖动。",
+            vec![format!(
+                "显存峰值占比 {}",
+                fmt_diag_percent(metrics.max_vram_ratio * 100.0)
+            )],
+            vec![
+                "降低上下文长度、并发槽位或 GPU offload 层数。".to_string(),
+                "避免同一 GPU 上同时运行多个大模型实例。".to_string(),
+            ],
+        ));
+    }
 
-        if metrics.max_deferred > 0 || metrics.avg_deferred >= 0.5 {
-            findings.push(diagnostic_finding(
-                "queue_pressure",
-                "warning",
-                0.86,
-                "请求排队压力",
-                "监控到延迟队列，说明当前实例吞吐或 slot 配置可能无法覆盖请求峰值。",
-                vec![
-                    format!("最大延迟请求 {}", metrics.max_deferred),
-                    format!("平均处理中 {:.1}", metrics.avg_processing),
-                    format!("最大处理中 {}", metrics.max_processing),
-                ],
-                vec![
-                    "根据业务目标增加并发 slot，或拆分为多个实例分担请求。".to_string(),
-                    "如果延迟集中出现在长上下文请求，优先限制单次请求上下文规模。".to_string(),
-                ],
-            ));
-        }
+    if metrics.max_deferred > 0 || metrics.avg_deferred >= 0.5 {
+        findings.push(diagnostic_finding(
+            "queue_pressure",
+            "warning",
+            0.86,
+            "请求排队压力",
+            "监控到延迟队列，说明当前实例吞吐或 slot 配置可能无法覆盖请求峰值。",
+            vec![
+                format!("最大延迟请求 {}", metrics.max_deferred),
+                format!("平均处理中 {:.1}", metrics.avg_processing),
+                format!("最大处理中 {}", metrics.max_processing),
+            ],
+            vec![
+                "根据业务目标增加并发 slot，或拆分为多个实例分担请求。".to_string(),
+                "如果延迟集中出现在长上下文请求，优先限制单次请求上下文规模。".to_string(),
+            ],
+        ));
+    }
 
-        if metrics.avg_tps > 0.0 && metrics.avg_gpu < 35.0 && (metrics.avg_system_cpu > 55.0 || metrics.avg_instance_cpu > 55.0) {
-            findings.push(diagnostic_finding(
+    if metrics.avg_tps > 0.0
+        && metrics.avg_gpu < 35.0
+        && (metrics.avg_system_cpu > 55.0 || metrics.avg_instance_cpu > 55.0)
+    {
+        findings.push(diagnostic_finding(
                 "gpu_underutilized",
                 "warning",
                 0.74,
@@ -1369,10 +1564,10 @@ pub async fn get_telemetry_session_diagnostics(
                     "尝试增加 GPU offload 层数，或调整 batch/ubatch 配置。".to_string(),
                 ],
             ));
-        }
+    }
 
-        if analysis.request_count == 0 {
-            findings.push(diagnostic_finding(
+    if analysis.request_count == 0 {
+        findings.push(diagnostic_finding(
                 "no_request_records",
                 "info",
                 0.78,
@@ -1381,12 +1576,12 @@ pub async fn get_telemetry_session_diagnostics(
                 vec![format!("资源采样 {} 条", metrics.sample_count)],
                 vec!["完成至少一次推理请求后，诊断会补充 token、耗时和吞吐拆解。".to_string()],
             ));
-        } else {
-            if analysis.avg_prompt_tps > 0.0
-                && analysis.avg_generation_tps > 0.0
-                && analysis.avg_prompt_tps < analysis.avg_generation_tps * 0.55
-            {
-                findings.push(diagnostic_finding(
+    } else {
+        if analysis.avg_prompt_tps > 0.0
+            && analysis.avg_generation_tps > 0.0
+            && analysis.avg_prompt_tps < analysis.avg_generation_tps * 0.55
+        {
+            findings.push(diagnostic_finding(
                     "prompt_eval_bottleneck",
                     "info",
                     0.72,
@@ -1401,60 +1596,61 @@ pub async fn get_telemetry_session_diagnostics(
                         "结合 slot 缓存数据判断是否需要调整 cache/keep 参数。".to_string(),
                     ],
                 ));
-            }
-
-            if analysis.avg_total_time_ms > 60_000.0 {
-                findings.push(diagnostic_finding(
-                    "long_request_latency",
-                    "warning",
-                    0.8,
-                    "请求耗时偏长",
-                    "平均请求总耗时超过 60 秒，交互式使用可能感到明显等待。",
-                    vec![
-                        format!("平均耗时 {:.1} 秒", analysis.avg_total_time_ms / 1000.0),
-                        format!("平均生成 token {:.0}", analysis.avg_generated_tokens),
-                    ],
-                    vec![
-                        "检查 max_tokens、上下文长度和并发设置是否符合目标场景。".to_string(),
-                        "若是批处理场景，可以将该会话单独标记为长任务基线。".to_string(),
-                    ],
-                ));
-            }
         }
 
-        if analysis.slot_sample_count > 0 && analysis.avg_cached_slots >= 1.0 {
+        if analysis.avg_total_time_ms > 60_000.0 {
             findings.push(diagnostic_finding(
-                "slot_cache_observed",
-                "info",
-                0.68,
-                "检测到 slot 缓存",
-                "会话中存在空闲但带上下文的 slot，说明实例可能正在保留 KV cache。",
+                "long_request_latency",
+                "warning",
+                0.8,
+                "请求耗时偏长",
+                "平均请求总耗时超过 60 秒，交互式使用可能感到明显等待。",
                 vec![
-                    format!("平均缓存 slot {:.1}", analysis.avg_cached_slots),
-                    format!("slot 采样 {} 条", analysis.slot_sample_count),
+                    format!("平均耗时 {:.1} 秒", analysis.avg_total_time_ms / 1000.0),
+                    format!("平均生成 token {:.0}", analysis.avg_generated_tokens),
                 ],
                 vec![
-                    "如果重复对话较多，这是有益信号；如果显存紧张，可降低保留上下文或并发槽位。".to_string(),
+                    "检查 max_tokens、上下文长度和并发设置是否符合目标场景。".to_string(),
+                    "若是批处理场景，可以将该会话单独标记为长任务基线。".to_string(),
                 ],
             ));
         }
+    }
 
-        if analysis.max_context_tokens >= 32_768 {
-            findings.push(diagnostic_finding(
-                "large_context_window",
-                "info",
-                0.66,
-                "上下文窗口较大",
-                "该会话观测到较大的上下文窗口，吞吐和显存占用可能受上下文规模影响。",
-                vec![format!("最大上下文 {} tokens", analysis.max_context_tokens)],
-                vec![
-                    "如不需要长上下文，降低 ctx-size 通常可以改善显存压力和延迟。".to_string(),
-                ],
-            ));
-        }
+    if analysis.slot_sample_count > 0 && analysis.avg_cached_slots >= 1.0 {
+        findings.push(diagnostic_finding(
+            "slot_cache_observed",
+            "info",
+            0.68,
+            "检测到 slot 缓存",
+            "会话中存在空闲但带上下文的 slot，说明实例可能正在保留 KV cache。",
+            vec![
+                format!("平均缓存 slot {:.1}", analysis.avg_cached_slots),
+                format!("slot 采样 {} 条", analysis.slot_sample_count),
+            ],
+            vec![
+                "如果重复对话较多，这是有益信号；如果显存紧张，可降低保留上下文或并发槽位。"
+                    .to_string(),
+            ],
+        ));
+    }
 
-        if findings.iter().all(|item| item.severity == "info") && analysis.request_count > 0 {
-            findings.insert(0, diagnostic_finding(
+    if analysis.max_context_tokens >= 32_768 {
+        findings.push(diagnostic_finding(
+            "large_context_window",
+            "info",
+            0.66,
+            "上下文窗口较大",
+            "该会话观测到较大的上下文窗口，吞吐和显存占用可能受上下文规模影响。",
+            vec![format!("最大上下文 {} tokens", analysis.max_context_tokens)],
+            vec!["如不需要长上下文，降低 ctx-size 通常可以改善显存压力和延迟。".to_string()],
+        ));
+    }
+
+    if findings.iter().all(|item| item.severity == "info") && analysis.request_count > 0 {
+        findings.insert(
+            0,
+            diagnostic_finding(
                 "session_healthy",
                 "success",
                 0.76,
@@ -1466,30 +1662,295 @@ pub async fn get_telemetry_session_diagnostics(
                     format!("峰值吞吐 {}", fmt_diag_rate(metrics.max_tps)),
                 ],
                 vec!["可以继续积累更多会话样本，后续基线判断会更稳定。".to_string()],
+            ),
+        );
+    }
+
+    if findings.is_empty() {
+        findings.push(diagnostic_finding(
+            "baseline_collecting",
+            "info",
+            0.7,
+            "正在建立分析基线",
+            "当前数据可用于展示趋势，但历史基线或请求级样本仍偏少。",
+            vec![
+                format!("引擎 {} / {}", session.engine_id, session.backend),
+                format!("资源采样 {} 条", metrics.sample_count),
+                format!("请求 {} 次", analysis.request_count),
+                format!(
+                    "指标 busy slot 平均 {:.1} / 峰值 {:.1}",
+                    metrics.avg_busy_slots_metric, metrics.max_busy_slots_metric
+                ),
+            ],
+            vec![
+                "多运行几组相同模型和相同参数的会话后，诊断会自动给出更明确的对比结论。"
+                    .to_string(),
+            ],
+        ));
+    }
+
+    Ok(findings)
+}
+
+fn build_vector_diagnostics(
+    conn: &Connection,
+    session_id: &str,
+    session: &SessionDiagnosticContext,
+    analysis: &TelemetrySessionAnalysis,
+    metrics: &SessionMetricStats,
+) -> Result<Vec<DiagnosticFinding>, String> {
+    let vector = analysis
+        .vector_analysis
+        .as_ref()
+        .ok_or_else(|| "向量会话缺少工作负载分析结果".to_string())?;
+    let baseline = query_vector_baseline(
+        conn,
+        session_id,
+        &session.model_name,
+        &session.model_path,
+        session.workload,
+        &session.backend,
+    )?;
+    let mut findings = Vec::new();
+
+    if metrics.sample_count == 0 {
+        findings.push(diagnostic_finding(
+            "no_metric_samples",
+            "info",
+            0.98,
+            "资源遥测样本不足",
+            "当前向量会话还没有可用于分析的 CPU、GPU、显存或队列采样。",
+            vec!["资源采样数 0".to_string()],
+            vec!["保持实例运行一段时间并发起向量请求，资源诊断会随采样自动补充。".to_string()],
+        ));
+    }
+
+    if metrics.max_vram_ratio >= 0.92 {
+        findings.push(diagnostic_finding(
+            "vram_pressure",
+            if metrics.max_vram_ratio >= 0.98 {
+                "critical"
+            } else {
+                "warning"
+            },
+            0.9,
+            "显存压力偏高",
+            "向量会话期间显存占用接近上限，可能导致请求失败、回退到 CPU 或延迟抖动。",
+            vec![format!(
+                "显存峰值占比 {}",
+                fmt_diag_percent(metrics.max_vram_ratio * 100.0)
+            )],
+            vec![
+                "降低批处理规模、并发槽位或 GPU offload 层数。".to_string(),
+                "避免同一 GPU 上同时运行多个大模型实例。".to_string(),
+            ],
+        ));
+    }
+
+    if metrics.max_deferred > 0 || metrics.avg_deferred >= 0.5 {
+        findings.push(diagnostic_finding(
+            "queue_pressure",
+            "warning",
+            0.86,
+            "向量任务排队压力",
+            "监控到延迟队列，说明当前向量吞吐或 slot 配置可能无法覆盖请求峰值。",
+            vec![
+                format!("最大延迟请求 {}", metrics.max_deferred),
+                format!("平均处理中 {:.1}", metrics.avg_processing),
+                format!("最大处理中 {}", metrics.max_processing),
+            ],
+            vec![
+                "根据批处理和延迟目标调整并发 slot，或拆分为多个实例分担请求。".to_string(),
+                "检查调用方是否短时间提交了超出服务处理能力的大批量任务。".to_string(),
+            ],
+        ));
+    }
+
+    let has_vector_throughput = vector
+        .average_input_tokens_per_second
+        .is_some_and(|value| value > 0.0)
+        || vector
+            .average_items_per_second
+            .is_some_and(|value| value > 0.0);
+    if has_vector_throughput
+        && metrics.avg_gpu < 35.0
+        && (metrics.avg_system_cpu > 55.0 || metrics.avg_instance_cpu > 55.0)
+    {
+        findings.push(diagnostic_finding(
+            "gpu_underutilized",
+            "warning",
+            0.74,
+            "GPU 利用率偏低",
+            "向量任务产生吞吐时 GPU 平均利用率较低，同时 CPU 负载较高，可能存在 CPU 侧瓶颈或 GPU offload 不充分。",
+            vec![
+                format!("GPU 平均 {}", fmt_diag_percent(metrics.avg_gpu)),
+                format!(
+                    "系统 CPU 平均 {}",
+                    fmt_diag_percent(metrics.avg_system_cpu)
+                ),
+                format!(
+                    "实例 CPU 平均 {}",
+                    fmt_diag_percent(metrics.avg_instance_cpu)
+                ),
+            ],
+            vec![
+                "检查引擎是否使用了预期的 CUDA/ROCm/Vulkan 后端。".to_string(),
+                "尝试增加 GPU offload 层数，或调整 batch/ubatch 配置。".to_string(),
+            ],
+        ));
+    }
+
+    if !vector.log_available || !vector.proxy_available {
+        let log_state = if vector.log_available {
+            "日志任务事件可用"
+        } else {
+            "日志任务事件不可用"
+        };
+        let proxy_state = if vector.proxy_available {
+            "代理 HTTP 事件可用"
+        } else {
+            "代理 HTTP 事件不可用"
+        };
+        let recommendation = if !vector.log_available {
+            "确认当前 llama-server 日志格式可被识别；缺少日志事件时无法统计输入吞吐和任务耗时。"
+        } else {
+            "直连服务时代理指标不可用属于正常情况；需要 HTTP 请求耗时和失败率时请通过实例路由访问。"
+        };
+        findings.push(diagnostic_finding(
+            "vector_source_incomplete",
+            "info",
+            0.96,
+            "向量指标来源不完整",
+            "日志任务与代理 HTTP 使用独立统计口径，当前只能展示已采集来源对应的指标。",
+            vec![log_state.to_string(), proxy_state.to_string()],
+            vec![recommendation.to_string()],
+        ));
+    }
+
+    let input_regressed = match (
+        vector.average_input_tokens_per_second,
+        baseline.average_input_tokens_per_second,
+    ) {
+        (Some(current), Some(historical)) if historical > 0.0 => current < historical * 0.75,
+        _ => false,
+    };
+    let items_regressed = match (
+        vector.average_items_per_second,
+        baseline.average_items_per_second,
+    ) {
+        (Some(current), Some(historical)) if historical > 0.0 => current < historical * 0.75,
+        _ => false,
+    };
+    if baseline.session_count >= 2 && (input_regressed || items_regressed) {
+        let mut evidence = vec![format!("同类历史会话 {} 个", baseline.session_count)];
+        if let (Some(current), Some(historical)) = (
+            vector.average_input_tokens_per_second,
+            baseline.average_input_tokens_per_second,
+        ) {
+            evidence.push(format!(
+                "输入吞吐：本次 {:.1} / 历史 {:.1} tokens/s",
+                current, historical
             ));
         }
+        if let (Some(current), Some(historical)) = (
+            vector.average_items_per_second,
+            baseline.average_items_per_second,
+        ) {
+            evidence.push(format!(
+                "处理项吞吐：本次 {:.1} / 历史 {:.1} 项/s",
+                current, historical
+            ));
+        }
+        findings.push(diagnostic_finding(
+            "vector_throughput_regression",
+            "warning",
+            0.84,
+            "向量吞吐低于历史基线",
+            "相同模型、工作负载和后端下，本次向量吞吐明显低于历史会话。",
+            evidence,
+            vec![
+                "对比批处理大小、并发槽位、GPU offload 和调用方请求节奏。".to_string(),
+                "检查本次会话是否与其他 CPU/GPU 密集任务同时运行。".to_string(),
+            ],
+        ));
+    }
 
-        if findings.is_empty() {
-            findings.push(diagnostic_finding(
-                "baseline_collecting",
-                "info",
-                0.7,
-                "正在建立分析基线",
-                "当前数据可用于展示趋势，但历史基线或请求级样本仍偏少。",
+    let latency_regressed = match (vector.task_duration_p95_ms, baseline.task_duration_p95_ms) {
+        (Some(current), Some(historical)) if historical > 0.0 => current > historical * 1.35,
+        _ => false,
+    };
+    if baseline.session_count >= 2 && latency_regressed {
+        findings.push(diagnostic_finding(
+            "vector_task_latency_regression",
+            "warning",
+            0.82,
+            "向量任务 P95 耗时回退",
+            "相同模型、工作负载和后端下，本次慢任务耗时明显高于历史会话。",
+            vec![
+                format!(
+                    "本次 P95 {:.1} ms",
+                    vector.task_duration_p95_ms.unwrap_or_default()
+                ),
+                format!(
+                    "历史 P95 {:.1} ms",
+                    baseline.task_duration_p95_ms.unwrap_or_default()
+                ),
+                format!("同类历史会话 {} 个", baseline.session_count),
+            ],
+            vec![
+                "检查批量输入是否变大，以及是否出现资源争用或请求排队。".to_string(),
+                "使用相同输入规模重复测试，以区分负载差异和运行时回退。".to_string(),
+            ],
+        ));
+    }
+
+    if baseline.session_count < 2 && vector.log_available {
+        findings.push(diagnostic_finding(
+            "vector_baseline_collecting",
+            "info",
+            0.72,
+            "正在建立向量性能基线",
+            "同模型、同工作负载和同后端的历史会话还不足，暂不判断吞吐或 P95 回退。",
+            vec![format!("可用历史会话 {} 个", baseline.session_count)],
+            vec!["再完成至少两次相同环境下的向量任务，会话诊断会自动启用历史比较。".to_string()],
+        ));
+    }
+
+    let has_problem = findings
+        .iter()
+        .any(|finding| matches!(finding.severity.as_str(), "warning" | "critical"));
+    if !has_problem && metrics.sample_count > 0 && vector.log_available {
+        let item_label = if session.workload == ModelWorkload::Reranker {
+            "文档项"
+        } else {
+            "向量项"
+        };
+        findings.insert(
+            0,
+            diagnostic_finding(
+                "vector_session_healthy",
+                "success",
+                0.78,
+                "未发现明显向量性能瓶颈",
+                "基于当前资源、任务事件和同类历史会话，暂未发现需要立即处理的性能异常。",
                 vec![
-                    format!("引擎 {} / {}", session.1, session.2),
+                    format!(
+                        "已完成 {} {}",
+                        vector.completed_items.unwrap_or_default(),
+                        item_label
+                    ),
+                    format!(
+                        "平均处理速度 {:.1} 项/s",
+                        vector.average_items_per_second.unwrap_or_default()
+                    ),
                     format!("资源采样 {} 条", metrics.sample_count),
-                    format!("请求 {} 次", analysis.request_count),
-                    format!("指标 busy slot 平均 {:.1} / 峰值 {:.1}", metrics.avg_busy_slots_metric, metrics.max_busy_slots_metric),
                 ],
-                vec!["多运行几组相同模型和相同参数的会话后，诊断会自动给出更明确的对比结论。".to_string()],
-            ));
-        }
+                vec!["继续积累相同环境下的会话样本，可提高历史基线判断稳定性。".to_string()],
+            ),
+        );
+    }
 
-        Ok(findings)
-    })
-    .await
-    .map_err(|e| format!("会话诊断查询失败: {}", e))?
+    Ok(findings)
 }
 
 #[tauri::command]
@@ -1698,6 +2159,69 @@ mod tests {
             .unwrap()
     }
 
+    fn seed_vector_session(
+        conn: &Connection,
+        id: &'static str,
+        model_path: &'static str,
+        backend: &'static str,
+        workload: ModelWorkload,
+    ) {
+        insert_run_session(
+            conn,
+            &RunSessionStart {
+                id,
+                instance_id: id,
+                instance_name: id,
+                model_path,
+                engine_id: "engine",
+                backend,
+                config_hash: "hash",
+                command_line: match workload {
+                    ModelWorkload::Inference => "llama-server",
+                    ModelWorkload::Embedding => "llama-server --embedding",
+                    ModelWorkload::Reranker => "llama-server --embedding --reranking",
+                },
+                workload,
+                started_at: 0,
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE run_sessions SET stopped_at = 10000 WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+    }
+
+    fn seed_vector_log_event(
+        conn: &Connection,
+        session_id: &str,
+        workload: ModelWorkload,
+        source_event_id: i64,
+        input_tokens: u64,
+        item_count: u64,
+        duration_ms: f64,
+    ) {
+        record_vector_activity_in_connection(
+            conn,
+            session_id,
+            &VectorActivityRecord {
+                source: VectorEventSource::Log,
+                source_event_id,
+                workload,
+                endpoint: None,
+                started_at: 1_000,
+                completed_at: 5_000,
+                duration_ms,
+                item_count,
+                input_tokens: Some(input_tokens),
+                http_status: None,
+                error_text: None,
+            },
+        )
+        .unwrap();
+    }
+
     #[test]
     fn run_session_insert_persists_workload() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1860,6 +2384,268 @@ mod tests {
         assert!(
             record_vector_activity_in_connection(&conn, "session-vector-event", &invalid).is_err()
         );
+    }
+
+    #[test]
+    fn vector_analysis_keeps_sources_and_availability_separate() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        for (id, workload, command_line) in [
+            (
+                "analysis-vector",
+                ModelWorkload::Embedding,
+                "llama-server --embedding",
+            ),
+            (
+                "analysis-inference",
+                ModelWorkload::Inference,
+                "llama-server",
+            ),
+        ] {
+            insert_run_session(
+                &conn,
+                &RunSessionStart {
+                    id,
+                    instance_id: id,
+                    instance_name: id,
+                    model_path: "model.gguf",
+                    engine_id: "engine",
+                    backend: "cpu",
+                    config_hash: "hash",
+                    command_line,
+                    workload,
+                    started_at: 0,
+                },
+            )
+            .unwrap();
+            conn.execute(
+                "UPDATE run_sessions SET stopped_at = 10000 WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+        }
+        let log = VectorActivityRecord {
+            source: VectorEventSource::Log,
+            source_event_id: 1,
+            workload: ModelWorkload::Embedding,
+            endpoint: None,
+            started_at: 1_000,
+            completed_at: 5_000,
+            duration_ms: 4_000.0,
+            item_count: 4,
+            input_tokens: Some(40),
+            http_status: None,
+            error_text: None,
+        };
+        let proxy = VectorActivityRecord {
+            source: VectorEventSource::Proxy,
+            source_event_id: 2,
+            workload: ModelWorkload::Embedding,
+            endpoint: Some("/v1/embeddings".to_string()),
+            started_at: 900,
+            completed_at: 5_100,
+            duration_ms: 4_200.0,
+            item_count: 4,
+            input_tokens: None,
+            http_status: Some(200),
+            error_text: None,
+        };
+        record_vector_activity_in_connection(&conn, "analysis-vector", &log).unwrap();
+        record_vector_activity_in_connection(&conn, "analysis-vector", &proxy).unwrap();
+
+        let analysis = query_session_analysis(&conn, "analysis-vector").unwrap();
+        let vector = analysis
+            .vector_analysis
+            .expect("vector session should expose vector analysis");
+        assert_eq!(vector.workload, "embedding");
+        assert!(vector.log_available);
+        assert_eq!(vector.completed_items, Some(4));
+        assert_eq!(vector.input_tokens, Some(40));
+        assert_eq!(vector.average_items_per_second, Some(0.4));
+        assert!(vector.proxy_available);
+        assert_eq!(vector.proxy_request_count, Some(1));
+        assert_eq!(vector.proxy_item_count, Some(4));
+        assert_eq!(vector.proxy_success_rate, Some(1.0));
+        assert!(!vector.trend.is_empty());
+
+        let inference = query_session_analysis(&conn, "analysis-inference").unwrap();
+        assert!(inference.vector_analysis.is_none());
+    }
+
+    #[test]
+    fn vector_analysis_distinguishes_proxy_only_and_no_business_data() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        seed_vector_session(
+            &conn,
+            "proxy-only",
+            "C:/models/embed.gguf",
+            "cuda",
+            ModelWorkload::Embedding,
+        );
+        seed_vector_session(
+            &conn,
+            "no-events",
+            "C:/models/embed.gguf",
+            "cuda",
+            ModelWorkload::Embedding,
+        );
+        let proxy = VectorActivityRecord {
+            source: VectorEventSource::Proxy,
+            source_event_id: 1,
+            workload: ModelWorkload::Embedding,
+            endpoint: Some("/v1/embeddings".to_string()),
+            started_at: 1_000,
+            completed_at: 2_000,
+            duration_ms: 1_000.0,
+            item_count: 3,
+            input_tokens: None,
+            http_status: Some(200),
+            error_text: None,
+        };
+        record_vector_activity_in_connection(&conn, "proxy-only", &proxy).unwrap();
+
+        let proxy_only = query_vector_analysis(&conn, "proxy-only").unwrap().unwrap();
+        assert!(!proxy_only.log_available);
+        assert!(proxy_only.proxy_available);
+        assert_eq!(proxy_only.completed_items, None);
+        assert_eq!(proxy_only.average_items_per_second, None);
+        assert_eq!(proxy_only.proxy_request_count, Some(1));
+        assert!(proxy_only.trend.is_empty());
+
+        let no_events = query_vector_analysis(&conn, "no-events").unwrap().unwrap();
+        assert!(!no_events.log_available);
+        assert!(!no_events.proxy_available);
+        assert_eq!(no_events.completed_items, None);
+        assert_eq!(no_events.proxy_request_count, None);
+        assert!(no_events.trend.is_empty());
+    }
+
+    #[test]
+    fn vector_baseline_requires_matching_model_workload_and_backend() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        for id in ["current", "matching-a", "matching-b"] {
+            seed_vector_session(
+                &conn,
+                id,
+                "C:/models/embed.gguf",
+                "cuda",
+                ModelWorkload::Embedding,
+            );
+        }
+        seed_vector_session(
+            &conn,
+            "wrong-workload",
+            "C:/models/embed.gguf",
+            "cuda",
+            ModelWorkload::Reranker,
+        );
+        seed_vector_session(
+            &conn,
+            "wrong-backend",
+            "C:/models/embed.gguf",
+            "vulkan",
+            ModelWorkload::Embedding,
+        );
+        for (id, workload) in [
+            ("matching-a", ModelWorkload::Embedding),
+            ("matching-b", ModelWorkload::Embedding),
+            ("wrong-workload", ModelWorkload::Reranker),
+            ("wrong-backend", ModelWorkload::Embedding),
+        ] {
+            seed_vector_log_event(&conn, id, workload, 1, 1_000, 100, 100.0);
+        }
+
+        let baseline = query_vector_baseline(
+            &conn,
+            "current",
+            "embed.gguf",
+            "C:/models/embed.gguf",
+            ModelWorkload::Embedding,
+            "cuda",
+        )
+        .unwrap();
+
+        assert_eq!(baseline.session_count, 2);
+        assert_eq!(baseline.average_input_tokens_per_second, Some(100.0));
+        assert_eq!(baseline.average_items_per_second, Some(10.0));
+        assert_eq!(baseline.task_duration_p95_ms, Some(100.0));
+    }
+
+    #[test]
+    fn vector_diagnostics_exclude_generation_findings_and_use_vector_baseline() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        for id in ["current", "baseline-a", "baseline-b"] {
+            seed_vector_session(
+                &conn,
+                id,
+                "C:/models/embed.gguf",
+                "cuda",
+                ModelWorkload::Embedding,
+            );
+        }
+        seed_vector_log_event(
+            &conn,
+            "current",
+            ModelWorkload::Embedding,
+            1,
+            100,
+            10,
+            500.0,
+        );
+        for id in ["baseline-a", "baseline-b"] {
+            seed_vector_log_event(&conn, id, ModelWorkload::Embedding, 1, 1_000, 100, 100.0);
+        }
+
+        let findings = query_session_diagnostics(&conn, "current").unwrap();
+        let ids = findings
+            .iter()
+            .map(|finding| finding.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(ids.contains(&"vector_throughput_regression"));
+        assert!(ids.contains(&"vector_task_latency_regression"));
+        assert!(ids.contains(&"vector_source_incomplete"));
+        for generation_only in [
+            "throughput_regression",
+            "no_request_records",
+            "prompt_eval_bottleneck",
+            "long_request_latency",
+            "slot_cache_observed",
+            "large_context_window",
+        ] {
+            assert!(!ids.contains(&generation_only));
+        }
+    }
+
+    #[test]
+    fn session_summaries_keep_their_persisted_workload() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "historical-reranker",
+                instance_id: "mutable-instance",
+                instance_name: "Historical",
+                model_path: "old-reranker.gguf",
+                engine_id: "engine",
+                backend: "vulkan",
+                config_hash: "hash",
+                command_line: "llama-server --embedding --reranking",
+                workload: ModelWorkload::Reranker,
+                started_at: 1_000,
+            },
+        )
+        .unwrap();
+
+        let sessions = query_telemetry_sessions(&conn, 2_000, 20).unwrap();
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].instance_id, "mutable-instance");
+        assert_eq!(sessions[0].workload, "reranker");
     }
 
     #[test]

@@ -15,6 +15,14 @@ impl VectorEventSource {
             Self::Proxy => "proxy",
         }
     }
+
+    pub fn from_storage(value: &str) -> Option<Self> {
+        match value {
+            "log" => Some(Self::Log),
+            "proxy" => Some(Self::Proxy),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

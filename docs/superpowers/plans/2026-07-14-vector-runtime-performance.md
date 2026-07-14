@@ -449,17 +449,17 @@ git commit -m "feat: monitor vector requests through instance proxy"
 - Consumes: workload-pinned session rows, vector events, metric samples, model/backend identity.
 - Produces: serializable vector analysis/trend/source availability, workload-filtered baselines and vector-safe diagnostics.
 
-- [ ] **Step 1: Add failing query contract tests**
+- [x] **Step 1: Add failing query contract tests**
 
 Seed in-memory inference, Embedding and Reranker sessions. Cover only-log, only-proxy, full-data, no-business-data, invalid event, same-model/different-workload, same-workload/different-backend and instance-after-model-switch cases.
 
-- [ ] **Step 2: Run focused telemetry query tests and verify failure**
+- [x] **Step 2: Run focused telemetry query tests and verify failure**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml --locked commands::telemetry::tests::vector_analysis_keeps_sources_and_availability_separate`
 
 Expected: FAIL because current analysis is generation-only.
 
-- [ ] **Step 3: Extend response contracts additively**
+- [x] **Step 3: Extend response contracts additively**
 
 ```rust
 #[derive(Serialize)]
@@ -486,23 +486,23 @@ pub struct VectorTelemetryAnalysis {
 
 Add `workload` to session summaries. Add `vector_analysis: Option<VectorTelemetryAnalysis>` to session analysis rather than removing inference fields, preserving old frontend compatibility during rollout.
 
-- [ ] **Step 4: Query vector events with bounded ranges**
+- [x] **Step 4: Query vector events with bounded ranges**
 
 Use the `(session_id, source, completed_at)` index. Clamp bucket/range arguments to existing telemetry limits. Keep `None` for unavailable measurements; a measured idle bucket may contain numeric zero only after at least one source event establishes source availability.
 
-- [ ] **Step 5: Filter historical baselines correctly**
+- [x] **Step 5: Filter historical baselines correctly**
 
 Compare only matching model identity, `workload` and backend. Embedding baseline fields are input tokens/s, vector items/s and task P95; Reranker uses input tokens/s, document items/s and task P95. Existing inference baseline remains unchanged.
 
-- [ ] **Step 6: Gate diagnostics by workload**
+- [x] **Step 6: Gate diagnostics by workload**
 
 Keep resource pressure, queue, CPU/GPU balance, vector throughput regression, task P95 regression and source-incomplete diagnostics. Do not execute generation phase, context/KV cache or speculative decoding findings for vector sessions.
 
-- [ ] **Step 7: Register any new Tauri query command**
+- [x] **Step 7: Register any new Tauri query command**
 
 Prefer extending `get_telemetry_session_analysis` to avoid an extra round trip. If a dedicated trend command is required for range changes, register it in `main.rs` and document its exact frontend invoke name in the TypeScript task.
 
-- [ ] **Step 8: Run query and full backend tests**
+- [x] **Step 8: Run query and full backend tests**
 
 Run:
 
@@ -513,7 +513,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked
 
 Expected: all vector query states pass and existing inference serialization tests remain compatible.
 
-- [ ] **Step 9: Commit query layer**
+- [x] **Step 9: Commit query layer**
 
 ```bash
 git add src-tauri/src/commands/telemetry.rs src-tauri/src/main.rs
