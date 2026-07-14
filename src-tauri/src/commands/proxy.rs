@@ -15,18 +15,112 @@ use tauri::Manager;
 
 use crate::commands::config::update_and_persist;
 use crate::commands::server::effective_api_key;
-use crate::commands::telemetry::{record_proxy_request, ProxyRequestRecord};
+use crate::commands::telemetry::{
+    current_time_ms, record_proxy_request, record_vector_activity, ProxyRequestRecord,
+    VectorActivityRecord,
+};
+use crate::commands::vector_metrics::VectorEventSource;
 use crate::models::{AppState, InstanceConfig, ProxyConfig, ProxyStatus, ProxyTarget};
+use crate::vector_policy::ModelWorkload;
 
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
 const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VectorRequestMetadata {
+    workload: ModelWorkload,
+    endpoint: String,
+    item_count: u64,
+}
+
+fn classify_vector_endpoint(path: &str) -> Option<ModelWorkload> {
+    match path {
+        "/embedding" | "/embeddings" | "/v1/embeddings" => Some(ModelWorkload::Embedding),
+        "/rerank" | "/reranking" | "/v1/rerank" | "/v1/reranking" => Some(ModelWorkload::Reranker),
+        _ => None,
+    }
+}
+
+fn embedding_item_count(value: &serde_json::Value) -> u64 {
+    match value {
+        serde_json::Value::String(_) => 1,
+        serde_json::Value::Array(items) if items.is_empty() => 0,
+        serde_json::Value::Array(items) if items.iter().all(serde_json::Value::is_number) => 1,
+        serde_json::Value::Array(items) => items.len() as u64,
+        _ => 0,
+    }
+}
+
+fn vector_request_metadata(path: &str, body: &[u8]) -> Option<VectorRequestMetadata> {
+    let workload = classify_vector_endpoint(path)?;
+    let parsed = serde_json::from_slice::<serde_json::Value>(body).ok();
+    let item_count = match workload {
+        ModelWorkload::Embedding => parsed
+            .as_ref()
+            .and_then(|value| value.get("input").or_else(|| value.get("content")))
+            .map(embedding_item_count)
+            .unwrap_or(0),
+        ModelWorkload::Reranker => parsed
+            .as_ref()
+            .and_then(|value| value.get("documents"))
+            .and_then(serde_json::Value::as_array)
+            .map(|documents| documents.len() as u64)
+            .unwrap_or(0),
+        ModelWorkload::Inference => 0,
+    };
+    Some(VectorRequestMetadata {
+        workload,
+        endpoint: path.to_string(),
+        item_count,
+    })
+}
+
+fn vector_endpoint_matches_target(
+    endpoint_workload: Option<ModelWorkload>,
+    target_workload: ModelWorkload,
+) -> bool {
+    match endpoint_workload {
+        Some(workload) => workload == target_workload,
+        None => true,
+    }
+}
+
+fn instance_workload(config: &InstanceConfig) -> ModelWorkload {
+    if config.reranking {
+        ModelWorkload::Reranker
+    } else if config.embedding {
+        ModelWorkload::Embedding
+    } else {
+        ModelWorkload::Inference
+    }
+}
+
+fn stored_instance_workload(config: &InstanceConfig, stored_workload: &str) -> ModelWorkload {
+    if stored_workload.trim().is_empty() {
+        instance_workload(config)
+    } else {
+        ModelWorkload::from_storage(stored_workload)
+    }
+}
+
+fn stored_target_matches_endpoint(
+    config: &InstanceConfig,
+    stored_workload: &str,
+    endpoint_workload: Option<ModelWorkload>,
+) -> bool {
+    vector_endpoint_matches_target(
+        endpoint_workload,
+        stored_instance_workload(config, stored_workload),
+    )
+}
 
 struct ResolvedProxyTarget {
     public: ProxyTarget,
     api_key: String,
     api_prefix: String,
     telemetry_session_id: Option<String>,
+    workload: ModelWorkload,
 }
 
 struct ProxyTelemetryGuard {
@@ -36,7 +130,19 @@ struct ProxyTelemetryGuard {
     target_instance_id: String,
     http_status: u16,
     started_at: std::time::Instant,
+    started_at_ms: i64,
+    vector_metadata: Option<VectorRequestMetadata>,
     recorded: bool,
+}
+
+struct ProxyTelemetryRecord {
+    task_id: u32,
+    model: Option<String>,
+    target_instance_id: String,
+    http_status: Option<u16>,
+    started_at_ms: i64,
+    duration_ms: f64,
+    error_text: Option<String>,
 }
 
 impl ProxyTelemetryGuard {
@@ -45,16 +151,18 @@ impl ProxyTelemetryGuard {
             return;
         }
         self.recorded = true;
-        let _ = record_proxy_request(
+        let _ = record_proxy_telemetry(
             self.session_id.as_deref(),
-            &ProxyRequestRecord {
+            &ProxyTelemetryRecord {
                 task_id: self.task_id,
                 model: self.model.clone(),
                 target_instance_id: self.target_instance_id.clone(),
                 http_status: Some(self.http_status),
+                started_at_ms: self.started_at_ms,
                 duration_ms: self.started_at.elapsed().as_secs_f64() * 1000.0,
                 error_text,
             },
+            self.vector_metadata.as_ref(),
         );
     }
 }
@@ -65,6 +173,44 @@ impl Drop for ProxyTelemetryGuard {
             "client disconnected before upstream stream completed".to_string(),
         ));
     }
+}
+
+fn record_proxy_telemetry(
+    session_id: Option<&str>,
+    record: &ProxyTelemetryRecord,
+    vector_metadata: Option<&VectorRequestMetadata>,
+) -> Result<(), String> {
+    if let Some(metadata) = vector_metadata {
+        let completed_at = current_time_ms().max(record.started_at_ms);
+        record_vector_activity(
+            session_id,
+            &VectorActivityRecord {
+                source: VectorEventSource::Proxy,
+                source_event_id: i64::from(record.task_id),
+                workload: metadata.workload,
+                endpoint: Some(metadata.endpoint.clone()),
+                started_at: record.started_at_ms,
+                completed_at,
+                duration_ms: record.duration_ms,
+                item_count: metadata.item_count,
+                input_tokens: None,
+                http_status: record.http_status,
+                error_text: record.error_text.clone(),
+            },
+        )?;
+        return Ok(());
+    }
+    record_proxy_request(
+        session_id,
+        &ProxyRequestRecord {
+            task_id: record.task_id,
+            model: record.model.clone(),
+            target_instance_id: record.target_instance_id.clone(),
+            http_status: record.http_status,
+            duration_ms: record.duration_ms,
+            error_text: record.error_text.clone(),
+        },
+    )
 }
 
 fn proxy_bound_addr(config: &ProxyConfig) -> String {
@@ -211,6 +357,7 @@ fn list_proxy_targets_inner(state: &AppState) -> Vec<ProxyTarget> {
 fn resolve_proxy_target(
     state: &AppState,
     requested_model: Option<&str>,
+    endpoint_workload: Option<ModelWorkload>,
 ) -> Option<ResolvedProxyTarget> {
     let proxy_config = state.proxy_config.lock().unwrap().clone();
     let instances = state.instances.lock().unwrap().clone();
@@ -253,6 +400,10 @@ fn resolve_proxy_target(
 
     for id in candidate_ids {
         if let (Some(config), Some(running_info)) = (instances.get(&id), running.get(&id)) {
+            if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
+                continue;
+            }
+            let workload = stored_instance_workload(config, &running_info.workload);
             let public = ProxyTarget {
                 instance_id: id.clone(),
                 name: config.name.clone(),
@@ -266,6 +417,7 @@ fn resolve_proxy_target(
                 api_key: effective_api_key(config),
                 api_prefix: config.api_prefix.clone(),
                 telemetry_session_id: running_info.telemetry_session_id.clone(),
+                workload,
             });
         }
     }
@@ -416,7 +568,12 @@ async fn proxy_openai(
     }
 
     let requested_model = requested_model_from_body(&body);
-    let target = match resolve_proxy_target(&state, requested_model.as_deref()) {
+    let vector_metadata = vector_request_metadata(uri.path(), &body);
+    let target = match resolve_proxy_target(
+        &state,
+        requested_model.as_deref(),
+        vector_metadata.as_ref().map(|metadata| metadata.workload),
+    ) {
         Some(target) => target,
         None => {
             return plain_response(
@@ -425,7 +582,17 @@ async fn proxy_openai(
             )
         }
     };
+    if !vector_endpoint_matches_target(
+        vector_metadata.as_ref().map(|metadata| metadata.workload),
+        target.workload,
+    ) {
+        return plain_response(
+            StatusCode::BAD_REQUEST,
+            "selected target does not support the requested vector endpoint",
+        );
+    }
     let started_at = std::time::Instant::now();
+    let started_at_ms = current_time_ms();
     let proxy_task_id = next_proxy_task_id();
 
     let client = match reqwest::Client::builder()
@@ -468,16 +635,18 @@ async fn proxy_openai(
     let response = match request.body(body.to_vec()).send().await {
         Ok(response) => response,
         Err(err) => {
-            let _ = record_proxy_request(
+            let _ = record_proxy_telemetry(
                 target.telemetry_session_id.as_deref(),
-                &ProxyRequestRecord {
+                &ProxyTelemetryRecord {
                     task_id: proxy_task_id,
                     model: requested_model.clone(),
                     target_instance_id: target.public.instance_id.clone(),
                     http_status: None,
+                    started_at_ms,
                     duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
                     error_text: Some(err.to_string()),
                 },
+                vector_metadata.as_ref(),
             );
             return plain_response(
                 StatusCode::BAD_GATEWAY,
@@ -514,6 +683,8 @@ async fn proxy_openai(
         target_instance_id: target.public.instance_id.clone(),
         http_status,
         started_at,
+        started_at_ms,
+        vector_metadata,
         recorded: false,
     };
     let upstream_stream = Box::pin(response.bytes_stream());
@@ -562,7 +733,13 @@ fn proxy_router(app: tauri::AppHandle) -> Router {
         .route("/v1/models", get(proxy_models))
         .route("/v1/chat/completions", any(proxy_openai))
         .route("/v1/completions", any(proxy_openai))
+        .route("/embedding", any(proxy_openai))
+        .route("/embeddings", any(proxy_openai))
         .route("/v1/embeddings", any(proxy_openai))
+        .route("/rerank", any(proxy_openai))
+        .route("/reranking", any(proxy_openai))
+        .route("/v1/rerank", any(proxy_openai))
+        .route("/v1/reranking", any(proxy_openai))
         .route_layer(auth_layer)
         .with_state(app)
 }
@@ -601,7 +778,7 @@ pub async fn test_proxy_route(
     model: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyTarget, String> {
-    resolve_proxy_target(&state, model.as_deref())
+    resolve_proxy_target(&state, model.as_deref(), None)
         .map(|target| target.public)
         .ok_or_else(|| "no running instance matches the requested model".to_string())
 }
@@ -702,7 +879,8 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use crate::models::ProxyConfig;
+    use crate::models::{InstanceConfig, ProxyConfig};
+    use crate::vector_policy::ModelWorkload;
     use axum::http::HeaderMap;
 
     #[test]
@@ -738,5 +916,121 @@ mod tests {
         for path in ["/", "/health", "/v1/models", "/v1/chat/completions"] {
             assert!(!super::proxy_request_is_authorized(&config, path, &headers));
         }
+    }
+
+    #[test]
+    fn vector_endpoint_classification_covers_supported_aliases() {
+        for path in ["/embedding", "/embeddings", "/v1/embeddings"] {
+            assert_eq!(
+                super::classify_vector_endpoint(path),
+                Some(ModelWorkload::Embedding)
+            );
+        }
+        for path in ["/rerank", "/reranking", "/v1/rerank", "/v1/reranking"] {
+            assert_eq!(
+                super::classify_vector_endpoint(path),
+                Some(ModelWorkload::Reranker)
+            );
+        }
+        assert_eq!(
+            super::classify_vector_endpoint("/v1/chat/completions"),
+            None
+        );
+    }
+
+    #[test]
+    fn vector_request_metadata_counts_items_without_retaining_content() {
+        let cases = [
+            (
+                "/v1/embeddings",
+                br#"{"input":"private text"}"#.as_slice(),
+                1,
+            ),
+            (
+                "/v1/embeddings",
+                br#"{"input":["private one","private two"]}"#.as_slice(),
+                2,
+            ),
+            ("/embedding", br#"{"content":[12,13,14]}"#.as_slice(), 1),
+            (
+                "/embeddings",
+                br#"{"content":[[1,2],[3,4],[5,6]]}"#.as_slice(),
+                3,
+            ),
+            (
+                "/v1/rerank",
+                br#"{"query":"private query","documents":["private a","private b","private c"]}"#
+                    .as_slice(),
+                3,
+            ),
+        ];
+
+        for (path, body, expected) in cases {
+            let metadata = super::vector_request_metadata(path, body).unwrap();
+            assert_eq!(metadata.item_count, expected);
+            let debug = format!("{metadata:?}");
+            assert!(!debug.contains("private"));
+        }
+        assert_eq!(
+            super::vector_request_metadata("/v1/embeddings", b"not-json")
+                .unwrap()
+                .item_count,
+            0
+        );
+    }
+
+    #[test]
+    fn vector_endpoint_requires_matching_target_workload() {
+        assert!(super::vector_endpoint_matches_target(
+            Some(ModelWorkload::Embedding),
+            ModelWorkload::Embedding
+        ));
+        assert!(!super::vector_endpoint_matches_target(
+            Some(ModelWorkload::Reranker),
+            ModelWorkload::Embedding
+        ));
+        assert!(super::vector_endpoint_matches_target(
+            None,
+            ModelWorkload::Inference
+        ));
+    }
+
+    #[test]
+    fn vector_target_filter_uses_instance_workload() {
+        let embedding = InstanceConfig {
+            embedding: true,
+            ..InstanceConfig::default()
+        };
+        let reranker = InstanceConfig {
+            reranking: true,
+            ..InstanceConfig::default()
+        };
+        let inference = InstanceConfig::default();
+
+        assert!(super::stored_target_matches_endpoint(
+            &embedding,
+            "",
+            Some(ModelWorkload::Embedding)
+        ));
+        assert!(!super::stored_target_matches_endpoint(
+            &inference,
+            "",
+            Some(ModelWorkload::Embedding)
+        ));
+        assert!(super::stored_target_matches_endpoint(
+            &reranker,
+            "",
+            Some(ModelWorkload::Reranker)
+        ));
+        assert!(super::stored_target_matches_endpoint(
+            &inference,
+            "embedding",
+            Some(ModelWorkload::Embedding)
+        ));
+        assert!(!super::stored_target_matches_endpoint(
+            &reranker,
+            "embedding",
+            Some(ModelWorkload::Reranker)
+        ));
     }
 }

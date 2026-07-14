@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { useI18n } from '../../i18n'
+import type { ModelWorkload } from '../../store/types'
 
 interface TaskPerfState {
   slot_id: number
@@ -29,7 +30,13 @@ interface PerfUpdate {
   lastCompleted: TaskPerfState | null
 }
 
-export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
+export default function PerfAnalysis({
+  instanceId,
+  workload = 'inference',
+}: {
+  instanceId: string
+  workload?: ModelWorkload
+}) {
   const { t } = useI18n()
   const [tasks, setTasks] = useState<TaskPerfState[]>([])
   const [lastCompleted, setLastCompleted] = useState<TaskPerfState | null>(null)
@@ -55,6 +62,26 @@ export default function PerfAnalysis({ instanceId }: { instanceId: string }) {
       <div className="rounded-lg border border-slate-800 bg-slate-900/70 p-5">
         <div className="mb-3 text-xs uppercase tracking-[0.14em] text-slate-500">{t.perfBlock.perfTitle}</div>
         <div className="py-6 text-center text-sm text-slate-400">{t.perfBlock.waitingActivity}</div>
+      </div>
+    )
+  }
+
+  if (workload !== 'inference') {
+    return (
+      <div className="space-y-2" data-vector-task-analysis={workload}>
+        {tasks.map(task => (
+          <div key={task.task_id} className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm dark:border-slate-800 dark:bg-slate-950/60">
+            <div className="min-w-0">
+              <div className="truncate font-medium text-slate-900 dark:text-slate-100">
+                {t.perfBlock.task} {task.task_id}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">{t.perfBlock.slot} {task.slot_id}</div>
+            </div>
+            <div className="shrink-0 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300">
+              {workload === 'reranker' ? 'Reranker' : 'Embedding'}
+            </div>
+          </div>
+        ))}
       </div>
     )
   }

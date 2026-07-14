@@ -50,6 +50,30 @@ for (const relativePath of files) {
   }
 }
 
+const performancePage = fs.readFileSync(
+  path.join(repoRoot, 'src/components/PerformancePage/PerformancePage.tsx'),
+  'utf8',
+)
+for (const marker of ['data-workload-badge', 'data-vector-source-state', 'data-vector-trend-control']) {
+  if (!performancePage.includes(marker)) {
+    failures.push(`PerformancePage.tsx: missing vector monitoring marker "${marker}".`)
+  }
+}
+if (!/data-vector-source-state[\s\S]{0,500}text-slate-600[\s\S]{0,120}dark:text-slate-300/.test(performancePage)) {
+  failures.push('PerformancePage.tsx: vector source state must define readable light and dark text colors.')
+}
+if (!/data-vector-trend-control[\s\S]{0,800}min-w-\[84px\]/.test(performancePage)) {
+  failures.push('PerformancePage.tsx: vector trend controls need a stable minimum width.')
+}
+
+const primitives = fs.readFileSync(
+  path.join(repoRoot, 'src/components/monitoring/MonitoringPrimitives.tsx'),
+  'utf8',
+)
+if (!/workload !== 'inference'[\s\S]{0,500}grid-cols-\[minmax\(0,1fr\)_100px_82px\]/.test(primitives)) {
+  failures.push('MonitoringPrimitives.tsx: vector activity rows need stable responsive columns.')
+}
+
 if (failures.length > 0) {
   console.error('Monitoring theme check failed:')
   for (const failure of failures) {

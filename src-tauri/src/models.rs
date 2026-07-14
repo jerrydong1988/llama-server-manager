@@ -559,6 +559,8 @@ pub struct RunningInstance {
     pub executable_path: String,
     #[serde(default)]
     pub telemetry_session_id: Option<String>,
+    #[serde(default)]
+    pub workload: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

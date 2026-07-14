@@ -38,7 +38,8 @@ type MetricsEvent = {
   llama?: {
     tokens_per_sec?: number
     prompt_tokens_per_sec?: number
-    requests?: number
+    decode_calls_total?: number
+    max_tokens_observed?: number
     requests_processing?: number
     requests_deferred?: number
     busy_slots_per_decode?: number
@@ -158,7 +159,6 @@ export default function BigScreenPage() {
     return {
       tokens_per_sec: sumMetric(values, 'tokens_per_sec'),
       prompt_tokens_per_sec: sumMetric(values, 'prompt_tokens_per_sec'),
-      requests: sumMetric(values, 'requests'),
       requests_processing: sumMetric(values, 'requests_processing'),
       requests_deferred: sumMetric(values, 'requests_deferred'),
       busy_slots_per_decode: average(values.map(value => value.busy_slots_per_decode || 0)),

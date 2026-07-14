@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Activity, CheckCircle2 } from 'lucide-react'
-import type { RunningInferenceTask } from '../../store/types'
+import type { ModelWorkload, RunningInferenceTask } from '../../store/types'
 import { Badge, joinClassNames } from '../ui'
 import { clampPercent, formatCompactNumber, formatDuration, formatRate } from './monitoringFormat'
 import type { ActivityFeedItem, SignalTone } from './monitoringViewModel'
@@ -167,12 +167,12 @@ export function TrendChart({
   tone = 'blue',
   className = '',
 }: {
-  values: number[]
+  values: Array<number | null>
   emptyText: string
   tone?: SignalTone
   className?: string
 }) {
-  const safeValues = values.filter(value => Number.isFinite(value))
+  const safeValues = values.filter((value): value is number => value != null && Number.isFinite(value))
   if (safeValues.length < 2) {
     return (
       <div className={joinClassNames('flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400', className)}>
@@ -222,10 +222,27 @@ export function ActivityRow({ item }: { item: ActivityFeedItem }) {
 export function ActiveRequestRow({
   task,
   instanceName,
+  workload,
+  workloadText,
 }: {
   task: RunningInferenceTask
   instanceName?: string
+  workload: ModelWorkload
+  workloadText: string
 }) {
+  const elapsed = formatDuration((Date.now() - task.started_at_ms) / 1000)
+  if (workload !== 'inference') {
+    return (
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_100px_82px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950/60">
+        <div className="min-w-0">
+          <div className="truncate font-medium text-slate-900 dark:text-slate-100" title={instanceName}>#{task.task_id} {instanceName ? `· ${instanceName}` : ''}</div>
+          <div className="text-xs text-slate-500">slot {task.slot_id}</div>
+        </div>
+        <Badge tone={workload === 'reranker' ? 'blue' : 'violet'}>{workloadText}</Badge>
+        <div className="truncate text-right text-slate-500">{elapsed}</div>
+      </div>
+    )
+  }
   return (
     <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_80px_92px_82px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm dark:border-slate-800 dark:bg-slate-950/60">
       <div className="min-w-0">
@@ -234,7 +251,7 @@ export function ActiveRequestRow({
       </div>
       <div className="truncate text-slate-600 dark:text-slate-300">{formatCompactNumber(task.n_decoded)}</div>
       <div className="truncate text-emerald-600 dark:text-emerald-300">{formatRate(task.tg)}</div>
-      <div className="truncate text-slate-500">{formatDuration((Date.now() - task.started_at_ms) / 1000)}</div>
+      <div className="truncate text-slate-500">{elapsed}</div>
     </div>
   )
 }
@@ -245,6 +262,8 @@ export function SessionCard({
   meta,
   selected,
   running,
+  workload,
+  workloadTone = 'blue',
   onClick,
 }: {
   title: string
@@ -252,6 +271,8 @@ export function SessionCard({
   meta: string
   selected: boolean
   running: boolean
+  workload?: string
+  workloadTone?: 'slate' | 'blue' | 'emerald' | 'amber' | 'red' | 'violet'
   onClick: () => void
 }) {
   return (
@@ -270,7 +291,10 @@ export function SessionCard({
           <div className="truncate text-sm font-semibold text-slate-950 dark:text-slate-100" title={title}>{title}</div>
           <div className="mt-1 truncate text-xs text-slate-500" title={subtitle}>{subtitle}</div>
         </div>
-        <Badge tone={running ? 'emerald' : 'slate'}>{running ? '运行中' : '已结束'}</Badge>
+        <div className="flex shrink-0 flex-col items-end gap-1.5">
+          <Badge tone={running ? 'emerald' : 'slate'}>{running ? '运行中' : '已结束'}</Badge>
+          {workload ? <Badge tone={workloadTone}>{workload}</Badge> : null}
+        </div>
       </div>
       <div className="mt-3 truncate text-xs text-slate-500" title={meta}>{meta}</div>
     </button>
