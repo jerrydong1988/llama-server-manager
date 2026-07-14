@@ -5,11 +5,25 @@ import {
   normalizeStoredConfig,
   reconcileInstancesWithModels,
 } from './bootstrap'
+import { createLatestSaveCoordinator } from './configSaveCoordinator'
 import type { AppStoreGet, AppStoreSet } from './helpers'
+import { synchronizeInstanceSummary } from './instanceSummary'
 import type { AppState, InstanceConfig, LogEntry } from './types'
 
 const MAX_LOG_ENTRIES = 1000
-let configSaveQueue: Promise<void> = Promise.resolve()
+type ConfigSaveSnapshot = {
+  instances: Record<string, InstanceConfig>
+  modelDirs: string[]
+  engineDirs: string[]
+  defaultEngineId: string
+  instanceOrder: string[]
+  lastTab: string
+  darkMode: boolean
+}
+
+const configSaveCoordinator = createLatestSaveCoordinator<ConfigSaveSnapshot>(
+  snapshot => invoke('save_config', snapshot),
+)
 
 export function createInstanceSlice(
   set: AppStoreSet,
@@ -37,9 +51,10 @@ export function createInstanceSlice(
       void get().saveConfig().catch(() => {})
     },
     updateInstance: (id, partial) => set((state) => ({
-      instances: state.instances.map((instance) => (
-        instance.id === id ? { ...instance, ...partial } : instance
-      )),
+      instances: state.instances.map((instance) => {
+        if (instance.id !== id) return instance
+        return synchronizeInstanceSummary({ ...instance, ...partial })
+      }),
     })),
     deleteInstance: (id) => set((state) => ({
       instances: state.instances.filter((instance) => instance.id !== id),
@@ -100,7 +115,7 @@ export function createInstanceSlice(
           }))
           await get().saveConfig()
         }
-        await configSaveQueue
+        await configSaveCoordinator.waitForIdle()
 
         const engine = engines.find((item) => item.id === normalized.config.engine_id)
           || engines.find((item) => item.id === defaultEngineId)
@@ -146,21 +161,18 @@ export function createInstanceSlice(
         order.push(instance.id)
       })
 
-      const operation = configSaveQueue.catch(() => {}).then(async () => {
-        await invoke('save_config', {
-          instances: instancesById,
-          modelDirs: state.modelDirs,
-          engineDirs: state.engineDirs,
-          defaultEngineId: state.defaultEngineId || '',
-          instanceOrder: order,
-          lastTab: state.activeTab,
-          darkMode: state.darkMode,
-        })
+      const operation = configSaveCoordinator.save({
+        instances: instancesById,
+        modelDirs: state.modelDirs,
+        engineDirs: state.engineDirs,
+        defaultEngineId: state.defaultEngineId || '',
+        instanceOrder: order,
+        lastTab: state.activeTab,
+        darkMode: state.darkMode,
       }).catch((error) => {
         get().addRuntimeWarning(`配置保存失败：${String(error)}`)
         throw error
       })
-      configSaveQueue = operation
       return operation
     },
     loadConfig: async () => {

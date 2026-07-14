@@ -46,7 +46,7 @@ export const enUS = {
     dirs: 'Added Engine Directories (auto-scan subdirectories):', addDirTitle: 'Select a parent directory containing llama-server (subdirectories will be auto-scanned)',
   },
   configPage: {
-    title: 'Instance Config', saved: '\u2713 Saved', save: 'Save Config',
+    title: 'Instance Config', saved: '\u2713 Saved', saving: 'Saving...', save: 'Save Config',
     savedMsg: 'Config saved to', savedHint: 'Return to Instances and click Start to apply the new config.',
     noInstance: 'Click the \u2699\uFE0F button on an instance card in Instances to configure it.',
     basic: 'Basic', reasoning: 'Reasoning & Generation', generation: 'Generation', advancedSampling: 'Advanced Sampling',

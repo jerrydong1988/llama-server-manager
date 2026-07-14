@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, ListChecks, RotateCcw, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, ListChecks, LoaderCircle, RotateCcw, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { useAppStore, type InstanceConfig, type ModelInfo, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { validateConfig, type Warning } from '../validators'
@@ -224,6 +224,7 @@ const ConfigPage = () => {
   const [local, setLocal] = useState<InstanceConfig | null>(null)
   const [baseline, setBaseline] = useState<InstanceConfig | null>(null)
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<'model' | 'draft'>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
@@ -239,6 +240,7 @@ const ConfigPage = () => {
   const committedModelPathRef = useRef('')
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
     }
@@ -345,7 +347,7 @@ const ConfigPage = () => {
   }
 
   const save = async () => {
-    if (!inst) {
+    if (!inst || saving) {
       return
     }
 
@@ -358,12 +360,17 @@ const ConfigPage = () => {
 
     committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
     setLocal(normalized.config)
+    setSaving(true)
+    setSaved(false)
     updateInstance(inst.id, { config: normalized.config })
     try {
       await saveConfig()
     } catch {
       return
+    } finally {
+      if (mountedRef.current) setSaving(false)
     }
+    if (!mountedRef.current || useAppStore.getState().activeConfigInstanceId !== inst.id) return
     setSaved(true)
     setBaseline(normalized.config)
     setSaveWarnings(warnings)
@@ -675,13 +682,13 @@ const ConfigPage = () => {
 
           <Button
             onClick={save}
-            disabled={!inst}
+            disabled={!inst || saving}
             variant="primary"
             data-guide="config-save"
-            icon={saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+            icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
             className="shrink-0"
           >
-            {saved ? t.configPage.saved : t.configPage.save}
+            {saving ? t.configPage.saving : saved ? t.configPage.saved : t.configPage.save}
           </Button>
         </div>
       </Surface>

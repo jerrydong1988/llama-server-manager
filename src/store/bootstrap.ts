@@ -4,6 +4,7 @@ import { normalizeInstanceConfig } from '../modelPolicy'
 import { pathBasename } from '../utils/path'
 import { resolveHydratedHealth } from './bootstrapHealth'
 import type { AppStoreGet, AppStoreSet } from './helpers'
+import { synchronizeInstanceSummary } from './instanceSummary'
 import type {
   AppState,
   DownloadManagerSnapshot,
@@ -82,10 +83,14 @@ export function reconcileInstancesWithModels(instances: Instance[], models: Mode
   let changed = false
   const next = instances.map((instance) => {
     const normalized = normalizeStoredConfig(instance.config, models)
-    if (normalized.changes.length === 0) return instance
+    const normalizedInstance = normalized.changes.length === 0
+      ? instance
+      : { ...instance, config: normalized.config }
+    const synchronized = synchronizeInstanceSummary(normalizedInstance)
+    if (synchronized === instance) return instance
 
     changed = true
-    return { ...instance, config: normalized.config }
+    return synchronized
   })
 
   return { instances: changed ? next : instances, changed }

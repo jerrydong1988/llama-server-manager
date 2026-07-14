@@ -26,6 +26,7 @@ const entry = `
     normalizeStoredConfig,
     reconcileInstancesWithModels,
   } from './src/store/bootstrap'
+  import { synchronizeInstanceSummary } from './src/store/instanceSummary'
 
   const model = (overrides = {}) => ({
     id: 'model', name: 'model.gguf', path: 'C:/models/model.gguf', size: 1, file_type: 'gguf',
@@ -172,6 +173,7 @@ const entry = `
     ...defaultInstanceConfig(),
     id: 'vector',
     name: 'Vector instance',
+    port: 18080,
     model_path: 'c:/models/Qwen3-Instruct.gguf',
     embedding: false,
     temp: 1.5,
@@ -187,6 +189,7 @@ const entry = `
     ...defaultInstanceConfig(),
     id: 'inference',
     name: 'Inference instance',
+    port: 18081,
     model_path: 'C:\\\\missing\\\\Qwen3-8B-Instruct.gguf',
     temp: 1.25,
   }
@@ -216,6 +219,27 @@ const entry = `
   const unchanged = reconcileInstancesWithModels([inferenceInstance], [])
   assert.equal(unchanged.changed, false)
   assert.strictEqual(unchanged.instances[0], inferenceInstance)
+
+  const changedModelConfig = {
+    ...missingInferenceConfig,
+    name: 'Qwen3-Reranker-8B',
+    model_path: 'C:/Models/Qwen3-Reranker-8B-Q8_0.gguf',
+    port: 18082,
+  }
+  const staleSummary = {
+    ...inferenceInstance,
+    name: 'Qwen3-Reranker-8B',
+    model: 'Qwen3.6-27B-Q6_K.gguf',
+    port: 18081,
+    config: changedModelConfig,
+  }
+  const synchronized = synchronizeInstanceSummary(staleSummary)
+  assert.equal(synchronized.name, 'Qwen3-Reranker-8B')
+  assert.equal(synchronized.model, 'Qwen3-Reranker-8B-Q8_0.gguf')
+  assert.equal(synchronized.port, 18082)
+  const summaryReconciled = reconcileInstancesWithModels([staleSummary], [])
+  assert.equal(summaryReconciled.changed, true)
+  assert.equal(summaryReconciled.instances[0].model, 'Qwen3-Reranker-8B-Q8_0.gguf')
 `
 
 const bundled = esbuild.buildSync({
@@ -259,7 +283,7 @@ assert.match(startInstanceSource, /normalizeStoredConfig\(/, 'start must normali
 assert.match(startInstanceSource, /config:\s*normalized\.config/, 'start must invoke with normalized config')
 assert.match(startInstanceSource, /set\(/, 'start cleanup must update Zustand state')
 assert.match(startInstanceSource, /await get\(\)\.saveConfig\(\)/, 'start cleanup must be persisted before launch')
-assert.match(startInstanceSource, /await configSaveQueue/, 'start must await an in-flight inventory migration save')
+assert.match(startInstanceSource, /await configSaveCoordinator\.waitForIdle\(\)/, 'start must await an in-flight inventory migration save')
 assert.match(saveConfigSource, /reconcileInstancesWithModels\(/, 'save must normalize every instance')
 
 const bootstrapSource = readSource('src', 'store', 'bootstrap.ts')
