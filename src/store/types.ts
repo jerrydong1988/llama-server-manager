@@ -351,6 +351,7 @@ export interface TelemetrySessionAnalysis {
   max_context_tokens: number
   slot_sample_count: number
   vector_analysis: VectorTelemetryAnalysis | null
+  vector_baseline: VectorTelemetryBaseline | null
 }
 
 export interface VectorTrendBucket {
@@ -376,6 +377,13 @@ export interface VectorTelemetryAnalysis {
   proxySuccessRate: number | null
   proxyFailureRate: number | null
   trend: VectorTrendBucket[]
+}
+
+export interface VectorTelemetryBaseline {
+  sessionCount: number
+  averageInputTokensPerSecond: number | null
+  averageItemsPerSecond: number | null
+  taskDurationP95Ms: number | null
 }
 
 export interface DiagnosticFinding {

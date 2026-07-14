@@ -105,6 +105,7 @@ pub struct TelemetrySessionAnalysis {
     pub max_context_tokens: u32,
     pub slot_sample_count: u32,
     pub vector_analysis: Option<VectorTelemetryAnalysis>,
+    pub vector_baseline: Option<VectorTelemetryBaseline>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -126,6 +127,15 @@ pub struct VectorTelemetryAnalysis {
     pub proxy_success_rate: Option<f64>,
     pub proxy_failure_rate: Option<f64>,
     pub trend: Vec<VectorTrendBucket>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VectorTelemetryBaseline {
+    pub session_count: u32,
+    pub average_input_tokens_per_second: Option<f64>,
+    pub average_items_per_second: Option<f64>,
+    pub task_duration_p95_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1114,6 +1124,12 @@ fn query_session_analysis(
         )
         .map_err(|e| format!("无法查询 slot 分析摘要: {}", e))?;
 
+    let vector_analysis = query_vector_analysis(conn, session_id)?;
+    let vector_baseline = if vector_analysis.is_some() {
+        query_vector_baseline_for_session(conn, session_id)?
+    } else {
+        None
+    };
     Ok(TelemetrySessionAnalysis {
         request_count: request_stats.0.max(0) as u32,
         avg_prompt_tokens: request_stats.1,
@@ -1128,7 +1144,8 @@ fn query_session_analysis(
         avg_cached_slots: slot_stats.2,
         max_context_tokens: slot_stats.3.max(0) as u32,
         slot_sample_count: slot_stats.4.max(0) as u32,
-        vector_analysis: query_vector_analysis(conn, session_id)?,
+        vector_analysis,
+        vector_baseline,
     })
 }
 
@@ -1242,14 +1259,6 @@ fn query_vector_analysis(
     }))
 }
 
-#[derive(Debug, Default)]
-struct VectorBaselineStats {
-    session_count: u32,
-    average_input_tokens_per_second: Option<f64>,
-    average_items_per_second: Option<f64>,
-    task_duration_p95_ms: Option<f64>,
-}
-
 fn average_available(values: &[f64]) -> Option<f64> {
     (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
 }
@@ -1261,7 +1270,7 @@ fn query_vector_baseline(
     model_path: &str,
     workload: ModelWorkload,
     backend: &str,
-) -> Result<VectorBaselineStats, String> {
+) -> Result<VectorTelemetryBaseline, String> {
     let mut statement = conn
         .prepare(
             "SELECT id
@@ -1314,12 +1323,50 @@ fn query_vector_baseline(
         }
     }
 
-    Ok(VectorBaselineStats {
+    Ok(VectorTelemetryBaseline {
         session_count,
         average_input_tokens_per_second: average_available(&input_rates),
         average_items_per_second: average_available(&item_rates),
         task_duration_p95_ms: average_available(&p95_durations),
     })
+}
+
+fn query_vector_baseline_for_session(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<VectorTelemetryBaseline>, String> {
+    let session = conn
+        .query_row(
+            "SELECT model_name, model_path, workload, backend
+             FROM run_sessions WHERE id = ?1",
+            params![session_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| format!("无法读取向量基线会话: {e}"))?;
+    let Some((model_name, model_path, stored_workload, backend)) = session else {
+        return Ok(None);
+    };
+    let workload = ModelWorkload::from_storage(&stored_workload);
+    if !workload.is_vector() {
+        return Ok(None);
+    }
+    query_vector_baseline(
+        conn,
+        session_id,
+        &model_name,
+        &model_path,
+        workload,
+        &backend,
+    )
+    .map(Some)
 }
 
 fn query_session_metric_stats(
@@ -1404,7 +1451,6 @@ fn fmt_diag_percent(value: f64) -> String {
 #[derive(Debug)]
 struct SessionDiagnosticContext {
     model_name: String,
-    model_path: String,
     engine_id: String,
     backend: String,
     workload: ModelWorkload,
@@ -1428,26 +1474,25 @@ fn query_session_diagnostics(
 ) -> Result<Vec<DiagnosticFinding>, String> {
     let session = conn
         .query_row(
-            "SELECT model_name, model_path, engine_id, backend, workload
+                "SELECT model_name, engine_id, backend, workload
                  FROM run_sessions WHERE id = ?1",
             params![session_id],
             |row| {
                 Ok(SessionDiagnosticContext {
-                    model_name: row.get(0)?,
-                    model_path: row.get(1)?,
-                    engine_id: row.get(2)?,
-                    backend: row.get(3)?,
-                    workload: ModelWorkload::from_storage(&row.get::<_, String>(4)?),
+                        model_name: row.get(0)?,
+                        engine_id: row.get(1)?,
+                        backend: row.get(2)?,
+                        workload: ModelWorkload::from_storage(&row.get::<_, String>(3)?),
                 })
             },
         )
         .optional()
         .map_err(|e| format!("无法读取诊断会话: {}", e))?
         .ok_or_else(|| "找不到对应的遥测会话".to_string())?;
-    let analysis = query_session_analysis(conn, session_id)?;
-    let metrics = query_session_metric_stats(conn, session_id)?;
-    if session.workload.is_vector() {
-        return build_vector_diagnostics(conn, session_id, &session, &analysis, &metrics);
+        let analysis = query_session_analysis(conn, session_id)?;
+        let metrics = query_session_metric_stats(conn, session_id)?;
+        if session.workload.is_vector() {
+            return build_vector_diagnostics(&session, &analysis, &metrics);
     }
     let baseline = conn
         .query_row(
@@ -1693,8 +1738,6 @@ fn query_session_diagnostics(
 }
 
 fn build_vector_diagnostics(
-    conn: &Connection,
-    session_id: &str,
     session: &SessionDiagnosticContext,
     analysis: &TelemetrySessionAnalysis,
     metrics: &SessionMetricStats,
@@ -1703,14 +1746,10 @@ fn build_vector_diagnostics(
         .vector_analysis
         .as_ref()
         .ok_or_else(|| "向量会话缺少工作负载分析结果".to_string())?;
-    let baseline = query_vector_baseline(
-        conn,
-        session_id,
-        &session.model_name,
-        &session.model_path,
-        session.workload,
-        &session.backend,
-    )?;
+    let baseline = analysis
+        .vector_baseline
+        .as_ref()
+        .ok_or_else(|| "向量会话缺少历史基线分析结果".to_string())?;
     let mut findings = Vec::new();
 
     if metrics.sample_count == 0 {
@@ -2571,6 +2610,13 @@ mod tests {
         assert_eq!(baseline.average_input_tokens_per_second, Some(100.0));
         assert_eq!(baseline.average_items_per_second, Some(10.0));
         assert_eq!(baseline.task_duration_p95_ms, Some(100.0));
+
+        let session_analysis = query_session_analysis(&conn, "current").unwrap();
+        let exposed = session_analysis
+            .vector_baseline
+            .expect("vector session should expose its filtered baseline");
+        assert_eq!(exposed.session_count, 2);
+        assert_eq!(exposed.average_items_per_second, Some(10.0));
     }
 
     #[test]

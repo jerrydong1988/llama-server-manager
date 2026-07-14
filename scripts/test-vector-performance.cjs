@@ -157,4 +157,27 @@ assert.doesNotMatch(source, /spec_accept|avg_cached_slots|max_context_tokens/, '
 assert.doesNotMatch(source, /requests_total/, 'legacy decode count must not be presented as HTTP requests')
 assert.match(source, /proxyRequestCount/, 'HTTP request count must come from the proxy source')
 
+const performancePageSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'components', 'PerformancePage', 'PerformancePage.tsx'),
+  'utf8',
+)
+assert.match(performancePageSource, /buildPerformanceMode\(/, 'performance page must use the workload view model')
+assert.match(performancePageSource, /data-workload-badge/, 'selected session must render a workload badge')
+assert.match(performancePageSource, /data-vector-source-state/, 'vector source availability must be visible')
+assert.match(performancePageSource, /performanceMode\.kind === 'vector'/, 'primary metrics must branch by workload')
+assert.match(performancePageSource, /buildVectorTrendSeries\(/, 'vector trends must use vector task buckets')
+assert.match(performancePageSource, /workload=\{performanceMode\.workload\}/, 'active task rows must receive the persisted workload')
+assert.match(
+  performancePageSource,
+  /session\.workload === selectedSession\.workload/,
+  'historical comparison must not mix workloads after an instance model switch',
+)
+
+const primitiveSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'components', 'monitoring', 'MonitoringPrimitives.tsx'),
+  'utf8',
+)
+assert.match(primitiveSource, /workload: ModelWorkload/, 'active request primitive must switch fields by workload')
+assert.match(primitiveSource, /workload !== 'inference'/, 'generation-only fields must be gated')
+
 console.log('vector performance view-model tests passed')

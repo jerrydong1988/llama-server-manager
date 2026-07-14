@@ -604,37 +604,37 @@ git commit -m "feat: add vector performance view model"
 - Consumes: frontend performance view model and existing three-column page layout.
 - Produces: workload badge, vector KPIs, two vector trends, source-aware summaries, vector-safe activities and diagnostics.
 
-- [ ] **Step 1: Add failing component integration assertions**
+- [x] **Step 1: Add failing component integration assertions**
 
 Assert the page uses the pure mode helper, renders a workload badge, does not use generation TPS for vector current throughput, displays source-unavailable text, and switches active task fields by workload.
 
-- [ ] **Step 2: Run frontend regression and verify failure**
+- [x] **Step 2: Run frontend regression and verify failure**
 
 Run: `node scripts/test-vector-performance.cjs`
 
 Expected: FAIL on missing PerformancePage integration markers.
 
-- [ ] **Step 3: Render workload-aware primary metrics**
+- [x] **Step 3: Render workload-aware primary metrics**
 
 Keep current inference cards unchanged. For Embedding show input tokens/s, vector items/s, task P95 and queue pressure. For Reranker show input tokens/s, document items/s, task P95 and queue pressure. Add a compact badge beside instance/session identity; use existing badge primitives and theme tokens.
 
-- [ ] **Step 4: Render trends and session summaries**
+- [x] **Step 4: Render trends and session summaries**
 
 Provide input throughput and item throughput trend modes for vector sessions. Show completed items, average input speed and task P50/P95. Add proxy HTTP count/P50/P95/failure rate only when `proxyAvailable` is true. Preserve numeric zero inside measured idle buckets but show an explicit unavailable state when no log source exists.
 
-- [ ] **Step 5: Adapt active tasks and diagnostics**
+- [x] **Step 5: Adapt active tasks and diagnostics**
 
 Vector active rows show slot, elapsed time and workload. Hide generated token count, generation TPS and speculative acceptance. Filter inference-only diagnostics and ensure “指标来源不完整” is visible without blocking resource cards.
 
-- [ ] **Step 6: Keep historical sessions stable across model changes**
+- [x] **Step 6: Keep historical sessions stable across model changes**
 
 All historical cards and comparisons must use `session.workload`; do not classify from the selected instance’s current model. Verify an inference session remains labeled inference after the instance is changed to Reranker.
 
-- [ ] **Step 7: Check responsive/theme behavior**
+- [x] **Step 7: Check responsive/theme behavior**
 
 Extend monitoring theme checks to cover new badges, unavailable states and selected trend controls. Ensure no fixed-width text overlap at desktop and narrow widths and no light-theme low-contrast text.
 
-- [ ] **Step 8: Run regression, theme and production build checks**
+- [x] **Step 8: Run regression, theme and production build checks**
 
 Run:
 
@@ -646,7 +646,7 @@ npm run build
 
 Expected: all tests pass and Vite production build completes without warnings.
 
-- [ ] **Step 9: Commit the vector performance interface**
+- [x] **Step 9: Commit the vector performance interface**
 
 ```bash
 git add src/components/PerformancePage/PerformancePage.tsx src/components/PerformancePage/PerfAnalysis.tsx src/components/monitoring/MonitoringPrimitives.tsx src/components/monitoring/monitoringViewModel.ts scripts/test-vector-performance.cjs scripts/check-monitoring-theme.mjs
