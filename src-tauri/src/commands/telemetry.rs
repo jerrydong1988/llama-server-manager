@@ -1,7 +1,4 @@
-use crate::commands::vector_metrics::{
-    aggregate_log_buckets, summarize_vector_events, VectorEventPoint, VectorEventSource,
-    VectorTrendBucket,
-};
+use crate::commands::vector_metrics::{VectorEventSource, VectorTrendBucket};
 use crate::models::{InstanceConfig, SystemMetrics};
 use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -10,6 +7,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SCHEMA_VERSION: i64 = 5;
+const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TelemetryOverview {
@@ -359,6 +357,8 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             ON vector_activity_events(session_id, completed_at);
         CREATE INDEX IF NOT EXISTS idx_vector_activity_session_source_completed
             ON vector_activity_events(session_id, source, completed_at);
+        CREATE INDEX IF NOT EXISTS idx_vector_activity_session_source_duration
+            ON vector_activity_events(session_id, source, duration_ms);
         "#,
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
@@ -764,6 +764,15 @@ fn record_vector_activity_in_connection(
     if !record.workload.is_vector() {
         return Err("vector activity requires a vector workload".to_string());
     }
+    let session_workload = session_workload_from_connection(conn, session_id)?
+        .ok_or_else(|| "vector activity session does not exist".to_string())?;
+    if session_workload != record.workload {
+        return Err(format!(
+            "vector activity workload {} does not match session workload {}",
+            record.workload.as_str(),
+            session_workload.as_str()
+        ));
+    }
     if record.source_event_id < 0 {
         return Err("vector activity source event id must be non-negative".to_string());
     }
@@ -1153,6 +1162,208 @@ fn query_vector_analysis(
     conn: &Connection,
     session_id: &str,
 ) -> Result<Option<VectorTelemetryAnalysis>, String> {
+    query_vector_analysis_inner(conn, session_id, true)
+}
+
+#[derive(Debug, Default)]
+struct VectorSourceTotals {
+    event_count: u64,
+    item_count: u64,
+    input_tokens: Option<u64>,
+    success_count: u64,
+    first_started_at: Option<i64>,
+    last_completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VectorQueryScope<'a> {
+    session_id: &'a str,
+    source: VectorEventSource,
+    workload: ModelWorkload,
+    range_start: i64,
+    range_end: i64,
+}
+
+fn query_vector_source_totals(
+    conn: &Connection,
+    scope: VectorQueryScope<'_>,
+) -> Result<VectorSourceTotals, String> {
+    let values = conn
+        .query_row(
+            "SELECT COUNT(*), COALESCE(SUM(item_count), 0), SUM(input_tokens),
+                    COALESCE(SUM(CASE
+                        WHEN error_text IS NULL AND http_status >= 200 AND http_status < 300
+                        THEN 1 ELSE 0 END), 0),
+                    MIN(started_at), MAX(completed_at)
+             FROM vector_activity_events
+             WHERE session_id = ?1 AND source = ?2 AND workload = ?3
+               AND completed_at >= ?4 AND completed_at <= ?5
+               AND duration_ms >= 0",
+            params![
+                scope.session_id,
+                scope.source.as_str(),
+                scope.workload.as_str(),
+                scope.range_start,
+                scope.range_end
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Option<i64>>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("无法汇总向量活动: {e}"))?;
+    Ok(VectorSourceTotals {
+        event_count: u64::try_from(values.0).map_err(|_| "向量活动数量无效".to_string())?,
+        item_count: u64::try_from(values.1).map_err(|_| "向量活动项目总数无效".to_string())?,
+        input_tokens: values
+            .2
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| "向量活动输入 token 总数无效".to_string())?,
+        success_count: u64::try_from(values.3).map_err(|_| "向量代理成功数无效".to_string())?,
+        first_started_at: values.4,
+        last_completed_at: values.5,
+    })
+}
+
+fn query_vector_duration_percentile(
+    conn: &Connection,
+    scope: VectorQueryScope<'_>,
+    event_count: u64,
+    percentile: u64,
+) -> Result<Option<f64>, String> {
+    if event_count == 0 || percentile == 0 || percentile > 100 {
+        return Ok(None);
+    }
+    let rank = ((u128::from(event_count) * u128::from(percentile)).saturating_add(99) / 100)
+        .max(1)
+        .saturating_sub(1);
+    let offset = i64::try_from(rank).map_err(|_| "向量分位数样本过多".to_string())?;
+    let value = conn
+        .query_row(
+            "SELECT duration_ms
+             FROM vector_activity_events
+             WHERE session_id = ?1 AND source = ?2 AND workload = ?3
+               AND completed_at >= ?4 AND completed_at <= ?5
+               AND duration_ms >= 0
+             ORDER BY duration_ms
+             LIMIT 1 OFFSET ?6",
+            params![
+                scope.session_id,
+                scope.source.as_str(),
+                scope.workload.as_str(),
+                scope.range_start,
+                scope.range_end,
+                offset
+            ],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()
+        .map_err(|e| format!("无法读取向量活动分位数: {e}"))?;
+    Ok(value.filter(|duration| duration.is_finite() && *duration >= 0.0))
+}
+
+fn query_vector_trend(
+    conn: &Connection,
+    session_id: &str,
+    workload: ModelWorkload,
+    range_start: i64,
+    range_end: i64,
+    bucket_ms: i64,
+    input_tokens_available: bool,
+) -> Result<Vec<VectorTrendBucket>, String> {
+    let range_ms = range_end.saturating_sub(range_start);
+    let bucket_count = range_ms.saturating_add(bucket_ms - 1) / bucket_ms;
+    let bucket_count =
+        usize::try_from(bucket_count).map_err(|_| "向量趋势时间范围过大".to_string())?;
+    if bucket_count == 0 || bucket_count > 120 {
+        return Ok(Vec::new());
+    }
+    let last_bucket = i64::try_from(bucket_count.saturating_sub(1))
+        .map_err(|_| "向量趋势桶数量无效".to_string())?;
+    let mut buckets = (0..bucket_count)
+        .map(|index| {
+            let timestamp = range_start.saturating_add((index as i64).saturating_mul(bucket_ms));
+            VectorTrendBucket {
+                timestamp,
+                input_tokens_per_second: input_tokens_available.then_some(0.0),
+                items_per_second: 0.0,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut statement = conn
+        .prepare(
+            "SELECT CASE WHEN completed_at >= ?5 THEN ?7
+                         ELSE (completed_at - ?4) / ?6 END AS bucket_index,
+                    COALESCE(SUM(item_count), 0), SUM(input_tokens)
+             FROM vector_activity_events
+             WHERE session_id = ?1 AND source = ?3 AND workload = ?2
+               AND completed_at >= ?4 AND completed_at <= ?5
+               AND duration_ms >= 0
+             GROUP BY bucket_index
+             ORDER BY bucket_index",
+        )
+        .map_err(|e| format!("无法准备向量趋势查询: {e}"))?;
+    let rows = statement
+        .query_map(
+            params![
+                session_id,
+                workload.as_str(),
+                VectorEventSource::Log.as_str(),
+                range_start,
+                range_end,
+                bucket_ms,
+                last_bucket
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("无法查询向量趋势: {e}"))?;
+    for row in rows {
+        let (index, item_count, input_tokens) =
+            row.map_err(|e| format!("无法读取向量趋势: {e}"))?;
+        let Ok(index) = usize::try_from(index) else {
+            continue;
+        };
+        let Some(bucket) = buckets.get_mut(index) else {
+            continue;
+        };
+        let bucket_end = bucket.timestamp.saturating_add(bucket_ms).min(range_end);
+        let seconds = (bucket_end.saturating_sub(bucket.timestamp)) as f64 / 1_000.0;
+        if seconds <= 0.0 {
+            continue;
+        }
+        let item_count =
+            u64::try_from(item_count).map_err(|_| "向量趋势项目总数无效".to_string())?;
+        bucket.items_per_second = item_count as f64 / seconds;
+        if input_tokens_available {
+            let input_tokens = input_tokens
+                .map(u64::try_from)
+                .transpose()
+                .map_err(|_| "向量趋势输入 token 总数无效".to_string())?
+                .unwrap_or(0);
+            bucket.input_tokens_per_second = Some(input_tokens as f64 / seconds);
+        }
+    }
+    Ok(buckets)
+}
+
+fn query_vector_analysis_inner(
+    conn: &Connection,
+    session_id: &str,
+    include_trend: bool,
+) -> Result<Option<VectorTelemetryAnalysis>, String> {
     let session = conn
         .query_row(
             "SELECT workload, started_at, stopped_at FROM run_sessions WHERE id = ?1",
@@ -1182,79 +1393,98 @@ fn query_vector_analysis(
     let range_ms = range_end.saturating_sub(range_start).max(1_000);
     let bucket_ms = range_ms.saturating_add(119) / 120;
     let bucket_ms = bucket_ms.max(1_000);
-    let mut statement = conn
-        .prepare(
-            "SELECT source, completed_at, duration_ms, item_count, input_tokens,
-                    http_status, error_text
-             FROM vector_activity_events
-             WHERE session_id = ?1 AND completed_at >= ?2 AND completed_at < ?3
-             ORDER BY completed_at",
-        )
-        .map_err(|e| format!("无法准备向量活动查询: {e}"))?;
-    let rows = statement
-        .query_map(params![session_id, range_start, range_end], |row| {
-            let source = row.get::<_, String>(0)?;
-            let http_status = row.get::<_, Option<u16>>(5)?;
-            let error_text = row.get::<_, Option<String>>(6)?;
-            Ok((
-                source,
-                row.get::<_, i64>(1)?,
-                row.get::<_, f64>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, Option<i64>>(4)?,
-                http_status,
-                error_text,
-            ))
-        })
-        .map_err(|e| format!("无法查询向量活动: {e}"))?;
-    let mut events = Vec::new();
-    for row in rows {
-        let (source, completed_at, duration_ms, item_count, input_tokens, http_status, error) =
-            row.map_err(|e| format!("无法读取向量活动: {e}"))?;
-        let Some(source) = VectorEventSource::from_storage(&source) else {
-            continue;
-        };
-        let Ok(item_count) = u64::try_from(item_count) else {
-            continue;
-        };
-        events.push(VectorEventPoint {
-            source,
-            completed_at,
-            duration_ms,
-            item_count,
-            input_tokens: input_tokens.and_then(|value| u64::try_from(value).ok()),
-            http_status,
-            has_error: error.is_some()
-                || http_status.is_some_and(|status| !(200..300).contains(&status)),
-        });
-    }
-    let window_seconds = range_ms as f64 / 1_000.0;
-    let summary = summarize_vector_events(&events, window_seconds);
-    let trend = if summary.log.available {
-        aggregate_log_buckets(&events, range_start, range_end, bucket_ms)
+    let log_scope = VectorQueryScope {
+        session_id,
+        source: VectorEventSource::Log,
+        workload,
+        range_start,
+        range_end,
+    };
+    let proxy_scope = VectorQueryScope {
+        session_id,
+        source: VectorEventSource::Proxy,
+        workload,
+        range_start,
+        range_end,
+    };
+    let log = query_vector_source_totals(conn, log_scope)?;
+    let proxy = query_vector_source_totals(conn, proxy_scope)?;
+    let log_available = log.event_count > 0;
+    let proxy_available = proxy.event_count > 0;
+    let rate_end = if stopped_at.is_some() {
+        log.last_completed_at.unwrap_or(range_end)
+    } else {
+        range_end
+    };
+    let rate_start = log
+        .first_started_at
+        .unwrap_or(rate_end)
+        .max(rate_end.saturating_sub(VECTOR_RATE_WINDOW_MS));
+    let rate_window_ms = rate_end.saturating_sub(rate_start).max(1_000);
+    let rate_window_seconds = rate_window_ms as f64 / 1_000.0;
+    let rate_log = if log_available {
+        query_vector_source_totals(
+            conn,
+            VectorQueryScope {
+                session_id,
+                source: VectorEventSource::Log,
+                workload,
+                range_start: rate_start,
+                range_end: rate_end,
+            },
+        )?
+    } else {
+        VectorSourceTotals::default()
+    };
+    let task_duration_p50_ms =
+        query_vector_duration_percentile(conn, log_scope, log.event_count, 50)?;
+    let task_duration_p95_ms =
+        query_vector_duration_percentile(conn, log_scope, log.event_count, 95)?;
+    let proxy_duration_p50_ms =
+        query_vector_duration_percentile(conn, proxy_scope, proxy.event_count, 50)?;
+    let proxy_duration_p95_ms =
+        query_vector_duration_percentile(conn, proxy_scope, proxy.event_count, 95)?;
+    let trend = if include_trend && log_available {
+        query_vector_trend(
+            conn,
+            session_id,
+            workload,
+            range_start,
+            range_end,
+            bucket_ms,
+            log.input_tokens.is_some(),
+        )?
     } else {
         Vec::new()
     };
+    let proxy_failure_count = proxy.event_count.saturating_sub(proxy.success_count);
 
     Ok(Some(VectorTelemetryAnalysis {
         workload: workload.as_str().to_string(),
-        log_available: summary.log.available,
-        proxy_available: summary.proxy.available,
-        completed_items: summary.log.available.then_some(summary.log.completed_items),
-        input_tokens: summary.log.input_tokens,
-        average_input_tokens_per_second: summary.log.average_input_tokens_per_second,
-        average_items_per_second: summary.log.average_items_per_second,
-        task_duration_p50_ms: summary.log.task_duration_p50_ms,
-        task_duration_p95_ms: summary.log.task_duration_p95_ms,
-        proxy_request_count: summary
-            .proxy
-            .available
-            .then_some(summary.proxy.request_count),
-        proxy_item_count: summary.proxy.available.then_some(summary.proxy.item_count),
-        proxy_duration_p50_ms: summary.proxy.http_duration_p50_ms,
-        proxy_duration_p95_ms: summary.proxy.http_duration_p95_ms,
-        proxy_success_rate: summary.proxy.success_rate,
-        proxy_failure_rate: summary.proxy.failure_rate,
+        log_available,
+        proxy_available,
+        completed_items: log_available.then_some(log.item_count),
+        input_tokens: log.input_tokens,
+        average_input_tokens_per_second: if rate_log.event_count == 0 && log.input_tokens.is_some()
+        {
+            Some(0.0)
+        } else {
+            rate_log
+                .input_tokens
+                .map(|tokens| tokens as f64 / rate_window_seconds)
+        },
+        average_items_per_second: log_available
+            .then_some(rate_log.item_count as f64 / rate_window_seconds),
+        task_duration_p50_ms,
+        task_duration_p95_ms,
+        proxy_request_count: proxy_available.then_some(proxy.event_count),
+        proxy_item_count: proxy_available.then_some(proxy.item_count),
+        proxy_duration_p50_ms,
+        proxy_duration_p95_ms,
+        proxy_success_rate: proxy_available
+            .then_some(proxy.success_count as f64 / proxy.event_count as f64),
+        proxy_failure_rate: proxy_available
+            .then_some(proxy_failure_count as f64 / proxy.event_count as f64),
         trend,
     }))
 }
@@ -1278,6 +1508,7 @@ fn query_vector_baseline(
              WHERE id != ?1
                AND workload = ?2
                AND backend = ?3
+               AND stopped_at IS NOT NULL
                AND (model_path = ?4 OR model_name = ?5)
              ORDER BY started_at DESC
              LIMIT 50",
@@ -1305,7 +1536,7 @@ fn query_vector_baseline(
     let mut p95_durations = Vec::new();
     let mut session_count = 0_u32;
     for historical_id in session_ids {
-        let Some(analysis) = query_vector_analysis(conn, &historical_id)? else {
+        let Some(analysis) = query_vector_analysis_inner(conn, &historical_id, false)? else {
             continue;
         };
         if !analysis.log_available {
@@ -1474,25 +1705,25 @@ fn query_session_diagnostics(
 ) -> Result<Vec<DiagnosticFinding>, String> {
     let session = conn
         .query_row(
-                "SELECT model_name, engine_id, backend, workload
+            "SELECT model_name, engine_id, backend, workload
                  FROM run_sessions WHERE id = ?1",
             params![session_id],
             |row| {
                 Ok(SessionDiagnosticContext {
-                        model_name: row.get(0)?,
-                        engine_id: row.get(1)?,
-                        backend: row.get(2)?,
-                        workload: ModelWorkload::from_storage(&row.get::<_, String>(3)?),
+                    model_name: row.get(0)?,
+                    engine_id: row.get(1)?,
+                    backend: row.get(2)?,
+                    workload: ModelWorkload::from_storage(&row.get::<_, String>(3)?),
                 })
             },
         )
         .optional()
         .map_err(|e| format!("无法读取诊断会话: {}", e))?
         .ok_or_else(|| "找不到对应的遥测会话".to_string())?;
-        let analysis = query_session_analysis(conn, session_id)?;
-        let metrics = query_session_metric_stats(conn, session_id)?;
-        if session.workload.is_vector() {
-            return build_vector_diagnostics(&session, &analysis, &metrics);
+    let analysis = query_session_analysis(conn, session_id)?;
+    let metrics = query_session_metric_stats(conn, session_id)?;
+    if session.workload.is_vector() {
+        return build_vector_diagnostics(&session, &analysis, &metrics);
     }
     let baseline = conn
         .query_row(
@@ -2418,6 +2649,11 @@ mod tests {
         assert!(
             record_vector_activity_in_connection(&conn, "session-vector-event", &invalid).is_err()
         );
+        invalid.workload = ModelWorkload::Reranker;
+        let mismatch =
+            record_vector_activity_in_connection(&conn, "session-vector-event", &invalid)
+                .unwrap_err();
+        assert!(mismatch.contains("session workload"));
         invalid.workload = ModelWorkload::Embedding;
         invalid.duration_ms = f64::NAN;
         assert!(
@@ -2500,7 +2736,8 @@ mod tests {
         assert!(vector.log_available);
         assert_eq!(vector.completed_items, Some(4));
         assert_eq!(vector.input_tokens, Some(40));
-        assert_eq!(vector.average_items_per_second, Some(0.4));
+        assert_eq!(vector.average_input_tokens_per_second, Some(10.0));
+        assert_eq!(vector.average_items_per_second, Some(1.0));
         assert!(vector.proxy_available);
         assert_eq!(vector.proxy_request_count, Some(1));
         assert_eq!(vector.proxy_item_count, Some(4));
@@ -2509,6 +2746,56 @@ mod tests {
 
         let inference = query_session_analysis(&conn, "analysis-inference").unwrap();
         assert!(inference.vector_analysis.is_none());
+    }
+
+    #[test]
+    fn vector_analysis_aggregates_concurrent_buckets_and_exact_percentiles() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        seed_vector_session(
+            &conn,
+            "aggregate-vector",
+            "C:/models/embed.gguf",
+            "cpu",
+            ModelWorkload::Embedding,
+        );
+        for (source_event_id, started_at, completed_at, duration_ms, item_count, input_tokens) in [
+            (1, 1_000, 1_100, 10.0, 2, 20),
+            (2, 1_000, 1_900, 20.0, 3, 30),
+            (3, 2_000, 2_100, 30.0, 1, 5),
+            (4, 2_000, 2_200, 40.0, 1, 5),
+        ] {
+            record_vector_activity_in_connection(
+                &conn,
+                "aggregate-vector",
+                &VectorActivityRecord {
+                    source: VectorEventSource::Log,
+                    source_event_id,
+                    workload: ModelWorkload::Embedding,
+                    endpoint: None,
+                    started_at,
+                    completed_at,
+                    duration_ms,
+                    item_count,
+                    input_tokens: Some(input_tokens),
+                    http_status: None,
+                    error_text: None,
+                },
+            )
+            .unwrap();
+        }
+
+        let analysis = query_vector_analysis(&conn, "aggregate-vector")
+            .unwrap()
+            .unwrap();
+        assert_eq!(analysis.completed_items, Some(7));
+        assert_eq!(analysis.input_tokens, Some(60));
+        assert_eq!(analysis.task_duration_p50_ms, Some(20.0));
+        assert_eq!(analysis.task_duration_p95_ms, Some(40.0));
+        assert_eq!(analysis.trend[1].items_per_second, 5.0);
+        assert_eq!(analysis.trend[1].input_tokens_per_second, Some(50.0));
+        assert_eq!(analysis.trend[2].items_per_second, 2.0);
+        assert_eq!(analysis.trend[2].input_tokens_per_second, Some(10.0));
     }
 
     #[test]
@@ -2564,7 +2851,7 @@ mod tests {
     fn vector_baseline_requires_matching_model_workload_and_backend() {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
-        for id in ["current", "matching-a", "matching-b"] {
+        for id in ["current", "matching-a", "matching-b", "active-match"] {
             seed_vector_session(
                 &conn,
                 id,
@@ -2590,11 +2877,17 @@ mod tests {
         for (id, workload) in [
             ("matching-a", ModelWorkload::Embedding),
             ("matching-b", ModelWorkload::Embedding),
+            ("active-match", ModelWorkload::Embedding),
             ("wrong-workload", ModelWorkload::Reranker),
             ("wrong-backend", ModelWorkload::Embedding),
         ] {
             seed_vector_log_event(&conn, id, workload, 1, 1_000, 100, 100.0);
         }
+        conn.execute(
+            "UPDATE run_sessions SET stopped_at = NULL WHERE id = 'active-match'",
+            [],
+        )
+        .unwrap();
 
         let baseline = query_vector_baseline(
             &conn,
@@ -2607,8 +2900,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(baseline.session_count, 2);
-        assert_eq!(baseline.average_input_tokens_per_second, Some(100.0));
-        assert_eq!(baseline.average_items_per_second, Some(10.0));
+        assert_eq!(baseline.average_input_tokens_per_second, Some(250.0));
+        assert_eq!(baseline.average_items_per_second, Some(25.0));
         assert_eq!(baseline.task_duration_p95_ms, Some(100.0));
 
         let session_analysis = query_session_analysis(&conn, "current").unwrap();
@@ -2616,7 +2909,86 @@ mod tests {
             .vector_baseline
             .expect("vector session should expose its filtered baseline");
         assert_eq!(exposed.session_count, 2);
-        assert_eq!(exposed.average_items_per_second, Some(10.0));
+        assert_eq!(exposed.average_items_per_second, Some(25.0));
+    }
+
+    #[test]
+    fn vector_rates_use_the_recent_observed_work_window() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        seed_vector_session(
+            &conn,
+            "work-window",
+            "C:/models/embed.gguf",
+            "cpu",
+            ModelWorkload::Embedding,
+        );
+        conn.execute(
+            "UPDATE run_sessions SET stopped_at = 100000 WHERE id = 'work-window'",
+            [],
+        )
+        .unwrap();
+        record_vector_activity_in_connection(
+            &conn,
+            "work-window",
+            &VectorActivityRecord {
+                source: VectorEventSource::Log,
+                source_event_id: 1,
+                workload: ModelWorkload::Embedding,
+                endpoint: None,
+                started_at: 50_000,
+                completed_at: 51_000,
+                duration_ms: 1_000.0,
+                item_count: 10,
+                input_tokens: Some(100),
+                http_status: None,
+                error_text: None,
+            },
+        )
+        .unwrap();
+
+        let analysis = query_vector_analysis(&conn, "work-window")
+            .unwrap()
+            .unwrap();
+        assert_eq!(analysis.completed_items, Some(10));
+        assert_eq!(analysis.average_input_tokens_per_second, Some(100.0));
+        assert_eq!(analysis.average_items_per_second, Some(10.0));
+    }
+
+    #[test]
+    fn vector_analysis_includes_an_event_completed_at_session_stop() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        seed_vector_session(
+            &conn,
+            "boundary",
+            "C:/models/embed.gguf",
+            "cpu",
+            ModelWorkload::Embedding,
+        );
+        record_vector_activity_in_connection(
+            &conn,
+            "boundary",
+            &VectorActivityRecord {
+                source: VectorEventSource::Log,
+                source_event_id: 1,
+                workload: ModelWorkload::Embedding,
+                endpoint: None,
+                started_at: 9_000,
+                completed_at: 10_000,
+                duration_ms: 1_000.0,
+                item_count: 2,
+                input_tokens: Some(20),
+                http_status: None,
+                error_text: None,
+            },
+        )
+        .unwrap();
+
+        let analysis = query_vector_analysis(&conn, "boundary").unwrap().unwrap();
+        assert_eq!(analysis.completed_items, Some(2));
+        assert_eq!(analysis.input_tokens, Some(20));
+        assert_eq!(analysis.task_duration_p95_ms, Some(1_000.0));
     }
 
     #[test]
@@ -2736,6 +3108,7 @@ mod tests {
         for index_name in [
             "idx_vector_activity_session_completed",
             "idx_vector_activity_session_source_completed",
+            "idx_vector_activity_session_source_duration",
         ] {
             let count: i64 = conn
                 .query_row(

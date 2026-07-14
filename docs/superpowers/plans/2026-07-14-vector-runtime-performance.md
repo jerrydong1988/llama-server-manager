@@ -665,21 +665,21 @@ git commit -m "feat: display vector runtime performance"
 - Consumes: final verified vector performance behavior.
 - Produces: aligned repository and offline in-app documentation without release-validation content.
 
-- [ ] **Step 1: Add failing guide checks**
+- [x] **Step 1: Add failing guide checks**
 
 Require the performance sections to mention Embedding/Reranker workload metrics, log-versus-proxy source meaning, direct-call coverage and unavailable-state behavior in both Chinese and English where the document is bilingual.
 
-- [ ] **Step 2: Run guide check and verify failure**
+- [x] **Step 2: Run guide check and verify failure**
 
 Run: `node scripts/check-guide.cjs`
 
 Expected: FAIL because current guide describes only tokens/s and generation request analysis.
 
-- [ ] **Step 3: Update GUIDE, README and in-app guide**
+- [x] **Step 3: Update GUIDE, README and in-app guide**
 
 Explain that generation uses tokens/s, Embedding uses input tokens/s and vector items/s, Reranker uses input tokens/s and document items/s. Clarify that direct calls provide task metrics from logs while proxy calls add HTTP count/latency/failure rate. Update the performance walkthrough description. `GuidePage.tsx` already imports `GUIDE.md?raw`, so do not create a second in-app content source. Keep the existing performance screenshot when its generation-model state remains accurate; do not fabricate a vector screenshot without a verified live instance.
 
-- [ ] **Step 4: Run guide, encoding and release checks**
+- [x] **Step 4: Run guide, encoding and release checks**
 
 Run:
 
@@ -691,24 +691,23 @@ npm run check:release
 
 Expected: documentation checks and all release regressions pass.
 
-- [ ] **Step 5: Commit documentation**
+- [x] **Step 5: Commit documentation**
 
 ```bash
 git add GUIDE.md README.md src/components/guide/guideTour.ts scripts/check-guide.cjs
 git commit -m "docs: explain vector performance monitoring"
 ```
 
-### Task 10: Integration Verification, Audit, and Stage-Two Design
+### Task 10: Integration Verification and Audit
 
 **Files:**
-- Create after stage-one verification: `docs/superpowers/specs/2026-07-14-vector-quality-evaluation-design.md`
 - Modify implementation files only if verification exposes a defect.
 
 **Interfaces:**
 - Consumes: all stage-one implementation tasks.
-- Produces: release-ready evidence for runtime monitoring and a discussion-only quality-evaluation design.
+- Produces: release-ready evidence for runtime monitoring.
 
-- [ ] **Step 1: Run formatter checks**
+- [x] **Step 1: Run formatter checks**
 
 Run:
 
@@ -718,7 +717,7 @@ cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
 
 The repository does not install Prettier or define a frontend formatter command. Do not add a formatter dependency merely for this task; rely on TypeScript, production build, source checks and existing release scripts.
 
-- [ ] **Step 2: Run the full frontend release suite**
+- [x] **Step 2: Run the full frontend release suite**
 
 Run:
 
@@ -729,7 +728,7 @@ npm run build
 
 Expected: all regression, guide, encoding, cross-platform and TypeScript checks pass; production build succeeds.
 
-- [ ] **Step 3: Run the complete Rust suite**
+- [x] **Step 3: Run the complete Rust suite**
 
 Run:
 
@@ -740,19 +739,19 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -
 
 Expected: every test passes and Clippy reports no warnings.
 
-- [ ] **Step 4: Verify migration and source semantics with a no-model integration fixture**
+- [x] **Step 4: Verify migration and source semantics with a no-model integration fixture**
 
 Use an in-memory/temp SQLite database, representative log lines and an Axum test upstream. Prove: old DB upgrades; direct vector logs create nonzero task metrics; proxy request adds one HTTP event; log/proxy do not double count; failure produces proxy failure rate; no private request content exists in persisted rows.
 
-- [ ] **Step 5: Perform visual verification**
+- [x] **Step 5: Perform visual verification**
 
 Start the app/dev server as supported by the repository. Use browser automation or the desktop app to inspect dark/light themes and desktop/narrow widths. Check inference, Embedding, Reranker, only-log, only-proxy and unavailable states. Capture screenshots only as test evidence unless documentation assets are intentionally updated.
 
-- [ ] **Step 6: Perform a focused final code audit**
+- [x] **Step 6: Perform a focused final code audit**
 
 Review the complete diff for schema migration safety, task parser bounds, proxy body privacy, request-body size handling, source double counting, workload drift, unavailable-vs-zero semantics, generation regressions, cross-platform paths and warning-free code. Fix every release-impacting issue and rerun affected suites.
 
-- [ ] **Step 7: Check repository hygiene and commit final fixes**
+- [x] **Step 7: Check repository hygiene and commit final fixes**
 
 Run:
 
@@ -763,13 +762,3 @@ git log --oneline --decorate -12
 ```
 
 Remove temporary databases, logs, screenshots, generated reports and helper files that are not deliverables. Commit only intentional final fixes.
-
-- [ ] **Step 8: Write the stage-two quality evaluation design only**
-
-After stage one passes, write a separate design covering: Embedding retrieval datasets and corpus/query relevance structure; Reranker candidate-set inputs; Recall@K, Precision@K, MRR, MAP and NDCG definitions; dataset import and privacy; deterministic run manifests; warm-up/repetition; hardware/model/backend identity; baseline comparison; result storage; cancellation; offline operation; UI workflow; export; testing and phased implementation options.
-
-Do not implement quality evaluation code, download a benchmark dataset or alter runtime metrics based on this design until the user approves it.
-
-- [ ] **Step 9: Self-review stage-two proposal for decision readiness**
-
-The proposal must compare at least three implementation scopes (minimal built-in evaluator, extensible local benchmark workspace, external-tool integration), state time/storage/privacy tradeoffs, and recommend one option without treating paid services or cloud access as required.

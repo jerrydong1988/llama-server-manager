@@ -37,7 +37,8 @@ type MetricsEvent = {
     prompt_tokens_per_sec?: number
     prompt_tokens?: number
     gen_tokens?: number
-    requests?: number
+    decode_calls_total?: number
+    max_tokens_observed?: number
     requests_processing?: number
     requests_deferred?: number
     busy_slots_per_decode?: number
@@ -595,7 +596,12 @@ function filterSamplesByRange(samples: TelemetrySampleSummary[], range: '1m' | '
 
 function buildSessionBenchmark(selectedSession: TelemetrySessionSummary | undefined, sessions: TelemetrySessionSummary[]): SessionBenchmark {
   if (!selectedSession) return emptySessionBenchmark()
-  const history = sessions.filter(session => session.id !== selectedSession.id && session.stopped_at && session.sample_count > 0)
+  const history = sessions.filter(session =>
+    session.workload === selectedSession.workload &&
+    session.id !== selectedSession.id &&
+    session.stopped_at &&
+    session.sample_count > 0
+  )
   const sameConfig = history.filter(session =>
     session.model_name === selectedSession.model_name &&
     session.engine_id === selectedSession.engine_id &&

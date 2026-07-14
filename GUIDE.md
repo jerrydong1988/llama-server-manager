@@ -384,8 +384,8 @@ Performance Monitoring combines system signals, instance metrics, slots, log tim
 1. 从左侧选择正在运行的实例，工作负载徽标会显示本次会话实际记录的服务类型。
 2. CPU、内存、GPU 和显存是三类工作负载共用的资源信号。
 3. 生成模型查看输出 tokens/s、提示处理速度、排队深度和忙碌槽位。
-4. Embedding：输入 tokens/s、向量项/s、任务耗时 P50 / P95 和已完成向量项数。
-5. Reranker：输入 tokens/s、文档项/s、任务耗时 P50 / P95 和已完成文档项数。
+4. Embedding：输入 tokens/s、向量项/s 使用最近 60 秒工作窗口，并显示任务耗时 P50 / P95 和整段会话已完成向量项数。
+5. Reranker：输入 tokens/s、文档项/s 使用最近 60 秒工作窗口，并显示任务耗时 P50 / P95 和整段会话已完成文档项数。
 6. 任务日志覆盖应用内代理请求和绕过代理的直连请求，用于统计任务吞吐与耗时；代理请求统计仅覆盖经过实例路由的 HTTP 请求，并补充请求数、失败率及请求耗时。
 7. 页面会分别标明日志来源和代理来源。某个来源没有可确认的数据时显示“不可用”或 `--`，不会用 `0` 冒充已测量结果；已测量时间桶内确实空闲时才显示零值。
 8. 历史基线只比较相同模型、工作负载和后端的会话。向量服务的诊断聚焦资源压力、吞吐和 P95 变化，不显示生成模型专用的 KV 缓存、上下文和解码建议。
@@ -393,8 +393,8 @@ Performance Monitoring combines system signals, instance metrics, slots, log tim
 1. Select a running instance; the workload badge shows the service type recorded for that session.
 2. CPU, memory, GPU, and VRAM are common resource signals across all workloads.
 3. Generation workloads show output tokens/s, prompt processing speed, queue depth, and busy slots.
-4. Embedding: input tokens/s and vector items/s, plus task P50/P95 latency and completed vector items.
-5. Reranker: input tokens/s and document items/s, plus task P50/P95 latency and completed document items.
+4. Embedding: input tokens/s and vector items/s over the latest 60-second work window, plus task P50/P95 latency and session-wide completed vector items.
+5. Reranker: input tokens/s and document items/s over the latest 60-second work window, plus task P50/P95 latency and session-wide completed document items.
 6. Task logs cover both proxied requests and direct requests that bypass the app proxy, providing task throughput and latency. Proxied request telemetry covers only HTTP traffic routed by the app and adds request count, failure rate, and request latency.
 7. Log and proxy source availability are shown separately. Missing evidence is labeled unavailable or `--`, never presented as a measured zero; zero is used only for an observed idle bucket.
 8. Historical baselines compare sessions with the same model, workload, and backend. Vector diagnostics focus on resource pressure, throughput, and P95 changes without generation-only KV-cache, context, or decoding advice.

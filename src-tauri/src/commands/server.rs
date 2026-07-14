@@ -924,6 +924,7 @@ pub async fn start_server(
                 start_time,
                 executable_path: executable_path.to_string_lossy().to_string(),
                 telemetry_session_id: telemetry_session_id.clone(),
+                workload: workload.as_str().to_string(),
             },
         );
     }
@@ -2875,6 +2876,7 @@ mod perf_parser_tests {
             start_time: 100,
             executable_path: "C:\\tools\\llama-server.exe".into(),
             telemetry_session_id: None,
+            workload: "inference".into(),
         };
 
         assert!(!process_identity_matches(

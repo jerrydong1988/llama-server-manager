@@ -169,7 +169,7 @@ assert.match(performancePageSource, /buildVectorTrendSeries\(/, 'vector trends m
 assert.match(performancePageSource, /workload=\{performanceMode\.workload\}/, 'active task rows must receive the persisted workload')
 assert.match(
   performancePageSource,
-  /session\.workload === selectedSession\.workload/,
+  /const history = sessions\.filter\(session =>\s*session\.workload === selectedSession\.workload\s*&&/,
   'historical comparison must not mix workloads after an instance model switch',
 )
 

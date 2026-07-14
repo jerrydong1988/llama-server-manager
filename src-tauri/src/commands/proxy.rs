@@ -86,6 +86,35 @@ fn vector_endpoint_matches_target(
     }
 }
 
+fn instance_workload(config: &InstanceConfig) -> ModelWorkload {
+    if config.reranking {
+        ModelWorkload::Reranker
+    } else if config.embedding {
+        ModelWorkload::Embedding
+    } else {
+        ModelWorkload::Inference
+    }
+}
+
+fn stored_instance_workload(config: &InstanceConfig, stored_workload: &str) -> ModelWorkload {
+    if stored_workload.trim().is_empty() {
+        instance_workload(config)
+    } else {
+        ModelWorkload::from_storage(stored_workload)
+    }
+}
+
+fn stored_target_matches_endpoint(
+    config: &InstanceConfig,
+    stored_workload: &str,
+    endpoint_workload: Option<ModelWorkload>,
+) -> bool {
+    vector_endpoint_matches_target(
+        endpoint_workload,
+        stored_instance_workload(config, stored_workload),
+    )
+}
+
 struct ResolvedProxyTarget {
     public: ProxyTarget,
     api_key: String,
@@ -328,6 +357,7 @@ fn list_proxy_targets_inner(state: &AppState) -> Vec<ProxyTarget> {
 fn resolve_proxy_target(
     state: &AppState,
     requested_model: Option<&str>,
+    endpoint_workload: Option<ModelWorkload>,
 ) -> Option<ResolvedProxyTarget> {
     let proxy_config = state.proxy_config.lock().unwrap().clone();
     let instances = state.instances.lock().unwrap().clone();
@@ -370,6 +400,10 @@ fn resolve_proxy_target(
 
     for id in candidate_ids {
         if let (Some(config), Some(running_info)) = (instances.get(&id), running.get(&id)) {
+            if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
+                continue;
+            }
+            let workload = stored_instance_workload(config, &running_info.workload);
             let public = ProxyTarget {
                 instance_id: id.clone(),
                 name: config.name.clone(),
@@ -383,13 +417,7 @@ fn resolve_proxy_target(
                 api_key: effective_api_key(config),
                 api_prefix: config.api_prefix.clone(),
                 telemetry_session_id: running_info.telemetry_session_id.clone(),
-                workload: if config.reranking {
-                    ModelWorkload::Reranker
-                } else if config.embedding {
-                    ModelWorkload::Embedding
-                } else {
-                    ModelWorkload::Inference
-                },
+                workload,
             });
         }
     }
@@ -541,7 +569,11 @@ async fn proxy_openai(
 
     let requested_model = requested_model_from_body(&body);
     let vector_metadata = vector_request_metadata(uri.path(), &body);
-    let target = match resolve_proxy_target(&state, requested_model.as_deref()) {
+    let target = match resolve_proxy_target(
+        &state,
+        requested_model.as_deref(),
+        vector_metadata.as_ref().map(|metadata| metadata.workload),
+    ) {
         Some(target) => target,
         None => {
             return plain_response(
@@ -746,7 +778,7 @@ pub async fn test_proxy_route(
     model: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyTarget, String> {
-    resolve_proxy_target(&state, model.as_deref())
+    resolve_proxy_target(&state, model.as_deref(), None)
         .map(|target| target.public)
         .ok_or_else(|| "no running instance matches the requested model".to_string())
 }
@@ -847,7 +879,7 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use crate::models::ProxyConfig;
+    use crate::models::{InstanceConfig, ProxyConfig};
     use crate::vector_policy::ModelWorkload;
     use axum::http::HeaderMap;
 
@@ -960,6 +992,45 @@ mod tests {
         assert!(super::vector_endpoint_matches_target(
             None,
             ModelWorkload::Inference
+        ));
+    }
+
+    #[test]
+    fn vector_target_filter_uses_instance_workload() {
+        let embedding = InstanceConfig {
+            embedding: true,
+            ..InstanceConfig::default()
+        };
+        let reranker = InstanceConfig {
+            reranking: true,
+            ..InstanceConfig::default()
+        };
+        let inference = InstanceConfig::default();
+
+        assert!(super::stored_target_matches_endpoint(
+            &embedding,
+            "",
+            Some(ModelWorkload::Embedding)
+        ));
+        assert!(!super::stored_target_matches_endpoint(
+            &inference,
+            "",
+            Some(ModelWorkload::Embedding)
+        ));
+        assert!(super::stored_target_matches_endpoint(
+            &reranker,
+            "",
+            Some(ModelWorkload::Reranker)
+        ));
+        assert!(super::stored_target_matches_endpoint(
+            &inference,
+            "embedding",
+            Some(ModelWorkload::Embedding)
+        ));
+        assert!(!super::stored_target_matches_endpoint(
+            &reranker,
+            "embedding",
+            Some(ModelWorkload::Reranker)
         ));
     }
 }
