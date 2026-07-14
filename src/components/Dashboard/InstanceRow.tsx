@@ -4,7 +4,8 @@ import { useI18n } from '../../i18n'
 
 export default function InstanceRow({ instance }: { instance: Instance }) {
   const { t } = useI18n()
-  const { startInstance, stopInstance } = useAppStore()
+  const startInstance = useAppStore(state => state.startInstance)
+  const stopInstance = useAppStore(state => state.stopInstance)
   const isRunning = instance.status === 'running'
 
   return (

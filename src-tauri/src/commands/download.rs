@@ -848,6 +848,7 @@ async fn download_single_file(
     let mut win_start = std::time::Instant::now();
     let mut win_bytes: u64 = 0;
     let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1); // Emit immediately the first time.
+    let mut last_artifact_save = std::time::Instant::now() - std::time::Duration::from_secs(2);
 
     use std::io::Write;
     let mut file = match std::fs::OpenOptions::new()
@@ -1059,23 +1060,26 @@ async fn download_single_file(
                         "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "downloaded": downloaded,
                         "total": total, "speed": speed, "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                     }));
-                    save_artifact_state(
-                        &DownloadArtifactState {
-                            task_id: task_id.clone(),
-                            run_id: run_id.clone(),
-                            repo_id: repo_id.clone(),
-                            source: source.clone(),
-                            remote_path: remote_path.clone(),
-                            final_path: final_path.to_string_lossy().to_string(),
-                            temp_path: temp_path.to_string_lossy().to_string(),
-                            expected_size: total,
-                            downloaded_size: downloaded,
-                            etag: save_etag.clone(),
-                            last_modified: save_lm.clone(),
-                            updated_at: now_secs(),
-                        },
-                        &temp_path,
-                    );
+                    if last_artifact_save.elapsed() >= std::time::Duration::from_secs(2) {
+                        last_artifact_save = now;
+                        save_artifact_state(
+                            &DownloadArtifactState {
+                                task_id: task_id.clone(),
+                                run_id: run_id.clone(),
+                                repo_id: repo_id.clone(),
+                                source: source.clone(),
+                                remote_path: remote_path.clone(),
+                                final_path: final_path.to_string_lossy().to_string(),
+                                temp_path: temp_path.to_string_lossy().to_string(),
+                                expected_size: total,
+                                downloaded_size: downloaded,
+                                etag: save_etag.clone(),
+                                last_modified: save_lm.clone(),
+                                updated_at: now_secs(),
+                            },
+                            &temp_path,
+                        );
+                    }
                 }
             }
             Err(e) => {
@@ -1518,26 +1522,33 @@ use crate::models::DownloadState;
 
 fn persist_manager_queue(state: &AppState) {
     let queue = state.download_queue.lock().unwrap().clone();
+    let queued_ids = queue
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
     let mut persisted = load_download_state(state);
     persisted.retain(|entry| !is_runtime_queued(entry));
-    persisted.retain(|entry| !queue.iter().any(|queued| queued.id == entry.id));
+    persisted.retain(|entry| !queued_ids.contains(entry.id.as_str()));
     persisted.extend(queue);
     save_download_state(&persisted, state);
 }
 
 fn collect_manager_entries(state: &AppState) -> Vec<PersistedQueueEntry> {
     let mut entries = state.download_queue.lock().unwrap().clone();
+    let mut positions = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.id.clone(), index))
+        .collect::<std::collections::HashMap<_, _>>();
     let active_entries = state.download_active_entries.lock().unwrap();
 
     for entry in active_entries.values() {
         let mut active_entry = entry.clone();
         active_entry.status = "active".into();
-        if let Some(existing) = entries
-            .iter_mut()
-            .find(|queued| queued.id == active_entry.id)
-        {
-            *existing = active_entry;
+        if let Some(index) = positions.get(&active_entry.id).copied() {
+            entries[index] = active_entry;
         } else {
+            positions.insert(active_entry.id.clone(), entries.len());
             entries.push(active_entry);
         }
     }
@@ -1578,7 +1589,14 @@ fn derive_entry_status(entry: &PersistedQueueEntry) -> String {
     entry.status.clone()
 }
 
-fn persist_active_entries_snapshot(state: &AppState) {
+fn persist_active_entries_snapshot(state: &AppState, force: bool) {
+    if !force {
+        let mut last_persist = state.download_last_inflight_persist.lock().unwrap();
+        if last_persist.elapsed() < std::time::Duration::from_secs(2) {
+            return;
+        }
+        *last_persist = std::time::Instant::now();
+    }
     let inflight: Vec<PersistedQueueEntry> = {
         let entries = state.download_active_entries.lock().unwrap();
         entries.values().cloned().collect()
@@ -1618,6 +1636,7 @@ fn apply_file_patch(file: &mut MsFileEntry, patch: &FileStatePatch) {
 }
 
 fn update_manager_file_state(state: &AppState, task_id: &str, patch: FileStatePatch) -> bool {
+    let force_persist = !matches!(patch.status.as_deref(), Some("active"));
     {
         let mut active_entries = state.download_active_entries.lock().unwrap();
         let mut changed = false;
@@ -1634,7 +1653,7 @@ fn update_manager_file_state(state: &AppState, task_id: &str, patch: FileStatePa
         }
         if changed {
             drop(active_entries);
-            persist_active_entries_snapshot(state);
+            persist_active_entries_snapshot(state, force_persist);
             return true;
         }
     }
@@ -1676,7 +1695,7 @@ fn remove_manager_file(state: &AppState, task_id: &str) -> bool {
         });
         if changed {
             drop(active_entries);
-            persist_active_entries_snapshot(state);
+            persist_active_entries_snapshot(state, true);
             return true;
         }
     }
@@ -2037,19 +2056,29 @@ pub async fn persist_download_queue(
 
     let mut persisted = load_download_state(&state);
     persisted.retain(|entry| !is_runtime_queued(entry));
+    let mut persisted_positions = persisted
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.id.clone(), index))
+        .collect::<std::collections::HashMap<_, _>>();
 
     for entry in collect_manager_entries(&state)
         .into_iter()
         .filter(|entry| !is_runtime_queued(entry))
     {
-        if let Some(existing) = persisted.iter_mut().find(|saved| saved.id == entry.id) {
-            *existing = entry;
+        if let Some(index) = persisted_positions.get(&entry.id).copied() {
+            persisted[index] = entry;
         } else {
+            persisted_positions.insert(entry.id.clone(), persisted.len());
             persisted.push(entry);
         }
     }
 
-    persisted.retain(|entry| !runtime_queue.iter().any(|queued| queued.id == entry.id));
+    let runtime_ids = runtime_queue
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    persisted.retain(|entry| !runtime_ids.contains(entry.id.as_str()));
     persisted.extend(runtime_queue);
     save_download_state(&persisted, &state);
     Ok(())

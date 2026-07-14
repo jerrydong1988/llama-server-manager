@@ -30,9 +30,16 @@ fn default_global_config() -> GlobalConfig {
 fn persist_global_config_unlocked(
     config_dir: &std::path::Path,
     global: &GlobalConfig,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let path = config_dir.join("instances.json");
     let json = serde_json::to_string_pretty(global).map_err(|e| format!("序列化失败: {}", e))?;
+    if std::fs::read_to_string(&path).is_ok_and(|current| current == json) {
+        let backup = config_dir.join("instances.json.bak");
+        if !backup.exists() {
+            let _ = std::fs::copy(&path, backup);
+        }
+        return Ok(false);
+    }
     let tmp = config_dir.join("instances.json.tmp");
     std::fs::write(&tmp, &json).map_err(|e| format!("保存失败: {}", e))?;
     if path.exists() {
@@ -40,7 +47,7 @@ fn persist_global_config_unlocked(
     }
     std::fs::rename(&tmp, &path).map_err(|e| format!("保存失败: {}", e))?;
     let _ = std::fs::copy(&path, config_dir.join("instances.json.bak"));
-    Ok(())
+    Ok(true)
 }
 
 /// Atomically writes instances.json; all config writes should go through this helper to avoid races.
@@ -49,7 +56,7 @@ pub fn persist_global_config(
     global: &GlobalConfig,
 ) -> Result<(), String> {
     let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
-    persist_global_config_unlocked(config_dir, global)
+    persist_global_config_unlocked(config_dir, global).map(|_| ())
 }
 
 /// Reads existing config, mutates it, then writes atomically for non-save_config paths.
@@ -64,7 +71,7 @@ where
     let mut global: GlobalConfig =
         serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
     update_fn(&mut global);
-    persist_global_config_unlocked(&config_dir, &global)
+    persist_global_config_unlocked(&config_dir, &global).map(|_| ())
 }
 
 // Config persistence.
@@ -175,13 +182,22 @@ fn apply_frontend_config(
     global.engine_names = engine_names;
 }
 
-fn normalize_instances_for_save(
-    instances: HashMap<String, InstanceConfig>,
-) -> HashMap<String, InstanceConfig> {
-    instances
-        .into_iter()
-        .map(|(id, config)| (id, normalize_for_launch(config).into_config()))
-        .collect()
+struct NormalizedInstances {
+    all: HashMap<String, InstanceConfig>,
+    changed: HashMap<String, InstanceConfig>,
+}
+
+fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> NormalizedInstances {
+    let mut all = HashMap::with_capacity(instances.len());
+    let mut changed = HashMap::new();
+    for (id, config) in instances {
+        let normalized = normalize_for_launch(config.clone()).into_config();
+        if normalized != config {
+            changed.insert(id.clone(), normalized.clone());
+        }
+        all.insert(id, normalized);
+    }
+    NormalizedInstances { all, changed }
 }
 
 #[tauri::command]
@@ -196,7 +212,8 @@ pub async fn save_config(
     dark_mode: bool,
     state: tauri::State<'_, AppState>,
 ) -> Result<HashMap<String, InstanceConfig>, String> {
-    let instances = normalize_instances_for_save(instances);
+    let normalized = normalize_instances_for_save(instances);
+    let instances = normalized.all;
     let running_snapshot = state.running.lock().unwrap().clone();
     let engine_names = state.engine_names.lock().unwrap().clone();
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -218,7 +235,7 @@ pub async fn save_config(
     }
     let mut stored = state.instances.lock().unwrap();
     *stored = instances.clone();
-    Ok(instances)
+    Ok(normalized.changed)
 }
 
 #[tauri::command]
@@ -385,10 +402,23 @@ mod tests {
         );
 
         let normalized = normalize_instances_for_save(instances);
-        let config = &normalized["embedding"];
+        let config = &normalized.all["embedding"];
         assert!(config.embedding);
         assert!(config.spec_type.is_empty());
         assert!(config.custom_args.is_empty());
+        assert_eq!(normalized.changed["embedding"], *config);
+    }
+
+    #[test]
+    fn save_config_returns_only_backend_normalization_changes() {
+        let config = normalize_for_launch(InstanceConfig::default()).into_config();
+        let mut instances = HashMap::new();
+        instances.insert("clean".into(), config.clone());
+
+        let normalized = normalize_instances_for_save(instances);
+
+        assert_eq!(normalized.all["clean"], config);
+        assert!(normalized.changed.is_empty());
     }
 
     fn temp_config_dir(name: &str) -> std::path::PathBuf {
@@ -437,6 +467,19 @@ mod tests {
             loaded.download_max_concurrent,
             expected.download_max_concurrent
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn identical_config_skips_redundant_atomic_write() {
+        let dir = temp_config_dir("skip-identical-write");
+        let mut config = sample_config();
+
+        assert!(persist_global_config_unlocked(&dir, &config).unwrap());
+        assert!(!persist_global_config_unlocked(&dir, &config).unwrap());
+
+        config.dark_mode = !config.dark_mode;
+        assert!(persist_global_config_unlocked(&dir, &config).unwrap());
         let _ = std::fs::remove_dir_all(dir);
     }
 

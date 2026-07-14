@@ -502,9 +502,8 @@ pub async fn scan_models(
     };
 
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<ModelInfo>, Vec<String>> {
-        let inventory = model_inventory::load_model_index().map_err(|err| vec![err])?;
-        let directory_inventory =
-            model_inventory::load_directory_index("model").map_err(|err| vec![err])?;
+        let (inventory, directory_inventory) =
+            model_inventory::load_model_scan_indexes().map_err(|err| vec![err])?;
         let mut models: Vec<ModelInfo> = Vec::new();
         let mut seen_display_paths = HashSet::new();
         let mut seen_inventory_paths = HashSet::new();
@@ -626,12 +625,14 @@ pub async fn scan_models(
                     })
             })
             .collect::<Vec<_>>();
-        model_inventory::upsert_model_records(&records).map_err(|err| vec![err])?;
-        model_inventory::upsert_directory_records(&directory_records).map_err(|err| vec![err])?;
-        model_inventory::prune_absent_models(&scan_root_keys, &seen_inventory_paths)
-            .map_err(|err| vec![err])?;
-        model_inventory::prune_absent_directories("model", &scan_root_keys, &seen_directory_keys)
-            .map_err(|err| vec![err])?;
+        model_inventory::apply_model_scan(
+            &records,
+            &directory_records,
+            &scan_root_keys,
+            &seen_inventory_paths,
+            &seen_directory_keys,
+        )
+        .map_err(|err| vec![err])?;
 
         if models.is_empty() && !errors.is_empty() {
             Err(errors)
@@ -793,8 +794,7 @@ pub async fn scan_engines(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<EngineInfo>, String> {
     let mut engines = tokio::task::spawn_blocking(move || -> Result<Vec<EngineInfo>, String> {
-        let inventory = model_inventory::load_engine_index()?;
-        let directory_inventory = model_inventory::load_directory_index("engine")?;
+        let (inventory, directory_inventory) = model_inventory::load_engine_scan_indexes()?;
         let mut engines: Vec<EngineInfo> = Vec::new();
         let mut engine_records: Vec<InventoryEngineRecord> = Vec::new();
         let mut directory_records: Vec<InventoryDirectoryRecord> = Vec::new();
@@ -931,10 +931,13 @@ pub async fn scan_engines(
             }
         }
 
-        model_inventory::upsert_engine_records(&engine_records)?;
-        model_inventory::upsert_directory_records(&directory_records)?;
-        model_inventory::prune_absent_engines(&scan_root_keys, &seen_inventory_ids)?;
-        model_inventory::prune_absent_directories("engine", &scan_root_keys, &seen_directory_keys)?;
+        model_inventory::apply_engine_scan(
+            &engine_records,
+            &directory_records,
+            &scan_root_keys,
+            &seen_inventory_ids,
+            &seen_directory_keys,
+        )?;
         Ok(engines)
     })
     .await

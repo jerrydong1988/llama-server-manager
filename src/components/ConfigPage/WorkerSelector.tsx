@@ -10,7 +10,7 @@ interface Props {
 }
 
 export default function WorkerSelector({ value, onChange, t }: Props) {
-  const { workers } = useAppStore()
+  const workers = useAppStore(state => state.workers)
   const [manualMode, setManualMode] = useState(false)
   const [manualValue, setManualValue] = useState(value)
 

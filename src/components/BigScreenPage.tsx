@@ -61,7 +61,7 @@ const BIG_SCREEN_EVENT_REFRESH_MS = 5000
 export default function BigScreenPage() {
   const { lang } = useI18n()
   const zh = lang === 'zh-CN'
-  const labels = getLabels(zh)
+  const labels = useMemo(() => getLabels(zh), [zh])
   const instances = useAppStore(state => state.instances)
   const models = useAppStore(state => state.models)
   const engines = useAppStore(state => state.engines)

@@ -1,19 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { confirm } from '@tauri-apps/plugin-dialog'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { Activity, ChevronDown, Pause, Play, Search, Trash2 } from 'lucide-react'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
 import { Button, InsetSurface, MetricCard, SelectInput, Surface, TextInput } from './ui'
 
 const LogsViewer = () => {
-  const { instances, logs, clearLogs } = useAppStore()
+  const instances = useAppStore(state => state.instances)
+  const logs = useAppStore(state => state.logs)
+  const clearLogs = useAppStore(state => state.clearLogs)
   const { t, lang } = useI18n()
   const [selectedInstanceId, setSelectedInstanceId] = useState<string>('')
   const [autoScroll, setAutoScroll] = useState(true)
   const [filterText, setFilterText] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
   const userInteractedRef = useRef(false)
-  const logCountRef = useRef(0)
+  const lastLogTimestampRef = useRef(0)
   const zh = lang === 'zh-CN'
   const labels = {
     subtitle: zh
@@ -42,6 +45,10 @@ const LogsViewer = () => {
     [logs],
   )
   const sourceLogs = selectedInstanceId ? instanceLogs : allLogs
+  const instanceNames = useMemo(
+    () => new Map(instances.map(instance => [instance.id, instance.name])),
+    [instances],
+  )
 
   const displayLogs = useMemo(() => {
     const query = filterText.trim().toLowerCase()
@@ -49,15 +56,27 @@ const LogsViewer = () => {
       return sourceLogs
     }
     return sourceLogs.filter(entry => {
-      const instanceName = instances.find(instance => instance.id === entry.instanceId)?.name || entry.instanceId
+      const instanceName = instanceNames.get(entry.instanceId) || entry.instanceId
       return (
         entry.text.toLowerCase().includes(query) ||
         instanceName.toLowerCase().includes(query)
       )
     })
-  }, [filterText, instances, sourceLogs])
+  }, [filterText, instanceNames, sourceLogs])
+
+  const logVirtualizer = useVirtualizer({
+    count: displayLogs.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 36,
+    overscan: 16,
+    getItemKey: index => {
+      const entry = displayLogs[index]
+      return entry ? `${entry.instanceId}-${entry.timestamp}-${index}` : index
+    },
+  })
 
   const hasLogs = displayLogs.length > 0
+  const latestLogTimestamp = displayLogs[displayLogs.length - 1]?.timestamp || 0
   const hasRunningInstance = selectedInstanceId
     ? instances.some(instance => instance.id === selectedInstanceId && instance.status === 'running')
     : instances.some(instance => instance.status === 'running')
@@ -78,25 +97,23 @@ const LogsViewer = () => {
   }, [sourceLogs])
 
   useEffect(() => {
-    if (displayLogs.length === logCountRef.current) {
+    if (latestLogTimestamp === lastLogTimestampRef.current) {
       return
     }
-    logCountRef.current = displayLogs.length
+    lastLogTimestampRef.current = latestLogTimestamp
     if (autoScroll && scrollRef.current) {
       requestAnimationFrame(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-        }
+        if (displayLogs.length > 0) logVirtualizer.scrollToIndex(displayLogs.length - 1, { align: 'end' })
       })
     }
-  }, [displayLogs.length, autoScroll])
+  }, [displayLogs.length, latestLogTimestamp, autoScroll, logVirtualizer])
 
   const handleInstanceChange = (id: string) => {
     setSelectedInstanceId(id)
     setAutoScroll(true)
     setFilterText('')
     userInteractedRef.current = false
-    logCountRef.current = 0
+    lastLogTimestampRef.current = 0
   }
 
   const handleScroll = useCallback(() => {
@@ -116,9 +133,7 @@ const LogsViewer = () => {
   }, [autoScroll])
 
   const scrollToBottom = () => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-    }
+    if (displayLogs.length > 0) logVirtualizer.scrollToIndex(displayLogs.length - 1, { align: 'end' })
     setAutoScroll(true)
     userInteractedRef.current = false
   }
@@ -147,7 +162,7 @@ const LogsViewer = () => {
         clearLogs(id)
       }
     }
-    logCountRef.current = 0
+    lastLogTimestampRef.current = 0
     setAutoScroll(true)
   }
 
@@ -281,10 +296,14 @@ const LogsViewer = () => {
                 </p>
               </div>
             ) : (
-              <div className="space-y-1">
-                {displayLogs.slice(-1200).map((entry, index) => {
+              <div
+                className="relative w-full"
+                style={{ height: `${logVirtualizer.getTotalSize()}px` }}
+              >
+                {logVirtualizer.getVirtualItems().map(virtualRow => {
+                  const entry = displayLogs[virtualRow.index]
                   const time = new Date(entry.timestamp).toLocaleTimeString()
-                  const instanceName = instances.find(instance => instance.id === entry.instanceId)?.name || entry.instanceId
+                  const instanceName = instanceNames.get(entry.instanceId) || entry.instanceId
                   const text = entry.text
                   const lower = text.toLowerCase()
 
@@ -300,10 +319,18 @@ const LogsViewer = () => {
                   }
 
                   return (
-                    <div key={`${entry.timestamp}-${index}`} className="grid grid-cols-[84px,minmax(120px,180px),minmax(0,1fr)] gap-4 rounded-lg px-2 py-1 hover:bg-white/5">
-                      <span className="text-xs text-slate-600">{time}</span>
-                      <span className="truncate text-xs text-slate-500">{instanceName}</span>
-                      <span className={`${tone} whitespace-pre-wrap break-all`}>{text}</span>
+                    <div
+                      key={virtualRow.key}
+                      ref={logVirtualizer.measureElement}
+                      data-index={virtualRow.index}
+                      className="absolute left-0 top-0 w-full pb-1"
+                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                    >
+                      <div className="grid grid-cols-[84px,minmax(120px,180px),minmax(0,1fr)] gap-4 rounded-lg px-2 py-1 hover:bg-white/5">
+                        <span className="text-xs text-slate-600">{time}</span>
+                        <span className="truncate text-xs text-slate-500">{instanceName}</span>
+                        <span className={`${tone} whitespace-pre-wrap break-all`}>{text}</span>
+                      </div>
                     </div>
                   )
                 })}

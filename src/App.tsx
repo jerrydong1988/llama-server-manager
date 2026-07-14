@@ -285,15 +285,10 @@ function AppInner() {
 
   const upCount = useMemo(() => instances.filter(i => i.status === 'running').length, [instances])
   const downCount = useMemo(() => instances.filter(i => i.status !== 'running').length, [instances])
-  const downloadTasks = useAppStore(s => s.downloadTasks)
-  const activeDownloadCount = useMemo(
-    () => Object.values(downloadTasks).filter(t => t.status === 'active' || t.status === 'paused' || t.status === 'pausing').length,
-    [downloadTasks],
-  )
-  const failedDownloadCount = useMemo(
-    () => Object.values(downloadTasks).filter(t => t.status === 'error').length,
-    [downloadTasks],
-  )
+  const activeDownloadCount = useAppStore(state => Object.values(state.downloadTasks)
+    .filter(task => task.status === 'active' || task.status === 'paused' || task.status === 'pausing').length)
+  const failedDownloadCount = useAppStore(state => Object.values(state.downloadTasks)
+    .filter(task => task.status === 'error').length)
 
   const navigation = useMemo(() => [
     { id: 'dashboard', name: t.nav.dashboard || 'Dashboard', icon: BarChart3 },

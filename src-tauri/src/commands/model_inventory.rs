@@ -2,9 +2,11 @@ use crate::models::{EngineInfo, ModelCapabilities, ModelInfo};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 2;
+static INVENTORY_SCHEMA_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct InventoryModelRecord {
@@ -49,6 +51,15 @@ pub struct InventoryDirectoryRecord {
     pub last_seen: i64,
     pub cache_version: i64,
 }
+
+pub type ModelScanIndexes = (
+    HashMap<String, InventoryModelRecord>,
+    HashMap<String, InventoryDirectoryRecord>,
+);
+pub type EngineScanIndexes = (
+    HashMap<String, InventoryEngineRecord>,
+    HashMap<String, InventoryDirectoryRecord>,
+);
 
 impl InventoryModelRecord {
     pub fn from_model(
@@ -150,7 +161,7 @@ fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-fn open_connection() -> Result<Connection, String> {
+fn open_raw_connection() -> Result<Connection, String> {
     let path = inventory_db_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
@@ -158,10 +169,27 @@ fn open_connection() -> Result<Connection, String> {
     }
     let conn = Connection::open(path)
         .map_err(|e| format!("failed to open model inventory database: {}", e))?;
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(|e| format!("failed to enable model inventory WAL: {}", e))?;
-    init_schema(&conn)?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| format!("failed to configure model inventory busy timeout: {e}"))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(|e| format!("failed to configure model inventory synchronous mode: {e}"))?;
     Ok(conn)
+}
+
+pub(crate) fn initialize_inventory_storage() -> Result<(), String> {
+    INVENTORY_SCHEMA_INIT
+        .get_or_init(|| {
+            let conn = open_raw_connection()?;
+            conn.pragma_update(None, "journal_mode", "WAL")
+                .map_err(|e| format!("failed to enable model inventory WAL: {}", e))?;
+            init_schema(&conn)
+        })
+        .clone()
+}
+
+fn open_connection() -> Result<Connection, String> {
+    initialize_inventory_storage()?;
+    open_raw_connection()
 }
 
 fn init_schema(conn: &Connection) -> Result<(), String> {
@@ -231,10 +259,10 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-pub fn load_directory_index(
+fn load_directory_index_from_connection(
+    conn: &Connection,
     kind: &str,
 ) -> Result<HashMap<String, InventoryDirectoryRecord>, String> {
-    let conn = open_connection()?;
     let mut stmt = conn
         .prepare(
             r#"
@@ -257,18 +285,13 @@ pub fn load_directory_index(
         .collect())
 }
 
-pub fn upsert_directory_records(records: &[InventoryDirectoryRecord]) -> Result<(), String> {
-    if records.is_empty() {
-        return Ok(());
-    }
-    let mut conn = open_connection()?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("failed to start directory inventory transaction: {}", e))?;
-    {
-        let mut stmt = tx
-            .prepare(
-                r#"
+fn upsert_directory_records_in_connection(
+    conn: &Connection,
+    records: &[InventoryDirectoryRecord],
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
                 INSERT INTO inventory_directories (
                     kind, path, scan_root, signature, last_seen, cache_version
                 ) VALUES (
@@ -279,35 +302,29 @@ pub fn upsert_directory_records(records: &[InventoryDirectoryRecord]) -> Result<
                     signature=excluded.signature,
                     last_seen=excluded.last_seen,
                     cache_version=excluded.cache_version
-                "#,
-            )
-            .map_err(|e| format!("failed to prepare directory inventory upsert: {}", e))?;
-        for record in records {
-            stmt.execute(params![
-                record.kind,
-                record.path,
-                record.scan_root,
-                record.signature,
-                record.last_seen,
-                MODEL_INVENTORY_SCHEMA_VERSION,
-            ])
-            .map_err(|e| format!("failed to upsert directory inventory row: {}", e))?;
-        }
+            "#,
+        )
+        .map_err(|e| format!("failed to prepare directory inventory upsert: {}", e))?;
+    for record in records {
+        stmt.execute(params![
+            record.kind,
+            record.path,
+            record.scan_root,
+            record.signature,
+            record.last_seen,
+            MODEL_INVENTORY_SCHEMA_VERSION,
+        ])
+        .map_err(|e| format!("failed to upsert directory inventory row: {}", e))?;
     }
-    tx.commit()
-        .map_err(|e| format!("failed to commit directory inventory transaction: {}", e))?;
     Ok(())
 }
 
-pub fn prune_absent_directories(
+fn prune_absent_directories_in_connection(
+    conn: &Connection,
     kind: &str,
     scan_roots: &HashSet<String>,
     seen_dirs: &HashSet<String>,
 ) -> Result<(), String> {
-    if scan_roots.is_empty() {
-        return Ok(());
-    }
-    let conn = open_connection()?;
     let mut stmt = conn
         .prepare("SELECT path, scan_root FROM inventory_directories WHERE kind = ?1")
         .map_err(|e| format!("failed to prepare directory inventory prune query: {}", e))?;
@@ -332,6 +349,12 @@ pub fn prune_absent_directories(
 
 pub fn load_model_index() -> Result<HashMap<String, InventoryModelRecord>, String> {
     let conn = open_connection()?;
+    load_model_index_from_connection(&conn)
+}
+
+fn load_model_index_from_connection(
+    conn: &Connection,
+) -> Result<HashMap<String, InventoryModelRecord>, String> {
     let mut stmt = conn
         .prepare(
             r#"
@@ -355,6 +378,14 @@ pub fn load_model_index() -> Result<HashMap<String, InventoryModelRecord>, Strin
         .collect())
 }
 
+pub fn load_model_scan_indexes() -> Result<ModelScanIndexes, String> {
+    let conn = open_connection()?;
+    Ok((
+        load_model_index_from_connection(&conn)?,
+        load_directory_index_from_connection(&conn, "model")?,
+    ))
+}
+
 pub fn list_cached_models() -> Result<Vec<ModelInfo>, String> {
     let mut records = load_model_index()?.into_values().collect::<Vec<_>>();
     records.sort_by_key(|record| record.name.to_lowercase());
@@ -364,18 +395,13 @@ pub fn list_cached_models() -> Result<Vec<ModelInfo>, String> {
         .collect())
 }
 
-pub fn upsert_model_records(records: &[InventoryModelRecord]) -> Result<(), String> {
-    if records.is_empty() {
-        return Ok(());
-    }
-    let mut conn = open_connection()?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("failed to start model inventory transaction: {}", e))?;
-    {
-        let mut stmt = tx
-            .prepare(
-                r#"
+fn upsert_model_records_in_connection(
+    conn: &Connection,
+    records: &[InventoryModelRecord],
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
                 INSERT INTO model_inventory (
                     path, id, display_path, name, scan_root, size, mtime,
                     architecture, context_length, quant_type, has_mtp_head,
@@ -399,46 +425,40 @@ pub fn upsert_model_records(records: &[InventoryModelRecord]) -> Result<(), Stri
                     is_shard=excluded.is_shard,
                     last_seen=excluded.last_seen,
                     cache_version=excluded.cache_version
-                "#,
-            )
-            .map_err(|e| format!("failed to prepare model inventory upsert: {}", e))?;
-        for record in records {
-            let capabilities_json = serde_json::to_string(&record.capabilities)
-                .map_err(|e| format!("failed to encode model capabilities: {}", e))?;
-            stmt.execute(params![
-                record.path,
-                record.id,
-                record.display_path,
-                record.name,
-                record.scan_root,
-                record.size as i64,
-                record.mtime as i64,
-                record.architecture,
-                record.context_length.map(|value| value as i64),
-                record.quant_type,
-                if record.has_mtp_head { 1 } else { 0 },
-                capabilities_json,
-                record.file_type,
-                if record.is_shard { 1 } else { 0 },
-                record.last_seen,
-                MODEL_INVENTORY_SCHEMA_VERSION,
-            ])
-            .map_err(|e| format!("failed to upsert model inventory row: {}", e))?;
-        }
+            "#,
+        )
+        .map_err(|e| format!("failed to prepare model inventory upsert: {}", e))?;
+    for record in records {
+        let capabilities_json = serde_json::to_string(&record.capabilities)
+            .map_err(|e| format!("failed to encode model capabilities: {}", e))?;
+        stmt.execute(params![
+            record.path,
+            record.id,
+            record.display_path,
+            record.name,
+            record.scan_root,
+            record.size as i64,
+            record.mtime as i64,
+            record.architecture,
+            record.context_length.map(|value| value as i64),
+            record.quant_type,
+            if record.has_mtp_head { 1 } else { 0 },
+            capabilities_json,
+            record.file_type,
+            if record.is_shard { 1 } else { 0 },
+            record.last_seen,
+            MODEL_INVENTORY_SCHEMA_VERSION,
+        ])
+        .map_err(|e| format!("failed to upsert model inventory row: {}", e))?;
     }
-    tx.commit()
-        .map_err(|e| format!("failed to commit model inventory transaction: {}", e))?;
     Ok(())
 }
 
-pub fn prune_absent_models(
+fn prune_absent_models_in_connection(
+    conn: &Connection,
     scan_roots: &HashSet<String>,
     seen_paths: &HashSet<String>,
 ) -> Result<(), String> {
-    if scan_roots.is_empty() {
-        return Ok(());
-    }
-    let conn = open_connection()?;
     let mut stmt = conn
         .prepare("SELECT path, scan_root FROM model_inventory")
         .map_err(|e| format!("failed to prepare model inventory prune query: {}", e))?;
@@ -458,6 +478,32 @@ pub fn prune_absent_models(
     Ok(())
 }
 
+pub fn apply_model_scan(
+    records: &[InventoryModelRecord],
+    directory_records: &[InventoryDirectoryRecord],
+    scan_roots: &HashSet<String>,
+    seen_paths: &HashSet<String>,
+    seen_dirs: &HashSet<String>,
+) -> Result<(), String> {
+    let mut conn = open_connection()?;
+    let transaction = conn
+        .transaction()
+        .map_err(|e| format!("failed to start model scan inventory transaction: {e}"))?;
+    if !records.is_empty() {
+        upsert_model_records_in_connection(&transaction, records)?;
+    }
+    if !directory_records.is_empty() {
+        upsert_directory_records_in_connection(&transaction, directory_records)?;
+    }
+    if !scan_roots.is_empty() {
+        prune_absent_models_in_connection(&transaction, scan_roots, seen_paths)?;
+        prune_absent_directories_in_connection(&transaction, "model", scan_roots, seen_dirs)?;
+    }
+    transaction
+        .commit()
+        .map_err(|e| format!("failed to commit model scan inventory transaction: {e}"))
+}
+
 pub fn delete_model(path: &str) -> Result<(), String> {
     let conn = open_connection()?;
     conn.execute(
@@ -470,6 +516,12 @@ pub fn delete_model(path: &str) -> Result<(), String> {
 
 pub fn load_engine_index() -> Result<HashMap<String, InventoryEngineRecord>, String> {
     let conn = open_connection()?;
+    load_engine_index_from_connection(&conn)
+}
+
+fn load_engine_index_from_connection(
+    conn: &Connection,
+) -> Result<HashMap<String, InventoryEngineRecord>, String> {
     let mut stmt = conn
         .prepare(
             r#"
@@ -491,6 +543,14 @@ pub fn load_engine_index() -> Result<HashMap<String, InventoryEngineRecord>, Str
         .collect())
 }
 
+pub fn load_engine_scan_indexes() -> Result<EngineScanIndexes, String> {
+    let conn = open_connection()?;
+    Ok((
+        load_engine_index_from_connection(&conn)?,
+        load_directory_index_from_connection(&conn, "engine")?,
+    ))
+}
+
 pub fn list_cached_engines() -> Result<Vec<EngineInfo>, String> {
     let mut records = load_engine_index()?.into_values().collect::<Vec<_>>();
     records.sort_by_key(|record| record.name.to_lowercase());
@@ -500,18 +560,13 @@ pub fn list_cached_engines() -> Result<Vec<EngineInfo>, String> {
         .collect())
 }
 
-pub fn upsert_engine_records(records: &[InventoryEngineRecord]) -> Result<(), String> {
-    if records.is_empty() {
-        return Ok(());
-    }
-    let mut conn = open_connection()?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("failed to start engine inventory transaction: {}", e))?;
-    {
-        let mut stmt = tx
-            .prepare(
-                r#"
+fn upsert_engine_records_in_connection(
+    conn: &Connection,
+    records: &[InventoryEngineRecord],
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
                 INSERT INTO engine_inventory (
                     id, name, dir, exe, version, backend, exe_mtime,
                     scan_root, last_seen, cache_version
@@ -528,38 +583,32 @@ pub fn upsert_engine_records(records: &[InventoryEngineRecord]) -> Result<(), St
                     scan_root=excluded.scan_root,
                     last_seen=excluded.last_seen,
                     cache_version=excluded.cache_version
-                "#,
-            )
-            .map_err(|e| format!("failed to prepare engine inventory upsert: {}", e))?;
-        for record in records {
-            stmt.execute(params![
-                record.id,
-                record.name,
-                record.dir,
-                record.exe,
-                record.version,
-                record.backend,
-                record.exe_mtime as i64,
-                record.scan_root,
-                record.last_seen,
-                MODEL_INVENTORY_SCHEMA_VERSION,
-            ])
-            .map_err(|e| format!("failed to upsert engine inventory row: {}", e))?;
-        }
+            "#,
+        )
+        .map_err(|e| format!("failed to prepare engine inventory upsert: {}", e))?;
+    for record in records {
+        stmt.execute(params![
+            record.id,
+            record.name,
+            record.dir,
+            record.exe,
+            record.version,
+            record.backend,
+            record.exe_mtime as i64,
+            record.scan_root,
+            record.last_seen,
+            MODEL_INVENTORY_SCHEMA_VERSION,
+        ])
+        .map_err(|e| format!("failed to upsert engine inventory row: {}", e))?;
     }
-    tx.commit()
-        .map_err(|e| format!("failed to commit engine inventory transaction: {}", e))?;
     Ok(())
 }
 
-pub fn prune_absent_engines(
+fn prune_absent_engines_in_connection(
+    conn: &Connection,
     scan_roots: &HashSet<String>,
     seen_ids: &HashSet<String>,
 ) -> Result<(), String> {
-    if scan_roots.is_empty() {
-        return Ok(());
-    }
-    let conn = open_connection()?;
     let mut stmt = conn
         .prepare("SELECT id, scan_root FROM engine_inventory")
         .map_err(|e| format!("failed to prepare engine inventory prune query: {}", e))?;
@@ -577,6 +626,32 @@ pub fn prune_absent_engines(
         }
     }
     Ok(())
+}
+
+pub fn apply_engine_scan(
+    records: &[InventoryEngineRecord],
+    directory_records: &[InventoryDirectoryRecord],
+    scan_roots: &HashSet<String>,
+    seen_ids: &HashSet<String>,
+    seen_dirs: &HashSet<String>,
+) -> Result<(), String> {
+    let mut conn = open_connection()?;
+    let transaction = conn
+        .transaction()
+        .map_err(|e| format!("failed to start engine scan inventory transaction: {e}"))?;
+    if !records.is_empty() {
+        upsert_engine_records_in_connection(&transaction, records)?;
+    }
+    if !directory_records.is_empty() {
+        upsert_directory_records_in_connection(&transaction, directory_records)?;
+    }
+    if !scan_roots.is_empty() {
+        prune_absent_engines_in_connection(&transaction, scan_roots, seen_ids)?;
+        prune_absent_directories_in_connection(&transaction, "engine", scan_roots, seen_dirs)?;
+    }
+    transaction
+        .commit()
+        .map_err(|e| format!("failed to commit engine scan inventory transaction: {e}"))
 }
 
 pub fn delete_engine(id: &str) -> Result<(), String> {

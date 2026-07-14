@@ -19,6 +19,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.6",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-shell": "^2.0.0",

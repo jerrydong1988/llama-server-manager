@@ -1,23 +1,61 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Database, File, FolderOpen, FolderTree, HardDrive, Image, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { confirm, open } from '@tauri-apps/plugin-dialog'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAppStore, type ModelInfo } from '../store'
 import { useI18n } from '../i18n'
 import { isPathWithinRoot, normalizePath, pathJoin } from '../utils/path'
 import { formatSize } from '../utils/format'
 import { Button, InsetSurface, MetricCard, PathText, Surface, TextInput } from './ui'
 
+interface TreeStats {
+  models: number
+  mmproj: number
+  imatrix: number
+  size: number
+}
+
 interface TreeNode {
   name: string
   path: string
   isDir: boolean
   children?: Map<string, TreeNode>
+  orderedChildren?: TreeNode[]
   model?: ModelInfo
+  stats: TreeStats
+}
+
+const emptyTreeStats = (): TreeStats => ({ models: 0, mmproj: 0, imatrix: 0, size: 0 })
+
+const modelStats = (model: ModelInfo): TreeStats => ({
+  models: model.file_type === 'model' && !model.is_shard ? 1 : 0,
+  mmproj: model.file_type === 'mmproj' ? 1 : 0,
+  imatrix: model.file_type === 'imatrix' ? 1 : 0,
+  size: model.size,
+})
+
+const finalizeTree = (node: TreeNode): TreeStats => {
+  if (!node.isDir) return node.stats
+  const orderedChildren = [...(node.children?.values() || [])].sort((left, right) => {
+    if (left.isDir !== right.isDir) return left.isDir ? -1 : 1
+    return left.name.localeCompare(right.name)
+  })
+  node.orderedChildren = orderedChildren
+  const stats = emptyTreeStats()
+  for (const child of orderedChildren) {
+    const childStats = finalizeTree(child)
+    stats.models += childStats.models
+    stats.mmproj += childStats.mmproj
+    stats.imatrix += childStats.imatrix
+    stats.size += childStats.size
+  }
+  node.stats = stats
+  return stats
 }
 
 const buildTree = (rootDir: string, models: ModelInfo[]): TreeNode => {
   const normalizedRoot = normalizePath(rootDir)
-  const root: TreeNode = { name: rootDir, path: normalizedRoot, isDir: true, children: new Map() }
+  const root: TreeNode = { name: rootDir, path: normalizedRoot, isDir: true, children: new Map(), stats: emptyTreeStats() }
 
   for (const model of models) {
     const normalizedPath = normalizePath(model.path)
@@ -36,7 +74,7 @@ const buildTree = (rootDir: string, models: ModelInfo[]): TreeNode => {
     for (let index = 0; index < parts.length; index += 1) {
       const part = parts[index]
       if (index === parts.length - 1) {
-        cursor.children!.set(part, { name: part, path: model.path, isDir: false, model })
+        cursor.children!.set(part, { name: part, path: model.path, isDir: false, model, stats: modelStats(model) })
       } else {
         if (!cursor.children!.has(part)) {
           cursor.children!.set(part, {
@@ -44,6 +82,7 @@ const buildTree = (rootDir: string, models: ModelInfo[]): TreeNode => {
             path: pathJoin(cursor.path, part),
             isDir: true,
             children: new Map(),
+            stats: emptyTreeStats(),
           })
         }
         cursor = cursor.children!.get(part)!
@@ -51,40 +90,8 @@ const buildTree = (rootDir: string, models: ModelInfo[]): TreeNode => {
     }
   }
 
+  finalizeTree(root)
   return root
-}
-
-const countTree = (node: TreeNode): { models: number; mmproj: number; imatrix: number; size: number } => {
-  if (!node.isDir) {
-    const model = node.model!
-    if (model.file_type === 'mmproj') {
-      return { models: 0, mmproj: 1, imatrix: 0, size: model.size }
-    }
-    if (model.file_type === 'imatrix') {
-      return { models: 0, mmproj: 0, imatrix: 1, size: model.size }
-    }
-    if (model.is_shard) {
-      return { models: 0, mmproj: 0, imatrix: 0, size: model.size }
-    }
-    return { models: 1, mmproj: 0, imatrix: 0, size: model.size }
-  }
-
-  let models = 0
-  let mmproj = 0
-  let imatrix = 0
-  let size = 0
-
-  if (node.children) {
-    for (const child of node.children.values()) {
-      const childStats = countTree(child)
-      models += childStats.models
-      mmproj += childStats.mmproj
-      imatrix += childStats.imatrix
-      size += childStats.size
-    }
-  }
-
-  return { models, mmproj, imatrix, size }
 }
 
 const matchNode = (node: TreeNode, query: string): boolean => {
@@ -99,20 +106,6 @@ const matchNode = (node: TreeNode, query: string): boolean => {
     !!node.model?.architecture?.toLowerCase().includes(normalizedQuery) ||
     !!node.model?.file_type?.toLowerCase().includes(normalizedQuery)
   )
-}
-
-const dirHasMatch = (node: TreeNode, query: string): boolean => {
-  if (!node.isDir || !node.children) {
-    return false
-  }
-
-  for (const child of node.children.values()) {
-    if (child.isDir ? dirHasMatch(child, query) : matchNode(child, query)) {
-      return true
-    }
-  }
-
-  return false
 }
 
 const highlightText = (text: string, query: string): ReactNode => {
@@ -152,6 +145,7 @@ const ModelRepo = () => {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
   const savedCollapsed = useRef<Set<string>>(new Set())
+  const treeScrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     loadInitialData()
@@ -179,6 +173,40 @@ const ModelRepo = () => {
 
   const trees = useMemo(() => modelDirs.map(dir => buildTree(dir, models)), [modelDirs, models])
   const selectedModel = useMemo(() => models.find(model => model.path === selectedPath) ?? null, [models, selectedPath])
+  const matchingPaths = useMemo(() => {
+    const paths = new Set<string>()
+    if (!searchQuery) return paths
+    const visit = (node: TreeNode): boolean => {
+      const selfMatches = matchNode(node, searchQuery)
+      let childMatches = false
+      for (const child of node.orderedChildren || []) {
+        childMatches = visit(child) || childMatches
+      }
+      if (selfMatches || childMatches) paths.add(node.path)
+      return selfMatches || childMatches
+    }
+    trees.forEach(visit)
+    return paths
+  }, [searchQuery, trees])
+  const flatNodes = useMemo(() => {
+    const rows: { node: TreeNode; depth: number }[] = []
+    const visit = (node: TreeNode, depth: number) => {
+      if (searchQuery && !matchingPaths.has(node.path)) return
+      rows.push({ node, depth })
+      if (node.isDir && (!collapsed.has(node.path) || searchQuery)) {
+        node.orderedChildren?.forEach(child => visit(child, depth + 1))
+      }
+    }
+    trees.forEach(tree => visit(tree, 0))
+    return rows
+  }, [collapsed, matchingPaths, searchQuery, trees])
+  const treeVirtualizer = useVirtualizer({
+    count: flatNodes.length,
+    getScrollElement: () => treeScrollRef.current,
+    estimateSize: () => 41,
+    overscan: 14,
+    getItemKey: index => flatNodes[index]?.node.path || index,
+  })
 
   const stats = useMemo(() => {
     const primaryModels = models.filter(model => model.file_type !== 'mmproj' && model.file_type !== 'imatrix' && !model.is_shard)
@@ -241,7 +269,7 @@ const ModelRepo = () => {
     const nodeKey = node.path
     const isCollapsed = collapsed.has(nodeKey)
     const isMatch = !!searchQuery && matchNode(node, searchQuery)
-    const hasChildMatch = !!searchQuery && !isMatch && node.isDir && dirHasMatch(node, searchQuery)
+    const hasChildMatch = !!searchQuery && !isMatch && matchingPaths.has(node.path)
     const isVisible = !searchQuery || isMatch || hasChildMatch
 
     if (!isVisible) {
@@ -249,7 +277,7 @@ const ModelRepo = () => {
     }
 
     if (node.isDir) {
-      const stats = countTree(node)
+      const stats = node.stats
       return (
         <div key={nodeKey}>
           <button
@@ -280,18 +308,6 @@ const ModelRepo = () => {
               {stats.imatrix > 0 ? `${stats.imatrix} ${t.modelRepo.typeImatrix}` : ''}
             </span>
           </button>
-          {!isCollapsed && node.children && (
-            <div>
-              {[...node.children.values()]
-                .sort((left, right) => {
-                  if (left.isDir !== right.isDir) {
-                    return left.isDir ? -1 : 1
-                  }
-                  return left.name.localeCompare(right.name)
-                })
-                .map(child => renderNode(child, depth + 1))}
-            </div>
-          )}
         </div>
       )
     }
@@ -410,7 +426,7 @@ const ModelRepo = () => {
               </div>
             ) : (
               trees.map(tree => {
-                const treeStats = countTree(tree)
+                const treeStats = tree.stats
                 return (
                   <InsetSurface key={tree.path} className="p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -463,8 +479,26 @@ const ModelRepo = () => {
               </p>
             </div>
           ) : (
-            <div className="space-y-1 rounded-2xl border border-slate-800 bg-slate-950/40 p-3">
-              {trees.map(tree => renderNode(tree, 0))}
+            <div
+              ref={treeScrollRef}
+              className="h-[520px] overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/40 p-3"
+            >
+              <div className="relative w-full" style={{ height: `${treeVirtualizer.getTotalSize()}px` }}>
+                {treeVirtualizer.getVirtualItems().map(virtualRow => {
+                  const row = flatNodes[virtualRow.index]
+                  return (
+                    <div
+                      key={virtualRow.key}
+                      ref={treeVirtualizer.measureElement}
+                      data-index={virtualRow.index}
+                      className="absolute left-0 top-0 w-full"
+                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                    >
+                      {renderNode(row.node, row.depth)}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
         </Surface>

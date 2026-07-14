@@ -17,6 +17,11 @@ assert.match(
 assert.match(configPageSource, /setSaving\(true\)[\s\S]*await saveConfig\(\)[\s\S]*finally[\s\S]*setSaving\(false\)/)
 assert.match(
   configPageSource,
+  /clearTimeout\(saveFeedbackTimerRef\.current\)[\s\S]*saveFeedbackTimerRef\.current = setTimeout/,
+  'a newer save must replace the previous feedback timer',
+)
+assert.match(
+  configPageSource,
   /if \(!mountedRef\.current \|\| useAppStore\.getState\(\)\.activeConfigInstanceId !== inst\.id\) return[\s\S]*setSaved\(true\)/,
   'a completed save must not update feedback for another instance',
 )
@@ -36,6 +41,13 @@ assert.match(instanceSliceSource, /createLatestSaveCoordinator<ConfigSaveSnapsho
 assert.match(instanceSliceSource, /configSaveCoordinator\.save\(\{/)
 assert.match(instanceSliceSource, /configSaveCoordinator\.waitForIdle\(\)/)
 assert.match(instanceSliceSource, /result\.revision === latestConfigSaveRevision/)
+assert.match(instanceSliceSource, /result\.revision > latestAppliedConfigSaveRevision/)
+assert.match(instanceSliceSource, /Object\.keys\(result\.instances\)\.length > 0/)
+assert.match(
+  instanceSliceSource,
+  /if \(revision === latestConfigSaveRevision\)[\s\S]*addRuntimeWarning/,
+  'merged failures must report only the latest failed save',
+)
 assert.match(instanceSliceSource, /synchronizeInstanceSummary/)
 assert.doesNotMatch(instanceSliceSource, /configSaveQueue/)
 

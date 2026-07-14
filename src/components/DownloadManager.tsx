@@ -34,6 +34,9 @@ const preferredBandwidthDisplay = (bytes: number, fallbackUnit: BandwidthUnit) =
   if (bytes % (1024 * 1024) === 0) return { limit: bytes / (1024 * 1024), unit: 'MiB/s' as BandwidthUnit }
   return { limit: Math.round(bytes / 1024), unit: 'KiB/s' as BandwidthUnit }
 }
+const downloadFileKey = (source: string, repoId: string, remotePath: string, saveDir: string) => (
+  `${source}\u0000${repoId}\u0000${remotePath}\u0000${saveDir}`
+)
 
 function MetricTile({
   label,
@@ -412,11 +415,15 @@ export default function DownloadManager() {
     error: t.downloadPage.failed,
   }[task.status] || task.status)
 
-  const taskForFile = (file: MsFileEntry) => Object.values(downloadTasks).find(task =>
-    task.source === source &&
-    task.repoId === browsedRepoId &&
-    task.remotePath === (file.path || file.name) &&
-    task.saveDir === saveDir,
+  const tasksByFile = useMemo(() => new Map(
+    Object.values(downloadTasks).map(task => [
+      downloadFileKey(task.source, task.repoId, task.remotePath, task.saveDir),
+      task,
+    ]),
+  ), [downloadTasks])
+
+  const taskForFile = (file: MsFileEntry) => tasksByFile.get(
+    downloadFileKey(source, browsedRepoId, file.path || file.name, saveDir),
   )
 
   const modelTypeLabel = (fileType: string) => {

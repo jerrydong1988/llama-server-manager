@@ -80,9 +80,19 @@ export function normalizeStoredConfig(config: InstanceConfig, models: ModelInfo[
 }
 
 export function reconcileInstancesWithModels(instances: Instance[], models: ModelInfo[]) {
+  const modelsByPath = new Map<string, ModelInfo>()
+  for (const model of models) {
+    const modelPath = normalizeModelPath(model.path)
+    if (modelPath) modelsByPath.set(modelPath, model)
+  }
+
   let changed = false
   const next = instances.map((instance) => {
-    const normalized = normalizeStoredConfig(instance.config, models)
+    const modelPath = normalizeModelPath(instance.config.model_path)
+    const normalized = normalizeInstanceConfig(
+      instance.config,
+      modelPath ? modelsByPath.get(modelPath) : undefined,
+    )
     const normalizedInstance = normalized.changes.length === 0
       ? instance
       : { ...instance, config: normalized.config }

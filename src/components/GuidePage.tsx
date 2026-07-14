@@ -124,7 +124,7 @@ export default function GuidePage() {
   const engineDirs = useAppStore((state) => state.engineDirs)
   const instances = useAppStore((state) => state.instances)
   const downloadQueue = useAppStore((state) => state.downloadQueue)
-  const downloadTasks = useAppStore((state) => state.downloadTasks)
+  const downloadTaskCount = useAppStore((state) => Object.keys(state.downloadTasks).length)
   const sysMetrics = useAppStore((state) => state.sysMetrics)
   const [html, setHtml] = useState('')
   const [toc, setToc] = useState<{ id: string; title: string }[]>([])
@@ -164,7 +164,7 @@ export default function GuidePage() {
 
   const checklist = useMemo(() => {
     const hasRunningInstance = instances.some(instance => instance.status === 'running')
-    const hasDownloadActivity = downloadQueue.length > 0 || Object.keys(downloadTasks).length > 0
+    const hasDownloadActivity = downloadQueue.length > 0 || downloadTaskCount > 0
     return [
       {
         id: 'model-dirs',
@@ -202,8 +202,8 @@ export default function GuidePage() {
         id: 'downloads',
         title: zh ? '\u4e0b\u8f7d\u76ee\u5f55 / \u961f\u5217' : 'Download directory / queue',
         detail: zh
-          ? `${downloadQueue.length} \u4e2a\u961f\u5217\u9879\uff0c${Object.keys(downloadTasks).length} \u4e2a\u4efb\u52a1`
-          : `${downloadQueue.length} queue entries, ${Object.keys(downloadTasks).length} tasks`,
+          ? `${downloadQueue.length} \u4e2a\u961f\u5217\u9879\uff0c${downloadTaskCount} \u4e2a\u4efb\u52a1`
+          : `${downloadQueue.length} queue entries, ${downloadTaskCount} tasks`,
         done: hasDownloadActivity,
         tab: 'downloads',
       },
@@ -217,7 +217,7 @@ export default function GuidePage() {
         tab: 'perf',
       },
     ]
-  }, [downloadQueue.length, downloadTasks, engineDirs.length, engines.length, instances, modelDirs.length, models.length, sysMetrics, zh])
+  }, [downloadQueue.length, downloadTaskCount, engineDirs.length, engines.length, instances, modelDirs.length, models.length, sysMetrics, zh])
 
   useEffect(() => {
     const nextToc = parseTOC(inAppGuideContent)

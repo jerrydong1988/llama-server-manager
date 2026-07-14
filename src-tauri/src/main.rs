@@ -43,9 +43,9 @@ use crate::commands::server::{
     get_system_metrics, open_browser, start_server, stop_server, test_connection,
 };
 use crate::commands::telemetry::{
-    get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_diagnostics,
-    get_telemetry_session_samples, list_inference_requests, list_telemetry_sessions,
-    prune_telemetry,
+    get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_detail,
+    get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
+    list_telemetry_sessions, prune_telemetry,
 };
 use crate::models::{AppState, WindowState};
 use std::collections::HashMap;
@@ -96,6 +96,9 @@ fn persist_runtime_state(app: &tauri::AppHandle) {
 fn finalize_app_exit(app: &tauri::AppHandle) {
     persist_runtime_state(app);
     flush_download_manager_state(app);
+    if let Err(error) = crate::commands::telemetry::flush_telemetry_writer() {
+        eprintln!("Telemetry flush failed during shutdown: {error}");
+    }
     crate::commands::nvml::shutdown();
     app.exit(0);
 }
@@ -187,6 +190,12 @@ fn main() {
             let mut timings: Vec<(String, u64)> = Vec::new();
             let now = || NATIVE_START.get().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
             timings.push(("setup-enter".into(), now()));
+            if let Err(error) = crate::commands::telemetry::initialize_telemetry_storage() {
+                eprintln!("Telemetry storage initialization failed: {error}");
+            }
+            if let Err(error) = crate::commands::model_inventory::initialize_inventory_storage() {
+                eprintln!("Model inventory initialization failed: {error}");
+            }
             std::thread::spawn(|| {
                 if let Err(error) =
                     crate::commands::telemetry::prune_telemetry_storage(14)
@@ -341,6 +350,7 @@ fn main() {
             download_queue: Mutex::new(Vec::new()),
             download_active_batches: Mutex::new(std::collections::HashSet::new()),
             download_active_entries: Mutex::new(HashMap::new()),
+            download_last_inflight_persist: Mutex::new(Instant::now()),
             download_max_concurrent: Mutex::new(initial_config.download_max_concurrent.max(1)),
             download_bandwidth_limit_bytes_per_sec: Mutex::new(initial_config.download_bandwidth_limit_bytes_per_sec),
             download_low_priority_throttle: Mutex::new(initial_config.download_low_priority_throttle),
@@ -373,7 +383,7 @@ fn main() {
             get_download_manager_snapshot,
             test_connection, check_port,
             get_system_metrics, get_system_health, get_slots, get_metrics,
-            get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
+            get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
             get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
             save_window_state, load_window_state,
             resolve_path,

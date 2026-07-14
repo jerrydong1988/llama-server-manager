@@ -145,6 +145,15 @@ export function registerGlobalStoreListeners(
     })
   }).catch((error) => warnListenerFailure(store, 'server-log', error))
 
+  listen<{ instanceId: string; lines: string[] }>('server-log-batch', (event) => {
+    const timestamp = Date.now()
+    store.getState().addLogs(event.payload.lines.map((text, index) => ({
+      instanceId: event.payload.instanceId,
+      text,
+      timestamp: timestamp + index,
+    })))
+  }).catch((error) => warnListenerFailure(store, 'server-log-batch', error))
+
   listen<{ instanceId: string; pid: number; port: number; command: string }>('server-started', (event) => {
     const state = store.getState()
     state.updateInstance(event.payload.instanceId, {

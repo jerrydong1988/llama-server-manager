@@ -216,7 +216,15 @@ const groupTemplateChanges = (changes: ConfigChange[], groups: ChangeGroup[], ot
 }
 
 const ConfigPage = () => {
-  const { instances, activeConfigInstanceId, updateInstance, saveConfig, models, modelDirs, engines, defaultEngineId, setActiveTab } = useAppStore()
+  const instances = useAppStore(state => state.instances)
+  const activeConfigInstanceId = useAppStore(state => state.activeConfigInstanceId)
+  const updateInstance = useAppStore(state => state.updateInstance)
+  const saveConfig = useAppStore(state => state.saveConfig)
+  const models = useAppStore(state => state.models)
+  const modelDirs = useAppStore(state => state.modelDirs)
+  const engines = useAppStore(state => state.engines)
+  const defaultEngineId = useAppStore(state => state.defaultEngineId)
+  const setActiveTab = useAppStore(state => state.setActiveTab)
   const { t, lang } = useI18n()
   const zh = lang === 'zh-CN'
   const inst = instances.find(instance => instance.id === activeConfigInstanceId)
@@ -238,11 +246,15 @@ const ConfigPage = () => {
   const mountedRef = useRef(true)
   const prevQuery = useRef('')
   const committedModelPathRef = useRef('')
+  const saveFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
+      if (saveFeedbackTimerRef.current !== null) {
+        clearTimeout(saveFeedbackTimerRef.current)
+      }
     }
   }, [])
 
@@ -351,6 +363,10 @@ const ConfigPage = () => {
       return
     }
 
+    if (saveFeedbackTimerRef.current !== null) {
+      clearTimeout(saveFeedbackTimerRef.current)
+      saveFeedbackTimerRef.current = null
+    }
     const engine = engines.find(item => item.id === (local.engine_id || defaultEngineId || '')) || engines[0]
     const modelPathChanged = normalizeModelPath(local.model_path) !== committedModelPathRef.current
     const normalized = modelPathChanged
@@ -378,11 +394,12 @@ const ConfigPage = () => {
     setSaveWarnings(validateConfig(persistedConfig, currentModel, engine))
     setVectorCleanupChanges([])
 
-    setTimeout(() => {
+    saveFeedbackTimerRef.current = setTimeout(() => {
       if (mountedRef.current) {
         setSaved(false)
         setSaveWarnings([])
       }
+      saveFeedbackTimerRef.current = null
     }, 6000)
   }
 

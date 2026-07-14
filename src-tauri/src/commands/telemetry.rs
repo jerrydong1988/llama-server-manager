@@ -4,10 +4,17 @@ use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{mpsc, OnceLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
+const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
+const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
+
+static TELEMETRY_SCHEMA_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+static TELEMETRY_WRITER: OnceLock<Result<mpsc::SyncSender<TelemetryWrite>, String>> =
+    OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TelemetryOverview {
@@ -147,6 +154,14 @@ pub struct DiagnosticFinding {
     pub recommendation: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TelemetrySessionDetail {
+    pub samples: Vec<TelemetrySampleSummary>,
+    pub requests: Vec<InferenceRequestSummary>,
+    pub analysis: TelemetrySessionAnalysis,
+    pub diagnostics: Vec<DiagnosticFinding>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SlotSnapshotRecord {
     pub slot_id: u32,
@@ -211,6 +226,37 @@ pub struct LlamaMetricSample {
     pub busy_slots_per_decode: f64,
 }
 
+enum TelemetryWrite {
+    Metric {
+        session_id: String,
+        instance_id: String,
+        timestamp: i64,
+        system: SystemMetrics,
+        llama: Option<LlamaMetricSample>,
+    },
+    Inference {
+        session_id: String,
+        completed_at: i64,
+        record: InferenceRequestRecord,
+    },
+    Proxy {
+        session_id: String,
+        completed_at: i64,
+        record: ProxyRequestRecord,
+    },
+    Vector {
+        session_id: String,
+        record: VectorActivityRecord,
+    },
+    Slots {
+        session_id: String,
+        instance_id: String,
+        timestamp: i64,
+        slots: Vec<SlotSnapshotRecord>,
+    },
+    Flush(mpsc::Sender<Result<(), String>>),
+}
+
 fn telemetry_db_path() -> PathBuf {
     crate::utils::get_data_dir().join("telemetry.db")
 }
@@ -226,18 +272,35 @@ pub fn current_time_ms() -> i64 {
     now_ms()
 }
 
-fn open_connection() -> Result<Connection, String> {
+fn open_raw_connection() -> Result<Connection, String> {
     let path = telemetry_db_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("无法创建遥测数据目录: {}", e))?;
     }
     let conn = Connection::open(path).map_err(|e| format!("无法打开遥测数据库: {}", e))?;
-    conn.pragma_update(None, "journal_mode", "WAL")
-        .map_err(|e| format!("无法启用遥测数据库 WAL: {}", e))?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|e| format!("failed to configure telemetry busy timeout: {e}"))?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| format!("无法启用遥测数据库外键: {}", e))?;
-    init_schema(&conn)?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(|e| format!("failed to configure telemetry synchronous mode: {e}"))?;
     Ok(conn)
+}
+
+pub(crate) fn initialize_telemetry_storage() -> Result<(), String> {
+    TELEMETRY_SCHEMA_INIT
+        .get_or_init(|| {
+            let conn = open_raw_connection()?;
+            conn.pragma_update(None, "journal_mode", "WAL")
+                .map_err(|e| format!("无法启用遥测数据库 WAL: {}", e))?;
+            init_schema(&conn)
+        })
+        .clone()
+}
+
+fn open_connection() -> Result<Connection, String> {
+    initialize_telemetry_storage()?;
+    open_raw_connection()
 }
 
 fn init_schema(conn: &Connection) -> Result<(), String> {
@@ -290,6 +353,11 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         CREATE INDEX IF NOT EXISTS idx_metric_samples_session_ts ON metric_samples(session_id, ts);
         CREATE INDEX IF NOT EXISTS idx_metric_samples_instance_ts ON metric_samples(instance_id, ts);
         CREATE INDEX IF NOT EXISTS idx_run_sessions_instance_started ON run_sessions(instance_id, started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_metric_samples_ts ON metric_samples(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_run_sessions_started ON run_sessions(started_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_run_sessions_stopped ON run_sessions(stopped_at);
+        CREATE INDEX IF NOT EXISTS idx_run_sessions_active_started
+            ON run_sessions(started_at DESC) WHERE stopped_at IS NULL;
 
         CREATE TABLE IF NOT EXISTS inference_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -320,6 +388,8 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
 
         CREATE INDEX IF NOT EXISTS idx_inference_requests_session_completed
             ON inference_requests(session_id, completed_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_inference_requests_completed
+            ON inference_requests(completed_at);
         CREATE TABLE IF NOT EXISTS slot_snapshots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             session_id TEXT NOT NULL,
@@ -334,6 +404,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
 
         CREATE INDEX IF NOT EXISTS idx_slot_snapshots_session_ts
             ON slot_snapshots(session_id, ts);
+        CREATE INDEX IF NOT EXISTS idx_slot_snapshots_ts ON slot_snapshots(ts);
 
         CREATE TABLE IF NOT EXISTS vector_activity_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -359,6 +430,8 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             ON vector_activity_events(session_id, source, completed_at);
         CREATE INDEX IF NOT EXISTS idx_vector_activity_session_source_duration
             ON vector_activity_events(session_id, source, duration_ms);
+        CREATE INDEX IF NOT EXISTS idx_vector_activity_completed
+            ON vector_activity_events(completed_at);
         "#,
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
@@ -593,6 +666,144 @@ pub fn finish_run_session(
     Ok(())
 }
 
+fn telemetry_writer() -> Result<&'static mpsc::SyncSender<TelemetryWrite>, String> {
+    TELEMETRY_WRITER
+        .get_or_init(|| {
+            initialize_telemetry_storage()?;
+            let (sender, receiver) = mpsc::sync_channel(TELEMETRY_WRITE_QUEUE_CAPACITY);
+            std::thread::Builder::new()
+                .name("telemetry-writer".to_string())
+                .spawn(move || telemetry_writer_loop(receiver))
+                .map_err(|e| format!("failed to start telemetry writer: {e}"))?;
+            Ok(sender)
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+fn enqueue_telemetry(write: TelemetryWrite) -> Result<(), String> {
+    telemetry_writer()?
+        .try_send(write)
+        .map_err(|error| match error {
+            mpsc::TrySendError::Full(_) => {
+                "telemetry write queue is full; sample was dropped to protect runtime latency"
+                    .to_string()
+            }
+            mpsc::TrySendError::Disconnected(_) => "telemetry writer is unavailable".to_string(),
+        })
+}
+
+pub(crate) fn flush_telemetry_writer() -> Result<(), String> {
+    let (sender, receiver) = mpsc::channel();
+    let writer = telemetry_writer()?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut flush = TelemetryWrite::Flush(sender);
+    loop {
+        match writer.try_send(flush) {
+            Ok(()) => break,
+            Err(mpsc::TrySendError::Full(pending)) if std::time::Instant::now() < deadline => {
+                flush = pending;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(mpsc::TrySendError::Full(_)) => {
+                return Err("timed out while queueing telemetry flush".to_string());
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                return Err("telemetry writer is unavailable".to_string());
+            }
+        }
+    }
+    receiver
+        .recv_timeout(Duration::from_secs(5))
+        .map_err(|_| "timed out while flushing telemetry writes".to_string())?
+}
+
+fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
+    let mut conn = match open_connection() {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("Telemetry writer failed to open database: {error}");
+            return;
+        }
+    };
+    while let Ok(first) = receiver.recv() {
+        let mut batch = Vec::with_capacity(TELEMETRY_WRITE_BATCH_SIZE);
+        batch.push(first);
+        while batch.len() < TELEMETRY_WRITE_BATCH_SIZE {
+            match receiver.try_recv() {
+                Ok(write) => batch.push(write),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        let transaction = match conn.transaction() {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                eprintln!("Telemetry writer failed to begin transaction: {error}");
+                continue;
+            }
+        };
+        let mut flush_waiters = Vec::new();
+        for write in batch {
+            if let TelemetryWrite::Flush(waiter) = write {
+                flush_waiters.push(waiter);
+                continue;
+            }
+            if let Err(error) = apply_telemetry_write(&transaction, write) {
+                eprintln!("Telemetry write failed: {error}");
+            }
+        }
+        let commit_result = transaction
+            .commit()
+            .map_err(|error| format!("Telemetry writer failed to commit transaction: {error}"));
+        if let Err(error) = &commit_result {
+            eprintln!("{error}");
+        }
+        for waiter in flush_waiters {
+            let _ = waiter.send(commit_result.clone());
+        }
+    }
+}
+
+fn apply_telemetry_write(conn: &Connection, write: TelemetryWrite) -> Result<(), String> {
+    match write {
+        TelemetryWrite::Metric {
+            session_id,
+            instance_id,
+            timestamp,
+            system,
+            llama,
+        } => insert_metric_sample(
+            conn,
+            &session_id,
+            &instance_id,
+            timestamp,
+            &system,
+            llama.as_ref(),
+        ),
+        TelemetryWrite::Inference {
+            session_id,
+            completed_at,
+            record,
+        } => insert_inference_request(conn, &session_id, completed_at, &record),
+        TelemetryWrite::Proxy {
+            session_id,
+            completed_at,
+            record,
+        } => insert_proxy_request(conn, &session_id, completed_at, &record),
+        TelemetryWrite::Vector { session_id, record } => {
+            record_vector_activity_in_connection(conn, &session_id, &record).map(|_| ())
+        }
+        TelemetryWrite::Slots {
+            session_id,
+            instance_id,
+            timestamp,
+            slots,
+        } => insert_slot_snapshots(conn, &session_id, &instance_id, timestamp, &slots),
+        TelemetryWrite::Flush(_) => Ok(()),
+    }
+}
+
 pub fn record_metric_sample(
     session_id: Option<&str>,
     instance_id: &str,
@@ -602,8 +813,13 @@ pub fn record_metric_sample(
     let Some(session_id) = session_id else {
         return Ok(());
     };
-    let conn = open_connection()?;
-    insert_metric_sample(&conn, session_id, instance_id, now_ms(), system, llama)
+    enqueue_telemetry(TelemetryWrite::Metric {
+        session_id: session_id.to_string(),
+        instance_id: instance_id.to_string(),
+        timestamp: now_ms(),
+        system: system.clone(),
+        llama: llama.cloned(),
+    })
 }
 
 fn insert_metric_sample(
@@ -663,7 +879,19 @@ pub fn record_inference_request(
     let Some(session_id) = session_id else {
         return Ok(());
     };
-    let conn = open_connection()?;
+    enqueue_telemetry(TelemetryWrite::Inference {
+        session_id: session_id.to_string(),
+        completed_at: now_ms(),
+        record: record.clone(),
+    })
+}
+
+fn insert_inference_request(
+    conn: &Connection,
+    session_id: &str,
+    completed_at: i64,
+    record: &InferenceRequestRecord,
+) -> Result<(), String> {
     conn.execute(
         "INSERT INTO inference_requests
             (session_id, task_id, slot_id, completed_at, source, prompt_tokens, prompt_time_ms, prompt_tps,
@@ -690,7 +918,7 @@ pub fn record_inference_request(
             session_id,
             record.task_id,
             record.slot_id,
-            now_ms(),
+            completed_at,
             record.prompt_tokens.map(|v| v as i64),
             record.prompt_time_ms,
             record.prompt_tps,
@@ -716,7 +944,19 @@ pub fn record_proxy_request(
     let Some(session_id) = session_id else {
         return Ok(());
     };
-    let conn = open_connection()?;
+    enqueue_telemetry(TelemetryWrite::Proxy {
+        session_id: session_id.to_string(),
+        completed_at: now_ms(),
+        record: record.clone(),
+    })
+}
+
+fn insert_proxy_request(
+    conn: &Connection,
+    session_id: &str,
+    completed_at: i64,
+    record: &ProxyRequestRecord,
+) -> Result<(), String> {
     conn.execute(
         "INSERT INTO inference_requests
             (session_id, task_id, slot_id, completed_at, source, model, target_instance_id,
@@ -733,7 +973,7 @@ pub fn record_proxy_request(
         params![
             session_id,
             record.task_id,
-            now_ms(),
+            completed_at,
             record.model.as_deref(),
             record.target_instance_id,
             record.http_status.map(|v| v as i64),
@@ -752,8 +992,14 @@ pub fn record_vector_activity(
     let Some(session_id) = session_id else {
         return Ok(false);
     };
-    let conn = open_connection()?;
-    record_vector_activity_in_connection(&conn, session_id, record)
+    if !record.workload.is_vector() {
+        return Err("vector activity requires a vector workload".to_string());
+    }
+    enqueue_telemetry(TelemetryWrite::Vector {
+        session_id: session_id.to_string(),
+        record: record.clone(),
+    })?;
+    Ok(true)
 }
 
 fn record_vector_activity_in_connection(
@@ -840,34 +1086,40 @@ pub fn record_slot_snapshots(
     if slots.is_empty() {
         return Ok(());
     }
-    let mut conn = open_connection()?;
-    let tx = conn
-        .transaction()
-        .map_err(|e| format!("无法开始 slot 遥测事务: {}", e))?;
-    let ts = now_ms();
-    {
-        let mut stmt = tx
-            .prepare(
-                "INSERT INTO slot_snapshots
-                    (session_id, instance_id, ts, slot_id, is_processing, n_ctx, n_past)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            )
-            .map_err(|e| format!("无法准备 slot 遥测写入: {}", e))?;
-        for slot in slots {
-            stmt.execute(params![
-                session_id,
-                instance_id,
-                ts,
-                slot.slot_id,
-                if slot.is_processing { 1 } else { 0 },
-                slot.n_ctx,
-                slot.n_past.map(|v| v as i64),
-            ])
-            .map_err(|e| format!("无法写入 slot 遥测: {}", e))?;
-        }
+    enqueue_telemetry(TelemetryWrite::Slots {
+        session_id: session_id.to_string(),
+        instance_id: instance_id.to_string(),
+        timestamp: now_ms(),
+        slots: slots.to_vec(),
+    })
+}
+
+fn insert_slot_snapshots(
+    conn: &Connection,
+    session_id: &str,
+    instance_id: &str,
+    timestamp: i64,
+    slots: &[SlotSnapshotRecord],
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(
+            "INSERT INTO slot_snapshots
+                (session_id, instance_id, ts, slot_id, is_processing, n_ctx, n_past)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        )
+        .map_err(|e| format!("无法准备 slot 遥测写入: {}", e))?;
+    for slot in slots {
+        stmt.execute(params![
+            session_id,
+            instance_id,
+            timestamp,
+            slot.slot_id,
+            if slot.is_processing { 1 } else { 0 },
+            slot.n_ctx,
+            slot.n_past.map(|v| v as i64),
+        ])
+        .map_err(|e| format!("无法写入 slot 遥测: {}", e))?;
     }
-    tx.commit()
-        .map_err(|e| format!("无法提交 slot 遥测事务: {}", e))?;
     Ok(())
 }
 
@@ -933,20 +1185,32 @@ fn query_telemetry_sessions(
 ) -> Result<Vec<TelemetrySessionSummary>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT
+            "WITH recent_sessions AS MATERIALIZED (
+                SELECT * FROM run_sessions ORDER BY started_at DESC LIMIT ?2
+             ), metric_stats AS (
+                SELECT session_id,
+                    AVG(CASE WHEN tokens_per_sec > 0 THEN tokens_per_sec END) AS avg_tps,
+                    MAX(vram_used_mb) AS peak_vram,
+                    COUNT(*) AS sample_count
+                FROM metric_samples
+                WHERE session_id IN (SELECT id FROM recent_sessions)
+                GROUP BY session_id
+             )
+             SELECT
                 s.id, s.instance_id, s.instance_name, s.model_name, s.model_path, s.engine_id,
                 s.backend, s.workload, s.started_at, s.stopped_at,
                 CASE
                     WHEN COALESCE(s.stopped_at, ?1) <= s.started_at THEN 0
                     ELSE CAST((COALESCE(s.stopped_at, ?1) - s.started_at) / 1000 AS INTEGER)
                 END,
-                COALESCE((SELECT AVG(m.tokens_per_sec) FROM metric_samples m WHERE m.session_id = s.id AND m.tokens_per_sec > 0), 0),
-                COALESCE((SELECT MAX(m.vram_used_mb) FROM metric_samples m WHERE m.session_id = s.id), 0),
-                COALESCE((SELECT COUNT(*) FROM metric_samples m WHERE m.session_id = s.id), 0),
+                COALESCE(m.avg_tps, 0),
+                COALESCE(m.peak_vram, 0),
+                COALESCE(m.sample_count, 0),
                 s.stop_reason
-             FROM run_sessions s
+             FROM recent_sessions s
+             LEFT JOIN metric_stats m ON m.session_id = s.id
              ORDER BY s.started_at DESC
-             LIMIT ?2",
+             ",
         )
         .map_err(|e| format!("无法准备遥测会话查询: {e}"))?;
     let rows = stmt
@@ -992,6 +1256,32 @@ pub async fn get_telemetry_session_samples(
 }
 
 #[tauri::command]
+pub async fn get_telemetry_session_detail(
+    session_id: String,
+    sample_limit: Option<u32>,
+    request_limit: Option<u32>,
+) -> Result<TelemetrySessionDetail, String> {
+    let sample_limit = sample_limit.unwrap_or(220).clamp(1, 1_000);
+    let request_limit = request_limit.unwrap_or(18).clamp(1, 200);
+    tokio::task::spawn_blocking(move || {
+        flush_telemetry_writer()?;
+        let conn = open_connection()?;
+        let samples = samples_for_session(&conn, &session_id, sample_limit)?;
+        let requests = inference_requests_for_session(&conn, &session_id, request_limit)?;
+        let analysis = query_session_analysis(&conn, &session_id)?;
+        let diagnostics = query_session_diagnostics_with_analysis(&conn, &session_id, &analysis)?;
+        Ok(TelemetrySessionDetail {
+            samples,
+            requests,
+            analysis,
+            diagnostics,
+        })
+    })
+    .await
+    .map_err(|e| format!("遥测会话详情查询失败: {e}"))?
+}
+
+#[tauri::command]
 pub async fn prune_telemetry(retention_days: Option<u32>) -> Result<u32, String> {
     let days = retention_days.unwrap_or(14).clamp(1, 365);
     tokio::task::spawn_blocking(move || prune_telemetry_storage(days))
@@ -1034,7 +1324,7 @@ pub(crate) fn prune_telemetry_storage(retention_days: u32) -> Result<u32, String
     let mut conn = open_connection()?;
     let affected = prune_connection(&mut conn, before)?;
     if affected > 0 {
-        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;");
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;");
     }
     Ok(affected)
 }
@@ -1489,10 +1779,6 @@ fn query_vector_analysis_inner(
     }))
 }
 
-fn average_available(values: &[f64]) -> Option<f64> {
-    (!values.is_empty()).then(|| values.iter().sum::<f64>() / values.len() as f64)
-}
-
 fn query_vector_baseline(
     conn: &Connection,
     session_id: &str,
@@ -1501,9 +1787,9 @@ fn query_vector_baseline(
     workload: ModelWorkload,
     backend: &str,
 ) -> Result<VectorTelemetryBaseline, String> {
-    let mut statement = conn
-        .prepare(
-            "SELECT id
+    conn.query_row(
+        "WITH eligible AS (
+             SELECT id, workload, started_at, stopped_at
              FROM run_sessions
              WHERE id != ?1
                AND workload = ?2
@@ -1511,55 +1797,72 @@ fn query_vector_baseline(
                AND stopped_at IS NOT NULL
                AND (model_path = ?4 OR model_name = ?5)
              ORDER BY started_at DESC
-             LIMIT 50",
-        )
-        .map_err(|e| format!("无法准备向量历史基线查询: {e}"))?;
-    let rows = statement
-        .query_map(
-            params![
-                session_id,
-                workload.as_str(),
-                backend,
-                model_path,
-                model_name
-            ],
-            |row| row.get::<_, String>(0),
-        )
-        .map_err(|e| format!("无法查询向量历史基线: {e}"))?;
-    let mut session_ids = Vec::new();
-    for row in rows {
-        session_ids.push(row.map_err(|e| format!("无法读取向量历史会话: {e}"))?);
-    }
-
-    let mut input_rates = Vec::new();
-    let mut item_rates = Vec::new();
-    let mut p95_durations = Vec::new();
-    let mut session_count = 0_u32;
-    for historical_id in session_ids {
-        let Some(analysis) = query_vector_analysis_inner(conn, &historical_id, false)? else {
-            continue;
-        };
-        if !analysis.log_available {
-            continue;
-        }
-        session_count = session_count.saturating_add(1);
-        if let Some(value) = analysis.average_input_tokens_per_second {
-            input_rates.push(value);
-        }
-        if let Some(value) = analysis.average_items_per_second {
-            item_rates.push(value);
-        }
-        if let Some(value) = analysis.task_duration_p95_ms {
-            p95_durations.push(value);
-        }
-    }
-
-    Ok(VectorTelemetryBaseline {
-        session_count,
-        average_input_tokens_per_second: average_available(&input_rates),
-        average_items_per_second: average_available(&item_rates),
-        task_duration_p95_ms: average_available(&p95_durations),
-    })
+             LIMIT 50
+         ), events AS (
+             SELECT e.session_id, e.started_at, e.completed_at, e.duration_ms,
+                    e.item_count, e.input_tokens
+             FROM vector_activity_events e
+             JOIN eligible s ON s.id = e.session_id
+             WHERE e.source = 'log'
+               AND e.workload = s.workload
+               AND e.completed_at >= s.started_at
+               AND e.completed_at <= s.stopped_at
+               AND e.duration_ms >= 0
+         ), bounds AS (
+             SELECT session_id, MIN(started_at) AS first_started_at,
+                    MAX(completed_at) AS last_completed_at
+             FROM events
+             GROUP BY session_id
+         ), rate_sums AS (
+             SELECT e.session_id, SUM(e.item_count) AS item_count,
+                    SUM(e.input_tokens) AS input_tokens
+             FROM events e
+             JOIN bounds b ON b.session_id = e.session_id
+             WHERE e.completed_at >= MAX(b.first_started_at, b.last_completed_at - ?6)
+               AND e.completed_at <= b.last_completed_at
+             GROUP BY e.session_id
+         ), ranked AS (
+             SELECT session_id, duration_ms,
+                    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY duration_ms) AS rank,
+                    COUNT(*) OVER (PARTITION BY session_id) AS sample_count
+             FROM events
+         ), percentiles AS (
+             SELECT session_id,
+                    MAX(CASE WHEN rank = ((sample_count * 95 + 99) / 100)
+                             THEN duration_ms END) AS p95_ms
+             FROM ranked
+             GROUP BY session_id
+         ), per_session AS (
+             SELECT b.session_id,
+                    r.input_tokens / MAX((b.last_completed_at - MAX(b.first_started_at, b.last_completed_at - ?6)) / 1000.0, 1.0)
+                        AS input_rate,
+                    r.item_count / MAX((b.last_completed_at - MAX(b.first_started_at, b.last_completed_at - ?6)) / 1000.0, 1.0)
+                        AS item_rate,
+                    p.p95_ms
+             FROM bounds b
+             JOIN rate_sums r ON r.session_id = b.session_id
+             JOIN percentiles p ON p.session_id = b.session_id
+         )
+         SELECT COUNT(*), AVG(input_rate), AVG(item_rate), AVG(p95_ms)
+         FROM per_session",
+        params![
+            session_id,
+            workload.as_str(),
+            backend,
+            model_path,
+            model_name,
+            VECTOR_RATE_WINDOW_MS,
+        ],
+        |row| {
+            Ok(VectorTelemetryBaseline {
+                session_count: row.get::<_, i64>(0)?.max(0) as u32,
+                average_input_tokens_per_second: row.get(1)?,
+                average_items_per_second: row.get(2)?,
+                task_duration_p95_ms: row.get(3)?,
+            })
+        },
+    )
+    .map_err(|e| format!("无法查询向量历史基线: {e}"))
 }
 
 fn query_vector_baseline_for_session(
@@ -1703,6 +2006,15 @@ fn query_session_diagnostics(
     conn: &Connection,
     session_id: &str,
 ) -> Result<Vec<DiagnosticFinding>, String> {
+    let analysis = query_session_analysis(conn, session_id)?;
+    query_session_diagnostics_with_analysis(conn, session_id, &analysis)
+}
+
+fn query_session_diagnostics_with_analysis(
+    conn: &Connection,
+    session_id: &str,
+    analysis: &TelemetrySessionAnalysis,
+) -> Result<Vec<DiagnosticFinding>, String> {
     let session = conn
         .query_row(
             "SELECT model_name, engine_id, backend, workload
@@ -1720,10 +2032,9 @@ fn query_session_diagnostics(
         .optional()
         .map_err(|e| format!("无法读取诊断会话: {}", e))?
         .ok_or_else(|| "找不到对应的遥测会话".to_string())?;
-    let analysis = query_session_analysis(conn, session_id)?;
     let metrics = query_session_metric_stats(conn, session_id)?;
     if session.workload.is_vector() {
-        return build_vector_diagnostics(&session, &analysis, &metrics);
+        return build_vector_diagnostics(&session, analysis, &metrics);
     }
     let baseline = conn
         .query_row(
@@ -2231,53 +2542,60 @@ pub async fn list_inference_requests(
     let limit = limit.unwrap_or(20).clamp(1, 200);
     tokio::task::spawn_blocking(move || {
         let conn = open_connection()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT session_id, task_id, slot_id, completed_at, source, model, target_instance_id, http_status, error_text,
-                        prompt_tokens, prompt_time_ms, prompt_tps,
-                        generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
-                        spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms
-                 FROM inference_requests
-                 WHERE session_id = ?1
-                 ORDER BY completed_at DESC
-                 LIMIT ?2",
-            )
-            .map_err(|e| format!("无法准备推理请求查询: {}", e))?;
-        let rows = stmt
-            .query_map(params![session_id, limit], |row| {
-                Ok(InferenceRequestSummary {
-                    session_id: row.get(0)?,
-                    task_id: row.get(1)?,
-                    slot_id: row.get(2)?,
-                    completed_at: row.get(3)?,
-                    source: row.get::<_, Option<String>>(4)?.unwrap_or_else(|| "log".into()),
-                    model: row.get(5)?,
-                    target_instance_id: row.get(6)?,
-                    http_status: row.get::<_, Option<i64>>(7)?.map(|v| v as u16),
-                    error_text: row.get(8)?,
-                    prompt_tokens: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
-                    prompt_time_ms: row.get(10)?,
-                    prompt_tps: row.get(11)?,
-                    generated_tokens: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-                    generation_time_ms: row.get(13)?,
-                    generation_tps: row.get(14)?,
-                    total_tokens: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-                    total_time_ms: row.get(16)?,
-                    spec_accept_rate: row.get(17)?,
-                    spec_accepted: row.get::<_, Option<i64>>(18)?.map(|v| v as u64),
-                    spec_generated: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
-                    spec_gen_time_ms: row.get(20)?,
-                })
-            })
-            .map_err(|e| format!("无法查询推理请求: {}", e))?;
-        let mut requests = Vec::new();
-        for row in rows {
-            requests.push(row.map_err(|e| format!("无法读取推理请求: {}", e))?);
-        }
-        Ok(requests)
+        inference_requests_for_session(&conn, &session_id, limit)
     })
     .await
     .map_err(|e| format!("推理请求查询失败: {}", e))?
+}
+
+fn inference_requests_for_session(
+    conn: &Connection,
+    session_id: &str,
+    limit: u32,
+) -> Result<Vec<InferenceRequestSummary>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT session_id, task_id, slot_id, completed_at, source, model, target_instance_id, http_status, error_text,
+                    prompt_tokens, prompt_time_ms, prompt_tps,
+                    generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
+                    spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms
+             FROM inference_requests
+             WHERE session_id = ?1
+             ORDER BY completed_at DESC
+             LIMIT ?2",
+        )
+        .map_err(|e| format!("无法准备推理请求查询: {}", e))?;
+    let rows = stmt
+        .query_map(params![session_id, limit], |row| {
+            Ok(InferenceRequestSummary {
+                session_id: row.get(0)?,
+                task_id: row.get(1)?,
+                slot_id: row.get(2)?,
+                completed_at: row.get(3)?,
+                source: row
+                    .get::<_, Option<String>>(4)?
+                    .unwrap_or_else(|| "log".into()),
+                model: row.get(5)?,
+                target_instance_id: row.get(6)?,
+                http_status: row.get::<_, Option<i64>>(7)?.map(|v| v as u16),
+                error_text: row.get(8)?,
+                prompt_tokens: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
+                prompt_time_ms: row.get(10)?,
+                prompt_tps: row.get(11)?,
+                generated_tokens: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
+                generation_time_ms: row.get(13)?,
+                generation_tps: row.get(14)?,
+                total_tokens: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
+                total_time_ms: row.get(16)?,
+                spec_accept_rate: row.get(17)?,
+                spec_accepted: row.get::<_, Option<i64>>(18)?.map(|v| v as u64),
+                spec_generated: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+                spec_gen_time_ms: row.get(20)?,
+            })
+        })
+        .map_err(|e| format!("无法查询推理请求: {}", e))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("无法读取推理请求: {}", e))
 }
 
 pub fn latest_open_session_id(instance_id: &str) -> Result<Option<String>, String> {
@@ -3067,6 +3385,39 @@ mod tests {
     }
 
     #[test]
+    fn global_time_queries_use_dedicated_indexes() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        for (sql, expected_index) in [
+            (
+                "EXPLAIN QUERY PLAN SELECT AVG(tokens_per_sec) FROM metric_samples WHERE ts >= 1",
+                "idx_metric_samples_ts",
+            ),
+            (
+                "EXPLAIN QUERY PLAN SELECT * FROM metric_samples ORDER BY ts DESC LIMIT 10",
+                "idx_metric_samples_ts",
+            ),
+            (
+                "EXPLAIN QUERY PLAN DELETE FROM vector_activity_events WHERE completed_at < 1",
+                "idx_vector_activity_completed",
+            ),
+        ] {
+            let mut statement = conn.prepare(sql).unwrap();
+            let details = statement
+                .query_map([], |row| row.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join(" ");
+            assert!(
+                details.contains(expected_index),
+                "query plan did not use {expected_index}: {details}"
+            );
+        }
+    }
+
+    #[test]
     fn version_four_database_migrates_vector_schema_once() {
         let conn = version_four_connection();
 
@@ -3076,7 +3427,7 @@ mod tests {
         let version: i64 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, SCHEMA_VERSION);
         assert_eq!(
             column_names(&conn, "run_sessions")
                 .iter()

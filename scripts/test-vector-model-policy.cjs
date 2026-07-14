@@ -311,6 +311,9 @@ assert.match(startInstanceSource, /await configSaveCoordinator\.waitForIdle\(\)/
 assert.match(saveConfigSource, /reconcileInstancesWithModels\(/, 'save must normalize every instance')
 
 const bootstrapSource = readSource('src', 'store', 'bootstrap.ts')
+const reconcileSource = section(bootstrapSource, 'export function reconcileInstancesWithModels', 'export function applyModelInventory')
+assert.match(reconcileSource, /new Map<string, ModelInfo>\(\)/, 'instance reconciliation must index models once per batch')
+assert.doesNotMatch(reconcileSource, /models\.find\(/, 'instance reconciliation must not scan the full model list per instance')
 const cachedScanSource = section(bootstrapSource, 'const cachedScanRequest', 'const injected')
 const initialScanSource = section(bootstrapSource, 'const modelScanRequest', "invoke<EngineInfo[]>('scan_engines'")
 assert.match(cachedScanSource, /applyModelInventory\(/, 'cached model inventory must reconcile instances')

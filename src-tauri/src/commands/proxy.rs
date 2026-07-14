@@ -10,6 +10,7 @@ use axum::{
 use futures_util::StreamExt;
 use serde_json::json;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
@@ -24,6 +25,13 @@ use crate::models::{AppState, InstanceConfig, ProxyConfig, ProxyStatus, ProxyTar
 use crate::vector_policy::ModelWorkload;
 
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
+static PROXY_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+    reqwest::Client::builder()
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(30))
+        .build()
+        .expect("proxy HTTP client configuration must be valid")
+});
 const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -360,12 +368,34 @@ fn resolve_proxy_target(
     endpoint_workload: Option<ModelWorkload>,
 ) -> Option<ResolvedProxyTarget> {
     let proxy_config = state.proxy_config.lock().unwrap().clone();
-    let instances = state.instances.lock().unwrap().clone();
     let running = state.running.lock().unwrap().clone();
+    let instances = state.instances.lock().unwrap();
+    let mut had_candidate = false;
+    let resolve_id = |id: &str| {
+        let config = instances.get(id)?;
+        let running_info = running.get(id)?;
+        if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
+            return None;
+        }
+        let workload = stored_instance_workload(config, &running_info.workload);
+        Some(ResolvedProxyTarget {
+            public: ProxyTarget {
+                instance_id: id.to_string(),
+                name: config.name.clone(),
+                alias: config.alias.clone(),
+                host: normalize_host(&running_info.host),
+                port: running_info.port,
+                running: true,
+            },
+            api_key: effective_api_key(config),
+            api_prefix: config.api_prefix.clone(),
+            telemetry_session_id: running_info.telemetry_session_id.clone(),
+            workload,
+        })
+    };
 
-    let mut candidate_ids: Vec<String> = Vec::new();
     if let Some(model) = requested_model {
-        let mut routes = proxy_config.routes.clone();
+        let mut routes = proxy_config.routes.iter().collect::<Vec<_>>();
         routes.sort_by_key(|route| route.priority);
         for route in routes {
             if route.enabled
@@ -373,15 +403,21 @@ fn resolve_proxy_target(
                 && !route.target_instance_id.is_empty()
                 && running.contains_key(&route.target_instance_id)
             {
-                candidate_ids.push(route.target_instance_id);
+                had_candidate = true;
+                if let Some(target) = resolve_id(&route.target_instance_id) {
+                    return Some(target);
+                }
             }
         }
 
-        for (id, config) in &instances {
+        for (id, config) in instances.iter() {
             if running.contains_key(id)
                 && (config.alias == model || config.name == model || id == model)
             {
-                candidate_ids.push(id.clone());
+                had_candidate = true;
+                if let Some(target) = resolve_id(id) {
+                    return Some(target);
+                }
             }
         }
     }
@@ -389,36 +425,17 @@ fn resolve_proxy_target(
     if !proxy_config.default_instance_id.is_empty()
         && running.contains_key(&proxy_config.default_instance_id)
     {
-        candidate_ids.push(proxy_config.default_instance_id.clone());
-    }
-
-    if proxy_config.routing_strategy == "firstHealthy" || candidate_ids.is_empty() {
-        for id in running.keys() {
-            candidate_ids.push(id.clone());
+        had_candidate = true;
+        if let Some(target) = resolve_id(&proxy_config.default_instance_id) {
+            return Some(target);
         }
     }
 
-    for id in candidate_ids {
-        if let (Some(config), Some(running_info)) = (instances.get(&id), running.get(&id)) {
-            if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
-                continue;
+    if proxy_config.routing_strategy == "firstHealthy" || !had_candidate {
+        for id in running.keys() {
+            if let Some(target) = resolve_id(id) {
+                return Some(target);
             }
-            let workload = stored_instance_workload(config, &running_info.workload);
-            let public = ProxyTarget {
-                instance_id: id.clone(),
-                name: config.name.clone(),
-                alias: config.alias.clone(),
-                host: normalize_host(&running_info.host),
-                port: running_info.port,
-                running: true,
-            };
-            return Some(ResolvedProxyTarget {
-                public,
-                api_key: effective_api_key(config),
-                api_prefix: config.api_prefix.clone(),
-                telemetry_session_id: running_info.telemetry_session_id.clone(),
-                workload,
-            });
         }
     }
 
@@ -595,21 +612,6 @@ async fn proxy_openai(
     let started_at_ms = current_time_ms();
     let proxy_task_id = next_proxy_task_id();
 
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(
-            proxy_config.timeout_ms.max(1_000),
-        ))
-        .build()
-    {
-        Ok(client) => client,
-        Err(err) => {
-            return plain_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("proxy client error: {}", err),
-            )
-        }
-    };
-
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
         Ok(method) => method,
         Err(err) => {
@@ -617,7 +619,9 @@ async fn proxy_openai(
         }
     };
 
-    let mut request = client.request(reqwest_method, target_url(&target, &uri));
+    let mut request = PROXY_HTTP_CLIENT
+        .request(reqwest_method, target_url(&target, &uri))
+        .timeout(Duration::from_millis(proxy_config.timeout_ms.max(1_000)));
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_ascii_lowercase();
         if matches!(
@@ -632,7 +636,7 @@ async fn proxy_openai(
         request = request.bearer_auth(target.api_key.trim());
     }
 
-    let response = match request.body(body.to_vec()).send().await {
+    let response = match request.body(body.clone()).send().await {
         Ok(response) => response,
         Err(err) => {
             let _ = record_proxy_telemetry(

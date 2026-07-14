@@ -6,13 +6,16 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{Emitter, Manager};
 
 const MAX_SERVER_LOG_BYTES: u64 = 32 * 1024 * 1024;
 const RETAINED_SERVER_LOG_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TRACKED_PERF_TASKS: usize = 1_024;
+const LOG_REPLAY_LINES: usize = 2_000;
+const LOG_REPLAY_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const LOG_EVENT_BATCH_SIZE: usize = 200;
 
 struct CappedLogState {
     file: std::fs::File,
@@ -1061,20 +1064,7 @@ pub async fn start_server(
         }
     });
 
-    let id = instance_id.clone();
-    let app_for_health = app.clone();
-    let host = if config.host == "0.0.0.0" {
-        "localhost".to_string()
-    } else {
-        config.host.clone()
-    };
-    let port = config.port;
-    let api_key_health = effective_api_key(&config);
-    std::thread::spawn(move || {
-        health_check_loop(&id, &host, port, pid, &api_key_health, app_for_health);
-    });
-
-    // P1/P2: background metrics push and history recording thread.
+    // Combined health and metrics supervisor.
     let id_metrics = instance_id.clone();
     let app_metrics = app.clone();
     let host_metrics = if config.host == "0.0.0.0" {
@@ -1125,17 +1115,55 @@ fn monitor_loop(
     let client = reqwest::blocking::Client::new();
     let metrics_url = crate::utils::http_url(host, port, "/metrics");
     let slots_url = crate::utils::http_url(host, port, "/slots");
+    let health_url = crate::utils::http_url(host, port, "/health");
+    let models_url = crate::utils::http_url(host, port, "/v1/models");
 
     // Startup timestamp used to compute uptime.
     let start_instant = std::time::Instant::now();
 
     // Dedicated System for process metrics; system/GPU metrics reuse the SYSINFO_CACHE singleton.
     let mut proc_sys = System::new_all();
+    let mut health_failures = 0_u32;
+    let mut health_ready = false;
 
     loop {
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        let iteration_started = std::time::Instant::now();
         if !is_my_instance() {
             break;
+        }
+        if !is_recorded_process_alive(expected_pid) {
+            cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
+            break;
+        }
+
+        let probe = |url: &str| {
+            let mut request = client.get(url).timeout(std::time::Duration::from_secs(2));
+            if !api_key.is_empty() {
+                request = request.header("Authorization", format!("Bearer {api_key}"));
+            }
+            request.send().map(|response| response.status())
+        };
+        let ready = probe_status_is_success(&probe(&health_url).map_err(|e| e.to_string()))
+            || probe_status_is_success(&probe(&models_url).map_err(|e| e.to_string()));
+        if ready {
+            health_failures = 0;
+            if !health_ready {
+                health_ready = true;
+                let _ = app.emit(
+                    "health-status",
+                    serde_json::json!({ "instanceId": instance_id, "status": "ok" }),
+                );
+            }
+        } else {
+            health_failures = health_failures.saturating_add(1);
+            if health_ready && health_failures >= 3 {
+                health_ready = false;
+                health_failures = 0;
+                let _ = app.emit(
+                    "health-status",
+                    serde_json::json!({ "instanceId": instance_id, "status": "fail" }),
+                );
+            }
         }
 
         // System-level and GPU metrics using the collect_gpu_and_system singleton cache.
@@ -1152,7 +1180,6 @@ fn monitor_loop(
         ) = collect_gpu_and_system();
 
         // Process-level metrics.
-        proc_sys.refresh_cpu_all();
         let (cpu, mem) = get_process_metrics(&mut proc_sys, expected_pid);
         let cpu_pct = adlx_cpu.unwrap_or(cpu);
         let mem_mb = if adlx_cpu.is_some() {
@@ -1265,6 +1292,9 @@ fn monitor_loop(
                     .map(|d| d.as_secs())
                     .unwrap_or(0),
             }),
+        );
+        std::thread::sleep(
+            std::time::Duration::from_secs(5).saturating_sub(iteration_started.elapsed()),
         );
     }
 }
@@ -1760,7 +1790,17 @@ pub async fn check_port(port: u16, host: Option<String>) -> Result<bool, String>
 
 // System performance metrics via sysinfo.
 
-static SYSINFO_CACHE: Mutex<Option<System>> = Mutex::new(None);
+struct SystemSampler {
+    system: System,
+    snapshot: Option<(std::time::Instant, GpuSystemSnapshot)>,
+}
+
+static SYSINFO_CACHE: LazyLock<Mutex<SystemSampler>> = LazyLock::new(|| {
+    Mutex::new(SystemSampler {
+        system: System::new_all(),
+        snapshot: None,
+    })
+});
 type GpuSystemSnapshot = (
     Option<f32>,
     Option<f32>,
@@ -1776,14 +1816,17 @@ type GpuSystemSnapshot = (
 /// Collect GPU + system-level metrics. Uses cached System instance, no sleep.
 fn collect_gpu_and_system() -> GpuSystemSnapshot {
     let mut guard = SYSINFO_CACHE.lock().unwrap();
-    let sys = guard.get_or_insert_with(System::new_all);
-    sys.refresh_cpu_all();
-    sys.refresh_memory();
-    let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(sys);
+    if let Some((sampled_at, snapshot)) = &guard.snapshot {
+        if sampled_at.elapsed() < std::time::Duration::from_secs(4) {
+            return snapshot.clone();
+        }
+    }
+    guard.system.refresh_cpu_all();
+    guard.system.refresh_memory();
+    let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(&guard.system);
 
-    // AMD
-    if let Some(m) = adlx::collect_metrics() {
-        return (
+    let snapshot = if let Some(m) = adlx::collect_metrics() {
+        (
             m.cpu_percent,
             m.gpu_percent,
             m.vram_used_mb,
@@ -1793,11 +1836,9 @@ fn collect_gpu_and_system() -> GpuSystemSnapshot {
             sys_cpu,
             sys_mem_total,
             sys_mem_used,
-        );
-    }
-    // NVIDIA
-    if let Some(m) = nvml::collect_metrics() {
-        return (
+        )
+    } else if let Some(m) = nvml::collect_metrics() {
+        (
             None,
             m.gpu_percent,
             m.vram_used_mb,
@@ -1807,20 +1848,22 @@ fn collect_gpu_and_system() -> GpuSystemSnapshot {
             sys_cpu,
             sys_mem_total,
             sys_mem_used,
-        );
-    }
-    // Fallback
-    (
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        sys_cpu,
-        sys_mem_total,
-        sys_mem_used,
-    )
+        )
+    } else {
+        (
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            sys_cpu,
+            sys_mem_total,
+            sys_mem_used,
+        )
+    };
+    guard.snapshot = Some((std::time::Instant::now(), snapshot.clone()));
+    snapshot
 }
 
 /// #6: Reuse the System instance to avoid repeated new -> refresh -> sleep -> refresh 300ms stalls.
@@ -1842,8 +1885,7 @@ fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
     }
 }
 
-fn get_system_level_metrics(sys: &mut System) -> (Option<f32>, Option<f64>, Option<f64>) {
-    sys.refresh_memory();
+fn get_system_level_metrics(sys: &System) -> (Option<f32>, Option<f64>, Option<f64>) {
     let cpu = {
         let usage = sys.global_cpu_usage();
         if usage > 0.0 {
@@ -2421,6 +2463,56 @@ fn parse_perf_line(
 
 /// Reads existing content from the log file and tails new lines through server-log events.
 /// Mirrors the behavior of Docker `docker logs -f` or systemd `journalctl -f`.
+fn read_log_tail(path: &std::path::Path, max_lines: usize) -> std::io::Result<(Vec<String>, u64)> {
+    let mut file = std::fs::File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let min_offset = file_len.saturating_sub(LOG_REPLAY_MAX_BYTES);
+    let mut offset = file_len;
+    let mut chunks = Vec::new();
+    let mut newline_count = 0_usize;
+    while offset > min_offset && newline_count <= max_lines {
+        let chunk_start = offset.saturating_sub(64 * 1024).max(min_offset);
+        let chunk_len = usize::try_from(offset - chunk_start).unwrap_or(0);
+        if chunk_len == 0 {
+            break;
+        }
+        let mut chunk = vec![0_u8; chunk_len];
+        file.seek(SeekFrom::Start(chunk_start))?;
+        file.read_exact(&mut chunk)?;
+        newline_count += chunk.iter().filter(|byte| **byte == b'\n').count();
+        chunks.push(chunk);
+        offset = chunk_start;
+    }
+    chunks.reverse();
+    let bytes = chunks.into_iter().flatten().collect::<Vec<_>>();
+    let text = String::from_utf8_lossy(&bytes);
+    let complete_text = if offset > 0 {
+        text.split_once('\n').map(|(_, tail)| tail).unwrap_or("")
+    } else {
+        text.as_ref()
+    };
+    let mut lines = complete_text
+        .lines()
+        .rev()
+        .take(max_lines)
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    lines.reverse();
+    Ok((lines, file_len))
+}
+
+fn emit_log_batches(app: &tauri::AppHandle, instance_id: &str, lines: &[String]) {
+    for chunk in lines.chunks(LOG_EVENT_BATCH_SIZE) {
+        let _ = app.emit(
+            "server-log-batch",
+            serde_json::json!({
+                "instanceId": instance_id,
+                "lines": chunk,
+            }),
+        );
+    }
+}
+
 fn tail_log_file(
     log_path: &std::path::Path,
     instance_id: &str,
@@ -2468,26 +2560,21 @@ fn tail_log_file(
         );
     };
 
-    // Phase 1: replay the last 2000 existing lines, covering the frontend 1000-line cap.
+    // Phase 1: replay only the tail needed by the frontend cap.
+    let mut last_size = 0;
     if log_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(log_path) {
-            let lines: Vec<&str> = content.lines().collect();
-            let start = if lines.len() > 2000 {
-                lines.len() - 2000
-            } else {
-                0
-            };
-            for line in &lines[start..] {
+        if let Ok((lines, replay_end)) = read_log_tail(log_path, LOG_REPLAY_LINES) {
+            last_size = replay_end;
+            let replay_lines = lines
+                .iter()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| format!("{line}\n"))
+                .collect::<Vec<_>>();
+            emit_log_batches(&app, instance_id, &replay_lines);
+            for line in &lines {
                 if line.trim().is_empty() {
                     continue;
                 }
-                let _ = app.emit(
-                    "server-log",
-                    serde_json::json!({
-                        "instanceId": instance_id,
-                        "text": format!("{}\n", line),
-                    }),
-                );
                 if parse_perf_line(&parser, line, &mut tasks, &mut last_completed) {
                     record_completed(&last_completed, &mut last_recorded_task_id);
                 }
@@ -2501,8 +2588,6 @@ fn tail_log_file(
     // Phase 2: continuously tail new content.
     // Wait briefly for in-flight writes to finish so half-lines are avoided.
     std::thread::sleep(std::time::Duration::from_millis(200));
-
-    let mut last_size = std::fs::metadata(log_path).map(|m| m.len()).unwrap_or(0);
 
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -2529,6 +2614,7 @@ fn tail_log_file(
 
         if current_size > last_size {
             let mut perf_changed = false;
+            let mut log_lines = Vec::new();
             if let Ok(mut file) = std::fs::File::open(log_path) {
                 if file.seek(SeekFrom::Start(last_size)).is_ok() {
                     let reader = BufReader::new(file);
@@ -2536,13 +2622,7 @@ fn tail_log_file(
                         if text.trim().is_empty() {
                             continue;
                         }
-                        let _ = app.emit(
-                            "server-log",
-                            serde_json::json!({
-                                "instanceId": instance_id,
-                                "text": format!("{}\n", text),
-                            }),
-                        );
+                        log_lines.push(format!("{text}\n"));
                         if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
                             perf_changed = true;
                             record_completed(&last_completed, &mut last_recorded_task_id);
@@ -2550,6 +2630,7 @@ fn tail_log_file(
                     }
                 }
             }
+            emit_log_batches(&app, instance_id, &log_lines);
             last_size = current_size;
             if perf_changed {
                 tasks.retain(|_, t| !t.completed);
@@ -2922,6 +3003,26 @@ mod perf_parser_tests {
         let content = std::fs::read(&path).unwrap();
         assert!(content.len() <= 64);
         assert!(content.ends_with(&[b'b'; 48]));
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir(dir);
+    }
+
+    #[test]
+    fn log_replay_reads_only_requested_tail_lines() {
+        let dir = std::env::temp_dir().join(format!("lsm-log-tail-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.log");
+        let content = (0..3_000)
+            .map(|index| format!("line-{index:04}\n"))
+            .collect::<String>();
+        std::fs::write(&path, content).unwrap();
+
+        let (lines, end_offset) = read_log_tail(&path, 2_000).unwrap();
+
+        assert_eq!(lines.len(), 2_000);
+        assert_eq!(end_offset, std::fs::metadata(&path).unwrap().len());
+        assert_eq!(lines.first().map(String::as_str), Some("line-1000"));
+        assert_eq!(lines.last().map(String::as_str), Some("line-2999"));
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir(dir);
     }

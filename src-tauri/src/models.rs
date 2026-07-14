@@ -95,7 +95,7 @@ pub struct EngineInfo {
 // Instance config.
 // Container-level #[serde(default)]: missing fields fall back to Default.
 // Prevent older or hand-edited configs from failing all instance deserialization because one field is missing.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InstanceConfig {
     pub id: String,
@@ -709,6 +709,7 @@ pub struct AppState {
     pub download_queue: Mutex<Vec<PersistedQueueEntry>>,
     pub download_active_batches: Mutex<std::collections::HashSet<String>>,
     pub download_active_entries: Mutex<HashMap<String, PersistedQueueEntry>>,
+    pub download_last_inflight_persist: Mutex<Instant>,
     pub download_max_concurrent: Mutex<usize>,
     pub download_bandwidth_limit_bytes_per_sec: Mutex<u64>,
     pub download_low_priority_throttle: Mutex<bool>,

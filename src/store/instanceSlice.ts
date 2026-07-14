@@ -29,6 +29,7 @@ type PersistedConfigResult = {
 }
 
 let latestConfigSaveRevision = 0
+let latestAppliedConfigSaveRevision = 0
 
 const configSaveCoordinator = createLatestSaveCoordinator<ConfigSaveSnapshot, PersistedConfigResult>(
   async ({ revision, ...snapshot }) => ({
@@ -49,6 +50,7 @@ export function createInstanceSlice(
   | 'moveInstance'
   | 'renameInstance'
   | 'addLog'
+  | 'addLogs'
   | 'clearLogs'
   | 'generateCommand'
   | 'startInstance'
@@ -97,10 +99,21 @@ export function createInstanceSlice(
       })
       void get().saveConfig().catch(() => {})
     },
-    addLog: (entry: LogEntry) => set((state) => {
-      const existing = state.logs[entry.instanceId] || []
-      const updated = [...existing.slice(-(MAX_LOG_ENTRIES - 1)), { ...entry, timestamp: Date.now() }]
-      return { logs: { ...state.logs, [entry.instanceId]: updated } }
+    addLog: (entry: LogEntry) => get().addLogs([entry]),
+    addLogs: (entries: LogEntry[]) => set((state) => {
+      if (entries.length === 0) return state
+      const grouped = new Map<string, LogEntry[]>()
+      for (const entry of entries) {
+        const group = grouped.get(entry.instanceId) || []
+        group.push({ ...entry, timestamp: entry.timestamp || Date.now() })
+        grouped.set(entry.instanceId, group)
+      }
+      const logs = { ...state.logs }
+      for (const [instanceId, group] of grouped) {
+        const existing = logs[instanceId] || []
+        logs[instanceId] = [...existing, ...group].slice(-MAX_LOG_ENTRIES)
+      }
+      return { logs }
     }),
     clearLogs: (instanceId) => set((state) => ({
       logs: { ...state.logs, [instanceId]: [] },
@@ -188,7 +201,12 @@ export function createInstanceSlice(
         lastTab: state.activeTab,
         darkMode: state.darkMode,
       }).then((result) => {
-        if (result.revision === latestConfigSaveRevision) {
+        if (
+          result.revision === latestConfigSaveRevision
+          && result.revision > latestAppliedConfigSaveRevision
+          && Object.keys(result.instances).length > 0
+        ) {
+          latestAppliedConfigSaveRevision = result.revision
           set((current) => ({
             instances: current.instances.map((instance) => {
               const persistedConfig = result.instances[instance.id]
@@ -199,7 +217,9 @@ export function createInstanceSlice(
           }))
         }
       }).catch((error) => {
-        get().addRuntimeWarning(`配置保存失败：${String(error)}`)
+        if (revision === latestConfigSaveRevision) {
+          get().addRuntimeWarning(`配置保存失败：${String(error)}`)
+        }
         throw error
       })
       return operation

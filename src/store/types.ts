@@ -396,6 +396,13 @@ export interface DiagnosticFinding {
   recommendation: string[]
 }
 
+export interface TelemetrySessionDetail {
+  samples: TelemetrySampleSummary[]
+  requests: InferenceRequestSummary[]
+  analysis: TelemetrySessionAnalysis
+  diagnostics: DiagnosticFinding[]
+}
+
 export interface AppState {
   models: ModelInfo[]
   engines: EngineInfo[]
@@ -432,6 +439,7 @@ export interface AppState {
   moveInstance: (id: string, direction: 'up' | 'down') => void
   renameInstance: (id: string, name: string) => void
   addLog: (entry: LogEntry) => void
+  addLogs: (entries: LogEntry[]) => void
   clearLogs: (instanceId: string) => void
 
   loadInitialData: () => Promise<void>

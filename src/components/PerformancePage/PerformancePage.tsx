@@ -14,6 +14,7 @@ import type {
   SystemMetrics,
   TelemetryOverview,
   TelemetrySampleSummary,
+  TelemetrySessionDetail,
   TelemetrySessionAnalysis,
   TelemetrySessionSummary,
 } from '../../store/types'
@@ -71,8 +72,8 @@ const TELEMETRY_DETAIL_REFRESH_MS = 5000
 export default function PerformancePage() {
   const { lang } = useI18n()
   const zh = lang === 'zh-CN'
-  const labels = getLabels(zh)
-  const { instances } = useAppStore()
+  const labels = useMemo(() => getLabels(zh), [zh])
+  const instances = useAppStore(state => state.instances)
   const running = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
   const [selectedInstanceId, setSelectedInstanceId] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
@@ -90,8 +91,9 @@ export default function PerformancePage() {
   const [trendRange, setTrendRange] = useState<'1m' | '5m' | '15m' | '1h'>('5m')
   const [vectorTrendMetric, setVectorTrendMetric] = useState<'input' | 'items'>('input')
   const lastTelemetryRefreshRef = useRef(0)
-  const lastSessionDetailRefreshRef = useRef(0)
   const selectedSessionIdRef = useRef('')
+  const telemetryInFlightRef = useRef(false)
+  const detailInFlightRef = useRef(new Set<string>())
 
   const selectedSession = sessions.find(session => session.id === selectedSessionId)
   const selectedInstance = running.find(instance => instance.id === selectedInstanceId)
@@ -105,6 +107,8 @@ export default function PerformancePage() {
       : []
 
   const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
+    if (telemetryInFlightRef.current) return
+    telemetryInFlightRef.current = true
     lastTelemetryRefreshRef.current = Date.now()
     if (!options.silent) setLoading(true)
     try {
@@ -125,30 +129,32 @@ export default function PerformancePage() {
     } catch (error) {
       setTelemetryError(error instanceof Error ? error.message : String(error))
     } finally {
+      telemetryInFlightRef.current = false
       if (!options.silent) setLoading(false)
     }
   }, [])
 
   const refreshSelectedSessionDetails = useCallback(async (sessionId: string) => {
-    if (!sessionId) return
-    lastSessionDetailRefreshRef.current = Date.now()
+    if (!sessionId || detailInFlightRef.current.has(sessionId)) return
+    detailInFlightRef.current.add(sessionId)
     try {
-      const [nextSamples, nextRequests, nextAnalysis, nextDiagnostics] = await Promise.all([
-        invoke<TelemetrySampleSummary[]>('get_telemetry_session_samples', { sessionId, limit: 220 }),
-        invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 18 }),
-        invoke<TelemetrySessionAnalysis>('get_telemetry_session_analysis', { sessionId }),
-        invoke<DiagnosticFinding[]>('get_telemetry_session_diagnostics', { sessionId }),
-      ])
+      const detail = await invoke<TelemetrySessionDetail>('get_telemetry_session_detail', {
+        sessionId,
+        sampleLimit: 220,
+        requestLimit: 18,
+      })
       if (selectedSessionIdRef.current !== sessionId) return
-      setSamples(nextSamples)
-      setRequests(nextRequests)
-      setAnalysis(nextAnalysis)
-      setDiagnostics(nextDiagnostics)
+      setSamples(detail.samples)
+      setRequests(detail.requests)
+      setAnalysis(detail.analysis)
+      setDiagnostics(detail.diagnostics)
       setTelemetryError(null)
     } catch (error) {
       if (selectedSessionIdRef.current === sessionId) {
         setTelemetryError(error instanceof Error ? error.message : String(error))
       }
+    } finally {
+      detailInFlightRef.current.delete(sessionId)
     }
   }, [])
 
@@ -186,15 +192,12 @@ export default function PerformancePage() {
       if (now - lastTelemetryRefreshRef.current > TELEMETRY_OVERVIEW_REFRESH_MS) {
         void refreshTelemetry({ silent: true })
       }
-      if (selectedSessionIdRef.current && now - lastSessionDetailRefreshRef.current > TELEMETRY_DETAIL_REFRESH_MS) {
-        void refreshSelectedSessionDetails(selectedSessionIdRef.current)
-      }
     })
 
     return () => {
       unlisten.then(fn => fn())
     }
-  }, [selectedInstanceId, refreshTelemetry, refreshSelectedSessionDetails])
+  }, [selectedInstanceId, refreshTelemetry])
 
   useEffect(() => {
     const unlisten = listen<PerfUpdateEvent>('perf-update', event => {
@@ -202,16 +205,12 @@ export default function PerformancePage() {
         ...current,
         [event.payload.instanceId]: event.payload.tasks || [],
       }))
-      const now = Date.now()
-      if (selectedSessionIdRef.current && now - lastSessionDetailRefreshRef.current > TELEMETRY_DETAIL_REFRESH_MS) {
-        void refreshSelectedSessionDetails(selectedSessionIdRef.current)
-      }
     })
 
     return () => {
       unlisten.then(fn => fn())
     }
-  }, [refreshSelectedSessionDetails])
+  }, [])
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
@@ -222,15 +221,17 @@ export default function PerformancePage() {
       setDiagnostics([])
       return
     }
-    const session = sessions.find(item => item.id === selectedSessionId)
-    if (session) setSelectedInstanceId(session.instance_id)
     void refreshSelectedSessionDetails(selectedSessionId)
     const timer = window.setInterval(
       () => void refreshSelectedSessionDetails(selectedSessionId),
       TELEMETRY_DETAIL_REFRESH_MS,
     )
     return () => window.clearInterval(timer)
-  }, [selectedSessionId, sessions, refreshSelectedSessionDetails])
+  }, [selectedSessionId, refreshSelectedSessionDetails])
+
+  useEffect(() => {
+    if (selectedSession) setSelectedInstanceId(selectedSession.instance_id)
+  }, [selectedSession])
 
   const trendSamples = useMemo(() => filterSamplesByRange(samples.length > 0 ? samples : overview.latest_samples, trendRange), [samples, overview.latest_samples, trendRange])
   const resourceSignals = useMemo(
