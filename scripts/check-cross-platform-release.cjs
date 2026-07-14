@@ -8,6 +8,7 @@ const privacyPolicy = fs.readFileSync('PRIVACY.md', 'utf8')
 const signingGuide = fs.readFileSync('docs/RELEASE_SIGNING.md', 'utf8')
 const failures = []
 const rustsecNode24Commit = '858dc40f52ca2b8570b7a997c1c4e35c6fc9a432'
+const releaseNode24Commit = '3d0d9888cb7fd7b750713d6e236d1fcb99157228'
 const approvedRustsecAdvisories = [
   'RUSTSEC-2024-0370',
   'RUSTSEC-2024-0411',
@@ -80,6 +81,19 @@ for (const forbidden of [
   'informational_warnings = []',
 ]) {
   if (workflow.includes(forbidden)) failures.push(`RustSec workflow contains forbidden broad bypass ${forbidden}`)
+}
+
+const releaseUploadMatches = [...workflow.matchAll(/uses:\s*softprops\/action-gh-release@([^\s]+)/g)]
+if (releaseUploadMatches.length !== 6) {
+  failures.push(`release workflow must contain exactly 6 release upload steps, found ${releaseUploadMatches.length}`)
+}
+for (const match of releaseUploadMatches) {
+  if (match[1] !== releaseNode24Commit) {
+    failures.push(`release upload does not pin the reviewed Node 24 action commit: ${match[1]}`)
+  }
+}
+if (workflow.includes('::warning::')) {
+  failures.push('expected code-signing fallbacks must not emit warning annotations')
 }
 
 const windowsJob = jobBody('build-windows')

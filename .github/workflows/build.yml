@@ -99,7 +99,7 @@ jobs:
           if ($missing) {
             "enabled=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
             $message = "SignPath is not configured; publishing unsigned Windows installers. Missing: $($missing -join ', ')"
-            Write-Output "::warning::$message"
+            Write-Output $message
             "### Windows signing`n`n$message" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           } else {
             "enabled=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -136,7 +136,7 @@ jobs:
           path: src-tauri/target/release/bundle/
       - name: Upload signed Windows installers to Release
         if: startsWith(github.ref, 'refs/tags/v') && steps.signpath.outputs.enabled == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: |
             ${{ runner.temp }}/signed-windows/**/*.exe
@@ -155,7 +155,7 @@ jobs:
           }
       - name: Upload unsigned Windows installers to Release
         if: startsWith(github.ref, 'refs/tags/v') && steps.signpath.outputs.enabled != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: |
             ${{ runner.temp }}/unsigned-windows/*.exe
@@ -208,7 +208,7 @@ jobs:
           if [ -n "$missing" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             message="Apple signing credentials are incomplete; building an ad-hoc signed macOS package. Missing:$missing"
-            echo "::warning::$message"
+            echo "$message"
             printf '### macOS signing\n\n%s\n' "$message" >> "$GITHUB_STEP_SUMMARY"
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -250,7 +250,7 @@ jobs:
           path: src-tauri/target/release/bundle/
       - name: Upload notarized macOS package to Release
         if: startsWith(github.ref, 'refs/tags/v') && steps.apple-signing.outputs.enabled == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: src-tauri/target/release/bundle/dmg/*.dmg
       - name: Prepare clearly labeled ad-hoc macOS release asset
@@ -264,7 +264,7 @@ jobs:
           done
       - name: Upload ad-hoc macOS package to Release
         if: startsWith(github.ref, 'refs/tags/v') && steps.apple-signing.outputs.enabled != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: ${{ runner.temp }}/macos-release/*-adhoc.dmg
       - name: Remove temporary Apple signing keychain
@@ -317,7 +317,7 @@ jobs:
           path: src-tauri/target/release/bundle/
       - name: Upload to Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: |
             src-tauri/target/release/bundle/appimage/*.AppImage
@@ -365,7 +365,7 @@ jobs:
           path: src-tauri/target/release/bundle/
       - name: Upload to Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
         with:
           files: |
             src-tauri/target/release/bundle/appimage/*.AppImage
