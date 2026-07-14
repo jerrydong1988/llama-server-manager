@@ -376,7 +376,7 @@ git commit -m "feat: collect vector task activity from logs"
 - Consumes: vector proxy path, JSON request body, resolved target workload, full upstream response/failure.
 - Produces: forwarded Embedding/Reranker aliases and one source-specific proxy event containing only counts, timing, status and sanitized error.
 
-- [ ] **Step 1: Add failing endpoint and item-count tests**
+- [x] **Step 1: Add failing endpoint and item-count tests**
 
 Cover all seven aliases, unsupported paths, Embedding string/array/token-array inputs, Reranker `documents`, malformed/non-JSON bodies, status failures, body-stream failures and privacy assertions.
 
@@ -399,29 +399,29 @@ fn proxy_event_never_contains_request_content() {
 }
 ```
 
-- [ ] **Step 2: Run focused proxy tests and verify failure**
+- [x] **Step 2: Run focused proxy tests and verify failure**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml --locked commands::proxy::tests::vector_endpoint_classification_covers_supported_aliases`
 
 Expected: FAIL because only the existing OpenAI route set is registered.
 
-- [ ] **Step 3: Add route classification and body count helpers**
+- [x] **Step 3: Add route classification and body count helpers**
 
 Parse JSON into `serde_json::Value` only long enough to count top-level input/documents items. Treat a single string or one token array as one Embedding item; treat an array of strings/token arrays as its length; treat Reranker documents array length as item count. Return `None` when the count is unknowable rather than inventing zero. Drop parsed values immediately and never add request bodies to logs or errors.
 
-- [ ] **Step 4: Register aliases through the existing proxy handler**
+- [x] **Step 4: Register aliases through the existing proxy handler**
 
 Route all aliases through the same authorization, target selection, timeout, headers and forwarding behavior as current API endpoints. Preserve the original path sent upstream. Reject a workload/path mismatch explicitly instead of forwarding a rerank request to an Embedding-only instance.
 
-- [ ] **Step 5: Record complete proxy lifecycle**
+- [x] **Step 5: Record complete proxy lifecycle**
 
 Allocate proxy source IDs independently from log task IDs. Record start before forwarding and complete only after the upstream response body is fully consumed/forwarded or an error terminates it. Save status and sanitized error. Proxy event write failure must not replace the upstream response.
 
-- [ ] **Step 6: Prove source isolation**
+- [x] **Step 6: Prove source isolation**
 
 Add an integration-style database test where one proxied vector call also has four log child events. Assert the log summary reports four completed items and the proxy summary reports one HTTP request/four request items, without a combined value of eight.
 
-- [ ] **Step 7: Run proxy and telemetry tests**
+- [x] **Step 7: Run proxy and telemetry tests**
 
 Run:
 
@@ -432,7 +432,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked commands::telemetry
 
 Expected: aliases, privacy, failures and source-isolation tests all pass.
 
-- [ ] **Step 8: Commit proxy support**
+- [x] **Step 8: Commit proxy support**
 
 ```bash
 git add src-tauri/src/commands/proxy.rs src-tauri/src/commands/telemetry.rs
