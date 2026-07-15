@@ -1,6 +1,6 @@
 # Llama Server Manager 使用说明 / User Guide
 
-> v2.9.26 · Windows / macOS / Linux
+> v2.9.27 · Windows / macOS / Linux
 
 本说明按实际操作顺序介绍模型、引擎、实例、路由和监控功能。应用内“使用说明”页面会随安装包离线提供同一份内容和图片。
 
@@ -22,8 +22,7 @@ This guide follows the real workflow from models and engines to instances, routi
 10. [性能监控 / Performance Monitoring](#性能监控-performance-monitoring)
 11. [监控大屏 / Monitoring Wall](#监控大屏-monitoring-wall)
 12. [服务器日志 / Server Logs](#服务器日志-server-logs)
-13. [应用设置与数据安全 / Application Settings and Data Safety](#应用设置与数据安全-application-settings-and-data-safety)
-14. [常见问题 / FAQ](#常见问题-faq)
+13. [常见问题 / FAQ](#常见问题-faq)
 
 ---
 
@@ -452,48 +451,6 @@ Server Logs collects instance stdout and stderr, startup commands, PIDs, health 
 常见信号：`address already in use` 表示端口冲突；模型文件打开失败表示路径或权限问题；GPU 分配失败通常需要降低 GPU 层数、上下文或批大小；健康接口暂时返回错误但模型接口可用时，连接测试会使用兼容回退判断。
 
 Common signals include port conflicts, model path or permission errors, GPU allocation failures, and transient health endpoint errors. Connection tests can use compatible model endpoint fallback when appropriate.
-
----
-
-## 应用设置与数据安全 / Application Settings and Data Safety
-
-![应用内使用说明、进度检查和交互式引导 / In-app guide, setup checklist, and interactive tour](public/docs/guide/12-in-app-guide.png)
-
-### 使用说明与交互引导 / Guide and Interactive Tour
-
-应用内“使用说明”提供本地目录、启用进度检查和 11 步交互式引导。引导只切换页面和高亮控件，不创建、修改、启动或停止资源；关闭或完成后返回说明页。
-
-The in-app Guide provides an offline table of contents, setup checklist, and 11-step walkthrough. It only navigates and highlights; it does not mutate resources and returns to Guide when closed or completed.
-
-### 主题、语言和窗口 / Theme, Language, and Window
-
-- 侧边栏底部可切换深色 / 明亮主题和中文 / 英文。
-- 主题、最后页面、窗口尺寸和位置会保存。
-- 关闭窗口默认隐藏到系统托盘；托盘菜单可重新显示或退出。
-- 自动启动开关用于应用启动后恢复应当运行的实例；缺少引擎、模型或集群 Worker 时会跳过并记录警告。
-- 应用启动时检查 GitHub Release，新版本提示显示在侧边栏。
-
-- Toggle theme and language from the sidebar footer.
-- Theme, last page, window size, and position persist.
-- Closing hides to the tray by default; the tray can restore or exit.
-- Auto-start restores eligible instances and skips those missing engines, models, or required workers.
-- Startup checks GitHub Releases and shows an update notice when available.
-
-### 配置、备份和日志 / Configuration, Backup, and Logs
-
-- 主配置保存在应用配置目录下的 `configs/instances.json`。
-- 保存采用临时文件加原子替换，并保留 `instances.json.bak`。
-- 如果主配置 JSON 损坏，启动时会尝试从 `.bak` 读取并恢复可用配置。
-- 下载队列、窗口状态、路由配置和遥测数据库分别持久化。
-- API Key 文件可能包含敏感信息，不应提交到仓库或共享截图。
-- 配置目录和日志中可能包含本机路径，反馈问题前请先脱敏。
-
-- Main configuration is stored in `configs/instances.json` under the application configuration location.
-- Saves use a temporary file and atomic replacement while retaining `instances.json.bak`.
-- A corrupt primary JSON file triggers backup fallback on launch.
-- Download queues, window state, routing configuration, and telemetry are persisted separately.
-- API key files are sensitive and must not be committed or exposed in screenshots.
-- Redact local paths before sharing configuration or logs.
 
 ---
 

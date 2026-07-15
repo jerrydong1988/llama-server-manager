@@ -39,7 +39,6 @@ const REQUIRED_IMAGES = [
   '09-performance.png',
   '10-monitoring-wall.png',
   '11-server-logs.png',
-  '12-in-app-guide.png',
   'flow-01-first-run.png',
   'flow-02-start-and-diagnose.png',
   'flow-03-route-requests.png',
@@ -157,6 +156,14 @@ if (guide.includes('发版前自检 / Release Validation')) {
 
 if (guide.includes('#发版前自检-release-validation')) {
   errors.add('GUIDE.md table of contents must not link to release validation')
+}
+
+if (guide.includes('应用设置与数据安全 / Application Settings and Data Safety')) {
+  errors.add('GUIDE.md must not expose the internal application settings and data safety section')
+}
+
+if (guide.includes('#应用设置与数据安全-application-settings-and-data-safety')) {
+  errors.add('GUIDE.md table of contents must not link to application settings and data safety')
 }
 
 for (const section of REQUIRED_SECTIONS) {
