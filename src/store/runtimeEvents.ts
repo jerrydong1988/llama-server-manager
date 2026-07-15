@@ -2,7 +2,13 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import type { StoreApi } from 'zustand'
 import { formatStartupCommand } from './commandFormatting'
-import type { AppState, DownloadProgress, SystemMetrics } from './types'
+import type {
+  AppState,
+  DownloadProgress,
+  MonitoringFrame,
+  PerfUpdateEvent,
+  SystemMetrics,
+} from './types'
 
 type StoreLike = Pick<StoreApi<AppState>, 'getState' | 'setState'>
 
@@ -196,6 +202,22 @@ export function registerGlobalStoreListeners(
       healthCheck: event.payload.status === 'ok' ? 'ok' : 'fail',
     })
   }).catch((error) => warnListenerFailure(store, 'health-status', error))
+
+  listen<MonitoringFrame>('monitoring-frame', (event) => {
+    store.getState().ingestMonitoringFrame(event.payload)
+  }).catch((error) => warnListenerFailure(store, 'monitoring-frame', error))
+
+  listen<PerfUpdateEvent>('perf-update', (event) => {
+    store.getState().applyPerfUpdate(event.payload)
+  }).catch((error) => warnListenerFailure(store, 'perf-update', error))
+
+  invoke<MonitoringFrame[]>('get_monitoring_series', { rangeMs: 3_600_000 })
+    .then((frames) => store.getState().hydrateMonitoringFrames(frames))
+    .catch((error) => {
+      store.getState().addRuntimeWarning(
+        `monitoring timeline hydration failed: ${error?.message || String(error)}`,
+      )
+    })
 
   listen<DownloadEventPayload>('download-started', (event) => {
     const applied = applyDownloadPatch(store, event.payload, {

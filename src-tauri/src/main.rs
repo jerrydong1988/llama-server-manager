@@ -29,6 +29,7 @@ use crate::commands::download::{
     resume_all_downloads, resume_download_task, set_download_bandwidth_limit,
     set_download_concurrency, set_download_low_priority_throttle, set_download_resume_policy,
 };
+use crate::commands::monitoring::get_monitoring_series;
 use crate::commands::proxy::{
     get_proxy_config, get_proxy_status, list_proxy_targets, restart_proxy, save_proxy_config,
     start_proxy, stop_proxy, test_proxy_route,
@@ -382,7 +383,7 @@ fn main() {
             set_download_low_priority_throttle, get_download_low_priority_throttle,
             get_download_manager_snapshot,
             test_connection, check_port,
-            get_system_metrics, get_system_health, get_slots, get_metrics,
+            get_system_metrics, get_system_health, get_slots, get_metrics, get_monitoring_series,
             get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
             get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
             save_window_state, load_window_state,

@@ -206,6 +206,20 @@ fn record_proxy_telemetry(
                 error_text: record.error_text.clone(),
             },
         )?;
+        crate::commands::monitoring::record_vector_activity(
+            &record.target_instance_id,
+            session_id,
+            metadata.workload,
+            crate::commands::monitoring::VectorMetricSource::Proxy,
+            completed_at,
+            metadata.item_count,
+            None,
+            record.duration_ms,
+            record
+                .http_status
+                .is_some_and(|status| (200..300).contains(&status))
+                && record.error_text.is_none(),
+        );
         return Ok(());
     }
     record_proxy_request(

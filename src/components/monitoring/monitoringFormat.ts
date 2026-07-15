@@ -1,6 +1,6 @@
-export function formatRate(value?: number | null): string {
+export function formatRate(value?: number | null, unit = 'tok/s'): string {
   if (value == null || !Number.isFinite(value) || value <= 0) return '--'
-  return `${value >= 100 ? value.toFixed(0) : value.toFixed(value >= 10 ? 1 : 2)} tok/s`
+  return `${value >= 100 ? value.toFixed(0) : value.toFixed(value >= 10 ? 1 : 2)} ${unit}`
 }
 
 export function formatPercent(value?: number | null): string {

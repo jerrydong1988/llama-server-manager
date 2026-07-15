@@ -3,6 +3,7 @@ import { createClusterSlice } from './store/clusterSlice'
 import { createCoreSlice } from './store/coreSlice'
 import { createDownloadSlice } from './store/downloadSlice'
 import { createInstanceSlice } from './store/instanceSlice'
+import { createMonitoringSlice } from './store/monitoringSlice'
 import { registerGlobalStoreListeners } from './store/runtimeEvents'
 import type { AppState, SystemMetrics } from './store/types'
 
@@ -50,10 +51,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   downloadTasks: {},
   downloadQueue: [],
   sysMetrics: null as SystemMetrics | null,
+  monitoringFramesByInstance: {},
+  monitoringCurrentByInstance: {},
+  runningTasksByInstance: {},
   ...createCoreSlice(set, get),
   ...createInstanceSlice(set, get, _startupTimings),
   ...createDownloadSlice(set, get),
   ...createClusterSlice(set),
+  ...createMonitoringSlice(set),
 }))
 
 registerGlobalStoreListeners(useAppStore, _startupTimings)

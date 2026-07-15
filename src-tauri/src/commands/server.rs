@@ -1079,10 +1079,13 @@ pub async fn start_server(
         monitor_loop(
             &id_metrics,
             pid,
-            &host_metrics,
-            port_metrics,
-            &api_key_metrics,
-            telemetry_session_metrics,
+            MonitorLoopConfig {
+                host: host_metrics,
+                port: port_metrics,
+                api_key: api_key_metrics,
+                telemetry_session_id: telemetry_session_metrics,
+                workload,
+            },
             app_metrics,
         );
     });
@@ -1091,15 +1094,34 @@ pub async fn start_server(
 }
 
 /// Background metrics loop that samples every 5 seconds, pushes to the frontend, and records history.
+struct MonitorLoopConfig {
+    host: String,
+    port: u16,
+    api_key: String,
+    telemetry_session_id: Option<String>,
+    workload: ModelWorkload,
+}
+
 fn monitor_loop(
     instance_id: &str,
     expected_pid: u32,
-    host: &str,
-    port: u16,
-    api_key: &str,
-    telemetry_session_id: Option<String>,
+    config: MonitorLoopConfig,
     app: tauri::AppHandle,
 ) {
+    let MonitorLoopConfig {
+        host,
+        port,
+        api_key,
+        telemetry_session_id,
+        workload,
+    } = config;
+    crate::commands::monitoring::start_frame_loop(
+        instance_id.to_string(),
+        expected_pid,
+        telemetry_session_id.clone(),
+        workload,
+        app.clone(),
+    );
     // Wait for llama-server startup, giving it 3 seconds.
     std::thread::sleep(std::time::Duration::from_secs(3));
 
@@ -1113,10 +1135,10 @@ fn monitor_loop(
     };
 
     let client = reqwest::blocking::Client::new();
-    let metrics_url = crate::utils::http_url(host, port, "/metrics");
-    let slots_url = crate::utils::http_url(host, port, "/slots");
-    let health_url = crate::utils::http_url(host, port, "/health");
-    let models_url = crate::utils::http_url(host, port, "/v1/models");
+    let metrics_url = crate::utils::http_url(&host, port, "/metrics");
+    let slots_url = crate::utils::http_url(&host, port, "/slots");
+    let health_url = crate::utils::http_url(&host, port, "/health");
+    let models_url = crate::utils::http_url(&host, port, "/v1/models");
 
     // Startup timestamp used to compute uptime.
     let start_instant = std::time::Instant::now();
@@ -1235,6 +1257,13 @@ fn monitor_loop(
             &sys_metrics,
             llama_sample.as_ref(),
         );
+        crate::commands::monitoring::update_metrics(
+            instance_id,
+            telemetry_session_id.as_deref(),
+            workload,
+            sys_metrics.clone(),
+            llama_sample.clone(),
+        );
 
         let mut slots_req = client.get(&slots_url);
         if !api_key.is_empty() {
@@ -1272,6 +1301,13 @@ fn monitor_loop(
                             }
                         })
                         .collect();
+                    crate::commands::monitoring::update_slots(
+                        instance_id,
+                        telemetry_session_id.as_deref(),
+                        workload,
+                        slots.len() as u64,
+                        slots.iter().filter(|slot| slot.is_processing).count() as u64,
+                    );
                     let _ = crate::commands::telemetry::record_slot_snapshots(
                         telemetry_session_id.as_deref(),
                         instance_id,
@@ -1289,7 +1325,7 @@ fn monitor_loop(
                 "llama": llama_metrics,
                 "ts": std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
+                    .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
             }),
         );
@@ -2159,14 +2195,20 @@ pub fn reconnect_running_instance(
         let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_metrics)
             .ok()
             .flatten();
+        let workload =
+            crate::commands::telemetry::session_workload(telemetry_session_id.as_deref())
+                .unwrap_or(ModelWorkload::Inference);
         std::thread::spawn(move || {
             monitor_loop(
                 &id_metrics,
                 pid,
-                &host_m,
-                port,
-                &ak,
-                telemetry_session_id,
+                MonitorLoopConfig {
+                    host: host_m,
+                    port,
+                    api_key: ak,
+                    telemetry_session_id,
+                    workload,
+                },
                 app_metrics,
             );
         });
@@ -2551,6 +2593,18 @@ fn tail_log_file(
                     "text": format!("Telemetry warning: {error}\n"),
                 }),
             );
+        } else if let Some(event) = parser.vector_event(task) {
+            crate::commands::monitoring::record_vector_activity(
+                instance_id,
+                telemetry_session_id.as_deref(),
+                event.workload,
+                crate::commands::monitoring::VectorMetricSource::Log,
+                event.completed_at,
+                event.item_count,
+                event.input_tokens,
+                event.duration_ms,
+                true,
+            );
         }
         *recorded = Some(task.task_id);
     };
@@ -2559,6 +2613,25 @@ fn tail_log_file(
                      tasks: &HashMap<u32, TaskPerfState>,
                      last: &Option<TaskPerfState>| {
         let active: Vec<&TaskPerfState> = tasks.values().filter(|t| !t.completed).collect();
+        let throughput = if workload == ModelWorkload::Inference {
+            active
+                .iter()
+                .map(|task| task.tg_3s.unwrap_or(task.tg).max(0.0))
+                .sum()
+        } else {
+            active
+                .iter()
+                .filter_map(|task| task.prompt_tps)
+                .map(|value| value.max(0.0))
+                .sum()
+        };
+        crate::commands::monitoring::update_tasks(
+            instance_id,
+            telemetry_session_id.as_deref(),
+            workload,
+            active.len() as u64,
+            throughput,
+        );
         let _ = app.emit(
             "perf-update",
             serde_json::json!({
@@ -2647,6 +2720,13 @@ fn tail_log_file(
             }
         }
     }
+    crate::commands::monitoring::update_tasks(
+        instance_id,
+        telemetry_session_id.as_deref(),
+        workload,
+        0,
+        0.0,
+    );
 }
 
 /// #13: Simple shell-style argument splitting with double-quote support.

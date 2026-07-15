@@ -3,6 +3,8 @@ import type {
   InferenceRequestSummary,
   Instance,
   LogEntry,
+  ModelWorkload,
+  MonitoringFrame,
   RunningInferenceTask,
   SystemMetrics,
   TelemetrySampleSummary,
@@ -17,6 +19,19 @@ export type LiveThroughputSource = 'active-tasks' | 'llama-metrics' | 'mixed' | 
 export type ThroughputPoint = {
   ts: number
   value: number
+}
+
+export type MonitoringTrendPoint = {
+  ts: number
+  value: number | null
+}
+
+export type FleetThroughputSeries = {
+  mode: 'inference' | 'vector' | 'mixed' | 'empty'
+  unit: 'tok/s' | 'input tok/s'
+  points: MonitoringTrendPoint[]
+  current: number | null
+  vectorItemsPerSecond: number
 }
 
 export type LiveThroughput = {
@@ -173,13 +188,100 @@ export function buildChartAxis(values: number[], targetIntervals = 4) {
   return { min: 0, max, step, ticks }
 }
 
-export function buildRequestPressure(processing?: number | null, deferred?: number | null) {
+export function buildRequestPressure(
+  processing?: number | null,
+  deferred?: number | null,
+  capacity?: number | null,
+) {
   const active = Math.max(processing || 0, 0)
   const queued = Math.max(deferred || 0, 0)
-  const total = Math.max(active + queued, 1)
-  const percent = Math.round((active / total) * 100)
-  const level: RequestPressureLevel = percent >= 80 ? 'high' : percent >= 50 ? 'medium' : 'normal'
-  return { active, queued, percent, level }
+  const normalizedCapacity = Math.max(capacity || 0, 0)
+  const capacityKnown = normalizedCapacity > 0
+  const utilization = capacityKnown ? Math.min((active / normalizedCapacity) * 100, 100) : 0
+  const percent = Math.round(queued > 0 ? 100 : utilization)
+  const level: RequestPressureLevel = queued > 0 || percent >= 90
+    ? 'high'
+    : percent >= 70
+      ? 'medium'
+      : 'normal'
+  return { active, queued, capacity: capacityKnown ? normalizedCapacity : null, percent, level }
+}
+
+export function monitoringFramePoints(
+  frames: MonitoringFrame[],
+  workload: ModelWorkload,
+): MonitoringTrendPoint[] {
+  return frames
+    .filter(frame => frame.workload === workload)
+    .map(frame => ({
+      ts: frame.ts,
+      value: frame.state === 'unavailable' ? null : frame.throughput,
+    }))
+}
+
+export function downsampleMonitoringPoints(
+  points: MonitoringTrendPoint[],
+  maxPoints = 240,
+): MonitoringTrendPoint[] {
+  if (points.length <= maxPoints) return points
+  if (maxPoints <= 1) return points.slice(-1)
+  const lastIndex = points.length - 1
+  return Array.from(
+    { length: maxPoints },
+    (_, index) => points[Math.round((index / (maxPoints - 1)) * lastIndex)],
+  )
+}
+
+export function buildFleetThroughputSeries(
+  framesByInstance: Record<string, MonitoringFrame[]>,
+  currentByInstance: Record<string, MonitoringFrame>,
+  instanceIds: string[],
+): FleetThroughputSeries {
+  const currentFrames = instanceIds
+    .map(instanceId => currentByInstance[instanceId])
+    .filter((frame): frame is MonitoringFrame => Boolean(frame))
+  const hasInference = currentFrames.some(frame => frame.workload === 'inference')
+  const hasVector = currentFrames.some(frame => frame.workload !== 'inference')
+  const mode = hasInference && hasVector
+    ? 'mixed'
+    : hasInference
+      ? 'inference'
+      : hasVector
+        ? 'vector'
+        : 'empty'
+  const primaryIsInference = hasInference || !hasVector
+  const included = (frame: MonitoringFrame) => primaryIsInference
+    ? frame.workload === 'inference'
+    : frame.workload !== 'inference'
+  const byTimestamp = new Map<number, { total: number; available: boolean }>()
+  for (const instanceId of instanceIds) {
+    for (const frame of framesByInstance[instanceId] || []) {
+      if (!included(frame)) continue
+      const bucket = byTimestamp.get(frame.ts) || { total: 0, available: false }
+      if (frame.state !== 'unavailable' && frame.throughput != null && Number.isFinite(frame.throughput)) {
+        bucket.total += Math.max(frame.throughput, 0)
+        bucket.available = true
+      }
+      byTimestamp.set(frame.ts, bucket)
+    }
+  }
+  const points = [...byTimestamp.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([ts, bucket]) => ({ ts, value: bucket.available ? bucket.total : null }))
+  const currentValues = currentFrames.filter(included)
+  const current = currentValues.some(frame => frame.throughput != null)
+    ? currentValues.reduce((total, frame) => total + Math.max(frame.throughput || 0, 0), 0)
+    : null
+  const vectorItemsPerSecond = currentFrames
+    .filter(frame => frame.workload !== 'inference')
+    .reduce((total, frame) => total + Math.max(frame.itemsPerSecond || 0, 0), 0)
+  return {
+    mode,
+    unit: primaryIsInference ? 'tok/s' : 'input tok/s',
+    points,
+    current,
+    vectorItemsPerSecond,
+  }
 }
 
 export function buildServiceStatus(options: {

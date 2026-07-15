@@ -337,6 +337,28 @@ export interface PerfUpdateEvent {
   lastCompleted: RunningInferenceTask | null
 }
 
+export interface MonitoringFrame {
+  instanceId: string
+  sessionId: string | null
+  ts: number
+  workload: ModelWorkload
+  state: 'active' | 'idle' | 'warming' | 'unavailable'
+  throughput: number | null
+  throughputUnit: 'tok/s' | 'input tok/s'
+  outputTokensPerSecond: number | null
+  inputTokensPerSecond: number | null
+  itemsPerSecond: number | null
+  activeRequests: number
+  queuedRequests: number
+  slotCapacity: number | null
+  busySlots: number | null
+  averageLatencyMs: number | null
+  successRate: number | null
+  source: 'task' | 'llama' | 'vector-log' | 'idle' | 'unavailable'
+  dataAgeMs: number
+  system: SystemMetrics | null
+}
+
 export interface TelemetrySessionAnalysis {
   request_count: number
   avg_prompt_tokens: number
@@ -422,12 +444,18 @@ export interface AppState {
   downloadTasks: Record<string, DownloadProgress>
   downloadQueue: DownloadQueueEntry[]
   sysMetrics: SystemMetrics | null
+  monitoringFramesByInstance: Record<string, MonitoringFrame[]>
+  monitoringCurrentByInstance: Record<string, MonitoringFrame>
+  runningTasksByInstance: Record<string, RunningInferenceTask[]>
   setActiveTab: (tab: string) => void
   setDarkMode: (dm: boolean) => void
   setActiveConfigInstanceId: (id: string | null) => void
   setSysMetrics: (m: SystemMetrics | null) => void
   addRuntimeWarning: (message: string) => void
   clearRuntimeWarnings: () => void
+  ingestMonitoringFrame: (frame: MonitoringFrame) => void
+  hydrateMonitoringFrames: (frames: MonitoringFrame[]) => void
+  applyPerfUpdate: (event: PerfUpdateEvent) => void
 
   setModels: (models: ModelInfo[]) => void
   setEngines: (engines: EngineInfo[]) => void

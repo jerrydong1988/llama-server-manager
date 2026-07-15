@@ -7,6 +7,7 @@ pub mod cluster_ssh;
 pub mod config;
 pub mod download;
 pub mod model_inventory;
+pub mod monitoring;
 pub mod nvml;
 pub mod proxy;
 pub mod scanner;

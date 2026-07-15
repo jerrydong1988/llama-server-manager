@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import { Activity, AlertTriangle, BarChart3, Clock, Cpu, Gauge, HardDrive, Radio, RefreshCw, Server, Zap } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
@@ -9,9 +8,6 @@ import type {
   DiagnosticFinding,
   InferenceRequestSummary,
   ModelWorkload,
-  PerfUpdateEvent,
-  RunningInferenceTask,
-  SystemMetrics,
   TelemetryOverview,
   TelemetrySampleSummary,
   TelemetrySessionDetail,
@@ -22,13 +18,11 @@ import { Badge, Button, EmptyPanel, PageFrame, PageHeader } from '../ui'
 import { ActiveRequestRow, ComparisonTable, MonitorPanel, SessionCard, SignalMeter, StatusTile, TrendChart } from '../monitoring/MonitoringPrimitives'
 import { formatDuration, formatMemory, formatMs, formatRate, formatTime } from '../monitoring/monitoringFormat'
 import {
-  appendThroughputPoint,
-  buildLiveThroughput,
   buildRequestPressure,
   buildResourceSignals,
   buildTelemetryThroughputPoints,
   mergeThroughputPoints,
-  type ThroughputPoint,
+  monitoringFramePoints,
 } from '../monitoring/monitoringViewModel'
 import {
   buildPerformanceMode,
@@ -37,23 +31,6 @@ import {
   buildVectorTrendSeries,
   workloadLabel,
 } from './vectorPerformance'
-
-type MetricsEvent = {
-  instanceId: string
-  system: SystemMetrics
-  llama?: {
-    tokens_per_sec?: number
-    prompt_tokens_per_sec?: number
-    prompt_tokens?: number
-    gen_tokens?: number
-    decode_calls_total?: number
-    max_tokens_observed?: number
-    requests_processing?: number
-    requests_deferred?: number
-    busy_slots_per_decode?: number
-  } | null
-  ts: number
-}
 
 type SessionBenchmark = {
   historyCount: number
@@ -82,6 +59,9 @@ export default function PerformancePage() {
   const zh = lang === 'zh-CN'
   const labels = useMemo(() => getLabels(zh), [zh])
   const instances = useAppStore(state => state.instances)
+  const monitoringFramesByInstance = useAppStore(state => state.monitoringFramesByInstance)
+  const monitoringCurrentByInstance = useAppStore(state => state.monitoringCurrentByInstance)
+  const runningTasksByInstance = useAppStore(state => state.runningTasksByInstance)
   const running = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
   const [selectedInstanceId, setSelectedInstanceId] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
@@ -91,15 +71,10 @@ export default function PerformancePage() {
   const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
   const [analysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
   const [diagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
-  const [runningTasksByInstance, setRunningTasksByInstance] = useState<Record<string, RunningInferenceTask[]>>({})
-  const [liveThroughputByInstance, setLiveThroughputByInstance] = useState<Record<string, ThroughputPoint[]>>({})
-  const [liveSystem, setLiveSystem] = useState<SystemMetrics | null>(null)
-  const [liveLlama, setLiveLlama] = useState<MetricsEvent['llama']>(null)
   const [loading, setLoading] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const [trendRange, setTrendRange] = useState<'1m' | '5m' | '15m' | '1h'>('5m')
   const [vectorTrendMetric, setVectorTrendMetric] = useState<'input' | 'items'>('input')
-  const lastTelemetryRefreshRef = useRef(0)
   const selectedSessionIdRef = useRef('')
   const telemetryInFlightRef = useRef(false)
   const detailInFlightRef = useRef(new Set<string>())
@@ -108,21 +83,24 @@ export default function PerformancePage() {
   const selectedInstance = running.find(instance => instance.id === selectedInstanceId)
     || instances.find(instance => instance.id === selectedSession?.instance_id)
     || null
-  const latestSample = overview.latest_samples[0] || null
   const liveTargetInstance = selectedSession
     ? selectedSession.stopped_at
       ? null
       : running.find(instance => instance.id === selectedSession.instance_id) || null
     : running.find(instance => instance.id === selectedInstanceId) || null
   const activeTasks = liveTargetInstance ? runningTasksByInstance[liveTargetInstance.id] || [] : []
-  const taskStreamObserved = liveTargetInstance
-    ? Object.prototype.hasOwnProperty.call(runningTasksByInstance, liveTargetInstance.id)
-    : false
+  const currentFrame = liveTargetInstance
+    ? monitoringCurrentByInstance[liveTargetInstance.id] || null
+    : null
+  const liveFrames = liveTargetInstance
+    ? (monitoringFramesByInstance[liveTargetInstance.id] || []).filter(frame => (
+        !selectedSession || frame.sessionId === selectedSession.id
+      ))
+    : []
 
   const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
     if (telemetryInFlightRef.current) return
     telemetryInFlightRef.current = true
-    lastTelemetryRefreshRef.current = Date.now()
     if (!options.silent) setLoading(true)
     try {
       const [nextOverview, nextSessions] = await Promise.all([
@@ -180,50 +158,12 @@ export default function PerformancePage() {
   useEffect(() => {
     if (running.length === 0) {
       if (selectedInstanceId) setSelectedInstanceId('')
-      setLiveSystem(null)
-      setLiveLlama(null)
       return
     }
     if (running.length > 0 && (!selectedInstanceId || !running.some(instance => instance.id === selectedInstanceId))) {
       setSelectedInstanceId(running[0].id)
     }
   }, [running, selectedInstanceId])
-
-  useEffect(() => {
-    setLiveSystem(null)
-    setLiveLlama(null)
-    if (!selectedInstanceId) return
-    invoke<SystemMetrics>('get_system_metrics', { instanceId: selectedInstanceId })
-      .then(setLiveSystem)
-      .catch(() => setLiveSystem(null))
-
-    const unlisten = listen<MetricsEvent>('metrics-update', event => {
-      if (event.payload.instanceId !== selectedInstanceId) return
-      setLiveSystem(event.payload.system)
-      setLiveLlama(event.payload.llama || null)
-      const now = Date.now()
-      if (now - lastTelemetryRefreshRef.current > TELEMETRY_OVERVIEW_REFRESH_MS) {
-        void refreshTelemetry({ silent: true })
-      }
-    })
-
-    return () => {
-      unlisten.then(fn => fn())
-    }
-  }, [selectedInstanceId, refreshTelemetry])
-
-  useEffect(() => {
-    const unlisten = listen<PerfUpdateEvent>('perf-update', event => {
-      setRunningTasksByInstance(current => ({
-        ...current,
-        [event.payload.instanceId]: event.payload.tasks || [],
-      }))
-    })
-
-    return () => {
-      unlisten.then(fn => fn())
-    }
-  }, [])
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
@@ -246,15 +186,29 @@ export default function PerformancePage() {
     if (selectedSession) setSelectedInstanceId(selectedSession.instance_id)
   }, [selectedSession])
 
-  const trendSamples = useMemo(() => filterSamplesByRange(samples.length > 0 ? samples : overview.latest_samples, trendRange), [samples, overview.latest_samples, trendRange])
+  const historicalAnchor = selectedSession?.stopped_at || Date.now()
+  const selectedOverviewSamples = overview.latest_samples.filter(sample => (
+    sample.instance_id === (selectedSession?.instance_id || selectedInstance?.id)
+  ))
+  const trendSamples = useMemo(
+    () => filterSamplesByRange(
+      samples.length > 0 ? samples : selectedOverviewSamples,
+      trendRange,
+      historicalAnchor,
+    ),
+    [historicalAnchor, samples, selectedOverviewSamples, trendRange],
+  )
+  const latestSample = trendSamples[trendSamples.length - 1]
+    || selectedOverviewSamples[selectedOverviewSamples.length - 1]
+    || null
   const resourceSignals = useMemo(
     () => buildResourceSignals({
-      system: liveSystem,
+      system: currentFrame?.system || null,
       latest: latestSample,
       samples: trendSamples,
       labels,
     }),
-    [liveSystem, latestSample, trendSamples, labels],
+    [currentFrame?.system, latestSample, trendSamples, labels],
   )
   const fallbackWorkload: ModelWorkload = selectedInstance?.config.reranking
     ? 'reranker'
@@ -264,40 +218,35 @@ export default function PerformancePage() {
     analysis,
     lang,
   )
-  const currentThroughput = useMemo(
-    () => liveTargetInstance
-      ? buildLiveThroughput(activeTasks, liveLlama?.tokens_per_sec, liveLlama?.requests_processing, taskStreamObserved)
-      : { value: 0, source: 'idle' as const, activeCount: 0 },
-    [activeTasks, liveLlama?.requests_processing, liveLlama?.tokens_per_sec, liveTargetInstance, taskStreamObserved],
-  )
-  const liveThroughputInstanceId = liveTargetInstance?.id || ''
-  useEffect(() => {
-    if (!liveThroughputInstanceId) return
-    const point = { ts: Date.now(), value: currentThroughput.value }
-    setLiveThroughputByInstance(current => ({
-      ...current,
-      [liveThroughputInstanceId]: appendThroughputPoint(current[liveThroughputInstanceId] || [], point),
-    }))
-  }, [activeTasks, currentThroughput.activeCount, currentThroughput.source, currentThroughput.value, liveThroughputInstanceId])
+  const selectedRunning = selectedSession
+    ? selectedSession.stopped_at == null
+    : selectedInstance?.status === 'running'
+  const currentThroughput = currentFrame?.throughput ?? 0
+  const trendEnd = selectedSession?.stopped_at || Date.now()
+  const trendStart = trendEnd - trendRangeToMs(trendRange)
   const inferenceTrendPoints = useMemo(
-    () => mergeThroughputPoints(
-      buildTelemetryThroughputPoints(trendSamples),
-      liveThroughputByInstance[liveThroughputInstanceId] || [],
-      Date.now() - trendRangeToMs(trendRange),
-      240,
-    ),
-    [liveThroughputByInstance, liveThroughputInstanceId, trendRange, trendSamples],
+    () => {
+      const live = monitoringFramePoints(liveFrames, 'inference')
+        .filter(point => point.ts >= trendStart && point.value != null)
+        .map(point => ({ ts: point.ts, value: point.value as number }))
+      return mergeThroughputPoints(
+        buildTelemetryThroughputPoints(trendSamples),
+        live,
+        trendStart,
+        240,
+      )
+    },
+    [liveFrames, trendSamples, trendStart],
   )
-  const currentThroughputDetail = currentThroughput.source === 'active-tasks'
+  const currentThroughputDetail = currentFrame?.source === 'task'
     ? labels.fromLiveTasks
-    : currentThroughput.source === 'mixed'
-      ? labels.fromMixedLiveSources
-      : currentThroughput.source === 'llama-metrics'
+    : currentFrame?.source === 'llama'
         ? labels.fromLlamaMetrics
         : labels.idleThroughput
   const pressure = buildRequestPressure(
-    liveTargetInstance ? liveLlama?.requests_processing ?? latestSample?.requests_processing : 0,
-    liveTargetInstance ? liveLlama?.requests_deferred ?? latestSample?.requests_deferred : 0,
+    currentFrame?.activeRequests ?? latestSample?.requests_processing,
+    currentFrame?.queuedRequests ?? latestSample?.requests_deferred,
+    currentFrame?.slotCapacity,
   )
   const sessionBenchmark = useMemo(() => buildSessionBenchmark(selectedSession, sessions), [selectedSession, sessions])
   const comparisonRows = performanceMode.kind === 'vector' && performanceMode.analysis && analysis?.vector_baseline
@@ -313,10 +262,46 @@ export default function PerformancePage() {
       : []
   const vectorKpis = performanceMode.kind === 'vector' && performanceMode.analysis
     ? buildVectorKpis(performanceMode.analysis, lang)
-    : []
-  const vectorTrend = performanceMode.kind === 'vector' && performanceMode.analysis
+    : performanceMode.kind === 'vector' && currentFrame
+      ? [
+          {
+            key: 'input' as const,
+            label: labels.inputThroughput,
+            value: formatRate(currentFrame.inputTokensPerSecond, 'tok/s'),
+            available: currentFrame.inputTokensPerSecond != null,
+          },
+          {
+            key: 'items' as const,
+            label: performanceMode.itemName === 'document' ? labels.documentThroughput : labels.vectorThroughput,
+            value: formatRate(currentFrame.itemsPerSecond, zh ? '项/s' : 'items/s'),
+            available: currentFrame.itemsPerSecond != null,
+          },
+          {
+            key: 'p95' as const,
+            label: labels.taskP95,
+            value: formatMs(currentFrame.averageLatencyMs),
+            available: currentFrame.averageLatencyMs != null,
+          },
+        ]
+      : []
+  const displayedVectorKpis = vectorKpis.map(kpi => {
+    if (!selectedRunning || !currentFrame) return kpi
+    if (kpi.key === 'input') return { ...kpi, value: formatRate(currentFrame.inputTokensPerSecond, 'tok/s'), available: currentFrame.inputTokensPerSecond != null }
+    if (kpi.key === 'items') return { ...kpi, value: formatRate(currentFrame.itemsPerSecond, zh ? '项/s' : 'items/s'), available: currentFrame.itemsPerSecond != null }
+    return { ...kpi, value: formatMs(currentFrame.averageLatencyMs), available: currentFrame.averageLatencyMs != null }
+  })
+  const vectorHistoricalTrend = performanceMode.kind === 'vector' && performanceMode.analysis
     ? buildVectorTrendSeries(performanceMode.analysis, vectorTrendMetric)
     : []
+  const vectorLiveTrend = liveFrames
+    .filter(frame => frame.workload !== 'inference' && frame.ts >= trendStart)
+    .map(frame => ({
+      ts: frame.ts,
+      value: vectorTrendMetric === 'input' ? frame.inputTokensPerSecond : frame.itemsPerSecond,
+    }))
+  const vectorTrend = selectedRunning && vectorLiveTrend.length > 1
+    ? vectorLiveTrend
+    : vectorHistoricalTrend.map(point => ({ ts: point.timestamp, value: point.value }))
   const inferenceOnlyDiagnosticIds = new Set([
     'throughput_regression',
     'no_request_records',
@@ -329,10 +314,6 @@ export default function PerformancePage() {
     ? diagnostics.filter(finding => !inferenceOnlyDiagnosticIds.has(finding.id))
     : diagnostics
   const visibleDiagnostics = workloadDiagnostics.slice(0, 3)
-  const selectedRunning = selectedSession
-    ? selectedSession.stopped_at == null
-    : selectedInstance?.status === 'running'
-
   return (
     <PageFrame
       className="text-slate-900 dark:text-slate-100"
@@ -437,7 +418,7 @@ export default function PerformancePage() {
                 </div>
               </div>
               <div className={`mt-4 grid gap-3 ${performanceMode.kind === 'vector' ? 'sm:grid-cols-2 2xl:grid-cols-4' : 'lg:grid-cols-2'}`}>
-                {performanceMode.kind === 'vector' ? vectorKpis.map(kpi => (
+                {performanceMode.kind === 'vector' ? displayedVectorKpis.map(kpi => (
                   <StatusTile
                     key={kpi.key}
                     label={kpi.label}
@@ -448,12 +429,12 @@ export default function PerformancePage() {
                     className="py-3"
                   />
                 )) : (
-                  <StatusTile label={labels.currentTps} value={formatRate(currentThroughput.value)} detail={currentThroughputDetail} icon={<Gauge className="h-5 w-5" />} tone="blue" className="py-3" />
+                  <StatusTile label={labels.currentTps} value={formatRate(currentThroughput)} detail={currentThroughputDetail} icon={<Gauge className="h-5 w-5" />} tone="blue" className="py-3" />
                 )}
                 <StatusTile
                   label={labels.queuePressure}
                   value={`${pressure.percent}%`}
-                  detail={`${pressure.active} / ${pressure.queued} ${labels.processingDeferred}`}
+                  detail={`${pressure.active}${pressure.capacity ? ` / ${pressure.capacity}` : ''} · ${pressure.queued} ${labels.processingDeferred}`}
                   icon={<Zap className="h-5 w-5" />}
                   tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : 'emerald'}
                   className="py-3"
@@ -504,14 +485,14 @@ export default function PerformancePage() {
               }
             >
               <TrendChart
-                values={performanceMode.kind === 'vector'
-                  ? vectorTrend.map(point => point.value)
-                  : inferenceTrendPoints.map(point => point.value)}
+                points={performanceMode.kind === 'vector' ? vectorTrend : inferenceTrendPoints}
+                rangeStart={selectedRunning ? trendStart : undefined}
+                rangeEnd={selectedRunning ? trendEnd : undefined}
                 emptyText={performanceMode.kind === 'vector' ? performanceMode.source.summary : labels.noSamplesYet}
                 tone={performanceMode.kind === 'vector' && vectorTrendMetric === 'items' ? 'violet' : 'blue'}
                 unit={performanceMode.kind === 'vector' && vectorTrendMetric === 'items'
                   ? performanceMode.itemName === 'document' ? labels.documentsPerSecondShort : labels.itemsPerSecondShort
-                  : 'tok/s'}
+                  : performanceMode.kind === 'vector' ? 'input tok/s' : 'tok/s'}
               />
               {performanceMode.kind === 'vector' ? (
                 <div data-vector-source-state={performanceMode.source.kind} className="mt-3 flex min-w-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-3 text-xs text-slate-600 dark:border-slate-800 dark:text-slate-300">
@@ -636,11 +617,15 @@ function formatRatio(value?: number | null): string {
   return value == null || !Number.isFinite(value) ? '--' : `${(value * 100).toFixed(1)}%`
 }
 
-function filterSamplesByRange(samples: TelemetrySampleSummary[], range: '1m' | '5m' | '15m' | '1h') {
+function filterSamplesByRange(
+  samples: TelemetrySampleSummary[],
+  range: '1m' | '5m' | '15m' | '1h',
+  anchor: number,
+) {
   if (samples.length === 0) return []
-  const now = Math.max(...samples.map(sample => sample.ts || 0), Date.now())
+  const end = Math.max(...samples.map(sample => sample.ts || 0), anchor)
   const rangeMs = trendRangeToMs(range)
-  const filtered = samples.filter(sample => now - sample.ts <= rangeMs)
+  const filtered = samples.filter(sample => end - sample.ts <= rangeMs)
   return filtered.length >= 2 ? filtered : samples.slice(-80)
 }
 

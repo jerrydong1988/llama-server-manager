@@ -163,20 +163,31 @@ export function SignalMeter({
 
 export function TrendChart({
   values,
+  points,
+  rangeStart,
+  rangeEnd,
   emptyText,
   tone = 'blue',
   className = '',
   unit,
   valueFormatter = formatAxisValue,
 }: {
-  values: Array<number | null>
+  values?: Array<number | null>
+  points?: Array<{ ts: number; value: number | null }>
+  rangeStart?: number
+  rangeEnd?: number
   emptyText: string
   tone?: SignalTone
   className?: string
   unit?: string
   valueFormatter?: (value: number) => string
 }) {
-  const safeValues = values.filter((value): value is number => value != null && Number.isFinite(value))
+  const chartPoints = points
+    ? [...points].filter(point => Number.isFinite(point.ts)).sort((left, right) => left.ts - right.ts)
+    : (values || []).map((value, index) => ({ ts: index, value }))
+  const safeValues = chartPoints
+    .map(point => point.value)
+    .filter((value): value is number => value != null && Number.isFinite(value))
   if (safeValues.length < 2) {
     return (
       <div className={joinClassNames('flex min-h-[220px] items-center justify-center rounded-lg border border-dashed border-slate-300 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400', className)}>
@@ -188,14 +199,25 @@ export function TrendChart({
 
   const width = 900
   const height = 260
-  const chartPadding = 18
+  const chartPaddingTop = 18
+  const chartPaddingBottom = points ? 30 : 18
   const axis = buildChartAxis(safeValues)
-  const chartHeight = height - chartPadding * 2
-  const points = safeValues.map((value, index) => {
-    const x = safeValues.length === 1 ? 0 : (index / (safeValues.length - 1)) * width
-    const y = height - chartPadding - (value / axis.max) * chartHeight
-    return `${x},${y}`
-  }).join(' ')
+  const chartHeight = height - chartPaddingTop - chartPaddingBottom
+  const domainStart = rangeStart ?? chartPoints[0]?.ts ?? 0
+  const domainEnd = Math.max(rangeEnd ?? chartPoints[chartPoints.length - 1]?.ts ?? domainStart + 1, domainStart + 1)
+  const segments: string[] = []
+  let segment: string[] = []
+  for (const point of chartPoints) {
+    if (point.value == null || !Number.isFinite(point.value)) {
+      if (segment.length > 1) segments.push(segment.join(' '))
+      segment = []
+      continue
+    }
+    const x = Math.max(0, Math.min(width, ((point.ts - domainStart) / (domainEnd - domainStart)) * width))
+    const y = height - chartPaddingBottom - (point.value / axis.max) * chartHeight
+    segment.push(`${x},${y}`)
+  }
+  if (segment.length > 1) segments.push(segment.join(' '))
   const descendingTicks = [...axis.ticks].reverse()
 
   return (
@@ -207,14 +229,30 @@ export function TrendChart({
         {unit ? <span className="absolute right-3 top-2 z-10 rounded bg-slate-50/90 px-1 text-[11px] text-slate-500 dark:bg-slate-950/80 dark:text-slate-400">{unit}</span> : null}
         <svg viewBox={`0 0 ${width} ${height}`} className={joinClassNames('h-[260px] w-full', toneText[tone])} preserveAspectRatio="none" aria-hidden="true">
           {axis.ticks.map(tick => {
-            const y = height - chartPadding - (tick / axis.max) * chartHeight
+            const y = height - chartPaddingBottom - (tick / axis.max) * chartHeight
             return <line key={tick} x1="0" y1={y} x2={width} y2={y} stroke="currentColor" className="text-slate-300 dark:text-slate-800" strokeWidth="1" strokeDasharray="5 7" />
           })}
-          <polyline points={points} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+          {segments.map((line, index) => (
+            <polyline key={`${index}-${line.slice(0, 16)}`} points={line} fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+          ))}
         </svg>
+        {points ? (
+          <div className="pointer-events-none absolute inset-x-2 bottom-1 flex justify-between font-mono text-[10px] tabular-nums text-slate-500 dark:text-slate-400" aria-hidden="true">
+            <span>{formatTimeLabel(domainStart)}</span>
+            <span>{formatTimeLabel(domainEnd)}</span>
+          </div>
+        ) : null}
       </div>
     </div>
   )
+}
+
+function formatTimeLabel(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
 function formatAxisValue(value: number) {
