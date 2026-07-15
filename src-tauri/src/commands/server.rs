@@ -16,6 +16,7 @@ const MAX_TRACKED_PERF_TASKS: usize = 1_024;
 const LOG_REPLAY_LINES: usize = 2_000;
 const LOG_REPLAY_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const LOG_EVENT_BATCH_SIZE: usize = 200;
+static SERVER_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 struct CappedLogState {
     file: std::fs::File,
@@ -153,6 +154,24 @@ where
             }
         }
     });
+}
+
+fn terminate_spawned_child(child: &mut std::process::Child) -> Result<(), String> {
+    match child.kill() {
+        Ok(()) => child
+            .wait()
+            .map(|_| ())
+            .map_err(|error| format!("Failed to reap the terminated server process: {error}")),
+        Err(kill_error) => match child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(format!(
+                "Failed to terminate the spawned server process: {kill_error}"
+            )),
+            Err(wait_error) => Err(format!(
+                "Failed to terminate the spawned server process: {kill_error}; failed to query its state: {wait_error}"
+            )),
+        },
+    }
 }
 
 // Generate CLI command.
@@ -953,9 +972,11 @@ pub async fn start_server(
     let (start_time, executable_path) = match read_process_identity(pid) {
         Some(identity) => identity,
         None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Unable to verify the started server process identity".to_string());
+            let message = "Unable to verify the started server process identity";
+            return match terminate_spawned_child(&mut child) {
+                Ok(()) => Err(message.to_string()),
+                Err(cleanup_error) => Err(format!("{message}; {cleanup_error}")),
+            };
         }
     };
     let telemetry_session_id = crate::commands::telemetry::begin_run_session(
@@ -969,30 +990,38 @@ pub async fn start_server(
     .ok();
 
     // Atomic check-and-insert prevents starting the same instance twice.
-    {
+    let duplicate_start = {
         let mut running = state.running.lock().unwrap();
         if running.contains_key(&instance_id) {
-            let _ = child.kill();
-            let _ = crate::commands::telemetry::finish_run_session(
-                telemetry_session_id.as_deref(),
-                None,
-                "duplicate-start",
+            true
+        } else {
+            running.insert(
+                instance_id.clone(),
+                RunningInstance {
+                    instance_id: instance_id.clone(),
+                    pid,
+                    port: config.port,
+                    host: config.host.clone(),
+                    start_time,
+                    executable_path: executable_path.to_string_lossy().to_string(),
+                    telemetry_session_id: telemetry_session_id.clone(),
+                    workload: workload.as_str().to_string(),
+                },
             );
-            return Err("该实例已在运行中".to_string());
+            false
         }
-        running.insert(
-            instance_id.clone(),
-            RunningInstance {
-                instance_id: instance_id.clone(),
-                pid,
-                port: config.port,
-                host: config.host.clone(),
-                start_time,
-                executable_path: executable_path.to_string_lossy().to_string(),
-                telemetry_session_id: telemetry_session_id.clone(),
-                workload: workload.as_str().to_string(),
-            },
+    };
+    if duplicate_start {
+        let cleanup_result = terminate_spawned_child(&mut child);
+        let _ = crate::commands::telemetry::finish_run_session(
+            telemetry_session_id.as_deref(),
+            None,
+            "duplicate-start",
         );
+        return match cleanup_result {
+            Ok(()) => Err("该实例已在运行中".to_string()),
+            Err(cleanup_error) => Err(format!("该实例已在运行中；{cleanup_error}")),
+        };
     }
 
     // Persist running state to disk immediately via unified atomic writes to avoid races.
@@ -1980,8 +2009,7 @@ pub struct SlotInfo {
 }
 
 fn http_get(url: &str, api_key: Option<&str>) -> reqwest::RequestBuilder {
-    let client = reqwest::Client::new();
-    let req = client.get(url);
+    let req = SERVER_HTTP_CLIENT.get(url);
     if let Some(key) = api_key {
         req.header("Authorization", format!("Bearer {}", key))
     } else {

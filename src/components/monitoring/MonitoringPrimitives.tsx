@@ -322,6 +322,7 @@ export function SessionCard({
   meta,
   selected,
   running,
+  statusLabel,
   workload,
   workloadTone = 'blue',
   onClick,
@@ -331,6 +332,7 @@ export function SessionCard({
   meta: string
   selected: boolean
   running: boolean
+  statusLabel: string
   workload?: string
   workloadTone?: 'slate' | 'blue' | 'emerald' | 'amber' | 'red' | 'violet'
   onClick: () => void
@@ -352,7 +354,7 @@ export function SessionCard({
           <div className="mt-1 truncate text-xs text-slate-500" title={subtitle}>{subtitle}</div>
         </div>
         <div className="flex shrink-0 flex-col items-end gap-1.5">
-          <Badge tone={running ? 'emerald' : 'slate'}>{running ? '运行中' : '已结束'}</Badge>
+          <Badge tone={running ? 'emerald' : 'slate'}>{statusLabel}</Badge>
           {workload ? <Badge tone={workloadTone}>{workload}</Badge> : null}
         </div>
       </div>

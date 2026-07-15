@@ -6,6 +6,7 @@ import { useI18n } from '../i18n'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { pathJoin } from '../utils/path'
+import { forEachConcurrent } from '../utils/async'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
 import { PathText, surfaceClassName } from './ui'
 import {
@@ -19,6 +20,7 @@ const DEFAULT_SAVE_DIR = 'models'
 const DEFAULT_BANDWIDTH_LIMIT = 0
 const DEFAULT_BANDWIDTH_UNIT: BandwidthUnit = 'MiB/s'
 type Section = 'queue' | 'active' | 'paused' | 'failed' | 'completed'
+const LOCAL_FILE_CHECK_CONCURRENCY = 8
 
 const clampConcurrency = (value: number) => Math.max(1, Math.min(8, Number.isFinite(value) ? value : 1))
 const normalizeResumePolicy = (policy: string): ResumePolicy => policy === 'auto_on_launch' ? 'auto_on_launch' : 'manual'
@@ -170,7 +172,7 @@ export default function DownloadManager() {
   const [resumePolicy, setResumePolicy] = useState<ResumePolicy>('manual')
   const [concurrency, setConcurrency] = useState(1)
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
-  const [modelImportStatus, setModelImportStatus] = useState('')
+  const [modelImportStatuses, setModelImportStatuses] = useState<Record<string, string>>({})
   const [bandwidthLimit, setBandwidthLimit] = useState(DEFAULT_BANDWIDTH_LIMIT)
   const [bandwidthUnit, setBandwidthUnit] = useState<BandwidthUnit>(() => {
     try {
@@ -476,7 +478,7 @@ export default function DownloadManager() {
       }
 
       const resolvedDir = await invoke<string>('resolve_path', { path: saveDir })
-      await Promise.all(result.map(async file => {
+      await forEachConcurrent(result, LOCAL_FILE_CHECK_CONCURRENCY, async file => {
         const localPath = pathJoin(resolvedDir, trimmedRepoId, file.name)
         try {
           const actualSize = await invoke<number | null>('check_local_file', { path: localPath })
@@ -507,7 +509,7 @@ export default function DownloadManager() {
         } catch {
           // file not found
         }
-      }))
+      })
 
       setDownloadTasks(tasks)
     } catch (error: any) {
@@ -594,14 +596,17 @@ export default function DownloadManager() {
   const handleOpenTaskLocation = async (task: DownloadProgress) => {
     try {
       await openModelFolder(taskLocalPath(task))
+      setModelImportStatuses(statuses => ({ ...statuses, [task.id]: '' }))
     } catch (error: any) {
-      setModelImportStatus(typeof error === 'string' ? error : String(error || ui.importFailed))
+      const message = typeof error === 'string' ? error : String(error || ui.importFailed)
+      setModelImportStatuses(statuses => ({ ...statuses, [task.id]: message }))
     }
   }
 
   const handleImportCompletedTask = async (task: DownloadProgress) => {
     const error = await scanModels([task.saveDir])
-    setModelImportStatus(error ? `${ui.importFailed}: ${error}` : ui.importedToRepo)
+    const message = error ? `${ui.importFailed}: ${error}` : ui.importedToRepo
+    setModelImportStatuses(statuses => ({ ...statuses, [task.id]: message }))
   }
 
   const allTasks = useMemo(() => Object.values(downloadTasks), [downloadTasks])
@@ -652,8 +657,9 @@ export default function DownloadManager() {
   }
 
   const renderTaskCard = (task: DownloadProgress) => {
-    const pct = task.total > 0 ? Math.min(100, (task.downloaded / task.total) * 100) : 0
+    const pct = task.total > 0 ? Math.max(0, Math.min(100, (task.downloaded / task.total) * 100)) : 0
     const isSelected = selectedTask?.id === task.id
+    const modelImportStatus = modelImportStatuses[task.id] || ''
     const barColor = task.status === 'active'
       ? 'bg-blue-500'
       : (task.status === 'paused' || task.status === 'pausing')
@@ -838,7 +844,9 @@ export default function DownloadManager() {
   const renderFileRow = (file: MsFileEntry) => {
     const task = taskForFile(file)
     const pending = task?.status === 'active' || task?.status === 'pausing' || task?.status === 'queued'
-    const pct = task && task.total > 0 ? (task.downloaded / task.total) * 100 : 0
+    const pct = task && task.total > 0
+      ? Math.max(0, Math.min(100, (task.downloaded / task.total) * 100))
+      : 0
 
     return (
       <div key={file.path} className="min-w-0 border-b border-slate-200 px-4 py-4 last:border-b-0 dark:border-slate-800">
@@ -958,9 +966,12 @@ export default function DownloadManager() {
       )
     }
 
-    const pct = selectedTask.total > 0 ? Math.min(100, (selectedTask.downloaded / selectedTask.total) * 100) : 0
+    const pct = selectedTask.total > 0
+      ? Math.max(0, Math.min(100, (selectedTask.downloaded / selectedTask.total) * 100))
+      : 0
     const isCompleted = selectedTask.status === 'completed'
     const isFailed = selectedTask.status === 'error'
+    const modelImportStatus = modelImportStatuses[selectedTask.id] || ''
 
     return (
       <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>

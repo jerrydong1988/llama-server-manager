@@ -2,7 +2,9 @@ export default function GaugeMeter({ label, value, max, unit, color, detail }: {
   label: string; value: number | null; max: number | null; unit: string
   color: 'blue' | 'purple' | 'emerald' | 'amber'; detail?: string
 }) {
-  const pct = value != null && max != null && max > 0 ? Math.min(100, (value / max) * 100) : 0
+  const pct = value != null && max != null && max > 0
+    ? Math.max(0, Math.min(100, (value / max) * 100))
+    : 0
   const colorMap = { blue: 'stroke-blue-500', purple: 'stroke-purple-500', emerald: 'stroke-emerald-500', amber: 'stroke-amber-500' }
   const radius = 40; const circ = 2 * Math.PI * radius
 

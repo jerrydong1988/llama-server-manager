@@ -1,3 +1,10 @@
+export function maskStartupCommandSecrets(cmdStr: string): string {
+  return cmdStr.replace(
+    /(--api-key(?:\s+|=))(?:"[^"]*"|'[^']*'|[^\s]+)/g,
+    '$1********',
+  )
+}
+
 export function formatStartupCommand(cmdStr: string): string {
   const tokens = cmdStr.match(/(?:[^\s"]+|"[^"]*")+/g) || []
   const exeName = (tokens[0] || '').split(/[\\/]/).pop() || tokens[0] || ''

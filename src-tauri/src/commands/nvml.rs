@@ -1,4 +1,6 @@
 use std::ffi::c_void;
+#[cfg(target_os = "windows")]
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 type NvmlResult = u32;
@@ -15,11 +17,38 @@ unsafe impl Sync for NvmlState {}
 
 static NVML_STATE: Mutex<Option<NvmlState>> = Mutex::new(None);
 
-#[cfg(target_os = "windows")]
-const NVML_DLL: &str = "nvml.dll";
-
 #[cfg(target_os = "linux")]
 const NVML_DLL: &str = "libnvidia-ml.so.1";
+
+#[cfg(target_os = "windows")]
+fn windows_nvml_candidates(system_root: &Path, program_files: Option<&Path>) -> Vec<PathBuf> {
+    let mut candidates = Vec::with_capacity(2);
+    if let Some(program_files) = program_files {
+        candidates.push(program_files.join("NVIDIA Corporation/NVSMI/nvml.dll"));
+    }
+    candidates.push(system_root.join("System32/nvml.dll"));
+    candidates
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn load_nvml_library() -> Option<libloading::Library> {
+    let system_root = std::env::var_os("SystemRoot")
+        .or_else(|| std::env::var_os("WINDIR"))
+        .map(PathBuf::from)?;
+    let program_files = std::env::var_os("ProgramW6432")
+        .or_else(|| std::env::var_os("ProgramFiles"))
+        .map(PathBuf::from);
+    windows_nvml_candidates(&system_root, program_files.as_deref())
+        .into_iter()
+        .find_map(|path| libloading::Library::new(path).ok())
+}
+
+#[cfg(target_os = "linux")]
+unsafe fn load_nvml_library() -> Option<libloading::Library> {
+    libloading::Library::new(NVML_DLL)
+        .or_else(|_| libloading::Library::new("libnvidia-ml.so"))
+        .ok()
+}
 
 #[cfg(not(any(target_os = "windows", target_os = "linux")))]
 fn ensure_loaded() -> bool {
@@ -32,23 +61,10 @@ fn ensure_loaded() -> bool {
     if state.is_some() {
         return true;
     }
-    let lib = unsafe {
-        match libloading::Library::new(NVML_DLL) {
-            Ok(l) => Box::leak(Box::new(l)),
-            Err(_) => {
-                #[cfg(target_os = "linux")]
-                {
-                    let lib2 = libloading::Library::new("libnvidia-ml.so");
-                    match lib2 {
-                        Ok(l) => Box::leak(Box::new(l)),
-                        Err(_) => return false,
-                    }
-                }
-                #[cfg(not(target_os = "linux"))]
-                return false;
-            }
-        }
+    let Some(library) = (unsafe { load_nvml_library() }) else {
+        return false;
     };
+    let lib = Box::leak(Box::new(library));
     *state = Some(NvmlState {
         lib,
         initialized: false,
@@ -121,49 +137,80 @@ unsafe fn try_collect() -> Option<NvmlMetrics> {
         eprintln!("[nvml] initialized OK");
     }
 
-    // Get device handle for GPU 0.
+    type GetCountFn = unsafe extern "system" fn(*mut u32) -> NvmlResult;
+    let get_count: libloading::Symbol<GetCountFn> = lib.get(b"nvmlDeviceGetCount_v2\0").ok()?;
+    let mut device_count = 0;
+    if get_count(&mut device_count) != NVML_SUCCESS || device_count == 0 {
+        return None;
+    }
+
     type GetHandleFn = unsafe extern "system" fn(u32, *mut *mut c_void) -> NvmlResult;
     let get_handle: libloading::Symbol<GetHandleFn> =
         lib.get(b"nvmlDeviceGetHandleByIndex_v2\0").ok()?;
-
-    let mut device: *mut c_void = std::ptr::null_mut();
-    if get_handle(0, &mut device) != NVML_SUCCESS || device.is_null() {
-        eprintln!("[nvml] no GPU found at index 0");
-    }
-
     let mut m = NvmlMetrics {
         gpu_percent: None,
         vram_used_mb: None,
         vram_total_mb: None,
     };
 
-    if !device.is_null() {
-        // Utilization.
-        type GetUtilFn = unsafe extern "system" fn(*mut c_void, *mut NvmlUtilization) -> NvmlResult;
-        let get_util: libloading::Symbol<GetUtilFn> =
-            lib.get(b"nvmlDeviceGetUtilizationRates\0").ok()?;
+    type GetUtilFn = unsafe extern "system" fn(*mut c_void, *mut NvmlUtilization) -> NvmlResult;
+    let get_util: libloading::Symbol<GetUtilFn> =
+        lib.get(b"nvmlDeviceGetUtilizationRates\0").ok()?;
+    type GetMemFn = unsafe extern "system" fn(*mut c_void, *mut NvmlMemory) -> NvmlResult;
+    let get_mem: libloading::Symbol<GetMemFn> = lib.get(b"nvmlDeviceGetMemoryInfo\0").ok()?;
 
-        let mut util: NvmlUtilization = NvmlUtilization { gpu: 0, memory: 0 };
-        if get_util(device, &mut util) == NVML_SUCCESS {
-            m.gpu_percent = Some(util.gpu as f32);
+    let mut vram_used_bytes = 0_u64;
+    let mut vram_total_bytes = 0_u64;
+    let mut memory_samples = 0_u32;
+    for index in 0..device_count {
+        let mut device: *mut c_void = std::ptr::null_mut();
+        if get_handle(index, &mut device) != NVML_SUCCESS || device.is_null() {
+            continue;
         }
 
-        // Memory info.
-        type GetMemFn = unsafe extern "system" fn(*mut c_void, *mut NvmlMemory) -> NvmlResult;
-        let get_mem: libloading::Symbol<GetMemFn> = lib.get(b"nvmlDeviceGetMemoryInfo\0").ok()?;
+        let mut util = NvmlUtilization { gpu: 0, memory: 0 };
+        if get_util(device, &mut util) == NVML_SUCCESS {
+            m.gpu_percent = Some(m.gpu_percent.unwrap_or(0.0).max(util.gpu as f32));
+        }
 
-        let mut mem: NvmlMemory = NvmlMemory {
+        let mut mem = NvmlMemory {
             total: 0,
             free: 0,
             used: 0,
         };
         if get_mem(device, &mut mem) == NVML_SUCCESS {
-            m.vram_total_mb = Some((mem.total as f64) / (1024.0 * 1024.0));
-            m.vram_used_mb = Some((mem.used as f64) / (1024.0 * 1024.0));
+            vram_total_bytes = vram_total_bytes.saturating_add(mem.total);
+            vram_used_bytes = vram_used_bytes.saturating_add(mem.used);
+            memory_samples += 1;
         }
+    }
+    if memory_samples > 0 {
+        m.vram_total_mb = Some((vram_total_bytes as f64) / (1024.0 * 1024.0));
+        m.vram_used_mb = Some((vram_used_bytes as f64) / (1024.0 * 1024.0));
     }
 
     Some(m)
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nvml_candidates_are_absolute_driver_locations() {
+        let candidates = windows_nvml_candidates(
+            Path::new(r"C:\Windows"),
+            Some(Path::new(r"C:\Program Files")),
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll"),
+                PathBuf::from(r"C:\Windows\System32\nvml.dll"),
+            ]
+        );
+        assert!(candidates.iter().all(|path| path.is_absolute()));
+    }
 }
 
 /// Cleanup NVML on app shutdown; best-effort and not mandatory.

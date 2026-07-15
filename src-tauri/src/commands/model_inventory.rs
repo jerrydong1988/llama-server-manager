@@ -2,11 +2,13 @@ use crate::models::{EngineInfo, ModelCapabilities, ModelInfo};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 2;
-static INVENTORY_SCHEMA_INIT: OnceLock<Result<(), String>> = OnceLock::new();
+static INVENTORY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
+static INVENTORY_SCHEMA_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone)]
 pub struct InventoryModelRecord {
@@ -177,14 +179,19 @@ fn open_raw_connection() -> Result<Connection, String> {
 }
 
 pub(crate) fn initialize_inventory_storage() -> Result<(), String> {
-    INVENTORY_SCHEMA_INIT
-        .get_or_init(|| {
-            let conn = open_raw_connection()?;
-            conn.pragma_update(None, "journal_mode", "WAL")
-                .map_err(|e| format!("failed to enable model inventory WAL: {}", e))?;
-            init_schema(&conn)
-        })
-        .clone()
+    if INVENTORY_SCHEMA_READY.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let _guard = INVENTORY_SCHEMA_LOCK.lock().unwrap();
+    if INVENTORY_SCHEMA_READY.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let conn = open_raw_connection()?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|e| format!("failed to enable model inventory WAL: {}", e))?;
+    init_schema(&conn)?;
+    INVENTORY_SCHEMA_READY.store(true, Ordering::Release);
+    Ok(())
 }
 
 fn open_connection() -> Result<Connection, String> {

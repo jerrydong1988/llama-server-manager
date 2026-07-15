@@ -378,6 +378,7 @@ export default function PerformancePage() {
                         meta={`${session.workload === 'inference' ? formatRate(session.avg_tokens_per_sec) : workloadLabel(session.workload, lang)} · ${formatMemory(session.peak_vram_mb)} · ${formatTime(session.started_at)}`}
                         selected={session.id === selectedSessionId}
                         running={!session.stopped_at}
+                        statusLabel={!session.stopped_at ? labels.running : labels.finished}
                         workload={workloadLabel(session.workload, lang)}
                         workloadTone={session.workload === 'embedding' ? 'violet' : session.workload === 'reranker' ? 'blue' : 'slate'}
                         onClick={() => {

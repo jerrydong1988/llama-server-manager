@@ -6,6 +6,9 @@ import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
 import { Button, InsetSurface, MetricCard, SelectInput, Surface, TextInput } from './ui'
 
+const ERROR_LOG_PATTERN = /error|fail|panic|fatal|\u9519\u8bef|\u5931\u8d25|\u5f02\u5e38|\u81f4\u547d/i
+const WARNING_LOG_PATTERN = /warn|warning|\u8b66\u544a|\u8b66\u793a/i
+
 const LogsViewer = () => {
   const instances = useAppStore(state => state.instances)
   const logs = useAppStore(state => state.logs)
@@ -84,10 +87,9 @@ const LogsViewer = () => {
   const stats = useMemo(() => {
     const counts = { error: 0, warn: 0, info: 0 }
     for (const entry of sourceLogs) {
-      const lower = entry.text.toLowerCase()
-      if (/error|fail|panic|fatal/.test(lower)) {
+      if (ERROR_LOG_PATTERN.test(entry.text)) {
         counts.error += 1
-      } else if (/warn|warning/.test(lower)) {
+      } else if (WARNING_LOG_PATTERN.test(entry.text)) {
         counts.warn += 1
       } else {
         counts.info += 1
@@ -308,9 +310,9 @@ const LogsViewer = () => {
                   const lower = text.toLowerCase()
 
                   let tone = 'text-slate-300'
-                  if (/error|fail|panic|fatal/.test(lower)) {
+                  if (ERROR_LOG_PATTERN.test(text)) {
                     tone = 'text-red-300'
-                  } else if (/warn|warning/.test(lower)) {
+                  } else if (WARNING_LOG_PATTERN.test(text)) {
                     tone = 'text-amber-300'
                   } else if (/listening|ready|ok|success|loaded/.test(lower)) {
                     tone = 'text-emerald-300'

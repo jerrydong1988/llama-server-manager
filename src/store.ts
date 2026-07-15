@@ -25,7 +25,7 @@ export type {
   Usb4Adapter,
 } from './store/types'
 export { defaultInstanceConfig } from './store/defaults'
-export { formatStartupCommand } from './store/commandFormatting'
+export { formatStartupCommand, maskStartupCommandSecrets } from './store/commandFormatting'
 
 export const useAppStore = create<AppState>((set, get) => ({
   models: [],

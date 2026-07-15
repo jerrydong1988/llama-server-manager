@@ -582,6 +582,49 @@ fn is_rpc_server_process(pid: u32) -> bool {
         .is_some_and(is_rpc_server_executable)
 }
 
+fn wait_for_tcp_ready(addr: SocketAddr, max_wait: Duration) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + max_wait;
+    let mut last_error = None;
+
+    loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(now);
+        let attempt_timeout = remaining.min(Duration::from_millis(250));
+        match std::net::TcpStream::connect_timeout(&addr, attempt_timeout) {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        std::thread::sleep(
+            deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .min(Duration::from_millis(100)),
+        );
+    }
+
+    Err(last_error
+        .map(|error| error.to_string())
+        .unwrap_or_else(|| "readiness check timed out".to_string()))
+}
+
+fn terminate_rpc_child(child: &mut std::process::Child) -> Result<(), String> {
+    match child.kill() {
+        Ok(()) => child
+            .wait()
+            .map(|_| ())
+            .map_err(|error| format!("等待 rpc-server 退出失败: {error}")),
+        Err(kill_error) => match child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(format!("终止 rpc-server 失败: {kill_error}")),
+            Err(wait_error) => Err(format!(
+                "终止 rpc-server 失败: {kill_error}；查询进程状态失败: {wait_error}"
+            )),
+        },
+    }
+}
+
 fn listening_pids(port: u16) -> Result<Vec<u32>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -750,40 +793,44 @@ pub async fn start_local_rpc(
         };
 
         #[cfg(target_os = "windows")]
-        {
+        let mut child = {
             use std::os::windows::process::CommandExt;
             const DETACHED_PROCESS: u32 = 0x00000008;
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             std::process::Command::new(&binary)
                 .args(["--host", "127.0.0.1", "--port", &port.to_string()])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
                 .creation_flags(DETACHED_PROCESS | CREATE_NO_WINDOW)
                 .spawn()
-                .map_err(|e| format!("无法启动 {}: {}", binary, e))?;
-        }
+                .map_err(|e| format!("无法启动 {}: {}", binary, e))?
+        };
         #[cfg(not(target_os = "windows"))]
-        {
-            let log_path = format!("/tmp/rpc-server-{}.log", port);
-            let log_file =
-                std::fs::File::create(&log_path).map_err(|e| format!("无法创建日志文件: {}", e))?;
+        let mut child = {
             std::process::Command::new("nohup")
                 .arg(&binary)
                 .args(["--host", "127.0.0.1", "--port", &port.to_string()])
                 .stdin(Stdio::null())
-                .stdout(Stdio::from(log_file))
+                .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
-                .map_err(|e| format!("无法启动 {}: {}", binary, e))?;
-        }
+                .map_err(|e| format!("无法启动 {}: {}", binary, e))?
+        };
 
-        // Wait for the port to become ready.
-        std::thread::sleep(std::time::Duration::from_secs(2));
         let addr = format!("127.0.0.1:{}", port);
         let sock_addr = addr
             .parse::<std::net::SocketAddr>()
             .map_err(|e| format!("地址解析失败 ({}): {}", addr, e))?;
-        match std::net::TcpStream::connect_timeout(&sock_addr, std::time::Duration::from_secs(3)) {
+        match wait_for_tcp_ready(sock_addr, Duration::from_secs(5)) {
             Ok(_) => Ok(serde_json::json!({ "ok": true, "port": port })),
-            Err(e) => Err(format!("rpc-server 启动后无法连接: {}", e)),
+            Err(error) => {
+                let message = format!("rpc-server 启动后无法连接: {error}");
+                match terminate_rpc_child(&mut child) {
+                    Ok(()) => Err(message),
+                    Err(cleanup_error) => Err(format!("{message}；{cleanup_error}")),
+                }
+            }
         }
     })
     .await
@@ -829,6 +876,13 @@ mod tests {
         let loaded = load_workers_from(&test_path);
         assert!(loaded.is_empty());
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn tcp_readiness_accepts_a_listening_socket() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        assert!(wait_for_tcp_ready(addr, Duration::from_secs(1)).is_ok());
     }
 
     #[test]

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
-import { formatStartupCommand } from '../store'
+import { formatStartupCommand, maskStartupCommandSecrets } from '../store'
 import { invoke } from '@tauri-apps/api/core'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { useI18n } from '../i18n'
@@ -35,6 +35,7 @@ const InstanceManager = () => {
   const [showCmdModal, setShowCmdModal] = useState('')
   const [cmdText, setCmdText] = useState('')
   const [cmdRaw, setCmdRaw] = useState('')
+  const [cmdIncludesSecrets, setCmdIncludesSecrets] = useState(false)
   const [showCreatePicker, setShowCreatePicker] = useState(false)
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [newInst, setNewInst] = useState({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: 8080, engineId: '' })
@@ -242,7 +243,11 @@ const InstanceManager = () => {
       const cmd = await generateCommand(inst.config, engine.exe)
       const raw = cmd.map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ')
       setCmdRaw(raw)
-      setCmdText(formatStartupCommand(raw))
+      setCmdIncludesSecrets(cmd.some((arg, index) => (
+        (index > 0 && cmd[index - 1] === '--api-key' && Boolean(arg)) ||
+        (arg.startsWith('--api-key=') && arg.length > '--api-key='.length)
+      )))
+      setCmdText(formatStartupCommand(maskStartupCommandSecrets(raw)))
       setShowCmdModal(id)
     } catch (e) {
       console.error(e)
@@ -921,6 +926,11 @@ const InstanceManager = () => {
               <Button onClick={() => setShowCmdModal('')} variant="subtle" size="icon" aria-label="Close"><X className="h-5 w-5" /></Button>
             </div>
             <pre className="max-h-80 overflow-y-auto overflow-x-auto rounded-lg bg-slate-950 p-4 text-sm text-slate-200">{cmdText}</pre>
+            {cmdIncludesSecrets && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+                {t.instance.commandSecretWarning}
+              </div>
+            )}
             {copyFeedback && <div className="mt-3 text-center text-xs font-medium text-emerald-500">{t.common.copySuccess}</div>}
             <div className="mt-4 flex gap-2">
               <Button onClick={() => handleCopyCommand(cmdRaw)} variant="primary" icon={<Copy className="h-4 w-4" />}>{t.instance.copyClipboard}</Button>

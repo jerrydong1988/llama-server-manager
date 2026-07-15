@@ -29,7 +29,6 @@ export default function ClusterPage() {
     host: '',
     user: '',
     keyPath: '',
-    password: '',
     port: 50052,
     rpcPath: '',
     sshPort: 22,
@@ -43,6 +42,74 @@ export default function ClusterPage() {
   const [localEngine, setLocalEngine] = useState('')
   const [localMode, setLocalMode] = useState<'engine' | 'custom'>('engine')
   const scanCancelled = useRef(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!showAddDialog && !showLaunchWizard && !showLocalLaunch) return
+
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const focusableSelector = [
+      'button:not([disabled])',
+      'input:not([disabled])',
+      'select:not([disabled])',
+      'textarea:not([disabled])',
+      '[href]',
+      '[tabindex]:not([tabindex="-1"])',
+    ].join(',')
+
+    const closeDialog = () => {
+      if (showLocalLaunch) {
+        setShowLocalLaunch(false)
+      } else if (showLaunchWizard) {
+        setShowLaunchWizard(false)
+        setLaunchStep(0)
+      } else {
+        setShowAddDialog(false)
+      }
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeDialog()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector))
+        .filter(element => element.offsetParent !== null)
+      if (focusable.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      const active = document.activeElement
+      if (event.shiftKey && (active === first || !dialog.contains(active))) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+
+    dialog.addEventListener('keydown', handleKeyDown)
+    const focusFrame = window.requestAnimationFrame(() => {
+      const first = dialog.querySelector<HTMLElement>(focusableSelector)
+      ;(first || dialog).focus()
+    })
+
+    return () => {
+      window.cancelAnimationFrame(focusFrame)
+      dialog.removeEventListener('keydown', handleKeyDown)
+      if (previousFocus?.isConnected) previousFocus.focus()
+    }
+  }, [showAddDialog, showLaunchWizard, showLocalLaunch])
 
   useEffect(() => {
     void loadWorkers()
@@ -143,6 +210,11 @@ export default function ClusterPage() {
   }
 
   const handleSshLaunch = async () => {
+    if (!launchForm.keyPath.trim()) {
+      setLaunchError(zh ? '\u8bf7\u5148\u9009\u62e9 SSH \u5bc6\u94a5\u6587\u4ef6\u3002' : 'Select an SSH key file before launching.')
+      setLaunchStep(1)
+      return
+    }
     setLaunching(true)
     setLaunchError('')
     try {
@@ -150,7 +222,6 @@ export default function ClusterPage() {
         host: launchForm.host,
         sshUser: launchForm.user,
         sshKeyPath: launchForm.keyPath || null,
-        sshPassword: launchForm.password || null,
         rpcPort: launchForm.port,
         remoteRpcPath: launchForm.rpcPath || null,
         sshPort: launchForm.sshPort || 22,
@@ -557,11 +628,14 @@ export default function ClusterPage() {
       </div>
 
       {showAddDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-md rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onMouseDown={event => { if (event.target === event.currentTarget) setShowAddDialog(false) }}
+        >
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="add-worker-dialog-title" tabIndex={-1} className="w-full max-w-md rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
             <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-              <h3 className="font-semibold text-slate-50">{t.clusterPage.addWorker}</h3>
-              <Button onClick={() => setShowAddDialog(false)} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
+              <h3 id="add-worker-dialog-title" className="font-semibold text-slate-50">{t.clusterPage.addWorker}</h3>
+              <Button onClick={() => setShowAddDialog(false)} variant="subtle" size="icon" aria-label={t.common.cancel}><X className="h-4 w-4" /></Button>
             </div>
             <div className="space-y-3 p-6">
               <div>
@@ -586,11 +660,14 @@ export default function ClusterPage() {
       )}
 
       {showLaunchWizard && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-lg rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onMouseDown={event => { if (event.target === event.currentTarget) { setShowLaunchWizard(false); setLaunchStep(0) } }}
+        >
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="launch-worker-dialog-title" tabIndex={-1} className="w-full max-w-lg rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
             <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-              <h3 className="font-semibold text-slate-50">{t.clusterPage.launchWizard}</h3>
-              <Button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
+              <h3 id="launch-worker-dialog-title" className="font-semibold text-slate-50">{t.clusterPage.launchWizard}</h3>
+              <Button onClick={() => { setShowLaunchWizard(false); setLaunchStep(0) }} variant="subtle" size="icon" aria-label={t.common.cancel}><X className="h-4 w-4" /></Button>
             </div>
             <div className="space-y-4 p-6">
               {launchStep === 0 && (
@@ -634,10 +711,8 @@ export default function ClusterPage() {
                     <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshKeyPath}</label>
                     <TextInput type="text" value={launchForm.keyPath} onChange={event => setLaunchForm({ ...launchForm, keyPath: event.target.value })} placeholder="~/.ssh/id_rsa" className="h-10" />
                   </div>
-                  <div className="text-xs text-slate-500">Optional: provide a password only when key-based auth is unavailable.</div>
-                  <div>
-                    <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshPassword}</label>
-                    <TextInput type="password" value={launchForm.password} onChange={event => setLaunchForm({ ...launchForm, password: event.target.value })} className="h-10" />
+                  <div className="text-xs text-slate-500">
+                    {zh ? '\u4ec5\u652f\u6301 SSH \u5bc6\u94a5\u8ba4\u8bc1\uff0c\u5bc6\u94a5\u4e0d\u4f1a\u79bb\u5f00\u672c\u673a\u3002' : 'SSH key authentication is required; the key remains on this device.'}
                   </div>
                 </>
               )}
@@ -679,11 +754,14 @@ export default function ClusterPage() {
       )}
 
       {showLocalLaunch && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-          <div className="w-full max-w-sm rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onMouseDown={event => { if (event.target === event.currentTarget) setShowLocalLaunch(false) }}
+        >
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="local-worker-dialog-title" tabIndex={-1} className="w-full max-w-sm rounded-lg border border-slate-800 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
             <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-              <h3 className="font-semibold text-slate-50">{t.clusterPage.localLaunchTitle}</h3>
-              <Button onClick={() => setShowLocalLaunch(false)} variant="subtle" size="icon" aria-label="Close"><X className="h-4 w-4" /></Button>
+              <h3 id="local-worker-dialog-title" className="font-semibold text-slate-50">{t.clusterPage.localLaunchTitle}</h3>
+              <Button onClick={() => setShowLocalLaunch(false)} variant="subtle" size="icon" aria-label={t.common.cancel}><X className="h-4 w-4" /></Button>
             </div>
             <div className="space-y-3 p-6">
               <div>

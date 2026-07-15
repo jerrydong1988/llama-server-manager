@@ -323,12 +323,12 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     clearCompletedDownloadTasks: () => {
       const tasks = { ...get().downloadTasks }
       for (const key of Object.keys(tasks)) {
-        if (tasks[key].status === 'completed' || tasks[key].status === 'cancelled') {
+        if (tasks[key].status === 'completed') {
           delete tasks[key]
         }
       }
       set({ downloadTasks: tasks })
-      invoke('clear_download_tasks_by_status', { statuses: ['completed', 'cancelled'] }).catch(() => {})
+      invoke('clear_download_tasks_by_status', { statuses: ['completed'] }).catch(() => {})
     },
     clearFailedDownloadTasks: () => {
       const tasks = { ...get().downloadTasks }

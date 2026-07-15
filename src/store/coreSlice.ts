@@ -114,12 +114,24 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       set((state) => ({ engines: state.engines.filter((engine) => engine.id !== id) }))
     },
     renameEngine: (id, name) => {
-      invoke('rename_engine', { id, name }).catch(() => {})
+      const previous = get().engines.find((engine) => engine.id === id)
       set((state) => ({
         engines: state.engines.map((engine) => (
           engine.id === id ? { ...engine, name, custom_name: name } : engine
         )),
       }))
+      void invoke('rename_engine', { id, name }).catch((error) => {
+        if (previous) {
+          set((state) => ({
+            engines: state.engines.map((engine) => (
+              engine.id === id && engine.name === name && engine.custom_name === name
+                ? previous
+                : engine
+            )),
+          }))
+        }
+        get().addRuntimeWarning(`Engine rename failed: ${String(error)}`)
+      })
     },
     openEngineFolder: async (dir) => {
       await invoke('open_engine_folder', { dir })
