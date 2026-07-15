@@ -96,6 +96,16 @@ if (workflow.includes('::warning::')) {
   failures.push('expected code-signing fallbacks must not emit warning annotations')
 }
 
+const finalizeJob = jobBody('finalize-release')
+for (const command of [
+  'gh release view "$tag" --repo "$GITHUB_REPOSITORY"',
+  'gh release edit "$tag" --repo "$GITHUB_REPOSITORY"',
+]) {
+  if (!finalizeJob.includes(command)) {
+    failures.push(`release finalizer must select the repository explicitly: ${command}`)
+  }
+}
+
 const windowsJob = jobBody('build-windows')
 if (!windowsJob.includes('actions: read')) failures.push('Windows SignPath job cannot read GitHub Actions build metadata')
 for (const token of [
