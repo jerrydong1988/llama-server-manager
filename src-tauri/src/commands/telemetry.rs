@@ -834,6 +834,20 @@ fn insert_metric_sample(
     let memory = Some(system.memory_mb);
     let gpu = system.gpu_percent.map(|v| v as f64);
     let sys_cpu = system.system_cpu_percent.map(|v| v as f64);
+    let tokens_per_sec = llama.map(|metric| {
+        if metric.requests_processing > 0 {
+            metric.tokens_per_sec
+        } else {
+            0.0
+        }
+    });
+    let prompt_tokens_per_sec = llama.map(|metric| {
+        if metric.requests_processing > 0 {
+            metric.prompt_tokens_per_sec
+        } else {
+            0.0
+        }
+    });
     conn.execute(
         "INSERT INTO metric_samples
             (session_id, instance_id, ts, cpu_percent, memory_mb, gpu_percent, vram_used_mb, vram_total_mb,
@@ -856,13 +870,13 @@ fn insert_metric_sample(
             system.system_memory_used_mb,
             system.system_memory_total_mb,
             system.gpu_vendor.as_deref(),
-            llama.map(|m| m.tokens_per_sec),
+            tokens_per_sec,
             llama.map(|m| m.prompt_tokens as i64),
             llama.map(|m| m.gen_tokens as i64),
             llama.map(|m| m.decode_calls_total as i64),
             llama.map(|m| m.decode_calls_total as i64),
             llama.map(|m| m.max_tokens_observed as i64),
-            llama.map(|m| m.prompt_tokens_per_sec),
+            prompt_tokens_per_sec,
             llama.map(|m| m.requests_processing as i64),
             llama.map(|m| m.requests_deferred as i64),
             llama.map(|m| m.busy_slots_per_decode),
@@ -1910,7 +1924,7 @@ fn query_session_metric_stats(
     conn.query_row(
         "SELECT
             COUNT(*),
-            COALESCE(AVG(tokens_per_sec), 0),
+            COALESCE(AVG(CASE WHEN tokens_per_sec > 0 THEN tokens_per_sec END), 0),
             COALESCE(MAX(tokens_per_sec), 0),
             COALESCE(AVG(gpu_percent), 0),
             COALESCE(AVG(cpu_percent), 0),
@@ -2913,6 +2927,93 @@ mod tests {
             )
             .unwrap();
         assert_eq!(values, (17, 17, 4096));
+    }
+
+    #[test]
+    fn idle_metric_sample_zeroes_stale_throughput() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "session-idle-metrics",
+                instance_id: "instance-idle-metrics",
+                instance_name: "Idle metrics",
+                model_path: "model.gguf",
+                engine_id: "engine",
+                backend: "cpu",
+                config_hash: "hash",
+                command_line: "llama-server --model model.gguf",
+                workload: ModelWorkload::Inference,
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let system = SystemMetrics {
+            cpu_percent: 1.0,
+            memory_mb: 2.0,
+            uptime_secs: 3,
+            gpu_percent: None,
+            vram_used_mb: None,
+            vram_total_mb: None,
+            system_cpu_percent: None,
+            system_memory_total_mb: None,
+            system_memory_used_mb: None,
+            gpu_vendor: None,
+        };
+        let llama = LlamaMetricSample {
+            tokens_per_sec: 72.6,
+            prompt_tokens: 5,
+            gen_tokens: 6,
+            decode_calls_total: 17,
+            max_tokens_observed: 4096,
+            prompt_tokens_per_sec: 140.0,
+            requests_processing: 0,
+            requests_deferred: 0,
+            busy_slots_per_decode: 0.0,
+        };
+
+        insert_metric_sample(
+            &conn,
+            "session-idle-metrics",
+            "instance-idle-metrics",
+            100,
+            &system,
+            Some(&llama),
+        )
+        .unwrap();
+
+        let values: (f64, f64, i64) = conn
+            .query_row(
+                "SELECT tokens_per_sec, prompt_tokens_per_sec, requests_processing
+                 FROM metric_samples WHERE session_id = 'session-idle-metrics' AND ts = 100",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(values, (0.0, 0.0, 0));
+
+        let active_llama = LlamaMetricSample {
+            tokens_per_sec: 45.0,
+            prompt_tokens_per_sec: 90.0,
+            requests_processing: 1,
+            busy_slots_per_decode: 1.0,
+            ..llama
+        };
+        insert_metric_sample(
+            &conn,
+            "session-idle-metrics",
+            "instance-idle-metrics",
+            200,
+            &system,
+            Some(&active_llama),
+        )
+        .unwrap();
+
+        let stats = query_session_metric_stats(&conn, "session-idle-metrics").unwrap();
+        assert_eq!(stats.sample_count, 2);
+        assert_eq!(stats.avg_tps, 45.0);
+        assert_eq!(stats.max_tps, 45.0);
     }
 
     #[test]

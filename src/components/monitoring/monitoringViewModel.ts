@@ -107,15 +107,38 @@ export function appendThroughputPoint(
   return next.slice(-maxPoints)
 }
 
+export function buildTelemetryThroughputPoints(
+  samples: Array<Pick<TelemetrySampleSummary, 'ts' | 'tokens_per_sec' | 'requests_processing'>>,
+): ThroughputPoint[] {
+  return samples.map(sample => ({
+    ts: sample.ts,
+    value: sample.requests_processing === 0
+      ? 0
+      : validThroughput(sample.tokens_per_sec) ? sample.tokens_per_sec : 0,
+  }))
+}
+
 export function mergeThroughputPoints(
   historical: ThroughputPoint[],
   live: ThroughputPoint[],
   cutoff = 0,
   maxPoints = 720,
 ): ThroughputPoint[] {
+  const validLive = live.filter(point => (
+    point.ts >= cutoff && Number.isFinite(point.ts) && validThroughput(point.value)
+  ))
+  const liveFrom = validLive.reduce(
+    (earliest, point) => Math.min(earliest, point.ts),
+    Number.POSITIVE_INFINITY,
+  )
   const byTimestamp = new Map<number, ThroughputPoint>()
-  for (const point of [...historical, ...live]) {
+  for (const point of historical) {
     if (point.ts < cutoff || !Number.isFinite(point.ts) || !validThroughput(point.value)) continue
+    // Once the live stream starts, persisted samples must not overwrite its timeline.
+    if (point.ts >= liveFrom) continue
+    byTimestamp.set(point.ts, point)
+  }
+  for (const point of validLive) {
     byTimestamp.set(point.ts, point)
   }
   const sorted = [...byTimestamp.values()].sort((left, right) => left.ts - right.ts)

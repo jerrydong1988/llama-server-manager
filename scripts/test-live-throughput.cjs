@@ -11,6 +11,7 @@ const entry = `
     appendThroughputPoint,
     buildChartAxis,
     buildLiveThroughput,
+    buildTelemetryThroughputPoints,
     mergeThroughputPoints,
   } from './src/components/monitoring/monitoringViewModel'
 
@@ -82,11 +83,32 @@ const entry = `
     [{ ts: 95, value: 2 }, { ts: 100, value: 4 }],
   )
   assert.deepEqual(
+    buildTelemetryThroughputPoints([
+      { ts: 1, tokens_per_sec: 72.6, requests_processing: 0 },
+      { ts: 2, tokens_per_sec: 45, requests_processing: 1 },
+      { ts: 3, tokens_per_sec: 30, requests_processing: null },
+      { ts: 4, tokens_per_sec: null, requests_processing: 1 },
+    ]),
+    [
+      { ts: 1, value: 0 },
+      { ts: 2, value: 45 },
+      { ts: 3, value: 30 },
+      { ts: 4, value: 0 },
+    ],
+  )
+  assert.deepEqual(
     mergeThroughputPoints(
       [{ ts: 1, value: 1 }, { ts: 2, value: 2 }],
       [{ ts: 2, value: 20 }, { ts: 3, value: 3 }],
     ),
     [{ ts: 1, value: 1 }, { ts: 2, value: 20 }, { ts: 3, value: 3 }],
+  )
+  assert.deepEqual(
+    mergeThroughputPoints(
+      [{ ts: 1, value: 70 }, { ts: 4, value: 72 }],
+      [{ ts: 2, value: 0 }, { ts: 5, value: 0 }],
+    ),
+    [{ ts: 1, value: 70 }, { ts: 2, value: 0 }, { ts: 5, value: 0 }],
   )
   assert.deepEqual(
     mergeThroughputPoints(
@@ -135,6 +157,7 @@ assert.match(rustSource, /re_tg_3s/, 'the log parser must parse rolling throughp
 for (const source of [performanceSource, bigScreenSource]) {
   assert.match(source, /buildLiveThroughput/, 'monitoring views must use the shared live throughput model')
   assert.match(source, /appendThroughputPoint/, 'monitoring views must append live trend points')
+  assert.match(source, /buildTelemetryThroughputPoints/, 'monitoring views must normalize idle telemetry samples')
   assert.match(source, /mergeThroughputPoints/, 'monitoring views must merge live and persisted trends')
   assert.doesNotMatch(source, /selectCurrentThroughput/, 'historical throughput must not drive the current value')
 }

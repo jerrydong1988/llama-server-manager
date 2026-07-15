@@ -38,6 +38,7 @@ import {
   buildRequestPressure,
   buildResourceSignals,
   buildServiceStatus,
+  buildTelemetryThroughputPoints,
   mergeThroughputPoints,
   type ActivityFeedItem,
   type SignalTone,
@@ -210,7 +211,7 @@ export default function BigScreenPage() {
   }, [allActiveTasks, currentThroughput.activeCount, currentThroughput.source, currentThroughput.value])
   const trendPoints = useMemo(
     () => mergeThroughputPoints(
-      trendSamples.map(sample => ({ ts: sample.ts, value: sample.tokens_per_sec ?? 0 })),
+      buildTelemetryThroughputPoints(trendSamples),
       liveThroughputPoints,
       Date.now() - 5 * 60 * 1000,
       240,

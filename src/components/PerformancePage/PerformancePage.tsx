@@ -26,6 +26,7 @@ import {
   buildLiveThroughput,
   buildRequestPressure,
   buildResourceSignals,
+  buildTelemetryThroughputPoints,
   mergeThroughputPoints,
   type ThroughputPoint,
 } from '../monitoring/monitoringViewModel'
@@ -280,7 +281,7 @@ export default function PerformancePage() {
   }, [activeTasks, currentThroughput.activeCount, currentThroughput.source, currentThroughput.value, liveThroughputInstanceId])
   const inferenceTrendPoints = useMemo(
     () => mergeThroughputPoints(
-      trendSamples.map(sample => ({ ts: sample.ts, value: sample.tokens_per_sec ?? 0 })),
+      buildTelemetryThroughputPoints(trendSamples),
       liveThroughputByInstance[liveThroughputInstanceId] || [],
       Date.now() - trendRangeToMs(trendRange),
       240,
