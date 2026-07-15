@@ -4,6 +4,20 @@ const Module = require('node:module')
 const path = require('node:path')
 const esbuild = require('esbuild')
 
+const backendConfigSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src-tauri', 'src', 'commands', 'config.rs'),
+  'utf8',
+)
+const saveConfigBackend = backendConfigSource.slice(
+  backendConfigSource.indexOf('pub async fn save_config('),
+  backendConfigSource.indexOf('pub async fn load_config('),
+)
+assert.ok(
+  saveConfigBackend.indexOf('CONFIG_WRITE_LOCK.lock()')
+    < saveConfigBackend.indexOf('state.running.lock()'),
+  'runtime state must be sampled only after save_config owns the config write lock',
+)
+
 const configPageSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'components', 'ConfigPage.tsx'),
   'utf8',

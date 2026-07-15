@@ -370,3 +370,27 @@ jobs:
           files: |
             src-tauri/target/release/bundle/appimage/*.AppImage
             src-tauri/target/release/bundle/deb/*.deb
+
+  finalize-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-windows, build-macos, build-linux, build-linux-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Ensure release notes are present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          body="$(gh release view "$tag" --json body --jq '.body // ""')"
+          if [[ -n "${body//[[:space:]]/}" ]]; then
+            echo "Release notes already exist; preserving the curated content."
+            exit 0
+          fi
+          gh api --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$tag" \
+            --jq '.body' > generated-release-notes.md
+          test -s generated-release-notes.md
+          gh release edit "$tag" --notes-file generated-release-notes.md

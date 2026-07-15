@@ -20,6 +20,7 @@ const VECTOR_WINDOW_MS: i64 = 3_000;
 pub struct MonitoringFrame {
     pub instance_id: String,
     pub session_id: Option<String>,
+    pub session_started_at: i64,
     pub ts: i64,
     pub workload: String,
     pub state: String,
@@ -73,6 +74,28 @@ struct VectorLiveEvent {
     succeeded: bool,
 }
 
+fn aggregate_completed_input_tps(events: &[&VectorLiveEvent]) -> Option<f64> {
+    let mut input_tokens = 0_u64;
+    let mut earliest_start = i64::MAX;
+    let mut latest_end = i64::MIN;
+    for event in events {
+        let Some(tokens) = event.input_tokens.filter(|tokens| *tokens > 0) else {
+            continue;
+        };
+        if !event.duration_ms.is_finite() || event.duration_ms <= 0.0 {
+            continue;
+        }
+        let duration_ms = event.duration_ms.ceil().min(i64::MAX as f64) as i64;
+        let started_at = event.completed_at.saturating_sub(duration_ms);
+        input_tokens = input_tokens.saturating_add(tokens);
+        earliest_start = earliest_start.min(started_at);
+        latest_end = latest_end.max(event.completed_at);
+    }
+    let observed_ms = latest_end.saturating_sub(earliest_start);
+    (input_tokens > 0 && observed_ms > 0)
+        .then_some(input_tokens as f64 / (observed_ms as f64 / 1_000.0))
+}
+
 struct InstanceMonitoringState {
     instance_id: String,
     session_id: Option<String>,
@@ -104,14 +127,20 @@ impl InstanceMonitoringState {
         }
     }
 
-    fn reset_session(&mut self, session_id: Option<&str>, workload: ModelWorkload, now: i64) {
+    fn reset_session(
+        &mut self,
+        session_id: Option<&str>,
+        workload: ModelWorkload,
+        now: i64,
+        force: bool,
+    ) {
         let next_session = session_id.map(ToString::to_string);
-        if self.session_id == next_session && self.workload == workload {
+        if !force && self.session_id == next_session && self.workload == workload {
             return;
         }
         self.session_id = next_session;
         self.workload = workload;
-        self.registered_at = now;
+        self.registered_at = now.max(self.registered_at.saturating_add(1));
         self.system = None;
         self.llama = None;
         self.tasks = None;
@@ -208,21 +237,7 @@ impl InstanceMonitoringState {
                 / rate_events.len() as f64
                 * 100.0
         });
-        let completed_input_tps = if log_events.is_empty() {
-            None
-        } else {
-            let input_tokens = log_events
-                .iter()
-                .filter_map(|event| event.input_tokens)
-                .sum::<u64>();
-            let duration_ms = log_events
-                .iter()
-                .filter(|event| event.input_tokens.is_some())
-                .map(|event| event.duration_ms.max(0.0))
-                .sum::<f64>();
-            (input_tokens > 0 && duration_ms > 0.0)
-                .then_some(input_tokens as f64 / (duration_ms / 1_000.0))
-        };
+        let completed_input_tps = aggregate_completed_input_tps(&log_events);
 
         let mut source = "unavailable";
         let output_tokens_per_second = if self.workload == ModelWorkload::Inference {
@@ -297,6 +312,7 @@ impl InstanceMonitoringState {
         MonitoringFrame {
             instance_id: self.instance_id.clone(),
             session_id: self.session_id.clone(),
+            session_started_at: self.registered_at,
             ts: frame_ts,
             workload: self.workload.as_str().to_string(),
             state: state.to_string(),
@@ -355,10 +371,10 @@ fn with_state(
         .entry(instance_id.to_string())
         .or_insert_with(|| InstanceMonitoringState::new(instance_id, session_id, workload, now));
     if session_id.is_some() || state.session_id.is_none() {
-        state.reset_session(session_id, workload, now);
+        state.reset_session(session_id, workload, now, false);
     } else if state.workload != workload {
         let existing_session = state.session_id.clone();
-        state.reset_session(existing_session.as_deref(), workload, now);
+        state.reset_session(existing_session.as_deref(), workload, now, false);
     }
     update(state);
 }
@@ -467,8 +483,9 @@ pub fn start_frame_loop(
         let state = registry.entry(instance_id.clone()).or_insert_with(|| {
             InstanceMonitoringState::new(&instance_id, session_id.as_deref(), workload, now)
         });
-        state.reset_session(session_id.as_deref(), workload, now);
-        if state.frame_loop_pid == Some(expected_pid) {
+        let same_process = state.frame_loop_pid == Some(expected_pid);
+        state.reset_session(session_id.as_deref(), workload, now, !same_process);
+        if same_process {
             false
         } else {
             state.frame_loop_pid = Some(expected_pid);
@@ -662,5 +679,57 @@ mod tests {
         assert_eq!(frame.output_tokens_per_second, None);
         assert_eq!(frame.success_rate, Some(100.0));
         assert_eq!(frame.throughput_unit, "input tok/s");
+    }
+
+    #[test]
+    fn concurrent_vector_completions_use_wall_clock_throughput() {
+        let now = 20_000;
+        let events = [
+            VectorLiveEvent {
+                source: VectorMetricSource::Log,
+                completed_at: now,
+                item_count: 1,
+                input_tokens: Some(100),
+                duration_ms: 1_000.0,
+                succeeded: true,
+            },
+            VectorLiveEvent {
+                source: VectorMetricSource::Log,
+                completed_at: now,
+                item_count: 1,
+                input_tokens: Some(100),
+                duration_ms: 1_000.0,
+                succeeded: true,
+            },
+        ];
+        let refs = events.iter().collect::<Vec<_>>();
+
+        assert_eq!(aggregate_completed_input_tps(&refs), Some(200.0));
+    }
+
+    #[test]
+    fn sequential_vector_completions_include_the_observed_work_span() {
+        let now = 20_000;
+        let events = [
+            VectorLiveEvent {
+                source: VectorMetricSource::Log,
+                completed_at: now - 1_000,
+                item_count: 1,
+                input_tokens: Some(100),
+                duration_ms: 1_000.0,
+                succeeded: true,
+            },
+            VectorLiveEvent {
+                source: VectorMetricSource::Log,
+                completed_at: now,
+                item_count: 1,
+                input_tokens: Some(100),
+                duration_ms: 1_000.0,
+                succeeded: true,
+            },
+        ];
+        let refs = events.iter().collect::<Vec<_>>();
+
+        assert_eq!(aggregate_completed_input_tps(&refs), Some(100.0));
     }
 }

@@ -6,6 +6,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::State;
 use tokio::time::timeout as tokio_timeout;
 
@@ -560,75 +561,103 @@ pub async fn generate_rpc_launch_cmd(port: u16) -> Result<String, String> {
 
 #[tauri::command]
 pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || stop_verified_rpc_server(port))
+        .await
+        .map_err(|e| format!("停止 Worker 失败: {}", e))?
+}
+
+fn is_rpc_server_executable(path: &std::path::Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(RPC_SERVER_NAME))
+}
+
+fn is_rpc_server_process(pid: u32) -> bool {
+    let pid = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+    system
+        .process(pid)
+        .and_then(|process| process.exe())
+        .is_some_and(is_rpc_server_executable)
+}
+
+fn listening_pids(port: u16) -> Result<Vec<u32>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut command = Command::new("cmd");
+        command.creation_flags(0x08000000);
+        let output = command
+            .args(["/c", &format!("netstat -ano | findstr :{}", port)])
+            .output()
+            .map_err(|e| format!("netstat 失败: {}", e))?;
+        let out = String::from_utf8_lossy(&output.stdout);
+        let pid_re = regex_lite::Regex::new(r"LISTENING\s+(\d+)$")
+            .map_err(|e| format!("PID 解析器初始化失败: {e}"))?;
+        Ok(out
+            .lines()
+            .filter(|line| line.contains(&format!(":{port}")) && line.contains("LISTENING"))
+            .filter_map(|line| pid_re.captures(line))
+            .filter_map(|captures| captures.get(1))
+            .filter_map(|value| value.as_str().parse::<u32>().ok())
+            .collect())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let output = Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "ss -tlnp | grep ':{}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'",
+                port
+            ))
+            .output()
+            .map_err(|e| format!("ss 失败: {}", e))?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .collect())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("lsof")
+            .args(["-ti", &format!(":{}", port)])
+            .output()
+            .map_err(|e| format!("lsof 失败: {}", e))?;
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse::<u32>().ok())
+            .collect())
+    }
+}
+
+fn stop_verified_rpc_server(port: u16) -> Result<bool, String> {
+    for pid in listening_pids(port)? {
+        if !is_rpc_server_process(pid) {
+            continue;
+        }
         #[cfg(target_os = "windows")]
-        {
-            let output = std::process::Command::new("cmd")
-                .args(["/c", &format!("netstat -ano | findstr :{}", port)])
-                .output()
-                .map_err(|e| format!("netstat 失败: {}", e))?;
-            let out = String::from_utf8_lossy(&output.stdout);
-            // #6: Match PID with regex to avoid localized netstat output; /T kills child processes.
-            let pid_re = regex_lite::Regex::new(r"LISTENING\s+(\d+)$").ok();
-            for line in out.lines() {
-                if line.contains(&format!(":{}", port)) && line.contains("LISTENING") {
-                    if let Some(pid) = pid_re
-                        .as_ref()
-                        .and_then(|re| re.captures(line))
-                        .and_then(|c| c.get(1))
-                        .map(|m| m.as_str())
-                    {
-                        let _ = std::process::Command::new("taskkill")
-                            .args(["/PID", pid, "/F", "/T"])
-                            .output();
-                        return Ok(true);
-                    }
-                }
-            }
+        let stopped = {
+            use std::os::windows::process::CommandExt;
+            let mut command = Command::new("taskkill");
+            command.creation_flags(0x08000000);
+            command
+                .args(["/PID", &pid.to_string(), "/F", "/T"])
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        };
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        let stopped = Command::new("kill")
+            .arg(pid.to_string())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if stopped {
+            return Ok(true);
         }
-        #[cfg(target_os = "linux")]
-        {
-            // #11: Avoid grep -P and use sed for minimal Linux compatibility.
-            let output = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(format!(
-                    "ss -tlnp | grep ':{}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'",
-                    port
-                ))
-                .output()
-                .map_err(|e| format!("ss 失败: {}", e))?;
-            let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !out.is_empty() {
-                let _ = std::process::Command::new("kill").arg(&out).output();
-                // Kill child processes too.
-                let _ = std::process::Command::new("sh")
-                    .arg("-c")
-                    .arg(format!("ps --ppid {} -o pid= 2>/dev/null", out))
-                    .output()
-                    .map(|o| {
-                        String::from_utf8_lossy(&o.stdout).lines().for_each(|p| {
-                            let _ = std::process::Command::new("kill").arg(p).output();
-                        });
-                    });
-                return Ok(true);
-            }
-        }
-        #[cfg(target_os = "macos")]
-        {
-            let output = std::process::Command::new("lsof")
-                .args(["-ti", &format!(":{}", port)])
-                .output()
-                .map_err(|e| format!("lsof 失败: {}", e))?;
-            let out = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !out.is_empty() {
-                let _ = std::process::Command::new("kill").arg(&out).output();
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    })
-    .await
-    .map_err(|e| format!("停止 Worker 失败: {}", e))?
+    }
+    Ok(false)
 }
 
 pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
@@ -807,6 +836,16 @@ mod tests {
         let cmd = generate_rpc_launch_cmd_internal(50052);
         assert!(cmd.contains("50052"));
         assert!(cmd.contains("127.0.0.1"));
+    }
+
+    #[test]
+    fn rpc_process_identity_requires_the_expected_executable_name() {
+        assert!(is_rpc_server_executable(std::path::Path::new(
+            RPC_SERVER_NAME
+        )));
+        assert!(!is_rpc_server_executable(std::path::Path::new(
+            "unrelated-server.exe"
+        )));
     }
 
     #[tokio::test]

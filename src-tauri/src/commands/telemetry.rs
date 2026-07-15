@@ -4,7 +4,8 @@ use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::{mpsc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SCHEMA_VERSION: i64 = 6;
@@ -12,9 +13,9 @@ const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
 
-static TELEMETRY_SCHEMA_INIT: OnceLock<Result<(), String>> = OnceLock::new();
-static TELEMETRY_WRITER: OnceLock<Result<mpsc::SyncSender<TelemetryWrite>, String>> =
-    OnceLock::new();
+static TELEMETRY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
+static TELEMETRY_SCHEMA_LOCK: Mutex<()> = Mutex::new(());
+static TELEMETRY_WRITER: Mutex<Option<mpsc::SyncSender<TelemetryWrite>>> = Mutex::new(None);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TelemetryOverview {
@@ -288,14 +289,19 @@ fn open_raw_connection() -> Result<Connection, String> {
 }
 
 pub(crate) fn initialize_telemetry_storage() -> Result<(), String> {
-    TELEMETRY_SCHEMA_INIT
-        .get_or_init(|| {
-            let conn = open_raw_connection()?;
-            conn.pragma_update(None, "journal_mode", "WAL")
-                .map_err(|e| format!("无法启用遥测数据库 WAL: {}", e))?;
-            init_schema(&conn)
-        })
-        .clone()
+    if TELEMETRY_SCHEMA_READY.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let _guard = TELEMETRY_SCHEMA_LOCK.lock().unwrap();
+    if TELEMETRY_SCHEMA_READY.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let conn = open_raw_connection()?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|e| format!("无法启用遥测数据库 WAL: {}", e))?;
+    init_schema(&conn)?;
+    TELEMETRY_SCHEMA_READY.store(true, Ordering::Release);
+    Ok(())
 }
 
 fn open_connection() -> Result<Connection, String> {
@@ -666,39 +672,58 @@ pub fn finish_run_session(
     Ok(())
 }
 
-fn telemetry_writer() -> Result<&'static mpsc::SyncSender<TelemetryWrite>, String> {
-    TELEMETRY_WRITER
-        .get_or_init(|| {
-            initialize_telemetry_storage()?;
-            let (sender, receiver) = mpsc::sync_channel(TELEMETRY_WRITE_QUEUE_CAPACITY);
-            std::thread::Builder::new()
-                .name("telemetry-writer".to_string())
-                .spawn(move || telemetry_writer_loop(receiver))
-                .map_err(|e| format!("failed to start telemetry writer: {e}"))?;
-            Ok(sender)
-        })
-        .as_ref()
-        .map_err(Clone::clone)
+fn telemetry_writer() -> Result<mpsc::SyncSender<TelemetryWrite>, String> {
+    let mut writer = TELEMETRY_WRITER.lock().unwrap();
+    if let Some(sender) = writer.as_ref() {
+        return Ok(sender.clone());
+    }
+    initialize_telemetry_storage()?;
+    let (sender, receiver) = mpsc::sync_channel(TELEMETRY_WRITE_QUEUE_CAPACITY);
+    std::thread::Builder::new()
+        .name("telemetry-writer".to_string())
+        .spawn(move || telemetry_writer_loop(receiver))
+        .map_err(|e| format!("failed to start telemetry writer: {e}"))?;
+    *writer = Some(sender.clone());
+    Ok(sender)
+}
+
+fn reset_telemetry_writer() {
+    *TELEMETRY_WRITER.lock().unwrap() = None;
 }
 
 fn enqueue_telemetry(write: TelemetryWrite) -> Result<(), String> {
-    telemetry_writer()?
-        .try_send(write)
-        .map_err(|error| match error {
+    let writer = telemetry_writer()?;
+    match writer.try_send(write) {
+        Ok(()) => Ok(()),
+        Err(mpsc::TrySendError::Disconnected(pending)) => {
+            reset_telemetry_writer();
+            match telemetry_writer()?.try_send(pending) {
+                Ok(()) => Ok(()),
+                Err(mpsc::TrySendError::Full(_)) => Err(
+                    "telemetry write queue is full; sample was dropped to protect runtime latency"
+                        .to_string(),
+                ),
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    Err("telemetry writer is unavailable after restart".to_string())
+                }
+            }
+        }
+        Err(error) => Err(match error {
             mpsc::TrySendError::Full(_) => {
                 "telemetry write queue is full; sample was dropped to protect runtime latency"
                     .to_string()
             }
             mpsc::TrySendError::Disconnected(_) => "telemetry writer is unavailable".to_string(),
-        })
+        }),
+    }
 }
 
 pub(crate) fn flush_telemetry_writer() -> Result<(), String> {
     let (sender, receiver) = mpsc::channel();
-    let writer = telemetry_writer()?;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut flush = TelemetryWrite::Flush(sender);
     loop {
+        let writer = telemetry_writer()?;
         match writer.try_send(flush) {
             Ok(()) => break,
             Err(mpsc::TrySendError::Full(pending)) if std::time::Instant::now() < deadline => {
@@ -708,8 +733,12 @@ pub(crate) fn flush_telemetry_writer() -> Result<(), String> {
             Err(mpsc::TrySendError::Full(_)) => {
                 return Err("timed out while queueing telemetry flush".to_string());
             }
-            Err(mpsc::TrySendError::Disconnected(_)) => {
-                return Err("telemetry writer is unavailable".to_string());
+            Err(mpsc::TrySendError::Disconnected(pending)) => {
+                reset_telemetry_writer();
+                flush = pending;
+                if std::time::Instant::now() >= deadline {
+                    return Err("telemetry writer is unavailable".to_string());
+                }
             }
         }
     }
@@ -739,7 +768,13 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
         let transaction = match conn.transaction() {
             Ok(transaction) => transaction,
             Err(error) => {
-                eprintln!("Telemetry writer failed to begin transaction: {error}");
+                let message = format!("Telemetry writer failed to begin transaction: {error}");
+                eprintln!("{message}");
+                for write in batch {
+                    if let TelemetryWrite::Flush(waiter) = write {
+                        let _ = waiter.send(Err(message.clone()));
+                    }
+                }
                 continue;
             }
         };

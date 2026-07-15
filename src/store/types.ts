@@ -340,6 +340,7 @@ export interface PerfUpdateEvent {
 export interface MonitoringFrame {
   instanceId: string
   sessionId: string | null
+  sessionStartedAt: number
   ts: number
   workload: ModelWorkload
   state: 'active' | 'idle' | 'warming' | 'unavailable'

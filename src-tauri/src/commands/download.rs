@@ -35,10 +35,62 @@ fn effective_download_bandwidth_limit(state: &AppState) -> u64 {
 
 fn effective_download_concurrency(state: &AppState) -> usize {
     let configured = (*state.download_max_concurrent.lock().unwrap()).max(1);
-    if *state.download_low_priority_throttle.lock().unwrap() {
+    apply_download_priority_concurrency(
+        configured,
+        *state.download_low_priority_throttle.lock().unwrap(),
+    )
+}
+
+fn apply_download_priority_concurrency(configured: usize, low_priority: bool) -> usize {
+    if low_priority {
         1
     } else {
-        configured
+        configured.max(1)
+    }
+}
+
+struct GlobalDownloadSlot {
+    app: tauri::AppHandle,
+}
+
+impl Drop for GlobalDownloadSlot {
+    fn drop(&mut self) {
+        let state = self.app.state::<AppState>();
+        state
+            .download_active_file_slots
+            .fetch_sub(1, Ordering::AcqRel);
+        state.download_slot_notify.notify_waiters();
+    }
+}
+
+async fn acquire_global_download_slot(app: &tauri::AppHandle) -> GlobalDownloadSlot {
+    let notify = app.state::<AppState>().download_slot_notify.clone();
+    loop {
+        let state = app.state::<AppState>();
+        let limit = effective_download_concurrency(&state);
+        let mut active = state.download_active_file_slots.load(Ordering::Acquire);
+        while active < limit {
+            match state.download_active_file_slots.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return GlobalDownloadSlot { app: app.clone() },
+                Err(current) => active = current,
+            }
+        }
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let should_wait = {
+            let state = app.state::<AppState>();
+            state.download_active_file_slots.load(Ordering::Acquire)
+                >= effective_download_concurrency(&state)
+        };
+        if should_wait {
+            notified.as_mut().await;
+        }
     }
 }
 
@@ -102,7 +154,14 @@ fn sanitize_repo_id(repo_id: &str) -> Result<String, String> {
     if repo_id.is_empty() {
         return Err("仓库 ID 不能为空".to_string());
     }
-    if repo_id.contains("..") || repo_id.contains('\\') {
+    if repo_id.starts_with('/')
+        || repo_id.ends_with('/')
+        || repo_id.contains("//")
+        || repo_id.contains("..")
+        || repo_id.contains('\\')
+        || Path::new(repo_id).is_absolute()
+        || Path::new(repo_id).has_root()
+    {
         return Err(format!("无效的仓库 ID: {}", repo_id));
     }
     #[cfg(target_os = "windows")]
@@ -1259,13 +1318,6 @@ pub async fn download_modelscope_files(
     let save_path = resolve_repo_save_path(&app, &save_dir, &repo_id)?;
 
     let mut handles = Vec::new();
-    use tokio::sync::Semaphore;
-    let max_concurrent = *app
-        .state::<AppState>()
-        .download_max_concurrent
-        .lock()
-        .unwrap();
-    let semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
     let has_error = Arc::new(AtomicBool::new(false));
 
     // Clear cancel/pause flags for this batch to avoid stale pause/cancel state.
@@ -1281,9 +1333,8 @@ pub async fn download_modelscope_files(
         let has_error = Arc::clone(&has_error);
         let handle = tokio::spawn({
             let app = app.clone();
-            let permit = semaphore.clone().acquire_owned();
             async move {
-                let _permit = permit.await;
+                let _slot = acquire_global_download_slot(&app).await;
                 download_single_file(ctx, url, dest_dir, file.size, app, has_error).await;
             }
         });
@@ -1460,17 +1511,9 @@ pub async fn download_huggingface_files(
     save_dir: String,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    use tokio::sync::Semaphore;
-
     let repo_id = sanitize_repo_id(&repo_id)?;
     let save_path = resolve_repo_save_path(&app, &save_dir, &repo_id)?;
 
-    let max_concurrent = *app
-        .state::<AppState>()
-        .download_max_concurrent
-        .lock()
-        .unwrap();
-    let semaphore = Arc::new(Semaphore::new(max_concurrent.max(1)));
     let has_error = Arc::new(AtomicBool::new(false));
     let mut handles = Vec::new();
 
@@ -1487,9 +1530,8 @@ pub async fn download_huggingface_files(
         let has_error = Arc::clone(&has_error);
         let handle = tokio::spawn({
             let app = app.clone();
-            let permit = semaphore.clone().acquire_owned();
             async move {
-                let _permit = permit.await;
+                let _slot = acquire_global_download_slot(&app).await;
                 download_single_file(ctx, url, dest_dir, file.size, app, has_error).await;
             }
         });
@@ -1597,11 +1639,12 @@ fn persist_active_entries_snapshot(state: &AppState, force: bool) {
         }
         *last_persist = std::time::Instant::now();
     }
+    let _guard = state.download_inflight_lock.lock().unwrap();
     let inflight: Vec<PersistedQueueEntry> = {
         let entries = state.download_active_entries.lock().unwrap();
         entries.values().cloned().collect()
     };
-    save_inflight_state(&inflight, state);
+    save_inflight_state_unlocked(&inflight, state);
 }
 
 #[derive(Default)]
@@ -1792,23 +1835,23 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
         entry.status = "active".into();
         // B-01: save to inflight before dequeue so crash recovery can find it
         {
-            let mut inflight = load_inflight_state(&state);
-            inflight.retain(|e| e.id != entry.id);
             let mut inflight_entry = entry.clone();
             inflight_entry.status = "active".into();
-            inflight.push(inflight_entry);
-            save_inflight_state(&inflight, &state);
+            update_inflight_state(&state, |inflight| {
+                inflight.retain(|e| e.id != entry.id);
+                inflight.push(inflight_entry.clone());
+                state
+                    .download_active_entries
+                    .lock()
+                    .unwrap()
+                    .insert(entry.id.clone(), inflight_entry);
+            });
         }
         // Save once after dequeueing to avoid repeated disk writes inside the loop.
         drop(queue);
         persist_manager_queue(&state);
         entry
     };
-
-    {
-        let mut active_entries = state.download_active_entries.lock().unwrap();
-        active_entries.insert(entry.id.clone(), entry.clone());
-    }
 
     {
         let mut active = state.download_active_batches.lock().unwrap();
@@ -1900,9 +1943,9 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
                 .unwrap()
                 .remove(&batch_id);
             // B-01: remove from inflight on final completion/exhaustion
-            let mut inflight = load_inflight_state(&state);
-            inflight.retain(|e| e.id != batch_id);
-            save_inflight_state(&inflight, &state);
+            update_inflight_state(&state, |inflight| {
+                inflight.retain(|e| e.id != batch_id);
+            });
         }
         fill_download_queue_slots(app);
     });
@@ -1910,6 +1953,9 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
 }
 
 fn fill_download_queue_slots(app: tauri::AppHandle) {
+    let scheduler_app = app.clone();
+    let scheduler_state = scheduler_app.state::<AppState>();
+    let _scheduler = scheduler_state.download_scheduler_lock.lock().unwrap();
     while process_download_queue_inner(app.clone()) {}
 }
 
@@ -1946,7 +1992,7 @@ fn inflight_path(state: &AppState) -> PathBuf {
         .join("downloads_inflight.json")
 }
 
-fn save_inflight_state(inflight: &[PersistedQueueEntry], state: &AppState) {
+fn save_inflight_state_unlocked(inflight: &[PersistedQueueEntry], state: &AppState) {
     let path = inflight_path(state);
     if inflight.is_empty() {
         let _ = std::fs::remove_file(&path);
@@ -1960,7 +2006,7 @@ fn save_inflight_state(inflight: &[PersistedQueueEntry], state: &AppState) {
     }
 }
 
-fn load_inflight_state(state: &AppState) -> Vec<PersistedQueueEntry> {
+fn load_inflight_state_unlocked(state: &AppState) -> Vec<PersistedQueueEntry> {
     let path = inflight_path(state);
     std::fs::read_to_string(&path)
         .ok()
@@ -1969,7 +2015,23 @@ fn load_inflight_state(state: &AppState) -> Vec<PersistedQueueEntry> {
         .unwrap_or_default()
 }
 
+fn load_inflight_state(state: &AppState) -> Vec<PersistedQueueEntry> {
+    let _guard = state.download_inflight_lock.lock().unwrap();
+    load_inflight_state_unlocked(state)
+}
+
+fn update_inflight_state<F>(state: &AppState, update: F)
+where
+    F: FnOnce(&mut Vec<PersistedQueueEntry>),
+{
+    let _guard = state.download_inflight_lock.lock().unwrap();
+    let mut inflight = load_inflight_state_unlocked(state);
+    update(&mut inflight);
+    save_inflight_state_unlocked(&inflight, state);
+}
+
 fn clear_inflight_state(state: &AppState) {
+    let _guard = state.download_inflight_lock.lock().unwrap();
     let _ = std::fs::remove_file(inflight_path(state));
 }
 
@@ -2485,6 +2547,21 @@ mod audit_remediation_tests {
                 .join("model")
         );
     }
+
+    #[test]
+    fn repository_id_rejects_rooted_and_empty_path_segments() {
+        assert!(sanitize_repo_id("/org/model").is_err());
+        assert!(sanitize_repo_id("org/model/").is_err());
+        assert!(sanitize_repo_id("org//model").is_err());
+        assert!(sanitize_repo_id("org/model").is_ok());
+    }
+
+    #[test]
+    fn low_priority_mode_limits_every_download_source_to_one_slot() {
+        assert_eq!(apply_download_priority_concurrency(8, true), 1);
+        assert_eq!(apply_download_priority_concurrency(4, false), 4);
+        assert_eq!(apply_download_priority_concurrency(0, false), 1);
+    }
 }
 
 // Batch control commands.
@@ -2551,10 +2628,11 @@ pub async fn set_download_concurrency(
     if !(1..=8).contains(&n) {
         return Err("concurrency must be 1-8".into());
     }
-    *state.download_max_concurrent.lock().unwrap() = n;
     crate::commands::config::update_and_persist(&state, |global| {
         global.download_max_concurrent = n;
     })?;
+    *state.download_max_concurrent.lock().unwrap() = n;
+    state.download_slot_notify.notify_waiters();
     fill_download_queue_slots(app);
     Ok(())
 }
@@ -2575,15 +2653,15 @@ pub async fn set_download_bandwidth_limit(
     if bytes_per_sec > MAX_LIMIT_BYTES_PER_SEC {
         return Err("bandwidth limit must be 0-10 GiB/s".into());
     }
+    crate::commands::config::update_and_persist(&state, |global| {
+        global.download_bandwidth_limit_bytes_per_sec = bytes_per_sec;
+    })?;
     *state.download_bandwidth_limit_bytes_per_sec.lock().unwrap() = bytes_per_sec;
     {
         let mut limiter = state.download_bandwidth_limiter.lock().unwrap();
         limiter.available_bytes = 0.0;
         limiter.last_refill = std::time::Instant::now();
     }
-    crate::commands::config::update_and_persist(&state, |global| {
-        global.download_bandwidth_limit_bytes_per_sec = bytes_per_sec;
-    })?;
     Ok(())
 }
 
@@ -2600,15 +2678,16 @@ pub async fn set_download_low_priority_throttle(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let state = app.state::<AppState>();
+    crate::commands::config::update_and_persist(&state, |global| {
+        global.download_low_priority_throttle = enabled;
+    })?;
     *state.download_low_priority_throttle.lock().unwrap() = enabled;
     {
         let mut limiter = state.download_bandwidth_limiter.lock().unwrap();
         limiter.available_bytes = 0.0;
         limiter.last_refill = std::time::Instant::now();
     }
-    crate::commands::config::update_and_persist(&state, |global| {
-        global.download_low_priority_throttle = enabled;
-    })?;
+    state.download_slot_notify.notify_waiters();
     if !enabled {
         fill_download_queue_slots(app);
     }

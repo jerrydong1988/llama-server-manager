@@ -136,6 +136,7 @@ const entry = `
   const frame = (overrides = {}) => ({
     instanceId: 'a',
     sessionId: 'session-a',
+    sessionStartedAt: 1000,
     ts: 1000,
     workload: 'inference',
     state: 'active',
@@ -198,8 +199,8 @@ const entry = `
     'same-bucket updates must replace instead of adding duplicate points',
   )
   assert.deepEqual(
-    appendMonitoringFrame(instanceFrames, frame({ sessionId: 'session-b', ts: 3000 })),
-    [frame({ sessionId: 'session-b', ts: 3000 })],
+    appendMonitoringFrame(instanceFrames, frame({ sessionId: 'session-b', sessionStartedAt: 3000, ts: 3000 })),
+    [frame({ sessionId: 'session-b', sessionStartedAt: 3000, ts: 3000 })],
     'a newer run must clear the previous in-memory session timeline',
   )
   assert.deepEqual(
@@ -212,11 +213,19 @@ const entry = `
   )
   assert.equal(
     mergeMonitoringFrames(
-      [frame({ sessionId: 'session-a', ts: 3000 })],
-      [frame({ sessionId: 'session-b', ts: 3000 })],
+      [frame({ sessionId: 'session-a', sessionStartedAt: 1000, ts: 3000 })],
+      [frame({ sessionId: 'session-b', sessionStartedAt: 3000, ts: 3000 })],
     )[0].sessionId,
     'session-b',
     'a new session in the same one-second bucket must win hydration races',
+  )
+  assert.deepEqual(
+    appendMonitoringFrame(
+      [frame({ sessionId: 'session-b', sessionStartedAt: 3000, ts: 4000 })],
+      frame({ sessionId: 'session-a', sessionStartedAt: 1000, ts: 5000 }),
+    ).map(point => point.sessionId),
+    ['session-b'],
+    'a delayed frame from an older session must not replace the current session',
   )
 
   assert.deepEqual(buildRequestPressure(1, 0, 4), {

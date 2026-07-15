@@ -292,29 +292,22 @@ fn main() {
                 *st.proxy_config.lock().unwrap() = config.proxy_config.clone();
             }
 
-            // Start health checks, log recovery, and metrics monitoring for restored running instances.
+            // Restore log capture, metrics, and the single authoritative health monitor.
             for (id, ri) in &config.running {
                 if !crate::commands::server::register_restored_runtime_instance(app.handle(), id, ri.pid) {
                     continue;
                 }
-                let id_hc = id.clone();
                 let host = if ri.host == "0.0.0.0" { "localhost".to_string() } else { ri.host.clone() };
-                let host2 = host.clone();
                 let port = ri.port;
                 let pid = ri.pid;
-                let app_hc = app.handle().clone();
                 let app_reconnect = app.handle().clone();
                 let config_dir_clone = config_dir.clone();
 
-                let api_key_health = config.instances.get(&id_hc)
+                let api_key = config.instances.get(id)
                     .map(crate::commands::server::effective_api_key)
                     .filter(|key| !key.is_empty())
                     .unwrap_or_default();
-                let api_key_reconnect = api_key_health.clone();
-                std::thread::spawn(move || {
-                    crate::commands::server::health_check_loop(&id_hc, &host, port, pid, &api_key_health, app_hc);
-                });
-                crate::commands::server::reconnect_running_instance(id, pid, &host2, port, &config_dir_clone, &api_key_reconnect, app_reconnect);
+                crate::commands::server::reconnect_running_instance(id, pid, &host, port, &config_dir_clone, &api_key, app_reconnect);
             }
 
             if config.proxy_config.enabled {
@@ -352,6 +345,10 @@ fn main() {
             download_active_batches: Mutex::new(std::collections::HashSet::new()),
             download_active_entries: Mutex::new(HashMap::new()),
             download_last_inflight_persist: Mutex::new(Instant::now()),
+            download_scheduler_lock: Mutex::new(()),
+            download_inflight_lock: Mutex::new(()),
+            download_active_file_slots: std::sync::atomic::AtomicUsize::new(0),
+            download_slot_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
             download_max_concurrent: Mutex::new(initial_config.download_max_concurrent.max(1)),
             download_bandwidth_limit_bytes_per_sec: Mutex::new(initial_config.download_bandwidth_limit_bytes_per_sec),
             download_low_priority_throttle: Mutex::new(initial_config.download_low_priority_throttle),

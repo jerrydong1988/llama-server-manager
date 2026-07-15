@@ -214,8 +214,6 @@ pub async fn save_config(
 ) -> Result<HashMap<String, InstanceConfig>, String> {
     let normalized = normalize_instances_for_save(instances);
     let instances = normalized.all;
-    let running_snapshot = state.running.lock().unwrap().clone();
-    let engine_names = state.engine_names.lock().unwrap().clone();
     let config_dir = state.config_dir.lock().unwrap().clone();
     let snapshot = FrontendConfigSnapshot {
         instances: instances.clone(),
@@ -229,6 +227,10 @@ pub async fn save_config(
     std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
     {
         let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        // Runtime-owned fields must be sampled after taking the write lock. Otherwise a
+        // concurrent start/stop can persist newer state and then be overwritten here.
+        let running_snapshot = state.running.lock().unwrap().clone();
+        let engine_names = state.engine_names.lock().unwrap().clone();
         let mut global = load_global_config_file(&config_dir);
         apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
         persist_global_config_unlocked(&config_dir, &global)?;
@@ -262,52 +264,37 @@ pub async fn load_config(
     *state.download_low_priority_throttle.lock().unwrap() = global.download_low_priority_throttle;
     *state.proxy_config.lock().unwrap() = global.proxy_config.clone();
 
-    // Start health checks, log recovery, and metrics monitoring for restored running instances.
+    // Restore log capture, metrics, and the single authoritative health monitor.
     for (id, ri) in &global.running {
         if !crate::commands::server::register_restored_runtime_instance(&app, id, ri.pid) {
             continue;
         }
-        let id_hc = id.clone();
         let host = if ri.host == "0.0.0.0" {
             "localhost".to_string()
         } else {
             ri.host.clone()
         };
-        let host2 = host.clone();
         let port = ri.port;
         let pid = ri.pid;
-        let app = app.clone();
-        let app2 = app.clone();
+        let app_reconnect = app.clone();
         let config_dir = config_dir.clone();
 
-        let api_key_health = {
+        let api_key = {
             let stored = state.instances.lock().unwrap();
             stored
-                .get(&id_hc)
+                .get(id)
                 .map(crate::commands::server::effective_api_key)
                 .filter(|key| !key.is_empty())
                 .unwrap_or_default()
         };
-        let api_key_reconnect = api_key_health.clone();
-        std::thread::spawn(move || {
-            crate::commands::server::health_check_loop(
-                &id_hc,
-                &host,
-                port,
-                pid,
-                &api_key_health,
-                app,
-            );
-        });
-
         crate::commands::server::reconnect_running_instance(
             id,
             pid,
-            &host2,
+            &host,
             port,
             &config_dir,
-            &api_key_reconnect,
-            app2,
+            &api_key,
+            app_reconnect,
         );
     }
 

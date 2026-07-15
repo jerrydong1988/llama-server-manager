@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 // Compact GGUF capability summary used by UI validation. Keep field names stable
@@ -710,6 +711,10 @@ pub struct AppState {
     pub download_active_batches: Mutex<std::collections::HashSet<String>>,
     pub download_active_entries: Mutex<HashMap<String, PersistedQueueEntry>>,
     pub download_last_inflight_persist: Mutex<Instant>,
+    pub download_scheduler_lock: Mutex<()>,
+    pub download_inflight_lock: Mutex<()>,
+    pub download_active_file_slots: AtomicUsize,
+    pub download_slot_notify: Arc<tokio::sync::Notify>,
     pub download_max_concurrent: Mutex<usize>,
     pub download_bandwidth_limit_bytes_per_sec: Mutex<u64>,
     pub download_low_priority_throttle: Mutex<bool>,

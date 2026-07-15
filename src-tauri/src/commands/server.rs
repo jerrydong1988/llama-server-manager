@@ -4,7 +4,7 @@ use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
 use crate::vector_policy::{normalize_for_launch, ModelWorkload};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use sysinfo::{Pid, ProcessesToUpdate, System};
@@ -22,10 +22,19 @@ struct CappedLogState {
     size: u64,
     max_bytes: u64,
     retained_bytes: u64,
+    generation: u64,
+    rotation_boundary: u64,
 }
 
 struct CappedLogWriter {
     state: Mutex<CappedLogState>,
+}
+
+struct LogReadChunk {
+    bytes: Vec<u8>,
+    end_offset: u64,
+    generation: u64,
+    rotated: bool,
 }
 
 impl CappedLogWriter {
@@ -48,6 +57,8 @@ impl CappedLogWriter {
                 size: 0,
                 max_bytes,
                 retained_bytes,
+                generation: 0,
+                rotation_boundary: 0,
             }),
         })
     }
@@ -65,12 +76,64 @@ impl CappedLogWriter {
             state.file.seek(SeekFrom::Start(0))?;
             state.file.write_all(&tail)?;
             state.size = keep;
+            state.generation = state.generation.saturating_add(1);
+            state.rotation_boundary = keep;
         }
         state.file.seek(SeekFrom::End(0))?;
         state.file.write_all(bytes)?;
         state.size = state.size.saturating_add(bytes.len() as u64);
         Ok(())
     }
+
+    fn read_since(&self, offset: u64, generation: u64) -> std::io::Result<LogReadChunk> {
+        let mut state = self.state.lock().unwrap();
+        let rotated = state.generation != generation;
+        let start = if rotated {
+            state.rotation_boundary.min(state.size)
+        } else {
+            offset.min(state.size)
+        };
+        let available = state.size.saturating_sub(start);
+        let mut bytes = Vec::with_capacity(usize::try_from(available).unwrap_or(0));
+        state.file.flush()?;
+        state.file.seek(SeekFrom::Start(start))?;
+        Read::take(&mut state.file, available).read_to_end(&mut bytes)?;
+        state.file.seek(SeekFrom::End(0))?;
+        Ok(LogReadChunk {
+            bytes,
+            end_offset: state.size,
+            generation: state.generation,
+            rotated,
+        })
+    }
+
+    fn read_tail(&self, max_lines: usize) -> std::io::Result<(Vec<String>, u64, u64)> {
+        let mut state = self.state.lock().unwrap();
+        let file_len = state.size;
+        let generation = state.generation;
+        state.file.flush()?;
+        let result = read_log_tail_from_file(&mut state.file, file_len, max_lines);
+        state.file.seek(SeekFrom::End(0))?;
+        result.map(|(lines, offset)| (lines, offset, generation))
+    }
+}
+
+fn take_complete_log_lines(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
+    pending.extend_from_slice(bytes);
+    let Some(last_newline) = pending.iter().rposition(|byte| *byte == b'\n') else {
+        return Vec::new();
+    };
+    let complete = pending.drain(..=last_newline).collect::<Vec<_>>();
+    complete
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| {
+            if line.is_empty() {
+                return None;
+            }
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            Some(String::from_utf8_lossy(line).into_owned())
+        })
+        .collect()
 }
 
 fn spawn_log_pump<R>(mut source: R, writer: Arc<CappedLogWriter>)
@@ -885,7 +948,7 @@ pub async fn start_server(
         .take()
         .ok_or_else(|| "Unable to capture server stderr".to_string())?;
     spawn_log_pump(stdout, log_writer.clone());
-    spawn_log_pump(stderr, log_writer);
+    spawn_log_pump(stderr, log_writer.clone());
 
     let (start_time, executable_path) = match read_process_identity(pid) {
         Some(identity) => identity,
@@ -968,8 +1031,10 @@ pub async fn start_server(
         tail_log_file(
             &log_path_tail,
             &id_tail,
+            pid,
             telemetry_session_tail,
             workload,
+            Some(log_writer),
             app_tail,
         );
     });
@@ -1335,147 +1400,38 @@ fn monitor_loop(
     }
 }
 
-pub fn health_check_loop(
-    instance_id: &str,
-    host: &str,
-    port: u16,
-    expected_pid: u32,
-    api_key: &str,
-    app: tauri::AppHandle,
-) {
-    let url = crate::utils::http_url(host, port, "/health");
-    let models_url = crate::utils::http_url(host, port, "/v1/models");
-    let client = reqwest::blocking::Client::new();
-
-    let probe_req = |probe_url: &str, timeout_secs: u64| {
-        let mut req = client.get(probe_url);
-        if !api_key.is_empty() {
-            req = req.header("Authorization", format!("Bearer {}", api_key));
-        }
-        req.timeout(std::time::Duration::from_secs(timeout_secs))
-            .send()
-    };
-
-    let service_ready = |timeout_secs: u64| {
-        let health = probe_req(&url, timeout_secs)
-            .map(|resp| resp.status())
-            .map_err(|err| err.to_string());
-        if probe_status_is_success(&health) {
+#[cfg(unix)]
+fn wait_for_recorded_process_exit(ri: &RunningInstance, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if !running_instance_matches_live_process(ri) {
             return true;
         }
-        let models = probe_req(&models_url, timeout_secs)
-            .map(|resp| resp.status())
-            .map_err(|err| err.to_string());
-        probe_status_is_success(&models)
-    };
-
-    let is_my_instance = || {
-        let st = app.state::<AppState>();
-        let guard = st.running.lock().unwrap();
-        guard
-            .get(instance_id)
-            .map(|r| r.pid == expected_pid)
-            .unwrap_or(false)
-    };
-
-    // Fast initial health check: 10 x 1s = 10s
-    for _ in 0..10 {
-        if !is_my_instance() {
-            return;
-        }
-        if !is_recorded_process_alive(expected_pid) {
-            cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
-            return;
-        }
-        if service_ready(2) {
-            let _ = app.emit(
-                "health-status",
-                serde_json::json!({
-                    "instanceId": instance_id, "status": "ok",
-                }),
-            );
-            let mut fail_count = 0u32;
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                if !is_my_instance() {
-                    return;
-                }
-                if !is_recorded_process_alive(expected_pid) {
-                    cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
-                    return;
-                }
-                if service_ready(5) {
-                    fail_count = 0;
-                    let _ = app.emit(
-                        "health-status",
-                        serde_json::json!({
-                            "instanceId": instance_id, "status": "ok",
-                        }),
-                    );
-                } else {
-                    fail_count += 1;
-                }
-                if fail_count >= 3 {
-                    if !is_recorded_process_alive(expected_pid) {
-                        cleanup_running_instance(&app, instance_id, expected_pid, "process-exited");
-                        return;
-                    }
-                    let _ = app.emit(
-                        "health-status",
-                        serde_json::json!({
-                            "instanceId": instance_id, "status": "fail",
-                        }),
-                    );
-                    fail_count = 0;
-                }
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_secs(1));
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
+    !running_instance_matches_live_process(ri)
+}
 
-    // Slower retry: keep trying indefinitely until server starts or instance stops
-    loop {
-        std::thread::sleep(std::time::Duration::from_secs(10));
-        if !is_my_instance() {
-            return;
-        }
-        if service_ready(5) {
-            let _ = app.emit(
-                "health-status",
-                serde_json::json!({
-                    "instanceId": instance_id, "status": "ok",
-                }),
-            );
-            // Enter stable monitoring loop
-            let mut fail_count = 0u32;
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(5));
-                if !is_my_instance() {
-                    return;
-                }
-                if service_ready(5) {
-                    fail_count = 0;
-                    let _ = app.emit(
-                        "health-status",
-                        serde_json::json!({
-                            "instanceId": instance_id, "status": "ok",
-                        }),
-                    );
-                } else {
-                    fail_count += 1;
-                }
-                if fail_count >= 3 {
-                    let _ = app.emit(
-                        "health-status",
-                        serde_json::json!({
-                            "instanceId": instance_id, "status": "fail",
-                        }),
-                    );
-                    fail_count = 0;
-                }
-            }
-        }
+#[cfg(unix)]
+fn terminate_unix_process(ri: &RunningInstance) -> bool {
+    let pid = ri.pid.to_string();
+    let term_sent = Command::new("kill")
+        .args(["-TERM", &pid])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if term_sent && wait_for_recorded_process_exit(ri, std::time::Duration::from_secs(3)) {
+        return true;
     }
+    if !running_instance_matches_live_process(ri) {
+        return true;
+    }
+    let kill_sent = Command::new("kill")
+        .args(["-KILL", &pid])
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    kill_sent && wait_for_recorded_process_exit(ri, std::time::Duration::from_secs(2))
 }
 
 #[tauri::command]
@@ -1505,11 +1461,7 @@ pub async fn stop_server(
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            killed = Command::new("kill")
-                .arg(ri.pid.to_string())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
+            killed = terminate_unix_process(ri);
         }
     }
 
@@ -2178,7 +2130,15 @@ pub fn reconnect_running_instance(
             crate::commands::telemetry::session_workload(telemetry_session_id.as_deref())
                 .unwrap_or(ModelWorkload::Inference);
         std::thread::spawn(move || {
-            tail_log_file(&log_path, &id_log, telemetry_session_id, workload, app_log);
+            tail_log_file(
+                &log_path,
+                &id_log,
+                pid,
+                telemetry_session_id,
+                workload,
+                None,
+                app_log,
+            );
         });
     }
 
@@ -2517,6 +2477,14 @@ fn parse_perf_line(
 fn read_log_tail(path: &std::path::Path, max_lines: usize) -> std::io::Result<(Vec<String>, u64)> {
     let mut file = std::fs::File::open(path)?;
     let file_len = file.metadata()?.len();
+    read_log_tail_from_file(&mut file, file_len, max_lines)
+}
+
+fn read_log_tail_from_file(
+    file: &mut std::fs::File,
+    file_len: u64,
+    max_lines: usize,
+) -> std::io::Result<(Vec<String>, u64)> {
     let min_offset = file_len.saturating_sub(LOG_REPLAY_MAX_BYTES);
     let mut offset = file_len;
     let mut chunks = Vec::new();
@@ -2536,20 +2504,30 @@ fn read_log_tail(path: &std::path::Path, max_lines: usize) -> std::io::Result<(V
     }
     chunks.reverse();
     let bytes = chunks.into_iter().flatten().collect::<Vec<_>>();
-    let text = String::from_utf8_lossy(&bytes);
-    let complete_text = if offset > 0 {
-        text.split_once('\n').map(|(_, tail)| tail).unwrap_or("")
+    let valid_start = if offset > 0 {
+        bytes
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .map(|index| index + 1)
+            .unwrap_or(bytes.len())
     } else {
-        text.as_ref()
+        0
     };
-    let mut lines = complete_text
+    let complete_end = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|index| index + 1)
+        .filter(|end| *end >= valid_start)
+        .unwrap_or(valid_start);
+    let text = String::from_utf8_lossy(&bytes[valid_start..complete_end]);
+    let mut lines = text
         .lines()
         .rev()
         .take(max_lines)
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     lines.reverse();
-    Ok((lines, file_len))
+    Ok((lines, offset.saturating_add(complete_end as u64)))
 }
 
 fn emit_log_batches(app: &tauri::AppHandle, instance_id: &str, lines: &[String]) {
@@ -2567,12 +2545,12 @@ fn emit_log_batches(app: &tauri::AppHandle, instance_id: &str, lines: &[String])
 fn tail_log_file(
     log_path: &std::path::Path,
     instance_id: &str,
+    expected_pid: u32,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
+    log_writer: Option<Arc<CappedLogWriter>>,
     app: tauri::AppHandle,
 ) {
-    use std::io::{Seek, SeekFrom};
-
     let parser = PerfParser::new(workload);
     let mut tasks: HashMap<u32, TaskPerfState> = HashMap::new();
     let mut last_completed: Option<TaskPerfState> = None;
@@ -2585,15 +2563,7 @@ fn tail_log_file(
         if *recorded == Some(task.task_id) {
             return;
         }
-        if let Err(error) = persist_completed_task(telemetry_session_id.as_deref(), &parser, task) {
-            let _ = app.emit(
-                "server-log",
-                serde_json::json!({
-                    "instanceId": instance_id,
-                    "text": format!("Telemetry warning: {error}\n"),
-                }),
-            );
-        } else if let Some(event) = parser.vector_event(task) {
+        if let Some(event) = parser.vector_event(task) {
             crate::commands::monitoring::record_vector_activity(
                 instance_id,
                 telemetry_session_id.as_deref(),
@@ -2604,6 +2574,15 @@ fn tail_log_file(
                 event.input_tokens,
                 event.duration_ms,
                 true,
+            );
+        }
+        if let Err(error) = persist_completed_task(telemetry_session_id.as_deref(), &parser, task) {
+            let _ = app.emit(
+                "server-log",
+                serde_json::json!({
+                    "instanceId": instance_id,
+                    "text": format!("Telemetry warning: {error}\n"),
+                }),
             );
         }
         *recorded = Some(task.task_id);
@@ -2644,9 +2623,18 @@ fn tail_log_file(
 
     // Phase 1: replay only the tail needed by the frontend cap.
     let mut last_size = 0;
+    let mut observed_generation = 0;
+    let mut pending = Vec::new();
     if log_path.exists() {
-        if let Ok((lines, replay_end)) = read_log_tail(log_path, LOG_REPLAY_LINES) {
+        let replay = if let Some(writer) = log_writer.as_ref() {
+            writer.read_tail(LOG_REPLAY_LINES)
+        } else {
+            read_log_tail(log_path, LOG_REPLAY_LINES)
+                .map(|(lines, offset)| (lines, offset, observed_generation))
+        };
+        if let Ok((lines, replay_end, generation)) = replay {
             last_size = replay_end;
+            observed_generation = generation;
             let replay_lines = lines
                 .iter()
                 .filter(|line| !line.trim().is_empty())
@@ -2678,42 +2666,66 @@ fn tail_log_file(
         {
             let st = app.state::<AppState>();
             let guard = st.running.lock().unwrap();
-            if !guard.contains_key(instance_id) {
+            if guard
+                .get(instance_id)
+                .map(|running| running.pid != expected_pid)
+                .unwrap_or(true)
+            {
                 break;
             }
         }
 
-        // Check file state.
-        let current_size = match std::fs::metadata(log_path) {
-            Ok(meta) => meta.len(),
-            Err(_) => break, // Exit if the file was deleted.
-        };
-
-        if current_size < last_size {
-            // If the file was truncated, for example by log rotation, restart from the current position.
-            last_size = 0;
-        }
-
-        if current_size > last_size {
-            let mut perf_changed = false;
-            let mut log_lines = Vec::new();
-            if let Ok(mut file) = std::fs::File::open(log_path) {
-                if file.seek(SeekFrom::Start(last_size)).is_ok() {
-                    let reader = BufReader::new(file);
-                    for text in reader.lines().map_while(Result::ok) {
-                        if text.trim().is_empty() {
-                            continue;
-                        }
-                        log_lines.push(format!("{text}\n"));
-                        if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
-                            perf_changed = true;
-                            record_completed(&last_completed, &mut last_recorded_task_id);
-                        }
+        let read_chunk = if let Some(writer) = log_writer.as_ref() {
+            match writer.read_since(last_size, observed_generation) {
+                Ok(chunk) => chunk,
+                Err(_) => break,
+            }
+        } else {
+            let current_size = match std::fs::metadata(log_path) {
+                Ok(meta) => meta.len(),
+                Err(_) => break,
+            };
+            if current_size < last_size {
+                pending.clear();
+                last_size = current_size;
+            }
+            let mut bytes = Vec::new();
+            if current_size > last_size {
+                if let Ok(mut file) = std::fs::File::open(log_path) {
+                    if file.seek(SeekFrom::Start(last_size)).is_ok() {
+                        let available = current_size.saturating_sub(last_size);
+                        let _ = file.take(available).read_to_end(&mut bytes);
                     }
                 }
             }
+            LogReadChunk {
+                bytes,
+                end_offset: current_size,
+                generation: observed_generation,
+                rotated: false,
+            }
+        };
+
+        if read_chunk.rotated {
+            debug_assert_ne!(observed_generation, read_chunk.generation);
+        }
+        last_size = read_chunk.end_offset;
+        observed_generation = read_chunk.generation;
+
+        if !read_chunk.bytes.is_empty() {
+            let mut perf_changed = false;
+            let mut log_lines = Vec::new();
+            for text in take_complete_log_lines(&mut pending, &read_chunk.bytes) {
+                if text.trim().is_empty() {
+                    continue;
+                }
+                log_lines.push(format!("{text}\n"));
+                if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
+                    perf_changed = true;
+                    record_completed(&last_completed, &mut last_recorded_task_id);
+                }
+            }
             emit_log_batches(&app, instance_id, &log_lines);
-            last_size = current_size;
             if perf_changed {
                 tasks.retain(|_, t| !t.completed);
                 emit_perf(&app, &tasks, &last_completed);
@@ -3122,6 +3134,36 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn complete_log_lines_wait_for_the_line_terminator() {
+        let mut pending = Vec::new();
+        assert!(take_complete_log_lines(&mut pending, b"partial").is_empty());
+        assert_eq!(
+            take_complete_log_lines(&mut pending, b" line\nnext\r\n"),
+            vec!["partial line".to_string(), "next".to_string()]
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn capped_log_reader_skips_the_retained_tail_after_rotation() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-capped-log-reader-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.log");
+        let writer = CappedLogWriter::new(path.clone(), 32, 8).unwrap();
+        writer.append(b"old-line-0000000000\n").unwrap();
+        let (_, old_offset, old_generation) = writer.read_tail(20).unwrap();
+
+        writer.append(b"new-line-1111111111\n").unwrap();
+        let chunk = writer.read_since(old_offset, old_generation).unwrap();
+
+        assert!(chunk.rotated);
+        assert_eq!(chunk.bytes, b"new-line-1111111111\n");
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir(dir);
+    }
+
+    #[test]
     fn log_replay_reads_only_requested_tail_lines() {
         let dir = std::env::temp_dir().join(format!("lsm-log-tail-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -3137,6 +3179,21 @@ mod perf_parser_tests {
         assert_eq!(end_offset, std::fs::metadata(&path).unwrap().len());
         assert_eq!(lines.first().map(String::as_str), Some("line-1000"));
         assert_eq!(lines.last().map(String::as_str), Some("line-2999"));
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir(dir);
+    }
+
+    #[test]
+    fn log_replay_leaves_an_unterminated_line_for_the_tail_reader() {
+        let dir = std::env::temp_dir().join(format!("lsm-log-partial-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.log");
+        std::fs::write(&path, b"complete\npartial").unwrap();
+
+        let (lines, end_offset) = read_log_tail(&path, 20).unwrap();
+
+        assert_eq!(lines, vec!["complete".to_string()]);
+        assert_eq!(end_offset, b"complete\n".len() as u64);
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir(dir);
     }

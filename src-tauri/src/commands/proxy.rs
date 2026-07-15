@@ -190,22 +190,6 @@ fn record_proxy_telemetry(
 ) -> Result<(), String> {
     if let Some(metadata) = vector_metadata {
         let completed_at = current_time_ms().max(record.started_at_ms);
-        record_vector_activity(
-            session_id,
-            &VectorActivityRecord {
-                source: VectorEventSource::Proxy,
-                source_event_id: i64::from(record.task_id),
-                workload: metadata.workload,
-                endpoint: Some(metadata.endpoint.clone()),
-                started_at: record.started_at_ms,
-                completed_at,
-                duration_ms: record.duration_ms,
-                item_count: metadata.item_count,
-                input_tokens: None,
-                http_status: record.http_status,
-                error_text: record.error_text.clone(),
-            },
-        )?;
         crate::commands::monitoring::record_vector_activity(
             &record.target_instance_id,
             session_id,
@@ -220,7 +204,23 @@ fn record_proxy_telemetry(
                 .is_some_and(|status| (200..300).contains(&status))
                 && record.error_text.is_none(),
         );
-        return Ok(());
+        return record_vector_activity(
+            session_id,
+            &VectorActivityRecord {
+                source: VectorEventSource::Proxy,
+                source_event_id: i64::from(record.task_id),
+                workload: metadata.workload,
+                endpoint: Some(metadata.endpoint.clone()),
+                started_at: record.started_at_ms,
+                completed_at,
+                duration_ms: record.duration_ms,
+                item_count: metadata.item_count,
+                input_tokens: None,
+                http_status: record.http_status,
+                error_text: record.error_text.clone(),
+            },
+        )
+        .map(|_| ());
     }
     record_proxy_request(
         session_id,
