@@ -385,10 +385,85 @@ fn normalize_path_for_compare(path: &Path) -> PathBuf {
     normalized
 }
 
-fn queue_entry_download_dir(base_dir: &Path, entry: &PersistedQueueEntry) -> PathBuf {
-    base_dir
-        .join(&entry.save_dir)
-        .join(entry.repo_id.replace('/', std::path::MAIN_SEPARATOR_STR))
+fn queue_entry_download_dir(
+    base_dir: &Path,
+    entry: &PersistedQueueEntry,
+) -> Result<PathBuf, String> {
+    let repo_id = sanitize_repo_id(&entry.repo_id)?;
+    let managed_root = queue_entry_managed_root(base_dir, entry)?;
+    Ok(managed_root.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR)))
+}
+
+fn queue_entry_managed_root(
+    base_dir: &Path,
+    entry: &PersistedQueueEntry,
+) -> Result<PathBuf, String> {
+    let save_dir = Path::new(&entry.save_dir);
+    if save_dir
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("Download save directory cannot contain parent traversal".into());
+    }
+    Ok(if save_dir.is_absolute() {
+        save_dir.to_path_buf()
+    } else {
+        base_dir.join(save_dir)
+    })
+}
+
+fn verified_managed_cleanup_path(root: &Path, path: &Path) -> Result<PathBuf, String> {
+    if path
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("Download cleanup path contains parent traversal".into());
+    }
+    let canonical_root = match std::fs::canonicalize(root) {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let normalized_root = normalize_path_for_compare(root);
+            let normalized_path = normalize_path_for_compare(path);
+            if normalized_path.starts_with(&normalized_root) {
+                return Ok(path.to_path_buf());
+            }
+            return Err("文件不在受管目录内".into());
+        }
+        Err(error) => {
+            return Err(format!("Failed to resolve managed download root: {error}"));
+        }
+    };
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Download cleanup path has no parent directory".to_string())?;
+    let mut existing_ancestor = parent;
+    let canonical_ancestor = loop {
+        match std::fs::canonicalize(existing_ancestor) {
+            Ok(path) => break path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                existing_ancestor = existing_ancestor.parent().ok_or_else(|| {
+                    "Download cleanup path has no existing managed ancestor".to_string()
+                })?;
+            }
+            Err(error) => {
+                return Err(format!("Failed to resolve download directory: {error}"));
+            }
+        }
+    };
+    if !canonical_ancestor.starts_with(&canonical_root) {
+        return Err("文件不在受管目录内".into());
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| "Download cleanup path has no file name".to_string())?;
+    if parent.exists() {
+        Ok(std::fs::canonicalize(parent)
+            .map_err(|error| format!("Failed to resolve download directory: {error}"))?
+            .join(file_name))
+    } else {
+        // No deletion can occur below a missing parent, but cleanup may still remove the task.
+        Ok(path.to_path_buf())
+    }
 }
 
 fn refresh_download_file_identity(file: &mut MsFileEntry) -> ResumeDownloadTaskResult {
@@ -430,7 +505,7 @@ fn trusted_download_cleanup_paths(
     file_name: &str,
     run_id: Option<&str>,
     frontend_path: Option<&Path>,
-) -> Result<(PathBuf, PathBuf, PathBuf), String> {
+) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
     let sanitized = sanitize_file_name(file_name)?;
     let mut candidates = Vec::new();
     for entry in entries {
@@ -446,12 +521,14 @@ fn trusted_download_cleanup_paths(
             if file.name != sanitized {
                 return Err("Download task file name does not match registered file".into());
             }
-            let dir = queue_entry_download_dir(base_dir, entry);
-            candidates.push(build_download_paths(&dir, &file.name));
+            let managed_root = queue_entry_managed_root(base_dir, entry)?;
+            let dir = queue_entry_download_dir(base_dir, entry)?;
+            let (final_path, temp_path, metadata_path) = build_download_paths(&dir, &file.name);
+            candidates.push((managed_root, final_path, temp_path, metadata_path));
         }
     }
 
-    let (final_path, temp_path, metadata_path) = candidates
+    let (managed_root, final_path, temp_path, metadata_path) = candidates
         .into_iter()
         .next()
         .ok_or_else(|| "Download task not found".to_string())?;
@@ -464,7 +541,7 @@ fn trusted_download_cleanup_paths(
         }
     }
 
-    Ok((final_path, temp_path, metadata_path))
+    Ok((managed_root, final_path, temp_path, metadata_path))
 }
 
 #[derive(Clone)]
@@ -1629,7 +1706,7 @@ pub async fn cancel_and_cleanup_download(
         .parent()
         .unwrap_or(Path::new("."))
         .to_path_buf();
-    let (trusted_final_path, trusted_temp_path, trusted_metadata_path) =
+    let (root, trusted_final_path, trusted_temp_path, trusted_metadata_path) =
         trusted_download_cleanup_paths(
             &entries,
             &base_dir,
@@ -1638,20 +1715,16 @@ pub async fn cancel_and_cleanup_download(
             run_id_for_match,
             Some(Path::new(&file_path)),
         )?;
-    // Canonicalize + verify the path is within a managed download directory
-    let managed = state.config_dir.lock().unwrap();
-    let root = managed.parent().unwrap_or(Path::new(".")).to_path_buf();
-    let cpath = trusted_final_path;
-    let croot = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
-    if !cpath.starts_with(&croot) {
-        return Err("文件不在受管目录内".into());
-    }
+    // Resolve the parent directory so symlinks and traversal cannot escape the managed root.
+    let cpath = verified_managed_cleanup_path(&root, &trusted_final_path)?;
+    let ctemp = verified_managed_cleanup_path(&root, &trusted_temp_path)?;
+    let cmetadata = verified_managed_cleanup_path(&root, &trusted_metadata_path)?;
     let key = run_id.unwrap_or_else(|| task_id.clone());
     state.cancel_flags.lock().unwrap().insert(key.clone(), true);
     state.pause_flags.lock().unwrap().remove(&key);
     let _ = std::fs::remove_file(&cpath);
-    let _ = std::fs::remove_file(&trusted_temp_path);
-    let _ = std::fs::remove_file(&trusted_metadata_path);
+    let _ = std::fs::remove_file(&ctemp);
+    let _ = std::fs::remove_file(&cmetadata);
     remove_manager_file(&state, &task_id);
     let _ = app.emit("download-removed", serde_json::json!({ "taskId": task_id, "fileName": file_name, "version": version.unwrap_or(0) }));
     Ok(())
@@ -1841,13 +1914,16 @@ fn derive_entry_status(entry: &PersistedQueueEntry) -> String {
     {
         return "paused".into();
     }
-    if !entry.files.is_empty()
-        && entry
+    if !entry.files.is_empty() && entry.files.iter().all(is_terminal_download_file) {
+        return if entry
             .files
             .iter()
             .all(|file| matches!(file.status.as_deref(), Some("completed")))
-    {
-        return "completed".into();
+        {
+            "completed".into()
+        } else {
+            "cancelled".into()
+        };
     }
     entry.status.clone()
 }
@@ -1910,7 +1986,9 @@ fn persist_active_entries_snapshot(state: &AppState, force: bool) {
         let entries = state.download_active_entries.lock().unwrap();
         entries.values().cloned().collect()
     };
-    save_inflight_state_unlocked(&inflight, state);
+    if let Err(error) = save_inflight_state_unlocked(&inflight, state) {
+        eprintln!("Failed to persist active download snapshot: {error}");
+    }
 }
 
 #[derive(Default)]
@@ -2065,19 +2143,37 @@ fn is_restore_runnable(entry: &PersistedQueueEntry) -> bool {
         && entry.retries < entry.max_retries
 }
 
+fn is_terminal_download_file(file: &MsFileEntry) -> bool {
+    matches!(file.status.as_deref(), Some("completed" | "cancelled"))
+}
+
+fn pending_download_files(files: Vec<MsFileEntry>) -> Vec<MsFileEntry> {
+    files
+        .into_iter()
+        .filter(|file| !is_terminal_download_file(file))
+        .collect()
+}
+
 async fn run_persisted_entry(
     entry: PersistedQueueEntry,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
+    let files = pending_download_files(entry.files);
+    if files.is_empty() {
+        return Ok(());
+    }
     if entry.source == "modelscope" {
-        download_modelscope_files(entry.repo_id, entry.files, entry.save_dir, app).await
+        download_modelscope_files(entry.repo_id, files, entry.save_dir, app).await
     } else {
-        download_huggingface_files(entry.repo_id, entry.files, entry.save_dir, app).await
+        download_huggingface_files(entry.repo_id, files, entry.save_dir, app).await
     }
 }
 
 fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
     let state = app.state::<AppState>();
+    if state.download_shutting_down.load(Ordering::SeqCst) {
+        return false;
+    }
     {
         let max = effective_download_concurrency(&state);
         if active_download_slot_count(&state) >= max {
@@ -2099,30 +2195,44 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
             }
             return false;
         }
-        let mut entry = queue.remove(0);
+        let queued_entry = queue.remove(0);
+        let mut entry = queued_entry.clone();
         for file in entry.files.iter_mut() {
-            file.status = Some("active".into());
-            file.error = None;
+            if !is_terminal_download_file(file) {
+                file.status = Some("active".into());
+                file.error = None;
+            }
         }
         entry.status = "active".into();
-        // B-01: save to inflight before dequeue so crash recovery can find it
-        {
-            let mut inflight_entry = entry.clone();
-            inflight_entry.status = "active".into();
-            update_inflight_state(&state, |inflight| {
-                inflight.retain(|e| e.id != entry.id);
-                inflight.push(inflight_entry.clone());
-                state
-                    .download_active_entries
-                    .lock()
-                    .unwrap()
-                    .insert(entry.id.clone(), inflight_entry);
-            });
+        let inflight_entry = entry.clone();
+        if let Err(error) = update_inflight_state(&state, |inflight| {
+            inflight.retain(|saved| saved.id != entry.id);
+            inflight.push(inflight_entry.clone());
+        }) {
+            queue.insert(0, queued_entry);
+            eprintln!("Failed to hand off download entry to inflight state: {error}");
+            return false;
         }
-        // Save once after dequeueing to avoid repeated disk writes inside the loop.
+        state
+            .download_active_entries
+            .lock()
+            .unwrap()
+            .insert(entry.id.clone(), inflight_entry);
         drop(queue);
         if let Err(error) = persist_manager_queue(&state) {
+            state
+                .download_active_entries
+                .lock()
+                .unwrap()
+                .remove(&entry.id);
+            state.download_queue.lock().unwrap().insert(0, queued_entry);
+            if let Err(rollback_error) = update_inflight_state(&state, |inflight| {
+                inflight.retain(|saved| saved.id != entry.id);
+            }) {
+                eprintln!("Failed to roll back inflight download state: {rollback_error}");
+            }
             eprintln!("Failed to persist dequeued download entry: {error}");
+            return false;
         }
         entry
     };
@@ -2132,7 +2242,11 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
         active.insert(entry.id.clone());
     }
 
-    for file in &entry.files {
+    for file in entry
+        .files
+        .iter()
+        .filter(|file| !is_terminal_download_file(file))
+    {
         let _ = app.emit(
             "download-started",
             serde_json::json!({
@@ -2160,56 +2274,88 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
             entries.get(&batch_id).cloned()
         };
 
-        if let Err(_e) = result {
-            if entry_for_retry.retries < entry_for_retry.max_retries {
+        if result.is_err() {
+            let shutting_down = app
+                .state::<AppState>()
+                .download_shutting_down
+                .load(Ordering::SeqCst);
+            if !shutting_down && entry_for_retry.retries < entry_for_retry.max_retries {
                 let delay_ms = 2000u64 * 2u64.pow(entry_for_retry.retries.min(5));
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 
-                let mut retry_entry = finalized_entry.unwrap_or(entry_for_retry);
-                retry_entry.retries += 1;
-                retry_entry.status = "queued".into();
-                for file in retry_entry.files.iter_mut() {
-                    if matches!(
-                        file.status.as_deref(),
-                        Some("error") | Some("paused") | Some("cancelled")
-                    ) {
-                        file.status = Some("queued".into());
+                let state = app.state::<AppState>();
+                if state.download_shutting_down.load(Ordering::SeqCst) {
+                    // Shutdown persists the latest active snapshot below instead of requeueing it.
+                } else {
+                    let mut retry_entry = finalized_entry.clone().unwrap_or(entry_for_retry);
+                    retry_entry.retries += 1;
+                    retry_entry.status = "queued".into();
+                    for file in retry_entry.files.iter_mut() {
+                        if matches!(
+                            file.status.as_deref(),
+                            Some("error") | Some("paused") | Some("active")
+                        ) {
+                            file.status = Some("queued".into());
+                            file.error = None;
+                        }
                     }
-                    file.error = None;
-                }
 
-                {
-                    let state = app.state::<AppState>();
-                    state
-                        .download_active_batches
-                        .lock()
-                        .unwrap()
-                        .remove(&batch_id);
-                    state
-                        .download_active_entries
-                        .lock()
-                        .unwrap()
-                        .remove(&batch_id);
-                    let mut queue = state.download_queue.lock().unwrap();
-                    queue.insert(0, retry_entry);
-                    drop(queue);
-                    if let Err(error) = persist_manager_queue(&state) {
-                        eprintln!("Failed to persist download retry: {error}");
+                    if retry_entry
+                        .files
+                        .iter()
+                        .any(|file| !is_terminal_download_file(file))
+                    {
+                        state
+                            .download_active_batches
+                            .lock()
+                            .unwrap()
+                            .remove(&batch_id);
+                        state
+                            .download_active_entries
+                            .lock()
+                            .unwrap()
+                            .remove(&batch_id);
+                        state.download_queue.lock().unwrap().insert(0, retry_entry);
+                        match persist_manager_queue(&state) {
+                            Ok(()) => {
+                                if let Err(error) = update_inflight_state(&state, |inflight| {
+                                    inflight.retain(|entry| entry.id != batch_id);
+                                }) {
+                                    eprintln!(
+                                        "Failed to clear inflight state before retry: {error}"
+                                    );
+                                }
+                                fill_download_queue_slots(app);
+                                return;
+                            }
+                            Err(error) => {
+                                state
+                                    .download_queue
+                                    .lock()
+                                    .unwrap()
+                                    .retain(|entry| entry.id != batch_id);
+                                eprintln!("Failed to persist download retry: {error}");
+                            }
+                        }
                     }
                 }
-
-                fill_download_queue_slots(app);
-                return;
             }
         }
 
         {
             let state = app.state::<AppState>();
-            if let Some(entry) = finalized_entry {
-                if let Err(error) = persist_terminal_entry(&state, entry) {
-                    eprintln!("Failed to persist terminal download entry: {error}");
+            let terminal_persisted = if let Some(entry) = finalized_entry {
+                match persist_terminal_entry(&state, entry) {
+                    Ok(()) => true,
+                    Err(error) => {
+                        // Keep the inflight snapshot when the terminal state is not durable.
+                        eprintln!("Failed to persist terminal download entry: {error}");
+                        false
+                    }
                 }
-            }
+            } else {
+                false
+            };
             state
                 .download_active_batches
                 .lock()
@@ -2220,10 +2366,13 @@ fn process_download_queue_inner(app: tauri::AppHandle) -> bool {
                 .lock()
                 .unwrap()
                 .remove(&batch_id);
-            // B-01: remove from inflight on final completion/exhaustion
-            update_inflight_state(&state, |inflight| {
-                inflight.retain(|e| e.id != batch_id);
-            });
+            if terminal_persisted {
+                if let Err(error) = update_inflight_state(&state, |inflight| {
+                    inflight.retain(|entry| entry.id != batch_id);
+                }) {
+                    eprintln!("Failed to clear completed inflight download state: {error}");
+                }
+            }
         }
         fill_download_queue_slots(app);
     });
@@ -2234,6 +2383,12 @@ fn fill_download_queue_slots(app: tauri::AppHandle) {
     let scheduler_app = app.clone();
     let scheduler_state = scheduler_app.state::<AppState>();
     let _scheduler = scheduler_state.download_scheduler_lock.lock().unwrap();
+    if scheduler_state
+        .download_shutting_down
+        .load(Ordering::SeqCst)
+    {
+        return;
+    }
     while process_download_queue_inner(app.clone()) {}
 }
 
@@ -2241,8 +2396,7 @@ fn save_download_state_unlocked(
     queue: &[PersistedQueueEntry],
     state: &AppState,
 ) -> Result<(), String> {
-    let config_dir = state.config_dir.lock().unwrap().clone();
-    let path = config_dir.join("downloads.json");
+    let path = download_state_path(state);
     let ds = DownloadState {
         queue: queue.to_vec(),
     };
@@ -2252,8 +2406,7 @@ fn save_download_state_unlocked(
 }
 
 fn load_download_state_unlocked(state: &AppState) -> Result<Vec<PersistedQueueEntry>, String> {
-    let config_dir = state.config_dir.lock().unwrap().clone();
-    let path = config_dir.join("downloads.json");
+    let path = download_state_path(state);
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -2262,6 +2415,20 @@ fn load_download_state_unlocked(state: &AppState) -> Result<Vec<PersistedQueueEn
     serde_json::from_str::<DownloadState>(&json)
         .map(|state| state.queue)
         .map_err(|error| format!("failed to parse download state: {error}"))
+}
+
+fn download_state_path(state: &AppState) -> PathBuf {
+    state.config_dir.lock().unwrap().join("downloads.json")
+}
+
+fn quarantine_corrupt_state(path: &Path, file_prefix: &str) -> Result<PathBuf, String> {
+    let quarantine = path.with_file_name(format!(
+        "{file_prefix}.corrupt-{}.json",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::rename(path, &quarantine)
+        .map_err(|error| format!("failed to preserve corrupt download state: {error}"))?;
+    Ok(quarantine)
 }
 
 pub(crate) fn save_download_state(
@@ -2302,71 +2469,127 @@ fn inflight_path(state: &AppState) -> PathBuf {
         .join("downloads_inflight.json")
 }
 
-fn save_inflight_state_unlocked(inflight: &[PersistedQueueEntry], state: &AppState) {
+fn save_inflight_state_unlocked(
+    inflight: &[PersistedQueueEntry],
+    state: &AppState,
+) -> Result<(), String> {
     let path = inflight_path(state);
     if inflight.is_empty() {
-        let _ = std::fs::remove_file(&path);
-        return;
+        return match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("failed to remove inflight download state: {error}")),
+        };
     }
     let ds = DownloadState {
         queue: inflight.to_vec(),
     };
-    let result = serde_json::to_string_pretty(&ds)
+    serde_json::to_string_pretty(&ds)
         .map_err(|error| format!("failed to serialize inflight download state: {error}"))
-        .and_then(|json| write_string_atomic(&path, &json));
-    if let Err(error) = result {
-        eprintln!("Failed to persist inflight download state: {error}");
-    }
+        .and_then(|json| write_string_atomic(&path, &json))
 }
 
-fn load_inflight_state_unlocked(state: &AppState) -> Vec<PersistedQueueEntry> {
+fn load_inflight_state_unlocked(state: &AppState) -> Result<Vec<PersistedQueueEntry>, String> {
     let path = inflight_path(state);
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str::<DownloadState>(&s).ok())
-        .map(|ds| ds.queue)
-        .unwrap_or_default()
+    let json = match std::fs::read_to_string(&path) {
+        Ok(json) => json,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("failed to read inflight download state: {error}")),
+    };
+    serde_json::from_str::<DownloadState>(&json)
+        .map(|state| state.queue)
+        .map_err(|error| format!("failed to parse inflight download state: {error}"))
 }
 
-fn load_inflight_state(state: &AppState) -> Vec<PersistedQueueEntry> {
-    let _guard = state.download_inflight_lock.lock().unwrap();
-    load_inflight_state_unlocked(state)
-}
-
-fn update_inflight_state<F>(state: &AppState, update: F)
+fn update_inflight_state<F>(state: &AppState, update: F) -> Result<(), String>
 where
     F: FnOnce(&mut Vec<PersistedQueueEntry>),
 {
     let _guard = state.download_inflight_lock.lock().unwrap();
-    let mut inflight = load_inflight_state_unlocked(state);
+    let mut inflight = load_inflight_state_unlocked(state)?;
     update(&mut inflight);
-    save_inflight_state_unlocked(&inflight, state);
+    save_inflight_state_unlocked(&inflight, state)
 }
 
-fn clear_inflight_state(state: &AppState) {
+fn clear_inflight_state(state: &AppState) -> Result<(), String> {
     let _guard = state.download_inflight_lock.lock().unwrap();
-    let _ = std::fs::remove_file(inflight_path(state));
+    save_inflight_state_unlocked(&[], state)
+}
+
+fn merge_crash_recovered_inflight(
+    queue: &mut Vec<PersistedQueueEntry>,
+    inflight: Vec<PersistedQueueEntry>,
+) {
+    let mut positions = queue
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.id.clone(), index))
+        .collect::<std::collections::HashMap<_, _>>();
+    for mut entry in inflight {
+        normalize_crash_recovered_entry(&mut entry);
+        if let Some(index) = positions.get(&entry.id).copied() {
+            queue[index] = entry;
+        } else {
+            positions.insert(entry.id.clone(), queue.len());
+            queue.push(entry);
+        }
+    }
 }
 
 pub(crate) fn restore_runtime_queue_from_disk(
     state: &AppState,
     app: &tauri::AppHandle,
 ) -> Vec<PersistedQueueEntry> {
-    let mut queue = match load_download_state(state) {
-        Ok(queue) => queue,
-        Err(error) => {
-            eprintln!("Failed to restore download queue: {error}");
-            Vec::new()
+    let (mut queue, can_persist_restored_state) = {
+        let state_lock = DOWNLOAD_STATE_LOCK.lock();
+        match state_lock {
+            Ok(_guard) => match load_download_state_unlocked(state) {
+                Ok(queue) => (queue, true),
+                Err(error) => {
+                    eprintln!("Failed to restore download queue: {error}");
+                    match quarantine_corrupt_state(&download_state_path(state), "downloads") {
+                        Ok(path) => {
+                            eprintln!("Preserved corrupt download queue at {}", path.display());
+                            (Vec::new(), true)
+                        }
+                        Err(quarantine_error) => {
+                            eprintln!(
+                                "Failed to quarantine corrupt download queue: {quarantine_error}"
+                            );
+                            (Vec::new(), false)
+                        }
+                    }
+                }
+            },
+            Err(_) => {
+                eprintln!("Failed to restore download queue: download state lock is poisoned");
+                (Vec::new(), false)
+            }
         }
     };
 
-    let inflight = load_inflight_state(state);
-    if !inflight.is_empty() {
-        for mut entry in inflight {
-            normalize_crash_recovered_entry(&mut entry);
-            queue.push(entry);
+    state.download_shutting_down.store(false, Ordering::SeqCst);
+    let inflight = {
+        let _guard = state.download_inflight_lock.lock().unwrap();
+        match load_inflight_state_unlocked(state) {
+            Ok(inflight) => inflight,
+            Err(error) => {
+                eprintln!("Failed to restore inflight download queue: {error}");
+                match quarantine_corrupt_state(&inflight_path(state), "downloads_inflight") {
+                    Ok(path) => {
+                        eprintln!("Preserved corrupt inflight queue at {}", path.display())
+                    }
+                    Err(quarantine_error) => {
+                        eprintln!("Failed to quarantine corrupt inflight queue: {quarantine_error}")
+                    }
+                }
+                Vec::new()
+            }
         }
-        clear_inflight_state(state);
+    };
+    let had_inflight = !inflight.is_empty();
+    if had_inflight {
+        merge_crash_recovered_inflight(&mut queue, inflight);
     }
 
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -2409,8 +2632,20 @@ pub(crate) fn restore_runtime_queue_from_disk(
         .cloned()
         .collect();
     *state.download_queue.lock().unwrap() = runnable;
-    if let Err(error) = save_download_state(&queue, state) {
-        eprintln!("Failed to persist restored download queue: {error}");
+    match can_persist_restored_state
+        .then(|| save_download_state(&queue, state))
+        .transpose()
+    {
+        Ok(Some(())) if had_inflight => {
+            if let Err(error) = clear_inflight_state(state) {
+                eprintln!("Failed to clear restored inflight download queue: {error}");
+            }
+        }
+        Ok(Some(())) => {}
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("Failed to persist restored download queue: {error}");
+        }
     }
 
     let policy = config.download_resume_policy;
@@ -2792,12 +3027,8 @@ pub async fn resume_all_downloads(
 
 pub fn flush_download_manager_state(app: &tauri::AppHandle) {
     let state = app.state::<AppState>();
-
-    // Snapshot active batch entries before they're removed (need them for disk persistence)
-    let active_entries: Vec<PersistedQueueEntry> = {
-        let entries = state.download_active_entries.lock().unwrap();
-        entries.values().cloned().collect()
-    };
+    state.download_shutting_down.store(true, Ordering::SeqCst);
+    let _scheduler = state.download_scheduler_lock.lock().unwrap();
 
     {
         let mut cancel = state.cancel_flags.lock().unwrap();
@@ -2809,25 +3040,45 @@ pub fn flush_download_manager_state(app: &tauri::AppHandle) {
         }
     }
 
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !state.download_active_batches.lock().unwrap().is_empty()
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 
-    // Write paused entries to disk so they survive restart
+    let active_entries: Vec<PersistedQueueEntry> = state
+        .download_active_entries
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect();
     let mut queue = state.download_queue.lock().unwrap().clone();
     for mut entry in active_entries {
         entry.status = "paused".to_string();
         for file in entry.files.iter_mut() {
-            file.status = Some("paused".into());
+            if !matches!(file.status.as_deref(), Some("completed" | "cancelled")) {
+                file.status = Some("paused".into());
+            }
         }
-        if !queue.iter().any(|e| e.id == entry.id) {
+        if let Some(existing) = queue.iter_mut().find(|saved| saved.id == entry.id) {
+            *existing = entry;
+        } else {
             queue.push(entry);
         }
     }
-    if let Err(error) = update_download_state(&state, move |persisted| {
+    match update_download_state(&state, move |persisted| {
         persisted.retain(|entry| !queue.iter().any(|queued| queued.id == entry.id));
         persisted.extend(queue);
         Ok(())
     }) {
-        eprintln!("Failed to flush download manager state: {error}");
+        Ok(()) => {
+            if let Err(error) = clear_inflight_state(&state) {
+                eprintln!("Failed to clear inflight state during shutdown: {error}");
+            }
+        }
+        Err(error) => eprintln!("Failed to flush download manager state: {error}"),
     }
 }
 
@@ -2956,6 +3207,199 @@ mod audit_remediation_tests {
         assert!(sanitize_repo_id("org/model/").is_err());
         assert!(sanitize_repo_id("org//model").is_err());
         assert!(sanitize_repo_id("org/model").is_ok());
+    }
+
+    #[test]
+    fn queue_entry_directory_rejects_save_directory_parent_traversal() {
+        let entry = PersistedQueueEntry {
+            id: "entry-1".into(),
+            repo_id: "org/model".into(),
+            source: "huggingface".into(),
+            save_dir: "../outside".into(),
+            added_at: 1,
+            status: "paused".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: Vec::new(),
+        };
+
+        assert!(queue_entry_download_dir(Path::new("/app-data"), &entry).is_err());
+    }
+
+    #[test]
+    fn absolute_save_directory_is_its_own_managed_cleanup_root() {
+        let root = std::env::temp_dir().join(format!(
+            "lsm-absolute-download-root-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let entry = PersistedQueueEntry {
+            id: "entry-absolute".into(),
+            repo_id: "org/model".into(),
+            source: "huggingface".into(),
+            save_dir: root.to_string_lossy().into_owned(),
+            added_at: 1,
+            status: "paused".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "file".into(),
+                downloaded: None,
+                status: Some("paused".into()),
+                error: None,
+                task_id: Some("task-absolute".into()),
+                run_id: Some("run-absolute".into()),
+                version: Some(1),
+            }],
+        };
+
+        let (managed_root, final_path, _, _) = trusted_download_cleanup_paths(
+            &[entry],
+            Path::new("/ignored-base"),
+            "task-absolute",
+            "model.gguf",
+            Some("run-absolute"),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(managed_root, root);
+        assert!(verified_managed_cleanup_path(&managed_root, &final_path).is_ok());
+        let _ = std::fs::remove_dir_all(managed_root);
+    }
+
+    #[test]
+    fn managed_cleanup_allows_already_missing_nested_directory() {
+        let root =
+            std::env::temp_dir().join(format!("lsm-download-cleanup-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("missing").join("nested").join("model.gguf");
+
+        assert_eq!(
+            verified_managed_cleanup_path(&root, &target).unwrap(),
+            target
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn retry_filters_files_that_already_completed() {
+        let file = |name: &str, status: &str| MsFileEntry {
+            name: name.into(),
+            path: name.into(),
+            size: 100,
+            file_type: "file".into(),
+            downloaded: None,
+            status: Some(status.into()),
+            error: None,
+            task_id: None,
+            run_id: None,
+            version: None,
+        };
+
+        let pending = pending_download_files(vec![
+            file("finished.gguf", "completed"),
+            file("cancelled.gguf", "cancelled"),
+            file("retry.gguf", "error"),
+            file("queued.gguf", "queued"),
+        ]);
+
+        assert_eq!(
+            pending
+                .iter()
+                .map(|file| file.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["retry.gguf", "queued.gguf"]
+        );
+    }
+
+    #[test]
+    fn terminal_entry_status_preserves_cancellation() {
+        let file = |status: &str| MsFileEntry {
+            name: format!("{status}.gguf"),
+            path: format!("{status}.gguf"),
+            size: 100,
+            file_type: "file".into(),
+            downloaded: None,
+            status: Some(status.into()),
+            error: None,
+            task_id: None,
+            run_id: None,
+            version: None,
+        };
+        let entry = PersistedQueueEntry {
+            id: "terminal-entry".into(),
+            repo_id: "org/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "active".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![file("completed"), file("cancelled")],
+        };
+
+        assert_eq!(derive_entry_status(&entry), "cancelled");
+    }
+
+    #[test]
+    fn corrupt_download_state_is_quarantined_without_overwrite() {
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-corrupt-download-state-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("downloads.json");
+        std::fs::write(&path, "{broken-json").unwrap();
+
+        let quarantine = quarantine_corrupt_state(&path, "downloads").unwrap();
+
+        assert!(!path.exists());
+        assert_eq!(std::fs::read_to_string(quarantine).unwrap(), "{broken-json");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn inflight_restore_replaces_same_queue_entry_instead_of_duplicating_it() {
+        let entry = |status: &str| PersistedQueueEntry {
+            id: "entry-1".into(),
+            repo_id: "org/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: status.into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "file".into(),
+                downloaded: Some(50),
+                status: Some(status.into()),
+                error: None,
+                task_id: Some("task-1".into()),
+                run_id: Some("run-1".into()),
+                version: Some(1),
+            }],
+        };
+        let mut queue = vec![entry("queued")];
+
+        merge_crash_recovered_inflight(&mut queue, vec![entry("active")]);
+
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].status, "paused");
+        assert_eq!(queue[0].files[0].status.as_deref(), Some("paused"));
     }
 
     #[test]

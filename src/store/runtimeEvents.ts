@@ -81,6 +81,7 @@ function applyDownloadPatch(
   if (!taskId) return undefined
 
   const prev = state.downloadTasks[taskId]
+  const now = Date.now()
   const next: DownloadProgress = {
     ...(prev || {}),
     id: taskId,
@@ -93,6 +94,9 @@ function applyDownloadPatch(
     source: payload.source,
     downloaded: payload.downloaded ?? prev?.downloaded ?? 0,
     total: payload.total ?? prev?.total ?? 0,
+    createdAt: prev?.createdAt ?? now,
+    updatedAt: now,
+    completedAt: patch.status === 'completed' ? prev?.completedAt ?? now : prev?.completedAt,
     speed: payload.speed ?? prev?.speed ?? 0,
     status: prev?.status || 'queued',
     version: payload.version ?? prev?.version ?? 0,

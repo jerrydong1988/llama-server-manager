@@ -8,16 +8,23 @@ function compareMonitoringFrameOrder(left: MonitoringFrame, right: MonitoringFra
   return sessionOrder || left.ts - right.ts
 }
 
+function sameMonitoringSession(left: MonitoringFrame, right: MonitoringFrame) {
+  if (left.sessionId != null || right.sessionId != null) {
+    return left.sessionId === right.sessionId
+  }
+  return left.sessionStartedAt === right.sessionStartedAt
+}
+
 export function appendMonitoringFrame(previous: MonitoringFrame[], frame: MonitoringFrame) {
   const previousLast = previous[previous.length - 1]
   if (
     previousLast
-    && previousLast.sessionId !== frame.sessionId
+    && !sameMonitoringSession(previousLast, frame)
     && frame.sessionStartedAt < previousLast.sessionStartedAt
   ) {
     return previous
   }
-  const sameSession = previousLast?.sessionId === frame.sessionId ? previous : []
+  const sameSession = previousLast && sameMonitoringSession(previousLast, frame) ? previous : []
   const last = sameSession[sameSession.length - 1]
   if (!last || frame.ts > last.ts) {
     return [...sameSession, frame].slice(-MAX_MONITORING_FRAMES)
@@ -43,7 +50,7 @@ export function mergeMonitoringFrames(
   if (!latest) return previous
   const byTimestamp = new Map<number, MonitoringFrame>()
   for (const frame of [...previous, ...incoming]) {
-    if (frame.sessionId === latest.sessionId) byTimestamp.set(frame.ts, frame)
+    if (sameMonitoringSession(frame, latest)) byTimestamp.set(frame.ts, frame)
   }
   return [...byTimestamp.values()]
     .sort((left, right) => left.ts - right.ts)
@@ -56,24 +63,33 @@ export function createMonitoringSlice(set: AppStoreSet): Pick<
   | 'hydrateMonitoringFrames'
   | 'applyPerfUpdate'
 > {
-  return {
-    ingestMonitoringFrame: (frame) => set((state) => {
-      const timeline = appendMonitoringFrame(
-        state.monitoringFramesByInstance[frame.instanceId] || [],
-        frame,
-      )
-      const current = timeline[timeline.length - 1]
-      return {
-        monitoringFramesByInstance: {
-          ...state.monitoringFramesByInstance,
-          [frame.instanceId]: timeline,
-        },
-        monitoringCurrentByInstance: current ? {
-          ...state.monitoringCurrentByInstance,
-          [frame.instanceId]: current,
-        } : state.monitoringCurrentByInstance,
+  const pendingFrames: MonitoringFrame[] = []
+  let flushTimer: ReturnType<typeof setTimeout> | null = null
+  const flushPendingFrames = () => {
+    flushTimer = null
+    const frames = pendingFrames.splice(0)
+    if (frames.length === 0) return
+    set((state) => {
+      const nextFrames = { ...state.monitoringFramesByInstance }
+      const nextCurrent = { ...state.monitoringCurrentByInstance }
+      for (const frame of frames) {
+        const timeline = appendMonitoringFrame(nextFrames[frame.instanceId] || [], frame)
+        nextFrames[frame.instanceId] = timeline
+        const current = timeline[timeline.length - 1]
+        if (current) nextCurrent[frame.instanceId] = current
       }
-    }),
+      return {
+        monitoringFramesByInstance: nextFrames,
+        monitoringCurrentByInstance: nextCurrent,
+      }
+    })
+  }
+
+  return {
+    ingestMonitoringFrame: (frame) => {
+      pendingFrames.push(frame)
+      flushTimer ??= setTimeout(flushPendingFrames, 50)
+    },
     hydrateMonitoringFrames: (frames) => set((state) => {
       const nextFrames = { ...state.monitoringFramesByInstance }
       const nextCurrent = { ...state.monitoringCurrentByInstance }

@@ -5,19 +5,39 @@ type RestoreContext = {
   source: 'modelscope' | 'huggingface'
   saveDir: string
   entryStatus: string
+  addedAt?: number
 }
 
 const taskRemotePath = (file: MsFileEntry) => file.path || file.name
 
-const restoredStatus = (
+const downloadStatuses: ReadonlySet<string> = new Set([
+  'active',
+  'completed',
+  'cancelled',
+  'error',
+  'paused',
+  'pausing',
+  'queued',
+])
+
+function parseDownloadStatus(value: string | undefined): DownloadProgress['status'] | null {
+  return value && downloadStatuses.has(value) ? value as DownloadProgress['status'] : null
+}
+
+export function restoredDownloadTimestamp(value?: number): number {
+  if (value == null || !Number.isFinite(value) || value <= 0) return 0
+  return value < 1_000_000_000_000 ? value * 1000 : value
+}
+
+export const restoredDownloadStatus = (
   fileStatus: string | undefined,
   entryStatus: string,
 ): DownloadProgress['status'] => (
-  (fileStatus as DownloadProgress['status'])
+  parseDownloadStatus(fileStatus)
   || (entryStatus === 'active' ? 'active'
     : entryStatus === 'queued' ? 'queued'
     : entryStatus === 'pausing' ? 'paused'
-    : (entryStatus as DownloadProgress['status']) || 'queued')
+    : parseDownloadStatus(entryStatus) || 'queued')
 )
 
 function preferExistingStatus(
@@ -25,6 +45,7 @@ function preferExistingStatus(
   restored: DownloadProgress['status'],
 ): DownloadProgress['status'] {
   if (existing === 'completed') return 'completed'
+  if (existing === 'cancelled') return 'cancelled'
   if (existing === 'active' && restored === 'queued') return 'active'
   if (existing === 'pausing' && (restored === 'queued' || restored === 'paused')) return 'pausing'
   if (existing === 'paused' && restored === 'queued') return 'paused'
@@ -51,9 +72,12 @@ export function mergeRestoredDownloadTask(
     downloaded: file.downloaded ?? 0,
     total: file.size,
     speed: 0,
-    status: restoredStatus(file.status, context.entryStatus),
+    status: restoredDownloadStatus(file.status, context.entryStatus),
     version: restoredVersion,
     error: file.error,
+    createdAt: existing?.createdAt ?? restoredDownloadTimestamp(context.addedAt),
+    updatedAt: existing?.updatedAt ?? restoredDownloadTimestamp(context.addedAt),
+    completedAt: existing?.completedAt,
   }
 
   if (!existing) return restored

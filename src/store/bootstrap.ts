@@ -3,12 +3,12 @@ import { invokeApp as invoke } from '../lib/ipc'
 import { normalizeInstanceConfig } from '../modelPolicy'
 import { pathBasename } from '../utils/path'
 import { resolveHydratedHealth } from './bootstrapHealth'
+import { restoredDownloadStatus, restoredDownloadTimestamp } from './downloadMerge'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import { synchronizeInstanceSummary } from './instanceSummary'
 import type {
   AppState,
   DownloadManagerSnapshot,
-  DownloadProgress,
   EngineInfo,
   Instance,
   InstanceConfig,
@@ -154,13 +154,11 @@ function hydrateDownloadTasksFromSnapshot(
           downloaded: file.downloaded ?? 0,
           total: file.size,
           speed: 0,
-          status: (file.status as DownloadProgress['status'])
-            || (entry.status === 'active' ? 'active'
-              : entry.status === 'queued' ? 'queued'
-              : entry.status === 'pausing' ? 'paused'
-              : (entry.status as DownloadProgress['status']) || 'queued'),
+          status: restoredDownloadStatus(file.status, entry.status),
           version: file.version ?? 0,
           error: file.error,
+          createdAt: restoredDownloadTimestamp(entry.added_at),
+          updatedAt: restoredDownloadTimestamp(entry.added_at),
         }
       }
     }

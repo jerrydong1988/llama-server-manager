@@ -132,6 +132,9 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
           speed: 0,
           status: 'queued',
           version,
+          createdAt: existing?.createdAt ?? Date.now(),
+          updatedAt: Date.now(),
+          completedAt: undefined,
         }
       }
 
@@ -219,6 +222,8 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
               status: 'queued',
               speed: 0,
               error: undefined,
+              updatedAt: Date.now(),
+              completedAt: undefined,
             },
           },
         })
@@ -240,6 +245,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
             source,
             saveDir,
             entryStatus: entry.status,
+            addedAt: entry.added_at,
           })
         }
       }

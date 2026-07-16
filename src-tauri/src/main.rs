@@ -350,6 +350,7 @@ fn main() {
             download_last_inflight_persist: Mutex::new(Instant::now()),
             download_scheduler_lock: Mutex::new(()),
             download_inflight_lock: Mutex::new(()),
+            download_shutting_down: std::sync::atomic::AtomicBool::new(false),
             download_active_file_slots: std::sync::atomic::AtomicUsize::new(0),
             download_slot_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
             download_max_concurrent: Mutex::new(initial_config.download_max_concurrent.max(1)),
@@ -363,6 +364,7 @@ fn main() {
             proxy_task: Mutex::new(None),
             proxy_bound_addr: Mutex::new(None),
             proxy_last_error: Mutex::new(None),
+            proxy_lifecycle_lock: tokio::sync::Mutex::new(()),
             restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
         })
         .invoke_handler(tauri::generate_handler![

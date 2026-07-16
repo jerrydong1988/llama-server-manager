@@ -72,7 +72,6 @@ export default function BigScreenPage() {
   const monitoringCurrentByInstance = useAppStore(state => state.monitoringCurrentByInstance)
   const runningTasksByInstance = useAppStore(state => state.runningTasksByInstance)
   const lastCompletedTaskByInstance = useAppStore(state => state.lastCompletedTaskByInstance)
-  const loadInitialData = useAppStore(state => state.loadInitialData)
 
   const [overview, setOverview] = useState<TelemetryOverview>(emptyOverview)
   const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
@@ -122,10 +121,6 @@ export default function BigScreenPage() {
   }, [])
 
   useEffect(() => {
-    void loadInitialData().catch(() => undefined)
-  }, [loadInitialData])
-
-  useEffect(() => {
     void refreshTelemetry()
     const timer = window.setInterval(() => void refreshTelemetry({ silent: true }), BIG_SCREEN_TELEMETRY_REFRESH_MS)
     return () => window.clearInterval(timer)
@@ -144,16 +139,17 @@ export default function BigScreenPage() {
     () => runningInstances.map(instance => instance.id),
     [runningInstances],
   )
+  const trendEnd = Math.max(Date.now(), ...runningInstanceIds.map(instanceId => monitoringCurrentByInstance[instanceId]?.ts || 0))
+  const trendStart = trendEnd - 5 * 60 * 1000
   const fleetThroughput = useMemo(
     () => buildFleetThroughputSeries(
       monitoringFramesByInstance,
       monitoringCurrentByInstance,
       runningInstanceIds,
+      trendStart,
     ),
-    [monitoringCurrentByInstance, monitoringFramesByInstance, runningInstanceIds],
+    [monitoringCurrentByInstance, monitoringFramesByInstance, runningInstanceIds, trendStart],
   )
-  const trendEnd = Math.max(Date.now(), ...fleetThroughput.points.map(point => point.ts))
-  const trendStart = trendEnd - 5 * 60 * 1000
   const trendPoints = downsampleMonitoringPoints(
     fleetThroughput.points.filter(point => point.ts >= trendStart),
     240,
@@ -182,11 +178,13 @@ export default function BigScreenPage() {
       .filter((frame): frame is MonitoringFrame => Boolean(frame)),
     [monitoringCurrentByInstance, runningInstanceIds],
   )
+  const inferenceFrames = currentFrames.filter(frame => frame.workload === 'inference')
+  const pressureFrames = inferenceFrames.length > 0 ? inferenceFrames : currentFrames
   const pressure = buildRequestPressure(
-    currentFrames.reduce((total, frame) => total + frame.activeRequests, 0),
-    currentFrames.reduce((total, frame) => total + frame.queuedRequests, 0),
-    currentFrames.every(frame => frame.slotCapacity != null)
-      ? currentFrames.reduce((total, frame) => total + (frame.slotCapacity || 0), 0)
+    pressureFrames.reduce((total, frame) => total + frame.activeRequests, 0),
+    pressureFrames.reduce((total, frame) => total + frame.queuedRequests, 0),
+    inferenceFrames.length > 0 && inferenceFrames.every(frame => frame.slotCapacity != null)
+      ? inferenceFrames.reduce((total, frame) => total + (frame.slotCapacity || 0), 0)
       : null,
   )
   const activeRequestCount = currentFrames.reduce((total, frame) => total + frame.activeRequests, 0)
@@ -352,12 +350,12 @@ export default function BigScreenPage() {
         <WallKpi label={labels.serviceStatus} value={statusLabel} detail={telemetryError || labels.allServicesNormal} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
         <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
         <WallKpi label={labels.currentThroughput} value={formatRate(currentTps, fleetThroughput.unit)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps, fleetThroughput.unit)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />
-        <WallKpi label={labels.requestPressure} value={`${pressure.percent}%`} detail={formatRequestPressureDetail(pressure, labels)} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
+        <WallKpi label={labels.requestPressure} value={pressure.percent == null ? '--' : `${pressure.percent}%`} detail={formatRequestPressureDetail(pressure, labels)} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : pressure.level === 'unknown' ? 'blue' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
         <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
       </section>
 
       <section className="grid gap-3 xl:grid-cols-[minmax(0,1.08fr)_minmax(420px,0.92fr)]">
-        <WallPanel title={labels.realtimeThroughput} icon={<Activity className="h-5 w-5" />} action={<Badge tone="blue">5分钟</Badge>}>
+        <WallPanel title={labels.realtimeThroughput} icon={<Activity className="h-5 w-5" />} action={<Badge tone="blue">{labels.range5m}</Badge>}>
           <div className="grid gap-4 lg:grid-cols-[190px_minmax(0,1fr)]">
             <div className="space-y-4">
               <div>
@@ -396,7 +394,7 @@ export default function BigScreenPage() {
           ) : null}
         </WallPanel>
 
-        <WallPanel title={labels.resourcePressure} icon={<Cpu className="h-5 w-5" />} action={<Badge tone="blue">5分钟</Badge>}>
+        <WallPanel title={labels.resourcePressure} icon={<Cpu className="h-5 w-5" />} action={<Badge tone="blue">{labels.range5m}</Badge>}>
           <div className="space-y-3">
             {resourceSignals.map(signal => (
               <ResourcePressureRow

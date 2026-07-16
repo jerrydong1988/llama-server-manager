@@ -1016,7 +1016,7 @@ fn insert_inference_request(
          VALUES (?1, ?2, ?3, ?4, 'log', ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(session_id, task_id) DO UPDATE SET
              slot_id = excluded.slot_id,
-             completed_at = excluded.completed_at,
+             completed_at = inference_requests.completed_at,
              source = excluded.source,
              prompt_tokens = excluded.prompt_tokens,
              prompt_time_ms = excluded.prompt_time_ms,
@@ -3175,6 +3175,58 @@ mod tests {
         assert_eq!(stats.sample_count, 2);
         assert_eq!(stats.avg_tps, 45.0);
         assert_eq!(stats.max_tps, 45.0);
+    }
+
+    #[test]
+    fn inference_log_replay_preserves_original_completion_time() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "session-replay",
+                instance_id: "instance-replay",
+                instance_name: "Replay",
+                model_path: "model.gguf",
+                engine_id: "engine",
+                backend: "cpu",
+                config_hash: "hash",
+                command_line: "llama-server --model model.gguf",
+                workload: ModelWorkload::Inference,
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        let mut record = InferenceRequestRecord {
+            task_id: 7,
+            slot_id: 0,
+            prompt_tokens: Some(10),
+            prompt_time_ms: None,
+            prompt_tps: None,
+            generated_tokens: Some(20),
+            generation_time_ms: None,
+            generation_tps: Some(30.0),
+            total_tokens: Some(30),
+            total_time_ms: None,
+            spec_accept_rate: None,
+            spec_accepted: None,
+            spec_generated: None,
+            spec_gen_time_ms: None,
+        };
+
+        insert_inference_request(&conn, "session-replay", 1_000, &record).unwrap();
+        record.generation_tps = Some(42.0);
+        insert_inference_request(&conn, "session-replay", 9_000, &record).unwrap();
+
+        let values: (i64, f64) = conn
+            .query_row(
+                "SELECT completed_at, generation_tps FROM inference_requests
+                 WHERE session_id = 'session-replay' AND task_id = 7",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(values, (1_000, 42.0));
     }
 
     #[test]

@@ -158,7 +158,7 @@ fn take_complete_log_lines(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
     lines
 }
 
-fn spawn_log_pump<R>(mut source: R, writer: Arc<CappedLogWriter>)
+fn spawn_log_pump<R>(mut source: R, writer: Arc<CappedLogWriter>) -> std::thread::JoinHandle<()>
 where
     R: Read + Send + 'static,
 {
@@ -174,7 +174,7 @@ where
                 }
             }
         }
-    });
+    })
 }
 
 fn terminate_spawned_child(child: &mut std::process::Child) -> Result<(), String> {
@@ -1023,8 +1023,8 @@ pub async fn start_server(
         .stderr
         .take()
         .ok_or_else(|| "Unable to capture server stderr".to_string())?;
-    spawn_log_pump(stdout, log_writer.clone());
-    spawn_log_pump(stderr, log_writer.clone());
+    let stdout_pump = spawn_log_pump(stdout, log_writer.clone());
+    let stderr_pump = spawn_log_pump(stderr, log_writer.clone());
 
     let (start_time, executable_path) = match read_process_identity(pid) {
         Some(identity) => identity,
@@ -1172,6 +1172,8 @@ pub async fn start_server(
         std::thread::sleep(std::time::Duration::from_secs(1));
         match child.try_wait() {
             Ok(Some(status)) if !status.success() => {
+                let _ = stdout_pump.join();
+                let _ = stderr_pump.join();
                 let st = app_clone.state::<AppState>();
                 {
                     let mut r = st.running.lock().unwrap();
@@ -1226,6 +1228,8 @@ pub async fn start_server(
         }
 
         let exit_code = child.wait().ok().and_then(|status| status.code());
+        let _ = stdout_pump.join();
+        let _ = stderr_pump.join();
         let st2 = app_clone.state::<AppState>();
         let removed = {
             let mut r = st2.running.lock().unwrap();
@@ -2807,19 +2811,6 @@ fn tail_log_file(
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // Check whether the instance is still running.
-        {
-            let st = app.state::<AppState>();
-            let guard = st.running.lock().unwrap();
-            if guard
-                .get(instance_id)
-                .map(|running| running.pid != expected_pid)
-                .unwrap_or(true)
-            {
-                break;
-            }
-        }
-
         let read_chunk = if let Some(writer) = log_writer.as_ref() {
             match writer.read_since(last_size, observed_generation) {
                 Ok(chunk) => chunk,
@@ -2876,6 +2867,30 @@ fn tail_log_file(
                 tasks.retain(|_, t| !t.completed);
                 emit_perf(&app, &tasks, &last_completed);
             }
+        }
+
+        let still_running = {
+            let st = app.state::<AppState>();
+            let guard = st.running.lock().unwrap();
+            guard
+                .get(instance_id)
+                .map(|running| running.pid == expected_pid)
+                .unwrap_or(false)
+        };
+        if !still_running {
+            if !pending.is_empty() {
+                let text = String::from_utf8_lossy(&pending).trim().to_string();
+                if !text.is_empty() {
+                    emit_log_batches(&app, instance_id, &[format!("{text}\n")]);
+                    if parse_perf_line(&parser, &text, &mut tasks, &mut last_completed) {
+                        record_completed(&last_completed, &mut last_recorded_task_id);
+                        tasks.retain(|_, task| !task.completed);
+                        emit_perf(&app, &tasks, &last_completed);
+                    }
+                }
+                pending.clear();
+            }
+            break;
         }
     }
     crate::commands::monitoring::update_tasks(

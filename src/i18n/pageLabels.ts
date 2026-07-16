@@ -33,6 +33,7 @@ export function getBigScreenLabels(lang: string) {
     medium: zh ? '中等' : 'Medium',
     realtimeThroughput: zh ? '实时吞吐' : 'Realtime Throughput',
     avg5m: zh ? '5分钟平均' : '5m Avg',
+    range5m: zh ? '5分钟' : '5m',
     noSamples: zh ? '暂无足够采样' : 'Not enough samples',
     activeRequests: zh ? '运行中请求' : 'Active Requests',
     noActiveRequests: zh ? '暂无运行中请求' : 'No active requests',

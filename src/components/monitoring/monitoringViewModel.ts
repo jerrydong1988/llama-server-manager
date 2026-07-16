@@ -12,7 +12,7 @@ import type {
 } from '../../store/types'
 
 export type ServiceStatus = 'healthy' | 'attention' | 'critical'
-export type RequestPressureLevel = 'normal' | 'medium' | 'high'
+export type RequestPressureLevel = 'unknown' | 'normal' | 'medium' | 'high'
 export type SignalTone = 'blue' | 'emerald' | 'amber' | 'red' | 'violet' | 'cyan' | 'slate'
 export type LiveThroughputSource = 'active-tasks' | 'llama-metrics' | 'mixed' | 'idle'
 
@@ -198,10 +198,12 @@ export function buildRequestPressure(
   const normalizedCapacity = Math.max(capacity || 0, 0)
   const capacityKnown = normalizedCapacity > 0
   const utilization = capacityKnown ? Math.min((active / normalizedCapacity) * 100, 100) : 0
-  const percent = Math.round(queued > 0 ? 100 : utilization)
-  const level: RequestPressureLevel = queued > 0 || percent >= 90
+  const percent = queued > 0 ? 100 : capacityKnown ? Math.round(utilization) : null
+  const level: RequestPressureLevel = queued > 0 || (percent != null && percent >= 90)
     ? 'high'
-    : percent >= 70
+    : percent == null
+      ? 'unknown'
+      : percent >= 70
       ? 'medium'
       : 'normal'
   return { active, queued, capacity: capacityKnown ? normalizedCapacity : null, percent, level }
@@ -246,6 +248,7 @@ export function buildFleetThroughputSeries(
   framesByInstance: Record<string, MonitoringFrame[]>,
   currentByInstance: Record<string, MonitoringFrame>,
   instanceIds: string[],
+  startTs = Number.NEGATIVE_INFINITY,
 ): FleetThroughputSeries {
   const currentFrames = instanceIds
     .map(instanceId => currentByInstance[instanceId])
@@ -265,7 +268,16 @@ export function buildFleetThroughputSeries(
     : frame.workload !== 'inference'
   const byTimestamp = new Map<number, { total: number; available: boolean }>()
   for (const instanceId of instanceIds) {
-    for (const frame of framesByInstance[instanceId] || []) {
+    const frames = framesByInstance[instanceId] || []
+    let low = 0
+    let high = frames.length
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2)
+      if (frames[middle].ts < startTs) low = middle + 1
+      else high = middle
+    }
+    for (let index = low; index < frames.length; index += 1) {
+      const frame = frames[index]
       if (!included(frame)) continue
       const bucket = byTimestamp.get(frame.ts) || { total: 0, available: false }
       if (frame.state !== 'unavailable' && frame.throughput != null && Number.isFinite(frame.throughput)) {
@@ -299,11 +311,15 @@ export function buildServiceStatus(options: {
   downloads: DownloadProgress[]
   logs: LogEntry[]
   telemetryError?: string | null
+  now?: number
+  logWindowMs?: number
 }): { status: ServiceStatus; alertCount: number } {
   const errorInstances = options.instances.filter(instance => instance.status === 'error')
   const failedDownloads = options.downloads.filter(task => task.status === 'error')
-  const criticalLogs = options.logs.filter(entry => criticalLogPattern.test(entry.text))
-  const warningLogs = options.logs.filter(entry => warningLogPattern.test(entry.text))
+  const logCutoff = (options.now ?? Date.now()) - (options.logWindowMs ?? 5 * 60 * 1000)
+  const recentLogs = options.logs.filter(entry => entry.timestamp >= logCutoff)
+  const criticalLogs = recentLogs.filter(entry => criticalLogPattern.test(entry.text))
+  const warningLogs = recentLogs.filter(entry => warningLogPattern.test(entry.text))
   const alertCount = errorInstances.length + failedDownloads.length + criticalLogs.length + warningLogs.length + (options.telemetryError ? 1 : 0)
   if (options.telemetryError || errorInstances.length > 0 || criticalLogs.length > 0) {
     return { status: 'critical', alertCount }
@@ -409,7 +425,7 @@ export function buildActivityFeed(options: {
     .filter(task => task.status === 'active' || task.status === 'queued' || task.status === 'error' || task.status === 'completed')
     .map(task => ({
       id: `download-${task.id}`,
-      ts: Date.now(),
+      ts: task.completedAt ?? task.updatedAt ?? task.createdAt ?? 0,
       kind: 'download' as const,
       severity: task.status === 'error' ? 'critical' as const : task.status === 'completed' ? 'success' as const : 'info' as const,
       label: options.labels.download,

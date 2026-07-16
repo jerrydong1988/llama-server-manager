@@ -245,6 +245,7 @@ export default function DownloadManager() {
       return
     }
 
+    const browseStartedAt = Date.now()
     setBrowsing(true)
     setStatus(t.modelRepo.querying)
 
@@ -259,12 +260,7 @@ export default function DownloadManager() {
       setStatus(result.length === 0 ? t.modelRepo.notFound : `${t.modelRepo.found} ${result.length} ${t.modelRepo.files}`)
 
       const allTasks = useAppStore.getState().downloadTasks
-      const tasks: Record<string, DownloadProgress> = {}
-      for (const key of Object.keys(allTasks)) {
-        if (allTasks[key].status !== 'error' && allTasks[key].status !== 'cancelled') {
-          tasks[key] = allTasks[key]
-        }
-      }
+      const completedTasks: DownloadProgress[] = []
 
       const resolvedDir = await invoke<string>('resolve_path', { path: saveDir })
       await forEachConcurrent(result, LOCAL_FILE_CHECK_CONCURRENCY, async file => {
@@ -272,14 +268,15 @@ export default function DownloadManager() {
         try {
           const actualSize = await invoke<number | null>('check_local_file', { path: localPath })
           if (actualSize != null && actualSize >= file.size * 0.99) {
-            const existing = Object.values(tasks).find(task =>
+            const existing = Object.values(allTasks).find(task =>
               task.source === source &&
               task.repoId === trimmedRepoId &&
               task.remotePath === (file.path || file.name) &&
               task.saveDir === saveDir,
             )
             const id = existing?.id || crypto.randomUUID()
-            tasks[id] = {
+            const completedAt = Date.now()
+            completedTasks.push({
               id,
               fileName: file.name,
               remotePath: file.path || file.name,
@@ -293,14 +290,42 @@ export default function DownloadManager() {
               status: 'completed',
               path: localPath,
               version: existing?.version ?? 0,
-            }
+              createdAt: existing?.createdAt ?? completedAt,
+              updatedAt: completedAt,
+              completedAt: existing?.completedAt ?? completedAt,
+            })
           }
         } catch {
           // file not found
         }
       })
 
-      setDownloadTasks(tasks)
+      useAppStore.setState(state => {
+        const tasks = { ...state.downloadTasks }
+        for (const completed of completedTasks) {
+          const latest = Object.values(tasks).find(task =>
+            task.source === completed.source
+            && task.repoId === completed.repoId
+            && task.remotePath === completed.remotePath
+            && task.saveDir === completed.saveDir,
+          )
+          if ((latest?.version ?? 0) > (completed.version ?? 0)) continue
+          if (
+            latest
+            && (latest.updatedAt ?? 0) > browseStartedAt
+            && latest.status !== 'completed'
+          ) continue
+          if (latest && ['active', 'queued', 'pausing'].includes(latest.status)) continue
+          const id = latest?.id || completed.id
+          tasks[id] = {
+            ...latest,
+            ...completed,
+            id,
+            version: Math.max(latest?.version ?? 0, completed.version ?? 0),
+          }
+        }
+        return { downloadTasks: tasks }
+      })
     } catch (error: any) {
       setStatus(`${t.modelRepo.queryFailed}${typeof error === 'string' ? error : t.modelRepo.networkError}`)
     } finally {

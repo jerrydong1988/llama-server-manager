@@ -16,7 +16,7 @@ require.extensions['.ts'] = function loadTs(module, filename) {
   module._compile(output, filename)
 }
 
-const { mergeRestoredDownloadTask } = require(path.join('..', 'src', 'store', 'downloadMerge.ts'))
+const { mergeRestoredDownloadTask, restoredDownloadStatus, restoredDownloadTimestamp } = require(path.join('..', 'src', 'store', 'downloadMerge.ts'))
 
 const existingActive = {
   id: 'task-a',
@@ -83,5 +83,28 @@ const restoredOnly = mergeRestoredDownloadTask(
 assert.strictEqual(restoredOnly.status, 'active')
 assert.strictEqual(restoredOnly.runId, 'run-b')
 assert.strictEqual(restoredOnly.version, 0)
+
+assert.strictEqual(restoredDownloadStatus('not-a-real-status', 'also-unknown'), 'queued')
+assert.strictEqual(restoredDownloadTimestamp(1_700_000_000), 1_700_000_000_000)
+assert.strictEqual(restoredDownloadTimestamp(1_700_000_000_000), 1_700_000_000_000)
+
+const existingCancelled = {
+  ...existingActive,
+  status: 'cancelled',
+  version: 4,
+  runId: 'run-cancelled',
+}
+const cancelledMerge = mergeRestoredDownloadTask(
+  existingCancelled,
+  { ...olderPersistedFile, version: 4, status: 'active', run_id: 'run-restored' },
+  {
+    repoId: 'repo-a',
+    source: 'huggingface',
+    saveDir: 'models',
+    entryStatus: 'active',
+  },
+)
+assert.strictEqual(cancelledMerge.status, 'cancelled')
+assert.strictEqual(cancelledMerge.runId, 'run-cancelled')
 
 console.log('download restore merge regression passed')

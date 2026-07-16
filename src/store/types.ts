@@ -182,6 +182,9 @@ export interface DownloadProgress {
   error?: string
   version?: number
   remoteChanged?: boolean
+  createdAt?: number
+  updatedAt?: number
+  completedAt?: number
 }
 
 export interface DownloadQueueEntry {

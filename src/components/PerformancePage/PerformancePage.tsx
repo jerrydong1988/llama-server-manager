@@ -65,19 +65,16 @@ export default function PerformancePage() {
   const labels = useMemo(() => getPerformanceLabels(lang), [lang])
   const speculativeLabels = useMemo(() => getSpeculativeDecodingLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
-  const monitoringFramesByInstance = useAppStore(state => state.monitoringFramesByInstance)
-  const monitoringCurrentByInstance = useAppStore(state => state.monitoringCurrentByInstance)
-  const runningTasksByInstance = useAppStore(state => state.runningTasksByInstance)
-  const lastCompletedTaskByInstance = useAppStore(state => state.lastCompletedTaskByInstance)
   const running = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
   const [selectedInstanceId, setSelectedInstanceId] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
   const [overview, setOverview] = useState<TelemetryOverview>(emptyOverview)
   const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
-  const [samples, setSamples] = useState<TelemetrySampleSummary[]>([])
-  const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
-  const [analysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
-  const [diagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
+  const [loadedSamples, setSamples] = useState<TelemetrySampleSummary[]>([])
+  const [loadedRequests, setRequests] = useState<InferenceRequestSummary[]>([])
+  const [loadedAnalysis, setAnalysis] = useState<TelemetrySessionAnalysis | null>(null)
+  const [loadedDiagnostics, setDiagnostics] = useState<DiagnosticFinding[]>([])
+  const [detailSessionId, setDetailSessionId] = useState('')
   const [loading, setLoading] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
   const [trendRange, setTrendRange] = useState<'1m' | '5m' | '15m' | '1h'>('5m')
@@ -85,6 +82,11 @@ export default function PerformancePage() {
   const selectedSessionIdRef = useRef('')
   const telemetryInFlightRef = useRef(false)
   const detailInFlightRef = useRef(new Set<string>())
+  const detailReady = Boolean(selectedSessionId) && detailSessionId === selectedSessionId
+  const samples = detailReady ? loadedSamples : []
+  const requests = detailReady ? loadedRequests : []
+  const analysis = detailReady ? loadedAnalysis : null
+  const diagnostics = detailReady ? loadedDiagnostics : []
 
   const selectedSession = sessions.find(session => session.id === selectedSessionId)
   const selectedInstance = running.find(instance => instance.id === selectedInstanceId)
@@ -95,15 +97,13 @@ export default function PerformancePage() {
       ? null
       : running.find(instance => instance.id === selectedSession.instance_id) || null
     : running.find(instance => instance.id === selectedInstanceId) || null
-  const activeTasks = liveTargetInstance ? runningTasksByInstance[liveTargetInstance.id] || [] : []
-  const lastCompletedTask = liveTargetInstance
-    ? lastCompletedTaskByInstance[liveTargetInstance.id] || null
-    : null
-  const currentFrame = liveTargetInstance
-    ? monitoringCurrentByInstance[liveTargetInstance.id] || null
-    : null
+  const liveTargetId = liveTargetInstance?.id
+  const activeTasks = useAppStore(state => liveTargetId ? state.runningTasksByInstance[liveTargetId] : undefined) || []
+  const lastCompletedTask = useAppStore(state => liveTargetId ? state.lastCompletedTaskByInstance[liveTargetId] : undefined) || null
+  const currentFrame = useAppStore(state => liveTargetId ? state.monitoringCurrentByInstance[liveTargetId] : undefined) || null
+  const selectedInstanceFrames = useAppStore(state => liveTargetId ? state.monitoringFramesByInstance[liveTargetId] : undefined) || []
   const liveFrames = liveTargetInstance
-    ? (monitoringFramesByInstance[liveTargetInstance.id] || []).filter(frame => (
+    ? selectedInstanceFrames.filter(frame => (
         !selectedSession || frame.sessionId === selectedSession.id
       ))
     : []
@@ -149,6 +149,7 @@ export default function PerformancePage() {
       setRequests(detail.requests)
       setAnalysis(detail.analysis)
       setDiagnostics(detail.diagnostics)
+      setDetailSessionId(sessionId)
       setTelemetryError(null)
     } catch (error) {
       if (selectedSessionIdRef.current === sessionId) {
@@ -177,11 +178,12 @@ export default function PerformancePage() {
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
+    setDetailSessionId('')
+    setSamples([])
+    setRequests([])
+    setAnalysis(null)
+    setDiagnostics([])
     if (!selectedSessionId) {
-      setSamples([])
-      setRequests([])
-      setAnalysis(null)
-      setDiagnostics([])
       return
     }
     void refreshSelectedSessionDetails(selectedSessionId)
@@ -197,9 +199,14 @@ export default function PerformancePage() {
   }, [selectedSession])
 
   const historicalAnchor = selectedSession?.stopped_at || Date.now()
-  const selectedOverviewSamples = overview.latest_samples.filter(sample => (
-    sample.instance_id === (selectedSession?.instance_id || selectedInstance?.id)
-  ))
+  const selectedOverviewSamples = useMemo(
+    () => overview.latest_samples
+      .filter(sample => selectedSession
+        ? sample.session_id === selectedSession.id
+        : sample.instance_id === selectedInstance?.id)
+      .sort((left, right) => left.ts - right.ts),
+    [overview.latest_samples, selectedInstance?.id, selectedSession],
+  )
   const trendSamples = useMemo(
     () => filterSamplesByRange(
       samples.length > 0 ? samples : selectedOverviewSamples,
@@ -457,10 +464,10 @@ export default function PerformancePage() {
                 )}
                 <StatusTile
                   label={labels.queuePressure}
-                  value={`${pressure.percent}%`}
+                  value={pressure.percent == null ? '--' : `${pressure.percent}%`}
                   detail={formatRequestPressureDetail(pressure, labels)}
                   icon={<Zap className="h-5 w-5" />}
-                  tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : 'emerald'}
+                  tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : pressure.level === 'unknown' ? 'blue' : 'emerald'}
                   className="py-3"
                 />
               </div>

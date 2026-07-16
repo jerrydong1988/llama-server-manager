@@ -54,6 +54,7 @@ const ConfigPage = () => {
   const mountedRef = useRef(true)
   const prevQuery = useRef('')
   const committedModelPathRef = useRef('')
+  const editRevisionRef = useRef(0)
   const saveFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -91,10 +92,12 @@ const ConfigPage = () => {
       const next = { ...defaultInstanceConfig(), ...inst.config }
       setLocal(next)
       setBaseline(next)
+      editRevisionRef.current = 0
       committedModelPathRef.current = normalizeModelPath(next.model_path)
     } else {
       setLocal(null)
       setBaseline(null)
+      editRevisionRef.current = 0
       committedModelPathRef.current = ''
     }
   }, [activeConfigInstanceId, inst?.id])
@@ -107,6 +110,7 @@ const ConfigPage = () => {
   }, [activeConfigInstanceId])
 
   const set = (key: keyof InstanceConfig, value: any) => {
+    editRevisionRef.current += 1
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
     setLocal(current => (current ? { ...current, [key]: value } : current))
@@ -150,6 +154,7 @@ const ConfigPage = () => {
     const mmproj = models.find(model => pathDirname(model.path) === directory && model.file_type === 'mmproj')
     const candidate = { ...local, model_path: modelPath, mmproj_path: mmproj?.path ?? '' }
     const normalized = normalizeConfigForSelectedModel(candidate, selectedModel)
+    editRevisionRef.current += 1
     committedModelPathRef.current = normalizedPath
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
@@ -180,6 +185,7 @@ const ConfigPage = () => {
     const normalized = modelPathChanged
       ? normalizeConfigForSelectedModel(local, currentModel)
       : normalizeInstanceConfig(local, currentModel)
+    const saveRevision = editRevisionRef.current
     committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
     setLocal(normalized.config)
     setSaving(true)
@@ -195,12 +201,17 @@ const ConfigPage = () => {
     if (!mountedRef.current || useAppStore.getState().activeConfigInstanceId !== inst.id) return
     const persistedConfig = useAppStore.getState().instances
       .find(item => item.id === inst.id)?.config ?? normalized.config
-    committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
-    setLocal(persistedConfig)
-    setSaved(true)
     setBaseline(persistedConfig)
-    setSaveWarnings(validateConfig(persistedConfig, currentModel, engine))
-    setVectorCleanupChanges([])
+    if (editRevisionRef.current === saveRevision) {
+      committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
+      setLocal(persistedConfig)
+      setSaved(true)
+      setSaveWarnings(validateConfig(persistedConfig, currentModel, engine))
+      setVectorCleanupChanges([])
+    } else {
+      setSaved(false)
+      setSaveWarnings([])
+    }
 
     saveFeedbackTimerRef.current = setTimeout(() => {
       if (mountedRef.current) {
@@ -287,6 +298,7 @@ const ConfigPage = () => {
     if (!local) {
       return
     }
+    editRevisionRef.current += 1
     setLastTemplateSnapshot({ templateId: template.id, templateTitle: template.title, config: { ...local } })
     setLocal({ ...local, ...template.changes })
     setAppliedTemplateId(template.id)
@@ -299,6 +311,7 @@ const ConfigPage = () => {
     if (!lastTemplateSnapshot) {
       return
     }
+    editRevisionRef.current += 1
     setLocal({ ...lastTemplateSnapshot.config })
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)

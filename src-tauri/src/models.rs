@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -716,6 +716,7 @@ pub struct AppState {
     pub download_last_inflight_persist: Mutex<Instant>,
     pub download_scheduler_lock: Mutex<()>,
     pub download_inflight_lock: Mutex<()>,
+    pub download_shutting_down: AtomicBool,
     pub download_active_file_slots: AtomicUsize,
     pub download_slot_notify: Arc<tokio::sync::Notify>,
     pub download_max_concurrent: Mutex<usize>,
@@ -729,6 +730,7 @@ pub struct AppState {
     pub proxy_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub proxy_bound_addr: Mutex<Option<String>>,
     pub proxy_last_error: Mutex<Option<String>>,
+    pub proxy_lifecycle_lock: tokio::sync::Mutex<()>,
     pub restored_runtime_instances: Mutex<std::collections::HashSet<String>>,
 }
 

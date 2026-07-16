@@ -14,6 +14,7 @@ const entry = `
     buildLiveThroughput,
     buildRequestPressure,
     buildResourceSignals,
+    buildServiceStatus,
     formatRequestPressureDetail,
     buildTelemetryThroughputPoints,
     mergeThroughputPoints,
@@ -229,6 +230,14 @@ const entry = `
     ['session-b'],
     'a delayed frame from an older session must not replace the current session',
   )
+  assert.deepEqual(
+    appendMonitoringFrame(
+      [frame({ sessionId: null, sessionStartedAt: 1000, ts: 2000 })],
+      frame({ sessionId: null, sessionStartedAt: 3000, ts: 3000 }),
+    ).map(point => point.sessionStartedAt),
+    [3000],
+    'session start time must separate runs when an older backend omitted session IDs',
+  )
 
   assert.deepEqual(buildRequestPressure(1, 0, 4), {
     active: 1,
@@ -237,7 +246,8 @@ const entry = `
     percent: 25,
     level: 'normal',
   })
-  assert.equal(buildRequestPressure(1, 0).percent, 0)
+  assert.equal(buildRequestPressure(1, 0).percent, null)
+  assert.equal(buildRequestPressure(1, 0).level, 'unknown')
   assert.equal(buildRequestPressure(1, 1, 4).level, 'high')
   assert.equal(
     formatRequestPressureDetail(
@@ -277,6 +287,25 @@ const entry = `
     'AMD Radeon(TM) 8060S Graphics',
     'historical sessions must display the persisted GPU model name',
   )
+
+  const boundedFleet = buildFleetThroughputSeries(
+    { a: [frame({ ts: 1000, throughput: 99 }), frame({ ts: 5000, throughput: 10 })] },
+    { a: frame({ ts: 5000, throughput: 10 }) },
+    ['a'],
+    4000,
+  )
+  assert.deepEqual(boundedFleet.points.map(point => point.ts), [5000])
+
+  assert.deepEqual(
+    buildServiceStatus({
+      instances: [],
+      downloads: [],
+      logs: [{ id: 'old', instanceId: 'a', timestamp: 1000, text: 'fatal error' }],
+      now: 10 * 60 * 1000,
+    }),
+    { status: 'healthy', alertCount: 0 },
+    'old log history must not keep the current service state critical forever',
+  )
 `
 
 const bundled = esbuild.buildSync({
@@ -315,7 +344,10 @@ for (const source of [performanceSource, bigScreenSource]) {
   assert.doesNotMatch(source, /listen<PerfUpdateEvent>/, 'views must not register page-local task listeners')
 }
 assert.match(performanceSource, /monitoringFramePoints/, 'performance view must project selected-instance frames')
+assert.match(performanceSource, /const detailReady = Boolean\(selectedSessionId\) && detailSessionId === selectedSessionId/, 'telemetry detail state must be bound to the selected session before rendering')
+assert.match(performanceSource, /sample\.session_id === selectedSession\.id/, 'historical fallback samples must belong to the selected session')
 assert.match(bigScreenSource, /buildFleetThroughputSeries/, 'wallboard must use workload-aware fleet aggregation')
+assert.match(bigScreenSource, /const pressureFrames = inferenceFrames\.length > 0 \? inferenceFrames : currentFrames/, 'mixed workload pressure must use one consistent numerator and capacity population')
 assert.match(runtimeEventsSource, /registerListener<MonitoringFrame>\(store, 'monitoring-frame'/, 'monitoring frames must be registered once at application scope')
 assert.match(runtimeEventsSource, /get_monitoring_series/, 'the global store must hydrate the backend timeline')
 assert.match(monitoringSource, /FRAME_INTERVAL_MS: i64 = 1_000/, 'backend monitoring must use one-second canonical buckets')

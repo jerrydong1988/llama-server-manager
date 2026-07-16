@@ -41,6 +41,12 @@ assert.match(
 )
 assert.match(configPageSource, /disabled=\{!inst \|\| saving\}/)
 assert.match(configPageSource, /saving \? t\.configPage\.saving :/)
+assert.match(configPageSource, /const editRevisionRef = useRef\(0\)/)
+assert.match(
+  configPageSource,
+  /const saveRevision = editRevisionRef\.current[\s\S]*if \(editRevisionRef\.current === saveRevision\)/,
+  'a completed save must not replace local fields edited while persistence was in flight',
+)
 
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {
   const localeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'i18n', locale), 'utf8')

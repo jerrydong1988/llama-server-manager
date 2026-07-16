@@ -41,10 +41,15 @@ fn persist_global_config_unlocked(
         }
         return Ok(false);
     }
+    let primary_is_valid = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|contents| serde_json::from_str::<GlobalConfig>(&contents).ok())
+        .is_some();
+    let backup_path = config_dir.join("instances.json.bak");
     crate::persistence::atomic_write(
         &path,
         json.as_bytes(),
-        Some(&config_dir.join("instances.json.bak")),
+        primary_is_valid.then_some(backup_path.as_path()),
     )
     .map_err(|error| format!("保存失败: {error}"))?;
     Ok(true)
@@ -66,10 +71,7 @@ where
 {
     let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
-    let path = config_dir.join("instances.json");
-    let json = std::fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {}", e))?;
-    let mut global: GlobalConfig =
-        serde_json::from_str(&json).map_err(|e| format!("解析配置失败: {}", e))?;
+    let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     update_fn(&mut global);
     persist_global_config_unlocked(&config_dir, &global).map(|_| ())
 }
@@ -96,6 +98,33 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
             .and_then(|backup| serde_json::from_str(&backup).ok())
             .unwrap_or_else(default_global_config)
     })
+}
+
+fn load_global_config_for_update_unlocked(
+    config_dir: &std::path::Path,
+) -> Result<GlobalConfig, String> {
+    let primary_path = config_dir.join("instances.json");
+    let backup_path = config_dir.join("instances.json.bak");
+    let primary = std::fs::read_to_string(&primary_path);
+    if let Ok(contents) = &primary {
+        if let Ok(config) = serde_json::from_str::<GlobalConfig>(contents) {
+            return Ok(config);
+        }
+    }
+
+    if let Ok(contents) = std::fs::read_to_string(&backup_path) {
+        let config = serde_json::from_str::<GlobalConfig>(&contents)
+            .map_err(|error| format!("解析配置备份失败: {error}"))?;
+        crate::persistence::atomic_write(&primary_path, contents.as_bytes(), None)
+            .map_err(|error| format!("修复主配置失败: {error}"))?;
+        return Ok(config);
+    }
+
+    match primary {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(default_global_config()),
+        Err(error) => Err(format!("读取配置失败: {error}")),
+        Ok(_) => Err("主配置损坏且没有有效备份".into()),
+    }
 }
 
 /// Reads config from disk and resolves paths without AppState so main.rs setup() can call it early.
@@ -236,7 +265,12 @@ pub async fn save_config(
         // concurrent start/stop can persist newer state and then be overwritten here.
         let running_snapshot = state.running.lock().unwrap().clone();
         let engine_names = state.engine_names.lock().unwrap().clone();
-        let mut global = load_global_config_file(&config_dir);
+        let mut global = load_global_config_for_update_unlocked(&config_dir).map_err(|error| {
+            AppError::new("CONFIG_RECOVERY_FAILED", error, true).with_context(
+                "path",
+                config_dir.join("instances.json").display().to_string(),
+            )
+        })?;
         apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
         persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
             AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
@@ -472,6 +506,46 @@ mod tests {
         assert_eq!(
             loaded.download_max_concurrent,
             expected.download_max_concurrent
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn update_load_repairs_corrupt_primary_without_destroying_valid_backup() {
+        let dir = temp_config_dir("backup-repair-for-update");
+        let expected = sample_config();
+        let backup_json = serde_json::to_string_pretty(&expected).unwrap();
+        std::fs::write(dir.join("instances.json"), "{not-json").unwrap();
+        std::fs::write(dir.join("instances.json.bak"), &backup_json).unwrap();
+
+        let mut loaded = load_global_config_for_update_unlocked(&dir).unwrap();
+
+        assert_eq!(loaded.default_engine_id, expected.default_engine_id);
+        assert_eq!(
+            serde_json::from_str::<GlobalConfig>(
+                &std::fs::read_to_string(dir.join("instances.json")).unwrap()
+            )
+            .unwrap()
+            .last_tab,
+            expected.last_tab
+        );
+        assert_eq!(
+            serde_json::from_str::<GlobalConfig>(
+                &std::fs::read_to_string(dir.join("instances.json.bak")).unwrap()
+            )
+            .unwrap()
+            .last_tab,
+            expected.last_tab
+        );
+
+        loaded.dark_mode = true;
+        assert!(persist_global_config_unlocked(&dir, &loaded).unwrap());
+        assert!(
+            serde_json::from_str::<GlobalConfig>(
+                &std::fs::read_to_string(dir.join("instances.json.bak")).unwrap()
+            )
+            .is_ok(),
+            "a repaired update must never rotate corrupt JSON into the backup"
         );
         let _ = std::fs::remove_dir_all(dir);
     }

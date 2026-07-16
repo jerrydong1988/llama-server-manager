@@ -800,6 +800,7 @@ pub async fn save_proxy_config(
     config: ProxyConfig,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyConfig, String> {
+    let _transition = state.proxy_lifecycle_lock.lock().await;
     *state.proxy_config.lock().unwrap() = config.clone();
     update_and_persist(&state, |global| {
         global.proxy_config = config.clone();
@@ -826,7 +827,7 @@ pub async fn test_proxy_route(
         .ok_or_else(|| "no running instance matches the requested model".to_string())
 }
 
-pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
+async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
     let state = app.state::<AppState>();
     discard_finished_proxy_task(state.inner()).await;
     if state.proxy_shutdown.lock().unwrap().is_some() {
@@ -884,11 +885,19 @@ pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, S
     Ok(proxy_status_from_state(&state))
 }
 
+pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
+    let app_for_start = app.clone();
+    let state = app.state::<AppState>();
+    let _transition = state.proxy_lifecycle_lock.lock().await;
+    start_proxy_locked(app_for_start).await
+}
+
 pub async fn start_proxy(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
     start_proxy_for_app(app).await
 }
 
 pub async fn stop_proxy(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
+    let _transition = state.proxy_lifecycle_lock.lock().await;
     shutdown_proxy_runtime(state.inner()).await?;
     {
         let mut config = state.proxy_config.lock().unwrap();
@@ -905,12 +914,14 @@ pub async fn restart_proxy(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ProxyStatus, String> {
+    let _transition = state.proxy_lifecycle_lock.lock().await;
     shutdown_proxy_runtime(state.inner()).await?;
-    start_proxy_for_app(app).await
+    start_proxy_locked(app).await
 }
 
 pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(state) = app.try_state::<AppState>() {
+        let _transition = state.proxy_lifecycle_lock.lock().await;
         shutdown_proxy_runtime(state.inner()).await
     } else {
         Ok(())
