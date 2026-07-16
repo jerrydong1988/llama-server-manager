@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../lib/ipc'
 import { Activity, AlertTriangle, Copy, Plus, RefreshCw, Route, Save, Server, Square, Trash2, Zap } from 'lucide-react'
 import { useAppStore } from '../store'
 import { formatHostPort, httpUrl } from '../utils/network'
 import { useI18n } from '../i18n'
+import { getProxyLabels } from '../i18n/pageLabels'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
 
 type ProxyRoute = {
@@ -179,7 +180,6 @@ function endpointUrl(boundAddr: string, config: ProxyConfig) {
 
 export default function ProxyPage() {
   const { lang } = useI18n()
-  const zh = lang === 'zh-CN'
   const instances = useAppStore(state => state.instances)
   const [config, setConfig] = useState<ProxyConfig>(defaultConfig)
   const [draft, setDraft] = useState<ProxyConfig>(defaultConfig)
@@ -192,48 +192,7 @@ export default function ProxyPage() {
   const [notice, setNotice] = useState('')
   const [commandsReady, setCommandsReady] = useState(true)
 
-  const labels = {
-    title: zh ? '\u5b9e\u4f8b\u8def\u7531' : 'Instance Routing',
-    subtitle: zh ? '\u5bf9\u5916\u63d0\u4f9b\u7edf\u4e00 OpenAI \u517c\u5bb9\u5165\u53e3\uff0c\u6309\u6a21\u578b\u540d\u6216\u522b\u540d\u5206\u53d1\u5230\u540e\u7aef llama-server \u5b9e\u4f8b\u3002' : 'Expose one OpenAI-compatible endpoint and route requests to managed llama-server instances by model name or alias.',
-    notReady: zh ? '\u540e\u7aef\u8def\u7531\u547d\u4ee4\u6682\u65f6\u4e0d\u53ef\u7528\uff0c\u8bf7\u5148\u68c0\u67e5\u7f16\u8bd1\u7248\u672c\u3002' : 'Routing commands are unavailable in this build. Check the compiled version first.',
-    refresh: zh ? '\u5237\u65b0' : 'Refresh',
-    save: zh ? '\u4fdd\u5b58' : 'Save',
-    start: zh ? '\u542f\u52a8' : 'Start',
-    stop: zh ? '\u505c\u6b62' : 'Stop',
-    endpoint: zh ? 'API \u5165\u53e3' : 'API Endpoint',
-    status: zh ? '\u72b6\u6001' : 'Status',
-    running: zh ? '\u8fd0\u884c\u4e2d' : 'Running',
-    stopped: zh ? '\u5df2\u505c\u6b62' : 'Stopped',
-    requests: zh ? '\u53ef\u7528\u8def\u7531' : 'Active Routes',
-    connections: zh ? '\u5df2\u767b\u8bb0\u76ee\u6807' : 'Targets',
-    listen: zh ? '\u76d1\u542c\u5730\u5740' : 'Listen Address',
-    host: zh ? '\u4e3b\u673a' : 'Host',
-    port: zh ? '\u7aef\u53e3' : 'Port',
-    defaultTarget: zh ? '\u9ed8\u8ba4\u5b9e\u4f8b' : 'Default Instance',
-    noDefault: zh ? '\u6682\u4e0d\u6307\u5b9a' : 'None',
-    routeTable: zh ? '\u8def\u7531\u8868' : 'Route Table',
-    addRoute: zh ? '\u6dfb\u52a0\u8def\u7531' : 'Add Route',
-    targetList: zh ? '\u76ee\u6807\u5217\u8868' : 'Targets',
-    modelPattern: zh ? '\u5bf9\u5916\u6a21\u578b\u540d' : 'Public Model',
-    priority: zh ? '\u4f18\u5148\u7ea7' : 'Priority',
-    target: zh ? '\u76ee\u6807' : 'Target',
-    actions: zh ? '\u64cd\u4f5c' : 'Actions',
-    enabled: zh ? '\u542f\u7528' : 'Enabled',
-    disabled: zh ? '\u7981\u7528' : 'Disabled',
-    copied: zh ? '\u5df2\u590d\u5236\u7aef\u70b9' : 'Endpoint copied',
-    saved: zh ? '\u4ee3\u7406\u914d\u7f6e\u5df2\u4fdd\u5b58' : 'Proxy config saved',
-    targetFallback: zh ? '\u76ee\u6807\u6765\u81ea\u5f53\u524d\u5b9e\u4f8b\u5217\u8868\uff0c\u53ea\u6709\u8fd0\u884c\u4e2d\u5b9e\u4f8b\u4f1a\u88ab\u4ee3\u7406\u8def\u7531\u547d\u4e2d\u3002' : 'Targets come from the current instance list. Only running instances can receive proxied traffic.',
-    noRoutes: zh ? '\u5c1a\u672a\u914d\u7f6e\u8def\u7531\uff0c\u8bf7\u6c42\u5c06\u843d\u5230\u9ed8\u8ba4\u5b9e\u4f8b\u3002' : 'No routes configured. Requests will fall through to the default target.',
-    noTargets: zh ? '\u6682\u65e0\u53ef\u7528\u76ee\u6807\u3002' : 'No targets available.',
-    publicKey: zh ? '\u4ee3\u7406 API Key\uff08\u53ef\u9009\uff09' : 'Proxy API Key (optional)',
-    publicKeyRequired: zh ? '\u76d1\u542c\u975e\u672c\u673a\u5730\u5740\u65f6\u5fc5\u987b\u8bbe\u7f6e\u4ee3\u7406 API Key\u3002' : 'A proxy API key is required when listening on a non-local address.',
-    timeout: zh ? '\u8d85\u65f6\uff08\u6beb\u79d2\uff09' : 'Timeout (ms)',
-    lastError: zh ? '\u6700\u8fd1\u9519\u8bef' : 'Last Error',
-    keepAliveTitle: zh ? '\u540e\u53f0\u4fdd\u6d3b\u6a21\u5f0f' : 'Background keep-alive',
-    keepAliveDesc: zh
-      ? '\u6258\u76d8\u9000\u51fa\u65f6\u4fdd\u6301\u7ba1\u7406\u5668\u8fdb\u7a0b\u5728\u540e\u53f0\u8fd0\u884c\uff0c\u907f\u514d\u4e2d\u65ad\u5b9e\u4f8b\u8def\u7531\u3002\u5f53\u524d\u9636\u6bb5\u4e0d\u662f\u72ec\u7acb Windows \u670d\u52a1\u3002'
-      : 'Keep the manager process alive from the tray so the route is not interrupted. This phase is not a detached Windows service.',
-  }
+  const labels = useMemo(() => getProxyLabels(lang), [lang])
 
   const isLocalHost = (host: string) => ['', 'localhost', '127.0.0.1', '::1', '[::1]'].includes(host.trim())
   const requiresPublicKey = !isLocalHost(draft.host) && !draft.publicApiKey.trim()
@@ -395,8 +354,8 @@ export default function ProxyPage() {
               <StatusBadge tone={status.running ? 'emerald' : 'slate'}>
                 {status.running ? labels.running : labels.stopped}
               </StatusBadge>
-              {!commandsReady ? <Badge tone="amber">{zh ? '\u547d\u4ee4\u4e0d\u53ef\u7528' : 'Unavailable'}</Badge> : null}
-              {dirty ? <Badge tone="blue">{zh ? '\u672a\u4fdd\u5b58' : 'Unsaved'}</Badge> : null}
+              {!commandsReady ? <Badge tone="amber">{labels.unavailable}</Badge> : null}
+              {dirty ? <Badge tone="blue">{labels.unsaved}</Badge> : null}
             </div>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-500 dark:text-slate-400">{labels.subtitle}</p>
           </div>
@@ -621,10 +580,10 @@ export default function ProxyPage() {
                       <div className="mt-1 truncate font-mono text-xs text-slate-500 dark:text-slate-400" title={target.endpoint}>{target.endpoint}</div>
                     </div>
                     <StatusBadge tone={target.status === 'running' ? 'emerald' : target.status === 'stopped' ? 'slate' : 'amber'}>
-                      {target.status === 'running' ? labels.running : target.status === 'stopped' ? labels.stopped : zh ? '\u672a\u77e5' : 'Unknown'}
+                      {target.status === 'running' ? labels.running : target.status === 'stopped' ? labels.stopped : labels.unknown}
                     </StatusBadge>
                   </div>
-                  {target.alias ? <div className="mt-2 truncate text-xs text-slate-500 dark:text-slate-400" title={target.alias}>{zh ? '\u522b\u540d' : 'Alias'}: {target.alias}</div> : null}
+                  {target.alias ? <div className="mt-2 truncate text-xs text-slate-500 dark:text-slate-400" title={target.alias}>{labels.alias}: {target.alias}</div> : null}
                 </div>
               ))}
             </div>

@@ -41,8 +41,9 @@ jobs:
       - name: Audit Rust dependencies
         # Tauri 2 still depends on the upstream GTK3 stack on Linux, while
         # tauri-utils 2.9 uses urlpattern 0.3. Keep these exact advisories
-        # visible here until their upstream migrations land; new advisories
-        # remain unignored and therefore produce a new release-blocking signal.
+        # visible here until their upstream migrations land. The matching
+        # metadata and expiry live in .github/rustsec-allowlist.json; new
+        # advisories remain unignored and therefore block the release.
         uses: RustSec/audit-check@858dc40f52ca2b8570b7a997c1c4e35c6fc9a432
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

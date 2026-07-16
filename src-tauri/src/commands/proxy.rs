@@ -9,6 +9,7 @@ use axum::{
 };
 use futures_util::StreamExt;
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::LazyLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -490,14 +491,23 @@ fn proxy_request_is_authorized(config: &ProxyConfig, _path: &str, headers: &Head
     is_proxy_authorized(config, headers)
 }
 
+fn authorize_and_strip_proxy_credentials(config: &ProxyConfig, headers: &mut HeaderMap) -> bool {
+    if !proxy_request_is_authorized(config, "", headers) {
+        return false;
+    }
+    headers.remove("authorization");
+    headers.remove("x-api-key");
+    true
+}
+
 async fn proxy_auth_middleware(
     State(app): State<tauri::AppHandle>,
-    request: Request,
+    mut request: Request,
     next: Next,
 ) -> Response {
     let state = app.state::<AppState>();
     let config = state.proxy_config.lock().unwrap().clone();
-    if !proxy_request_is_authorized(&config, request.uri().path(), request.headers()) {
+    if !authorize_and_strip_proxy_credentials(&config, request.headers_mut()) {
         return plain_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     next.run(request).await
@@ -509,21 +519,49 @@ fn target_url(target: &ResolvedProxyTarget, uri: &Uri) -> String {
         .map(|pq| pq.as_str())
         .unwrap_or(uri.path());
     let prefix = target.api_prefix.trim_matches('/');
-    if prefix.is_empty()
+    let upstream_path = if prefix.is_empty()
         || original_path == format!("/{}", prefix)
         || original_path.starts_with(&format!("/{}/", prefix))
         || original_path.starts_with(&format!("/{}?", prefix))
     {
-        format!(
-            "http://{}:{}{}",
-            target.public.host, target.public.port, original_path
-        )
+        original_path.to_string()
     } else {
-        format!(
-            "http://{}:{}/{}{}",
-            target.public.host, target.public.port, prefix, original_path
+        format!("/{prefix}{original_path}")
+    };
+    crate::utils::http_url(&target.public.host, target.public.port, &upstream_path)
+}
+
+fn connection_header_tokens(headers: &HeaderMap) -> HashSet<String> {
+    headers
+        .get_all("connection")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn is_hop_by_hop_header(name: &str, connection_tokens: &HashSet<String>) -> bool {
+    connection_tokens.contains(name)
+        || matches!(
+            name,
+            "connection"
+                | "keep-alive"
+                | "proxy-authenticate"
+                | "proxy-authorization"
+                | "te"
+                | "trailer"
+                | "transfer-encoding"
+                | "upgrade"
         )
-    }
+}
+
+fn should_forward_request_header(name: &str, connection_tokens: &HashSet<String>) -> bool {
+    !matches!(
+        name,
+        "host" | "content-length" | "authorization" | "x-api-key"
+    ) && !is_hop_by_hop_header(name, connection_tokens)
 }
 
 fn plain_response(status: StatusCode, message: &str) -> Response {
@@ -594,10 +632,6 @@ async fn proxy_openai(
 ) -> Response {
     let state = app.state::<AppState>();
     let proxy_config = state.proxy_config.lock().unwrap().clone();
-    if !is_proxy_authorized(&proxy_config, &headers) {
-        return plain_response(StatusCode::UNAUTHORIZED, "unauthorized");
-    }
-
     let requested_model = requested_model_from_body(&body);
     let vector_metadata = vector_request_metadata(uri.path(), &body);
     let target = match resolve_proxy_target(
@@ -636,12 +670,10 @@ async fn proxy_openai(
     let mut request = PROXY_HTTP_CLIENT
         .request(reqwest_method, target_url(&target, &uri))
         .timeout(Duration::from_millis(proxy_config.timeout_ms.max(1_000)));
+    let connection_tokens = connection_header_tokens(&headers);
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_ascii_lowercase();
-        if matches!(
-            lower.as_str(),
-            "host" | "content-length" | "connection" | "authorization"
-        ) {
+        if !should_forward_request_header(&lower, &connection_tokens) {
             continue;
         }
         request = request.header(name.as_str(), value.as_bytes());
@@ -676,12 +708,10 @@ async fn proxy_openai(
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut builder = Response::builder().status(status);
+    let response_connection_tokens = connection_header_tokens(response.headers());
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
-        if matches!(
-            lower.as_str(),
-            "connection" | "content-length" | "transfer-encoding"
-        ) {
+        if lower == "content-length" || is_hop_by_hop_header(&lower, &response_connection_tokens) {
             continue;
         }
         if let (Ok(header_name), Ok(header_value)) = (
@@ -762,12 +792,10 @@ fn proxy_router(app: tauri::AppHandle) -> Router {
         .with_state(app)
 }
 
-#[tauri::command]
 pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<ProxyConfig, String> {
     Ok(state.proxy_config.lock().unwrap().clone())
 }
 
-#[tauri::command]
 pub async fn save_proxy_config(
     config: ProxyConfig,
     state: tauri::State<'_, AppState>,
@@ -779,19 +807,16 @@ pub async fn save_proxy_config(
     Ok(config)
 }
 
-#[tauri::command]
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
     Ok(proxy_status_from_state(&state))
 }
 
-#[tauri::command]
 pub async fn list_proxy_targets(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ProxyTarget>, String> {
     Ok(list_proxy_targets_inner(&state))
 }
 
-#[tauri::command]
 pub async fn test_proxy_route(
     model: Option<String>,
     state: tauri::State<'_, AppState>,
@@ -859,12 +884,10 @@ pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, S
     Ok(proxy_status_from_state(&state))
 }
 
-#[tauri::command]
 pub async fn start_proxy(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
     start_proxy_for_app(app).await
 }
 
-#[tauri::command]
 pub async fn stop_proxy(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
     shutdown_proxy_runtime(state.inner()).await?;
     {
@@ -878,7 +901,6 @@ pub async fn stop_proxy(state: tauri::State<'_, AppState>) -> Result<ProxyStatus
     Ok(proxy_status_from_state(&state))
 }
 
-#[tauri::command]
 pub async fn restart_proxy(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -897,9 +919,75 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{InstanceConfig, ProxyConfig};
+    use crate::models::{InstanceConfig, ProxyConfig, ProxyTarget};
     use crate::vector_policy::ModelWorkload;
-    use axum::http::HeaderMap;
+    use axum::http::{HeaderMap, Uri};
+
+    #[test]
+    fn target_url_brackets_ipv6_and_preserves_prefix_and_query() {
+        let target = super::ResolvedProxyTarget {
+            public: ProxyTarget {
+                instance_id: "ipv6".into(),
+                name: "IPv6".into(),
+                alias: "".into(),
+                host: "::1".into(),
+                port: 8080,
+                running: true,
+            },
+            api_key: String::new(),
+            api_prefix: "v1".into(),
+            telemetry_session_id: None,
+            workload: ModelWorkload::Inference,
+        };
+        let uri: Uri = "/models?limit=1".parse().unwrap();
+
+        assert_eq!(
+            super::target_url(&target, &uri),
+            "http://[::1]:8080/v1/models?limit=1"
+        );
+    }
+
+    #[test]
+    fn public_credentials_and_connection_headers_are_never_forwarded() {
+        let mut headers = HeaderMap::new();
+        headers.insert("connection", "keep-alive, x-private-hop".parse().unwrap());
+        let tokens = super::connection_header_tokens(&headers);
+
+        assert!(!super::should_forward_request_header(
+            "authorization",
+            &tokens
+        ));
+        assert!(!super::should_forward_request_header("x-api-key", &tokens));
+        assert!(!super::should_forward_request_header("keep-alive", &tokens));
+        assert!(!super::should_forward_request_header(
+            "x-private-hop",
+            &tokens
+        ));
+        assert!(super::should_forward_request_header(
+            "content-type",
+            &tokens
+        ));
+    }
+
+    #[test]
+    fn successful_proxy_authentication_consumes_public_credentials_once() {
+        let config = ProxyConfig {
+            public_api_key: "secret".into(),
+            ..ProxyConfig::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret".parse().unwrap());
+        headers.insert("x-api-key", "secret".parse().unwrap());
+        headers.insert("content-type", "application/json".parse().unwrap());
+
+        assert!(super::authorize_and_strip_proxy_credentials(
+            &config,
+            &mut headers
+        ));
+        assert!(!headers.contains_key("authorization"));
+        assert!(!headers.contains_key("x-api-key"));
+        assert!(headers.contains_key("content-type"));
+    }
 
     #[test]
     fn bind_error_mentions_background_keepalive_when_address_is_in_use() {
@@ -1050,5 +1138,85 @@ mod tests {
             "embedding",
             Some(ModelWorkload::Reranker)
         ));
+    }
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn get_proxy_config(
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<ProxyConfig> {
+        super::get_proxy_config(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn save_proxy_config(
+        config: ProxyConfig,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<ProxyConfig> {
+        super::save_proxy_config(config, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_proxy_status(
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<ProxyStatus> {
+        super::get_proxy_status(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn list_proxy_targets(
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<Vec<ProxyTarget>> {
+        super::list_proxy_targets(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn test_proxy_route(
+        model: Option<String>,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<ProxyTarget> {
+        super::test_proxy_route(model, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn start_proxy(app: tauri::AppHandle) -> crate::error::AppResult<ProxyStatus> {
+        super::start_proxy(app)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn stop_proxy(
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<ProxyStatus> {
+        super::stop_proxy(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn restart_proxy(
+        state: tauri::State<'_, AppState>,
+        app: tauri::AppHandle,
+    ) -> crate::error::AppResult<ProxyStatus> {
+        super::restart_proxy(state, app)
+            .await
+            .map_err(crate::error::AppError::from)
     }
 }

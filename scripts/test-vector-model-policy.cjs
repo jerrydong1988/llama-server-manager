@@ -345,6 +345,7 @@ assert.ok(
 )
 
 const configPageSource = readSource('src', 'components', 'ConfigPage.tsx')
+const configWorkspaceSource = readSource('src', 'components', 'ConfigPage', 'configWorkspace.ts')
 const applyPrimaryModelSource = section(configPageSource, 'const applyPrimaryModelPath', 'const pickModel')
 assert.match(applyPrimaryModelSource, /normalizeConfigForSelectedModel\(/, 'all primary model path commits must use atomic workload selection')
 assert.match(applyPrimaryModelSource, /setVectorCleanupChanges\(/, 'manual primary model paths must retain cleanup feedback')
@@ -356,7 +357,7 @@ assert.doesNotMatch(pickModelSource, /set\('model_path'/, 'primary model switchi
 const configDiffSource = section(configPageSource, 'const savedBaseline', 'const liveWarnings')
 assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must be filtered from the ordinary config diff')
 assert.match(configDiffSource, /isEqualValue\(local\[change\.key\],\s*change\.after\)/, 'manual edits after cleanup must remain visible in the ordinary diff')
-assert.match(configPageSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
+assert.match(configWorkspaceSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
 const saveSource = section(configPageSource, 'const save =', 'const sectionProps')
 assert.match(saveSource, /const normalized = modelPathChanged/, 'save must select normalization based on whether the model path changed')
 assert.match(saveSource, /modelPathChanged[\s\S]*normalizeConfigForSelectedModel/, 'save must treat a manually edited model path as an explicit model switch')

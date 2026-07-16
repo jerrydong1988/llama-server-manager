@@ -1,15 +1,15 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, File, Image, FolderOpen, ChevronRight, ChevronDown, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal } from 'lucide-react'
+import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { formatStartupCommand, maskStartupCommandSecrets } from '../store'
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../lib/ipc'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { useI18n } from '../i18n'
-import { isPathWithinRoot, normalizePath, pathJoin, pathDirname } from '../utils/path'
 import { formatHostPort } from '../utils/network'
 import { normalizeInstanceConfig } from '../modelPolicy'
-import type { Instance, ModelInfo } from '../store/types'
+import type { Instance } from '../store/types'
 import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
+import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
 
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 
@@ -29,7 +29,8 @@ const InstanceManager = () => {
   const setActiveTab = useAppStore(s => s.setActiveTab)
   const moveInstance = useAppStore(s => s.moveInstance)
   const renameInstance = useAppStore(s => s.renameInstance)
-  const { t, lang } = useI18n()
+  const { t } = useI18n()
+  const labels = t.instanceWorkspace
 
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCmdModal, setShowCmdModal] = useState('')
@@ -82,11 +83,11 @@ const InstanceManager = () => {
     inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error
 
   const healthText = (inst: Instance) => {
-    if (inst.status === 'stopped') return lang === 'zh-CN' ? '\u79bb\u7ebf' : 'Offline'
-    if (inst.status === 'error') return 'Error'
-    if (inst.healthCheck === 'ok') return lang === 'zh-CN' ? '\u6b63\u5e38' : 'Healthy'
-    if (inst.healthCheck === 'fail') return 'Fail'
-    return lang === 'zh-CN' ? '\u68c0\u67e5\u4e2d' : 'Pending'
+    if (inst.status === 'stopped') return labels.offline
+    if (inst.status === 'error') return t.instance.error
+    if (inst.healthCheck === 'ok') return labels.healthy
+    if (inst.healthCheck === 'fail') return t.downloadPage.failed
+    return labels.pending
   }
 
   const healthDotClass = (inst: Instance) => {
@@ -117,49 +118,6 @@ const InstanceManager = () => {
   const autoStartCount = instances.filter(inst => inst.config.auto_start).length
   const selectedInstance = filteredInstances.find(inst => inst.id === selectedInstanceId) || filteredInstances[0] || null
   const selectedIndex = selectedInstance ? filteredInstances.findIndex(inst => inst.id === selectedInstance.id) : -1
-  const labels = {
-    instances: lang === 'zh-CN' ? '\u5b9e\u4f8b' : 'instances',
-    running: lang === 'zh-CN' ? '\u8fd0\u884c\u4e2d' : 'running',
-    runningTitle: lang === 'zh-CN' ? '\u8fd0\u884c\u4e2d' : 'Running',
-    stoppedTitle: lang === 'zh-CN' ? '\u5df2\u505c\u6b62' : 'Stopped',
-    errored: lang === 'zh-CN' ? '\u5f02\u5e38' : 'Errored',
-    autoStart: lang === 'zh-CN' ? '\u81ea\u52a8\u542f\u52a8' : 'Auto Start',
-    all: lang === 'zh-CN' ? '\u5168\u90e8' : 'All',
-    offline: lang === 'zh-CN' ? '\u79bb\u7ebf' : 'Offline',
-    healthy: lang === 'zh-CN' ? '\u6b63\u5e38' : 'Healthy',
-    pending: lang === 'zh-CN' ? '\u68c0\u67e5\u4e2d' : 'Pending',
-    checkingPort: lang === 'zh-CN' ? '\u68c0\u67e5\u7aef\u53e3\u4e2d...' : 'Checking port...',
-    portAvailable: lang === 'zh-CN' ? '\u7aef\u53e3\u53ef\u7528' : 'Port is available',
-    portInUse: lang === 'zh-CN' ? '\u7aef\u53e3\u5df2\u88ab\u5360\u7528' : 'Port is already in use',
-    noEnginePrefix: lang === 'zh-CN' ? '\u5c1a\u672a\u68c0\u6d4b\u5230\u5f15\u64ce\uff0c\u8bf7\u5148\u524d\u5f80' : 'No engine detected yet. Please open',
-    noEngineSuffix: lang === 'zh-CN' ? '\u5e76\u6dfb\u52a0 llama-server\u3002' : 'and add a llama-server installation.',
-    searchPlaceholder: lang === 'zh-CN' ? '\u641c\u7d22\u5b9e\u4f8b\u3001\u6a21\u578b\u3001\u5f15\u64ce\u3001\u7aef\u53e3...' : 'Search instances, model, engine, port...',
-    allEngines: lang === 'zh-CN' ? '\u6240\u6709\u5f15\u64ce' : 'All Engines',
-    name: lang === 'zh-CN' ? '\u540d\u79f0' : 'Name',
-    status: lang === 'zh-CN' ? '\u72b6\u6001' : 'Status',
-    health: lang === 'zh-CN' ? '\u5065\u5eb7' : 'Health',
-    uptime: lang === 'zh-CN' ? '\u8fd0\u884c\u65f6\u957f' : 'Uptime',
-    actions: lang === 'zh-CN' ? '\u64cd\u4f5c' : 'Actions',
-    rename: lang === 'zh-CN' ? '\u91cd\u547d\u540d' : 'Rename',
-    moveUp: lang === 'zh-CN' ? '\u4e0a\u79fb' : 'Move up',
-    moveDown: lang === 'zh-CN' ? '\u4e0b\u79fb' : 'Move down',
-    checking: lang === 'zh-CN' ? '\u6d4b\u8bd5\u4e2d...' : 'Checking...',
-    more: lang === 'zh-CN' ? '\u66f4\u591a' : 'More',
-    listTitle: lang === 'zh-CN' ? '\u5b9e\u4f8b\u5217\u8868' : 'Instance List',
-    details: lang === 'zh-CN' ? '\u5b9e\u4f8b\u8be6\u60c5' : 'Instance Details',
-    noSelection: lang === 'zh-CN' ? '\u9009\u62e9\u4e00\u4e2a\u5b9e\u4f8b\u67e5\u770b\u8fd0\u884c\u4fe1\u606f\u548c\u5feb\u6377\u64cd\u4f5c' : 'Select an instance to inspect runtime details and quick actions',
-    endpoint: lang === 'zh-CN' ? '\u8bbf\u95ee\u5730\u5740' : 'Endpoint',
-    modelPath: lang === 'zh-CN' ? '\u6a21\u578b\u8def\u5f84' : 'Model Path',
-    engine: lang === 'zh-CN' ? '\u5f15\u64ce' : 'Engine',
-    primaryActions: lang === 'zh-CN' ? '\u4e3b\u8981\u64cd\u4f5c' : 'Primary Actions',
-    quickActions: lang === 'zh-CN' ? '\u5feb\u6377\u64cd\u4f5c' : 'Quick Actions',
-    order: lang === 'zh-CN' ? '\u987a\u5e8f' : 'Order',
-    autoStartHint: lang === 'zh-CN' ? '\u968f\u5e94\u7528\u542f\u52a8\u65f6\u81ea\u52a8\u542f\u52a8\u6b64\u5b9e\u4f8b' : 'Start this instance automatically when the app starts',
-    selected: lang === 'zh-CN' ? '\u5f53\u524d\u9009\u4e2d' : 'Selected',
-    operationTarget: lang === 'zh-CN' ? '\u5f53\u524d\u64cd\u4f5c\u5b9e\u4f8b' : 'Current Operation Target',
-    operationTargetHint: lang === 'zh-CN' ? '\u53f3\u4fa7\u5feb\u6377\u64cd\u4f5c\u5c06\u4f5c\u7528\u4e8e\u8be5\u5b9e\u4f8b' : 'Right-side actions apply to this instance',
-  }
-
   useEffect(() => {
     if (selectedInstanceId && filteredInstances.some(inst => inst.id === selectedInstanceId)) return
     setSelectedInstanceId(filteredInstances[0]?.id || '')
@@ -818,104 +776,22 @@ const InstanceManager = () => {
       )}
 
       {showCreatePicker && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
-          <Surface className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-800 dark:bg-slate-950/90">
-              <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{t.modelRepo.selectFromRepo}</h3>
-              <Button onClick={() => setShowCreatePicker(false)} variant="subtle" size="icon" aria-label="Close"><X className="h-5 w-5" /></Button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              {(function TreeRenderer() {
-                interface TNode { name: string; path: string; isDir: boolean; children?: Map<string, TNode>; model?: ModelInfo }
-                function buildTree(rootDir: string): TNode {
-                  const normDir = normalizePath(rootDir)
-                  const root: TNode = { name: rootDir, path: normDir, isDir: true, children: new Map() }
-                  for (const model of models) {
-                    const path = normalizePath(model.path)
-                    if (!isPathWithinRoot(path, normDir)) continue
-                    const rel = path.slice(normDir.length).replace(/^\/+/, '')
-                    if (!rel) continue
-                    const parts = rel.split('/')
-                    let cur = root
-                    for (let i = 0; i < parts.length; i++) {
-                      if (i === parts.length - 1) {
-                        cur.children!.set(parts[i], { name: parts[i], path: model.path, isDir: false, model })
-                      } else {
-                        if (!cur.children!.has(parts[i])) {
-                          cur.children!.set(parts[i], { name: parts[i], path: pathJoin(cur.path, parts[i]), isDir: true, children: new Map() })
-                        }
-                        cur = cur.children!.get(parts[i])!
-                      }
-                    }
-                  }
-                  return root
-                }
-
-                const togglePath = (path: string) => {
-                  const next = new Set(pickerCollapsed)
-                  if (next.has(path)) next.delete(path)
-                  else next.add(path)
-                  setPickerCollapsed(next)
-                }
-
-                const pickForCreate = (model: ModelInfo) => {
-                  const dir = pathDirname(model.path)
-                  const mmproj = models.find(entry => pathDirname(entry.path) === dir && entry.file_type === 'mmproj')
-                  setNewInst(prev => ({ ...prev, modelId: model.id, modelPath: model.path, mmprojPath: mmproj?.path || '' }))
-                  setShowCreatePicker(false)
-                }
-
-                function renderNode(node: TNode, depth: number): any {
-                  if (node.isDir) {
-                    const collapsed = pickerCollapsed.has(node.path)
-                    return (
-                      <div key={node.path}>
-                        <button
-                          onClick={() => togglePath(node.path)}
-                          style={{ paddingLeft: `${depth * 12 + 4}px` }}
-                          className="flex w-full items-center gap-1.5 rounded py-1 text-left text-xs hover:bg-slate-100 dark:hover:bg-slate-800"
-                        >
-                          {collapsed ? <ChevronRight className="h-3 w-3 shrink-0 text-slate-400" /> : <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />}
-                          <FolderOpen className="h-3 w-3 shrink-0 text-amber-500" />
-                          <span className="truncate font-medium">{node.name}</span>
-                        </button>
-                        {!collapsed && node.children && [...node.children.values()]
-                          .sort((a, b) => a.isDir !== b.isDir ? (a.isDir ? -1 : 1) : a.name.localeCompare(b.name))
-                          .map(child => renderNode(child, depth + 1))}
-                      </div>
-                    )
-                  }
-
-                  const model = node.model!
-                  if (model.file_type === 'mmproj') {
-                    return (
-                      <div key={node.path} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex items-center gap-2 py-1 pr-2 text-xs text-slate-500">
-                        <Image className="h-3 w-3 shrink-0 text-purple-500" />
-                        <span className="truncate flex-1">{model.name}</span>
-                        <span className="shrink-0 text-xs text-purple-400">{t.modelRepo.typeMmprojShort}</span>
-                      </div>
-                    )
-                  }
-
-                  return (
-                    <button
-                      key={node.path}
-                      onClick={() => pickForCreate(model)}
-                      style={{ paddingLeft: `${depth * 12 + 20}px` }}
-                      className="flex w-full items-center gap-2 rounded py-1 pr-2 text-left text-xs hover:bg-blue-50 dark:hover:bg-blue-950/30"
-                    >
-                      <File className="h-3 w-3 shrink-0 text-blue-500" />
-                      <span className="truncate flex-1">{model.name}</span>
-                      <span className="shrink-0 text-slate-400">{model.quant_type || ''}</span>
-                    </button>
-                  )
-                }
-
-                return modelDirs.map(dir => buildTree(dir)).map(tree => renderNode(tree, 0))
-              })()}
-            </div>
-          </Surface>
-        </div>
+        <InstanceModelPicker
+          models={models}
+          modelDirs={modelDirs}
+          collapsed={pickerCollapsed}
+          onToggle={(path) => setPickerCollapsed(current => {
+            const next = new Set(current)
+            if (next.has(path)) next.delete(path)
+            else next.add(path)
+            return next
+          })}
+          onPick={(model, mmprojPath) => {
+            setNewInst(current => ({ ...current, modelId: model.id, modelPath: model.path, mmprojPath }))
+            setShowCreatePicker(false)
+          }}
+          onClose={() => setShowCreatePicker(false)}
+        />
       )}
 
       {showCmdModal && (

@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../lib/ipc'
 import { message } from '@tauri-apps/plugin-dialog'
 import {
   loadAppBootstrap,

@@ -276,7 +276,7 @@ for (const source of [performanceSource, bigScreenSource]) {
 }
 assert.match(performanceSource, /monitoringFramePoints/, 'performance view must project selected-instance frames')
 assert.match(bigScreenSource, /buildFleetThroughputSeries/, 'wallboard must use workload-aware fleet aggregation')
-assert.match(runtimeEventsSource, /listen<MonitoringFrame>\('monitoring-frame'/, 'monitoring frames must be listened to once at application scope')
+assert.match(runtimeEventsSource, /registerListener<MonitoringFrame>\(store, 'monitoring-frame'/, 'monitoring frames must be registered once at application scope')
 assert.match(runtimeEventsSource, /get_monitoring_series/, 'the global store must hydrate the backend timeline')
 assert.match(monitoringSource, /FRAME_INTERVAL_MS: i64 = 1_000/, 'backend monitoring must use one-second canonical buckets')
 assert.match(monitoringSource, /items_per_second/, 'backend frames must expose vector item throughput')

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../lib/ipc'
 import {
   Activity,
   AlertTriangle,
@@ -15,6 +15,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useI18n } from '../i18n'
+import { getBigScreenLabels } from '../i18n/pageLabels'
 import { useAppStore } from '../store'
 import type {
   DownloadProgress,
@@ -51,8 +52,7 @@ const BIG_SCREEN_TELEMETRY_REFRESH_MS = 10000
 
 export default function BigScreenPage() {
   const { lang } = useI18n()
-  const zh = lang === 'zh-CN'
-  const labels = useMemo(() => getLabels(zh), [zh])
+  const labels = useMemo(() => getBigScreenLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
   const models = useAppStore(state => state.models)
   const engines = useAppStore(state => state.engines)
@@ -493,7 +493,7 @@ function InstanceWallRow({
   currentFrame,
 }: {
   instance: Instance
-  labels: ReturnType<typeof getLabels>
+  labels: ReturnType<typeof getBigScreenLabels>
   sessions: TelemetrySessionSummary[]
   currentFrame?: MonitoringFrame
 }) {
@@ -518,7 +518,7 @@ function InstanceWallRow({
   )
 }
 
-function DownloadWallRow({ task, labels }: { task: DownloadProgress; labels: ReturnType<typeof getLabels> }) {
+function DownloadWallRow({ task, labels }: { task: DownloadProgress; labels: ReturnType<typeof getBigScreenLabels> }) {
   const progress = task.total > 0 ? Math.max(0, Math.min(100, (task.downloaded / task.total) * 100)) : 0
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/50">
@@ -581,7 +581,7 @@ function downloadTone(status: DownloadProgress['status']) {
   return 'slate'
 }
 
-function downloadStatusText(status: DownloadProgress['status'], labels: ReturnType<typeof getLabels>) {
+function downloadStatusText(status: DownloadProgress['status'], labels: ReturnType<typeof getBigScreenLabels>) {
   if (status === 'active') return labels.active
   if (status === 'completed') return labels.completed
   if (status === 'error') return labels.failed
@@ -607,70 +607,4 @@ function averageThroughput(values: number[]) {
   const valid = values.filter(value => Number.isFinite(value) && value >= 0)
   if (valid.length === 0) return 0
   return valid.reduce((sum, value) => sum + value, 0) / valid.length
-}
-
-function getLabels(zh: boolean) {
-  return {
-    title: zh ? '大屏模式' : 'Big Screen',
-    subtitle: zh ? '运行态势、请求吞吐与资源压力' : 'Runtime posture, request throughput, and resource pressure',
-    wallboard: zh ? '只读态势屏' : 'Read-only wallboard',
-    updated: zh ? '数据已更新' : 'Updated',
-    refreshing: zh ? '刷新中' : 'Refreshing',
-    serviceStatus: zh ? '服务状态' : 'Service Status',
-    normal: zh ? '正常' : 'Normal',
-    needsAttention: zh ? '需关注' : 'Needs Attention',
-    abnormal: zh ? '异常' : 'Abnormal',
-    allServicesNormal: zh ? '所有服务运行正常' : 'All services normal',
-    runningInstances: zh ? '运行实例' : 'Running Instances',
-    currentThroughput: zh ? '当前吞吐' : 'Current Throughput',
-    fromLiveTasks: zh ? '活动任务最近 3 秒聚合' : 'Live 3-second task aggregate',
-    fromMixedLiveSources: zh ? '实时任务与 /metrics 聚合' : 'Live tasks and /metrics aggregate',
-    fromLlamaMetrics: zh ? '来自 llama-server /metrics' : 'From llama-server /metrics',
-    idleThroughput: zh ? '当前没有生成请求' : 'No generation request is active',
-    idleVectorThroughput: zh ? '当前没有向量请求' : 'No vector request is active',
-    mixedWorkloads: zh ? '生成吞吐为主指标，向量负载单独统计' : 'Generation is primary; vector load is reported separately',
-    vectorActivity: zh ? '向量条目吞吐' : 'Vector item throughput',
-    itemsPerSecondShort: zh ? '项/s' : 'items/s',
-    requestPressure: zh ? '请求压力' : 'Request Pressure',
-    alerts: zh ? '告警' : 'Alerts',
-    stopped: zh ? '已停止' : 'Stopped',
-    error: zh ? '异常' : 'Error',
-    failed: zh ? '失败' : 'Failed',
-    peak: zh ? '峰值' : 'Peak',
-    high: zh ? '高' : 'High',
-    medium: zh ? '中等' : 'Medium',
-    realtimeThroughput: zh ? '实时吞吐' : 'Realtime Throughput',
-    avg5m: zh ? '5分钟平均' : '5m Avg',
-    noSamples: zh ? '暂无足够采样' : 'Not enough samples',
-    activeRequests: zh ? '运行中请求' : 'Active Requests',
-    noActiveRequests: zh ? '暂无运行中请求' : 'No active requests',
-    resourcePressure: zh ? '资源压力' : 'Resource Pressure',
-    process: zh ? '进程' : 'Process',
-    system: zh ? '系统' : 'System',
-    memory: zh ? '内存' : 'Memory',
-    vram: zh ? '显存' : 'VRAM',
-    gpuUnavailable: zh ? '未检测到 GPU' : 'GPU unavailable',
-    instanceStatus: zh ? '实例状态' : 'Instance Status',
-    running: zh ? '运行中' : 'Running',
-    noInstances: zh ? '暂无实例' : 'No instances',
-    downloadQueue: zh ? '下载队列' : 'Download Queue',
-    active: zh ? '进行中' : 'Active',
-    queued: zh ? '排队中' : 'Queued',
-    paused: zh ? '已暂停' : 'Paused',
-    completed: zh ? '已完成' : 'Completed',
-    cancelled: zh ? '已取消' : 'Cancelled',
-    noDownloads: zh ? '暂无下载任务' : 'No download tasks',
-    totalSpeed: zh ? '总下载速度' : 'Total Speed',
-    activityFeed: zh ? '活动流' : 'Activity Feed',
-    all: zh ? '全部' : 'All',
-    noActivity: zh ? '暂无活动' : 'No activity',
-    request: zh ? '请求' : 'Request',
-    download: zh ? '下载' : 'Download',
-    log: zh ? '日志' : 'Log',
-    models: zh ? '模型' : 'Models',
-    engines: zh ? '引擎' : 'Engines',
-    sessions24h: zh ? '24小时会话' : 'Sessions 24h',
-    lastUpdated: zh ? '最后更新' : 'Last Updated',
-    dataLinkNormal: zh ? '数据连接正常' : 'Data link healthy',
-  }
 }

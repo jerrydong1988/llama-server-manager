@@ -1,5 +1,5 @@
 import { startTransition } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../lib/ipc'
 import { normalizeInstanceConfig } from '../modelPolicy'
 import { pathBasename } from '../utils/path'
 import { resolveHydratedHealth } from './bootstrapHealth'

@@ -23,6 +23,7 @@ import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
 import type { DownloadProgress, Instance } from '../../store'
 import { useI18n } from '../../i18n'
+import { getDashboardLabels } from '../../i18n/pageLabels'
 import { Badge, Button, InsetSurface, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
 
 type StatusScope = 'running' | 'stopped' | 'all'
@@ -182,7 +183,6 @@ function ActionIconButton({
 
 export default function Dashboard() {
   const { t, lang } = useI18n()
-  const zh = lang === 'zh-CN'
   const instances = useAppStore(state => state.instances)
   const models = useAppStore(state => state.models)
   const engines = useAppStore(state => state.engines)
@@ -202,79 +202,7 @@ export default function Dashboard() {
   const [engineFilter, setEngineFilter] = useState('all')
   const [sortMode, setSortMode] = useState<SortMode>('name')
 
-  const labels = {
-    title: t.dashboard?.title || (zh ? '总览' : 'Dashboard'),
-    subtitle: zh ? '本地 llama-server 运行状态、资源压力与实例操作台。' : 'Local llama-server activity, resource pressure, and instance control.',
-    workspace: zh ? '本地工作区' : 'Local Workspace',
-    create: zh ? '新建实例' : 'New Instance',
-    refresh: zh ? '刷新' : 'Refresh',
-    running: zh ? '运行中' : 'Running',
-    stopped: zh ? '已停止' : 'Stopped',
-    all: zh ? '全部' : 'All',
-    attention: zh ? '需关注' : 'Attention',
-    healthy: zh ? '健康' : 'Healthy',
-    autoStart: zh ? '自启动' : 'Auto Start',
-    models: zh ? '模型' : 'Models',
-    engines: zh ? '引擎' : 'Engines',
-    instances: zh ? '实例' : 'Instances',
-    resources: zh ? '资源总览' : 'Resource Overview',
-    process: zh ? '进程' : 'Process',
-    system: zh ? '系统' : 'System',
-    memory: zh ? '内存' : 'Memory',
-    vram: zh ? '显存' : 'VRAM',
-    uptime: zh ? '运行时长' : 'Uptime',
-    noMetrics: zh ? '暂无指标' : 'No metrics yet',
-    searchPlaceholder: zh ? '搜索实例、模型、端口...' : 'Search instances, models, ports...',
-    allEngines: zh ? '全部引擎' : 'All Engines',
-    sortName: zh ? '按名称' : 'By name',
-    sortPort: zh ? '按端口' : 'By port',
-    sortUptime: zh ? '按运行时长' : 'By uptime',
-    name: zh ? '实例' : 'Instance',
-    model: zh ? '模型' : 'Model',
-    engine: zh ? '引擎' : 'Engine',
-    status: zh ? '状态' : 'Status',
-    health: zh ? '健康' : 'Health',
-    endpoint: zh ? '端点' : 'Endpoint',
-    actions: zh ? '操作' : 'Actions',
-    open: zh ? '打开' : 'Open',
-    config: zh ? '配置' : 'Config',
-    noEngine: zh ? '未指定引擎' : 'No engine',
-    offline: zh ? '离线' : 'Offline',
-    pending: zh ? '检查中' : 'Pending',
-    fail: zh ? '异常' : 'Fail',
-    queue: zh ? '队列' : 'Queue',
-    downloads: zh ? '下载' : 'Downloads',
-    activeDownloads: zh ? '传输中' : 'Active',
-    queuedDownloads: zh ? '排队' : 'Queued',
-    failedDownloads: zh ? '失败' : 'Failed',
-    transfer: zh ? '传输' : 'Transfer',
-    actionCenter: zh ? '下一步建议' : 'Next Steps',
-    actionCenterDesc: zh ? '根据当前资源、实例与下载状态，优先处理最能提升可用性的事项。' : 'Prioritized actions based on current resources, instances, and downloads.',
-    setupEngineTitle: zh ? '登记运行引擎' : 'Register a runtime engine',
-    setupEngineDesc: zh ? '先添加或扫描 llama-server 二进制，后续实例才能稳定启动。' : 'Add or scan llama-server binaries so instances can start reliably.',
-    setupModelTitle: zh ? '整理模型仓库' : 'Organize model inventory',
-    setupModelDesc: zh ? '扫描本地模型目录，或进入下载管理补齐常用模型。' : 'Scan local model folders or use downloads to add common models.',
-    createInstanceTitle: zh ? '创建服务实例' : 'Create a server instance',
-    createInstanceDesc: zh ? '把模型、引擎、端口组合成可运行的本地服务。' : 'Combine a model, engine, and port into a runnable local service.',
-    inspectHealthTitle: zh ? '处理异常实例' : 'Review unhealthy instances',
-    inspectHealthDesc: zh ? '存在错误或健康检查失败的实例，建议先查看实例与日志。' : 'Some instances errored or failed health checks; review instances and logs.',
-    retryDownloadTitle: zh ? '处理失败下载' : 'Resolve failed downloads',
-    retryDownloadDesc: zh ? '有下载任务失败，可重试、清理或重新加入队列。' : 'Retry, clean up, or requeue failed download tasks.',
-    monitorTransferTitle: zh ? '查看传输队列' : 'Review transfer queue',
-    monitorTransferDesc: zh ? '当前有活动下载任务，进入下载管理可调整策略。' : 'Active downloads are running; tune policy in download management.',
-    reviewPerfTitle: zh ? '查看性能分析' : 'Review performance analysis',
-    reviewPerfDesc: zh ? '资源与实例状态稳定，可继续检查吞吐、瓶颈和诊断建议。' : 'Resources and instances look stable; inspect throughput, bottlenecks, and diagnostics.',
-    goHandle: zh ? '处理' : 'Open',
-    recentDownloads: zh ? '近期下载' : 'Recent Downloads',
-    noDownloads: zh ? '暂无下载任务' : 'No download tasks',
-    inventory: zh ? '资源统计' : 'Resource Summary',
-    operations: zh ? '快捷操作' : 'Quick Actions',
-    openDownloads: zh ? '打开下载' : 'Downloads',
-    openPerformance: zh ? '性能监控' : 'Performance',
-    openLogs: zh ? '查看日志' : 'Logs',
-    noMatches: zh ? '当前筛选条件下没有实例' : 'No instances match the current filters',
-    visibleRows: zh ? '当前行' : 'Rows',
-  }
+  const labels = getDashboardLabels(lang, t.dashboard?.title)
 
   const runningCount = instances.filter(instance => instance.status === 'running').length
   const stoppedCount = instances.filter(instance => instance.status !== 'running').length

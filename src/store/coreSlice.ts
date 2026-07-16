@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../lib/ipc'
 import { applyModelInventory, beginModelInventoryRequest } from './bootstrap'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'

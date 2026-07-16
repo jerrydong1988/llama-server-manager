@@ -1,0 +1,23 @@
+{
+  "reviewBy": "2026-10-15",
+  "upstream": "Tauri 2.11 Linux GTK3 and urlpattern transitive dependency chains",
+  "entries": [
+    { "id": "RUSTSEC-2024-0370", "package": "proc-macro-error", "kind": "unmaintained" },
+    { "id": "RUSTSEC-2024-0411", "package": "gdkwayland-sys", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0412", "package": "gdk", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0413", "package": "atk", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0414", "package": "gdkx11-sys", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0415", "package": "gtk", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0416", "package": "atk-sys", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0417", "package": "gdkx11", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0418", "package": "gdk-sys", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0419", "package": "gtk3-macros", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0420", "package": "gtk-sys", "kind": "unmaintained", "target": "linux" },
+    { "id": "RUSTSEC-2024-0429", "package": "glib", "kind": "unsound", "target": "linux", "restriction": "Application code does not call VariantStrIter; remove when Tauri adopts glib >=0.20" },
+    { "id": "RUSTSEC-2025-0075", "package": "unic-char-range", "kind": "unmaintained" },
+    { "id": "RUSTSEC-2025-0080", "package": "unic-common", "kind": "unmaintained" },
+    { "id": "RUSTSEC-2025-0081", "package": "unic-char-property", "kind": "unmaintained" },
+    { "id": "RUSTSEC-2025-0098", "package": "unic-ucd-version", "kind": "unmaintained" },
+    { "id": "RUSTSEC-2025-0100", "package": "unic-ucd-ident", "kind": "unmaintained" }
+  ]
+}

@@ -2,6 +2,7 @@ import type {
   ModelWorkload,
   VectorTelemetryAnalysis,
 } from '../../store/types'
+import { getVectorPerformanceLabels } from '../../i18n/pageLabels'
 
 export type PerformanceLocale = 'zh' | 'zh-CN' | 'en' | 'en-US'
 export type VectorMetricKey = 'input' | 'items' | 'p95'
@@ -65,7 +66,6 @@ export type PerformanceMode =
 type WorkloadSession = { workload?: ModelWorkload | null }
 type AnalysisEnvelope = { vector_analysis?: VectorTelemetryAnalysis | null }
 
-const isZh = (locale: PerformanceLocale) => locale.startsWith('zh')
 const isAvailable = (value: number | null): value is number =>
   value !== null && Number.isFinite(value)
 
@@ -80,32 +80,22 @@ function formatMilliseconds(value: number | null): string {
 export function workloadLabel(workload: ModelWorkload, locale: PerformanceLocale): string {
   if (workload === 'embedding') return 'Embedding'
   if (workload === 'reranker') return 'Reranker'
-  return isZh(locale) ? '生成' : 'Generation'
+  return getVectorPerformanceLabels(locale).generation
 }
 
 export function buildVectorSourceState(
   analysis: VectorTelemetryAnalysis,
   locale: PerformanceLocale,
 ): VectorSourceState {
-  const zh = isZh(locale)
+  const labels = getVectorPerformanceLabels(locale)
   const kind: VectorSourceKind = analysis.logAvailable
     ? analysis.proxyAvailable ? 'full' : 'log-only'
     : analysis.proxyAvailable ? 'proxy-only' : 'none'
-  const summaries: Record<VectorSourceKind, [string, string]> = {
-    full: ['日志任务与代理请求指标均可用', 'Task log and proxy request metrics available'],
-    'log-only': ['任务指标可用，代理请求指标不可用', 'Task metrics available; proxy request metrics unavailable'],
-    'proxy-only': ['代理请求指标可用，任务吞吐指标不可用', 'Proxy request metrics available; task throughput unavailable'],
-    none: ['暂无向量业务指标', 'No vector workload metrics yet'],
-  }
   return {
     kind,
-    summary: summaries[kind][zh ? 0 : 1],
-    log: analysis.logAvailable
-      ? zh ? '日志任务：可用' : 'Task log: available'
-      : zh ? '日志任务：不可用' : 'Task log: unavailable',
-    proxy: analysis.proxyAvailable
-      ? zh ? '代理请求：可用' : 'Proxy requests: available'
-      : zh ? '代理请求：不可用' : 'Proxy requests: unavailable',
+    summary: labels.sourceSummaries[kind],
+    log: analysis.logAvailable ? labels.logAvailable : labels.logUnavailable,
+    proxy: analysis.proxyAvailable ? labels.proxyAvailable : labels.proxyUnavailable,
   }
 }
 
@@ -158,26 +148,26 @@ export function buildVectorKpis(
   analysis: VectorTelemetryAnalysis,
   locale: PerformanceLocale,
 ): VectorKpi[] {
-  const zh = isZh(locale)
+  const labels = getVectorPerformanceLabels(locale)
   const itemLabel = analysis.workload === 'reranker'
-    ? zh ? '文档项吞吐' : 'Document throughput'
-    : zh ? '向量项吞吐' : 'Vector throughput'
+    ? labels.documentThroughput
+    : labels.vectorThroughput
   return [
     {
       key: 'input',
-      label: zh ? '输入吞吐' : 'Input throughput',
+      label: labels.inputThroughput,
       value: formatRate(analysis.averageInputTokensPerSecond, 'tok/s'),
       available: isAvailable(analysis.averageInputTokensPerSecond),
     },
     {
       key: 'items',
       label: itemLabel,
-      value: formatRate(analysis.averageItemsPerSecond, zh ? '项/s' : 'items/s'),
+      value: formatRate(analysis.averageItemsPerSecond, labels.itemsPerSecond),
       available: isAvailable(analysis.averageItemsPerSecond),
     },
     {
       key: 'p95',
-      label: zh ? '任务 P95' : 'Task P95',
+      label: labels.taskP95,
       value: formatMilliseconds(analysis.taskDurationP95Ms),
       available: isAvailable(analysis.taskDurationP95Ms),
     },
@@ -200,11 +190,11 @@ export function buildVectorComparisonRows(
   baseline: VectorBaseline,
   locale: PerformanceLocale,
 ): VectorComparisonRow[] {
-  const zh = isZh(locale)
+  const labels = getVectorPerformanceLabels(locale)
   const values = [
     {
       key: 'input' as const,
-      label: zh ? '输入吞吐' : 'Input throughput',
+      label: labels.inputThroughput,
       current: current.averageInputTokensPerSecond,
       baseline: baseline.averageInputTokensPerSecond,
       format: (value: number | null) => formatRate(value, 'tok/s'),
@@ -213,16 +203,16 @@ export function buildVectorComparisonRows(
     {
       key: 'items' as const,
       label: current.workload === 'reranker'
-        ? zh ? '文档项吞吐' : 'Document throughput'
-        : zh ? '向量项吞吐' : 'Vector throughput',
+        ? labels.documentThroughput
+        : labels.vectorThroughput,
       current: current.averageItemsPerSecond,
       baseline: baseline.averageItemsPerSecond,
-      format: (value: number | null) => formatRate(value, zh ? '项/s' : 'items/s'),
+      format: (value: number | null) => formatRate(value, labels.itemsPerSecond),
       lowerIsBetter: false,
     },
     {
       key: 'p95' as const,
-      label: zh ? '任务 P95' : 'Task P95',
+      label: labels.taskP95,
       current: current.taskDurationP95Ms,
       baseline: baseline.taskDurationP95Ms,
       format: formatMilliseconds,

@@ -49,7 +49,6 @@ fn home_dir() -> Result<PathBuf, String> {
         .map_err(|_| "无法获取 HOME 目录".to_string())
 }
 
-#[tauri::command]
 pub fn enable_autostart() -> Result<(), String> {
     let exe = exe_path()?;
 
@@ -116,7 +115,6 @@ pub fn enable_autostart() -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
 pub fn disable_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -152,7 +150,6 @@ pub fn disable_autostart() -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
 pub fn is_autostart_enabled() -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
@@ -220,5 +217,27 @@ mod tests {
             desktop_exec_value(std::path::Path::new("/home/A B/app$`\\\"100%")),
             "\"/home/A B/app\\$\\`\\\\\\\"100%%\""
         );
+    }
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub fn enable_autostart() -> crate::error::AppResult<()> {
+        super::enable_autostart().map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub fn disable_autostart() -> crate::error::AppResult<()> {
+        super::disable_autostart().map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub fn is_autostart_enabled() -> crate::error::AppResult<bool> {
+        super::is_autostart_enabled().map_err(crate::error::AppError::from)
     }
 }

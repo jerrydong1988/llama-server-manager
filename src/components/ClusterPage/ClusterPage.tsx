@@ -1,14 +1,15 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { ask, open } from '@tauri-apps/plugin-dialog'
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../../lib/ipc'
 import { Check, Copy, Network, Play, Plus, Radio, RefreshCw, Server, Square, StopCircle, Trash2, X, Zap } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
+import { getClusterLabels } from '../../i18n/pageLabels'
 import { Badge, Button, InsetSurface, MetricCard, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
 
 export default function ClusterPage() {
   const { t, lang } = useI18n()
-  const zh = lang === 'zh-CN'
+  const labels = useMemo(() => getClusterLabels(lang), [lang])
   const workers = useAppStore(state => state.workers)
   const clusterScanning = useAppStore(state => state.clusterScanning)
   const setWorkers = useAppStore(state => state.setWorkers)
@@ -211,7 +212,7 @@ export default function ClusterPage() {
 
   const handleSshLaunch = async () => {
     if (!launchForm.keyPath.trim()) {
-      setLaunchError(zh ? '\u8bf7\u5148\u9009\u62e9 SSH \u5bc6\u94a5\u6587\u4ef6\u3002' : 'Select an SSH key file before launching.')
+      setLaunchError(labels.selectSshKey)
       setLaunchStep(1)
       return
     }
@@ -340,25 +341,6 @@ export default function ClusterPage() {
     () => [...workers].sort((left, right) => left.name.localeCompare(right.name)),
     [workers],
   )
-  const labels = {
-    workers: zh ? '\u8282\u70b9' : 'workers',
-    subtitle: zh
-      ? '\u5728\u4e00\u4e2a\u754c\u9762\u4e2d\u53d1\u73b0 LAN rpc worker\u3001\u6ce8\u518c\u8fdc\u7a0b\u8282\u70b9\uff0c\u5e76\u542f\u52a8\u672c\u5730\u6216 SSH \u7b97\u529b\u3002'
-      : 'Discover rpc workers on the LAN, register remote nodes, and bootstrap local or SSH-launched capacity from one place.',
-    workerListDesc: zh
-      ? '\u76f4\u63a5\u6d4b\u8bd5\u8fde\u63a5\u3001\u67e5\u770b\u8bbe\u5907\u6e05\u5355\uff0c\u5e76\u7ba1\u7406\u672c\u5730 worker\u3002'
-      : 'Test connectivity, inspect device inventory, and stop local workers directly from the registry.',
-    hideDetails: zh ? '\u6536\u8d77\u8be6\u60c5' : 'Hide Details',
-    showDetails: zh ? '\u67e5\u770b\u8be6\u60c5' : 'Show Details',
-    clusterNotes: zh ? '\u96c6\u7fa4\u63d0\u793a' : 'Cluster Notes',
-    clusterNotesDesc: zh ? '\u7ba1\u7406 worker \u5bb9\u91cf\u65f6\uff0c\u4fdd\u6301\u53d1\u73b0\u72b6\u6001\u548c\u542f\u52a8\u6307\u5f15\u53ef\u89c1\u3002' : 'Keep discovery state and launch guidance visible while you manage worker capacity.',
-    auto: zh ? '\u81ea\u52a8' : 'auto',
-    devices: zh ? '\u8bbe\u5907' : 'devices',
-    host: zh ? '\u4e3b\u673a (IP)' : 'Host (IP)',
-    port: zh ? '\u7aef\u53e3' : 'Port',
-    workerHost: zh ? 'Worker IP / \u4e3b\u673a' : 'Worker IP / Host',
-  }
-
   return (
     <div className="space-y-5" data-testid="cluster-page">
       <div className="flex flex-col gap-5 2xl:flex-row 2xl:items-end 2xl:justify-between">
@@ -712,7 +694,7 @@ export default function ClusterPage() {
                     <TextInput type="text" value={launchForm.keyPath} onChange={event => setLaunchForm({ ...launchForm, keyPath: event.target.value })} placeholder="~/.ssh/id_rsa" className="h-10" />
                   </div>
                   <div className="text-xs text-slate-500">
-                    {zh ? '\u4ec5\u652f\u6301 SSH \u5bc6\u94a5\u8ba4\u8bc1\uff0c\u5bc6\u94a5\u4e0d\u4f1a\u79bb\u5f00\u672c\u673a\u3002' : 'SSH key authentication is required; the key remains on this device.'}
+                    {labels.sshKeyNotice}
                   </div>
                 </>
               )}

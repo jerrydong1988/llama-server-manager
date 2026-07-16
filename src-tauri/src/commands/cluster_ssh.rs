@@ -83,7 +83,6 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
     }
 }
 
-#[tauri::command]
 pub async fn ssh_launch_rpc(
     host: String,
     ssh_user: String,
@@ -184,5 +183,35 @@ mod tests {
         assert!(!command.contains("netstat -tlnp"));
         assert!(command.contains("PORT-OK"));
         assert!(!command.contains("/tmp/rpc-server"));
+    }
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn ssh_launch_rpc(
+        host: String,
+        ssh_user: String,
+        ssh_key_path: Option<String>,
+        rpc_port: u16,
+        remote_rpc_path: Option<String>,
+        ssh_port: Option<u16>,
+        remote_os: Option<String>,
+    ) -> crate::error::AppResult<serde_json::Value> {
+        super::ssh_launch_rpc(
+            host,
+            ssh_user,
+            ssh_key_path,
+            rpc_port,
+            remote_rpc_path,
+            ssh_port,
+            remote_os,
+        )
+        .await
+        .map_err(crate::error::AppError::from)
     }
 }

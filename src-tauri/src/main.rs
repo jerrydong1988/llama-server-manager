@@ -1,19 +1,21 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod error;
 mod models;
+mod persistence;
 mod utils;
 mod vector_policy;
 
 use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
 use crate::commands::cluster::{
     add_worker, find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics,
-    get_local_host, get_worker_info, get_workers, is_local_host, remove_worker, scan_workers_tcp,
-    start_local_rpc, stop_local_worker, test_worker,
+    get_local_host, get_worker_info, get_workers, is_local_host, load_workers, remove_worker,
+    scan_workers_tcp, start_local_rpc, stop_local_worker, test_worker,
 };
 use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
-use crate::commands::cluster_ssh::ssh_launch_rpc;
+use crate::commands::cluster_ssh::ipc::ssh_launch_rpc;
 use crate::commands::config::{
     load_config, load_window_state, resolve_path, save_config, save_window_state,
     update_and_persist,
@@ -158,6 +160,7 @@ fn main() {
     let data_dir = crate::utils::get_data_dir();
     let config_dir = data_dir.join("configs");
     let initial_config = crate::commands::config::read_config_from_disk(&config_dir);
+    let initial_workers = load_workers();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -175,9 +178,8 @@ fn main() {
                         let ws = WindowState { x: pos.x, y: pos.y, width: size.width, height: size.height };
                         if let Some(s) = window.try_state::<AppState>() {
                             let config_dir = s.config_dir.lock().unwrap().clone();
-                            let _ = std::fs::create_dir_all(&config_dir);
-                            if let Ok(json) = serde_json::to_string(&ws) {
-                                let _ = std::fs::write(config_dir.join("window_state.json"), json);
+                            if let Err(error) = crate::commands::config::persist_window_state(&config_dir, &ws) {
+                                eprintln!("Window state persistence failed: {error}");
                             }
                         }
                     }
@@ -341,6 +343,7 @@ fn main() {
             cancel_flags: Mutex::new(HashMap::new()),
             pause_flags: Mutex::new(HashMap::new()),
             active_downloads: Mutex::new(std::collections::HashSet::new()),
+            active_download_paths: Mutex::new(std::collections::HashSet::new()),
             download_queue: Mutex::new(Vec::new()),
             download_active_batches: Mutex::new(std::collections::HashSet::new()),
             download_active_entries: Mutex::new(HashMap::new()),
@@ -353,7 +356,7 @@ fn main() {
             download_bandwidth_limit_bytes_per_sec: Mutex::new(initial_config.download_bandwidth_limit_bytes_per_sec),
             download_low_priority_throttle: Mutex::new(initial_config.download_low_priority_throttle),
             download_bandwidth_limiter: Mutex::new(models::DownloadBandwidthLimiter::default()),
-            workers: Mutex::new(Vec::new()),
+            workers: Mutex::new(initial_workers),
             usb4_adapters: Mutex::new(Vec::new()),
             proxy_config: Mutex::new(initial_config.proxy_config),
             proxy_shutdown: Mutex::new(None),

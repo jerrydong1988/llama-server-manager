@@ -707,6 +707,7 @@ pub struct AppState {
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,
     pub active_downloads: Mutex<std::collections::HashSet<String>>,
+    pub active_download_paths: Mutex<std::collections::HashSet<String>>,
     pub download_queue: Mutex<Vec<PersistedQueueEntry>>,
     pub download_active_batches: Mutex<std::collections::HashSet<String>>,
     pub download_active_entries: Mutex<HashMap<String, PersistedQueueEntry>>,

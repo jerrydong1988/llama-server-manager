@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../../lib/ipc'
 import { Activity, AlertTriangle, BarChart3, Clock, Cpu, Gauge, HardDrive, Radio, RefreshCw, Server, Zap } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
 import { useI18n } from '../../i18n'
+import { getPerformanceLabels } from '../../i18n/pageLabels'
 import type {
   DiagnosticFinding,
   InferenceRequestSummary,
@@ -56,8 +57,7 @@ const TELEMETRY_DETAIL_REFRESH_MS = 5000
 
 export default function PerformancePage() {
   const { lang } = useI18n()
-  const zh = lang === 'zh-CN'
-  const labels = useMemo(() => getLabels(zh), [zh])
+  const labels = useMemo(() => getPerformanceLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
   const monitoringFramesByInstance = useAppStore(state => state.monitoringFramesByInstance)
   const monitoringCurrentByInstance = useAppStore(state => state.monitoringCurrentByInstance)
@@ -273,7 +273,7 @@ export default function PerformancePage() {
           {
             key: 'items' as const,
             label: performanceMode.itemName === 'document' ? labels.documentThroughput : labels.vectorThroughput,
-            value: formatRate(currentFrame.itemsPerSecond, zh ? '项/s' : 'items/s'),
+            value: formatRate(currentFrame.itemsPerSecond, labels.itemsPerSecondShort),
             available: currentFrame.itemsPerSecond != null,
           },
           {
@@ -287,7 +287,7 @@ export default function PerformancePage() {
   const displayedVectorKpis = vectorKpis.map(kpi => {
     if (!selectedRunning || !currentFrame) return kpi
     if (kpi.key === 'input') return { ...kpi, value: formatRate(currentFrame.inputTokensPerSecond, 'tok/s'), available: currentFrame.inputTokensPerSecond != null }
-    if (kpi.key === 'items') return { ...kpi, value: formatRate(currentFrame.itemsPerSecond, zh ? '项/s' : 'items/s'), available: currentFrame.itemsPerSecond != null }
+    if (kpi.key === 'items') return { ...kpi, value: formatRate(currentFrame.itemsPerSecond, labels.itemsPerSecondShort), available: currentFrame.itemsPerSecond != null }
     return { ...kpi, value: formatMs(currentFrame.averageLatencyMs), available: currentFrame.averageLatencyMs != null }
   })
   const vectorHistoricalTrend = performanceMode.kind === 'vector' && performanceMode.analysis
@@ -683,7 +683,7 @@ function average(values: Array<number | null | undefined>) {
   return valid.reduce((sum, value) => sum + value, 0) / valid.length
 }
 
-function buildComparisonRows(selectedSession: TelemetrySessionSummary | undefined, benchmark: SessionBenchmark, labels: ReturnType<typeof getLabels>) {
+function buildComparisonRows(selectedSession: TelemetrySessionSummary | undefined, benchmark: SessionBenchmark, labels: ReturnType<typeof getPerformanceLabels>) {
   if (!selectedSession) return []
   return [
     {
@@ -719,7 +719,7 @@ function formatDelta(current?: number | null, baseline?: number | null, higherIs
   }
 }
 
-function sessionComparisonScopeLabel(benchmark: SessionBenchmark, labels: ReturnType<typeof getLabels>) {
+function sessionComparisonScopeLabel(benchmark: SessionBenchmark, labels: ReturnType<typeof getPerformanceLabels>) {
   if (benchmark.scope === 'sameConfig') return labels.sameConfigHistory
   if (benchmark.scope === 'allHistory') return labels.allHistoryFallback
   return labels.noHistoryBaseline
@@ -739,92 +739,9 @@ function diagnosticPanelClass(severity: DiagnosticFinding['severity']) {
   return 'border-blue-300 bg-blue-50 dark:border-blue-500/30 dark:bg-blue-500/10'
 }
 
-function diagnosticSeverityLabel(severity: DiagnosticFinding['severity'], labels: ReturnType<typeof getLabels>) {
+function diagnosticSeverityLabel(severity: DiagnosticFinding['severity'], labels: ReturnType<typeof getPerformanceLabels>) {
   if (severity === 'critical') return labels.severityCritical
   if (severity === 'warning') return labels.severityWarning
   if (severity === 'success') return labels.severitySuccess
   return labels.severityInfo
-}
-
-function getLabels(zh: boolean) {
-  return {
-    title: zh ? '性能监控' : 'Performance Monitoring',
-    description: zh ? '实例性能、请求吞吐与诊断分析' : 'Instance performance, request throughput, and diagnostics.',
-    sqliteBacked: zh ? 'SQLite 遥测' : 'SQLite Telemetry',
-    refresh: zh ? '刷新' : 'Refresh',
-    telemetryError: zh ? '遥测数据读取异常' : 'Telemetry query failed',
-    monitoringObject: zh ? '监控对象' : 'Monitoring Target',
-    runningInstance: zh ? '运行中实例' : 'Running Instance',
-    noRunning: zh ? '暂无运行中实例' : 'No running instance',
-    sessionHistory: zh ? '会话历史' : 'Session History',
-    noHistory: zh ? '暂无历史会话' : 'No Session History',
-    noHistoryDesc: zh ? '启动实例并产生采样后会显示在这里。' : 'Sessions appear after an instance starts and emits samples.',
-    noSelection: zh ? '未选择实例' : 'No instance selected',
-    unknown: zh ? '未知' : 'Unknown',
-    running: zh ? '运行中' : 'Running',
-    finished: zh ? '已结束' : 'Finished',
-    currentTps: zh ? '当前吞吐' : 'Current Throughput',
-    fromLlamaMetrics: zh ? '来自 llama-server /metrics' : 'From llama-server /metrics',
-    fromLiveTasks: zh ? '活动任务最近 3 秒聚合' : 'Live 3-second task aggregate',
-    fromMixedLiveSources: zh ? '实时任务与 /metrics 聚合' : 'Live tasks and /metrics aggregate',
-    idleThroughput: zh ? '当前没有生成请求' : 'No generation request is active',
-    fromTaskLog: zh ? '来自 llama-server 任务日志' : 'From llama-server task logs',
-    inputThroughput: zh ? '输入吞吐' : 'Input Throughput',
-    vectorThroughput: zh ? '向量项吞吐' : 'Vector Throughput',
-    documentThroughput: zh ? '文档项吞吐' : 'Document Throughput',
-    itemsPerSecondShort: zh ? '项/s' : 'items/s',
-    documentsPerSecondShort: zh ? '文档/s' : 'docs/s',
-    queuePressure: zh ? '请求压力' : 'Request Pressure',
-    processingDeferred: zh ? '处理中 / 排队' : 'processing / queued',
-    process: zh ? '进程' : 'Process',
-    system: zh ? '系统' : 'System',
-    memory: zh ? '内存' : 'Memory',
-    vram: zh ? '显存' : 'VRAM',
-    gpuUnavailable: zh ? '未检测到 GPU' : 'GPU unavailable',
-    throughputTrend: zh ? '吞吐趋势' : 'Throughput Trend',
-    noSamplesYet: zh ? '暂无足够遥测采样' : 'Not enough telemetry samples yet',
-    ranges: {
-      '1m': zh ? '1分钟' : '1m',
-      '5m': zh ? '5分钟' : '5m',
-      '15m': zh ? '15分钟' : '15m',
-      '1h': zh ? '1小时' : '1h',
-    },
-    activeRequests: zh ? '运行中请求' : 'Active Requests',
-    noActiveRequests: zh ? '当前没有正在处理的推理请求。' : 'No inference request is currently processing.',
-    sessionFinishedNoActive: zh ? '该会话已结束，不再有运行中请求。' : 'This session has finished.',
-    diagnosis: zh ? '智能诊断' : 'Smart Diagnostics',
-    noDiagnostics: zh ? '当前会话暂无诊断结论。' : 'No diagnostics available yet.',
-    moreDiagnostics: (count: number) => zh ? `另有 ${count} 条诊断已折叠` : `${count} more diagnostics collapsed`,
-    severityCritical: zh ? '严重' : 'Critical',
-    severityWarning: zh ? '提醒' : 'Warning',
-    severityInfo: zh ? '信息' : 'Info',
-    severitySuccess: zh ? '正常' : 'Healthy',
-    historyBaseline: zh ? '历史基线' : 'Historical Baseline',
-    sameConfigHistory: zh ? '优先对比同模型、同引擎和同后端的历史会话。' : 'Compares with previous sessions using the same model, engine, and backend.',
-    allHistoryFallback: zh ? '暂无同配置历史，已回退到全部历史会话。' : 'No same-config history, falling back to all history.',
-    noHistoryBaseline: zh ? '暂无可用历史基线。' : 'No historical baseline is available yet.',
-    vectorHistory: (count: number) => zh
-      ? `对比 ${count} 个同模型、同工作负载和同后端的历史会话。`
-      : `Compared with ${count} historical sessions using the same model, workload, and backend.`,
-    noVectorHistory: zh ? '同模型、同工作负载和同后端的历史基线仍在积累。' : 'A matching vector baseline is still being collected.',
-    better: zh ? '较优' : 'Better',
-    regressed: zh ? '回退' : 'Regressed',
-    sessionDigest: zh ? '会话摘要' : 'Session Digest',
-    requests: zh ? '请求' : 'Requests',
-    avgGenerationSpeed: zh ? '平均生成速度' : 'Avg Generation Speed',
-    avgTotalTime: zh ? '平均总耗时' : 'Avg Total Time',
-    maxBusySlots: zh ? '忙碌 slot 峰值' : 'Max Busy Slots',
-    completedVectors: zh ? '完成向量项' : 'Completed Vectors',
-    completedDocuments: zh ? '完成文档项' : 'Completed Documents',
-    avgInputSpeed: zh ? '平均输入速度' : 'Avg Input Speed',
-    taskP50: zh ? '任务 P50' : 'Task P50',
-    taskP95: zh ? '任务 P95' : 'Task P95',
-    proxyRequests: zh ? '代理请求' : 'Proxy Requests',
-    proxyP50: zh ? '代理 P50' : 'Proxy P50',
-    proxyP95: zh ? '代理 P95' : 'Proxy P95',
-    failureRate: zh ? '失败率' : 'Failure Rate',
-    avgTps: zh ? '平均吞吐' : 'Avg Throughput',
-    peakVram: zh ? '峰值显存' : 'Peak VRAM',
-    duration: zh ? '时长' : 'Duration',
-  }
 }

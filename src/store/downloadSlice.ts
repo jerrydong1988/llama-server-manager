@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { invokeApp as invoke } from '../lib/ipc'
 import { mergeRestoredDownloadTask } from './downloadMerge'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, DownloadProgress, MsFileEntry, PersistedQueueEntry } from './types'
@@ -87,7 +87,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
 > {
   return {
     setDownloadTasks: (tasks) => set({ downloadTasks: tasks }),
-    addToDownloadQueue: (entry) => {
+    addToDownloadQueue: async (entry) => {
       const state = get()
       const queueId = crypto.randomUUID()
       const tasks = { ...state.downloadTasks }
@@ -135,21 +135,44 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         }
       }
 
-      if (files.length === 0) return
+      if (files.length === 0) return false
 
       const queuedEntry = { ...entry, files, id: queueId, addedAt: Date.now() }
-      set({
-        downloadTasks: tasks,
-        downloadQueue: [...state.downloadQueue, queuedEntry],
-      })
-      invoke('enqueue_download_queue', { entry: toPersistedQueueEntry(queuedEntry) }).catch(() => {})
+      const taskUpdates = Object.fromEntries(
+        files
+          .map(file => file.task_id)
+          .filter((taskId): taskId is string => Boolean(taskId))
+          .map(taskId => [taskId, tasks[taskId]]),
+      )
+      try {
+        await invoke('enqueue_download_queue', { entry: toPersistedQueueEntry(queuedEntry) })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        get().addRuntimeWarning(`download enqueue failed: ${message}`)
+        return false
+      }
+      set((current) => ({
+        downloadTasks: { ...current.downloadTasks, ...taskUpdates },
+        downloadQueue: [...current.downloadQueue, queuedEntry],
+      }))
+      return true
     },
-    removeFromDownloadQueue: (id) => {
-      set((state) => ({ downloadQueue: state.downloadQueue.filter((entry) => entry.id !== id) }))
-      invoke('remove_download_queue_entry', { id }).catch(() => {})
+    removeFromDownloadQueue: async (id) => {
+      try {
+        await invoke('remove_download_queue_entry', { id })
+        set((state) => ({ downloadQueue: state.downloadQueue.filter((entry) => entry.id !== id) }))
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        get().addRuntimeWarning(`download queue removal failed: ${message}`)
+      }
     },
-    processDownloadQueue: () => {
-      invoke('process_download_queue').catch(() => {})
+    processDownloadQueue: async () => {
+      try {
+        await invoke('process_download_queue')
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        get().addRuntimeWarning(`download queue processing failed: ${message}`)
+      }
     },
     browseModelscope: async (repoId) => invoke<MsFileEntry[]>('browse_modelscope', { repoId }),
     downloadModelscopeFiles: async (repoId, files, saveDir) => {
@@ -222,7 +245,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       }
       set({ downloadTasks: tasks })
     },
-    persistQueue: () => {
+    persistQueue: async () => {
       const { downloadQueue, downloadTasks } = get()
       const queue = downloadQueue.map((entry) => {
         const files = entry.files.map((file) => {
@@ -262,7 +285,12 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         }
       })
 
-      invoke('persist_download_queue', { queue }).catch(() => {})
+      try {
+        await invoke('persist_download_queue', { queue })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        get().addRuntimeWarning(`download queue persistence failed: ${message}`)
+      }
     },
     resumeAllDownloads: async () => {
       let identities: Array<{ taskId: string; runId: string; version: number }> = []
@@ -320,31 +348,37 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       }
       set({ downloadTasks: tasks, downloadQueue: [] })
     },
-    clearCompletedDownloadTasks: () => {
-      const tasks = { ...get().downloadTasks }
-      for (const key of Object.keys(tasks)) {
-        if (tasks[key].status === 'completed') {
-          delete tasks[key]
+    clearCompletedDownloadTasks: async () => {
+      try {
+        await invoke('clear_download_tasks_by_status', { statuses: ['completed'] })
+        const tasks = { ...get().downloadTasks }
+        for (const key of Object.keys(tasks)) {
+          if (tasks[key].status === 'completed') delete tasks[key]
         }
+        set({ downloadTasks: tasks })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        get().addRuntimeWarning(`completed download cleanup failed: ${message}`)
       }
-      set({ downloadTasks: tasks })
-      invoke('clear_download_tasks_by_status', { statuses: ['completed'] }).catch(() => {})
     },
-    clearFailedDownloadTasks: () => {
-      const tasks = { ...get().downloadTasks }
-      for (const key of Object.keys(tasks)) {
-        if (tasks[key].status === 'error') {
-          delete tasks[key]
+    clearFailedDownloadTasks: async () => {
+      try {
+        await invoke('clear_download_tasks_by_status', { statuses: ['error'] })
+        const tasks = { ...get().downloadTasks }
+        for (const key of Object.keys(tasks)) {
+          if (tasks[key].status === 'error') delete tasks[key]
         }
+        set({ downloadTasks: tasks })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        get().addRuntimeWarning(`failed download cleanup failed: ${message}`)
       }
-      set({ downloadTasks: tasks })
-      invoke('clear_download_tasks_by_status', { statuses: ['error'] }).catch(() => {})
     },
     retryFailedDownload: (taskId) => {
       const task = get().downloadTasks[taskId]
       if (!task || task.status !== 'error') return
 
-      get().addToDownloadQueue({
+      void get().addToDownloadQueue({
         repoId: task.repoId,
         source: task.source as 'modelscope' | 'huggingface',
         files: [{
@@ -376,11 +410,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         return
       }
 
-      const tasks = { ...get().downloadTasks }
-      delete tasks[taskId]
-      set({ downloadTasks: tasks })
-
-      get().addToDownloadQueue({
+      await get().addToDownloadQueue({
         repoId: task.repoId,
         source: task.source as 'modelscope' | 'huggingface',
         files: [{

@@ -96,7 +96,7 @@ export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
 
 export function getGuideTourSteps(lang: string): LocalizedGuideTourStep[] {
   return GUIDE_TOUR_STEPS.map((step) => {
-    const copy = lang === 'zh-CN' ? step.zh : step.en
+    const copy = selectLocalizedCopy(lang, step.zh, step.en)
     return {
       id: step.id,
       tab: step.tab,
@@ -106,3 +106,4 @@ export function getGuideTourSteps(lang: string): LocalizedGuideTourStep[] {
     }
   })
 }
+import { selectLocalizedCopy } from '../../i18n'

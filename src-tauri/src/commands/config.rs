@@ -1,3 +1,4 @@
+use crate::error::{AppError, AppResult};
 use crate::models::{AppState, GlobalConfig, InstanceConfig, ProxyConfig, WindowState};
 use crate::vector_policy::normalize_for_launch;
 use std::collections::HashMap;
@@ -40,13 +41,12 @@ fn persist_global_config_unlocked(
         }
         return Ok(false);
     }
-    let tmp = config_dir.join("instances.json.tmp");
-    std::fs::write(&tmp, &json).map_err(|e| format!("保存失败: {}", e))?;
-    if path.exists() {
-        let _ = std::fs::remove_file(&path);
-    }
-    std::fs::rename(&tmp, &path).map_err(|e| format!("保存失败: {}", e))?;
-    let _ = std::fs::copy(&path, config_dir.join("instances.json.bak"));
+    crate::persistence::atomic_write(
+        &path,
+        json.as_bytes(),
+        Some(&config_dir.join("instances.json.bak")),
+    )
+    .map_err(|error| format!("保存失败: {error}"))?;
     Ok(true)
 }
 
@@ -149,7 +149,9 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
                 "restore-cleanup",
             );
         }
-        let _ = persist_global_config(config_dir, &global);
+        if let Err(error) = persist_global_config(config_dir, &global) {
+            eprintln!("Failed to persist stale runtime cleanup: {error}");
+        }
     }
 
     global
@@ -211,7 +213,7 @@ pub async fn save_config(
     last_tab: String,
     dark_mode: bool,
     state: tauri::State<'_, AppState>,
-) -> Result<HashMap<String, InstanceConfig>, String> {
+) -> AppResult<HashMap<String, InstanceConfig>> {
     let normalized = normalize_instances_for_save(instances);
     let instances = normalized.all;
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -224,7 +226,10 @@ pub async fn save_config(
         last_tab,
         dark_mode,
     };
-    std::fs::create_dir_all(&config_dir).map_err(|e| format!("{}", e))?;
+    std::fs::create_dir_all(&config_dir).map_err(|error| {
+        AppError::new("CONFIG_DIRECTORY_WRITE", error.to_string(), true)
+            .with_context("path", config_dir.display().to_string())
+    })?;
     {
         let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
         // Runtime-owned fields must be sampled after taking the write lock. Otherwise a
@@ -233,14 +238,18 @@ pub async fn save_config(
         let engine_names = state.engine_names.lock().unwrap().clone();
         let mut global = load_global_config_file(&config_dir);
         apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
-        persist_global_config_unlocked(&config_dir, &global)?;
+        persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
+            AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
+                "path",
+                config_dir.join("instances.json").display().to_string(),
+            )
+        })?;
     }
     let mut stored = state.instances.lock().unwrap();
     *stored = instances.clone();
     Ok(normalized.changed)
 }
 
-#[tauri::command]
 pub async fn load_config(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -322,6 +331,19 @@ pub fn read_window_state_from_disk(config_dir: &std::path::Path) -> Option<Windo
     }
 }
 
+pub fn persist_window_state(
+    config_dir: &std::path::Path,
+    window_state: &WindowState,
+) -> AppResult<()> {
+    let json = serde_json::to_vec(window_state)
+        .map_err(|error| AppError::new("WINDOW_STATE_SERIALIZE", error.to_string(), false))?;
+    let path = config_dir.join("window_state.json");
+    crate::persistence::atomic_write(&path, &json, None).map_err(|error| {
+        AppError::new("WINDOW_STATE_PERSIST_FAILED", error, true)
+            .with_context("path", path.display().to_string())
+    })
+}
+
 #[tauri::command]
 pub fn save_window_state(
     x: i32,
@@ -329,18 +351,15 @@ pub fn save_window_state(
     width: u32,
     height: u32,
     state: tauri::State<'_, AppState>,
-) {
+) -> AppResult<()> {
     let config_dir = state.config_dir.lock().unwrap().clone();
-    let _ = std::fs::create_dir_all(&config_dir);
     let ws = WindowState {
         x,
         y,
         width,
         height,
     };
-    if let Ok(json) = serde_json::to_string(&ws) {
-        let _ = std::fs::write(config_dir.join("window_state.json"), json);
-    }
+    persist_window_state(&config_dir, &ws)
 }
 
 #[tauri::command]
@@ -491,5 +510,22 @@ mod tests {
         assert_eq!(config.proxy_config.public_api_key, "proxy-secret");
         assert_eq!(config.default_engine_id, "engine-new");
         assert_eq!(config.last_tab, "dashboard");
+    }
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn load_config(
+        state: tauri::State<'_, AppState>,
+        app: tauri::AppHandle,
+    ) -> crate::error::AppResult<GlobalConfig> {
+        super::load_config(state, app)
+            .await
+            .map_err(crate::error::AppError::from)
     }
 }

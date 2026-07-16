@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use sysinfo::{Pid, ProcessesToUpdate, System};
@@ -48,6 +48,8 @@ const VIRTUAL_KEYWORDS: &[&str] = &[
     "nebula",
 ];
 
+static WORKERS_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 // -------------------------------------------------------------------
 // Persistence.
 // -------------------------------------------------------------------
@@ -77,21 +79,48 @@ fn load_workers_from(path: &std::path::Path) -> Vec<WorkerInfo> {
         .unwrap_or_default()
 }
 
-pub(crate) fn save_workers(workers: &[WorkerInfo]) {
+pub(crate) fn save_workers(workers: &[WorkerInfo]) -> Result<(), String> {
     save_workers_to(&workers_path(), workers)
 }
 
-fn save_workers_to(path: &std::path::Path, workers: &[WorkerInfo]) {
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    // Atomic write: write a temporary file first, then rename it.
-    let tmp = path.with_extension("json.tmp");
-    if let Ok(json) = serde_json::to_string_pretty(workers) {
-        if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, path).is_err() {
-            let _ = std::fs::remove_file(&tmp);
+fn save_workers_to(path: &std::path::Path, workers: &[WorkerInfo]) -> Result<(), String> {
+    let json = serde_json::to_vec_pretty(workers)
+        .map_err(|error| format!("failed to serialize workers: {error}"))?;
+    crate::persistence::atomic_write(path, &json, None)
+}
+
+pub(crate) fn update_workers<R, F>(state: &AppState, update: F) -> Result<R, String>
+where
+    F: FnOnce(&mut Vec<WorkerInfo>) -> R,
+{
+    let _write_guard = WORKERS_WRITE_LOCK
+        .lock()
+        .map_err(|_| "worker persistence lock is poisoned".to_string())?;
+    let (result, previous, snapshot) = {
+        let mut workers = state
+            .workers
+            .lock()
+            .map_err(|_| "worker state lock is poisoned".to_string())?;
+        let previous = workers.clone();
+        let result = update(&mut workers);
+        (result, previous, workers.clone())
+    };
+    if let Err(error) = save_workers(&snapshot) {
+        if let Ok(mut workers) = state.workers.lock() {
+            *workers = previous;
         }
+        return Err(error);
     }
+    Ok(result)
+}
+
+pub(crate) fn stable_discovered_worker_id(host: &str, port: u16, service: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in format!("{host}|{port}|{service}").bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("auto-{hash:016x}")
 }
 
 // -------------------------------------------------------------------
@@ -193,7 +222,6 @@ async fn tcp_connect_succeeded(socket_addr: SocketAddr, connect_timeout: Duratio
     )
 }
 
-#[tauri::command]
 pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerInfo>, String> {
     let prefixes = get_lan_prefixes();
     let port: u16 = 50052;
@@ -271,7 +299,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                             // Use lock().await instead of try_lock() so high concurrency cannot silently drop discovered workers.
                             let mut list = discovered.lock().await;
                             list.push(WorkerInfo {
-                                id: format!("auto-{}", host.replace('.', "-")),
+                                id: stable_discovered_worker_id(&host, port, &worker_name),
                                 host,
                                 port,
                                 name: worker_name,
@@ -295,31 +323,20 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
 
     match tokio_timeout(overall_timeout, scan_future).await {
         Ok(results) => {
-            let mut existing = if let Ok(w) = state.workers.lock() {
-                if w.is_empty() {
-                    load_workers()
-                } else {
-                    w.clone()
+            let merged = update_workers(&state, |existing| {
+                for discovered in &results {
+                    if let Some(worker) = existing.iter_mut().find(|worker| {
+                        worker.host == discovered.host && worker.port == discovered.port
+                    }) {
+                        worker.status = WorkerStatus::Online;
+                        worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                    } else {
+                        existing.push(discovered.clone());
+                    }
                 }
-            } else {
-                load_workers()
-            };
-            for d in &results {
-                if let Some(e) = existing
-                    .iter_mut()
-                    .find(|w| w.host == d.host && w.port == d.port)
-                {
-                    e.status = WorkerStatus::Online;
-                    e.last_seen = Some(chrono::Utc::now().to_rfc3339());
-                } else {
-                    existing.push(d.clone());
-                }
-            }
-            save_workers(&existing);
-            if let Ok(mut w) = state.workers.lock() {
-                *w = existing.clone();
-            }
-            Ok(existing)
+                existing.clone()
+            })?;
+            Ok(merged)
         }
         Err(_) => {
             // Timeout: return whatever was found so far.
@@ -329,7 +346,6 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
     }
 }
 
-#[tauri::command]
 pub async fn test_worker(
     host: String,
     port: u16,
@@ -339,40 +355,33 @@ pub async fn test_worker(
 
     match utils::connect_tcp(&host, port, timeout) {
         Ok(_) => {
-            let mut workers = load_workers();
-            if let Some(w) = workers
-                .iter_mut()
-                .find(|w| w.host == host && w.port == port)
-            {
-                w.status = WorkerStatus::Online;
-                w.last_seen = Some(chrono::Utc::now().to_rfc3339());
-            }
-            save_workers(&workers);
-            if let Ok(mut w) = state.workers.lock() {
-                *w = workers;
-            }
+            update_workers(&state, |workers| {
+                if let Some(worker) = workers
+                    .iter_mut()
+                    .find(|worker| worker.host == host && worker.port == port)
+                {
+                    worker.status = WorkerStatus::Online;
+                    worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                }
+            })?;
 
             Ok(serde_json::json!({ "ok": true }))
         }
         Err(e) => {
-            let mut workers = load_workers();
-            if let Some(w) = workers
-                .iter_mut()
-                .find(|w| w.host == host && w.port == port)
-            {
-                w.status = WorkerStatus::Offline;
-            }
-            save_workers(&workers);
-            if let Ok(mut w) = state.workers.lock() {
-                *w = workers;
-            }
+            update_workers(&state, |workers| {
+                if let Some(worker) = workers
+                    .iter_mut()
+                    .find(|worker| worker.host == host && worker.port == port)
+                {
+                    worker.status = WorkerStatus::Offline;
+                }
+            })?;
 
             Ok(serde_json::json!({ "ok": false, "error": e }))
         }
     }
 }
 
-#[tauri::command]
 pub async fn get_worker_info(host: String, _port: u16) -> Result<Vec<WorkerDevice>, String> {
     // Check whether this is a local worker.
     let is_local =
@@ -458,12 +467,10 @@ fn is_local_ip(host: &str) -> bool {
     false
 }
 
-#[tauri::command]
 pub async fn is_local_host(host: String) -> Result<bool, String> {
     Ok(host == "127.0.0.1" || host == "localhost" || host == "::1" || is_local_ip(&host))
 }
 
-#[tauri::command]
 pub async fn get_local_host() -> Result<String, String> {
     if let Ok(ifs) = if_addrs::get_if_addrs() {
         for iface in ifs {
@@ -482,84 +489,80 @@ pub async fn get_local_host() -> Result<String, String> {
     Ok("127.0.0.1".to_string())
 }
 
-#[tauri::command]
 pub async fn add_worker(
     host: String,
     port: u16,
     name: String,
     state: State<'_, AppState>,
 ) -> Result<WorkerInfo, String> {
-    let mut workers = load_workers();
-
-    if let Some(existing) = workers
-        .iter_mut()
-        .find(|w| w.host == host && w.port == port)
-    {
-        if !name.is_empty() {
-            existing.name = name;
+    update_workers(&state, |workers| {
+        if let Some(existing) = workers
+            .iter_mut()
+            .find(|worker| worker.host == host && worker.port == port)
+        {
+            if !name.is_empty() {
+                existing.name = name.clone();
+            }
+            return existing.clone();
         }
-        let result = existing.clone();
-        let _ = existing; // Release the mutable borrow.
-        save_workers(&workers);
-        if let Ok(mut w) = state.workers.lock() {
-            *w = workers.clone();
-        }
-        return Ok(result);
-    }
 
-    let worker = WorkerInfo {
-        id: uuid::Uuid::new_v4().to_string(),
-        host: host.clone(),
-        port,
-        name: if name.is_empty() { host.clone() } else { name },
-        devices: Vec::new(),
-        status: WorkerStatus::Unknown,
-        last_seen: None,
-        auto_discovered: false,
-    };
-
-    workers.push(worker.clone());
-    save_workers(&workers);
-    if let Ok(mut w) = state.workers.lock() {
-        *w = workers;
-    }
-
-    Ok(worker)
+        let worker = WorkerInfo {
+            id: uuid::Uuid::new_v4().to_string(),
+            host: host.clone(),
+            port,
+            name: if name.is_empty() { host.clone() } else { name },
+            devices: Vec::new(),
+            status: WorkerStatus::Unknown,
+            last_seen: None,
+            auto_discovered: false,
+        };
+        workers.push(worker.clone());
+        worker
+    })
 }
 
-#[tauri::command]
 pub async fn remove_worker(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut workers = load_workers();
-    workers.retain(|w| w.id != id);
-    save_workers(&workers);
-    if let Ok(mut w) = state.workers.lock() {
-        *w = workers;
-    }
-    Ok(())
+    update_workers(&state, |workers| workers.retain(|worker| worker.id != id))
 }
 
-#[tauri::command]
 pub async fn get_workers(state: State<'_, AppState>) -> Result<Vec<WorkerInfo>, String> {
-    let workers = load_workers();
-    if let Ok(mut w) = state.workers.lock() {
-        *w = workers.clone();
-    }
-    Ok(workers)
+    state
+        .workers
+        .lock()
+        .map(|workers| workers.clone())
+        .map_err(|_| "worker state lock is poisoned".to_string())
 }
 
-#[tauri::command]
 pub async fn find_rpc_server_binary(_state: State<'_, AppState>) -> Result<Option<String>, String> {
     // #8: Delegate to the internal function to remove duplication.
     Ok(find_rpc_server_binary_internal())
 }
 
-#[tauri::command]
 pub async fn generate_rpc_launch_cmd(port: u16) -> Result<String, String> {
     let binary = find_rpc_server_binary_internal().unwrap_or_else(|| RPC_SERVER_NAME.to_string());
-    Ok(format!("{} --host 127.0.0.1 --port {}", binary, port))
+    Ok(format!(
+        "{} --host 127.0.0.1 --port {}",
+        quote_launch_binary(&binary),
+        port
+    ))
 }
 
-#[tauri::command]
+fn quote_launch_binary(binary: &str) -> String {
+    if !binary.chars().any(|character| {
+        character.is_whitespace() || matches!(character, '"' | '\'' | '&' | '(' | ')')
+    }) {
+        return binary.to_string();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        format!("\"{}\"", binary.replace('"', "\\\""))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        format!("'{}'", binary.replace('\'', "'\"'\"'"))
+    }
+}
+
 pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || stop_verified_rpc_server(port))
         .await
@@ -732,9 +735,12 @@ pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
     None
 }
 
-#[tauri::command]
-pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_json::Value, String> {
-    let workers = load_workers();
+pub async fn get_cluster_metrics(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let workers = state
+        .workers
+        .lock()
+        .map_err(|_| "worker state lock is poisoned".to_string())?
+        .clone();
     let online: Vec<&WorkerInfo> = workers
         .iter()
         .filter(|w| w.status == WorkerStatus::Online)
@@ -770,7 +776,6 @@ pub async fn get_cluster_metrics(_state: State<'_, AppState>) -> Result<serde_js
     }))
 }
 
-#[tauri::command]
 pub async fn start_local_rpc(
     engine_dir: Option<String>,
     port: u16,
@@ -858,7 +863,7 @@ mod tests {
             auto_discovered: false,
         }];
 
-        save_workers_to(&test_path, &test_workers);
+        save_workers_to(&test_path, &test_workers).unwrap();
         let loaded = load_workers_from(&test_path);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].host, "192.168.1.10");
@@ -893,6 +898,28 @@ mod tests {
     }
 
     #[test]
+    fn discovered_worker_identity_includes_host_port_and_service() {
+        let first = stable_discovered_worker_id("worker.local", 50052, "rpc-a");
+        let same = stable_discovered_worker_id("worker.local", 50052, "rpc-a");
+        let other_port = stable_discovered_worker_id("worker.local", 50053, "rpc-a");
+        let other_service = stable_discovered_worker_id("worker.local", 50052, "rpc-b");
+
+        assert_eq!(first, same);
+        assert_ne!(first, other_port);
+        assert_ne!(first, other_service);
+    }
+
+    #[test]
+    fn launch_binary_with_spaces_is_shell_quoted() {
+        let quoted = quote_launch_binary("C:/Program Files/Llama/rpc-server.exe");
+
+        #[cfg(target_os = "windows")]
+        assert_eq!(quoted, "\"C:/Program Files/Llama/rpc-server.exe\"");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(quoted, "'C:/Program Files/Llama/rpc-server.exe'");
+    }
+
+    #[test]
     fn rpc_process_identity_requires_the_expected_executable_name() {
         assert!(is_rpc_server_executable(std::path::Path::new(
             RPC_SERVER_NAME
@@ -917,5 +944,129 @@ mod tests {
         #[cfg(not(target_os = "windows"))]
         const NAME: &str = "rpc-server";
         format!("{} --host 127.0.0.1 --port {}", NAME, port)
+    }
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn scan_workers_tcp(
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<Vec<WorkerInfo>> {
+        super::scan_workers_tcp(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn test_worker(
+        host: String,
+        port: u16,
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<serde_json::Value> {
+        super::test_worker(host, port, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_worker_info(
+        host: String,
+        _port: u16,
+    ) -> crate::error::AppResult<Vec<WorkerDevice>> {
+        super::get_worker_info(host, _port)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn is_local_host(host: String) -> crate::error::AppResult<bool> {
+        super::is_local_host(host)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_local_host() -> crate::error::AppResult<String> {
+        super::get_local_host()
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn add_worker(
+        host: String,
+        port: u16,
+        name: String,
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<WorkerInfo> {
+        super::add_worker(host, port, name, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn remove_worker(
+        id: String,
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<()> {
+        super::remove_worker(id, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_workers(
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<Vec<WorkerInfo>> {
+        super::get_workers(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn find_rpc_server_binary(
+        _state: State<'_, AppState>,
+    ) -> crate::error::AppResult<Option<String>> {
+        super::find_rpc_server_binary(_state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn generate_rpc_launch_cmd(port: u16) -> crate::error::AppResult<String> {
+        super::generate_rpc_launch_cmd(port)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn stop_local_worker(port: u16) -> crate::error::AppResult<bool> {
+        super::stop_local_worker(port)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_cluster_metrics(
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<serde_json::Value> {
+        super::get_cluster_metrics(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn start_local_rpc(
+        engine_dir: Option<String>,
+        port: u16,
+    ) -> crate::error::AppResult<serde_json::Value> {
+        super::start_local_rpc(engine_dir, port)
+            .await
+            .map_err(crate::error::AppError::from)
     }
 }

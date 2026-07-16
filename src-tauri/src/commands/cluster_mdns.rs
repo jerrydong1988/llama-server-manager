@@ -1,5 +1,6 @@
-use crate::commands::cluster::{load_workers, save_workers};
-use crate::models::{WorkerInfo, WorkerStatus};
+use crate::commands::cluster::{stable_discovered_worker_id, update_workers};
+use crate::models::{AppState, WorkerInfo, WorkerStatus};
+use tauri::Manager;
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 
@@ -10,8 +11,7 @@ struct DiscoveryTask {
 
 static DISCOVERY_TASK: Mutex<Option<DiscoveryTask>> = Mutex::const_new(None);
 
-#[tauri::command]
-pub async fn start_mdns_discovery() -> Result<String, String> {
+pub async fn start_mdns_discovery(app: tauri::AppHandle) -> Result<String, String> {
     let mut task = DISCOVERY_TASK.lock().await;
     if task
         .as_ref()
@@ -25,7 +25,7 @@ pub async fn start_mdns_discovery() -> Result<String, String> {
 
     let (cancel, cancel_receiver) = oneshot::channel();
     let handle = tokio::spawn(async move {
-        if let Err(e) = run_mdns_discovery(cancel_receiver).await {
+        if let Err(e) = run_mdns_discovery(app, cancel_receiver).await {
             eprintln!("mDNS discovery error: {}", e);
         }
     });
@@ -34,7 +34,6 @@ pub async fn start_mdns_discovery() -> Result<String, String> {
     Ok("started".into())
 }
 
-#[tauri::command]
 pub async fn stop_mdns_discovery() -> Result<String, String> {
     let Some(mut task) = DISCOVERY_TASK.lock().await.take() else {
         return Ok("stopped".into());
@@ -51,7 +50,10 @@ pub async fn stop_mdns_discovery() -> Result<String, String> {
     Ok("stopped".into())
 }
 
-async fn run_mdns_discovery(mut cancel: oneshot::Receiver<()>) -> Result<(), String> {
+async fn run_mdns_discovery(
+    app: tauri::AppHandle,
+    mut cancel: oneshot::Receiver<()>,
+) -> Result<(), String> {
     let mdns = mdns_sd::ServiceDaemon::new().map_err(|e| format!("mdns init: {}", e))?;
     let receiver = mdns
         .browse("_rpc._tcp.local.")
@@ -72,24 +74,31 @@ async fn run_mdns_discovery(mut cancel: oneshot::Receiver<()>) -> Result<(), Str
                         .map(|a| a.to_string())
                         .unwrap_or_else(|| info.get_hostname().to_string());
                     let port = info.get_port();
-
-                    let mut workers = load_workers();
-                    if !workers.iter().any(|w| w.host == host && w.port == port) {
+                    let service_name = info
+                        .get_fullname()
+                        .trim_end_matches("._rpc._tcp.local.")
+                        .to_string();
+                    let state = app.state::<AppState>();
+                    update_workers(&state, |workers| {
+                        if let Some(worker) = workers
+                            .iter_mut()
+                            .find(|worker| worker.host == host && worker.port == port)
+                        {
+                            worker.status = WorkerStatus::Online;
+                            worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                            return;
+                        }
                         workers.push(WorkerInfo {
-                            id: format!("mdns-{}", host.replace('.', "-")),
+                            id: stable_discovered_worker_id(&host, port, &service_name),
                             host,
                             port,
-                            name: info
-                                .get_fullname()
-                                .trim_end_matches("._rpc._tcp.local.")
-                                .to_string(),
+                            name: service_name,
                             devices: Vec::new(),
                             status: WorkerStatus::Online,
                             last_seen: Some(chrono::Utc::now().to_rfc3339()),
                             auto_discovered: true,
                         });
-                        save_workers(&workers);
-                    }
+                    })?;
                 }
             }
         }
@@ -97,4 +106,25 @@ async fn run_mdns_discovery(mut cancel: oneshot::Receiver<()>) -> Result<(), Str
 
     let _ = mdns.shutdown();
     Ok(())
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn start_mdns_discovery(app: tauri::AppHandle) -> crate::error::AppResult<String> {
+        super::start_mdns_discovery(app)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn stop_mdns_discovery() -> crate::error::AppResult<String> {
+        super::stop_mdns_discovery()
+            .await
+            .map_err(crate::error::AppError::from)
+    }
 }

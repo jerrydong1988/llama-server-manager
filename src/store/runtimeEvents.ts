@@ -1,5 +1,5 @@
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { invokeApp as invoke } from '../lib/ipc'
+import { listen, type Event } from '@tauri-apps/api/event'
 import type { StoreApi } from 'zustand'
 import { formatStartupCommand } from './commandFormatting'
 import type {
@@ -30,13 +30,15 @@ type DownloadEventPayload = {
 
 declare global {
   interface Window {
-    __lsm_listeners_registered?: boolean
+    __lsm_listener_registry?: Record<string, 'pending' | 'registered'>
+    __lsm_listener_retries?: Record<string, ReturnType<typeof setTimeout>>
   }
 }
 
 const lastProgressUpdate: Record<string, number> = {}
 let scanModelDebounce: ReturnType<typeof setTimeout> | null = null
-let sysMetricsTimer: ReturnType<typeof setInterval> | null = null
+let sysMetricsTimer: ReturnType<typeof setTimeout> | null = null
+let sysMetricsInFlight = false
 
 const runMatches = (payload: { runId?: string }, task: DownloadProgress) => (
   payload.runId ? task.runId === payload.runId : !task.runId
@@ -108,18 +110,23 @@ function applyDownloadPatch(
 function startSysMetricsPolling(store: StoreLike) {
   if (sysMetricsTimer) return
 
-  const fetchSysMetrics = () => {
-    invoke<SystemMetrics>('get_system_health')
-      .then((metrics) => {
-        store.getState().setSysMetrics(metrics)
-      })
-      .catch((error) => {
-        store.getState().addRuntimeWarning(`system metrics polling failed: ${error?.message || String(error)}`)
-      })
+  const fetchSysMetrics = async () => {
+    if (sysMetricsInFlight) return
+    sysMetricsInFlight = true
+    try {
+      const metrics = await invoke<SystemMetrics>('get_system_health')
+      store.getState().setSysMetrics(metrics)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      store.getState().addRuntimeWarning(`system metrics polling failed: ${message}`)
+    } finally {
+      sysMetricsInFlight = false
+      const delay = document.visibilityState === 'hidden' ? 15_000 : 5_000
+      sysMetricsTimer = setTimeout(fetchSysMetrics, delay)
+    }
   }
 
-  fetchSysMetrics()
-  sysMetricsTimer = setInterval(fetchSysMetrics, 5000)
+  sysMetricsTimer = setTimeout(fetchSysMetrics, 0)
 }
 
 function warnListenerFailure(store: StoreLike, eventName: string, error: unknown) {
@@ -127,40 +134,69 @@ function warnListenerFailure(store: StoreLike, eventName: string, error: unknown
   store.getState().addRuntimeWarning(`listener "${eventName}" failed to register: ${message}`)
 }
 
+function warnAsyncFailure(store: StoreLike, operation: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error)
+  store.getState().addRuntimeWarning(`${operation} failed: ${message}`)
+}
+
+const LISTENER_RETRY_DELAYS = [250, 1_000, 3_000, 10_000, 30_000]
+
+function registerListener<T>(
+  store: StoreLike,
+  eventName: string,
+  handler: (event: Event<T>) => void,
+  attempt = 0,
+) {
+  const globalWindow = window as Window & typeof globalThis
+  const registry = globalWindow.__lsm_listener_registry ||= {}
+  globalWindow.__lsm_listener_retries ||= {}
+  if (registry[eventName]) return
+
+  registry[eventName] = 'pending'
+  void listen<T>(eventName, handler)
+    .then(() => {
+      registry[eventName] = 'registered'
+      const retry = globalWindow.__lsm_listener_retries?.[eventName]
+      if (retry) clearTimeout(retry)
+      delete globalWindow.__lsm_listener_retries?.[eventName]
+    })
+    .catch((error) => {
+      delete registry[eventName]
+      warnListenerFailure(store, eventName, error)
+      if (attempt >= LISTENER_RETRY_DELAYS.length) return
+      globalWindow.__lsm_listener_retries![eventName] = setTimeout(
+        () => registerListener(store, eventName, handler, attempt + 1),
+        LISTENER_RETRY_DELAYS[attempt],
+      )
+    })
+}
+
 export function registerGlobalStoreListeners(
   store: StoreLike,
   startupTimings: { name: string; ms: number }[],
 ) {
-  const globalWindow = window as Window & typeof globalThis
-  if (globalWindow.__lsm_listeners_registered) {
-    startSysMetricsPolling(store)
-    return
-  }
-
-  globalWindow.__lsm_listeners_registered = true
-
-  listen<{ name: string; ms: number }>('startup-timing', (event) => {
+  registerListener<{ name: string; ms: number }>(store, 'startup-timing', (event) => {
     startupTimings.push({ name: event.payload.name, ms: event.payload.ms })
-  }).catch((error) => warnListenerFailure(store, 'startup-timing', error))
+  })
 
-  listen<{ instanceId: string; text: string }>('server-log', (event) => {
+  registerListener<{ instanceId: string; text: string }>(store, 'server-log', (event) => {
     store.getState().addLog({
       instanceId: event.payload.instanceId,
       text: event.payload.text,
       timestamp: Date.now(),
     })
-  }).catch((error) => warnListenerFailure(store, 'server-log', error))
+  })
 
-  listen<{ instanceId: string; lines: string[] }>('server-log-batch', (event) => {
+  registerListener<{ instanceId: string; lines: string[] }>(store, 'server-log-batch', (event) => {
     const timestamp = Date.now()
     store.getState().addLogs(event.payload.lines.map((text, index) => ({
       instanceId: event.payload.instanceId,
       text,
       timestamp: timestamp + index,
     })))
-  }).catch((error) => warnListenerFailure(store, 'server-log-batch', error))
+  })
 
-  listen<{ instanceId: string; pid: number; port: number; command: string }>('server-started', (event) => {
+  registerListener<{ instanceId: string; pid: number; port: number; command: string }>(store, 'server-started', (event) => {
     const state = store.getState()
     state.updateInstance(event.payload.instanceId, {
       status: 'running',
@@ -172,10 +208,10 @@ export function registerGlobalStoreListeners(
       text: `${formatStartupCommand(event.payload.command)}\n-- PID: ${event.payload.pid} | Port: ${event.payload.port}`,
       timestamp: Date.now(),
     })
-    void state.saveConfig().catch(() => {})
-  }).catch((error) => warnListenerFailure(store, 'server-started', error))
+    void state.saveConfig().catch(error => warnAsyncFailure(store, 'runtime config save', error))
+  })
 
-  listen<{ instanceId: string }>('server-stopped', (event) => {
+  registerListener<{ instanceId: string }>(store, 'server-stopped', (event) => {
     const state = store.getState()
     const instance = state.instances.find((item) => item.id === event.payload.instanceId)
     if (instance) {
@@ -185,31 +221,31 @@ export function registerGlobalStoreListeners(
         healthCheck: isError ? 'fail' : 'pending',
       })
     }
-    void state.saveConfig().catch(() => {})
-  }).catch((error) => warnListenerFailure(store, 'server-stopped', error))
+    void state.saveConfig().catch(error => warnAsyncFailure(store, 'runtime config save', error))
+  })
 
-  listen<{ instanceId: string; error: string }>('server-error', (event) => {
+  registerListener<{ instanceId: string; error: string }>(store, 'server-error', (event) => {
     const state = store.getState()
     state.updateInstance(event.payload.instanceId, {
       status: 'error',
       healthCheck: 'fail',
     })
-    void state.saveConfig().catch(() => {})
-  }).catch((error) => warnListenerFailure(store, 'server-error', error))
+    void state.saveConfig().catch(error => warnAsyncFailure(store, 'runtime config save', error))
+  })
 
-  listen<{ instanceId: string; status: string }>('health-status', (event) => {
+  registerListener<{ instanceId: string; status: string }>(store, 'health-status', (event) => {
     store.getState().updateInstance(event.payload.instanceId, {
       healthCheck: event.payload.status === 'ok' ? 'ok' : 'fail',
     })
-  }).catch((error) => warnListenerFailure(store, 'health-status', error))
+  })
 
-  listen<MonitoringFrame>('monitoring-frame', (event) => {
+  registerListener<MonitoringFrame>(store, 'monitoring-frame', (event) => {
     store.getState().ingestMonitoringFrame(event.payload)
-  }).catch((error) => warnListenerFailure(store, 'monitoring-frame', error))
+  })
 
-  listen<PerfUpdateEvent>('perf-update', (event) => {
+  registerListener<PerfUpdateEvent>(store, 'perf-update', (event) => {
     store.getState().applyPerfUpdate(event.payload)
-  }).catch((error) => warnListenerFailure(store, 'perf-update', error))
+  })
 
   invoke<MonitoringFrame[]>('get_monitoring_series', { rangeMs: 3_600_000 })
     .then((frames) => store.getState().hydrateMonitoringFrames(frames))
@@ -219,7 +255,7 @@ export function registerGlobalStoreListeners(
       )
     })
 
-  listen<DownloadEventPayload>('download-started', (event) => {
+  registerListener<DownloadEventPayload>(store, 'download-started', (event) => {
     const applied = applyDownloadPatch(store, event.payload, {
       status: 'active',
       downloaded: event.payload.downloaded ?? 0,
@@ -234,9 +270,9 @@ export function registerGlobalStoreListeners(
       ? state.downloadQueue.filter((entry) => entry.id !== event.payload.queueId)
       : state.downloadQueue.filter((entry) => !entry.files.some((file) => file.task_id === event.payload.taskId))
     store.setState({ downloadQueue: queue })
-  }).catch((error) => warnListenerFailure(store, 'download-started', error))
+  })
 
-  listen<DownloadEventPayload>('download-progress', (event) => {
+  registerListener<DownloadEventPayload>(store, 'download-progress', (event) => {
     const state = store.getState()
     const taskId = taskIdFromEvent(event.payload, state.downloadTasks)
     if (!taskId) return
@@ -251,9 +287,9 @@ export function registerGlobalStoreListeners(
       total: event.payload.total ?? 0,
       speed: event.payload.speed ?? 0,
     })
-  }).catch((error) => warnListenerFailure(store, 'download-progress', error))
+  })
 
-  listen<DownloadEventPayload>('download-complete', (event) => {
+  registerListener<DownloadEventPayload>(store, 'download-complete', (event) => {
     const applied = applyDownloadPatch(store, event.payload, {
       status: 'completed',
       path: event.payload.path,
@@ -262,31 +298,31 @@ export function registerGlobalStoreListeners(
     if (!applied) return
 
     const state = store.getState()
-    state.processDownloadQueue()
+    void state.processDownloadQueue()
     scanModelDebounce ||= setTimeout(() => {
       scanModelDebounce = null
       const nextState = store.getState()
       nextState.scanModels(nextState.modelDirs)
     }, 2000)
-  }).catch((error) => warnListenerFailure(store, 'download-complete', error))
+  })
 
-  listen<DownloadEventPayload>('download-cancelled', (event) => {
+  registerListener<DownloadEventPayload>(store, 'download-cancelled', (event) => {
     const applied = applyDownloadPatch(store, event.payload, { status: 'cancelled', speed: 0 })
     if (!applied) return
 
-    store.getState().processDownloadQueue()
-  }).catch((error) => warnListenerFailure(store, 'download-cancelled', error))
+    void store.getState().processDownloadQueue()
+  })
 
-  listen<DownloadEventPayload>('download-paused', (event) => {
+  registerListener<DownloadEventPayload>(store, 'download-paused', (event) => {
     applyDownloadPatch(store, event.payload, {
       status: 'paused',
       downloaded: event.payload.downloaded ?? 0,
       total: event.payload.total ?? 0,
       speed: 0,
     })
-  }).catch((error) => warnListenerFailure(store, 'download-paused', error))
+  })
 
-  listen<DownloadEventPayload>('download-error', (event) => {
+  registerListener<DownloadEventPayload>(store, 'download-error', (event) => {
     const applied = applyDownloadPatch(store, event.payload, {
       status: 'error',
       error: event.payload.error,
@@ -294,18 +330,18 @@ export function registerGlobalStoreListeners(
     })
     if (!applied) return
 
-    store.getState().processDownloadQueue()
-  }).catch((error) => warnListenerFailure(store, 'download-error', error))
+    void store.getState().processDownloadQueue()
+  })
 
-  listen<DownloadEventPayload>('download-restarted', (event) => {
+  registerListener<DownloadEventPayload>(store, 'download-restarted', (event) => {
     applyDownloadPatch(store, event.payload, {
       downloaded: 0,
       speed: 0,
       remoteChanged: false,
     })
-  }).catch((error) => warnListenerFailure(store, 'download-restarted', error))
+  })
 
-  listen<DownloadEventPayload>('download-remote-changed', (event) => {
+  registerListener<DownloadEventPayload>(store, 'download-remote-changed', (event) => {
     const state = store.getState()
     const taskId = event.payload.taskId || Object.values(state.downloadTasks).find((task) => (
       task.fileName === event.payload.fileName
@@ -329,9 +365,9 @@ export function registerGlobalStoreListeners(
         remoteChanged: true,
       },
     })
-  }).catch((error) => warnListenerFailure(store, 'download-remote-changed', error))
+  })
 
-  listen<{ taskId?: string; fileName: string; version?: number }>('download-removed', (event) => {
+  registerListener<{ taskId?: string; fileName: string; version?: number }>(store, 'download-removed', (event) => {
     const state = store.getState()
     const taskId = event.payload.taskId || Object.values(state.downloadTasks).find((task) => (
       task.fileName === event.payload.fileName
@@ -342,7 +378,7 @@ export function registerGlobalStoreListeners(
     const tasks = { ...state.downloadTasks }
     delete tasks[taskId]
     state.setDownloadTasks(tasks)
-  }).catch((error) => warnListenerFailure(store, 'download-removed', error))
+  })
 
   startSysMetricsPolling(store)
 }

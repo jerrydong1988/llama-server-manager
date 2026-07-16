@@ -6,7 +6,8 @@ import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { ArrowUp, BookOpen, CheckCircle2, ChevronDown, Circle, Compass, PlayCircle } from 'lucide-react'
 import { version } from '../../package.json'
 import { useAppStore } from '../store'
-import { useI18n } from '../i18n'
+import { formatMessage, useI18n } from '../i18n'
+import { getGuideLabels } from '../i18n/pageLabels'
 import { Button, InsetSurface, Surface } from './ui'
 import { getGuideTourSteps } from './guide/guideTour'
 
@@ -143,24 +144,7 @@ export default function GuidePage() {
     () => stripInAppTableOfContents(guideContent),
     [guideContent],
   )
-  const zh = lang === 'zh-CN'
-  const labels = {
-    guide: zh ? '\u4f7f\u7528\u8bf4\u660e' : 'Guide',
-    subtitle: zh
-      ? '\u5feb\u901f\u67e5\u9605\u6587\u6863\uff0c\u6216\u76f4\u63a5\u8fdb\u5165\u4ea4\u4e92\u5f0f\u5f15\u5bfc\u3002'
-      : 'Read the guide or jump straight into an interactive walkthrough.',
-    startTour: zh ? '\u5f00\u59cb\u4ea4\u4e92\u5f0f\u5f15\u5bfc' : 'Start Interactive Tour',
-    contents: zh ? '\u76ee\u5f55' : 'Contents',
-    done: zh ? '\u5b8c\u6210' : 'Done',
-    next: zh ? '\u4e0b\u4e00\u6b65' : 'Next',
-    checklistTitle: zh ? '\u542f\u7528\u68c0\u67e5' : 'Setup Checklist',
-    checklistDesc: zh ? '\u6839\u636e\u5f53\u524d\u914d\u7f6e\u548c\u8fd0\u884c\u72b6\u6001\u81ea\u52a8\u63a8\u65ad\u8fdb\u5ea6\u3002' : 'Derived from the current config and runtime state.',
-    completed: zh ? '\u5df2\u5b8c\u6210' : 'Complete',
-    pending: zh ? '\u5f85\u5904\u7406' : 'Pending',
-    expandChecklist: zh ? '\u5c55\u5f00\u542f\u7528\u68c0\u67e5' : 'Expand setup checklist',
-    collapseChecklist: zh ? '\u6536\u8d77\u542f\u7528\u68c0\u67e5' : 'Collapse setup checklist',
-    backToTop: zh ? '\u56de\u5230\u9876\u90e8' : 'Back to top',
-  }
+  const labels = useMemo(() => getGuideLabels(lang), [lang])
 
   const checklist = useMemo(() => {
     const hasRunningInstance = instances.some(instance => instance.status === 'running')
@@ -168,56 +152,48 @@ export default function GuidePage() {
     return [
       {
         id: 'model-dirs',
-        title: zh ? '\u6a21\u578b\u76ee\u5f55' : 'Model directories',
-        detail: zh
-          ? `${modelDirs.length} \u4e2a\u76ee\u5f55\uff0c${models.length} \u4e2a\u8d44\u4ea7`
-          : `${modelDirs.length} directories, ${models.length} assets`,
+        title: labels.modelDirectories,
+        detail: formatMessage(labels.modelDirectoryDetail, { directories: modelDirs.length, assets: models.length }),
         done: modelDirs.length > 0 && models.length > 0,
         tab: 'model-repo',
       },
       {
         id: 'engine-scan',
-        title: zh ? '\u5f15\u64ce\u626b\u63cf' : 'Engine scan',
-        detail: zh
-          ? `${engineDirs.length} \u4e2a\u76ee\u5f55\uff0c${engines.length} \u4e2a\u5f15\u64ce`
-          : `${engineDirs.length} directories, ${engines.length} engines`,
+        title: labels.engineScan,
+        detail: formatMessage(labels.engineScanDetail, { directories: engineDirs.length, engines: engines.length }),
         done: engines.length > 0,
         tab: 'engine',
       },
       {
         id: 'instance-create',
-        title: zh ? '\u521b\u5efa\u5b9e\u4f8b' : 'Create an instance',
-        detail: zh ? `${instances.length} \u4e2a\u5b9e\u4f8b` : `${instances.length} instances`,
+        title: labels.createInstance,
+        detail: formatMessage(labels.instanceCount, { count: instances.length }),
         done: instances.length > 0,
         tab: 'instances',
       },
       {
         id: 'instance-start',
-        title: zh ? '\u542f\u52a8\u5b9e\u4f8b' : 'Start an instance',
-        detail: zh ? (hasRunningInstance ? '\u5df2\u6709\u8fd0\u884c\u4e2d\u5b9e\u4f8b' : '\u5c1a\u672a\u542f\u52a8') : (hasRunningInstance ? 'At least one instance is running' : 'No instance is running'),
+        title: labels.startInstance,
+        detail: hasRunningInstance ? labels.runningInstance : labels.noRunningInstance,
         done: hasRunningInstance,
         tab: 'instances',
       },
       {
         id: 'downloads',
-        title: zh ? '\u4e0b\u8f7d\u76ee\u5f55 / \u961f\u5217' : 'Download directory / queue',
-        detail: zh
-          ? `${downloadQueue.length} \u4e2a\u961f\u5217\u9879\uff0c${downloadTaskCount} \u4e2a\u4efb\u52a1`
-          : `${downloadQueue.length} queue entries, ${downloadTaskCount} tasks`,
+        title: labels.downloads,
+        detail: formatMessage(labels.downloadDetail, { queue: downloadQueue.length, tasks: downloadTaskCount }),
         done: hasDownloadActivity,
         tab: 'downloads',
       },
       {
         id: 'performance',
-        title: zh ? '\u6027\u80fd\u76d1\u63a7' : 'Performance monitoring',
-        detail: zh
-          ? (sysMetrics ? '\u5df2\u6536\u5230\u7cfb\u7edf\u6307\u6807' : '\u542f\u52a8\u5b9e\u4f8b\u540e\u67e5\u770b\u9065\u6d4b')
-          : (sysMetrics ? 'System metrics are available' : 'Start an instance to inspect telemetry'),
+        title: labels.performance,
+        detail: sysMetrics ? labels.metricsAvailable : labels.inspectTelemetry,
         done: !!sysMetrics || instances.some(instance => instance.config.metrics && instance.status === 'running'),
         tab: 'perf',
       },
     ]
-  }, [downloadQueue.length, downloadTaskCount, engineDirs.length, engines.length, instances, modelDirs.length, models.length, sysMetrics, zh])
+  }, [downloadQueue.length, downloadTaskCount, engineDirs.length, engines.length, instances, labels, modelDirs.length, models.length, sysMetrics])
 
   useEffect(() => {
     const nextToc = parseTOC(inAppGuideContent)

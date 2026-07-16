@@ -44,6 +44,7 @@ struct DirectoryEntryFingerprint {
     is_symlink: bool,
     size: u64,
     mtime: u64,
+    mtime_ns: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +76,10 @@ fn read_directory_fingerprint(path: &Path) -> Result<DirectoryFingerprint, Strin
             .file_type()
             .map_err(|e| format!("failed to read {} file type: {}", entry.path().display(), e))?;
         let metadata = entry.metadata().ok();
+        let modified = metadata
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok());
         entries.push(DirectoryEntryFingerprint {
             path: entry.path(),
             name: entry.file_name().to_string_lossy().to_string(),
@@ -82,11 +87,8 @@ fn read_directory_fingerprint(path: &Path) -> Result<DirectoryFingerprint, Strin
             is_file: file_type.is_file(),
             is_symlink: file_type.is_symlink(),
             size: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
-            mtime: metadata
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            mtime: modified.map(|duration| duration.as_secs()).unwrap_or(0),
+            mtime_ns: modified.map(|duration| duration.as_nanos()).unwrap_or(0),
         });
     }
     entries.sort_by(|left, right| left.name.cmp(&right.name));
@@ -105,7 +107,7 @@ fn read_directory_fingerprint(path: &Path) -> Result<DirectoryFingerprint, Strin
                 },
                 if entry.is_symlink { "l" } else { "-" },
                 entry.size,
-                entry.mtime,
+                entry.mtime_ns,
                 entry.path.extension().and_then(OsStr::to_str).unwrap_or("")
             )
         })
@@ -164,6 +166,8 @@ fn cached_models_under_directory(
         .cloned()
         .collect()
 }
+
+const MAX_MODEL_SCAN_DEPTH: usize = 32;
 
 fn reuse_cached_engines_for_root(
     scan_root_key: &str,
@@ -291,10 +295,18 @@ fn scan_model_directory_incremental(
             return 0;
         }
     };
+    let tree_signature =
+        match read_directory_tree_signature(dir, MAX_MODEL_SCAN_DEPTH.saturating_sub(depth)) {
+            Ok(signature) => signature,
+            Err(error) => {
+                errors.push(error);
+                return 0;
+            }
+        };
 
     if directory_inventory
         .get(&dir_key)
-        .map(|record| record.signature == fingerprint.signature)
+        .map(|record| record.signature == tree_signature)
         .unwrap_or(false)
     {
         let mut reused = 0;
@@ -317,7 +329,7 @@ fn scan_model_directory_incremental(
             "model",
             dir_key,
             scan_root_key.to_string(),
-            fingerprint.signature,
+            tree_signature,
         ));
         return reused;
     }
@@ -333,7 +345,7 @@ fn scan_model_directory_incremental(
         }
 
         if entry.is_dir {
-            if depth < 5 {
+            if depth < MAX_MODEL_SCAN_DEPTH {
                 file_count += scan_model_directory_incremental(
                     &entry.path,
                     scan_root_key,
@@ -349,6 +361,12 @@ fn scan_model_directory_incremental(
                     directory_records,
                     errors,
                 );
+            } else {
+                errors.push(format!(
+                    "{} exceeded the model scan depth limit of {} and was skipped",
+                    entry.path.display(),
+                    MAX_MODEL_SCAN_DEPTH
+                ));
             }
             continue;
         }
@@ -412,7 +430,7 @@ fn scan_model_directory_incremental(
         "model",
         dir_key,
         scan_root_key.to_string(),
-        fingerprint.signature,
+        tree_signature,
     ));
     file_count
 }
@@ -475,7 +493,6 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
 }
 
 // Model scanning.
-#[tauri::command]
 pub async fn scan_models(
     paths: Vec<String>,
     state: tauri::State<'_, AppState>,
@@ -661,7 +678,6 @@ type AppDataSnapshot = (
 );
 type CachedScan = (Vec<ModelInfo>, Vec<EngineInfo>);
 
-#[tauri::command]
 pub async fn load_app_data(
     paths: Vec<String>,
     engine_paths: Vec<String>,
@@ -679,7 +695,6 @@ pub async fn load_app_data(
 }
 
 /// Reads cached scan results from disk so startup can show data before a full scan finishes.
-#[tauri::command]
 pub async fn get_cached_scan(
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<CachedScan>, String> {
@@ -712,12 +727,10 @@ pub async fn get_cached_scan(
     Ok(Some((models, engines)))
 }
 
-#[tauri::command]
 pub async fn get_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelInfo>, String> {
     Ok(state.models.lock().unwrap().clone())
 }
 
-#[tauri::command]
 pub async fn delete_model_file(
     path: String,
     state: tauri::State<'_, AppState>,
@@ -753,7 +766,6 @@ pub async fn delete_model_file(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn open_model_folder(path: String) -> Result<(), String> {
     let parent = Path::new(&path).parent().unwrap_or(Path::new("."));
     #[cfg(target_os = "windows")]
@@ -780,7 +792,6 @@ pub async fn open_model_folder(path: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
 pub async fn read_gguf_metadata(
     path: String,
 ) -> Result<crate::models::GgufMetadataSummary, String> {
@@ -788,7 +799,6 @@ pub async fn read_gguf_metadata(
 }
 
 // Engine scanning.
-#[tauri::command]
 pub async fn scan_engines(
     paths: Vec<String>,
     state: tauri::State<'_, AppState>,
@@ -959,7 +969,6 @@ pub async fn scan_engines(
     Ok(engines)
 }
 
-#[tauri::command]
 pub async fn get_engines(state: tauri::State<'_, AppState>) -> Result<Vec<EngineInfo>, String> {
     Ok(state.engines.lock().unwrap().clone())
 }
@@ -1014,6 +1023,24 @@ mod incremental_scan_tests {
     }
 
     #[test]
+    fn tree_signature_changes_when_a_deep_model_is_rewritten() {
+        let dir = temp_test_dir("model-tree");
+        let nested = dir.join("vendor").join("family").join("quant");
+        std::fs::create_dir_all(&nested).unwrap();
+        let model = nested.join("model.gguf");
+        std::fs::write(&model, b"first-model-payload").unwrap();
+        let initial = read_directory_tree_signature(&dir, MAX_MODEL_SCAN_DEPTH).unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        std::fs::write(&model, b"other-model-payload").unwrap();
+
+        let updated = read_directory_tree_signature(&dir, MAX_MODEL_SCAN_DEPTH).unwrap();
+        assert_ne!(initial, updated);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn engine_path_identity_respects_platform_case_rules() {
         let upper = Path::new("/opt/llama/CUDA");
         let lower = Path::new("/opt/llama/cuda");
@@ -1024,7 +1051,6 @@ mod incremental_scan_tests {
     }
 }
 
-#[tauri::command]
 pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
     let mut engines = state.engines.lock().unwrap();
     engines.retain(|e| e.id != id);
@@ -1032,7 +1058,6 @@ pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Res
     Ok(())
 }
 
-#[tauri::command]
 pub async fn rename_engine(
     id: String,
     name: String,
@@ -1051,7 +1076,6 @@ pub async fn rename_engine(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn open_engine_folder(dir: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1075,4 +1099,125 @@ pub async fn open_engine_folder(dir: String) -> Result<(), String> {
             .map_err(|e| format!("{}", e))?;
     }
     Ok(())
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn scan_models(
+        paths: Vec<String>,
+        state: tauri::State<'_, AppState>,
+        _app: tauri::AppHandle,
+    ) -> crate::error::AppResult<Vec<ModelInfo>> {
+        super::scan_models(paths, state, _app)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn load_app_data(
+        paths: Vec<String>,
+        engine_paths: Vec<String>,
+        state: tauri::State<'_, AppState>,
+        app: tauri::AppHandle,
+    ) -> crate::error::AppResult<AppDataSnapshot> {
+        super::load_app_data(paths, engine_paths, state, app)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_cached_scan(
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<Option<CachedScan>> {
+        super::get_cached_scan(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_models(
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<Vec<ModelInfo>> {
+        super::get_models(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn delete_model_file(
+        path: String,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<()> {
+        super::delete_model_file(path, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn open_model_folder(path: String) -> crate::error::AppResult<()> {
+        super::open_model_folder(path)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn read_gguf_metadata(
+        path: String,
+    ) -> crate::error::AppResult<crate::models::GgufMetadataSummary> {
+        super::read_gguf_metadata(path)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn scan_engines(
+        paths: Vec<String>,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<Vec<EngineInfo>> {
+        super::scan_engines(paths, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_engines(
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<Vec<EngineInfo>> {
+        super::get_engines(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn delete_engine(
+        id: String,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<()> {
+        super::delete_engine(id, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn rename_engine(
+        id: String,
+        name: String,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<()> {
+        super::rename_engine(id, name, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn open_engine_folder(dir: String) -> crate::error::AppResult<()> {
+        super::open_engine_folder(dir)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
 }

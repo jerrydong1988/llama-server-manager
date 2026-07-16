@@ -4,6 +4,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { Activity, ChevronDown, Pause, Play, Search, Trash2 } from 'lucide-react'
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
+import { getLogsLabels } from '../i18n/pageLabels'
 import { Button, InsetSurface, MetricCard, SelectInput, Surface, TextInput } from './ui'
 
 const ERROR_LOG_PATTERN = /error|fail|panic|fatal|\u9519\u8bef|\u5931\u8d25|\u5f02\u5e38|\u81f4\u547d/i
@@ -20,27 +21,7 @@ const LogsViewer = () => {
   const scrollRef = useRef<HTMLDivElement>(null)
   const userInteractedRef = useRef(false)
   const lastLogTimestampRef = useRef(0)
-  const zh = lang === 'zh-CN'
-  const labels = {
-    subtitle: zh
-      ? '\u67e5\u770b\u5b9e\u65f6\u8fdb\u7a0b\u8f93\u51fa\uff0c\u8fc7\u6ee4\u566a\u58f0\u65e5\u5fd7\uff0c\u5e76\u5728\u8c03\u8bd5\u65f6\u4fdd\u6301\u5c3e\u90e8\u8ddf\u968f\u3002'
-      : 'Inspect live process output, filter noisy streams, and keep the tail pinned when you are actively debugging.',
-    visible: zh ? '\u5f53\u524d\u53ef\u89c1' : 'Visible',
-    errors: zh ? '\u9519\u8bef' : 'Errors',
-    warnings: zh ? '\u8b66\u544a' : 'Warnings',
-    info: zh ? '\u4fe1\u606f' : 'Info',
-    logScope: zh ? '\u65e5\u5fd7\u8303\u56f4' : 'Log Scope',
-    logScopeDesc: zh ? '\u5728\u5355\u5b9e\u4f8b\u65e5\u5fd7\u6d41\u4e0e\u5168\u5c40\u5408\u5e76\u65f6\u95f4\u7ebf\u4e4b\u95f4\u5207\u6362\u3002' : 'Switch between a single instance stream and the combined server timeline.',
-    filterPlaceholder: zh ? '\u6309\u65e5\u5fd7\u5185\u5bb9\u6216\u5b9e\u4f8b\u540d\u79f0\u8fc7\u6ee4...' : 'Filter by message or instance...',
-    scope: zh ? '\u8303\u56f4' : 'Scope',
-    liveTail: zh ? '\u5b9e\u65f6\u5c3e\u90e8' : 'Live tail',
-    runningSource: zh ? '\u8fd0\u884c\u6765\u6e90' : 'Running source',
-    yes: zh ? '\u662f' : 'Yes',
-    no: zh ? '\u5426' : 'No',
-    liveConsole: zh ? '\u5b9e\u65f6\u63a7\u5236\u53f0' : 'Live Console',
-    focusedStream: zh ? '\u5f53\u524d\u805a\u7126\u5355\u4e2a\u5b9e\u4f8b\u65e5\u5fd7\u6d41\u3002' : 'Focused on one instance stream.',
-    mergedTimeline: zh ? '\u5f53\u524d\u5c55\u793a\u6240\u6709\u5b9e\u4f8b\u7684\u5408\u5e76\u65f6\u95f4\u7ebf\u3002' : 'Merged timeline across all instances.',
-  }
+  const labels = useMemo(() => getLogsLabels(lang), [lang])
 
   const instanceLogs = selectedInstanceId ? (logs[selectedInstanceId] || []) : []
   const allLogs = useMemo(

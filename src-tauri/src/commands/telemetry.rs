@@ -256,6 +256,10 @@ enum TelemetryWrite {
         slots: Vec<SlotSnapshotRecord>,
     },
     Flush(mpsc::Sender<Result<(), String>>),
+    Prune {
+        before: i64,
+        waiter: mpsc::Sender<Result<u32, String>>,
+    },
 }
 
 fn telemetry_db_path() -> PathBuf {
@@ -441,8 +445,13 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("无法初始化遥测数据库: {}", e))?;
-    migrate_inference_request_columns(conn)?;
-    migrate_vector_schema(conn)?;
+    let stored_version = conn
+        .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+        .map_err(|e| format!("无法读取遥测 schema 版本: {e}"))?;
+    if stored_version < SCHEMA_VERSION {
+        migrate_inference_request_columns(conn)?;
+        migrate_vector_schema(conn)?;
+    }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
             ON inference_requests(source, completed_at DESC)",
@@ -755,47 +764,88 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
             return;
         }
     };
-    while let Ok(first) = receiver.recv() {
-        let mut batch = Vec::with_capacity(TELEMETRY_WRITE_BATCH_SIZE);
-        batch.push(first);
-        while batch.len() < TELEMETRY_WRITE_BATCH_SIZE {
-            match receiver.try_recv() {
-                Ok(write) => batch.push(write),
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => break,
+    let mut pending_control = None;
+    let mut last_write_error: Option<String> = None;
+    loop {
+        let first = match pending_control.take() {
+            Some(write) => write,
+            None => match receiver.recv() {
+                Ok(write) => write,
+                Err(_) => break,
+            },
+        };
+        match first {
+            TelemetryWrite::Flush(waiter) => {
+                let result = last_write_error.take().map_or(Ok(()), Err);
+                let _ = waiter.send(result);
+                continue;
             }
-        }
-        let transaction = match conn.transaction() {
-            Ok(transaction) => transaction,
-            Err(error) => {
-                let message = format!("Telemetry writer failed to begin transaction: {error}");
-                eprintln!("{message}");
-                for write in batch {
-                    if let TelemetryWrite::Flush(waiter) = write {
-                        let _ = waiter.send(Err(message.clone()));
+            TelemetryWrite::Prune { before, waiter } => {
+                let mut result = if let Some(error) = last_write_error.take() {
+                    Err(error)
+                } else {
+                    prune_connection(&mut conn, before)
+                };
+                if matches!(result, Ok(affected) if affected > 0) {
+                    if let Err(error) =
+                        conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;")
+                    {
+                        result = Err(format!("Telemetry cleanup maintenance failed: {error}"));
                     }
                 }
+                let _ = waiter.send(result);
                 continue;
             }
-        };
-        let mut flush_waiters = Vec::new();
-        for write in batch {
-            if let TelemetryWrite::Flush(waiter) = write {
-                flush_waiters.push(waiter);
-                continue;
+            write => {
+                let mut batch = Vec::with_capacity(TELEMETRY_WRITE_BATCH_SIZE);
+                batch.push(write);
+                while batch.len() < TELEMETRY_WRITE_BATCH_SIZE {
+                    match receiver.try_recv() {
+                        Ok(write @ (TelemetryWrite::Flush(_) | TelemetryWrite::Prune { .. })) => {
+                            pending_control = Some(write);
+                            break;
+                        }
+                        Ok(write) => batch.push(write),
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => break,
+                    }
+                }
+                let transaction = match conn.transaction() {
+                    Ok(transaction) => transaction,
+                    Err(error) => {
+                        let message =
+                            format!("Telemetry writer failed to begin transaction: {error}");
+                        eprintln!("{message}");
+                        last_write_error = Some(message);
+                        continue;
+                    }
+                };
+                let mut apply_error = None;
+                for write in batch {
+                    if let Err(error) = apply_telemetry_write(&transaction, write) {
+                        apply_error = Some(error);
+                        break;
+                    }
+                }
+                let result = if let Some(error) = apply_error {
+                    transaction
+                        .rollback()
+                        .map_err(|rollback| {
+                            format!("Telemetry write failed: {error}; rollback failed: {rollback}")
+                        })
+                        .and(Err(format!(
+                            "Telemetry write batch was rolled back: {error}"
+                        )))
+                } else {
+                    transaction.commit().map_err(|error| {
+                        format!("Telemetry writer failed to commit transaction: {error}")
+                    })
+                };
+                if let Err(error) = result {
+                    eprintln!("{error}");
+                    last_write_error = Some(error);
+                }
             }
-            if let Err(error) = apply_telemetry_write(&transaction, write) {
-                eprintln!("Telemetry write failed: {error}");
-            }
-        }
-        let commit_result = transaction
-            .commit()
-            .map_err(|error| format!("Telemetry writer failed to commit transaction: {error}"));
-        if let Err(error) = &commit_result {
-            eprintln!("{error}");
-        }
-        for waiter in flush_waiters {
-            let _ = waiter.send(commit_result.clone());
         }
     }
 }
@@ -835,7 +885,9 @@ fn apply_telemetry_write(conn: &Connection, write: TelemetryWrite) -> Result<(),
             timestamp,
             slots,
         } => insert_slot_snapshots(conn, &session_id, &instance_id, timestamp, &slots),
-        TelemetryWrite::Flush(_) => Ok(()),
+        TelemetryWrite::Flush(_) | TelemetryWrite::Prune { .. } => {
+            Err("telemetry control message reached the data writer".into())
+        }
     }
 }
 
@@ -1172,7 +1224,6 @@ fn insert_slot_snapshots(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn get_telemetry_overview() -> Result<TelemetryOverview, String> {
     tokio::task::spawn_blocking(|| {
         let conn = open_connection()?;
@@ -1214,7 +1265,6 @@ pub async fn get_telemetry_overview() -> Result<TelemetryOverview, String> {
     .map_err(|e| format!("遥测概览查询失败: {}", e))?
 }
 
-#[tauri::command]
 pub async fn list_telemetry_sessions(
     limit: Option<u32>,
 ) -> Result<Vec<TelemetrySessionSummary>, String> {
@@ -1290,7 +1340,6 @@ fn query_telemetry_sessions(
     Ok(sessions)
 }
 
-#[tauri::command]
 pub async fn get_telemetry_session_samples(
     session_id: String,
     limit: Option<u32>,
@@ -1304,7 +1353,6 @@ pub async fn get_telemetry_session_samples(
     .map_err(|e| format!("遥测采样查询失败: {}", e))?
 }
 
-#[tauri::command]
 pub async fn get_telemetry_session_detail(
     session_id: String,
     sample_limit: Option<u32>,
@@ -1330,7 +1378,6 @@ pub async fn get_telemetry_session_detail(
     .map_err(|e| format!("遥测会话详情查询失败: {e}"))?
 }
 
-#[tauri::command]
 pub async fn prune_telemetry(retention_days: Option<u32>) -> Result<u32, String> {
     let days = retention_days.unwrap_or(14).clamp(1, 365);
     tokio::task::spawn_blocking(move || prune_telemetry_storage(days))
@@ -1370,15 +1417,18 @@ fn prune_connection(conn: &mut Connection, before: i64) -> Result<u32, String> {
 pub(crate) fn prune_telemetry_storage(retention_days: u32) -> Result<u32, String> {
     let days = retention_days.clamp(1, 365);
     let before = now_ms() - days as i64 * 24 * 60 * 60 * 1000;
-    let mut conn = open_connection()?;
-    let affected = prune_connection(&mut conn, before)?;
-    if affected > 0 {
-        let _ = conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;");
-    }
-    Ok(affected)
+    let (sender, receiver) = mpsc::channel();
+    telemetry_writer()?
+        .send(TelemetryWrite::Prune {
+            before,
+            waiter: sender,
+        })
+        .map_err(|_| "telemetry writer is unavailable during cleanup".to_string())?;
+    receiver
+        .recv_timeout(Duration::from_secs(10))
+        .map_err(|_| "timed out while pruning telemetry storage".to_string())?
 }
 
-#[tauri::command]
 pub async fn get_telemetry_session_analysis(
     session_id: String,
 ) -> Result<TelemetrySessionAnalysis, String> {
@@ -2039,7 +2089,6 @@ struct SessionDiagnosticContext {
     workload: ModelWorkload,
 }
 
-#[tauri::command]
 pub async fn get_telemetry_session_diagnostics(
     session_id: String,
 ) -> Result<Vec<DiagnosticFinding>, String> {
@@ -2583,7 +2632,6 @@ fn build_vector_diagnostics(
     Ok(findings)
 }
 
-#[tauri::command]
 pub async fn list_inference_requests(
     session_id: String,
     limit: Option<u32>,
@@ -3634,6 +3682,27 @@ mod tests {
     }
 
     #[test]
+    fn current_schema_initialization_does_not_rescan_session_workloads() {
+        let conn = version_four_connection();
+        init_schema(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_workload_rescan
+             BEFORE UPDATE OF workload ON run_sessions
+             BEGIN
+               SELECT RAISE(ABORT, 'workload migration reran');
+             END;",
+        )
+        .unwrap();
+
+        init_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
     fn pruning_removes_old_samples_from_active_sessions() {
         let mut conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
@@ -3698,5 +3767,84 @@ mod tests {
 
         assert_eq!(removed, 1);
         assert_eq!(remaining, 1);
+    }
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn get_telemetry_overview() -> crate::error::AppResult<TelemetryOverview> {
+        super::get_telemetry_overview()
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn list_telemetry_sessions(
+        limit: Option<u32>,
+    ) -> crate::error::AppResult<Vec<TelemetrySessionSummary>> {
+        super::list_telemetry_sessions(limit)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_telemetry_session_samples(
+        session_id: String,
+        limit: Option<u32>,
+    ) -> crate::error::AppResult<Vec<TelemetrySampleSummary>> {
+        super::get_telemetry_session_samples(session_id, limit)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_telemetry_session_detail(
+        session_id: String,
+        sample_limit: Option<u32>,
+        request_limit: Option<u32>,
+    ) -> crate::error::AppResult<TelemetrySessionDetail> {
+        super::get_telemetry_session_detail(session_id, sample_limit, request_limit)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn prune_telemetry(retention_days: Option<u32>) -> crate::error::AppResult<u32> {
+        super::prune_telemetry(retention_days)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_telemetry_session_analysis(
+        session_id: String,
+    ) -> crate::error::AppResult<TelemetrySessionAnalysis> {
+        super::get_telemetry_session_analysis(session_id)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_telemetry_session_diagnostics(
+        session_id: String,
+    ) -> crate::error::AppResult<Vec<DiagnosticFinding>> {
+        super::get_telemetry_session_diagnostics(session_id)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn list_inference_requests(
+        session_id: String,
+        limit: Option<u32>,
+    ) -> crate::error::AppResult<Vec<InferenceRequestSummary>> {
+        super::list_inference_requests(session_id, limit)
+            .await
+            .map_err(crate::error::AppError::from)
     }
 }

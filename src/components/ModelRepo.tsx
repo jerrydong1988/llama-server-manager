@@ -3,7 +3,7 @@ import { AlertTriangle, Database, File, FolderOpen, FolderTree, HardDrive, Image
 import { confirm, open } from '@tauri-apps/plugin-dialog'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAppStore, type ModelInfo } from '../store'
-import { useI18n } from '../i18n'
+import { formatMessage, useI18n } from '../i18n'
 import { isPathWithinRoot, normalizePath, pathJoin } from '../utils/path'
 import { formatSize } from '../utils/format'
 import { Button, InsetSurface, MetricCard, PathText, Surface, TextInput } from './ui'
@@ -138,7 +138,8 @@ const ModelRepo = () => {
   const loadInitialData = useAppStore(state => state.loadInitialData)
   const deleteModelFile = useAppStore(state => state.deleteModelFile)
   const openModelFolder = useAppStore(state => state.openModelFolder)
-  const { t, lang } = useI18n()
+  const { t } = useI18n()
+  const copy = t.modelRepoWorkspace
 
   const [searchQuery, setSearchQuery] = useState('')
   const [scanError, setScanError] = useState('')
@@ -358,13 +359,11 @@ const ModelRepo = () => {
               <div className="flex items-center gap-2">
                 <h1 className="text-3xl font-semibold tracking-tight text-slate-50">{t.nav.modelRepo}</h1>
                 <span className="rounded-full border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400">
-                  {modelDirs.length} {lang === 'zh-CN' ? '\u4E2A\u6765\u6E90' : `source${modelDirs.length === 1 ? '' : 's'}`}
+                  {formatMessage(copy.sourceCount, { count: modelDirs.length })}
                 </span>
               </div>
               <p className="text-sm text-slate-400">
-                {lang === 'zh-CN'
-                  ? '\u7BA1\u7406\u672C\u5730\u6A21\u578B\u8D44\u4EA7\uFF0C\u4FDD\u6301\u626B\u63CF\u6839\u76EE\u5F55\u6E05\u6670\uFF0C\u5E76\u4EE5\u7EDF\u4E00\u89C6\u56FE\u68C0\u89C6\u4ED3\u5E93\u3002'
-                  : 'Curate local model assets, keep scan roots clean, and inspect the repo as one operational surface.'}
+                {copy.description}
               </p>
             </div>
           </div>
@@ -399,7 +398,7 @@ const ModelRepo = () => {
           { label: t.modelRepo.typeModelShort, value: stats.primaryCount, icon: File, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
           { label: t.modelRepo.typeMmprojShort, value: stats.projectorCount, icon: Image, tone: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/20' },
           { label: t.modelRepo.typeImatrix, value: stats.imatrixCount, icon: Database, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
-          { label: lang === 'zh-CN' ? '\u5BB9\u91CF' : 'Capacity', value: formatSize(stats.totalSize), icon: HardDrive, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
+          { label: copy.capacity, value: formatSize(stats.totalSize), icon: HardDrive, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
         ].map(card => (
           <MetricCard key={card.label} label={card.label} value={card.value} icon={<card.icon className="h-5 w-5" />} tone={card.tone} />
         ))}
@@ -409,9 +408,9 @@ const ModelRepo = () => {
         <Surface as="aside" className="p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-50">{lang === 'zh-CN' ? '\u626B\u63CF\u6839\u76EE\u5F55' : 'Scan Roots'}</h2>
+              <h2 className="text-lg font-semibold text-slate-50">{copy.scanRoots}</h2>
               <p className="mt-1 text-sm text-slate-400">
-                {lang === 'zh-CN' ? '\u7EB3\u5165\u4ED3\u5E93\u626B\u63CF\u7684\u672C\u5730\u76EE\u5F55\u3002' : 'Local directories included in repository scans.'}
+                {copy.scanRootsDescription}
               </p>
             </div>
             <span className="rounded-full border border-slate-700 px-2.5 py-1 text-xs text-slate-400">
@@ -456,9 +455,9 @@ const ModelRepo = () => {
         <Surface as="section" className="min-h-[620px] p-5" data-guide="model-search">
           <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-50">{lang === 'zh-CN' ? '\u4ED3\u5E93\u6D4F\u89C8\u5668' : 'Repository Explorer'}</h2>
+              <h2 className="text-lg font-semibold text-slate-50">{copy.explorer}</h2>
               <p className="mt-1 text-sm text-slate-400">
-                {lang === 'zh-CN' ? '\u6309\u6587\u4EF6\u540D\u3001\u67B6\u6784\u3001\u91CF\u5316\u6216\u8D44\u4EA7\u7C7B\u578B\u641C\u7D22\u3002' : 'Search by file name, architecture, quantization, or artifact type.'}
+                {copy.explorerDescription}
               </p>
             </div>
             <TextInput
@@ -475,7 +474,7 @@ const ModelRepo = () => {
               <Database className="mb-4 h-12 w-12 text-slate-700" />
               <p className="text-base text-slate-300">{t.modelRepo.noModels}</p>
               <p className="mt-2 max-w-md text-sm text-slate-500">
-                {lang === 'zh-CN' ? '\u6DFB\u52A0\u4E00\u4E2A\u6216\u591A\u4E2A\u6A21\u578B\u76EE\u5F55\uFF0C\u7136\u540E\u626B\u63CF\u4EE5\u586B\u5145\u4ED3\u5E93\u6D4F\u89C8\u5668\u3002' : 'Add one or more model directories, then run a scan to populate the repository explorer.'}
+                {copy.emptyDescription}
               </p>
             </div>
           ) : (
@@ -505,9 +504,9 @@ const ModelRepo = () => {
 
         <Surface as="aside" className="p-5">
           <div className="mb-4">
-            <h2 className="text-lg font-semibold text-slate-50">{lang === 'zh-CN' ? '\u8D44\u4EA7\u8BE6\u60C5' : 'Asset Details'}</h2>
+            <h2 className="text-lg font-semibold text-slate-50">{copy.assetDetails}</h2>
             <p className="mt-1 text-sm text-slate-400">
-              {lang === 'zh-CN' ? '\u67E5\u770B\u5F53\u524D\u9009\u4E2D\u6587\u4EF6\uFF0C\u5E76\u5FEB\u901F\u6253\u5F00\u5176\u6240\u5728\u4F4D\u7F6E\u3002' : 'Inspect the currently selected file and jump to its location.'}
+              {copy.assetDetailsDescription}
             </p>
           </div>
 
@@ -515,7 +514,7 @@ const ModelRepo = () => {
             <div className="flex min-h-[280px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 text-center">
               <File className="mb-4 h-10 w-10 text-slate-700" />
               <p className="text-sm text-slate-400">
-                {lang === 'zh-CN' ? '\u4ECE\u6D4F\u89C8\u5668\u9009\u62E9\u4E00\u4E2A\u6A21\u578B\u8D44\u4EA7\u540E\u53EF\u5728\u8FD9\u91CC\u67E5\u770B\u8BE6\u60C5\u3002' : 'Select a model artifact from the explorer to inspect it here.'}
+                {copy.noAssetSelected}
               </p>
             </div>
           ) : (
@@ -536,11 +535,11 @@ const ModelRepo = () => {
 
               <InsetSurface className="space-y-3 p-4">
                 {[
-                  [lang === 'zh-CN' ? '\u7C7B\u578B' : 'Type', selectedModel.file_type],
-                  [lang === 'zh-CN' ? '\u91CF\u5316' : 'Quant', selectedModel.quant_type || '--'],
-                  [lang === 'zh-CN' ? '\u67B6\u6784' : 'Architecture', selectedModel.architecture || '--'],
-                  [lang === 'zh-CN' ? '\u5927\u5C0F' : 'Size', formatSize(selectedModel.size)],
-                  [lang === 'zh-CN' ? '\u5206\u7247' : 'Shard', selectedModel.is_shard ? (lang === 'zh-CN' ? '\u662F' : 'Yes') : (lang === 'zh-CN' ? '\u5426' : 'No')],
+                  [copy.type, selectedModel.file_type],
+                  [copy.quant, selectedModel.quant_type || '--'],
+                  [copy.architecture, selectedModel.architecture || '--'],
+                  [copy.size, formatSize(selectedModel.size)],
+                  [copy.shard, selectedModel.is_shard ? copy.yes : copy.no],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between gap-3">
                     <span className="text-sm text-slate-500">{label}</span>

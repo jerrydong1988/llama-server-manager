@@ -1,5 +1,6 @@
 use crate::commands::adlx;
 use crate::commands::nvml;
+use crate::error::{AppError, AppResult};
 use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
 use crate::vector_policy::{normalize_for_launch, ModelWorkload};
 use std::collections::hash_map::DefaultHasher;
@@ -37,6 +38,10 @@ struct LogReadChunk {
     generation: u64,
     rotated: bool,
 }
+
+const MAX_PENDING_LOG_BYTES: usize = 256 * 1024;
+const INITIAL_HEALTH_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+const HEALTH_FAILURE_THRESHOLD: u32 = 3;
 
 impl CappedLogWriter {
     fn new(path: std::path::PathBuf, max_bytes: u64, retained_bytes: u64) -> std::io::Result<Self> {
@@ -121,11 +126,20 @@ impl CappedLogWriter {
 
 fn take_complete_log_lines(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
     pending.extend_from_slice(bytes);
+    let truncated = pending.len() > MAX_PENDING_LOG_BYTES;
+    if truncated {
+        let overflow = pending.len() - MAX_PENDING_LOG_BYTES;
+        pending.drain(..overflow);
+    }
     let Some(last_newline) = pending.iter().rposition(|byte| *byte == b'\n') else {
-        return Vec::new();
+        return if truncated {
+            vec!["[log line truncated after 256 KiB without a terminator]".to_string()]
+        } else {
+            Vec::new()
+        };
     };
     let complete = pending.drain(..=last_newline).collect::<Vec<_>>();
-    complete
+    let mut lines = complete
         .split(|byte| *byte == b'\n')
         .filter_map(|line| {
             if line.is_empty() {
@@ -134,7 +148,14 @@ fn take_complete_log_lines(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
             let line = line.strip_suffix(b"\r").unwrap_or(line);
             Some(String::from_utf8_lossy(line).into_owned())
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if truncated {
+        lines.insert(
+            0,
+            "[log line truncated after 256 KiB without a terminator]".to_string(),
+        );
+    }
+    lines
 }
 
 fn spawn_log_pump<R>(mut source: R, writer: Arc<CappedLogWriter>)
@@ -241,15 +262,7 @@ pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<Strin
     prepare_launch(config.clone(), engine_path).2
 }
 
-fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
-    let exe = if engine_path.is_empty() {
-        "llama-server".to_string()
-    } else {
-        engine_path.to_string()
-    };
-    let mut cmd = vec![exe, "-m".into(), config.model_path.clone()];
-    let is_emb = config.embedding;
-
+fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Basic.
     if !config.alias.is_empty() {
         cmd.extend_from_slice(&["-a".into(), config.alias.clone()]);
@@ -320,7 +333,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
             cmd.extend_from_slice(&["--grammar".into(), config.grammar.clone()]);
         }
     }
+}
 
+fn append_context_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Performance and context.
     if !config.ctx_size_auto {
         cmd.extend_from_slice(&["-c".into(), config.ctx_size.to_string()]);
@@ -377,7 +392,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
             cmd.push("--swa-full".into());
         }
     }
+}
 
+fn append_rope_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // RoPE / YaRN.
     if !config.rope_scaling.is_empty() {
         cmd.extend_from_slice(&["--rope-scaling".into(), config.rope_scaling.clone()]);
@@ -415,13 +432,17 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if config.yarn_orig_ctx > 0 {
         cmd.extend_from_slice(&["--yarn-orig-ctx".into(), config.yarn_orig_ctx.to_string()]);
     }
+}
 
+fn append_flash_attention_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // Flash Attention.
     let fa = config.flash_attn.as_str();
     if fa != "auto" && !fa.is_empty() {
         cmd.extend_from_slice(&["-fa".into(), fa.to_string()]);
     }
+}
 
+fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // Memory and loading.
     if config.moe_cpu_layers > 0 {
         cmd.extend_from_slice(&["--n-cpu-moe".into(), config.moe_cpu_layers.to_string()]);
@@ -459,7 +480,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if config.fit_ctx != 4096 {
         cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
     }
+}
 
+fn append_kv_cache_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // KV cache.
     if !config.cache_type_k.is_empty() {
         cmd.extend_from_slice(&["-ctk".into(), config.cache_type_k.clone()]);
@@ -484,7 +507,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if !config.cache_idle_slots {
         cmd.push("--no-cache-idle-slots".into());
     }
+}
 
+fn append_device_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // GPU and device.
     if !config.device.is_empty() {
         cmd.extend_from_slice(&["-dev".into(), config.device.clone()]);
@@ -501,7 +526,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     if !config.override_kv.is_empty() {
         cmd.extend_from_slice(&["--override-kv".into(), config.override_kv.clone()]);
     }
+}
 
+fn append_speculative_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Speculative decoding.
     let spec_active = !is_emb && !config.spec_type.is_empty() && config.spec_type != "none";
     if spec_active {
@@ -558,7 +585,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
             cmd.extend_from_slice(&["-tbd".into(), config.spec_draft_threads_batch.to_string()]);
         }
     }
+}
 
+fn append_network_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Network.
     cmd.extend_from_slice(&[
         "--host".into(),
@@ -604,7 +633,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
             cmd.push("--agent".into());
         }
     }
+}
 
+fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // Embedding / generation.
     if config.embedding {
         cmd.push("--embedding".into());
@@ -759,7 +790,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
             cmd.extend_from_slice(&["--sampler-seq".into(), config.sampler_seq.clone()]);
         }
     }
+}
 
+fn append_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Server features.
     if config.timeout > 0 {
         cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]);
@@ -793,7 +826,9 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
             cmd.push("--prefill-assistant".into());
         }
     }
+}
 
+fn append_extended_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // New server features aligned with llama.cpp master.
     if !config.rpc_servers.is_empty() {
         cmd.extend_from_slice(&["--rpc".into(), config.rpc_servers.clone()]);
@@ -857,6 +892,29 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
             }
         }
     }
+}
+
+fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
+    let exe = if engine_path.is_empty() {
+        "llama-server".to_string()
+    } else {
+        engine_path.to_string()
+    };
+    let mut cmd = vec![exe, "-m".into(), config.model_path.clone()];
+    let is_emb = config.embedding;
+
+    append_basic_flags(config, is_emb, &mut cmd);
+    append_context_flags(config, is_emb, &mut cmd);
+    append_rope_flags(config, &mut cmd);
+    append_flash_attention_flags(config, &mut cmd);
+    append_memory_flags(config, &mut cmd);
+    append_kv_cache_flags(config, is_emb, &mut cmd);
+    append_device_flags(config, &mut cmd);
+    append_speculative_flags(config, is_emb, &mut cmd);
+    append_network_flags(config, is_emb, &mut cmd);
+    append_workload_flags(config, &mut cmd);
+    append_server_flags(config, is_emb, &mut cmd);
+    append_extended_server_flags(config, is_emb, &mut cmd);
 
     cmd
 }
@@ -907,7 +965,6 @@ fn reserve_instance_start<'a>(
     })
 }
 
-#[tauri::command]
 pub async fn generate_server_command(
     config: InstanceConfig,
     engine_exe: String,
@@ -923,7 +980,7 @@ pub async fn start_server(
     engine_backend: String,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<(), String> {
+) -> AppResult<()> {
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let (config, workload, cmd) = prepare_launch(config, &engine_exe);
     let cmd_str = cmd.join(" ");
@@ -973,10 +1030,12 @@ pub async fn start_server(
         Some(identity) => identity,
         None => {
             let message = "Unable to verify the started server process identity";
-            return match terminate_spawned_child(&mut child) {
-                Ok(()) => Err(message.to_string()),
-                Err(cleanup_error) => Err(format!("{message}; {cleanup_error}")),
+            let message = match terminate_spawned_child(&mut child) {
+                Ok(()) => message.to_string(),
+                Err(cleanup_error) => format!("{message}; {cleanup_error}"),
             };
+            return Err(AppError::new("PROCESS_IDENTITY", message, false)
+                .with_context("instanceId", instance_id));
         }
     };
     let telemetry_session_id = crate::commands::telemetry::begin_run_session(
@@ -1018,14 +1077,16 @@ pub async fn start_server(
             None,
             "duplicate-start",
         );
-        return match cleanup_result {
-            Ok(()) => Err("该实例已在运行中".to_string()),
-            Err(cleanup_error) => Err(format!("该实例已在运行中；{cleanup_error}")),
+        let message = match cleanup_result {
+            Ok(()) => "该实例已在运行中".to_string(),
+            Err(cleanup_error) => format!("该实例已在运行中；{cleanup_error}"),
         };
+        return Err(AppError::new("INSTANCE_ALREADY_RUNNING", message, false)
+            .with_context("instanceId", instance_id));
     }
 
     // Persist running state to disk immediately via unified atomic writes to avoid races.
-    state
+    let previous_instance = state
         .instances
         .lock()
         .unwrap()
@@ -1033,12 +1094,46 @@ pub async fn start_server(
     let running_snapshot = state.running.lock().unwrap().clone();
     let persisted_instance_id = instance_id.clone();
     let persisted_config = config.clone();
-    let _ = crate::commands::config::update_and_persist(&state, |global| {
+    if let Err(persist_error) = crate::commands::config::update_and_persist(&state, |global| {
         global.running = running_snapshot;
         global
             .instances
             .insert(persisted_instance_id, persisted_config);
-    });
+    }) {
+        {
+            let mut running = state.running.lock().unwrap();
+            if running
+                .get(&instance_id)
+                .map(|current| current.pid == pid)
+                .unwrap_or(false)
+            {
+                running.remove(&instance_id);
+            }
+        }
+        {
+            let mut instances = state.instances.lock().unwrap();
+            if let Some(previous) = previous_instance {
+                instances.insert(instance_id.clone(), previous);
+            } else {
+                instances.remove(&instance_id);
+            }
+        }
+        let _ = crate::commands::telemetry::finish_run_session(
+            telemetry_session_id.as_deref(),
+            None,
+            "persistence-failed",
+        );
+        let message = match terminate_spawned_child(&mut child) {
+            Ok(()) => format!(
+                "Server start was rolled back because runtime state could not be persisted: {persist_error}"
+            ),
+            Err(cleanup_error) => format!(
+                "Runtime state persistence failed: {persist_error}; {cleanup_error}"
+            ),
+        };
+        return Err(AppError::new("RUNTIME_STATE_PERSIST_FAILED", message, true)
+            .with_context("instanceId", instance_id));
+    }
 
     app.emit(
         "server-started",
@@ -1093,7 +1188,7 @@ pub async fn start_server(
                     status.code(),
                     "startup-failed",
                 );
-                let _ = crate::commands::config::update_and_persist(&st, |global| {
+                if let Err(error) = crate::commands::config::update_and_persist(&st, |global| {
                     if global
                         .running
                         .get(&id)
@@ -1102,7 +1197,9 @@ pub async fn start_server(
                     {
                         global.running.remove(&id);
                     }
-                });
+                }) {
+                    eprintln!("Failed to persist startup failure for {id}: {error}");
+                }
                 // Emit captured stderr/log content so errors are never lost on quick exit
                 if let Ok(log_content) = std::fs::read_to_string(&log_path_mon) {
                     if !log_content.trim().is_empty() {
@@ -1130,31 +1227,37 @@ pub async fn start_server(
 
         let exit_code = child.wait().ok().and_then(|status| status.code());
         let st2 = app_clone.state::<AppState>();
-        {
+        let removed = {
             let mut r = st2.running.lock().unwrap();
             if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
-                r.remove(&id);
-                {
-                    let mut restored = st2.restored_runtime_instances.lock().unwrap();
-                    restored.remove(&format!("{}:{}", id, pid));
-                }
-                let _ = crate::commands::telemetry::finish_run_session(
-                    telemetry_session_monitor.as_deref(),
-                    exit_code,
-                    "process-exited",
-                );
-                let _ = crate::commands::config::update_and_persist(&st2, |global| {
-                    if global
-                        .running
-                        .get(&id)
-                        .map(|current| current.pid == pid)
-                        .unwrap_or(false)
-                    {
-                        global.running.remove(&id);
-                    }
-                });
-                let _ = app_clone.emit("server-stopped", serde_json::json!({ "instanceId": id }));
+                r.remove(&id).is_some()
+            } else {
+                false
             }
+        };
+        if removed {
+            {
+                let mut restored = st2.restored_runtime_instances.lock().unwrap();
+                restored.remove(&format!("{}:{}", id, pid));
+            }
+            let _ = crate::commands::telemetry::finish_run_session(
+                telemetry_session_monitor.as_deref(),
+                exit_code,
+                "process-exited",
+            );
+            if let Err(error) = crate::commands::config::update_and_persist(&st2, |global| {
+                if global
+                    .running
+                    .get(&id)
+                    .map(|current| current.pid == pid)
+                    .unwrap_or(false)
+                {
+                    global.running.remove(&id);
+                }
+            }) {
+                eprintln!("Failed to persist process exit for {id}: {error}");
+            }
+            let _ = app_clone.emit("server-stopped", serde_json::json!({ "instanceId": id }));
         }
     });
 
@@ -1194,6 +1297,40 @@ struct MonitorLoopConfig {
     api_key: String,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HealthTransition {
+    None,
+    Ready,
+    Failed,
+}
+
+fn advance_health_state(
+    ready: bool,
+    initial_grace_expired: bool,
+    health_failures: &mut u32,
+    last_health_ready: &mut Option<bool>,
+) -> HealthTransition {
+    if ready {
+        *health_failures = 0;
+        if *last_health_ready != Some(true) {
+            *last_health_ready = Some(true);
+            return HealthTransition::Ready;
+        }
+        return HealthTransition::None;
+    }
+
+    *health_failures = health_failures.saturating_add(1);
+    let recovered_service_failed = *last_health_ready == Some(true);
+    if *health_failures >= HEALTH_FAILURE_THRESHOLD
+        && (recovered_service_failed || (*last_health_ready).is_none() && initial_grace_expired)
+    {
+        *last_health_ready = Some(false);
+        *health_failures = 0;
+        return HealthTransition::Failed;
+    }
+    HealthTransition::None
 }
 
 fn monitor_loop(
@@ -1240,7 +1377,7 @@ fn monitor_loop(
     // Dedicated System for process metrics; system/GPU metrics reuse the SYSINFO_CACHE singleton.
     let mut proc_sys = System::new_all();
     let mut health_failures = 0_u32;
-    let mut health_ready = false;
+    let mut last_health_ready: Option<bool> = None;
 
     loop {
         let iteration_started = std::time::Instant::now();
@@ -1261,25 +1398,25 @@ fn monitor_loop(
         };
         let ready = probe_status_is_success(&probe(&health_url).map_err(|e| e.to_string()))
             || probe_status_is_success(&probe(&models_url).map_err(|e| e.to_string()));
-        if ready {
-            health_failures = 0;
-            if !health_ready {
-                health_ready = true;
+        match advance_health_state(
+            ready,
+            start_instant.elapsed() >= INITIAL_HEALTH_GRACE,
+            &mut health_failures,
+            &mut last_health_ready,
+        ) {
+            HealthTransition::Ready => {
                 let _ = app.emit(
                     "health-status",
                     serde_json::json!({ "instanceId": instance_id, "status": "ok" }),
                 );
             }
-        } else {
-            health_failures = health_failures.saturating_add(1);
-            if health_ready && health_failures >= 3 {
-                health_ready = false;
-                health_failures = 0;
+            HealthTransition::Failed => {
                 let _ = app.emit(
                     "health-status",
                     serde_json::json!({ "instanceId": instance_id, "status": "fail" }),
                 );
             }
+            HealthTransition::None => {}
         }
 
         // System-level and GPU metrics using the collect_gpu_and_system singleton cache.
@@ -1463,7 +1600,6 @@ fn terminate_unix_process(ri: &RunningInstance) -> bool {
     kill_sent && wait_for_recorded_process_exit(ri, std::time::Duration::from_secs(2))
 }
 
-#[tauri::command]
 pub async fn stop_server(
     instance_id: String,
     state: tauri::State<'_, AppState>,
@@ -1513,8 +1649,8 @@ pub async fn stop_server(
             None,
             "manual-stop",
         );
-        if let Some(ref ri) = ri {
-            let _ = crate::commands::config::update_and_persist(&state, |global| {
+        let persist_result = if let Some(ref ri) = ri {
+            crate::commands::config::update_and_persist(&state, |global| {
                 if global
                     .running
                     .get(&instance_id)
@@ -1523,8 +1659,10 @@ pub async fn stop_server(
                 {
                     global.running.remove(&instance_id);
                 }
-            });
-        }
+            })
+        } else {
+            Ok(())
+        };
         app.emit(
             "server-stopped",
             serde_json::json!({
@@ -1532,7 +1670,9 @@ pub async fn stop_server(
             }),
         )
         .ok();
-        Ok(())
+        persist_result.map_err(|error| {
+            format!("Server stopped, but its runtime state could not be persisted: {error}")
+        })
     } else {
         // Process is still running; do not emit server-stopped so the frontend stays running.
         // The monitor thread cleans up when the process actually exits.
@@ -1627,7 +1767,7 @@ fn cleanup_running_instance(
         None,
         reason,
     );
-    let _ = crate::commands::config::update_and_persist(&state, |global| {
+    if let Err(error) = crate::commands::config::update_and_persist(&state, |global| {
         if global
             .running
             .get(instance_id)
@@ -1636,7 +1776,9 @@ fn cleanup_running_instance(
         {
             global.running.remove(instance_id);
         }
-    });
+    }) {
+        eprintln!("Failed to persist cleanup for {instance_id}: {error}");
+    }
     let _ = app.emit(
         "server-stopped",
         serde_json::json!({
@@ -1674,7 +1816,6 @@ fn browser_url_for_host(host: &str, port: u16) -> Result<String, String> {
     Ok(format!("http://{}:{}", normalized, port))
 }
 
-#[tauri::command]
 pub async fn open_browser(host: String, port: u16) -> Result<(), String> {
     let url = browser_url_for_host(&host, port)?;
     #[cfg(target_os = "windows")]
@@ -1704,7 +1845,6 @@ pub async fn open_browser(host: String, port: u16) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
 pub async fn test_connection(
     host: String,
     port: u16,
@@ -1791,7 +1931,6 @@ fn classify_test_connection_result(
     ))
 }
 
-#[tauri::command]
 pub async fn check_port(port: u16, host: Option<String>) -> Result<bool, String> {
     use std::net::TcpListener;
     let bind_host = host
@@ -1916,7 +2055,6 @@ fn get_system_level_metrics(sys: &System) -> (Option<f32>, Option<f64>, Option<f
     (cpu, total_mb, used_mb)
 }
 
-#[tauri::command]
 pub async fn get_system_metrics(
     instance_id: String,
     state: tauri::State<'_, AppState>,
@@ -1969,7 +2107,6 @@ pub async fn get_system_metrics(
 }
 
 /// System health without requiring an instance. Used by Dashboard for the system resource bar.
-#[tauri::command]
 pub async fn get_system_health() -> Result<SystemMetrics, String> {
     let result = tokio::task::spawn_blocking(|| {
         let (
@@ -2024,7 +2161,6 @@ fn probe_status_is_success(status: &Result<reqwest::StatusCode, String>) -> bool
         .unwrap_or(false)
 }
 
-#[tauri::command]
 pub async fn get_slots(
     host: String,
     port: u16,
@@ -2068,7 +2204,6 @@ pub struct MetricsInfo {
     pub busy_slots_per_decode: f64,
 }
 
-#[tauri::command]
 pub async fn get_metrics(
     host: String,
     port: u16,
@@ -2736,6 +2871,7 @@ fn tail_log_file(
 
         if read_chunk.rotated {
             debug_assert_ne!(observed_generation, read_chunk.generation);
+            pending.clear();
         }
         last_size = read_chunk.end_offset;
         observed_generation = read_chunk.generation;
@@ -2905,6 +3041,73 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn command_groups_preserve_workload_and_device_boundaries() {
+        struct Case {
+            name: &'static str,
+            config: InstanceConfig,
+            required: &'static [&'static str],
+            forbidden: &'static [&'static str],
+        }
+
+        let cases = [
+            Case {
+                name: "inference-vulkan-speculative",
+                config: InstanceConfig {
+                    model_path: "C:/models/chat.gguf".into(),
+                    device: "Vulkan0".into(),
+                    spec_type: "draft".into(),
+                    draft_model_path: "C:/models/draft.gguf".into(),
+                    custom_args: vec!["--temp 0.7".into()],
+                    ..InstanceConfig::default()
+                },
+                required: &["-dev", "Vulkan0", "--spec-type", "draft", "--temp", "0.7"],
+                forbidden: &["--embedding", "--reranking"],
+            },
+            Case {
+                name: "embedding-cuda-cleans-generation",
+                config: InstanceConfig {
+                    model_path: "C:/models/Qwen3-Embedding-8B.gguf".into(),
+                    device: "CUDA0".into(),
+                    spec_type: "draft-mtp".into(),
+                    custom_args: vec!["--top-p 0.2".into()],
+                    ..InstanceConfig::default()
+                },
+                required: &["-dev", "CUDA0", "--embedding"],
+                forbidden: &["--reranking", "--spec-type", "--top-p"],
+            },
+            Case {
+                name: "reranker-cpu-cleans-generation",
+                config: InstanceConfig {
+                    model_path: "C:/models/Qwen3-Reranker-8B.gguf".into(),
+                    device: "none".into(),
+                    spec_type: "draft".into(),
+                    ..InstanceConfig::default()
+                },
+                required: &["-dev", "none", "--embedding", "--reranking"],
+                forbidden: &["--spec-type", "--context-shift"],
+            },
+        ];
+
+        for case in cases {
+            let (_, _, command) = prepare_launch(case.config, "llama-server");
+            for expected in case.required {
+                assert!(
+                    command.iter().any(|arg| arg == expected),
+                    "{} missing {expected}: {command:?}",
+                    case.name
+                );
+            }
+            for forbidden in case.forbidden {
+                assert!(
+                    !command.iter().any(|arg| arg == forbidden),
+                    "{} leaked {forbidden}: {command:?}",
+                    case.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn parses_llama_cpp_print_timing_token_stats() {
         let parser = PerfParser::new(ModelWorkload::Inference);
         let mut tasks = HashMap::new();
@@ -3041,6 +3244,59 @@ mod perf_parser_tests {
         }
 
         assert_eq!(tasks.len(), MAX_TRACKED_PERF_TASKS);
+    }
+
+    #[test]
+    fn unterminated_log_lines_are_capped_and_report_truncation() {
+        let mut pending = Vec::new();
+        let oversized = vec![b'x'; MAX_PENDING_LOG_BYTES + 4096];
+
+        let lines = take_complete_log_lines(&mut pending, &oversized);
+
+        assert_eq!(pending.len(), MAX_PENDING_LOG_BYTES);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("truncated"));
+
+        let lines = take_complete_log_lines(&mut pending, b"\n");
+        assert!(pending.is_empty());
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("truncated"));
+        assert_eq!(lines[1].len(), MAX_PENDING_LOG_BYTES - 1);
+    }
+
+    #[test]
+    fn never_ready_service_transitions_to_failed_after_startup_grace() {
+        let mut failures = 0;
+        let mut last_ready = None;
+
+        for _ in 0..HEALTH_FAILURE_THRESHOLD {
+            assert_eq!(
+                advance_health_state(false, false, &mut failures, &mut last_ready),
+                HealthTransition::None
+            );
+        }
+        assert_eq!(last_ready, None);
+
+        assert_eq!(
+            advance_health_state(false, true, &mut failures, &mut last_ready),
+            HealthTransition::Failed
+        );
+        assert_eq!(last_ready, Some(false));
+    }
+
+    #[test]
+    fn recovered_service_emits_ready_after_a_failure() {
+        let mut failures = HEALTH_FAILURE_THRESHOLD - 1;
+        let mut last_ready = Some(true);
+        assert_eq!(
+            advance_health_state(false, true, &mut failures, &mut last_ready),
+            HealthTransition::Failed
+        );
+        assert_eq!(
+            advance_health_state(true, true, &mut failures, &mut last_ready),
+            HealthTransition::Ready
+        );
+        assert_eq!(last_ready, Some(true));
     }
 
     #[test]
@@ -3224,5 +3480,98 @@ mod perf_parser_tests {
         assert_eq!(end_offset, b"complete\n".len() as u64);
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_dir(dir);
+    }
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn generate_server_command(
+        config: InstanceConfig,
+        engine_exe: String,
+    ) -> crate::error::AppResult<Vec<String>> {
+        super::generate_server_command(config, engine_exe)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn stop_server(
+        instance_id: String,
+        state: tauri::State<'_, AppState>,
+        app: tauri::AppHandle,
+    ) -> crate::error::AppResult<()> {
+        super::stop_server(instance_id, state, app)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn open_browser(host: String, port: u16) -> crate::error::AppResult<()> {
+        super::open_browser(host, port)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn test_connection(
+        host: String,
+        port: u16,
+        api_key: Option<String>,
+        api_key_file: Option<String>,
+    ) -> crate::error::AppResult<String> {
+        super::test_connection(host, port, api_key, api_key_file)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn check_port(port: u16, host: Option<String>) -> crate::error::AppResult<bool> {
+        super::check_port(port, host)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_system_metrics(
+        instance_id: String,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<SystemMetrics> {
+        super::get_system_metrics(instance_id, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_system_health() -> crate::error::AppResult<SystemMetrics> {
+        super::get_system_health()
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_slots(
+        host: String,
+        port: u16,
+        api_key: Option<String>,
+    ) -> crate::error::AppResult<Vec<SlotInfo>> {
+        super::get_slots(host, port, api_key)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_metrics(
+        host: String,
+        port: u16,
+        api_key: Option<String>,
+    ) -> crate::error::AppResult<Option<MetricsInfo>> {
+        super::get_metrics(host, port, api_key)
+            .await
+            .map_err(crate::error::AppError::from)
     }
 }

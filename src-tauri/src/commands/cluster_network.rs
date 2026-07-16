@@ -1,7 +1,6 @@
 use crate::models::{AppState, Usb4Adapter};
 use tauri::State;
 
-#[tauri::command]
 pub async fn detect_usb4_adapters(state: State<'_, AppState>) -> Result<Vec<Usb4Adapter>, String> {
     #[cfg(target_os = "windows")]
     {
@@ -96,11 +95,35 @@ $adapters | ConvertTo-Json -Compress
     Ok(filtered)
 }
 
-#[tauri::command]
 pub async fn get_usb4_adapters(state: State<'_, AppState>) -> Result<Vec<Usb4Adapter>, String> {
     if let Ok(a) = state.usb4_adapters.lock() {
         Ok(a.clone())
     } else {
         Ok(Vec::new())
+    }
+}
+
+// IPC compatibility boundary: legacy command internals keep their existing error flow,
+// while every registered command serializes a stable AppError object.
+#[allow(dead_code, unused_imports, unused_mut)] // Tauri references adapters through generated macros.
+pub mod ipc {
+    use super::*;
+
+    #[tauri::command]
+    pub async fn detect_usb4_adapters(
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<Vec<Usb4Adapter>> {
+        super::detect_usb4_adapters(state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn get_usb4_adapters(
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<Vec<Usb4Adapter>> {
+        super::get_usb4_adapters(state)
+            .await
+            .map_err(crate::error::AppError::from)
     }
 }

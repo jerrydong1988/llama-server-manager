@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState } from 'react'
 import { zhCN } from './zh-CN'
 import { enUS } from './en-US'
 
-type Lang = 'zh-CN' | 'en-US'
+export type Lang = 'zh-CN' | 'en-US'
 type Translations = typeof enUS
 
 const translations: Record<Lang, Translations> = { 'zh-CN': zhCN as Translations, 'en-US': enUS }
@@ -33,4 +33,18 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
 export function useI18n() {
   return useContext(I18nContext)
+}
+
+export function formatMessage(template: string, values: Record<string, string | number>) {
+  return template.replace(/\{([a-zA-Z0-9_]+)\}/g, (match, key: string) =>
+    Object.prototype.hasOwnProperty.call(values, key) ? String(values[key]) : match,
+  )
+}
+
+export function nextLanguage(lang: Lang): Lang {
+  return lang === 'zh-CN' ? 'en-US' : 'zh-CN'
+}
+
+export function selectLocalizedCopy<T>(lang: string, zhCN: T, enUS: T): T {
+  return lang === 'zh-CN' ? zhCN : enUS
 }

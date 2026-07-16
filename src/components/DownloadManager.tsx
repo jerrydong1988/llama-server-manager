@@ -1,14 +1,16 @@
-import { useState, useMemo, useEffect, type ReactNode } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Trash2, FolderOpen, X, Download, ChevronDown, ChevronUp, Pause, Play, RotateCcw, RefreshCw, Square, AlertTriangle, Database } from 'lucide-react'
 import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
-import { useI18n } from '../i18n'
-import { invoke } from '@tauri-apps/api/core'
+import { formatMessage, useI18n } from '../i18n'
+import { invokeApp as invoke } from '../lib/ipc'
 import { open } from '@tauri-apps/plugin-dialog'
 import { pathJoin } from '../utils/path'
 import { forEachConcurrent } from '../utils/async'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
 import { PathText, surfaceClassName } from './ui'
+import { MetricTile, SectionPanel, StatusBadge } from './DownloadManager/DownloadPrimitives'
+import { DEFAULT_BANDWIDTH_LIMIT, DEFAULT_BANDWIDTH_UNIT, DEFAULT_SAVE_DIR, LOCAL_FILE_CHECK_CONCURRENCY, bandwidthToBytes, bytesToBandwidth, clampConcurrency, downloadFileKey, normalizeResumePolicy, preferredBandwidthDisplay } from './DownloadManager/downloadPolicy'
 import {
   DownloadSettingsPanel,
   type DownloadBandwidthUnit as BandwidthUnit,
@@ -16,115 +18,10 @@ import {
 } from './DownloadManager/DownloadSettingsPanel'
 
 type DownloadSource = 'modelscope' | 'huggingface'
-const DEFAULT_SAVE_DIR = 'models'
-const DEFAULT_BANDWIDTH_LIMIT = 0
-const DEFAULT_BANDWIDTH_UNIT: BandwidthUnit = 'MiB/s'
 type Section = 'queue' | 'active' | 'paused' | 'failed' | 'completed'
-const LOCAL_FILE_CHECK_CONCURRENCY = 8
-
-const clampConcurrency = (value: number) => Math.max(1, Math.min(8, Number.isFinite(value) ? value : 1))
-const normalizeResumePolicy = (policy: string): ResumePolicy => policy === 'auto_on_launch' ? 'auto_on_launch' : 'manual'
-const bandwidthUnitMultiplier = (unit: BandwidthUnit) => unit === 'MiB/s' ? 1024 * 1024 : 1024
-const bandwidthToBytes = (value: number, unit: BandwidthUnit) => Math.max(0, Math.round((Number.isFinite(value) ? value : 0) * bandwidthUnitMultiplier(unit)))
-const bytesToBandwidth = (bytes: number, unit: BandwidthUnit) => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return 0
-  const value = bytes / bandwidthUnitMultiplier(unit)
-  return Number.isInteger(value) ? value : Number(value.toFixed(unit === 'MiB/s' ? 2 : 0))
-}
-const preferredBandwidthDisplay = (bytes: number, fallbackUnit: BandwidthUnit) => {
-  if (!Number.isFinite(bytes) || bytes <= 0) return { limit: 0, unit: fallbackUnit }
-  if (bytes % (1024 * 1024) === 0) return { limit: bytes / (1024 * 1024), unit: 'MiB/s' as BandwidthUnit }
-  return { limit: Math.round(bytes / 1024), unit: 'KiB/s' as BandwidthUnit }
-}
-const downloadFileKey = (source: string, repoId: string, remotePath: string, saveDir: string) => (
-  `${source}\u0000${repoId}\u0000${remotePath}\u0000${saveDir}`
-)
-
-function MetricTile({
-  label,
-  value,
-  detail,
-  tone,
-}: {
-  label: string
-  value: string | number
-  detail?: string
-  tone: 'blue' | 'emerald' | 'amber' | 'slate'
-}) {
-  const tones = {
-    blue: 'bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-300',
-    emerald: 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300',
-    amber: 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300',
-    slate: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
-  }
-
-  return (
-    <div className={`${surfaceClassName} min-w-0 px-4 py-4`}>
-      <div className={`inline-flex rounded-full px-2.5 py-1 text-[11px] font-medium ${tones[tone]}`}>{label}</div>
-      <div className="mt-3 truncate text-2xl font-semibold text-slate-900 dark:text-slate-100" title={String(value)}>{value}</div>
-      {detail && <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={detail}>{detail}</div>}
-    </div>
-  )
-}
-
-function StatusBadge({ status, label }: { status: DownloadProgress['status']; label: string }) {
-  const colors: Record<string, string> = {
-    active: 'bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-300',
-    paused: 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300',
-    pausing: 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-300',
-    queued: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
-    completed: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300',
-    cancelled: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300',
-    error: 'bg-rose-100 text-rose-700 dark:bg-rose-950/50 dark:text-rose-300',
-  }
-
-  return (
-    <span className={`inline-flex shrink-0 rounded-full px-2 py-1 text-[11px] font-medium ${colors[status] || colors.queued}`}>
-      {label}
-    </span>
-  )
-}
-
-function SectionPanel({
-  title,
-  count,
-  collapsed,
-  onToggle,
-  extra,
-  children,
-}: {
-  title: string
-  count: number
-  collapsed: boolean
-  onToggle: () => void
-  extra?: ReactNode
-  children: ReactNode
-}) {
-  return (
-    <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 text-left dark:border-slate-800"
-      >
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</span>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-            {count}
-          </span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2" onClick={e => e.stopPropagation()}>
-          {extra}
-          {collapsed ? <ChevronDown className="h-4 w-4 text-slate-400" /> : <ChevronUp className="h-4 w-4 text-slate-400" />}
-        </div>
-      </button>
-      {!collapsed && children}
-    </section>
-  )
-}
 
 export default function DownloadManager() {
-  const { t, lang } = useI18n()
+  const { t } = useI18n()
   const downloadTasks = useAppStore(s => s.downloadTasks)
   const downloadQueue = useAppStore(s => s.downloadQueue)
   const setDownloadTasks = useAppStore(s => s.setDownloadTasks)
@@ -184,115 +81,7 @@ export default function DownloadManager() {
   })
   const [lowPriorityThrottle, setLowPriorityThrottle] = useState(false)
   const [settingsError, setSettingsError] = useState('')
-  const ui = useMemo(() => lang === 'zh-CN' ? {
-    strategyTitle: '\u4E0B\u8F7D\u7B56\u7565',
-    strategySub: '\u6062\u590D\u7B56\u7565\u3001\u5E76\u53D1\u6570\u3001\u5E26\u5BBD\u9650\u5236\u4E0E\u4F4E\u4F18\u5148\u7EA7\u6A21\u5F0F\u5747\u5DF2\u63A5\u5165\u540E\u7AEF',
-    addTaskTitle: '\u6DFB\u52A0\u4E0B\u8F7D\u4EFB\u52A1',
-    addTaskSub: '\u9009\u62E9\u6A21\u578B\u6765\u6E90\u5E76\u6D4F\u89C8\u4ED3\u5E93\u6587\u4EF6',
-    sourceSection: '\u6A21\u578B\u6765\u6E90',
-    sourceHelp: '\u8F93\u5165\u4ED3\u5E93 ID \u540E\u6D4F\u89C8\u53EF\u4E0B\u8F7D\u6587\u4EF6',
-    storageSection: '\u4E0B\u8F7D\u5B58\u50A8\u8DEF\u5F84',
-    storageHelp: '\u8F93\u5165\u7EDD\u5BF9\u8DEF\u5F84\uFF0C\u6216\u4F7F\u7528 models \u8FD9\u7C7B\u76F8\u5BF9\u8DEF\u5F84\u4FDD\u5B58\u5230\u5E94\u7528\u6570\u636E\u76EE\u5F55',
-    storagePreview: '\u4FDD\u5B58\u843D\u70B9',
-    chooseFolder: '\u9009\u62E9\u76EE\u5F55',
-    batchTools: '\u6279\u91CF\u5DE5\u5177',
-    totalSpeed: '\u5F53\u524D\u901F\u5EA6',
-    controllable: '\u53EF\u64CD\u4F5C',
-    strategy: '\u7B56\u7565',
-    backendSaved: '\u5DF2\u63A5\u5165\u540E\u7AEF',
-    localOnly: '\u672C\u5730',
-    manualShort: '\u624B\u52A8',
-    autoShort: '\u542F\u52A8\u81EA\u52A8',
-    concurrencyShort: '\u5E76\u53D1',
-    bandwidth: '\u5168\u5C40\u5E26\u5BBD\u9650\u5236',
-    displayUnit: '\u663E\u793A\u5355\u4F4D',
-    unlimited: '\u4E0D\u9650',
-    limitHelp: '0 \u8868\u793A\u4E0D\u9650\u901F',
-    lowPriorityThrottle: '\u4F4E\u4F18\u5148\u7EA7\u8282\u6D41',
-    throttleHelp: '\u5F00\u542F\u540E\u540E\u7AEF\u4F1A\u5C06\u4E0B\u8F7D\u6536\u655B\u4E3A\u5355\u5E76\u53D1\uFF1B\u82E5\u672A\u8BBE\u7F6E\u9650\u901F\uFF0C\u5219\u81EA\u52A8\u4F7F\u7528 2 MiB/s \u540E\u53F0\u9650\u901F',
-    resetDefaults: '\u91CD\u7F6E\u9ED8\u8BA4',
-    noActionable: '\u6682\u65E0\u53EF\u64CD\u4F5C\u4E0B\u8F7D',
-    localPreset: '\u672C\u5730\u9884\u8BBE',
-    taskSummary: '\u4EFB\u52A1\u8BE6\u60C5',
-    noSelectedTask: '\u6682\u65E0\u9009\u4E2D\u4EFB\u52A1',
-    selectedTaskHint: '\u5355\u51FB\u4EFB\u52A1\u5361\u7247\u53EF\u5207\u6362\u8BE6\u60C5',
-    progress: '\u8FDB\u5EA6',
-    downloaded: '\u5DF2\u4E0B\u8F7D',
-    speed: '\u901F\u5EA6',
-    eta: '\u5269\u4F59',
-    etaPending: '\u5F85\u4F30\u7B97',
-    queueState: '\u961F\u5217\u72B6\u6001',
-    queuePosition: '\u961F\u5217\u7B2C',
-    runningNow: '\u6B63\u5728\u4E0B\u8F7D',
-    notQueued: '\u4E0D\u5728\u7B49\u5F85\u961F\u5217',
-    failedReason: '\u5931\u8D25\u539F\u56E0',
-    retryAdvice: '\u91CD\u8BD5\u5EFA\u8BAE',
-    retryAdviceNetwork: '\u4FDD\u7559\u5DF2\u4E0B\u8F7D\u5206\u7247\u5E76\u91CD\u8BD5\uFF1B\u5982\u679C\u7EE7\u7EED\u5931\u8D25\uFF0C\u68C0\u67E5\u7F51\u7EDC\u6216\u9650\u901F\u8BBE\u7F6E',
-    retryAdviceRedownload: '\u670D\u52A1\u7AEF\u6216\u5206\u7247\u72B6\u6001\u4E0D\u9002\u5408\u7EED\u4F20\uFF0C\u5EFA\u8BAE\u4F7F\u7528\u91CD\u65B0\u4E0B\u8F7D',
-    retryAdvicePermission: '\u68C0\u67E5\u4ED3\u5E93\u6743\u9650\u3001\u6587\u4EF6\u662F\u5426\u5B58\u5728\uFF0C\u7136\u540E\u91CD\u8BD5',
-    retryAdviceGeneric: '\u5148\u91CD\u8BD5\u4EE5\u7EED\u4F20\uFF1B\u82E5\u9519\u8BEF\u91CD\u590D\u51FA\u73B0\uFF0C\u518D\u6267\u884C\u91CD\u65B0\u4E0B\u8F7D',
-    openLocation: '\u6253\u5F00\u4F4D\u7F6E',
-    addToModelRepo: '\u5165\u5E93\u626B\u63CF',
-    importedToRepo: '\u5DF2\u626B\u63CF\u4FDD\u5B58\u76EE\u5F55\u5E76\u5237\u65B0\u6A21\u578B\u5E93',
-    importFailed: '\u5165\u5E93\u626B\u63CF\u5931\u8D25',
-    localPath: '\u672C\u5730\u6587\u4EF6',
-    settingsLoadFailed: '\u4E0B\u8F7D\u7B56\u7565\u8BFB\u53D6\u5931\u8D25',
-    settingsSaveFailed: '\u4E0B\u8F7D\u7B56\u7565\u4FDD\u5B58\u5931\u8D25',
-  } : {
-    strategyTitle: 'Download strategy',
-    strategySub: 'Resume policy, concurrency, bandwidth limit, and low-priority mode are backend-backed',
-    addTaskTitle: 'Add download task',
-    addTaskSub: 'Choose a model source and browse repository files',
-    sourceSection: 'Model source',
-    sourceHelp: 'Enter a repository ID, then browse downloadable files',
-    storageSection: 'Download storage path',
-    storageHelp: 'Use an absolute folder, or a relative folder such as models under the app data directory',
-    storagePreview: 'Save target',
-    chooseFolder: 'Choose folder',
-    batchTools: 'Bulk tools',
-    totalSpeed: 'Current speed',
-    controllable: 'Controllable',
-    strategy: 'Strategy',
-    backendSaved: 'Backend connected',
-    localOnly: 'Local',
-    manualShort: 'Manual',
-    autoShort: 'Auto on launch',
-    concurrencyShort: 'Concurrency',
-    bandwidth: 'Global bandwidth limit',
-    displayUnit: 'Display unit',
-    unlimited: 'Unlimited',
-    limitHelp: '0 means unlimited',
-    lowPriorityThrottle: 'Low-priority throttling',
-    throttleHelp: 'Backend switches downloads to single concurrency; without a custom limit it applies a 2 MiB/s background cap',
-    resetDefaults: 'Reset defaults',
-    noActionable: 'No actionable downloads',
-    localPreset: 'Local preset',
-    taskSummary: 'Task details',
-    noSelectedTask: 'No task selected',
-    selectedTaskHint: 'Click any task card to switch this panel',
-    progress: 'Progress',
-    downloaded: 'Downloaded',
-    speed: 'Speed',
-    eta: 'ETA',
-    etaPending: 'Pending',
-    queueState: 'Queue state',
-    queuePosition: 'Queue position',
-    runningNow: 'Downloading now',
-    notQueued: 'Not waiting in queue',
-    failedReason: 'Failure reason',
-    retryAdvice: 'Retry advice',
-    retryAdviceNetwork: 'Keep the partial file and retry; if it fails again, check network or bandwidth settings',
-    retryAdviceRedownload: 'The server or partial file state is not suitable for resume; use redownload',
-    retryAdvicePermission: 'Check repository access and whether the file still exists, then retry',
-    retryAdviceGeneric: 'Retry first to resume from the partial file; redownload if the error repeats',
-    openLocation: 'Open location',
-    addToModelRepo: 'Scan into model repo',
-    importedToRepo: 'Scanned the save directory and refreshed the model repository',
-    importFailed: 'Model repo scan failed',
-    localPath: 'Local file',
-    settingsLoadFailed: 'Failed to load download settings',
-    settingsSaveFailed: 'Failed to save download settings',
-  }, [lang])
+  const ui = t.downloadWorkspace
 
   const settingsFailureText = (prefix: string, error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
@@ -410,7 +199,7 @@ export default function DownloadManager() {
   const taskStatusLabel = (task: DownloadProgress) => ({
     active: t.downloadPage.active,
     paused: t.downloadPage.paused,
-    pausing: lang === 'zh-CN' ? '\u6682\u505C\u4E2D' : 'Pausing',
+    pausing: ui.pausing,
     queued: t.downloadPage.queued,
     completed: t.modelRepo.done,
     cancelled: t.modelRepo.cancelled,
@@ -885,7 +674,7 @@ export default function DownloadManager() {
                   </button>
                 ) : (
                   <span className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-                    {lang === 'zh-CN' ? '\u6682\u505C\u4E2D' : 'Pausing'}
+                    {ui.pausing}
                   </span>
                 )}
                 <button
@@ -1086,9 +875,9 @@ export default function DownloadManager() {
   return (
     <div className="space-y-5">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricTile label={t.downloadPage.queue} value={queueFileCount} detail={downloadQueue.length > 0 ? `${downloadQueue.length} ${lang === 'zh-CN' ? '\u6279\u6B21' : 'batches'}` : t.downloadPage.noQueue} tone="slate" />
+        <MetricTile label={t.downloadPage.queue} value={queueFileCount} detail={downloadQueue.length > 0 ? `${downloadQueue.length} ${ui.batches}` : t.downloadPage.noQueue} tone="slate" />
         <MetricTile label={t.downloadPage.active} value={activeTasks.length} detail={hasActive ? formatSpeed(activeTasks.reduce((sum, task) => sum + task.speed, 0)) : t.downloadPage.noActive} tone="blue" />
-        <MetricTile label={t.downloadPage.paused} value={pausedTasks.length} detail={hasPaused ? `${pausedTasks.filter(task => task.status === 'paused').length} ${lang === 'zh-CN' ? '\u53EF\u6062\u590D' : 'resumable'}` : t.downloadPage.noPaused} tone="amber" />
+        <MetricTile label={t.downloadPage.paused} value={pausedTasks.length} detail={hasPaused ? `${pausedTasks.filter(task => task.status === 'paused').length} ${ui.resumable}` : t.downloadPage.noPaused} tone="amber" />
         <MetricTile label={t.downloadPage.completed} value={completedTasks.length} detail={completedBytes > 0 ? formatSize(completedBytes) : t.downloadPage.noCompleted} tone="emerald" />
       </div>
 
@@ -1333,7 +1122,7 @@ export default function DownloadManager() {
                         <div key={file.task_id || file.name} className="truncate" title={file.path || file.name}>{file.name}</div>
                       ))}
                       {group.files.length > 4 && (
-                        <div>{lang === 'zh-CN' ? `\u8FD8\u6709 ${group.files.length - 4} \u4E2A\u6587\u4EF6` : `${group.files.length - 4} more files`}</div>
+                        <div>{formatMessage(ui.moreFiles, { count: group.files.length - 4 })}</div>
                       )}
                     </div>
                   </div>
