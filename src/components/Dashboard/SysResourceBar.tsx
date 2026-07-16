@@ -25,7 +25,7 @@ export default function SysResourceBar({ metrics }: { metrics: SystemMetrics | n
     },
     {
       label: t.perfBlock.gpu, pct: (metrics.gpu_percent ?? 0) / 100,
-      detail: metrics.gpu_vendor || 'N/A',
+      detail: metrics.gpu_name || metrics.gpu_vendor || 'N/A',
       color: 'bg-emerald-500',
     },
     {

@@ -228,6 +228,7 @@ export interface SystemMetrics {
   system_memory_total_mb: number | null
   system_memory_used_mb: number | null
   gpu_vendor: string | null
+  gpu_name: string | null
 }
 
 export type ModelWorkload = 'inference' | 'embedding' | 'reranker'
@@ -244,6 +245,8 @@ export interface TelemetrySampleSummary {
   system_cpu_percent: number | null
   system_memory_used_mb: number | null
   system_memory_total_mb: number | null
+  gpu_vendor: string | null
+  gpu_name: string | null
   tokens_per_sec: number | null
   prompt_tokens_per_sec: number | null
   prompt_tokens_total: number | null

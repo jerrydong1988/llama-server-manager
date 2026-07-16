@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void, CStr};
 use std::sync::Mutex;
 
 type AdlxResult = i32;
@@ -50,6 +50,7 @@ pub struct AdlxMetrics {
     pub gpu_percent: Option<f32>,
     pub vram_used_mb: Option<f64>,
     pub vram_total_mb: Option<f64>,
+    pub gpu_name: Option<String>,
 }
 
 /// Read function pointer from vtable at given index, cast to target type
@@ -65,6 +66,14 @@ unsafe fn release(obj: *mut c_void) {
     }
     type Release = unsafe extern "system" fn(*mut c_void) -> u32;
     vtbl::<Release>(*(obj as *const *const c_void), 1)(obj);
+}
+
+unsafe fn copy_c_string(value: *const c_char) -> Option<String> {
+    if value.is_null() {
+        return None;
+    }
+    let value = CStr::from_ptr(value).to_string_lossy().trim().to_string();
+    (!value.is_empty()).then_some(value)
 }
 
 pub fn collect_metrics() -> Option<AdlxMetrics> {
@@ -116,6 +125,7 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
         gpu_percent: None,
         vram_used_mb: None,
         vram_total_mb: None,
+        gpu_name: None,
     };
 
     // GetGPUs (index 1)
@@ -138,6 +148,13 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
         type AtGPU = unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> AdlxResult;
         if vtbl::<AtGPU>(vt_gl, 11)(gpu_list, 0, &mut gpu) == ADLX_OK && !gpu.is_null() {
             let vt_gpu = *(gpu as *const *const c_void);
+
+            // IADLXGPU::Name (vtable index 7, including IADLXInterface methods).
+            type GPUName = unsafe extern "system" fn(*mut c_void, *mut *const c_char) -> AdlxResult;
+            let mut gpu_name: *const c_char = std::ptr::null();
+            if vtbl::<GPUName>(vt_gpu, 7)(gpu, &mut gpu_name) == ADLX_OK {
+                m.gpu_name = copy_c_string(gpu_name);
+            }
 
             // GPU::TotalVRAM (index 11)
             type TotalVRAM = unsafe extern "system" fn(*mut c_void, *mut u32) -> AdlxResult;

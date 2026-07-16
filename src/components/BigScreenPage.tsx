@@ -34,6 +34,7 @@ import {
   buildActivityFeed,
   buildFleetThroughputSeries,
   buildRequestPressure,
+  formatRequestPressureDetail,
   buildResourceSignals,
   buildServiceStatus,
   downsampleMonitoringPoints,
@@ -351,7 +352,7 @@ export default function BigScreenPage() {
         <WallKpi label={labels.serviceStatus} value={statusLabel} detail={telemetryError || labels.allServicesNormal} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
         <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
         <WallKpi label={labels.currentThroughput} value={formatRate(currentTps, fleetThroughput.unit)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps, fleetThroughput.unit)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />
-        <WallKpi label={labels.requestPressure} value={`${pressure.percent}%`} detail={`${labels.active} ${pressure.active}${pressure.capacity ? ` / ${pressure.capacity}` : ''} · ${labels.queued} ${pressure.queued}`} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
+        <WallKpi label={labels.requestPressure} value={`${pressure.percent}%`} detail={formatRequestPressureDetail(pressure, labels)} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
         <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
       </section>
 
@@ -508,17 +509,19 @@ function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { 
   const safe = Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)))
   const toneClass = wallTone(tone)
   return (
-    <div className="grid min-w-0 grid-cols-[48px_110px_78px_minmax(120px,1fr)_140px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 dark:border-slate-700 dark:bg-slate-950/50">
+    <div className="grid min-w-0 grid-cols-[40px_minmax(0,1fr)_64px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 2xl:grid-cols-[48px_minmax(160px,0.8fr)_78px_minmax(80px,1fr)_110px] dark:border-slate-700 dark:bg-slate-950/50">
       <div className={joinClassNames('flex h-10 w-10 items-center justify-center rounded-lg border', toneClass.box)}>{icon}</div>
       <div className="min-w-0">
         <div className="truncate text-base font-semibold text-slate-900 dark:text-slate-100">{label}</div>
-        <div className="truncate text-xs text-slate-500" title={detail}>{detail}</div>
+        <div className="break-words text-xs leading-4 text-slate-500" title={detail}>{detail}</div>
       </div>
       <div className="text-3xl font-semibold text-slate-950 dark:text-white">{safe}%</div>
-      <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+      <div className="hidden h-2 overflow-hidden rounded-full bg-slate-200 2xl:block dark:bg-slate-800">
         <div className={joinClassNames('h-full rounded-full', toneClass.bar)} style={{ width: `${safe}%` }} />
       </div>
-      <MiniSparkline values={sparkline} tone={tone} />
+      <div className="hidden 2xl:block">
+        <MiniSparkline values={sparkline} tone={tone} />
+      </div>
     </div>
   )
 }

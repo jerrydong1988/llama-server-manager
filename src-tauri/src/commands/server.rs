@@ -1420,23 +1420,13 @@ fn monitor_loop(
         }
 
         // System-level and GPU metrics using the collect_gpu_and_system singleton cache.
-        let (
-            adlx_cpu,
-            gpu_pct,
-            vram_u,
-            vram_t,
-            _mem,
-            gpu_vendor,
-            sys_cpu,
-            sys_mem_total,
-            sys_mem_used,
-        ) = collect_gpu_and_system();
+        let gpu_system = collect_gpu_and_system();
 
         // Process-level metrics.
         let (cpu, mem) = get_process_metrics(&mut proc_sys, expected_pid);
-        let cpu_pct = adlx_cpu.unwrap_or(cpu);
-        let mem_mb = if adlx_cpu.is_some() {
-            _mem.unwrap_or(mem)
+        let cpu_pct = gpu_system.cpu_percent.unwrap_or(cpu);
+        let mem_mb = if gpu_system.cpu_percent.is_some() {
+            gpu_system.memory_mb.unwrap_or(mem)
         } else {
             (mem * 10.0).round() / 10.0
         };
@@ -1445,13 +1435,14 @@ fn monitor_loop(
             cpu_percent: cpu_pct,
             memory_mb: mem_mb,
             uptime_secs: start_instant.elapsed().as_secs(),
-            gpu_percent: gpu_pct,
-            vram_used_mb: vram_u,
-            vram_total_mb: vram_t,
-            system_cpu_percent: sys_cpu,
-            system_memory_total_mb: sys_mem_total,
-            system_memory_used_mb: sys_mem_used,
-            gpu_vendor,
+            gpu_percent: gpu_system.gpu_percent,
+            vram_used_mb: gpu_system.vram_used_mb,
+            vram_total_mb: gpu_system.vram_total_mb,
+            system_cpu_percent: gpu_system.system_cpu_percent,
+            system_memory_total_mb: gpu_system.system_memory_total_mb,
+            system_memory_used_mb: gpu_system.system_memory_used_mb,
+            gpu_vendor: gpu_system.gpu_vendor,
+            gpu_name: gpu_system.gpu_name,
         };
 
         // llama metrics.
@@ -1957,17 +1948,19 @@ static SYSINFO_CACHE: LazyLock<Mutex<SystemSampler>> = LazyLock::new(|| {
         snapshot: None,
     })
 });
-type GpuSystemSnapshot = (
-    Option<f32>,
-    Option<f32>,
-    Option<f64>,
-    Option<f64>,
-    Option<f64>,
-    Option<String>,
-    Option<f32>,
-    Option<f64>,
-    Option<f64>,
-);
+#[derive(Clone)]
+struct GpuSystemSnapshot {
+    cpu_percent: Option<f32>,
+    gpu_percent: Option<f32>,
+    vram_used_mb: Option<f64>,
+    vram_total_mb: Option<f64>,
+    memory_mb: Option<f64>,
+    gpu_vendor: Option<String>,
+    gpu_name: Option<String>,
+    system_cpu_percent: Option<f32>,
+    system_memory_total_mb: Option<f64>,
+    system_memory_used_mb: Option<f64>,
+}
 
 /// Collect GPU + system-level metrics. Uses cached System instance, no sleep.
 fn collect_gpu_and_system() -> GpuSystemSnapshot {
@@ -1982,41 +1975,44 @@ fn collect_gpu_and_system() -> GpuSystemSnapshot {
     let (sys_cpu, sys_mem_total, sys_mem_used) = get_system_level_metrics(&guard.system);
 
     let snapshot = if let Some(m) = adlx::collect_metrics() {
-        (
-            m.cpu_percent,
-            m.gpu_percent,
-            m.vram_used_mb,
-            m.vram_total_mb,
-            None,
-            Some("AMD".into()),
-            sys_cpu,
-            sys_mem_total,
-            sys_mem_used,
-        )
+        GpuSystemSnapshot {
+            cpu_percent: m.cpu_percent,
+            gpu_percent: m.gpu_percent,
+            vram_used_mb: m.vram_used_mb,
+            vram_total_mb: m.vram_total_mb,
+            memory_mb: m.memory_mb,
+            gpu_vendor: Some("AMD".into()),
+            gpu_name: m.gpu_name,
+            system_cpu_percent: sys_cpu,
+            system_memory_total_mb: sys_mem_total,
+            system_memory_used_mb: sys_mem_used,
+        }
     } else if let Some(m) = nvml::collect_metrics() {
-        (
-            None,
-            m.gpu_percent,
-            m.vram_used_mb,
-            m.vram_total_mb,
-            None,
-            Some("NVIDIA".into()),
-            sys_cpu,
-            sys_mem_total,
-            sys_mem_used,
-        )
+        GpuSystemSnapshot {
+            cpu_percent: None,
+            gpu_percent: m.gpu_percent,
+            vram_used_mb: m.vram_used_mb,
+            vram_total_mb: m.vram_total_mb,
+            memory_mb: None,
+            gpu_vendor: Some("NVIDIA".into()),
+            gpu_name: m.gpu_name,
+            system_cpu_percent: sys_cpu,
+            system_memory_total_mb: sys_mem_total,
+            system_memory_used_mb: sys_mem_used,
+        }
     } else {
-        (
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            sys_cpu,
-            sys_mem_total,
-            sys_mem_used,
-        )
+        GpuSystemSnapshot {
+            cpu_percent: None,
+            gpu_percent: None,
+            vram_used_mb: None,
+            vram_total_mb: None,
+            memory_mb: None,
+            gpu_vendor: None,
+            gpu_name: None,
+            system_cpu_percent: sys_cpu,
+            system_memory_total_mb: sys_mem_total,
+            system_memory_used_mb: sys_mem_used,
+        }
     };
     guard.snapshot = Some((std::time::Instant::now(), snapshot.clone()));
     snapshot
@@ -2071,34 +2067,25 @@ pub async fn get_system_metrics(
         - start_time;
 
     let result = tokio::task::spawn_blocking(move || {
-        let (
-            adlx_cpu,
-            gpu_pct,
-            vram_u,
-            vram_t,
-            _mem,
-            gpu_vendor,
-            sys_cpu,
-            sys_mem_total,
-            sys_mem_used,
-        ) = collect_gpu_and_system();
+        let gpu_system = collect_gpu_and_system();
         let mut proc_sys = System::new_all();
         let (cpu, mem) = get_process_metrics(&mut proc_sys, pid);
         SystemMetrics {
-            cpu_percent: adlx_cpu.unwrap_or(cpu),
-            memory_mb: if adlx_cpu.is_some() {
-                _mem.unwrap_or(mem)
+            cpu_percent: gpu_system.cpu_percent.unwrap_or(cpu),
+            memory_mb: if gpu_system.cpu_percent.is_some() {
+                gpu_system.memory_mb.unwrap_or(mem)
             } else {
                 (mem * 10.0).round() / 10.0
             },
             uptime_secs: uptime,
-            gpu_percent: gpu_pct,
-            vram_used_mb: vram_u,
-            vram_total_mb: vram_t,
-            system_cpu_percent: sys_cpu,
-            system_memory_total_mb: sys_mem_total,
-            system_memory_used_mb: sys_mem_used,
-            gpu_vendor,
+            gpu_percent: gpu_system.gpu_percent,
+            vram_used_mb: gpu_system.vram_used_mb,
+            vram_total_mb: gpu_system.vram_total_mb,
+            system_cpu_percent: gpu_system.system_cpu_percent,
+            system_memory_total_mb: gpu_system.system_memory_total_mb,
+            system_memory_used_mb: gpu_system.system_memory_used_mb,
+            gpu_vendor: gpu_system.gpu_vendor,
+            gpu_name: gpu_system.gpu_name,
         }
     })
     .await
@@ -2109,28 +2096,23 @@ pub async fn get_system_metrics(
 /// System health without requiring an instance. Used by Dashboard for the system resource bar.
 pub async fn get_system_health() -> Result<SystemMetrics, String> {
     let result = tokio::task::spawn_blocking(|| {
-        let (
-            adlx_cpu,
-            gpu_pct,
-            vram_u,
-            vram_t,
-            mem,
-            gpu_vendor,
-            sys_cpu,
-            sys_mem_total,
-            sys_mem_used,
-        ) = collect_gpu_and_system();
+        let gpu_system = collect_gpu_and_system();
         SystemMetrics {
-            cpu_percent: adlx_cpu.unwrap_or(sys_cpu.unwrap_or(0.0)),
-            memory_mb: mem.unwrap_or(sys_mem_used.unwrap_or(0.0)),
+            cpu_percent: gpu_system
+                .cpu_percent
+                .unwrap_or(gpu_system.system_cpu_percent.unwrap_or(0.0)),
+            memory_mb: gpu_system
+                .memory_mb
+                .unwrap_or(gpu_system.system_memory_used_mb.unwrap_or(0.0)),
             uptime_secs: 0,
-            gpu_percent: gpu_pct,
-            vram_used_mb: vram_u,
-            vram_total_mb: vram_t,
-            system_cpu_percent: sys_cpu,
-            system_memory_total_mb: sys_mem_total,
-            system_memory_used_mb: sys_mem_used,
-            gpu_vendor,
+            gpu_percent: gpu_system.gpu_percent,
+            vram_used_mb: gpu_system.vram_used_mb,
+            vram_total_mb: gpu_system.vram_total_mb,
+            system_cpu_percent: gpu_system.system_cpu_percent,
+            system_memory_total_mb: gpu_system.system_memory_total_mb,
+            system_memory_used_mb: gpu_system.system_memory_used_mb,
+            gpu_vendor: gpu_system.gpu_vendor,
+            gpu_name: gpu_system.gpu_name,
         }
     })
     .await

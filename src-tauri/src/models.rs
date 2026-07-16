@@ -580,6 +580,8 @@ pub struct SystemMetrics {
     pub system_memory_used_mb: Option<f64>,
     /// GPU vendor: "AMD" | "NVIDIA" | null (unknown/not detected)
     pub gpu_vendor: Option<String>,
+    /// Driver-reported GPU model name, for example "AMD Radeon(TM) 8060S Graphics".
+    pub gpu_name: Option<String>,
 }
 
 // Cluster management / Worker.

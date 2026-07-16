@@ -141,17 +141,15 @@ export function SignalMeter({
   const safeValue = clampPercent(value)
   return (
     <div className={joinClassNames('min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60', compact ? 'space-y-2' : 'space-y-3')}>
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
           {icon ? <div className={joinClassNames('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border', toneBorder[tone], toneText[tone])}>{icon}</div> : null}
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{label}</div>
-            <div className="truncate text-xs text-slate-500 dark:text-slate-400" title={detail}>{detail}</div>
-          </div>
+          <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{label}</div>
         </div>
         <div className="shrink-0 text-2xl font-semibold text-slate-950 dark:text-white">{Math.round(safeValue)}%</div>
       </div>
-      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_120px] items-center gap-3">
+      <div className="min-h-8 break-words text-xs leading-4 text-slate-500 dark:text-slate-400" title={detail}>{detail}</div>
+      <div className="grid min-w-0 grid-cols-[minmax(32px,1fr)_minmax(80px,120px)] items-center gap-3">
         <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
           <div className={joinClassNames('h-full rounded-full transition-[width]', toneBar[tone])} style={{ width: `${safeValue}%` }} />
         </div>

@@ -13,6 +13,8 @@ const entry = `
     buildFleetThroughputSeries,
     buildLiveThroughput,
     buildRequestPressure,
+    buildResourceSignals,
+    formatRequestPressureDetail,
     buildTelemetryThroughputPoints,
     mergeThroughputPoints,
     monitoringFramePoints,
@@ -237,6 +239,44 @@ const entry = `
   })
   assert.equal(buildRequestPressure(1, 0).percent, 0)
   assert.equal(buildRequestPressure(1, 1, 4).level, 'high')
+  assert.equal(
+    formatRequestPressureDetail(
+      buildRequestPressure(0, 0, 1),
+      { processing: '处理中', capacity: '总容量', queued: '排队' },
+    ),
+    '处理中 0 · 总容量 1 · 排队 0',
+    'capacity must not be visually confused with the queued request count',
+  )
+  assert.equal(
+    formatRequestPressureDetail(
+      buildRequestPressure(2, 1),
+      { processing: 'Processing', capacity: 'Capacity', queued: 'Queued' },
+    ),
+    'Processing 2 · Queued 1',
+  )
+
+  const gpuSignal = buildResourceSignals({
+    system: null,
+    latest: {
+      gpu_percent: 12,
+      gpu_vendor: 'AMD',
+      gpu_name: 'AMD Radeon(TM) 8060S Graphics',
+    },
+    samples: [],
+    labels: {
+      process: '进程',
+      system: '系统',
+      memory: '内存',
+      vram: '显存',
+      gpuUnavailable: '未检测到 GPU',
+    },
+  })[1]
+  assert.equal(gpuSignal.value, 12)
+  assert.equal(
+    gpuSignal.detail,
+    'AMD Radeon(TM) 8060S Graphics',
+    'historical sessions must display the persisted GPU model name',
+  )
 `
 
 const bundled = esbuild.buildSync({
@@ -284,5 +324,8 @@ assert.match(monitoringSource, /input_tokens_per_second/, 'backend frames must e
 assert.match(primitiveSource, /buildChartAxis/, 'trend charts must render a numeric axis')
 assert.match(primitiveSource, /unit\?: string/, 'trend charts must expose their measurement unit')
 assert.match(primitiveSource, /point\.ts - domainStart/, 'trend charts must position points by real timestamps')
+assert.match(performanceSource, /grid gap-3 sm:grid-cols-2/, 'resource cards must retain enough width for complete details')
+assert.match(primitiveSource, /min-h-8 break-words text-xs/, 'resource details must wrap instead of truncating')
+assert.match(bigScreenSource, /minmax\(160px,0\.8fr\)/, 'wallboard resource rows must reserve space for GPU model names')
 
 console.log('live throughput view-model tests passed')

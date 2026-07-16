@@ -207,6 +207,16 @@ export function buildRequestPressure(
   return { active, queued, capacity: capacityKnown ? normalizedCapacity : null, percent, level }
 }
 
+export function formatRequestPressureDetail(
+  pressure: ReturnType<typeof buildRequestPressure>,
+  labels: { processing: string; capacity: string; queued: string },
+) {
+  const parts = [`${labels.processing} ${pressure.active}`]
+  if (pressure.capacity != null) parts.push(`${labels.capacity} ${pressure.capacity}`)
+  parts.push(`${labels.queued} ${pressure.queued}`)
+  return parts.join(' · ')
+}
+
 export function monitoringFramePoints(
   frames: MonitoringFrame[],
   workload: ModelWorkload,
@@ -332,7 +342,11 @@ export function buildResourceSignals(options: {
       id: 'gpu',
       label: 'GPU',
       value: gpuValue,
-      detail: options.system?.gpu_vendor || options.labels.gpuUnavailable,
+      detail: options.system?.gpu_name
+        || options.latest?.gpu_name
+        || options.system?.gpu_vendor
+        || options.latest?.gpu_vendor
+        || options.labels.gpuUnavailable,
       tone: gpuValue >= 85 ? 'amber' : 'emerald',
       sparkline: options.samples.map(sample => sample.gpu_percent ?? 0),
     },

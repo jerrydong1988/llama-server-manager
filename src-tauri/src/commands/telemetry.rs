@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
@@ -58,6 +58,8 @@ pub struct TelemetrySampleSummary {
     pub system_cpu_percent: Option<f64>,
     pub system_memory_used_mb: Option<f64>,
     pub system_memory_total_mb: Option<f64>,
+    pub gpu_vendor: Option<String>,
+    pub gpu_name: Option<String>,
     pub tokens_per_sec: Option<f64>,
     pub prompt_tokens_per_sec: Option<f64>,
     pub prompt_tokens_total: Option<i64>,
@@ -357,6 +359,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             system_memory_used_mb REAL,
             system_memory_total_mb REAL,
             gpu_vendor TEXT,
+            gpu_name TEXT,
             tokens_per_sec REAL,
             prompt_tokens_total INTEGER,
             generated_tokens_total INTEGER,
@@ -568,6 +571,7 @@ fn migrate_vector_schema(conn: &Connection) -> Result<(), String> {
     for (name, definition) in [
         ("decode_calls_total", "INTEGER"),
         ("max_tokens_observed", "INTEGER"),
+        ("gpu_name", "TEXT"),
     ] {
         if !sample_columns.iter().any(|column| column == name) {
             conn.execute(
@@ -948,12 +952,12 @@ fn insert_metric_sample(
     conn.execute(
         "INSERT INTO metric_samples
             (session_id, instance_id, ts, cpu_percent, memory_mb, gpu_percent, vram_used_mb, vram_total_mb,
-             system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, tokens_per_sec,
+             system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
              prompt_tokens_total, generated_tokens_total, requests_total, decode_calls_total,
              max_tokens_observed, prompt_tokens_per_sec, requests_processing, requests_deferred,
              busy_slots_per_decode)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15,
-                 ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+                 ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
         params![
             session_id,
             instance_id,
@@ -967,6 +971,7 @@ fn insert_metric_sample(
             system.system_memory_used_mb,
             system.system_memory_total_mb,
             system.gpu_vendor.as_deref(),
+            system.gpu_name.as_deref(),
             tokens_per_sec,
             llama.map(|m| m.prompt_tokens as i64),
             llama.map(|m| m.gen_tokens as i64),
@@ -2773,7 +2778,7 @@ fn latest_samples(conn: &Connection, limit: u32) -> Result<Vec<TelemetrySampleSu
     let mut stmt = conn
         .prepare(
             "SELECT session_id, instance_id, ts, cpu_percent, memory_mb, gpu_percent, vram_used_mb, vram_total_mb,
-                    system_cpu_percent, system_memory_used_mb, system_memory_total_mb, tokens_per_sec,
+                    system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
                     decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
                     busy_slots_per_decode
@@ -2800,7 +2805,7 @@ fn samples_for_session(
     let mut stmt = conn
         .prepare(
             "SELECT session_id, instance_id, ts, cpu_percent, memory_mb, gpu_percent, vram_used_mb, vram_total_mb,
-                    system_cpu_percent, system_memory_used_mb, system_memory_total_mb, tokens_per_sec,
+                    system_cpu_percent, system_memory_used_mb, system_memory_total_mb, gpu_vendor, gpu_name, tokens_per_sec,
                     prompt_tokens_per_sec, prompt_tokens_total, generated_tokens_total, requests_total,
                     decode_calls_total, max_tokens_observed, requests_processing, requests_deferred,
                     busy_slots_per_decode
@@ -2834,16 +2839,18 @@ fn sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TelemetrySampleS
         system_cpu_percent: row.get(8)?,
         system_memory_used_mb: row.get(9)?,
         system_memory_total_mb: row.get(10)?,
-        tokens_per_sec: row.get(11)?,
-        prompt_tokens_per_sec: row.get(12)?,
-        prompt_tokens_total: row.get(13)?,
-        generated_tokens_total: row.get(14)?,
-        requests_total: row.get(15)?,
-        decode_calls_total: row.get(16)?,
-        max_tokens_observed: row.get(17)?,
-        requests_processing: row.get(18)?,
-        requests_deferred: row.get(19)?,
-        busy_slots_per_decode: row.get(20)?,
+        gpu_vendor: row.get(11)?,
+        gpu_name: row.get(12)?,
+        tokens_per_sec: row.get(13)?,
+        prompt_tokens_per_sec: row.get(14)?,
+        prompt_tokens_total: row.get(15)?,
+        generated_tokens_total: row.get(16)?,
+        requests_total: row.get(17)?,
+        decode_calls_total: row.get(18)?,
+        max_tokens_observed: row.get(19)?,
+        requests_processing: row.get(20)?,
+        requests_deferred: row.get(21)?,
+        busy_slots_per_decode: row.get(22)?,
     })
 }
 
@@ -3040,7 +3047,8 @@ mod tests {
             system_cpu_percent: None,
             system_memory_total_mb: None,
             system_memory_used_mb: None,
-            gpu_vendor: None,
+            gpu_vendor: Some("AMD".into()),
+            gpu_name: Some("AMD Radeon(TM) 8060S Graphics".into()),
         };
         let llama = LlamaMetricSample {
             tokens_per_sec: 4.0,
@@ -3073,6 +3081,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(values, (17, 17, 4096));
+        let sample = samples_for_session(&conn, "session-metrics", 1).unwrap();
+        assert_eq!(sample[0].gpu_vendor.as_deref(), Some("AMD"));
+        assert_eq!(
+            sample[0].gpu_name.as_deref(),
+            Some("AMD Radeon(TM) 8060S Graphics")
+        );
     }
 
     #[test]
@@ -3106,6 +3120,7 @@ mod tests {
             system_memory_total_mb: None,
             system_memory_used_mb: None,
             gpu_vendor: None,
+            gpu_name: None,
         };
         let llama = LlamaMetricSample {
             tokens_per_sec: 72.6,
@@ -3763,6 +3778,7 @@ mod tests {
         assert!(sample_columns
             .iter()
             .any(|column| column == "max_tokens_observed"));
+        assert!(sample_columns.iter().any(|column| column == "gpu_name"));
         for index_name in [
             "idx_vector_activity_session_completed",
             "idx_vector_activity_session_source_completed",

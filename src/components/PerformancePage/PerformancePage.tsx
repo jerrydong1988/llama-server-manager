@@ -20,6 +20,7 @@ import { ActiveRequestRow, ComparisonTable, MonitorPanel, SessionCard, SignalMet
 import { formatDuration, formatMemory, formatMs, formatRate, formatTime } from '../monitoring/monitoringFormat'
 import {
   buildRequestPressure,
+  formatRequestPressureDetail,
   buildResourceSignals,
   buildTelemetryThroughputPoints,
   mergeThroughputPoints,
@@ -457,7 +458,7 @@ export default function PerformancePage() {
                 <StatusTile
                   label={labels.queuePressure}
                   value={`${pressure.percent}%`}
-                  detail={`${pressure.active}${pressure.capacity ? ` / ${pressure.capacity}` : ''} · ${pressure.queued} ${labels.processingDeferred}`}
+                  detail={formatRequestPressureDetail(pressure, labels)}
                   icon={<Zap className="h-5 w-5" />}
                   tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : 'emerald'}
                   className="py-3"
@@ -465,7 +466,7 @@ export default function PerformancePage() {
               </div>
             </section>
 
-            <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-4">
+            <div className="grid gap-3 sm:grid-cols-2">
               {resourceSignals.map(signal => (
                 <SignalMeter
                   key={signal.id}

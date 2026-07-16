@@ -295,7 +295,7 @@ export default function Dashboard() {
       primary: sysMetrics?.vram_total_mb
         ? `${labels.vram} ${formatMb(sysMetrics.vram_used_mb)} / ${formatMb(sysMetrics.vram_total_mb)}`
         : `${labels.vram} --`,
-      secondary: sysMetrics?.gpu_vendor || 'N/A',
+      secondary: sysMetrics?.gpu_name || sysMetrics?.gpu_vendor || 'N/A',
       tone: 'gpu' as const,
       icon: <Gauge className="h-4 w-4" />,
     },
