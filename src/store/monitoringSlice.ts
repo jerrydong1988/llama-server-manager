@@ -103,6 +103,10 @@ export function createMonitoringSlice(set: AppStoreSet): Pick<
         ...state.runningTasksByInstance,
         [event.instanceId]: event.tasks,
       },
+      lastCompletedTaskByInstance: event.lastCompleted ? {
+        ...state.lastCompletedTaskByInstance,
+        [event.instanceId]: event.lastCompleted,
+      } : state.lastCompletedTaskByInstance,
     })),
   }
 }

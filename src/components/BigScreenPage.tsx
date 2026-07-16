@@ -7,6 +7,7 @@ import {
   Cpu,
   Database,
   Download,
+  FastForward,
   Gauge,
   HardDrive,
   Monitor,
@@ -15,7 +16,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { useI18n } from '../i18n'
-import { getBigScreenLabels } from '../i18n/pageLabels'
+import { getBigScreenLabels, getSpeculativeDecodingLabels } from '../i18n/pageLabels'
 import { useAppStore } from '../store'
 import type {
   DownloadProgress,
@@ -28,7 +29,7 @@ import type {
 } from '../store/types'
 import { Badge, joinClassNames } from './ui'
 import { MiniSparkline, TrendChart } from './monitoring/MonitoringPrimitives'
-import { formatBytes, formatBytesPerSecond, formatDuration, formatRate, formatTime } from './monitoring/monitoringFormat'
+import { formatBytes, formatBytesPerSecond, formatDuration, formatMs, formatRate, formatTime } from './monitoring/monitoringFormat'
 import {
   buildActivityFeed,
   buildFleetThroughputSeries,
@@ -39,6 +40,11 @@ import {
   type ActivityFeedItem,
   type SignalTone,
 } from './monitoring/monitoringViewModel'
+import {
+  buildSpeculativeDecodingSummary,
+  isSpeculativeDecodingConfigured,
+  type SpeculativeDecodingSummary,
+} from './monitoring/speculativeDecoding'
 
 const emptyOverview: TelemetryOverview = {
   active_sessions: 0,
@@ -53,6 +59,7 @@ const BIG_SCREEN_TELEMETRY_REFRESH_MS = 10000
 export default function BigScreenPage() {
   const { lang } = useI18n()
   const labels = useMemo(() => getBigScreenLabels(lang), [lang])
+  const speculativeLabels = useMemo(() => getSpeculativeDecodingLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
   const models = useAppStore(state => state.models)
   const engines = useAppStore(state => state.engines)
@@ -63,11 +70,13 @@ export default function BigScreenPage() {
   const monitoringFramesByInstance = useAppStore(state => state.monitoringFramesByInstance)
   const monitoringCurrentByInstance = useAppStore(state => state.monitoringCurrentByInstance)
   const runningTasksByInstance = useAppStore(state => state.runningTasksByInstance)
+  const lastCompletedTaskByInstance = useAppStore(state => state.lastCompletedTaskByInstance)
   const loadInitialData = useAppStore(state => state.loadInitialData)
 
   const [overview, setOverview] = useState<TelemetryOverview>(emptyOverview)
   const [sessions, setSessions] = useState<TelemetrySessionSummary[]>([])
   const [requests, setRequests] = useState<InferenceRequestSummary[]>([])
+  const [speculativeRequests, setSpeculativeRequests] = useState<InferenceRequestSummary[]>([])
   const [lastUpdatedAt, setLastUpdatedAt] = useState(Date.now())
   const [refreshing, setRefreshing] = useState(false)
   const [telemetryError, setTelemetryError] = useState<string | null>(null)
@@ -86,12 +95,21 @@ export default function BigScreenPage() {
       setSessions(nextSessions)
 
       const sessionId = nextSessions[0]?.id
-      if (sessionId) {
-        const nextRequests = await invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 8 })
-        setRequests(nextRequests)
-      } else {
-        setRequests([])
-      }
+      const inferenceSessionId = nextSessions.find(session => session.workload === 'inference')?.id
+      const speculativeRequestsPromise = inferenceSessionId
+        ? invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId: inferenceSessionId, limit: 32 })
+        : Promise.resolve([])
+      const recentRequestsPromise = sessionId === inferenceSessionId
+        ? speculativeRequestsPromise.then(items => items.slice(0, 8))
+        : sessionId
+          ? invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 8 })
+          : Promise.resolve([])
+      const [nextRequests, nextSpeculativeRequests] = await Promise.all([
+        recentRequestsPromise,
+        speculativeRequestsPromise,
+      ])
+      setRequests(nextRequests)
+      setSpeculativeRequests(nextSpeculativeRequests)
       setTelemetryError(null)
       setLastUpdatedAt(Date.now())
     } catch (error) {
@@ -209,6 +227,38 @@ export default function BigScreenPage() {
       .slice(0, 4),
     [monitoringCurrentByInstance, runningInstances, runningTasksByInstance],
   )
+  const activeInferenceTasks = useMemo(
+    () => runningInstances.flatMap(instance => {
+      const workload = monitoringCurrentByInstance[instance.id]?.workload
+        || (instance.config.reranking ? 'reranker' : instance.config.embedding ? 'embedding' : 'inference')
+      return workload === 'inference'
+        ? (runningTasksByInstance[instance.id] || []).filter(task => !task.completed)
+        : []
+    }),
+    [monitoringCurrentByInstance, runningInstances, runningTasksByInstance],
+  )
+  const lastCompletedInferenceTasks = useMemo(
+    () => runningInstances.flatMap(instance => {
+      const workload = monitoringCurrentByInstance[instance.id]?.workload
+        || (instance.config.reranking ? 'reranker' : instance.config.embedding ? 'embedding' : 'inference')
+      const task = lastCompletedTaskByInstance[instance.id]
+      const sessionId = monitoringCurrentByInstance[instance.id]?.sessionId
+        || sessions.find(session => session.instance_id === instance.id && !session.stopped_at)?.id
+        || null
+      return workload === 'inference' && task ? [{ ...task, session_id: sessionId }] : []
+    }),
+    [lastCompletedTaskByInstance, monitoringCurrentByInstance, runningInstances, sessions],
+  )
+  const speculativeSummary = buildSpeculativeDecodingSummary({
+    configured: runningInstances.some(instance => (
+      !instance.config.embedding
+      && !instance.config.reranking
+      && isSpeculativeDecodingConfigured(instance.config)
+    )),
+    requests: speculativeRequests,
+    activeTasks: activeInferenceTasks,
+    lastCompletedTasks: lastCompletedInferenceTasks,
+  })
 
   const downloadStats = useMemo(() => {
     const active = allDownloads.filter(task => task.status === 'active')
@@ -337,6 +387,12 @@ export default function BigScreenPage() {
               </div>
             )}
           </div>
+          {speculativeSummary.configured || speculativeSummary.hasData ? (
+            <WallSpeculativeSummary
+              summary={speculativeSummary}
+              labels={speculativeLabels}
+            />
+          ) : null}
         </WallPanel>
 
         <WallPanel title={labels.resourcePressure} icon={<Cpu className="h-5 w-5" />} action={<Badge tone="blue">5分钟</Badge>}>
@@ -486,6 +542,58 @@ function ActiveWallRequest({ task }: { task: RunningInferenceTask & { instanceNa
   )
 }
 
+function WallSpeculativeSummary({
+  summary,
+  labels,
+}: {
+  summary: SpeculativeDecodingSummary
+  labels: ReturnType<typeof getSpeculativeDecodingLabels>
+}) {
+  const sourceLabel = summary.source === 'live'
+    ? labels.liveSource
+    : summary.source === 'mixed'
+      ? labels.mixedSource
+      : summary.source === 'history'
+        ? labels.recentSessionSource
+        : labels.configured
+  return (
+    <div data-wall-speculative-analysis className="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+      <div className="mb-3 flex min-w-0 items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-900 dark:text-slate-100">
+          <FastForward className="h-4 w-4 shrink-0 text-violet-600 dark:text-violet-300" />
+          <span className="truncate">{labels.title}</span>
+        </div>
+        <Badge tone={summary.hasData ? 'violet' : 'slate'}>{sourceLabel}</Badge>
+      </div>
+      {summary.hasData ? (
+        <div className="grid min-w-0 gap-4 sm:grid-cols-2 xl:grid-cols-[150px_repeat(3,minmax(0,1fr))] xl:items-end">
+          <div className="min-w-0 xl:border-r xl:border-slate-200 xl:pr-4 dark:xl:border-slate-700">
+            <div className="text-xs text-slate-500">{labels.acceptanceRate}</div>
+            <div className="mt-1 text-3xl font-semibold text-violet-700 dark:text-violet-300">{formatPercent(summary.acceptanceRate)}</div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+              <div className="h-full rounded-full bg-violet-500" style={{ width: `${Math.round((summary.acceptanceRate || 0) * 100)}%` }} />
+            </div>
+          </div>
+          <WallInlineStat label={labels.acceptedTokens} value={summary.acceptedTokens.toLocaleString()} />
+          <WallInlineStat label={labels.observedRequests} value={summary.requestCount.toLocaleString()} />
+          <WallInlineStat label={labels.avgDraftTime} value={formatMs(summary.avgGenerationTimeMs)} />
+        </div>
+      ) : (
+        <div className="py-2 text-xs text-slate-500">{labels.waiting}</div>
+      )}
+    </div>
+  )
+}
+
+function WallInlineStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="truncate text-xs text-slate-500" title={label}>{label}</div>
+      <div className="mt-1 truncate text-lg font-semibold text-slate-900 dark:text-slate-100" title={value}>{value}</div>
+    </div>
+  )
+}
+
 function InstanceWallRow({
   instance,
   labels,
@@ -607,4 +715,8 @@ function averageThroughput(values: number[]) {
   const valid = values.filter(value => Number.isFinite(value) && value >= 0)
   if (valid.length === 0) return 0
   return valid.reduce((sum, value) => sum + value, 0) / valid.length
+}
+
+function formatPercent(value: number | null): string {
+  return value == null || !Number.isFinite(value) ? '--' : `${(value * 100).toFixed(1)}%`
 }

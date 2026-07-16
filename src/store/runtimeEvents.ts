@@ -198,6 +198,16 @@ export function registerGlobalStoreListeners(
 
   registerListener<{ instanceId: string; pid: number; port: number; command: string }>(store, 'server-started', (event) => {
     const state = store.getState()
+    store.setState(current => ({
+      runningTasksByInstance: {
+        ...current.runningTasksByInstance,
+        [event.payload.instanceId]: [],
+      },
+      lastCompletedTaskByInstance: {
+        ...current.lastCompletedTaskByInstance,
+        [event.payload.instanceId]: null,
+      },
+    }))
     state.updateInstance(event.payload.instanceId, {
       status: 'running',
       healthCheck: 'pending',

@@ -54,6 +54,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   monitoringFramesByInstance: {},
   monitoringCurrentByInstance: {},
   runningTasksByInstance: {},
+  lastCompletedTaskByInstance: {},
   ...createCoreSlice(set, get),
   ...createInstanceSlice(set, get, _startupTimings),
   ...createDownloadSlice(set, get),

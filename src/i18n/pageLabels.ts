@@ -65,6 +65,29 @@ export function getBigScreenLabels(lang: string) {
   }
 }
 
+export function getSpeculativeDecodingLabels(lang: string) {
+  const zh = lang === 'zh-CN'
+  return {
+    title: zh ? '推测解码分析' : 'Speculative Decoding',
+    configured: zh ? '已启用' : 'Enabled',
+    observed: zh ? '已采集' : 'Observed',
+    waiting: zh ? '等待请求完成后生成推测解码统计' : 'Waiting for a completed request with speculative statistics',
+    acceptanceRate: zh ? '加权接受率' : 'Weighted Acceptance',
+    latestAcceptance: zh ? '最近接受率' : 'Latest Acceptance',
+    acceptedTokens: zh ? '接受草稿令牌' : 'Accepted Draft Tokens',
+    generatedTokens: zh ? '生成草稿令牌' : 'Generated Draft Tokens',
+    observedRequests: zh ? '统计请求' : 'Observed Requests',
+    avgDraftTime: zh ? '平均草稿耗时' : 'Avg Draft Time',
+    liveSource: zh ? '实时请求' : 'Live Requests',
+    historySource: zh ? '当前会话' : 'Current Session',
+    mixedSource: zh ? '实时 + 会话' : 'Live + Session',
+    recentSessionSource: zh ? '最近推理会话' : 'Latest Inference Session',
+    tokenRatio: (accepted: string, generated: string) => zh
+      ? `${accepted} / ${generated} 个草稿令牌被接受`
+      : `${accepted} / ${generated} draft tokens accepted`,
+  }
+}
+
 export function getPerformanceLabels(lang: string) {
   const zh = lang === 'zh-CN'
   return {

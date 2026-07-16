@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { invokeApp as invoke } from '../../lib/ipc'
-import { Activity, AlertTriangle, BarChart3, Clock, Cpu, Gauge, HardDrive, Radio, RefreshCw, Server, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, BarChart3, Clock, Cpu, FastForward, Gauge, HardDrive, Radio, RefreshCw, Server, Zap } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
 import { useI18n } from '../../i18n'
-import { getPerformanceLabels } from '../../i18n/pageLabels'
+import { getPerformanceLabels, getSpeculativeDecodingLabels } from '../../i18n/pageLabels'
 import type {
   DiagnosticFinding,
   InferenceRequestSummary,
@@ -25,6 +25,10 @@ import {
   mergeThroughputPoints,
   monitoringFramePoints,
 } from '../monitoring/monitoringViewModel'
+import {
+  buildSpeculativeDecodingSummary,
+  isSpeculativeDecodingConfigured,
+} from '../monitoring/speculativeDecoding'
 import {
   buildPerformanceMode,
   buildVectorComparisonRows,
@@ -58,10 +62,12 @@ const TELEMETRY_DETAIL_REFRESH_MS = 5000
 export default function PerformancePage() {
   const { lang } = useI18n()
   const labels = useMemo(() => getPerformanceLabels(lang), [lang])
+  const speculativeLabels = useMemo(() => getSpeculativeDecodingLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
   const monitoringFramesByInstance = useAppStore(state => state.monitoringFramesByInstance)
   const monitoringCurrentByInstance = useAppStore(state => state.monitoringCurrentByInstance)
   const runningTasksByInstance = useAppStore(state => state.runningTasksByInstance)
+  const lastCompletedTaskByInstance = useAppStore(state => state.lastCompletedTaskByInstance)
   const running = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
   const [selectedInstanceId, setSelectedInstanceId] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
@@ -89,6 +95,9 @@ export default function PerformancePage() {
       : running.find(instance => instance.id === selectedSession.instance_id) || null
     : running.find(instance => instance.id === selectedInstanceId) || null
   const activeTasks = liveTargetInstance ? runningTasksByInstance[liveTargetInstance.id] || [] : []
+  const lastCompletedTask = liveTargetInstance
+    ? lastCompletedTaskByInstance[liveTargetInstance.id] || null
+    : null
   const currentFrame = liveTargetInstance
     ? monitoringCurrentByInstance[liveTargetInstance.id] || null
     : null
@@ -218,6 +227,19 @@ export default function PerformancePage() {
     analysis,
     lang,
   )
+  const speculativeSummary = buildSpeculativeDecodingSummary({
+    configured: performanceMode.kind === 'inference'
+      && isSpeculativeDecodingConfigured(selectedInstance?.config),
+    analysis: performanceMode.kind === 'inference' ? analysis?.speculative_analysis : null,
+    requests: performanceMode.kind === 'inference' ? requests : [],
+    activeTasks: performanceMode.kind === 'inference' ? activeTasks : [],
+    lastCompletedTasks: performanceMode.kind === 'inference' && lastCompletedTask
+      ? [{
+          ...lastCompletedTask,
+          session_id: selectedSession?.id || currentFrame?.sessionId || null,
+        }]
+      : [],
+  })
   const selectedRunning = selectedSession
     ? selectedSession.stopped_at == null
     : selectedInstance?.status === 'running'
@@ -525,6 +547,51 @@ export default function PerformancePage() {
                 </div>
               )}
             </MonitorPanel>
+
+            {performanceMode.kind === 'inference' && (speculativeSummary.configured || speculativeSummary.hasData) ? (
+              <MonitorPanel
+                title={speculativeLabels.title}
+                icon={<FastForward className="h-5 w-5" />}
+                action={
+                  <Badge tone={speculativeSummary.hasData ? 'violet' : 'slate'}>
+                    {speculativeSummary.hasData ? speculativeLabels.observed : speculativeLabels.configured}
+                  </Badge>
+                }
+              >
+                {speculativeSummary.hasData ? (
+                  <div data-speculative-analysis className="grid gap-4 md:grid-cols-[minmax(210px,0.9fr)_minmax(0,1.5fr)] md:items-center">
+                    <div className="min-w-0 md:border-r md:border-slate-200 md:pr-5 dark:md:border-slate-800">
+                      <div className="text-xs font-medium text-slate-500">{speculativeLabels.acceptanceRate}</div>
+                      <div className="mt-2 text-4xl font-semibold text-violet-700 dark:text-violet-300">
+                        {formatRatio(speculativeSummary.acceptanceRate)}
+                      </div>
+                      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+                        <div
+                          className="h-full rounded-full bg-violet-500 transition-[width] duration-500"
+                          style={{ width: `${Math.round((speculativeSummary.acceptanceRate || 0) * 100)}%` }}
+                        />
+                      </div>
+                      <div className="mt-2 text-xs text-slate-500">
+                        {speculativeLabels.tokenRatio(
+                          speculativeSummary.acceptedTokens.toLocaleString(),
+                          speculativeSummary.generatedTokens.toLocaleString(),
+                        )}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-5 gap-y-4 sm:grid-cols-4 md:grid-cols-2 xl:grid-cols-4">
+                      <InlineStat label={speculativeLabels.latestAcceptance} value={formatRatio(speculativeSummary.latestAcceptanceRate)} />
+                      <InlineStat label={speculativeLabels.acceptedTokens} value={speculativeSummary.acceptedTokens.toLocaleString()} />
+                      <InlineStat label={speculativeLabels.observedRequests} value={speculativeSummary.requestCount.toLocaleString()} />
+                      <InlineStat label={speculativeLabels.avgDraftTime} value={formatMs(speculativeSummary.avgGenerationTimeMs)} />
+                    </div>
+                  </div>
+                ) : (
+                  <div data-speculative-analysis="waiting" className="rounded-lg border border-dashed border-slate-300 px-4 py-7 text-center text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">
+                    {speculativeLabels.waiting}
+                  </div>
+                )}
+              </MonitorPanel>
+            ) : null}
           </main>
 
           <aside className="min-w-0 space-y-4 xl:col-span-2 2xl:col-span-1">
@@ -602,6 +669,15 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
     <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/60">
       <div className="truncate text-xs text-slate-500">{label}</div>
       <div className="mt-2 truncate text-lg font-semibold text-slate-950 dark:text-slate-100" title={String(value)}>{value}</div>
+    </div>
+  )
+}
+
+function InlineStat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="min-w-0">
+      <div className="truncate text-xs text-slate-500" title={label}>{label}</div>
+      <div className="mt-1 truncate text-lg font-semibold text-slate-950 dark:text-slate-100" title={String(value)}>{value}</div>
     </div>
   )
 }

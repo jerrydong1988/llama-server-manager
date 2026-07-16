@@ -110,8 +110,18 @@ pub struct TelemetrySessionAnalysis {
     pub avg_cached_slots: f64,
     pub max_context_tokens: u32,
     pub slot_sample_count: u32,
+    pub speculative_analysis: Option<SpeculativeTelemetryAnalysis>,
     pub vector_analysis: Option<VectorTelemetryAnalysis>,
     pub vector_baseline: Option<VectorTelemetryBaseline>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpeculativeTelemetryAnalysis {
+    pub request_count: u32,
+    pub acceptance_rate: Option<f64>,
+    pub accepted_tokens: u64,
+    pub generated_tokens: u64,
+    pub avg_generation_time_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1522,6 +1532,7 @@ fn query_session_analysis(
         )
         .map_err(|e| format!("无法查询 slot 分析摘要: {}", e))?;
 
+    let speculative_analysis = query_speculative_analysis(conn, session_id)?;
     let vector_analysis = query_vector_analysis(conn, session_id)?;
     let vector_baseline = if vector_analysis.is_some() {
         query_vector_baseline_for_session(conn, session_id)?
@@ -1542,9 +1553,61 @@ fn query_session_analysis(
         avg_cached_slots: slot_stats.2,
         max_context_tokens: slot_stats.3.max(0) as u32,
         slot_sample_count: slot_stats.4.max(0) as u32,
+        speculative_analysis,
         vector_analysis,
         vector_baseline,
     })
+}
+
+fn query_speculative_analysis(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<SpeculativeTelemetryAnalysis>, String> {
+    let stats = conn
+        .query_row(
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(spec_accepted), 0),
+                COALESCE(SUM(spec_generated), 0),
+                CASE
+                    WHEN COALESCE(SUM(spec_generated), 0) > 0
+                    THEN 1.0 * COALESCE(SUM(spec_accepted), 0) / SUM(spec_generated)
+                    ELSE AVG(spec_accept_rate)
+                END,
+                AVG(spec_gen_time_ms)
+             FROM inference_requests
+             WHERE session_id = ?1
+               AND source = 'log'
+               AND (
+                    spec_accept_rate IS NOT NULL
+                    OR spec_accepted IS NOT NULL
+                    OR spec_generated IS NOT NULL
+                    OR spec_gen_time_ms IS NOT NULL
+               )",
+            params![session_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<f64>>(3)?,
+                    row.get::<_, Option<f64>>(4)?,
+                ))
+            },
+        )
+        .map_err(|e| format!("无法查询推测解码分析摘要: {}", e))?;
+
+    if stats.0 <= 0 {
+        return Ok(None);
+    }
+
+    Ok(Some(SpeculativeTelemetryAnalysis {
+        request_count: stats.0 as u32,
+        acceptance_rate: stats.3.map(|value| value.clamp(0.0, 1.0)),
+        accepted_tokens: stats.1.max(0) as u64,
+        generated_tokens: stats.2.max(0) as u64,
+        avg_generation_time_ms: stats.4.filter(|value| value.is_finite() && *value >= 0.0),
+    }))
 }
 
 fn query_vector_analysis(
@@ -3248,6 +3311,66 @@ mod tests {
 
         let inference = query_session_analysis(&conn, "analysis-inference").unwrap();
         assert!(inference.vector_analysis.is_none());
+    }
+
+    #[test]
+    fn speculative_analysis_uses_weighted_token_acceptance() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "analysis-speculative",
+                instance_id: "spec-instance",
+                instance_name: "spec-instance",
+                model_path: "model.gguf",
+                engine_id: "engine",
+                backend: "cpu",
+                config_hash: "hash",
+                command_line: "llama-server --spec-type draft-mtp",
+                workload: ModelWorkload::Inference,
+                started_at: 0,
+            },
+        )
+        .unwrap();
+
+        for (task_id, accepted, generated, rate, generation_time_ms) in [
+            (1, 8, 10, Some(0.8), Some(12.0)),
+            (2, 2, 30, Some(0.2), Some(28.0)),
+        ] {
+            insert_inference_request(
+                &conn,
+                "analysis-speculative",
+                task_id as i64 * 1_000,
+                &InferenceRequestRecord {
+                    task_id,
+                    slot_id: 0,
+                    prompt_tokens: None,
+                    prompt_time_ms: None,
+                    prompt_tps: None,
+                    generated_tokens: None,
+                    generation_time_ms: None,
+                    generation_tps: None,
+                    total_tokens: None,
+                    total_time_ms: None,
+                    spec_accept_rate: rate,
+                    spec_accepted: Some(accepted),
+                    spec_generated: Some(generated),
+                    spec_gen_time_ms: generation_time_ms,
+                },
+            )
+            .unwrap();
+        }
+
+        let analysis = query_session_analysis(&conn, "analysis-speculative").unwrap();
+        let speculative = analysis
+            .speculative_analysis
+            .expect("speculative requests should expose an aggregate");
+        assert_eq!(speculative.request_count, 2);
+        assert_eq!(speculative.accepted_tokens, 10);
+        assert_eq!(speculative.generated_tokens, 40);
+        assert_eq!(speculative.acceptance_rate, Some(0.25));
+        assert_eq!(speculative.avg_generation_time_ms, Some(20.0));
     }
 
     #[test]

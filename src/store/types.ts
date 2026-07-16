@@ -374,8 +374,17 @@ export interface TelemetrySessionAnalysis {
   avg_cached_slots: number
   max_context_tokens: number
   slot_sample_count: number
+  speculative_analysis: SpeculativeTelemetryAnalysis | null
   vector_analysis: VectorTelemetryAnalysis | null
   vector_baseline: VectorTelemetryBaseline | null
+}
+
+export interface SpeculativeTelemetryAnalysis {
+  request_count: number
+  acceptance_rate: number | null
+  accepted_tokens: number
+  generated_tokens: number
+  avg_generation_time_ms: number | null
 }
 
 export interface VectorTrendBucket {
@@ -448,6 +457,7 @@ export interface AppState {
   monitoringFramesByInstance: Record<string, MonitoringFrame[]>
   monitoringCurrentByInstance: Record<string, MonitoringFrame>
   runningTasksByInstance: Record<string, RunningInferenceTask[]>
+  lastCompletedTaskByInstance: Record<string, RunningInferenceTask | null>
   setActiveTab: (tab: string) => void
   setDarkMode: (dm: boolean) => void
   setActiveConfigInstanceId: (id: string | null) => void
