@@ -20,8 +20,11 @@ import { pathBasename, pathDirname } from '../utils/path'
 import { formatHostPort } from '../utils/network'
 import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
+import { findUnsupportedEngineFlags, normalizeEngineCapabilityStatus } from '../engineCapabilities'
 import { _matchedElements } from './ConfigPage/shared'
 import { buildPickerTree, countActive, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, type PickerNode, type TemplateSnapshot } from './ConfigPage/configWorkspace'
+import { useEngineCompatibility } from './ConfigPage/useEngineCompatibility'
+import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotice'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
 
 const ConfigPage = () => {
@@ -34,6 +37,7 @@ const ConfigPage = () => {
   const engines = useAppStore(state => state.engines)
   const defaultEngineId = useAppStore(state => state.defaultEngineId)
   const setActiveTab = useAppStore(state => state.setActiveTab)
+  const generateCommand = useAppStore(state => state.generateCommand)
   const { t, lang } = useI18n()
   const inst = instances.find(instance => instance.id === activeConfigInstanceId)
 
@@ -132,6 +136,12 @@ const ConfigPage = () => {
   ), [currentModel, local?.model_path])
   const labels = useMemo(() => getConfigPageLabels(lang), [lang])
   const quickTemplates = useMemo(() => getConfigTemplates(lang), [lang])
+  const currentEngine = useMemo(() => {
+    const selectedId = local?.engine_id || defaultEngineId || ''
+    return engines.find(engine => engine.id === selectedId) ?? engines[0] ?? null
+  }, [defaultEngineId, engines, local?.engine_id])
+  const trustedEngineId = local?.engine_id || defaultEngineId || ''
+  const { unsupportedEngineFlags, setUnsupportedEngineFlags, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local, currentEngine, trustedEngineId })
 
   if (!local) {
     return (
@@ -142,7 +152,6 @@ const ConfigPage = () => {
   }
 
   const activeParams = getActiveParams(local, isEmbedding)
-  const currentEngine = engines.find(engine => engine.id === (local.engine_id || defaultEngineId || '')) ?? engines[0] ?? null
   const primaryModelPath = currentModel?.path || local.model_path || ''
   const draftModelPath = local.draft_model_path || ''
   const endpoint = formatHostPort(local.host || '127.0.0.1', local.port)
@@ -174,7 +183,7 @@ const ConfigPage = () => {
   }
 
   const save = async () => {
-    if (!inst || saving) {
+    if (!inst || saving || probingEngineCompatibility || capabilityProbeRequired) {
       return
     }
 
@@ -187,6 +196,14 @@ const ConfigPage = () => {
     const normalized = modelPathChanged
       ? normalizeConfigForSelectedModel(local, currentModel)
       : normalizeInstanceConfig(local, currentModel)
+    if (engine && normalizeEngineCapabilityStatus(engine.capabilities) === 'detected') {
+      const command = await generateCommand(normalized.config, engine.exe)
+      const unsupported = findUnsupportedEngineFlags(command, engine.capabilities)
+      setUnsupportedEngineFlags(unsupported)
+      if (unsupported.length > 0) {
+        return
+      }
+    }
     const saveRevision = editRevisionRef.current
     committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
     setLocal(normalized.config)
@@ -279,6 +296,7 @@ const ConfigPage = () => {
   const checkMessages = [
     ...(!primaryModelPath ? [{ tone: 'red', text: labels.missingModel }] : []),
     ...(!currentEngine ? [{ tone: 'amber', text: labels.missingEngine }] : []),
+    ...(unsupportedEngineFlags.length > 0 ? [{ tone: 'red', text: labels.engineCompatibilityBlocked }] : []),
     ...(liveWarnings.length > 0 ? [{ tone: liveWarnings.some(warning => warning.severity === 'high') ? 'red' : 'amber', text: `${liveWarnings.length} ${labels.liveWarnings}` }] : []),
   ]
   const selectedTemplate = quickTemplates.find(template => template.id === selectedTemplateId) ?? quickTemplates[0]
@@ -377,7 +395,7 @@ const ConfigPage = () => {
 
           <Button
             onClick={save}
-            disabled={!inst || saving}
+            disabled={!inst || saving || probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0}
             variant="primary"
             data-guide="config-save"
             icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
@@ -452,6 +470,13 @@ const ConfigPage = () => {
               {t.configPage.embeddingBanner}
             </div>
           )}
+
+          <EngineCompatibilityNotice
+            engine={currentEngine}
+            unsupportedFlags={unsupportedEngineFlags}
+            probing={probingEngineCompatibility}
+            labels={labels}
+          />
 
           {visibleVectorCleanupGroups.length > 0 && (
             <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">

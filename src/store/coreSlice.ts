@@ -22,6 +22,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   | 'openModelFolder'
   | 'readGgufMetadata'
   | 'scanEngines'
+  | 'probeEngineCapabilities'
   | 'deleteEngine'
   | 'renameEngine'
   | 'openEngineFolder'
@@ -108,6 +109,13 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         console.error('scan_engines error:', error)
         set({ isLoading: false })
       }
+    },
+    probeEngineCapabilities: async (id) => {
+      const engine = await invoke<EngineInfo>('probe_engine_capabilities', { engineId: id })
+      set((state) => ({
+        engines: state.engines.map((item) => item.id === engine.id ? engine : item),
+      }))
+      return engine
     },
     deleteEngine: async (id) => {
       await invoke('delete_engine', { id })

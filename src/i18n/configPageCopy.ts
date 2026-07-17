@@ -77,6 +77,10 @@ export function getConfigPageLabels(lang: string) {
     missingModel: zh ? '\u8bf7\u5148\u9009\u62e9\u4e3b\u6a21\u578b\uff0c\u5426\u5219\u5b9e\u4f8b\u65e0\u6cd5\u6b63\u5e38\u542f\u52a8\u3002' : 'Select a primary model before starting this instance.',
     missingEngine: zh ? '\u672a\u5339\u914d\u5230\u53ef\u7528\u5f15\u64ce\uff0c\u8bf7\u786e\u8ba4\u5f15\u64ce\u626b\u63cf\u7ed3\u679c\u3002' : 'No usable engine is matched. Check engine scan results.',
     liveWarnings: zh ? '\u6761\u53c2\u6570\u98ce\u9669\u9700\u590d\u6838' : 'parameter risks need review',
+    engineCompatibilityChecking: zh ? '\u6b63\u5728\u8bfb\u53d6\u5f53\u524d llama-server \u7684\u53c2\u6570\u80fd\u529b...' : 'Reading the selected llama-server parameter capabilities...',
+    engineCompatibilityUnknown: zh ? '\u65e0\u6cd5\u5b8c\u6574\u8bfb\u53d6\u5f53\u524d\u5f15\u64ce\u7684 --help \u80fd\u529b\uff0c\u672c\u6b21\u4e0d\u505a\u5f3a\u5236\u62e6\u622a\uff1b\u542f\u52a8\u65f6\u4ecd\u4f1a\u4fdd\u7559\u539f\u59cb\u9519\u8bef\u4fe1\u606f\u3002' : 'The selected engine help could not be read completely. Compatibility remains unknown and is not blocked; original startup errors are still preserved.',
+    engineCompatibilityBlocked: zh ? '\u5f53\u524d\u5f15\u64ce\u4e0d\u652f\u6301\u5df2\u542f\u7528\u7684\u53c2\u6570' : 'The selected engine does not support active parameters',
+    engineCompatibilityBlockedDesc: zh ? '\u8bf7\u6e05\u9664\u4e0b\u5217\u53c2\u6570\uff0c\u6216\u5728\u4fdd\u5b58\u524d\u66f4\u6362\u517c\u5bb9\u7684 llama-server \u5f15\u64ce\u3002' : 'Clear the following parameters or choose a compatible llama-server engine before saving.',
     performanceLink: zh ? '\u6027\u80fd\u8bca\u65ad' : 'Performance Diagnostics',
     performanceLinkDesc: zh
       ? '\u4fdd\u5b58\u5e76\u542f\u52a8\u5b9e\u4f8b\u540e\uff0c\u53ef\u5728\u6027\u80fd\u76d1\u63a7\u9875\u67e5\u770b\u541e\u5410\u3001\u663e\u5b58\u548c slot \u8bca\u65ad\u3002'

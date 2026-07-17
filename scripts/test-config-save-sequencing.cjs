@@ -39,7 +39,7 @@ assert.match(
   /if \(!mountedRef\.current \|\| useAppStore\.getState\(\)\.activeConfigInstanceId !== inst\.id\) return[\s\S]*setSaved\(true\)/,
   'a completed save must not update feedback for another instance',
 )
-assert.match(configPageSource, /disabled=\{!inst \|\| saving\}/)
+assert.match(configPageSource, /disabled=\{!inst \|\| saving[^}]*unsupportedEngineFlags\.length > 0\}/)
 assert.match(configPageSource, /saving \? t\.configPage\.saving :/)
 assert.match(configPageSource, /const editRevisionRef = useRef\(0\)/)
 assert.match(

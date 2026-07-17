@@ -6,6 +6,7 @@ pub mod cluster_network;
 pub mod cluster_ssh;
 pub mod config;
 pub mod download;
+pub mod engine_capabilities;
 pub mod model_inventory;
 pub mod monitoring;
 pub mod nvml;

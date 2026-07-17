@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Cpu, FolderOpen, Pencil, Plus, RefreshCw, Search, Star, Trash2 } from 'lucide-react'
+import { Cpu, FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Search, ShieldCheck, Star, Trash2 } from 'lucide-react'
 import { confirm, open } from '@tauri-apps/plugin-dialog'
 import { useAppStore } from '../store'
 import { formatMessage, useI18n } from '../i18n'
 import { getEngineLabels } from '../i18n/pageLabels'
+import { normalizeEngineCapabilityStatus } from '../engineCapabilities'
 import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
 const backendTone = (backend: string) => {
@@ -19,9 +20,17 @@ const backendTone = (backend: string) => {
   }
 }
 
+const capabilityTone = (status: string) => {
+  if (status === 'detected') return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
+  if (status === 'unprobed') return 'border-slate-700 bg-slate-800 text-slate-300'
+  return 'border-amber-500/20 bg-amber-500/10 text-amber-300'
+}
+
 const EngineManager = () => {
   const engines = useAppStore(state => state.engines)
   const scanEngines = useAppStore(state => state.scanEngines)
+  const probeEngineCapabilities = useAppStore(state => state.probeEngineCapabilities)
+  const addRuntimeWarning = useAppStore(state => state.addRuntimeWarning)
   const loadInitialData = useAppStore(state => state.loadInitialData)
   const isLoading = useAppStore(state => state.isLoading)
   const deleteEngine = useAppStore(state => state.deleteEngine)
@@ -38,6 +47,7 @@ const EngineManager = () => {
   const [selectedEngineId, setSelectedEngineId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [backendFilter, setBackendFilter] = useState('all')
+  const [probingEngineId, setProbingEngineId] = useState<string | null>(null)
   const editingCanceledRef = useRef(false)
 
   const labels = useMemo(() => getEngineLabels(lang), [lang])
@@ -129,6 +139,26 @@ const EngineManager = () => {
       renameEngine(id, trimmed)
     }
     setEditingId(null)
+  }
+
+  const handleProbe = async (id: string) => {
+    if (probingEngineId) return
+    setProbingEngineId(id)
+    try {
+      await probeEngineCapabilities(id)
+    } catch (error) {
+      addRuntimeWarning(formatMessage(labels.probeFailed, { error: String(error) }))
+    } finally {
+      setProbingEngineId(null)
+    }
+  }
+
+  const capabilityLabel = (status: string) => {
+    if (status === 'detected') return labels.capabilityDetected
+    if (status === 'partial') return labels.capabilityPartial
+    if (status === 'timeout') return labels.capabilityTimeout
+    if (status === 'failed') return labels.capabilityFailed
+    return labels.capabilityUnprobed
   }
 
   return (
@@ -349,7 +379,12 @@ const EngineManager = () => {
                           {engine.backend}
                         </span>
                       </div>
-                      <div className="flex items-center text-sm text-slate-300">{engine.version || '--'}</div>
+                      <div className="min-w-0 self-center">
+                        <p className="truncate text-sm text-slate-300" title={engine.version}>{engine.version || '--'}</p>
+                        <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] ${capabilityTone(normalizeEngineCapabilityStatus(engine.capabilities))}`}>
+                          {capabilityLabel(normalizeEngineCapabilityStatus(engine.capabilities))}
+                        </span>
+                      </div>
                       <div className="flex items-center justify-end gap-2">
                         <button
                           onClick={event => {
@@ -426,6 +461,11 @@ const EngineManager = () => {
                 {[
                   [labels.backend, selectedEngine.backend],
                   [labels.version, selectedEngine.version || '--'],
+                  [labels.compatibility, capabilityLabel(normalizeEngineCapabilityStatus(selectedEngine.capabilities))],
+                  [labels.supportedFlags, selectedEngine.capabilities?.supportedFlags?.length ?? 0],
+                  [labels.lastProbe, selectedEngine.capabilities?.probedAt
+                    ? new Date(selectedEngine.capabilities.probedAt * 1000).toLocaleString(lang)
+                    : labels.never],
                   [labels.default, defaultEngineId === selectedEngine.id ? (labels.yes) : (labels.no)],
                   [labels.scanRoot, engineDirs.find(dir => selectedEngine.dir.startsWith(dir)) || '--'],
                 ].map(([label, value]) => (
@@ -440,7 +480,22 @@ const EngineManager = () => {
                 ))}
               </InsetSurface>
 
+              {selectedEngine.capabilities?.error && (
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
+                  {selectedEngine.capabilities.error}
+                </div>
+              )}
+
               <div className="grid gap-3">
+                <Button
+                  onClick={() => void handleProbe(selectedEngine.id)}
+                  disabled={probingEngineId !== null}
+                  icon={probingEngineId === selectedEngine.id
+                    ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                    : <ShieldCheck className="h-4 w-4" />}
+                >
+                  {probingEngineId === selectedEngine.id ? labels.probing : labels.probeNow}
+                </Button>
                 <Button
                   onClick={() => setDefaultEngineId(selectedEngine.id)}
                   variant="primary"

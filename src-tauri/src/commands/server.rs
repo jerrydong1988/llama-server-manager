@@ -1,4 +1,7 @@
 use crate::commands::adlx;
+use crate::commands::engine_capabilities::{
+    capabilities_match_executable, unsupported_command_flags,
+};
 use crate::commands::nvml;
 use crate::error::{AppError, AppResult};
 use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
@@ -1029,6 +1032,31 @@ pub async fn start_server(
 ) -> AppResult<()> {
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let (config, workload, cmd) = prepare_launch(config, &engine_exe);
+    let engine_capabilities = state
+        .engines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|engine| {
+            engine.id == config.engine_id
+                || std::path::Path::new(&engine.exe) == std::path::Path::new(&engine_exe)
+        })
+        .map(|engine| engine.capabilities.clone());
+    if let Some(capabilities) = engine_capabilities
+        .filter(|capabilities| capabilities_match_executable(&engine_exe, capabilities))
+    {
+        let unsupported = unsupported_command_flags(&cmd, &capabilities);
+        if !unsupported.is_empty() {
+            return Err(AppError::new(
+                "ENGINE_PARAMETER_UNSUPPORTED",
+                format!(
+                    "当前 llama-server 不支持以下已启用参数：{}。请返回参数配置清除这些参数，或更换兼容的引擎版本。",
+                    unsupported.join(", ")
+                ),
+                false,
+            ));
+        }
+    }
     let cmd_str = cmd.join(" ");
     let cmd_display = mask_api_key_in_cmd(&cmd_str);
 

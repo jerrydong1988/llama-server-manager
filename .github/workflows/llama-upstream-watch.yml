@@ -1,0 +1,53 @@
+name: llama.cpp Upstream Watch
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  parameter-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Compare official llama-server parameters
+        id: drift
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check-llama-upstream.cjs --soft --report "$RUNNER_TEMP/llama-upstream-report.md"
+      - name: Synchronize tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_DRIFT: ${{ steps.drift.outputs.release_drift }}
+          MASTER_DRIFT: ${{ steps.drift.outputs.master_drift }}
+          CHECK_ERROR: ${{ steps.drift.outputs.error }}
+          REPORT_PATH: ${{ runner.temp }}/llama-upstream-report.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          title='[llama.cpp compatibility] upstream parameter drift detected'
+          issue_number="$(gh issue list --state all --limit 100 --search "\"$title\" in:title" --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n1)"
+          if [[ "$RELEASE_DRIFT" == 'true' || "$MASTER_DRIFT" == 'true' || "$CHECK_ERROR" == 'true' ]]; then
+            if [[ -n "$issue_number" ]]; then
+              gh issue reopen "$issue_number" >/dev/null 2>&1 || true
+              gh issue edit "$issue_number" --body-file "$REPORT_PATH"
+            else
+              gh issue create --title "$title" --body-file "$REPORT_PATH" --label maintenance || \
+                gh issue create --title "$title" --body-file "$REPORT_PATH"
+            fi
+          elif [[ -n "$issue_number" ]]; then
+            gh issue comment "$issue_number" --body 'The current stable and master parameter snapshots match the repository baseline. Closing automatically.'
+            gh issue close "$issue_number"
+          fi
+      - name: Enforce stable compatibility gate
+        if: steps.drift.outputs.release_drift == 'true' || steps.drift.outputs.error == 'true'
+        run: |
+          echo 'Stable llama.cpp parameter drift or an upstream check error requires review.' >&2
+          exit 1

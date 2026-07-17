@@ -31,6 +31,7 @@ use crate::commands::download::{
     resume_all_downloads, resume_download_task, set_download_bandwidth_limit,
     set_download_concurrency, set_download_low_priority_throttle, set_download_resume_policy,
 };
+use crate::commands::engine_capabilities::ipc::probe_engine_capabilities;
 use crate::commands::monitoring::get_monitoring_series;
 use crate::commands::proxy::{
     get_proxy_config, get_proxy_status, list_proxy_targets, restart_proxy, save_proxy_config,
@@ -370,6 +371,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata,
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
+            probe_engine_capabilities,
             load_app_data, get_cached_scan,
             generate_server_command, start_server, stop_server, open_browser,
             save_config, load_config,

@@ -82,6 +82,40 @@ pub struct ModelInfo {
 
 // Engine information.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineCapabilities {
+    #[serde(default = "default_engine_capability_status")]
+    pub status: String,
+    #[serde(default)]
+    pub supported_flags: Vec<String>,
+    #[serde(default)]
+    pub help_hash: String,
+    #[serde(default)]
+    pub executable_fingerprint: String,
+    #[serde(default)]
+    pub probed_at: Option<u64>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+fn default_engine_capability_status() -> String {
+    "unprobed".to_string()
+}
+
+impl Default for EngineCapabilities {
+    fn default() -> Self {
+        Self {
+            status: default_engine_capability_status(),
+            supported_flags: Vec::new(),
+            help_hash: String::new(),
+            executable_fingerprint: String::new(),
+            probed_at: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EngineInfo {
     pub id: String,
     pub name: String,
@@ -91,6 +125,8 @@ pub struct EngineInfo {
     pub backend: String,
     #[serde(default)]
     pub custom_name: Option<String>,
+    #[serde(default)]
+    pub capabilities: EngineCapabilities,
 }
 
 // Instance config.

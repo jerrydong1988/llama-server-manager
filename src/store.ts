@@ -12,6 +12,8 @@ export const _startupTimings: { name: string; ms: number }[] = []
 export type {
   ModelInfo,
   EngineInfo,
+  EngineCapabilities,
+  EngineCapabilityStatus,
   InstanceConfig,
   Instance,
   LogEntry,

@@ -258,6 +258,11 @@ export function getEngineLabels(lang: string) {
     detailsDescription: zh ? '查看选中二进制及其在运行时栈中的角色。' : 'Inspect the selected binary and review its role in the runtime stack.',
     noSelection: zh ? '选择一个引擎后可在这里查看详情。' : 'Select an engine to inspect it here.',
     yes: zh ? '是' : 'Yes', no: zh ? '否' : 'No', scanRoot: zh ? '扫描根目录' : 'Scan root',
+    compatibility: zh ? '参数兼容性' : 'Parameter compatibility', supportedFlags: zh ? '已识别参数' : 'Recognized flags',
+    lastProbe: zh ? '最近探测' : 'Last probe', never: zh ? '从未' : 'Never', probeNow: zh ? '探测参数能力' : 'Probe parameter capabilities',
+    probing: zh ? '正在探测...' : 'Probing...', capabilityDetected: zh ? '已确认' : 'Detected', capabilityUnprobed: zh ? '未探测' : 'Not probed',
+    capabilityPartial: zh ? '结果不完整' : 'Partial', capabilityTimeout: zh ? '探测超时' : 'Timed out', capabilityFailed: zh ? '探测失败' : 'Failed',
+    probeFailed: zh ? '引擎参数能力探测失败：{error}' : 'Engine capability probe failed: {error}',
   }
 }
 

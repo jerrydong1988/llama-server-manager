@@ -39,6 +39,18 @@ export interface EngineInfo {
   version: string
   backend: string
   custom_name?: string
+  capabilities?: EngineCapabilities
+}
+
+export type EngineCapabilityStatus = 'unprobed' | 'detected' | 'partial' | 'timeout' | 'failed'
+
+export interface EngineCapabilities {
+  status: EngineCapabilityStatus | string
+  supportedFlags: string[]
+  helpHash: string
+  executableFingerprint: string
+  probedAt?: number
+  error?: string
 }
 
 export interface InstanceConfig {
@@ -496,6 +508,7 @@ export interface AppState {
   readGgufMetadata: (path: string) => Promise<GgufMetadataSummary>
 
   scanEngines: (paths: string[]) => Promise<void>
+  probeEngineCapabilities: (id: string) => Promise<EngineInfo>
   deleteEngine: (id: string) => Promise<void>
   renameEngine: (id: string, name: string) => void
   openEngineFolder: (dir: string) => Promise<void>

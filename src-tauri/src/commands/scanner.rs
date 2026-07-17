@@ -489,6 +489,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
         version,
         backend,
         custom_name: None,
+        capabilities: Default::default(),
     })
 }
 

@@ -1,4 +1,4 @@
-use crate::models::{EngineInfo, ModelCapabilities, ModelInfo};
+use crate::models::{EngineCapabilities, EngineInfo, ModelCapabilities, ModelInfo};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 2;
+const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 3;
 static INVENTORY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 static INVENTORY_SCHEMA_LOCK: Mutex<()> = Mutex::new(());
 
@@ -38,6 +38,7 @@ pub struct InventoryEngineRecord {
     pub exe: String,
     pub version: String,
     pub backend: String,
+    pub capabilities: EngineCapabilities,
     pub exe_mtime: u64,
     pub scan_root: String,
     pub last_seen: i64,
@@ -119,6 +120,7 @@ impl InventoryEngineRecord {
             exe: engine.exe.clone(),
             version: engine.version.clone(),
             backend: engine.backend.clone(),
+            capabilities: engine.capabilities.clone(),
             exe_mtime,
             scan_root,
             last_seen: now_secs(),
@@ -135,6 +137,7 @@ impl InventoryEngineRecord {
             version: self.version.clone(),
             backend: self.backend.clone(),
             custom_name: None,
+            capabilities: self.capabilities.clone(),
         }
     }
 }
@@ -235,6 +238,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             exe TEXT NOT NULL,
             version TEXT NOT NULL,
             backend TEXT NOT NULL,
+            capabilities_json TEXT NOT NULL DEFAULT '{}',
             exe_mtime INTEGER NOT NULL,
             scan_root TEXT NOT NULL,
             last_seen INTEGER NOT NULL,
@@ -261,9 +265,38 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         "#,
     )
     .map_err(|e| format!("failed to initialize model inventory schema: {}", e))?;
+    ensure_column(
+        conn,
+        "engine_inventory",
+        "capabilities_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
     conn.pragma_update(None, "user_version", MODEL_INVENTORY_SCHEMA_VERSION)
         .map_err(|e| format!("failed to write model inventory schema version: {}", e))?;
     Ok(())
+}
+
+fn ensure_column(
+    conn: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .map_err(|e| format!("failed to inspect {table} schema: {e}"))?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("failed to query {table} schema: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("failed to read {table} schema: {e}"))?;
+    if columns.iter().any(|existing| existing == column) {
+        return Ok(());
+    }
+    conn.execute_batch(&format!(
+        "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+    ))
+    .map_err(|e| format!("failed to add {table}.{column}: {e}"))
 }
 
 fn load_directory_index_from_connection(
@@ -532,7 +565,8 @@ fn load_engine_index_from_connection(
     let mut stmt = conn
         .prepare(
             r#"
-            SELECT id, name, dir, exe, version, backend, exe_mtime, scan_root, last_seen, cache_version
+            SELECT id, name, dir, exe, version, backend, capabilities_json,
+                   exe_mtime, scan_root, last_seen, cache_version
             FROM engine_inventory
             "#,
         )
@@ -575,10 +609,10 @@ fn upsert_engine_records_in_connection(
         .prepare(
             r#"
                 INSERT INTO engine_inventory (
-                    id, name, dir, exe, version, backend, exe_mtime,
-                    scan_root, last_seen, cache_version
+                    id, name, dir, exe, version, backend, capabilities_json,
+                    exe_mtime, scan_root, last_seen, cache_version
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
@@ -586,6 +620,7 @@ fn upsert_engine_records_in_connection(
                     exe=excluded.exe,
                     version=excluded.version,
                     backend=excluded.backend,
+                    capabilities_json=excluded.capabilities_json,
                     exe_mtime=excluded.exe_mtime,
                     scan_root=excluded.scan_root,
                     last_seen=excluded.last_seen,
@@ -601,12 +636,30 @@ fn upsert_engine_records_in_connection(
             record.exe,
             record.version,
             record.backend,
+            serde_json::to_string(&record.capabilities)
+                .map_err(|e| format!("failed to encode engine capabilities: {e}"))?,
             record.exe_mtime as i64,
             record.scan_root,
             record.last_seen,
             MODEL_INVENTORY_SCHEMA_VERSION,
         ])
         .map_err(|e| format!("failed to upsert engine inventory row: {}", e))?;
+    }
+    Ok(())
+}
+
+pub fn update_engine_probe(engine: &EngineInfo) -> Result<(), String> {
+    let conn = open_connection()?;
+    let capabilities_json = serde_json::to_string(&engine.capabilities)
+        .map_err(|e| format!("failed to encode engine capabilities: {e}"))?;
+    let changed = conn
+        .execute(
+            "UPDATE engine_inventory SET version = ?2, capabilities_json = ?3 WHERE id = ?1",
+            params![engine.id, engine.version, capabilities_json],
+        )
+        .map_err(|e| format!("failed to persist engine capability probe: {e}"))?;
+    if changed == 0 {
+        return Err("engine is no longer present in the scan inventory".to_string());
     }
     Ok(())
 }
@@ -700,6 +753,9 @@ fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRe
 }
 
 fn engine_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryEngineRecord> {
+    let capabilities_json: String = row.get(6)?;
+    let capabilities =
+        serde_json::from_str::<EngineCapabilities>(&capabilities_json).unwrap_or_default();
     Ok(InventoryEngineRecord {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -707,10 +763,11 @@ fn engine_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inventory
         exe: row.get(3)?,
         version: row.get(4)?,
         backend: row.get(5)?,
-        exe_mtime: row.get::<_, i64>(6)?.max(0) as u64,
-        scan_root: row.get(7)?,
-        last_seen: row.get(8)?,
-        cache_version: row.get(9)?,
+        capabilities,
+        exe_mtime: row.get::<_, i64>(7)?.max(0) as u64,
+        scan_root: row.get(8)?,
+        last_seen: row.get(9)?,
+        cache_version: row.get(10)?,
     })
 }
 
@@ -725,4 +782,57 @@ fn directory_record_from_row(
         last_seen: row.get(4)?,
         cache_version: row.get(5)?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schema_migration_adds_engine_capabilities_to_existing_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE engine_inventory (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                dir TEXT NOT NULL,
+                exe TEXT NOT NULL,
+                version TEXT NOT NULL,
+                backend TEXT NOT NULL,
+                exe_mtime INTEGER NOT NULL,
+                scan_root TEXT NOT NULL,
+                last_seen INTEGER NOT NULL,
+                cache_version INTEGER NOT NULL
+            );
+            INSERT INTO engine_inventory (
+                id, name, dir, exe, version, backend, exe_mtime,
+                scan_root, last_seen, cache_version
+            ) VALUES ('engine', 'engine', '.', 'llama-server', 'old', 'CPU', 0, '.', 0, 2);
+            "#,
+        )
+        .unwrap();
+
+        init_schema(&conn).unwrap();
+        let capabilities: String = conn
+            .query_row(
+                "SELECT capabilities_json FROM engine_inventory WHERE id = 'engine'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(capabilities, "{}");
+        assert_eq!(
+            conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            MODEL_INVENTORY_SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn legacy_capability_json_defaults_to_an_unprobed_state() {
+        let capabilities = serde_json::from_str::<EngineCapabilities>("{}").unwrap();
+        assert_eq!(capabilities.status, "unprobed");
+        assert!(capabilities.supported_flags.is_empty());
+    }
 }

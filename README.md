@@ -153,6 +153,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [隐私政策 / Privacy Policy](PRIVACY.md)
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)
+- [llama.cpp 参数兼容机制 / llama.cpp Compatibility Policy](docs/LLAMA_CPP_COMPATIBILITY.md)
 - 应用内左侧“使用说明”可离线查看同一内容，并启动交互式引导。
 - 提交问题前请附版本、平台、后端类型和已脱敏的服务器日志；不要上传 API Key、私有路径或 SSH 凭据。
 
