@@ -341,9 +341,10 @@ pub(crate) fn executable_fingerprint(executable: &str) -> String {
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    let mut normalized_path = path.to_string_lossy().to_string();
     #[cfg(windows)]
-    normalized_path.make_ascii_lowercase();
+    let normalized_path = path.to_string_lossy().to_ascii_lowercase();
+    #[cfg(not(windows))]
+    let normalized_path = path.to_string_lossy().into_owned();
 
     let mut hash = 0xcbf29ce484222325_u64;
     update_fingerprint_hash(&mut hash, normalized_path.as_bytes());
