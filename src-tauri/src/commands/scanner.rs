@@ -1,3 +1,4 @@
+use crate::commands::engine_capabilities::capabilities_match_executable;
 use crate::commands::model_inventory::{
     self, InventoryDirectoryRecord, InventoryEngineRecord, InventoryModelRecord,
 };
@@ -266,6 +267,35 @@ fn push_indexed_engine(
             scan_root_key.to_string(),
         ));
         engines.push(info);
+    }
+}
+
+fn merge_scanned_engine_capabilities(scanned: &mut [EngineInfo], current: &[EngineInfo]) {
+    for engine in scanned {
+        if !engine.capabilities.executable_fingerprint.is_empty()
+            && !capabilities_match_executable(&engine.exe, &engine.capabilities)
+        {
+            engine.version.clear();
+            engine.capabilities = crate::models::EngineCapabilities {
+                error: Some("engine executable changed; compatibility probe required".to_string()),
+                ..crate::models::EngineCapabilities::default()
+            };
+        }
+
+        let Some(active) = current.iter().find(|candidate| {
+            candidate.id == engine.id
+                && engine_path_identity(Path::new(&candidate.exe))
+                    == engine_path_identity(Path::new(&engine.exe))
+        }) else {
+            continue;
+        };
+        if capabilities_match_executable(&engine.exe, &active.capabilities)
+            && active.capabilities.probed_at.unwrap_or(0)
+                >= engine.capabilities.probed_at.unwrap_or(0)
+        {
+            engine.version = active.version.clone();
+            engine.capabilities = active.capabilities.clone();
+        }
     }
 }
 
@@ -965,9 +995,18 @@ pub async fn scan_engines(
         }
     }
 
-    let mut state_engines = state.engines.lock().unwrap();
-    *state_engines = engines.clone();
-    Ok(engines)
+    let finalized = {
+        let mut state_engines = state.engines.lock().unwrap();
+        merge_scanned_engine_capabilities(&mut engines, &state_engines);
+        *state_engines = engines.clone();
+        // Keep the state lock through persistence. A concurrent probe uses the same lock for its
+        // state and cache update, so an older scan snapshot cannot be written after a newer probe.
+        for engine in state_engines.iter() {
+            let _ = model_inventory::update_engine_probe(engine);
+        }
+        state_engines.clone()
+    };
+    Ok(finalized)
 }
 
 pub async fn get_engines(state: tauri::State<'_, AppState>) -> Result<Vec<EngineInfo>, String> {
@@ -1006,6 +1045,46 @@ mod incremental_scan_tests {
 
         assert!(path_is_under_directory(&child, &parent));
         assert!(!path_is_under_directory(&sibling, &parent));
+    }
+
+    #[test]
+    fn scan_merge_preserves_a_newer_probe_and_invalidates_changed_executables() {
+        let dir = temp_test_dir("engine-capability-merge");
+        let exe = dir.join("llama-server-test");
+        std::fs::write(&exe, vec![b'a'; 128 * 1024]).unwrap();
+        let fingerprint =
+            crate::commands::engine_capabilities::executable_fingerprint(&exe.to_string_lossy());
+        let mut current = EngineInfo {
+            id: "engine-1".to_string(),
+            name: "engine".to_string(),
+            dir: dir.to_string_lossy().to_string(),
+            exe: exe.to_string_lossy().to_string(),
+            version: "version: 100".to_string(),
+            backend: "CPU".to_string(),
+            custom_name: None,
+            capabilities: crate::models::EngineCapabilities {
+                status: "detected".to_string(),
+                version_status: "detected".to_string(),
+                executable_fingerprint: fingerprint,
+                probed_at: Some(100),
+                ..crate::models::EngineCapabilities::default()
+            },
+        };
+        let mut scanned = vec![EngineInfo {
+            capabilities: crate::models::EngineCapabilities::default(),
+            version: String::new(),
+            ..current.clone()
+        }];
+        merge_scanned_engine_capabilities(&mut scanned, &[current.clone()]);
+        assert_eq!(scanned[0].version, "version: 100");
+        assert_eq!(scanned[0].capabilities.status, "detected");
+
+        std::fs::write(&exe, vec![b'b'; 128 * 1024]).unwrap();
+        current.capabilities.probed_at = Some(200);
+        merge_scanned_engine_capabilities(&mut scanned, &[current]);
+        assert_eq!(scanned[0].capabilities.status, "unprobed");
+        assert!(scanned[0].version.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

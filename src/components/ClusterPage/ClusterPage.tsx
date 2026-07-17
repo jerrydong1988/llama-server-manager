@@ -113,17 +113,10 @@ export default function ClusterPage() {
   }, [showAddDialog, showLaunchWizard, showLocalLaunch])
 
   useEffect(() => {
-    void loadWorkers()
-  }, [])
-
-  const loadWorkers = async () => {
-    try {
-      const result: WorkerInfo[] = await invoke('get_workers')
-      setWorkers(result)
-    } catch (error) {
-      console.error('Failed to load workers:', error)
-    }
-  }
+    void invoke<WorkerInfo[]>('get_workers')
+      .then(setWorkers)
+      .catch(error => console.error('Failed to load workers:', error))
+  }, [setWorkers])
 
   const handleScan = async () => {
     scanCancelled.current = false

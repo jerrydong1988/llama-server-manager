@@ -22,11 +22,12 @@ function useSearchScroll(match: boolean) {
   const ref = useRef<HTMLDivElement>(null)
   const q = useSearchQuery()
   useEffect(() => {
-    if (match && q && ref.current) {
-      _matchedElements.add(ref.current)
+    const element = ref.current
+    if (match && q && element) {
+      _matchedElements.add(element)
     }
     return () => {
-      if (ref.current) _matchedElements.delete(ref.current)
+      if (element) _matchedElements.delete(element)
     }
   }, [match, q])
   return ref

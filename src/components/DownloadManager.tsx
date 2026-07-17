@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { Trash2, FolderOpen, X, Download, ChevronDown, ChevronUp, Pause, Play, RotateCcw, RefreshCw, Square, AlertTriangle, Database } from 'lucide-react'
 import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
@@ -82,6 +82,8 @@ export default function DownloadManager() {
   const [lowPriorityThrottle, setLowPriorityThrottle] = useState(false)
   const [settingsError, setSettingsError] = useState('')
   const ui = t.downloadWorkspace
+  const initialBandwidthUnitRef = useRef(bandwidthUnit)
+  const settingsLoadFailedRef = useRef(ui.settingsLoadFailed)
 
   const settingsFailureText = (prefix: string, error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
@@ -93,7 +95,7 @@ export default function DownloadManager() {
     if (meta) {
       setResumePolicy(normalizeResumePolicy(meta.resume_policy || 'manual'))
       setConcurrency(clampConcurrency(meta.max_concurrent || 1))
-      const bandwidth = preferredBandwidthDisplay(meta.bandwidth_limit_bytes_per_sec || 0, bandwidthUnit)
+      const bandwidth = preferredBandwidthDisplay(meta.bandwidth_limit_bytes_per_sec || 0, initialBandwidthUnitRef.current)
       setBandwidthLimit(bandwidth.limit)
       setBandwidthUnit(bandwidth.unit)
       setLowPriorityThrottle(!!meta.low_priority_throttle)
@@ -107,14 +109,14 @@ export default function DownloadManager() {
         .then(([policy, concurrent, bytes, throttle]) => {
           setResumePolicy(normalizeResumePolicy(policy || 'manual'))
           setConcurrency(clampConcurrency(concurrent || 1))
-          const bandwidth = preferredBandwidthDisplay(bytes || 0, bandwidthUnit)
+          const bandwidth = preferredBandwidthDisplay(bytes || 0, initialBandwidthUnitRef.current)
           setBandwidthLimit(bandwidth.limit)
           setBandwidthUnit(bandwidth.unit)
           setLowPriorityThrottle(!!throttle)
           setSettingsError('')
         })
         .catch((error) => {
-          setSettingsError(settingsFailureText(ui.settingsLoadFailed, error))
+          setSettingsError(settingsFailureText(settingsLoadFailedRef.current, error))
         })
     }
     setTimeout(() => setInitialLoading(false), 300)

@@ -1,6 +1,7 @@
 use crate::commands::adlx;
 use crate::commands::engine_capabilities::{
-    capabilities_match_executable, command_for_capabilities, unsupported_command_flags,
+    blocked_security_flags, capabilities_match_executable, command_for_capabilities,
+    unsupported_command_flags,
 };
 use crate::commands::nvml;
 use crate::error::{AppError, AppResult};
@@ -200,32 +201,28 @@ fn terminate_spawned_child(child: &mut std::process::Child) -> Result<(), String
 
 // Generate CLI command.
 
-fn mask_api_key_in_cmd(cmd: &str) -> String {
-    let mut result = cmd.to_string();
-    let mut search_from = 0;
-    while let Some(pos) = result[search_from..].find("--api-key ") {
-        let pos = search_from + pos;
-        let rest = &result[pos + 10..];
-        if let Some(end) = rest.find(' ') {
-            let key = &rest[..end];
-            if !key.is_empty() {
-                let masked = "*".repeat(key.len().min(8));
-                let tail = &rest[end..];
-                result = format!("{}--api-key {}{}", &result[..pos], masked, tail);
-                search_from = pos + 10 + masked.len();
-            } else {
-                search_from = pos + 10;
-            }
+fn format_command_for_display(command: &[String]) -> String {
+    let mut masked = Vec::with_capacity(command.len());
+    let mut hide_next = false;
+    for argument in command {
+        let value = if hide_next {
+            hide_next = false;
+            "********".to_string()
+        } else if argument == "--api-key" {
+            hide_next = true;
+            argument.clone()
+        } else if argument.starts_with("--api-key=") {
+            "--api-key=********".to_string()
         } else {
-            let key = rest;
-            if !key.is_empty() {
-                let masked = "*".repeat(key.len().min(8));
-                result = format!("{}--api-key {}", &result[..pos], masked);
-            }
-            break;
+            argument.clone()
+        };
+        if value.chars().any(char::is_whitespace) {
+            masked.push(format!("\"{}\"", value.replace('"', "\\\"")));
+        } else {
+            masked.push(value);
         }
     }
-    result
+    masked.join(" ")
 }
 
 pub(crate) fn effective_api_key(config: &InstanceConfig) -> String {
@@ -339,9 +336,11 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
             let re = format!("{{\"reasoning_effort\": \"{}\"}}", config.reasoning_effort);
             cmd.extend_from_slice(&["--chat-template-kwargs".into(), re]);
         }
-        if !config.jinja {
-            cmd.push("--no-jinja".into());
-        }
+        cmd.push(if config.jinja {
+            "--jinja".into()
+        } else {
+            "--no-jinja".into()
+        });
         if !config.grammar_file.is_empty() {
             cmd.extend_from_slice(&["--grammar-file".into(), config.grammar_file.clone()]);
         }
@@ -371,11 +370,17 @@ fn append_context_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
     if config.parallel > 0 || config.parallel == -1 {
         cmd.extend_from_slice(&["-np".into(), config.parallel.to_string()]);
     }
-    if !config.cont_batching {
-        cmd.push("--no-cont-batching".into());
-    }
-    if !is_emb && !config.cache_prompt {
-        cmd.push("--no-cache-prompt".into());
+    cmd.push(if config.cont_batching {
+        "-cb".into()
+    } else {
+        "--no-cont-batching".into()
+    });
+    if !is_emb {
+        cmd.push(if config.cache_prompt {
+            "--cache-prompt".into()
+        } else {
+            "--no-cache-prompt".into()
+        });
     }
     if config.threads_batch > 0 {
         cmd.extend_from_slice(&["--threads-batch".into(), config.threads_batch.to_string()]);
@@ -384,26 +389,18 @@ fn append_context_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
         cmd.extend_from_slice(&["--threads-http".into(), config.threads_http.to_string()]);
     }
     if !is_emb {
-        if config.keep != 0 {
-            cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
-        }
-        if config.cache_reuse > 0 {
-            cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
-        }
-        if config.cache_ram != 8192 {
-            cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
-        }
+        cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
+        cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
+        cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
     }
-    if !config.warmup {
-        cmd.push("--no-warmup".into());
-    }
+    cmd.push(if config.warmup {
+        "--warmup".into()
+    } else {
+        "--no-warmup".into()
+    });
     if !is_emb {
-        if config.ctx_checkpoints != 32 {
-            cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
-        }
-        if config.checkpoint_min_step != 8192 {
-            cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
-        }
+        cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
+        cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
         if config.swa_full {
             cmd.push("--swa-full".into());
         }
@@ -504,9 +501,7 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         if !config.fit_target.is_empty() {
             cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]);
         }
-        if config.fit_ctx != 4096 {
-            cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
-        }
+        cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
     }
 }
 
@@ -539,9 +534,11 @@ fn append_kv_cache_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<St
     if config.no_kv_offload {
         cmd.push("--no-kv-offload".into());
     }
-    if !config.cache_idle_slots {
-        cmd.push("--no-cache-idle-slots".into());
-    }
+    cmd.push(if config.cache_idle_slots {
+        "--cache-idle-slots".into()
+    } else {
+        "--no-cache-idle-slots".into()
+    });
 }
 
 fn append_device_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
@@ -570,31 +567,21 @@ fn append_speculative_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec
         if !config.draft_model_path.is_empty() {
             cmd.extend_from_slice(&["-md".into(), config.draft_model_path.clone()]);
         }
-        if config.draft_gpu_layers != 99 {
-            cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]);
-        }
-        if config.draft_tokens > 0 {
-            cmd.extend_from_slice(&["--spec-draft-n-max".into(), config.draft_tokens.to_string()]);
-        }
-        if config.spec_draft_n_min > 0 {
-            cmd.extend_from_slice(&[
-                "--spec-draft-n-min".into(),
-                config.spec_draft_n_min.to_string(),
-            ]);
-        }
+        cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]);
+        cmd.extend_from_slice(&["--spec-draft-n-max".into(), config.draft_tokens.to_string()]);
+        cmd.extend_from_slice(&[
+            "--spec-draft-n-min".into(),
+            config.spec_draft_n_min.to_string(),
+        ]);
         cmd.extend_from_slice(&["--spec-type".into(), config.spec_type.clone()]);
-        if config.spec_draft_p_min > 0.0 {
-            cmd.extend_from_slice(&[
-                "--spec-draft-p-min".into(),
-                config.spec_draft_p_min.to_string(),
-            ]);
-        }
-        if config.spec_draft_p_split != 0.1 {
-            cmd.extend_from_slice(&[
-                "--spec-draft-p-split".into(),
-                config.spec_draft_p_split.to_string(),
-            ]);
-        }
+        cmd.extend_from_slice(&[
+            "--spec-draft-p-min".into(),
+            config.spec_draft_p_min.to_string(),
+        ]);
+        cmd.extend_from_slice(&[
+            "--spec-draft-p-split".into(),
+            config.spec_draft_p_split.to_string(),
+        ]);
         if !config.spec_draft_device.is_empty() {
             cmd.extend_from_slice(&[
                 "--spec-draft-device".into(),
@@ -691,16 +678,12 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         if !config.pooling.is_empty() {
             cmd.extend_from_slice(&["--pooling".into(), config.pooling.clone()]);
         }
-        if config.embd_normalize != 2 {
-            cmd.extend_from_slice(&["--embd-normalize".into(), config.embd_normalize.to_string()]);
-        }
+        cmd.extend_from_slice(&["--embd-normalize".into(), config.embd_normalize.to_string()]);
         if config.reranking {
             cmd.push("--reranking".into());
         }
     } else {
-        if config.n_predict != -1 {
-            cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]);
-        }
+        cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]);
         if config.ignore_eos {
             cmd.push("--ignore-eos".into());
         }
@@ -710,39 +693,21 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         if !config.json_schema_file.is_empty() {
             cmd.extend_from_slice(&["-jf".into(), config.json_schema_file.clone()]);
         }
-        if (config.temp - 0.8).abs() > f32::EPSILON {
-            cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]);
-        }
-        if config.top_k != 40 {
-            cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]);
-        }
-        if (config.top_p - 0.95).abs() > f32::EPSILON {
-            cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]);
-        }
-        if (config.repeat_penalty - 1.0).abs() > f32::EPSILON {
-            cmd.extend_from_slice(&["--repeat-penalty".into(), config.repeat_penalty.to_string()]);
-        }
-        if config.seed != -1 {
-            cmd.extend_from_slice(&["--seed".into(), config.seed.to_string()]);
-        }
-        if (config.min_p - 0.05).abs() > f32::EPSILON {
-            cmd.extend_from_slice(&["--min-p".into(), config.min_p.to_string()]);
-        }
-        if config.presence_penalty.abs() > f32::EPSILON {
-            cmd.extend_from_slice(&[
-                "--presence-penalty".into(),
-                config.presence_penalty.to_string(),
-            ]);
-        }
-        if config.frequency_penalty.abs() > f32::EPSILON {
-            cmd.extend_from_slice(&[
-                "--frequency-penalty".into(),
-                config.frequency_penalty.to_string(),
-            ]);
-        }
-        if config.repeat_last_n != 64 {
-            cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]);
-        }
+        cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]);
+        cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]);
+        cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]);
+        cmd.extend_from_slice(&["--repeat-penalty".into(), config.repeat_penalty.to_string()]);
+        cmd.extend_from_slice(&["--seed".into(), config.seed.to_string()]);
+        cmd.extend_from_slice(&["--min-p".into(), config.min_p.to_string()]);
+        cmd.extend_from_slice(&[
+            "--presence-penalty".into(),
+            config.presence_penalty.to_string(),
+        ]);
+        cmd.extend_from_slice(&[
+            "--frequency-penalty".into(),
+            config.frequency_penalty.to_string(),
+        ]);
+        cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]);
         if !config.reverse_prompt.is_empty() {
             cmd.extend_from_slice(&["-r".into(), config.reverse_prompt.clone()]);
         }
@@ -757,75 +722,41 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         }
 
         // Advanced sampling
+        cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]);
         if config.mirostat > 0 {
-            cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]);
-            if (config.mirostat_lr - 0.1).abs() > f32::EPSILON {
-                cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]);
-            }
-            if (config.mirostat_ent - 5.0).abs() > f32::EPSILON {
-                cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]);
-            }
+            cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]);
+            cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]);
         }
-        if config.xtc_probability > 0.0 {
+        cmd.extend_from_slice(&[
+            "--xtc-probability".into(),
+            config.xtc_probability.to_string(),
+        ]);
+        cmd.extend_from_slice(&["--xtc-threshold".into(), config.xtc_threshold.to_string()]);
+        cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]);
+        cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]);
+        cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]);
+        cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]);
+        cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]);
+        cmd.extend_from_slice(&[
+            "--dry-allowed-length".into(),
+            config.dry_allowed_length.to_string(),
+        ]);
+        cmd.extend_from_slice(&[
+            "--dry-penalty-last-n".into(),
+            config.dry_penalty_last_n.to_string(),
+        ]);
+        if config.dry_multiplier > 0.0 && !config.dry_sequence_breaker.is_empty() {
             cmd.extend_from_slice(&[
-                "--xtc-probability".into(),
-                config.xtc_probability.to_string(),
+                "--dry-sequence-breaker".into(),
+                config.dry_sequence_breaker.clone(),
             ]);
-            if (config.xtc_threshold - 0.1).abs() > f32::EPSILON {
-                cmd.extend_from_slice(&[
-                    "--xtc-threshold".into(),
-                    config.xtc_threshold.to_string(),
-                ]);
-            }
         }
-        if config.dynatemp_range > 0.0 {
-            cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]);
-            if (config.dynatemp_exp - 1.0).abs() > f32::EPSILON {
-                cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]);
-            }
-        }
-        if (config.typical_p - 1.0).abs() > f32::EPSILON {
-            cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]);
-        }
-        if config.dry_multiplier > 0.0 {
-            cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]);
-            if (config.dry_base - 1.75).abs() > f32::EPSILON {
-                cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]);
-            }
-            if config.dry_allowed_length != 2 {
-                cmd.extend_from_slice(&[
-                    "--dry-allowed-length".into(),
-                    config.dry_allowed_length.to_string(),
-                ]);
-            }
-            if config.dry_penalty_last_n != -1 {
-                cmd.extend_from_slice(&[
-                    "--dry-penalty-last-n".into(),
-                    config.dry_penalty_last_n.to_string(),
-                ]);
-            }
-            if !config.dry_sequence_breaker.is_empty() {
-                cmd.extend_from_slice(&[
-                    "--dry-sequence-breaker".into(),
-                    config.dry_sequence_breaker.clone(),
-                ]);
-            }
-        }
-        if (config.adaptive_target + 1.0).abs() > f32::EPSILON {
-            cmd.extend_from_slice(&[
-                "--adaptive-target".into(),
-                config.adaptive_target.to_string(),
-            ]);
-            if (config.adaptive_decay - 0.9).abs() > f32::EPSILON {
-                cmd.extend_from_slice(&[
-                    "--adaptive-decay".into(),
-                    config.adaptive_decay.to_string(),
-                ]);
-            }
-        }
-        if config.top_n_sigma >= 0.0 {
-            cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]);
-        }
+        cmd.extend_from_slice(&[
+            "--adaptive-target".into(),
+            config.adaptive_target.to_string(),
+        ]);
+        cmd.extend_from_slice(&["--adaptive-decay".into(), config.adaptive_decay.to_string()]);
+        cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]);
         if !config.logit_bias.is_empty() {
             cmd.extend_from_slice(&["-l".into(), config.logit_bias.clone()]);
         }
@@ -846,8 +777,12 @@ fn append_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Stri
     if config.sleep_idle >= 0 {
         cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]);
     }
-    if !is_emb && config.context_shift {
-        cmd.push("--context-shift".into());
+    if !is_emb {
+        cmd.push(if config.context_shift {
+            "--context-shift".into()
+        } else {
+            "--no-context-shift".into()
+        });
     }
     if config.verbose {
         cmd.push("-v".into());
@@ -858,9 +793,11 @@ fn append_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Stri
     if config.props {
         cmd.push("--props".into());
     }
-    if !config.slots_enabled {
-        cmd.push("--no-slots".into());
-    }
+    cmd.push(if config.slots_enabled {
+        "--slots".into()
+    } else {
+        "--no-slots".into()
+    });
     if !is_emb {
         if !config.slot_save_path.is_empty() {
             cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]);
@@ -868,12 +805,12 @@ fn append_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Stri
         if !config.log_prompts_dir.is_empty() {
             cmd.extend_from_slice(&["--log-prompts-dir".into(), config.log_prompts_dir.clone()]);
         }
-        if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON {
-            cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
-        }
-        if !config.prefill_assistant {
-            cmd.push("--no-prefill-assistant".into());
-        }
+        cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
+        cmd.push(if config.prefill_assistant {
+            "--prefill-assistant".into()
+        } else {
+            "--no-prefill-assistant".into()
+        });
     }
 }
 
@@ -900,12 +837,12 @@ fn append_extended_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut
         if !config.models_preset.is_empty() {
             cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]);
         }
-        if config.models_max != 4 {
-            cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
-        }
-        if !config.models_autoload {
-            cmd.push("--no-models-autoload".into());
-        }
+        cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
+        cmd.push(if config.models_autoload {
+            "--models-autoload".into()
+        } else {
+            "--no-models-autoload".into()
+        });
         if config.image_min_tokens > 0 {
             cmd.extend_from_slice(&[
                 "--image-min-tokens".into(),
@@ -979,22 +916,66 @@ fn prepare_launch(
     (config, workload, command)
 }
 
+enum EngineCapabilityResolution {
+    Available(EngineCapabilities),
+    Missing,
+    Stale,
+}
+
+fn normalized_engine_path(path: &str) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path))
+}
+
 fn trusted_engine_capabilities(
     state: &AppState,
     config: &InstanceConfig,
     engine_exe: &str,
-) -> Option<EngineCapabilities> {
-    state
-        .engines
-        .lock()
-        .unwrap()
+) -> EngineCapabilityResolution {
+    let requested_path = normalized_engine_path(engine_exe);
+    let mut engines = state.engines.lock().unwrap();
+    let selected_index = engines
         .iter()
-        .find(|engine| {
-            engine.id == config.engine_id
-                || std::path::Path::new(&engine.exe) == std::path::Path::new(engine_exe)
-        })
-        .map(|engine| engine.capabilities.clone())
-        .filter(|capabilities| capabilities_match_executable(engine_exe, capabilities))
+        .position(|engine| normalized_engine_path(&engine.exe) == requested_path)
+        .or_else(|| {
+            engines
+                .iter()
+                .position(|engine| engine.id == config.engine_id)
+        });
+    let Some(selected_index) = selected_index else {
+        return EngineCapabilityResolution::Missing;
+    };
+    let engine = &mut engines[selected_index];
+    if normalized_engine_path(&engine.exe) != requested_path {
+        return EngineCapabilityResolution::Stale;
+    }
+    if engine.capabilities.executable_fingerprint.is_empty() {
+        return EngineCapabilityResolution::Missing;
+    }
+    if capabilities_match_executable(engine_exe, &engine.capabilities) {
+        return EngineCapabilityResolution::Available(engine.capabilities.clone());
+    }
+    engine.version.clear();
+    engine.capabilities = EngineCapabilities {
+        error: Some("engine executable changed; compatibility probe required".to_string()),
+        ..EngineCapabilities::default()
+    };
+    let _ = crate::commands::model_inventory::update_engine_probe(engine);
+    EngineCapabilityResolution::Stale
+}
+
+fn stale_engine_error() -> AppError {
+    AppError::new(
+        "ENGINE_CAPABILITIES_STALE",
+        "llama-server 引擎文件已发生变化，必须重新探测版本与参数能力后才能继续。",
+        true,
+    )
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedServerCommand {
+    command: Vec<String>,
+    unsupported_flags: Vec<String>,
 }
 
 fn reserve_start_slot(
@@ -1036,10 +1017,32 @@ pub async fn generate_server_command(
     config: InstanceConfig,
     engine_exe: String,
     state: tauri::State<'_, AppState>,
-) -> Result<Vec<String>, String> {
-    let capabilities = trusted_engine_capabilities(state.inner(), &config, &engine_exe);
+) -> AppResult<GeneratedServerCommand> {
+    let capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
+        EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
+        EngineCapabilityResolution::Missing => None,
+        EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
+    };
     let command = generate_command(&config, &engine_exe);
-    Ok(command_for_capabilities(&command, capabilities.as_ref()))
+    let unsupported_flags = capabilities
+        .as_ref()
+        .map(|value| unsupported_command_flags(&command, value))
+        .unwrap_or_default();
+    let blocked = blocked_security_flags(&command, capabilities.as_ref());
+    if !blocked.is_empty() {
+        return Err(AppError::new(
+            "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
+            format!(
+                "当前引擎尚未确认支持以下安全参数：{}。请先完成引擎能力探测。",
+                blocked.join(", ")
+            ),
+            false,
+        ));
+    }
+    Ok(GeneratedServerCommand {
+        command: command_for_capabilities(&command, capabilities.as_ref()),
+        unsupported_flags,
+    })
 }
 
 #[tauri::command]
@@ -1053,7 +1056,12 @@ pub async fn start_server(
 ) -> AppResult<()> {
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let (config, workload, generated_cmd) = prepare_launch(config, &engine_exe);
-    let engine_capabilities = trusted_engine_capabilities(state.inner(), &config, &engine_exe);
+    let engine_capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe)
+    {
+        EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
+        EngineCapabilityResolution::Missing => None,
+        EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
+    };
     if let Some(capabilities) = engine_capabilities.as_ref() {
         let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
         if !unsupported.is_empty() {
@@ -1067,9 +1075,19 @@ pub async fn start_server(
             ));
         }
     }
+    let blocked = blocked_security_flags(&generated_cmd, engine_capabilities.as_ref());
+    if !blocked.is_empty() {
+        return Err(AppError::new(
+            "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
+            format!(
+                "当前引擎尚未确认支持以下安全参数：{}。请先完成引擎能力探测。",
+                blocked.join(", ")
+            ),
+            false,
+        ));
+    }
     let cmd = command_for_capabilities(&generated_cmd, engine_capabilities.as_ref());
-    let cmd_str = cmd.join(" ");
-    let cmd_display = mask_api_key_in_cmd(&cmd_str);
+    let cmd_display = format_command_for_display(&cmd);
 
     // Create a log file; llama-server writes here directly without pipe forwarding.
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -3054,31 +3072,37 @@ mod perf_parser_tests {
     }
 
     #[test]
-    fn upstream_defaults_do_not_emit_redundant_overrides() {
+    fn application_defaults_are_explicit_in_detected_engine_commands() {
         let command = generate_normalized_command(&InstanceConfig::default(), "llama-server");
 
         for flag in [
-            "-cram",
-            "-cms",
-            "--fit",
             "--jinja",
-            "--no-jinja",
             "--warmup",
-            "--no-warmup",
             "-cb",
-            "--no-cont-batching",
             "--prefill-assistant",
-            "--no-prefill-assistant",
             "--models-autoload",
-            "--no-models-autoload",
-            "-n",
-            "--temp",
-            "--top-k",
-            "--min-p",
+            "--cache-prompt",
+            "--cache-idle-slots",
+            "--no-context-shift",
+            "--slots",
         ] {
             assert!(
-                !command.iter().any(|argument| argument == flag),
-                "default command unexpectedly contains {flag}: {command:?}"
+                command.iter().any(|argument| argument == flag),
+                "default command is missing explicit {flag}: {command:?}"
+            );
+        }
+        for (flag, value) in [
+            ("-cram", "8192"),
+            ("-cms", "8192"),
+            ("-n", "-1"),
+            ("--temp", "0.8"),
+            ("--top-k", "40"),
+            ("--min-p", "0.05"),
+            ("--models-max", "4"),
+        ] {
+            assert!(
+                has_flag_value(&command, flag, value),
+                "default command is missing explicit {flag} {value}: {command:?}"
             );
         }
     }
@@ -3517,6 +3541,27 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn command_display_masks_api_keys_as_argument_values() {
+        assert_eq!(
+            format_command_for_display(&[
+                "llama-server".to_string(),
+                "--api-key".to_string(),
+                "secret value".to_string(),
+                "--port".to_string(),
+                "8080".to_string(),
+            ]),
+            "llama-server --api-key ******** --port 8080"
+        );
+        assert_eq!(
+            format_command_for_display(&[
+                "llama-server".to_string(),
+                "--api-key=secret value".to_string(),
+            ]),
+            "llama-server --api-key=********"
+        );
+    }
+
+    #[test]
     fn test_connection_accepts_models_when_health_is_bad_gateway() {
         let result = classify_test_connection_result(
             Err("HTTP 502 Bad Gateway".to_string()),
@@ -3705,10 +3750,8 @@ pub mod ipc {
         config: InstanceConfig,
         engine_exe: String,
         state: tauri::State<'_, AppState>,
-    ) -> crate::error::AppResult<Vec<String>> {
-        super::generate_server_command(config, engine_exe, state)
-            .await
-            .map_err(crate::error::AppError::from)
+    ) -> crate::error::AppResult<GeneratedServerCommand> {
+        super::generate_server_command(config, engine_exe, state).await
     }
 
     #[tauri::command]

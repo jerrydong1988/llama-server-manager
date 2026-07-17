@@ -18,7 +18,7 @@ export const KNOWN_FLAGS = new Set([
   '--reasoning-preserve', '--no-reasoning-preserve',
   '--chat-template-kwargs', '--jinja', '--no-jinja', '--grammar-file', '--grammar',
   // Performance & Context
-  '-c', '-ngl', '-t', '-b', '-ub', '-np', '-cb', '--no-cont-batching', '--no-cache-prompt',
+  '-c', '-ngl', '-t', '-b', '-ub', '-np', '-cb', '--no-cont-batching', '--cache-prompt', '--no-cache-prompt',
   '--threads-batch', '--threads-http', '--keep', '--cache-reuse', '-cram', '--warmup', '--no-warmup',
   '-ctxcp', '-cms', '--swa-full',
   // RoPE / YaRN
@@ -28,7 +28,7 @@ export const KNOWN_FLAGS = new Set([
   '-fa', '--n-cpu-moe', '--cpu-moe', '-cmoe', '--mlock', '--no-mmap', '--no-repack', '--numa',
   '--check-tensors', '--perf', '--fit', '-fitt', '-fitc', '--direct-io', '-dio',
   // KV Cache
-  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-unified', '--no-kv-offload', '--no-cache-idle-slots',
+  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-unified', '--no-kv-offload', '--cache-idle-slots', '--no-cache-idle-slots',
   // GPU & Device
   '-dev', '-sm', '-ts', '-mg', '--override-kv',
   // Server & Network
@@ -39,7 +39,8 @@ export const KNOWN_FLAGS = new Set([
   // Embedding & Generation
   '--embedding', '--pooling', '--embd-normalize', '--reranking',
   // Server features
-  '--metrics', '--props', '--no-slots', '--slot-save-path', '--log-prompts-dir', '-sps',
+  '--metrics', '--props', '--slots', '--no-slots', '--slot-save-path', '--log-prompts-dir', '-sps',
+  '--context-shift', '--no-context-shift',
   '--prefill-assistant', '--no-prefill-assistant',
   '--rpc', '--sse-ping-interval', '--reuse-port',
   // Multi-Model & Media

@@ -11,7 +11,7 @@
     "check:cluster-theme": "node scripts/check-cluster-theme.mjs",
     "check:download-theme": "node scripts/check-download-theme.mjs",
     "check:monitoring-theme": "node scripts/check-monitoring-theme.mjs",
-    "check:react-hooks": "node scripts/check-react-hooks.cjs",
+    "check:react-hooks": "eslint \"src/**/*.{ts,tsx}\" --max-warnings=0",
     "check:component-i18n": "node scripts/check-component-i18n.cjs",
     "check:component-budgets": "node scripts/check-component-budgets.cjs",
     "check:ipc-boundary": "node scripts/check-ipc-boundary.cjs",
@@ -43,9 +43,12 @@
     "@vitejs/plugin-react": "^6.0.3",
     "autoprefixer": "^10.4.17",
     "esbuild": "^0.28.1",
+    "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.2.2",
+    "typescript-eslint": "^8.64.0",
     "vite": "^8.1.4"
   }
 }

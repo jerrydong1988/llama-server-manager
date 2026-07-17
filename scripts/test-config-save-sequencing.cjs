@@ -36,16 +36,26 @@ assert.match(
 )
 assert.match(
   configPageSource,
-  /if \(!mountedRef\.current \|\| useAppStore\.getState\(\)\.activeConfigInstanceId !== inst\.id\) return[\s\S]*setSaved\(true\)/,
+  /const targetIsActive = \(\) => mountedRef\.current[\s\S]*if \(!targetIsActive\(\)\) return[\s\S]*setSaved\(true\)/,
   'a completed save must not update feedback for another instance',
 )
 assert.match(configPageSource, /disabled=\{!inst \|\| saving[^}]*unsupportedEngineFlags\.length > 0\}/)
 assert.match(configPageSource, /saving \? t\.configPage\.saving :/)
 assert.match(configPageSource, /const editRevisionRef = useRef\(0\)/)
+assert.match(configPageSource, /const saveInFlightRef = useRef\(false\)/)
 assert.match(
   configPageSource,
-  /const saveRevision = editRevisionRef\.current[\s\S]*if \(editRevisionRef\.current === saveRevision\)/,
+  /const saveRevision = editRevisionRef\.current[\s\S]*await runRevisionGuarded[\s\S]*if \(editRevisionRef\.current === saveRevision\)/,
   'a completed save must not replace local fields edited while persistence was in flight',
+)
+assert.ok(
+  configPageSource.indexOf('setSaving(true)') < configPageSource.indexOf('await runRevisionGuarded'),
+  'the save button must lock before asynchronous compatibility validation starts',
+)
+assert.ok(
+  configPageSource.indexOf('const saveRevision = editRevisionRef.current')
+    < configPageSource.indexOf('await runRevisionGuarded'),
+  'the save revision must be captured before asynchronous compatibility validation starts',
 )
 
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {
@@ -80,6 +90,7 @@ assert.match(
 const entry = `
   import assert from 'node:assert/strict'
   import { createLatestSaveCoordinator } from './src/store/configSaveCoordinator'
+  import { runRevisionGuarded } from './src/components/ConfigPage/configSaveGuard'
 
   async function run() {
 
@@ -92,6 +103,24 @@ const entry = `
     })
     return { promise, resolve, reject }
   }
+
+  let editRevision = 7
+  const preflightGate = deferred()
+  const preflight = runRevisionGuarded(
+    editRevision,
+    () => editRevision,
+    async () => {
+      await preflightGate.promise
+      return ['llama-server']
+    },
+  )
+  editRevision += 1
+  preflightGate.resolve()
+  assert.deepEqual(
+    await preflight,
+    { stale: true },
+    'an edit made while compatibility validation is pending must cancel the stale save',
+  )
 
   const writes = []
   const gates = []

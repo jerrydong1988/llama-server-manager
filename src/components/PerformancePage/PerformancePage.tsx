@@ -83,7 +83,10 @@ export default function PerformancePage() {
   const telemetryInFlightRef = useRef(false)
   const detailInFlightRef = useRef(new Set<string>())
   const detailReady = Boolean(selectedSessionId) && detailSessionId === selectedSessionId
-  const samples = detailReady ? loadedSamples : []
+  const samples = useMemo(
+    () => detailReady ? loadedSamples : [],
+    [detailReady, loadedSamples],
+  )
   const requests = detailReady ? loadedRequests : []
   const analysis = detailReady ? loadedAnalysis : null
   const diagnostics = detailReady ? loadedDiagnostics : []
@@ -101,12 +104,15 @@ export default function PerformancePage() {
   const activeTasks = useAppStore(state => liveTargetId ? state.runningTasksByInstance[liveTargetId] : undefined) || []
   const lastCompletedTask = useAppStore(state => liveTargetId ? state.lastCompletedTaskByInstance[liveTargetId] : undefined) || null
   const currentFrame = useAppStore(state => liveTargetId ? state.monitoringCurrentByInstance[liveTargetId] : undefined) || null
-  const selectedInstanceFrames = useAppStore(state => liveTargetId ? state.monitoringFramesByInstance[liveTargetId] : undefined) || []
-  const liveFrames = liveTargetInstance
-    ? selectedInstanceFrames.filter(frame => (
-        !selectedSession || frame.sessionId === selectedSession.id
-      ))
-    : []
+  const selectedInstanceFrames = useAppStore(state => liveTargetId ? state.monitoringFramesByInstance[liveTargetId] : undefined)
+  const liveFrames = useMemo(
+    () => liveTargetInstance
+      ? (selectedInstanceFrames || []).filter(frame => (
+          !selectedSession || frame.sessionId === selectedSession.id
+        ))
+      : [],
+    [liveTargetInstance, selectedInstanceFrames, selectedSession],
+  )
 
   const refreshTelemetry = useCallback(async (options: { silent?: boolean } = {}) => {
     if (telemetryInFlightRef.current) return

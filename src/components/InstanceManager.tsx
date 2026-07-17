@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig } from '../store'
 import { formatStartupCommand, maskStartupCommandSecrets } from '../store'
@@ -73,11 +73,11 @@ const InstanceManager = () => {
     return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`
   }
 
-  const engineNameFor = (inst: Instance) =>
+  const engineNameFor = useCallback((inst: Instance) =>
     engines.find(e => e.id === (inst.config.engine_id || defaultEngineId || ''))?.name
     || engines.find(e => e.id === defaultEngineId)?.name
     || engines[0]?.name
-    || t.instance.sysPath
+    || t.instance.sysPath, [defaultEngineId, engines, t.instance.sysPath])
 
   const statusText = (inst: Instance) =>
     inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error
@@ -110,7 +110,7 @@ const InstanceManager = () => {
         || engineNameFor(inst).toLowerCase().includes(query)
         || String(inst.config.port).includes(query)
     })
-  }, [instances, search, statusFilter, engineFilter, defaultEngineId, engines])
+  }, [instances, search, statusFilter, engineFilter, defaultEngineId, engineNameFor])
 
   const runningCount = instances.filter(inst => inst.status === 'running').length
   const stoppedCount = instances.filter(inst => inst.status === 'stopped').length
@@ -198,7 +198,7 @@ const InstanceManager = () => {
     const engine = engines.find(e => e.id === inst.config.engine_id) || engines.find(e => e.id === defaultEngineId) || engines[0]
     if (!engine) return
     try {
-      const cmd = await generateCommand(inst.config, engine.exe)
+      const { command: cmd } = await generateCommand(inst.config, engine.exe)
       const raw = cmd.map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ')
       setCmdRaw(raw)
       setCmdIncludesSecrets(cmd.some((arg, index) => (

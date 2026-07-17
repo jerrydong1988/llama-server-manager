@@ -5,26 +5,21 @@ import { useI18n } from '../i18n'
 import { getConfigPageLabels, getConfigTemplates, type ConfigTemplate } from '../i18n/configPageCopy'
 import { validateConfig, type Warning } from '../validators'
 import {
-  BasicSection,
-  ReasoningSection,
-  PerformanceSection,
-  AdvancedSection,
-  BASIC_CONFIG_KEYS,
-  REASONING_CONFIG_KEYS,
-  PERFORMANCE_CONFIG_KEYS,
-  ADVANCED_CONFIG_KEYS,
-  ADVANCED_GROUP_CONFIG_KEYS,
+  BasicSection, ReasoningSection, PerformanceSection, AdvancedSection,
+  BASIC_CONFIG_KEYS, REASONING_CONFIG_KEYS, PERFORMANCE_CONFIG_KEYS,
+  ADVANCED_CONFIG_KEYS, ADVANCED_GROUP_CONFIG_KEYS,
 } from './ConfigPage/sections'
 import { getActiveParams } from './ConfigPage/activeParams'
 import { pathBasename, pathDirname } from '../utils/path'
 import { formatHostPort } from '../utils/network'
 import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
-import { findUnsupportedEngineFlags, getEngineCompatibilityMode, normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../engineCapabilities'
+import { getEngineCompatibilityMode, normalizeEngineVersionStatus } from '../engineCapabilities'
 import { _matchedElements } from './ConfigPage/shared'
 import { buildPickerTree, countActive, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, type PickerNode, type TemplateSnapshot } from './ConfigPage/configWorkspace'
 import { useEngineCompatibility } from './ConfigPage/useEngineCompatibility'
 import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotice'
+import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
 
 const ConfigPage = () => {
@@ -38,8 +33,10 @@ const ConfigPage = () => {
   const defaultEngineId = useAppStore(state => state.defaultEngineId)
   const setActiveTab = useAppStore(state => state.setActiveTab)
   const generateCommand = useAppStore(state => state.generateCommand)
+  const addRuntimeWarning = useAppStore(state => state.addRuntimeWarning)
   const { t, lang } = useI18n()
   const inst = instances.find(instance => instance.id === activeConfigInstanceId)
+  const configInstanceId = inst?.id
 
   const [local, setLocal] = useState<InstanceConfig | null>(null)
   const [baseline, setBaseline] = useState<InstanceConfig | null>(null)
@@ -59,6 +56,7 @@ const ConfigPage = () => {
   const prevQuery = useRef('')
   const committedModelPathRef = useRef('')
   const editRevisionRef = useRef(0)
+  const saveInFlightRef = useRef(false)
   const saveFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -92,8 +90,9 @@ const ConfigPage = () => {
   }, [searchQuery])
 
   useEffect(() => {
-    if (inst) {
-      const next = { ...defaultInstanceConfig(), ...inst.config }
+    const selected = useAppStore.getState().instances.find(instance => instance.id === configInstanceId)
+    if (selected) {
+      const next = { ...defaultInstanceConfig(), ...selected.config }
       setLocal(next)
       setBaseline(next)
       editRevisionRef.current = 0
@@ -104,7 +103,7 @@ const ConfigPage = () => {
       editRevisionRef.current = 0
       committedModelPathRef.current = ''
     }
-  }, [activeConfigInstanceId, inst?.id])
+  }, [activeConfigInstanceId, configInstanceId])
 
   useEffect(() => {
     setAppliedTemplateId(null)
@@ -133,7 +132,7 @@ const ConfigPage = () => {
   const isEmbedding = workload !== 'inference'
   const modelWorkloadLocked = useMemo(() => (
     local ? isModelWorkloadLocked(currentModel, local.model_path) : false
-  ), [currentModel, local?.model_path])
+  ), [currentModel, local])
   const labels = useMemo(() => getConfigPageLabels(lang), [lang])
   const quickTemplates = useMemo(() => getConfigTemplates(lang), [lang])
   const currentEngine = useMemo(() => {
@@ -183,62 +182,76 @@ const ConfigPage = () => {
   }
 
   const save = async () => {
-    if (!inst || saving || probingEngineCompatibility || capabilityProbeRequired) {
+    if (!inst || saveInFlightRef.current || probingEngineCompatibility || capabilityProbeRequired) {
       return
     }
 
+    saveInFlightRef.current = true
+    setSaving(true)
+    setSaved(false)
     if (saveFeedbackTimerRef.current !== null) {
       clearTimeout(saveFeedbackTimerRef.current)
       saveFeedbackTimerRef.current = null
     }
-    const engine = engines.find(item => item.id === (local.engine_id || defaultEngineId || '')) || engines[0]
-    const modelPathChanged = normalizeModelPath(local.model_path) !== committedModelPathRef.current
-    const normalized = modelPathChanged
-      ? normalizeConfigForSelectedModel(local, currentModel)
-      : normalizeInstanceConfig(local, currentModel)
-    if (engine && normalizeEngineCapabilityStatus(engine.capabilities) === 'detected') {
-      const command = await generateCommand(normalized.config, engine.exe)
-      const unsupported = findUnsupportedEngineFlags(command, engine.capabilities)
-      setUnsupportedEngineFlags(unsupported)
-      if (unsupported.length > 0) {
-        return
-      }
-    }
+    const targetInstanceId = inst.id
     const saveRevision = editRevisionRef.current
-    committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
-    setLocal(normalized.config)
-    setSaving(true)
-    setSaved(false)
-    updateInstance(inst.id, { config: normalized.config })
-    try {
-      await saveConfig()
-    } catch {
-      return
-    } finally {
-      if (mountedRef.current) setSaving(false)
-    }
-    if (!mountedRef.current || useAppStore.getState().activeConfigInstanceId !== inst.id) return
-    const persistedConfig = useAppStore.getState().instances
-      .find(item => item.id === inst.id)?.config ?? normalized.config
-    setBaseline(persistedConfig)
-    if (editRevisionRef.current === saveRevision) {
-      committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
-      setLocal(persistedConfig)
-      setSaved(true)
-      setSaveWarnings(validateConfig(persistedConfig, currentModel, engine))
-      setVectorCleanupChanges([])
-    } else {
-      setSaved(false)
-      setSaveWarnings([])
-    }
+    const targetIsActive = () => mountedRef.current && useAppStore.getState().activeConfigInstanceId === targetInstanceId
+    const saveIsCurrent = () => targetIsActive() && editRevisionRef.current === saveRevision
+    const localSnapshot = local
+    const engine = engines.find(item => item.id === (localSnapshot.engine_id || defaultEngineId || '')) || engines[0]
+    const modelPathChanged = normalizeModelPath(localSnapshot.model_path) !== committedModelPathRef.current
+    const normalized = modelPathChanged
+      ? normalizeConfigForSelectedModel(localSnapshot, currentModel)
+      : normalizeInstanceConfig(localSnapshot, currentModel)
 
-    saveFeedbackTimerRef.current = setTimeout(() => {
-      if (mountedRef.current) {
+    try {
+      if (engine) {
+        const preflight = await runRevisionGuarded(saveRevision, () => editRevisionRef.current, () => generateCommand(normalized.config, engine.exe))
+        if (preflight.stale || !saveIsCurrent()) return
+        const unsupported = preflight.value.unsupportedFlags
+        setUnsupportedEngineFlags(unsupported)
+        if (unsupported.length > 0) {
+          return
+        }
+      }
+
+      if (!saveIsCurrent()) return
+
+      committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
+      setLocal(normalized.config)
+      updateInstance(targetInstanceId, { config: normalized.config })
+      await saveConfig()
+      if (!targetIsActive()) return
+      const persistedConfig = useAppStore.getState().instances
+        .find(item => item.id === targetInstanceId)?.config ?? normalized.config
+      setBaseline(persistedConfig)
+      if (editRevisionRef.current === saveRevision) {
+        committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
+        setLocal(persistedConfig)
+        setSaved(true)
+        setSaveWarnings(validateConfig(persistedConfig, currentModel, engine))
+        setVectorCleanupChanges([])
+      } else {
         setSaved(false)
         setSaveWarnings([])
       }
-      saveFeedbackTimerRef.current = null
-    }, 6000)
+
+      saveFeedbackTimerRef.current = setTimeout(() => {
+        if (mountedRef.current) {
+          setSaved(false)
+          setSaveWarnings([])
+        }
+        saveFeedbackTimerRef.current = null
+      }, 6000)
+    } catch (error) {
+      if (error && typeof error === 'object' && String((error as { code?: string }).code || '').startsWith('ENGINE_')) {
+        addRuntimeWarning(`配置保存前的引擎兼容性检查失败：${String(error)}`)
+      }
+      return
+    } finally {
+      saveInFlightRef.current = false
+      if (mountedRef.current) setSaving(false)
+    }
   }
 
   const sectionProps = {

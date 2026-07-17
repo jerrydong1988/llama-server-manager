@@ -1,11 +1,27 @@
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const Module = require('node:module')
 const path = require('node:path')
 const esbuild = require('esbuild')
 
+const read = (...segments) => fs.readFileSync(path.join(process.cwd(), ...segments), 'utf8')
+const capabilityBackend = read('src-tauri', 'src', 'commands', 'engine_capabilities.rs')
+const scannerBackend = read('src-tauri', 'src', 'commands', 'scanner.rs')
+
+assert.match(
+  capabilityBackend,
+  /let mut engines = state\.engines\.lock\(\)\.unwrap\(\);[\s\S]*model_inventory::update_engine_probe\(&probed\)[\s\S]*drop\(engines\)/,
+  'a capability probe must persist its result before releasing the engine state lock',
+)
+assert.match(
+  scannerBackend,
+  /let mut state_engines = state\.engines\.lock\(\)\.unwrap\(\);[\s\S]*for engine in state_engines\.iter\(\)[\s\S]*model_inventory::update_engine_probe\(engine\)[\s\S]*state_engines\.clone\(\)/,
+  'an engine scan must persist merged capabilities before releasing the engine state lock',
+)
+
 const entry = `
   import assert from 'node:assert/strict'
-  import { findUnsupportedEngineFlags, getEngineCompatibilityMode, normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from './src/engineCapabilities'
+  import { getEngineCompatibilityMode, normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from './src/engineCapabilities'
 
   const detected = {
     status: 'detected',
@@ -13,10 +29,6 @@ const entry = `
     helpHash: 'abc',
     executableFingerprint: '1:2',
   }
-  const command = ['llama-server', '-m', 'model.gguf', '--temp', '-1', '--future=value', '--future']
-  assert.deepEqual(findUnsupportedEngineFlags(command, detected), ['--future'])
-  assert.deepEqual(findUnsupportedEngineFlags(command, { ...detected, status: 'partial' }), [])
-  assert.deepEqual(findUnsupportedEngineFlags(command, { ...detected, status: 'timeout' }), [])
   assert.equal(normalizeEngineCapabilityStatus(undefined), 'unprobed')
   assert.equal(normalizeEngineVersionStatus(undefined), 'unprobed')
   assert.equal(normalizeEngineVersionStatus({ ...detected, versionStatus: 'unknown' }), 'unknown')

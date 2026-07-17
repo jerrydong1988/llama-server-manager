@@ -56,6 +56,11 @@ export interface EngineCapabilities {
   error?: string
 }
 
+export interface GeneratedServerCommand {
+  command: string[]
+  unsupportedFlags: string[]
+}
+
 export interface InstanceConfig {
   // Basic
   id: string; name: string; engine_id: string; model_path: string; alias: string;
@@ -516,7 +521,7 @@ export interface AppState {
   renameEngine: (id: string, name: string) => void
   openEngineFolder: (dir: string) => Promise<void>
 
-  generateCommand: (config: InstanceConfig, engineExe: string) => Promise<string[]>
+  generateCommand: (config: InstanceConfig, engineExe: string) => Promise<GeneratedServerCommand>
   startInstance: (id: string) => Promise<void>
   stopInstance: (id: string) => Promise<void>
   openBrowser: (host: string, port: number) => Promise<void>

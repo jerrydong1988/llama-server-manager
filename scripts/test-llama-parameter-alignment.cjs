@@ -13,6 +13,7 @@ const shared = read('src', 'components', 'ConfigPage', 'shared.tsx')
 const english = read('src', 'i18n', 'en-US.ts')
 const configPage = read('src', 'components', 'ConfigPage.tsx')
 const compatibilityHook = read('src', 'components', 'ConfigPage', 'useEngineCompatibility.ts')
+const upstreamWatcher = read('scripts', 'check-llama-upstream.cjs')
 
 assert.match(baseline.upstreamCommit, /^[0-9a-f]{40}$/)
 assert.match(baseline.upstreamMasterChecked, /^[0-9a-f]{40}$/)
@@ -51,10 +52,16 @@ for (const flag of [...baseline.structuredFlagsAdded, ...baseline.defaultTrueNeg
 
 assert.match(rustDefaults, /checkpoint_min_step:\s*8192/)
 assert.match(frontendDefaults, /checkpoint_min_step:\s*8192/)
-assert.match(server, /config\.cache_ram\s*!=\s*8192/)
-assert.match(server, /config\.checkpoint_min_step\s*!=\s*8192/)
-assert.match(server, /config\.keep\s*!=\s*0/)
-assert.match(server, /config\.draft_gpu_layers\s*!=\s*99/)
+assert.match(server, /"-cram"\.into\(\), config\.cache_ram\.to_string\(\)/)
+assert.match(server, /"-cms"\.into\(\), config\.checkpoint_min_step\.to_string\(\)/)
+assert.match(server, /"--keep"\.into\(\), config\.keep\.to_string\(\)/)
+assert.match(server, /"-ngld"\.into\(\), config\.draft_gpu_layers\.to_string\(\)/)
+assert.match(server, /cmd\.push\(if config\.jinja[\s\S]*"--jinja"/)
+assert.match(
+  upstreamWatcher,
+  /raw\.githubusercontent\.com\/\$\{repository\}\/\$\{encodeURIComponent\(commit\)\}/,
+  'upstream README snapshots must be fetched by the resolved immutable commit',
+)
 assert.doesNotMatch(shared, /['"]mistral['"]/, 'removed built-in template must not remain selectable')
 assert.doesNotMatch(english, /apply_diff/, 'removed upstream built-in tool must not be advertised')
 assert.match(server, /ENGINE_PARAMETER_UNSUPPORTED/, 'server launch must enforce detected engine capabilities')

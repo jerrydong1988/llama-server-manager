@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -217,11 +217,11 @@ export default function Dashboard() {
   const failedDownloadCount = downloadItems.filter(task => task.status === 'error').length
   const transferBytes = downloadItems.reduce((total, task) => total + (task.speed || 0), 0)
 
-  const engineNameFor = (instance: Instance) =>
+  const engineNameFor = useCallback((instance: Instance) =>
     engines.find(engine => engine.id === (instance.config.engine_id || defaultEngineId || ''))?.name
     || engines.find(engine => engine.id === defaultEngineId)?.name
     || engines[0]?.name
-    || labels.noEngine
+    || labels.noEngine, [defaultEngineId, engines, labels.noEngine])
 
   const healthText = (instance: Instance) => {
     if (instance.status === 'stopped') return labels.offline
@@ -258,7 +258,7 @@ export default function Dashboard() {
       if (sortMode === 'uptime') return (right.startTime || 0) - (left.startTime || 0)
       return left.name.localeCompare(right.name)
     })
-  }, [instances, statusScope, engineFilter, search, sortMode, defaultEngineId, engines])
+  }, [instances, statusScope, engineFilter, search, sortMode, defaultEngineId, engineNameFor])
 
   const recentDownloads = useMemo(() => {
     const priority: Record<DownloadProgress['status'], number> = {

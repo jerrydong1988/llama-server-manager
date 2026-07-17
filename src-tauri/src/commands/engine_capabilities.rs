@@ -1,9 +1,9 @@
 use crate::commands::model_inventory;
 use crate::models::{AppState, EngineCapabilities, EngineInfo};
 use std::collections::BTreeSet;
-use std::io::Read;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -35,42 +35,119 @@ fn read_stream_capped<R: Read>(mut reader: R) -> Vec<u8> {
     captured
 }
 
-fn spawn_stream_reader<R: Read + Send + 'static>(reader: R) -> Receiver<Vec<u8>> {
-    let (sender, receiver) = mpsc::channel();
-    let _ = thread::Builder::new()
-        .name("engine-probe-output".to_string())
-        .spawn(move || {
-            let _ = sender.send(read_stream_capped(reader));
-        });
-    receiver
+fn probe_output_file() -> Result<(std::path::PathBuf, File), String> {
+    for _ in 0..4 {
+        let path = std::env::temp_dir().join(format!(
+            "llama-server-manager-probe-{}-{}.log",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("cannot create probe output file: {error}")),
+        }
+    }
+    Err("cannot reserve a unique probe output file".to_string())
+}
+
+fn terminate_probe_process_tree(child: &mut std::process::Child) -> Option<String> {
+    let pid = child.id();
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let tree_killed = Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .creation_flags(0x08000000)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if !tree_killed {
+            let _ = child.kill();
+        }
+    }
+    #[cfg(unix)]
+    {
+        let killed_group = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) } == 0;
+        if !killed_group {
+            let _ = child.kill();
+        }
+    }
+    child.wait().err().map(|error| error.to_string())
 }
 
 fn run_bounded(executable: &str, argument: &str) -> CommandOutput {
+    let (output_path, mut output_file) = match probe_output_file() {
+        Ok(output) => output,
+        Err(error) => {
+            return CommandOutput {
+                text: String::new(),
+                timed_out: false,
+                error: Some(error),
+            }
+        }
+    };
+    let stdout_file = match output_file.try_clone() {
+        Ok(file) => file,
+        Err(error) => {
+            drop(output_file);
+            let _ = std::fs::remove_file(output_path);
+            return CommandOutput {
+                text: String::new(),
+                timed_out: false,
+                error: Some(format!("cannot clone probe output handle: {error}")),
+            };
+        }
+    };
+    let stderr_file = match output_file.try_clone() {
+        Ok(file) => file,
+        Err(error) => {
+            drop(stdout_file);
+            drop(output_file);
+            let _ = std::fs::remove_file(output_path);
+            return CommandOutput {
+                text: String::new(),
+                timed_out: false,
+                error: Some(format!("cannot clone probe error handle: {error}")),
+            };
+        }
+    };
     let mut command = Command::new(executable);
     command
         .arg(argument)
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        command.creation_flags(0x08000000);
+        command.creation_flags(0x08000000 | 0x00000200);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
     }
 
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
+            drop(command);
+            drop(output_file);
+            let _ = std::fs::remove_file(output_path);
             return CommandOutput {
                 text: String::new(),
                 timed_out: false,
                 error: Some(format!("cannot execute llama-server: {error}")),
-            }
+            };
         }
     };
-    let stdout_receiver = child.stdout.take().map(spawn_stream_reader);
-    let stderr_receiver = child.stderr.take().map(spawn_stream_reader);
-
+    drop(command);
     let started = Instant::now();
     let mut timed_out = false;
     let wait_error = loop {
@@ -81,30 +158,22 @@ fn run_bounded(executable: &str, argument: &str) -> CommandOutput {
             }
             Ok(None) => {
                 timed_out = true;
-                let _ = child.kill();
-                break child.wait().err().map(|error| error.to_string());
+                break terminate_probe_process_tree(&mut child);
             }
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Some(error.to_string());
+                let cleanup_error = terminate_probe_process_tree(&mut child);
+                break Some(match cleanup_error {
+                    Some(cleanup) => format!("{error}; cleanup failed: {cleanup}"),
+                    None => error.to_string(),
+                });
             }
         }
     };
 
-    // A child process can leave inherited pipe handles open in a descendant. Do not let an
-    // explicitly probed binary keep the application blocked after the parent has exited.
-    let stdout = stdout_receiver
-        .and_then(|receiver| receiver.recv_timeout(Duration::from_millis(500)).ok())
-        .unwrap_or_default();
-    let stderr = stderr_receiver
-        .and_then(|receiver| receiver.recv_timeout(Duration::from_millis(500)).ok())
-        .unwrap_or_default();
-    let mut combined = stdout;
-    if !combined.is_empty() && !stderr.is_empty() {
-        combined.push(b'\n');
-    }
-    combined.extend(stderr);
+    let _ = output_file.seek(SeekFrom::Start(0));
+    let combined = read_stream_capped(&mut output_file);
+    drop(output_file);
+    let _ = std::fs::remove_file(output_path);
 
     CommandOutput {
         text: String::from_utf8_lossy(&combined).into_owned(),
@@ -251,19 +320,61 @@ fn classify_probe_status(supported_flags: &[String], timed_out: bool) -> &'stati
     }
 }
 
-fn executable_fingerprint(executable: &str) -> String {
-    std::fs::metadata(executable)
+fn update_fingerprint_hash(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x100000001b3);
+    }
+}
+
+pub(crate) fn executable_fingerprint(executable: &str) -> String {
+    const SAMPLE_BYTES: u64 = 32 * 1024;
+
+    let path = std::fs::canonicalize(executable).unwrap_or_else(|_| executable.into());
+    let metadata = match path.metadata() {
+        Ok(metadata) if metadata.is_file() => metadata,
+        _ => return String::new(),
+    };
+    let modified = metadata
+        .modified()
         .ok()
-        .map(|metadata| {
-            let modified = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0);
-            format!("{}:{modified}", metadata.len())
-        })
-        .unwrap_or_default()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let mut normalized_path = path.to_string_lossy().to_string();
+    #[cfg(windows)]
+    normalized_path.make_ascii_lowercase();
+
+    let mut hash = 0xcbf29ce484222325_u64;
+    update_fingerprint_hash(&mut hash, normalized_path.as_bytes());
+    update_fingerprint_hash(&mut hash, &metadata.len().to_le_bytes());
+    update_fingerprint_hash(&mut hash, &modified.to_le_bytes());
+
+    let mut file = match File::open(&path) {
+        Ok(file) => file,
+        Err(_) => return String::new(),
+    };
+    let mut offsets = BTreeSet::new();
+    offsets.insert(0_u64);
+    offsets.insert(metadata.len().saturating_sub(SAMPLE_BYTES) / 2);
+    offsets.insert(metadata.len().saturating_sub(SAMPLE_BYTES));
+    let mut buffer = vec![0_u8; SAMPLE_BYTES as usize];
+    for offset in offsets {
+        if file.seek(SeekFrom::Start(offset)).is_err() {
+            return String::new();
+        }
+        let count = match file.read(&mut buffer) {
+            Ok(count) => count,
+            Err(_) => return String::new(),
+        };
+        update_fingerprint_hash(&mut hash, &offset.to_le_bytes());
+        update_fingerprint_hash(&mut hash, &buffer[..count]);
+    }
+
+    format!(
+        "v2:{normalized_path}:{}:{modified}:{hash:016x}",
+        metadata.len()
+    )
 }
 
 pub(crate) fn capabilities_match_executable(
@@ -275,11 +386,20 @@ pub(crate) fn capabilities_match_executable(
 }
 
 fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
+    let fingerprint_before = executable_fingerprint(&engine.exe);
     let version_output = run_bounded(&engine.exe, "--version");
     let help_output = run_bounded(&engine.exe, "--help");
     let supported_flags = extract_supported_flags(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
     let fingerprint = executable_fingerprint(&engine.exe);
+    if fingerprint_before.is_empty() || fingerprint_before != fingerprint {
+        engine.version.clear();
+        engine.capabilities = EngineCapabilities {
+            error: Some("engine executable changed while compatibility probing was in progress; probe again".to_string()),
+            ..EngineCapabilities::default()
+        };
+        return engine;
+    }
     let detected_version = extract_engine_version(&version_output.text);
     let preserve_existing_version = engine.capabilities.version_status == "detected"
         && engine.capabilities.executable_fingerprint == fingerprint
@@ -356,6 +476,229 @@ fn command_flag(token: &str) -> Option<&str> {
     Some(flag)
 }
 
+fn known_flag_value_count(flag: &str) -> Option<usize> {
+    let count = match flag {
+        "-m"
+        | "--model"
+        | "-a"
+        | "--lora"
+        | "--lora-scaled"
+        | "--mmproj"
+        | "--mmproj-url"
+        | "--chat-template"
+        | "--chat-template-file"
+        | "--reasoning-format"
+        | "--reasoning"
+        | "--reasoning-budget"
+        | "--reasoning-budget-message"
+        | "--chat-template-kwargs"
+        | "--grammar-file"
+        | "--grammar"
+        | "-c"
+        | "-ngl"
+        | "-t"
+        | "-b"
+        | "-ub"
+        | "-np"
+        | "--threads-batch"
+        | "--threads-http"
+        | "--keep"
+        | "--cache-reuse"
+        | "-cram"
+        | "-ctxcp"
+        | "-cms"
+        | "--rope-scaling"
+        | "--rope-scale"
+        | "--rope-freq-base"
+        | "--rope-freq-scale"
+        | "--yarn-ext-factor"
+        | "--yarn-attn-factor"
+        | "--yarn-beta-slow"
+        | "--yarn-beta-fast"
+        | "--yarn-orig-ctx"
+        | "-fa"
+        | "--n-cpu-moe"
+        | "--numa"
+        | "--fit"
+        | "-fitt"
+        | "-fitc"
+        | "-ctk"
+        | "-ctv"
+        | "-ctkd"
+        | "-ctvd"
+        | "-dev"
+        | "-sm"
+        | "-ts"
+        | "-mg"
+        | "--override-kv"
+        | "-md"
+        | "-ngld"
+        | "--spec-draft-n-max"
+        | "--spec-draft-n-min"
+        | "--spec-draft-p-min"
+        | "--spec-draft-p-split"
+        | "--spec-draft-device"
+        | "--spec-type"
+        | "-lcs"
+        | "-lcd"
+        | "-td"
+        | "-tbd"
+        | "--api-key"
+        | "--api-key-file"
+        | "--ssl-key-file"
+        | "--ssl-cert-file"
+        | "--path"
+        | "--api-prefix"
+        | "--cors-origins"
+        | "--cors-methods"
+        | "--cors-headers"
+        | "--ui-config-file"
+        | "--ui-config"
+        | "--pooling"
+        | "--embd-normalize"
+        | "-n"
+        | "--json-schema"
+        | "-jf"
+        | "--temp"
+        | "--top-k"
+        | "--top-p"
+        | "--repeat-penalty"
+        | "--seed"
+        | "--min-p"
+        | "--xtc-probability"
+        | "--xtc-threshold"
+        | "--typical-p"
+        | "--repeat-last-n"
+        | "-r"
+        | "--frequency-penalty"
+        | "--presence-penalty"
+        | "--mirostat"
+        | "--mirostat-lr"
+        | "--mirostat-ent"
+        | "--dynatemp-range"
+        | "--dynatemp-exp"
+        | "--dry-multiplier"
+        | "--dry-base"
+        | "--dry-allowed-length"
+        | "--dry-penalty-last-n"
+        | "--dry-sequence-breaker"
+        | "--adaptive-target"
+        | "--adaptive-decay"
+        | "--top-n-sigma"
+        | "-l"
+        | "--samplers"
+        | "--sampler-seq"
+        | "-to"
+        | "--sleep-idle-seconds"
+        | "--slot-save-path"
+        | "--log-prompts-dir"
+        | "-sps"
+        | "--rpc"
+        | "--host"
+        | "--port"
+        | "--models-dir"
+        | "--models-preset"
+        | "--models-max"
+        | "--sse-ping-interval"
+        | "--tags"
+        | "--media-path"
+        | "--tools"
+        | "--image-min-tokens"
+        | "--image-max-tokens"
+        | "--mtmd-batch-max-tokens" => 1,
+        "--lora-init-without-apply"
+        | "--mmproj-auto"
+        | "--no-mmproj"
+        | "--no-mmproj-offload"
+        | "--skip-chat-parsing"
+        | "--reasoning-preserve"
+        | "--no-reasoning-preserve"
+        | "--jinja"
+        | "--no-jinja"
+        | "-cb"
+        | "--no-cont-batching"
+        | "--cache-prompt"
+        | "--no-cache-prompt"
+        | "--warmup"
+        | "--no-warmup"
+        | "--swa-full"
+        | "--cpu-moe"
+        | "--mlock"
+        | "--no-mmap"
+        | "--no-repack"
+        | "--direct-io"
+        | "--check-tensors"
+        | "--perf"
+        | "--kv-unified"
+        | "--no-kv-unified"
+        | "--no-kv-offload"
+        | "--cache-idle-slots"
+        | "--no-cache-idle-slots"
+        | "--spec-default"
+        | "--no-spec-draft-backend-sampling"
+        | "--no-ui"
+        | "--offline"
+        | "--cors-credentials"
+        | "--no-cors-credentials"
+        | "--ui-mcp-proxy"
+        | "--agent"
+        | "--embedding"
+        | "--reranking"
+        | "--ignore-eos"
+        | "-sp"
+        | "--spm-infill"
+        | "-bs"
+        | "--context-shift"
+        | "--no-context-shift"
+        | "-v"
+        | "--metrics"
+        | "--props"
+        | "--slots"
+        | "--no-slots"
+        | "--prefill-assistant"
+        | "--no-prefill-assistant"
+        | "--reuse-port"
+        | "--models-autoload"
+        | "--no-models-autoload" => 0,
+        _ => return None,
+    };
+    Some(count)
+}
+
+#[derive(Debug)]
+struct CommandArgumentGroup<'a> {
+    flag: &'a str,
+    tokens: &'a [String],
+}
+
+fn command_argument_groups(command: &[String]) -> Vec<CommandArgumentGroup<'_>> {
+    let mut groups = Vec::new();
+    let mut index = 1;
+    while index < command.len() {
+        let Some(flag) = command_flag(&command[index]) else {
+            index += 1;
+            continue;
+        };
+        let start = index;
+        index += 1;
+        let value_count = if command[start].contains('=') {
+            0
+        } else if let Some(count) = known_flag_value_count(flag) {
+            count
+        } else if index < command.len() && command_flag(&command[index]).is_none() {
+            1
+        } else {
+            0
+        };
+        index = (index + value_count).min(command.len());
+        groups.push(CommandArgumentGroup {
+            flag,
+            tokens: &command[start..index],
+        });
+    }
+    groups
+}
+
 pub(crate) fn unsupported_command_flags(
     command: &[String],
     capabilities: &EngineCapabilities,
@@ -368,10 +711,9 @@ pub(crate) fn unsupported_command_flags(
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    command
-        .iter()
-        .skip(1)
-        .filter_map(|token| command_flag(token))
+    command_argument_groups(command)
+        .into_iter()
+        .map(|group| group.flag)
         .filter(|flag| !supported.contains(flag))
         .map(str::to_string)
         .collect::<BTreeSet<_>>()
@@ -397,6 +739,37 @@ fn preserve_in_conservative_mode(flag: &str) -> bool {
     )
 }
 
+pub(crate) fn blocked_security_flags(
+    command: &[String],
+    capabilities: Option<&EngineCapabilities>,
+) -> Vec<String> {
+    const SECURITY_FLAGS: [&str; 5] = [
+        "--cors-origins",
+        "--cors-methods",
+        "--cors-headers",
+        "--cors-credentials",
+        "--no-cors-credentials",
+    ];
+    let supported = capabilities
+        .filter(|value| matches!(value.status.as_str(), "detected" | "partial"))
+        .map(|value| {
+            value
+                .supported_flags
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    command_argument_groups(command)
+        .into_iter()
+        .map(|group| group.flag)
+        .filter(|flag| SECURITY_FLAGS.contains(flag) && !supported.contains(flag))
+        .map(str::to_string)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 pub(crate) fn command_for_capabilities(
     command: &[String],
     capabilities: Option<&EngineCapabilities>,
@@ -419,23 +792,10 @@ pub(crate) fn command_for_capabilities(
         })
         .unwrap_or_default();
     let mut projected = vec![executable.clone()];
-    let mut index = 1;
-    while index < command.len() {
-        let token = &command[index];
-        let Some(flag) = command_flag(token) else {
-            index += 1;
-            continue;
-        };
-        let retain = preserve_in_conservative_mode(flag) || recognized.contains(flag);
+    for group in command_argument_groups(command) {
+        let retain = preserve_in_conservative_mode(group.flag) || recognized.contains(group.flag);
         if retain {
-            projected.push(token.clone());
-        }
-        index += 1;
-        while index < command.len() && command_flag(&command[index]).is_none() {
-            if retain {
-                projected.push(command[index].clone());
-            }
-            index += 1;
+            projected.extend(group.tokens.iter().cloned());
         }
     }
     projected
@@ -456,19 +816,35 @@ pub async fn probe_engine_capabilities(
     let mut probed = tokio::task::spawn_blocking(move || probe_engine(engine))
         .await
         .map_err(|error| format!("engine capability probe task failed: {error}"))?;
+    let mut engines = state.engines.lock().unwrap();
+    let current = engines
+        .iter_mut()
+        .find(|engine| engine.id == probed.id)
+        .ok_or_else(|| "engine was removed while capability probing was in progress".to_string())?;
+    let current_path =
+        std::fs::canonicalize(&current.exe).unwrap_or_else(|_| current.exe.clone().into());
+    let probed_path =
+        std::fs::canonicalize(&probed.exe).unwrap_or_else(|_| probed.exe.clone().into());
+    if current_path != probed_path {
+        return Err(
+            "engine executable changed while capability probing was in progress".to_string(),
+        );
+    }
+    if !capabilities_match_executable(&current.exe, &probed.capabilities) {
+        return Err(probed.capabilities.error.clone().unwrap_or_else(|| {
+            "engine executable changed while capability probing was in progress".to_string()
+        }));
+    }
+    *current = probed.clone();
     if let Err(error) = model_inventory::update_engine_probe(&probed) {
         let warning = compact_error(format!("capability cache was not persisted: {error}"));
         probed.capabilities.error = Some(match probed.capabilities.error.take() {
             Some(existing) => compact_error(format!("{existing}; {warning}")),
             None => warning,
         });
+        current.capabilities = probed.capabilities.clone();
     }
-    let mut engines = state.engines.lock().unwrap();
-    let current = engines
-        .iter_mut()
-        .find(|engine| engine.id == probed.id)
-        .ok_or_else(|| "engine was removed while capability probing was in progress".to_string())?;
-    *current = probed.clone();
+    drop(engines);
     Ok(probed)
 }
 
@@ -584,6 +960,71 @@ mod tests {
                 "8080",
             ]
         );
+    }
+
+    #[test]
+    fn projection_keeps_hyphen_prefixed_values_attached_to_known_flags() {
+        let command = vec![
+            "llama-server".to_string(),
+            "-m".to_string(),
+            "model.gguf".to_string(),
+            "--api-key".to_string(),
+            "-secret value".to_string(),
+            "--temp".to_string(),
+            "0.7".to_string(),
+        ];
+
+        assert_eq!(
+            command_for_capabilities(&command, None),
+            vec![
+                "llama-server",
+                "-m",
+                "model.gguf",
+                "--api-key",
+                "-secret value"
+            ]
+        );
+    }
+
+    #[test]
+    fn conservative_mode_blocks_unverified_cors_policy() {
+        let command = vec![
+            "llama-server".to_string(),
+            "-m".to_string(),
+            "model.gguf".to_string(),
+            "--cors-origins".to_string(),
+            "https://example.test".to_string(),
+            "--no-cors-credentials".to_string(),
+        ];
+        assert_eq!(
+            blocked_security_flags(&command, None),
+            vec!["--cors-origins", "--no-cors-credentials"]
+        );
+
+        let partial = EngineCapabilities {
+            status: "partial".to_string(),
+            supported_flags: vec![
+                "--cors-origins".to_string(),
+                "--no-cors-credentials".to_string(),
+            ],
+            ..EngineCapabilities::default()
+        };
+        assert!(blocked_security_flags(&command, Some(&partial)).is_empty());
+    }
+
+    #[test]
+    fn executable_fingerprint_includes_sampled_file_content() {
+        let path = std::env::temp_dir().join(format!(
+            "lsm-engine-fingerprint-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, vec![b'a'; 128 * 1024]).unwrap();
+        let first = executable_fingerprint(&path.to_string_lossy());
+        std::fs::write(&path, vec![b'b'; 128 * 1024]).unwrap();
+        let second = executable_fingerprint(&path.to_string_lossy());
+        assert_ne!(first, second);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

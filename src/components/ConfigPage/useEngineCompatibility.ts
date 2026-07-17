@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore, type EngineInfo, type InstanceConfig } from '../../store'
-import { findUnsupportedEngineFlags, normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../../engineCapabilities'
+import { normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../../engineCapabilities'
 
 type CompatibilityInput = {
   local: InstanceConfig | null
@@ -71,9 +71,9 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
     let cancelled = false
     const timer = setTimeout(() => {
       void generateCommand(local, currentEngine.exe)
-        .then(command => {
+        .then(result => {
           if (!cancelled) {
-            setUnsupportedEngineFlags(findUnsupportedEngineFlags(command, currentEngine.capabilities))
+            setUnsupportedEngineFlags(result.unsupportedFlags)
           }
         })
         .catch(() => {

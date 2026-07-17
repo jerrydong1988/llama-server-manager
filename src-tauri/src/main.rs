@@ -562,13 +562,15 @@ mod tests {
     }
 
     #[test]
-    fn test_advanced_sampling_defaults_omitted() {
+    fn test_advanced_sampling_defaults_are_explicit() {
         let c = cfg();
         let cmd = generate_command(&c, "");
-        assert!(!cmd.iter().any(|a| a == "--mirostat"));
+        assert!(cmd.windows(2).any(|args| args == ["--mirostat", "0"]));
         assert!(!cmd.iter().any(|a| a == "--mirostat-lr"));
-        assert!(!cmd.iter().any(|a| a == "--xtc-probability"));
-        assert!(!cmd.iter().any(|a| a == "--dry-multiplier"));
+        assert!(cmd
+            .windows(2)
+            .any(|args| args == ["--xtc-probability", "0"]));
+        assert!(cmd.windows(2).any(|args| args == ["--dry-multiplier", "0"]));
     }
 
     #[test]

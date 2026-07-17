@@ -9,9 +9,32 @@ import { createLatestSaveCoordinator } from './configSaveCoordinator'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import { runInstanceStart } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
-import type { AppState, InstanceConfig, LogEntry } from './types'
+import type { AppState, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
 
 const MAX_LOG_ENTRIES = 1000
+
+const isStaleEngineCapabilityError = (error: unknown) => (
+  Boolean(error && typeof error === 'object' && (error as { code?: string }).code === 'ENGINE_CAPABILITIES_STALE')
+)
+
+const invalidateEngineCapabilities = (set: AppStoreSet, engineExe: string) => {
+  set(state => ({
+    engines: state.engines.map(engine => engine.exe === engineExe
+      ? {
+          ...engine,
+          version: '',
+          capabilities: {
+            status: 'unprobed',
+            versionStatus: 'unprobed',
+            supportedFlags: [],
+            helpHash: '',
+            executableFingerprint: '',
+            error: 'Engine executable changed; compatibility probe required.',
+          },
+        }
+      : engine),
+  }))
+}
 type ConfigSaveSnapshot = {
   revision: number
   instances: Record<string, InstanceConfig>
@@ -120,7 +143,12 @@ export function createInstanceSlice(
     })),
     generateCommand: async (config: InstanceConfig, engineExe: string) => {
       const normalized = normalizeStoredConfig(config, get().models)
-      return invoke<string[]>('generate_server_command', { config: normalized.config, engineExe })
+      try {
+        return await invoke<GeneratedServerCommand>('generate_server_command', { config: normalized.config, engineExe })
+      } catch (error) {
+        if (isStaleEngineCapabilityError(error)) invalidateEngineCapabilities(set, engineExe)
+        throw error
+      }
     },
     startInstance: (id) => runInstanceStart(id, async () => {
       try {
@@ -159,6 +187,13 @@ export function createInstanceSlice(
         })
         get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
       } catch (error) {
+        if (isStaleEngineCapabilityError(error)) {
+          const state = get()
+          const instance = state.instances.find(item => item.id === id)
+          const engine = state.engines.find(item => item.id === instance?.config.engine_id)
+            || state.engines.find(item => item.id === state.defaultEngineId)
+          if (engine) invalidateEngineCapabilities(set, engine.exe)
+        }
         console.error('start_server error:', error)
         get().addRuntimeWarning(`\u5b9e\u4f8b\u542f\u52a8\u5931\u8d25\uff1a${String(error)}`)
         throw error

@@ -113,7 +113,7 @@ function parseParameterTable(markdown) {
 }
 
 async function readSnapshot(ref, commit) {
-  const readme = await fetchText(`https://raw.githubusercontent.com/${repository}/${encodeURIComponent(ref)}/tools/server/README.md`)
+  const readme = await fetchText(`https://raw.githubusercontent.com/${repository}/${encodeURIComponent(commit)}/tools/server/README.md`)
   return { ref, commit, ...parseParameterTable(readme) }
 }
 
@@ -170,6 +170,7 @@ async function main() {
   ])
 
   if (writeMode) {
+    const stableAliases = new Set(releaseSnapshot.parameters.flatMap(parameter => parameter.aliases))
     const next = {
       schemaVersion: 2,
       verifiedAt: new Date().toISOString().slice(0, 10),
@@ -184,7 +185,7 @@ async function main() {
       upstreamMasterChecked: masterCommit,
       releaseSnapshot,
       masterSnapshot,
-      masterPreviewFlags: baseline.masterPreviewFlags || [],
+      masterPreviewFlags: (baseline.masterPreviewFlags || []).filter(flag => !stableAliases.has(flag)),
       structuredFlagsAdded: baseline.structuredFlagsAdded || [],
       defaultTrueNegativeFlags: baseline.defaultTrueNegativeFlags || [],
       intentionalCustomArgsOnly: baseline.intentionalCustomArgsOnly || {},
