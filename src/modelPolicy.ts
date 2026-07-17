@@ -31,12 +31,13 @@ export const VECTOR_ALLOWED_FIELDS = new Set<keyof InstanceConfig>([
   'rope_scaling', 'rope_scale', 'rope_freq_base', 'rope_freq_scale',
   'yarn_ext_factor', 'yarn_attn_factor', 'yarn_beta_slow', 'yarn_beta_fast',
   'yarn_orig_ctx', 'flash_attn', 'moe_cpu_layers', 'cpu_moe', 'mlock',
-  'no_mmap', 'no_repack', 'direct_io', 'numa', 'perf', 'check_tensors',
-  'fit', 'fit_target', 'fit_ctx', 'cache_type_k', 'cache_type_v',
-  'kv_unified', 'cache_idle_slots', 'no_kv_offload', 'device', 'split_mode',
+  'no_mmap', 'no_repack', 'direct_io', 'numa', 'numa_mode', 'perf', 'check_tensors',
+  'fit', 'fit_mode', 'fit_target', 'fit_ctx', 'cache_type_k', 'cache_type_v',
+  'kv_unified', 'kv_unified_mode', 'cache_idle_slots', 'no_kv_offload', 'device', 'split_mode',
   'tensor_split', 'main_gpu', 'override_kv',
   'host', 'port', 'api_key', 'api_key_file', 'ssl_key_file', 'ssl_cert_file',
-  'path_prefix', 'api_prefix', 'no_ui', 'offline', 'metrics', 'props',
+  'path_prefix', 'api_prefix', 'cors_origins', 'cors_methods', 'cors_headers',
+  'cors_credentials', 'no_ui', 'offline', 'metrics', 'props',
   'slots_enabled', 'timeout', 'sleep_idle', 'verbose', 'rpc_servers',
   'sse_ping_interval', 'reuse_port',
   'embedding', 'pooling', 'embd_normalize', 'reranking',
@@ -67,12 +68,12 @@ const SPECULATIVE_FIELDS = new Set<keyof InstanceConfig>([
 const CHAT_FIELDS = new Set<keyof InstanceConfig>([
   'lora_path', 'lora_init_without_apply', 'lora_scaled', 'chat_template',
   'chat_template_file', 'skip_chat_parsing', 'reasoning_format',
-  'reasoning_effort', 'reasoning', 'jinja', 'reasoning_budget',
+  'reasoning_effort', 'reasoning', 'reasoning_preserve', 'jinja', 'reasoning_budget',
   'reasoning_budget_message', 'grammar_file', 'grammar', 'prefill_assistant',
 ])
 
 const MULTIMODAL_FIELDS = new Set<keyof InstanceConfig>([
-  'mmproj_path', 'mmproj_url', 'mmproj_auto', 'no_mmproj',
+  'mmproj_path', 'mmproj_url', 'mmproj_auto', 'mmproj_mode', 'no_mmproj',
   'no_mmproj_offload', 'image_min_tokens', 'image_max_tokens',
   'mtmd_batch_max_tokens', 'tags', 'media_path',
 ])

@@ -47,7 +47,7 @@ export interface InstanceConfig {
   lora_path: string; mmproj_path: string; lora_init_without_apply: boolean; lora_scaled: string;
   chat_template: string; chat_template_file: string; skip_chat_parsing: boolean;
   reasoning_format: string; reasoning_effort: string; reasoning: string;
-  jinja: boolean; reasoning_budget: string; reasoning_budget_message: string;
+  reasoning_preserve: string; jinja: boolean; reasoning_budget: string; reasoning_budget_message: string;
   grammar_file: string; grammar: string;
   // Performance & Context
   ctx_size: number; ctx_size_auto: boolean; gpu_layers_auto: boolean; gpu_layers: number;
@@ -61,8 +61,8 @@ export interface InstanceConfig {
   yarn_ext_factor: number; yarn_attn_factor: number; yarn_beta_slow: number; yarn_beta_fast: number; yarn_orig_ctx: number;
   // Memory & KV Cache
   flash_attn: string; moe_cpu_layers: number; cpu_moe: boolean; mlock: boolean;
-  no_mmap: boolean; no_repack: boolean; direct_io: boolean; numa: boolean; context_shift: boolean;
-  perf: boolean; check_tensors: boolean; fit: boolean; fit_target: string; fit_ctx: number; kv_unified: boolean; cache_idle_slots: boolean; no_kv_offload: boolean;
+  no_mmap: boolean; no_repack: boolean; direct_io: boolean; numa: boolean; numa_mode: string; context_shift: boolean;
+  perf: boolean; check_tensors: boolean; fit: boolean; fit_mode: string; fit_target: string; fit_ctx: number; kv_unified: boolean; kv_unified_mode: string; cache_idle_slots: boolean; no_kv_offload: boolean;
   cache_type_k: string; cache_type_v: string;
   cache_type_draft_k: string; cache_type_draft_v: string;
   // Speculative Decoding
@@ -77,13 +77,14 @@ export interface InstanceConfig {
   // Server & Network
   host: string; port: number; api_key: string; api_key_file: string;
   ssl_key_file: string; ssl_cert_file: string; path_prefix: string; api_prefix: string;
+  cors_origins: string; cors_methods: string; cors_headers: string; cors_credentials: string;
   no_ui: boolean; offline: boolean; ui_config_file: string; ui_config: string; ui_mcp_proxy: boolean; agent: boolean;
   embedding: boolean; pooling: string; embd_normalize: number; reranking: boolean;
   metrics: boolean; props: boolean; slots_enabled: boolean;
-  slot_save_path: string; slot_prompt_similarity: number; prefill_assistant: boolean;
+  slot_save_path: string; log_prompts_dir: string; slot_prompt_similarity: number; prefill_assistant: boolean;
   // Multi-Model & Media
   models_dir: string; models_preset: string; models_max: number; models_autoload: boolean;
-  mmproj_url: string; mmproj_auto: boolean; no_mmproj: boolean; no_mmproj_offload: boolean; image_min_tokens: number; image_max_tokens: number; mtmd_batch_max_tokens: number;
+  mmproj_url: string; mmproj_auto: boolean; mmproj_mode: string; no_mmproj: boolean; no_mmproj_offload: boolean; image_min_tokens: number; image_max_tokens: number; mtmd_batch_max_tokens: number;
   tags: string; media_path: string; tools: string;
   // Generation
   n_predict: number; ignore_eos: boolean; json_schema: string; json_schema_file: string;

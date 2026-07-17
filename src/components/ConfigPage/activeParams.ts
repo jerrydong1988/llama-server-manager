@@ -22,18 +22,18 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.lora_scaled) a.add('lora_scaled')
     if (config.mmproj_path) a.add('mmproj_path')
     if (config.mmproj_url) a.add('mmproj_url')
-    if (config.mmproj_auto) a.add('mmproj_auto')
-    if (config.no_mmproj) a.add('no_mmproj')
+    if (config.mmproj_mode || config.mmproj_auto || config.no_mmproj) a.add('mmproj_mode')
     if (config.no_mmproj_offload) a.add('no_mmproj_offload')
     if (config.chat_template) a.add('chat_template')
     if (config.chat_template_file) a.add('chat_template_file')
     if (config.skip_chat_parsing) a.add('skip_chat_parsing')
     if (config.reasoning_format) a.add('reasoning_format')
     if (config.reasoning) a.add('reasoning')
+    if (config.reasoning_preserve) a.add('reasoning_preserve')
     if (config.reasoning_budget) a.add('reasoning_budget')
     if (config.reasoning_budget_message) a.add('reasoning_budget_message')
     if (config.reasoning_effort) a.add('reasoning_effort')
-    if (config.jinja) a.add('jinja')
+    if (!config.jinja) a.add('jinja')
     if (config.grammar_file) a.add('grammar_file')
     if (config.grammar) a.add('grammar')
   }
@@ -45,16 +45,16 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.batch_size > 0) a.add('batch_size')
   if (config.ubatch_size > 0) a.add('ubatch_size')
   if (config.parallel > 0 || config.parallel === -1) a.add('parallel')
-  if (config.cont_batching) a.add('cont_batching')
+  if (!config.cont_batching) a.add('cont_batching')
   if (!config.cache_prompt) a.add('cache_prompt')           // negative: --no-cache-prompt when false
   if (config.threads_batch > 0) a.add('threads_batch')
   if (config.threads_http >= 0) a.add('threads_http')
-  if (config.keep > 0) a.add('keep')
+  if (config.keep !== 0) a.add('keep')
   if (config.cache_reuse > 0) a.add('cache_reuse')
-  if (config.cache_ram > 0) a.add('cache_ram')
-  if (config.warmup) a.add('warmup')
+  if (config.cache_ram !== 8192) a.add('cache_ram')
+  if (!config.warmup) a.add('warmup')
   if (config.ctx_checkpoints !== 32) a.add('ctx_checkpoints')
-  if (config.checkpoint_min_step > 0) a.add('checkpoint_min_step')
+  if (config.checkpoint_min_step !== 8192) a.add('checkpoint_min_step')
   if (config.swa_full) a.add('swa_full')
 
   // ── RoPE / YaRN ──
@@ -78,19 +78,21 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.no_mmap) a.add('no_mmap')
   if (config.no_repack) a.add('no_repack')
   if (config.direct_io) a.add('direct_io')
-  if (config.numa) a.add('numa')
+  if (config.numa_mode || config.numa) a.add('numa_mode')
   if (config.perf) a.add('perf')
   if (config.check_tensors) a.add('check_tensors')
-  if (config.fit) a.add('fit')
-  if (config.fit_target) a.add('fit_target')
-  if (config.fit_ctx !== 4096) a.add('fit_ctx')
+  if (config.fit_mode || config.fit) a.add('fit_mode')
+  if (config.fit_mode !== 'off') {
+    if (config.fit_target) a.add('fit_target')
+    if (config.fit_ctx !== 4096) a.add('fit_ctx')
+  }
 
   // ── KV Cache ──
   if (config.cache_type_k) a.add('cache_type_k')
   if (config.cache_type_v) a.add('cache_type_v')
   if (config.cache_type_draft_k) a.add('cache_type_draft_k')
   if (config.cache_type_draft_v) a.add('cache_type_draft_v')
-  if (config.kv_unified) a.add('kv_unified')
+  if (config.kv_unified_mode || config.kv_unified) a.add('kv_unified_mode')
   if (!config.cache_idle_slots) a.add('cache_idle_slots')   // negative: --no-cache-idle-slots when false
   if (config.no_kv_offload) a.add('no_kv_offload')
 
@@ -105,7 +107,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (specActive) {
     a.add('spec_type')                                      // --spec-type itself
     if (config.draft_model_path) a.add('draft_model_path')
-    if (config.draft_gpu_layers > 0 && config.draft_gpu_layers < 99) a.add('draft_gpu_layers')
+    if (config.draft_gpu_layers !== 99) a.add('draft_gpu_layers')
     if (config.draft_tokens > 0) a.add('draft_tokens')
     if (config.spec_draft_n_min > 0) a.add('spec_draft_n_min')
     if (config.spec_draft_p_min > 0) a.add('spec_draft_p_min')
@@ -128,6 +130,10 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
    if (config.offline) a.add('offline')
    if (config.path_prefix) a.add('path_prefix')
    if (config.api_prefix) a.add('api_prefix')
+   if (config.cors_origins) a.add('cors_origins')
+   if (config.cors_methods) a.add('cors_methods')
+   if (config.cors_headers) a.add('cors_headers')
+   if (config.cors_credentials) a.add('cors_credentials')
    if (config.ui_config_file) a.add('ui_config_file')
    if (config.ui_config) a.add('ui_config')
     if (config.ui_mcp_proxy) a.add('ui_mcp_proxy')
@@ -147,47 +153,47 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
 
   // ── Generation (gated by !isEmbedding) ──
   if (!e) {
-    if (config.n_predict !== 0) a.add('n_predict')
+    if (config.n_predict !== -1) a.add('n_predict')
     if (config.ignore_eos) a.add('ignore_eos')
     if (config.json_schema) a.add('json_schema')
     if (config.json_schema_file) a.add('json_schema_file')
-    if (config.temp > 0) a.add('temp')
-    if (config.top_k > 0) a.add('top_k')
-    if (config.top_p > 0) a.add('top_p')
-    if (config.repeat_penalty > 0) a.add('repeat_penalty')
-    if (config.seed >= 0) a.add('seed')
-    if (config.min_p > 0) a.add('min_p')
-    if (config.presence_penalty > 0) a.add('presence_penalty')
-    if (config.frequency_penalty > 0) a.add('frequency_penalty')
-    if (config.repeat_last_n > 0) a.add('repeat_last_n')
+    if (Math.abs(config.temp - 0.8) > 0.001) a.add('temp')
+    if (config.top_k !== 40) a.add('top_k')
+    if (Math.abs(config.top_p - 0.95) > 0.001) a.add('top_p')
+    if (Math.abs(config.repeat_penalty - 1) > 0.001) a.add('repeat_penalty')
+    if (config.seed !== -1) a.add('seed')
+    if (Math.abs(config.min_p - 0.05) > 0.001) a.add('min_p')
+    if (Math.abs(config.presence_penalty) > 0.001) a.add('presence_penalty')
+    if (Math.abs(config.frequency_penalty) > 0.001) a.add('frequency_penalty')
+    if (config.repeat_last_n !== 64) a.add('repeat_last_n')
     if (config.reverse_prompt) a.add('reverse_prompt')
     if (config.special) a.add('special')
     if (config.spm_infill) a.add('spm_infill')
     if (config.backend_sampling) a.add('backend_sampling')
     if (config.mirostat > 0) {
       a.add('mirostat')
-      if (config.mirostat_lr > 0) a.add('mirostat_lr')
-      if (config.mirostat_ent > 0) a.add('mirostat_ent')
+      if (Math.abs(config.mirostat_lr - 0.1) > 0.001) a.add('mirostat_lr')
+      if (Math.abs(config.mirostat_ent - 5) > 0.001) a.add('mirostat_ent')
     }
     if (config.xtc_probability > 0) {
       a.add('xtc_probability')
-      if (config.xtc_threshold > 0) a.add('xtc_threshold')
+      if (Math.abs(config.xtc_threshold - 0.1) > 0.001) a.add('xtc_threshold')
     }
     if (config.dynatemp_range > 0) {
       a.add('dynatemp_range')
-      if (config.dynatemp_exp > 0) a.add('dynatemp_exp')
+      if (Math.abs(config.dynatemp_exp - 1) > 0.001) a.add('dynatemp_exp')
     }
-    if (config.typical_p < 1 && config.typical_p > 0) a.add('typical_p')
+    if (Math.abs(config.typical_p - 1) > 0.001) a.add('typical_p')
     if (config.dry_multiplier > 0) {
       a.add('dry_multiplier')
-      if (config.dry_base > 0) a.add('dry_base')
-      if (config.dry_allowed_length > 0) a.add('dry_allowed_length')
-      if (config.dry_penalty_last_n > 0) a.add('dry_penalty_last_n')
+      if (Math.abs(config.dry_base - 1.75) > 0.001) a.add('dry_base')
+      if (config.dry_allowed_length !== 2) a.add('dry_allowed_length')
+      if (config.dry_penalty_last_n !== -1) a.add('dry_penalty_last_n')
       if (config.dry_sequence_breaker) a.add('dry_sequence_breaker')
     }
-    if (config.adaptive_target > 0) {
+    if (Math.abs(config.adaptive_target + 1) > 0.001) {
       a.add('adaptive_target')
-      if (config.adaptive_decay > 0) a.add('adaptive_decay')
+      if (Math.abs(config.adaptive_decay - 0.9) > 0.001) a.add('adaptive_decay')
     }
     if (config.top_n_sigma >= 0) a.add('top_n_sigma')
     if (config.logit_bias) a.add('logit_bias')
@@ -207,13 +213,14 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   // Float comparison for similarity
   if (Math.abs(config.slot_prompt_similarity - 0.1) > 0.001) a.add('slot_prompt_similarity')
   if (config.slot_save_path) a.add('slot_save_path')
-  if (config.prefill_assistant) a.add('prefill_assistant')
+  if (config.log_prompts_dir) a.add('log_prompts_dir')
+  if (!config.prefill_assistant) a.add('prefill_assistant')
 
   // ── Multi-Model & Media ──
   if (config.models_dir) a.add('models_dir')
   if (config.models_preset) a.add('models_preset')
   if (config.models_max !== 4) a.add('models_max')
-  if (config.models_autoload) a.add('models_autoload')
+  if (!config.models_autoload) a.add('models_autoload')
   if (config.image_min_tokens > 0) a.add('image_min_tokens')
   if (config.image_max_tokens > 0) a.add('image_max_tokens')
   if (config.tags) a.add('tags')

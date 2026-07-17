@@ -1,0 +1,30 @@
+{
+  "verifiedAt": "2026-07-17",
+  "upstreamRelease": "b10056",
+  "upstreamCommit": "b85833e934123f373a8dc087316e385b28c98cc0",
+  "upstreamMasterChecked": "635cdd5fcc5bdeb8ec2e108bb2a40acf62d9039b",
+  "structuredFlagsAdded": [
+    "--cors-origins",
+    "--cors-methods",
+    "--cors-headers",
+    "--cors-credentials",
+    "--no-cors-credentials",
+    "--reasoning-preserve",
+    "--no-reasoning-preserve",
+    "--log-prompts-dir"
+  ],
+  "defaultTrueNegativeFlags": [
+    "--no-cont-batching",
+    "--no-warmup",
+    "--no-jinja",
+    "--no-prefill-assistant",
+    "--no-models-autoload"
+  ],
+  "intentionalCustomArgsOnly": {
+    "processAndHelp": ["--help", "--version", "--list-devices", "--completion-bash"],
+    "remoteModelAcquisition": ["--model-url", "--hf-repo", "--hf-file", "--docker-repo", "--spec-draft-hf"],
+    "lowLevelScheduling": ["--cpu-mask", "--cpu-range", "--prio", "--poll", "--cpu-mask-batch"],
+    "advancedTensorRouting": ["--override-tensor", "--control-vector", "--control-vector-layer-range"],
+    "specializedPresets": ["--tts-use-guide-tokens", "--vocoder", "--fim-qwen-7b-default"]
+  }
+}

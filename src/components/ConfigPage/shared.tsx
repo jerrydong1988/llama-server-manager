@@ -5,7 +5,7 @@ import { SelectInput, TextInput, surfaceClassName } from '../ui'
 
 export const cacheTypes = ['', 'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq4_nl', 'q5_0', 'q5_1']
 export const specTypes = ['', 'none', 'draft-mtp', 'draft-simple', 'draft-eagle3', 'draft-dflash', 'ngram-cache', 'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod']
-export const chatTemplates = ['', 'bailing', 'bailing-think', 'bailing2', 'chatglm3', 'chatglm4', 'chatml', 'command-r', 'deepseek', 'deepseek-ocr', 'deepseek2', 'deepseek3', 'exaone-moe', 'exaone3', 'exaone4', 'falcon3', 'gemma', 'gigachat', 'glmedge', 'gpt-oss', 'granite', 'granite-4.0', 'granite-4.1', 'grok-2', 'hunyuan-dense', 'hunyuan-moe', 'hunyuan-vl', 'kimi-k2', 'llama2', 'llama2-sys', 'llama2-sys-bos', 'llama2-sys-strip', 'llama3', 'llama4', 'megrez', 'minicpm', 'mistral', 'mistral-v1', 'mistral-v3', 'mistral-v3-tekken', 'mistral-v7', 'mistral-v7-tekken', 'monarch', 'openchat', 'orion', 'pangu-embedded', 'phi3', 'phi4', 'rwkv-world', 'seed_oss', 'smolvlm', 'solar-open', 'vicuna', 'vicuna-orca', 'yandex', 'zephyr']
+export const chatTemplates = ['', 'bailing', 'bailing-think', 'bailing2', 'chatglm3', 'chatglm4', 'chatml', 'command-r', 'deepseek', 'deepseek-ocr', 'deepseek2', 'deepseek3', 'exaone-moe', 'exaone3', 'exaone4', 'falcon3', 'gemma', 'gigachat', 'glmedge', 'gpt-oss', 'granite', 'granite-4.0', 'granite-4.1', 'grok-2', 'hunyuan-dense', 'hunyuan-moe', 'hunyuan-vl', 'kimi-k2', 'llama2', 'llama2-sys', 'llama2-sys-bos', 'llama2-sys-strip', 'llama3', 'llama4', 'megrez', 'minicpm', 'mistral-v1', 'mistral-v3', 'mistral-v3-tekken', 'mistral-v7', 'mistral-v7-tekken', 'monarch', 'openchat', 'orion', 'pangu-embedded', 'phi3', 'phi4', 'rwkv-world', 'seed_oss', 'smolvlm', 'solar-open', 'vicuna', 'vicuna-orca', 'yandex', 'zephyr']
 
 // ── Search Context: injects searchQuery to all nested form fields without prop drilling ──
 const SearchCtx = createContext<string>('')
@@ -203,7 +203,7 @@ export const CollapsibleGroup = ({
 export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedReasoningConfig: {
     reasoning_format: '', reasoning_effort: '', reasoning_budget: '', reasoning_budget_message: '',
-    jinja: false, skip_chat_parsing: false,
+    reasoning_preserve: '', jinja: false, skip_chat_parsing: false,
   },
   advancedModelAdapt: {
     chat_template_file: '', lora_path: '', lora_init_without_apply: false, mmproj_path: '',
@@ -238,7 +238,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   advancedKvCache: {
     cache_type_k: '', cache_type_v: '',
     cache_prompt: true, cache_reuse: 0, cache_ram: 0, warmup: false,
-    cache_idle_slots: true, kv_unified: false,
+    cache_idle_slots: true, kv_unified: false, kv_unified_mode: '',
   },
   advancedContextMgmt: {
     ctx_checkpoints: 32, checkpoint_min_step: 0,
@@ -247,24 +247,26 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
   },
   advancedHardware: {
     moe_cpu_layers: 0, cpu_moe: false, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
-    perf: false, check_tensors: false, fit: false, fit_target: '', fit_ctx: 4096,
+    perf: false, check_tensors: false, fit: false, fit_mode: '', fit_target: '', fit_ctx: 4096,
+    numa_mode: '',
     direct_io: false,
     threads_http: -1,
   },
   advancedServerBasic: {
     api_key: '', api_key_file: '', no_ui: false,
     path_prefix: '', api_prefix: '', timeout: 600, sleep_idle: -1, verbose: false,
+    cors_origins: '', cors_methods: '', cors_headers: '', cors_credentials: '',
     ssl_key_file: '', ssl_cert_file: '',
   },
   advancedServerExt: {
     slots_enabled: true, metrics: false, props: false,
-    slot_save_path: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
+    slot_save_path: '', log_prompts_dir: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
     ui_config_file: '', ui_config: '', ui_mcp_proxy: false, agent: false,
     rpc_servers: '', sse_ping_interval: 30, reuse_port: false,
   },
   advancedMulti: {
     models_dir: '', models_preset: '', models_max: 4, models_autoload: false,
-    mmproj_url: '', mmproj_auto: false, image_min_tokens: 0, image_max_tokens: 0,
+    mmproj_url: '', mmproj_auto: false, mmproj_mode: '', image_min_tokens: 0, image_max_tokens: 0,
     media_path: '', tags: '', tools: '',
   },
 }

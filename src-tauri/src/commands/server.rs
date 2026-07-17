@@ -283,11 +283,19 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
         if !config.mmproj_url.is_empty() {
             cmd.extend_from_slice(&["--mmproj-url".into(), config.mmproj_url.clone()]);
         }
-        if config.mmproj_auto {
-            cmd.push("--mmproj-auto".into());
-        }
-        if config.no_mmproj {
-            cmd.push("--no-mmproj".into());
+        let mmproj_mode = if !config.mmproj_mode.is_empty() {
+            config.mmproj_mode.as_str()
+        } else if config.no_mmproj {
+            "off"
+        } else if config.mmproj_auto {
+            "on"
+        } else {
+            ""
+        };
+        match mmproj_mode {
+            "on" => cmd.push("--mmproj-auto".into()),
+            "off" => cmd.push("--no-mmproj".into()),
+            _ => {}
         }
         if config.no_mmproj_offload {
             cmd.push("--no-mmproj-offload".into());
@@ -310,6 +318,11 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
         if !config.reasoning.is_empty() {
             cmd.extend_from_slice(&["--reasoning".into(), config.reasoning.clone()]);
         }
+        match config.reasoning_preserve.as_str() {
+            "on" => cmd.push("--reasoning-preserve".into()),
+            "off" => cmd.push("--no-reasoning-preserve".into()),
+            _ => {}
+        }
         if !config.reasoning_budget.is_empty() {
             cmd.extend_from_slice(&["--reasoning-budget".into(), config.reasoning_budget.clone()]);
         }
@@ -323,8 +336,8 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
             let re = format!("{{\"reasoning_effort\": \"{}\"}}", config.reasoning_effort);
             cmd.extend_from_slice(&["--chat-template-kwargs".into(), re]);
         }
-        if config.jinja {
-            cmd.push("--jinja".into());
+        if !config.jinja {
+            cmd.push("--no-jinja".into());
         }
         if !config.grammar_file.is_empty() {
             cmd.extend_from_slice(&["--grammar-file".into(), config.grammar_file.clone()]);
@@ -355,8 +368,8 @@ fn append_context_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
     if config.parallel > 0 || config.parallel == -1 {
         cmd.extend_from_slice(&["-np".into(), config.parallel.to_string()]);
     }
-    if config.cont_batching {
-        cmd.push("-cb".into());
+    if !config.cont_batching {
+        cmd.push("--no-cont-batching".into());
     }
     if !is_emb && !config.cache_prompt {
         cmd.push("--no-cache-prompt".into());
@@ -368,24 +381,24 @@ fn append_context_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
         cmd.extend_from_slice(&["--threads-http".into(), config.threads_http.to_string()]);
     }
     if !is_emb {
-        if config.keep > 0 {
+        if config.keep != 0 {
             cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
         }
         if config.cache_reuse > 0 {
             cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
         }
-        if config.cache_ram > 0 {
+        if config.cache_ram != 8192 {
             cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
         }
     }
-    if config.warmup {
-        cmd.push("--warmup".into());
+    if !config.warmup {
+        cmd.push("--no-warmup".into());
     }
     if !is_emb {
         if config.ctx_checkpoints != 32 {
             cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
         }
-        if config.checkpoint_min_step > 0 {
+        if config.checkpoint_min_step != 8192 {
             cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
         }
         if config.swa_full {
@@ -462,8 +475,13 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     if config.direct_io {
         cmd.push("--direct-io".into());
     }
-    if config.numa {
-        cmd.extend_from_slice(&["--numa".into(), "distribute".into()]);
+    let numa_mode = if config.numa_mode.is_empty() && config.numa {
+        "distribute"
+    } else {
+        config.numa_mode.as_str()
+    };
+    if !numa_mode.is_empty() {
+        cmd.extend_from_slice(&["--numa".into(), numa_mode.into()]);
     }
     if config.check_tensors {
         cmd.push("--check-tensors".into());
@@ -471,14 +489,21 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     if config.perf {
         cmd.push("--perf".into());
     }
-    if config.fit {
-        cmd.extend_from_slice(&["--fit".into(), "on".into()]);
+    let fit_mode = if config.fit_mode.is_empty() && config.fit {
+        "on"
+    } else {
+        config.fit_mode.as_str()
+    };
+    if matches!(fit_mode, "on" | "off") {
+        cmd.extend_from_slice(&["--fit".into(), fit_mode.into()]);
     }
-    if !config.fit_target.is_empty() {
-        cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]);
-    }
-    if config.fit_ctx != 4096 {
-        cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
+    if fit_mode != "off" {
+        if !config.fit_target.is_empty() {
+            cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]);
+        }
+        if config.fit_ctx != 4096 {
+            cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
+        }
     }
 }
 
@@ -498,8 +523,15 @@ fn append_kv_cache_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<St
             cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]);
         }
     }
-    if config.kv_unified {
-        cmd.push("--kv-unified".into());
+    let kv_unified_mode = if config.kv_unified_mode.is_empty() && config.kv_unified {
+        "on"
+    } else {
+        config.kv_unified_mode.as_str()
+    };
+    match kv_unified_mode {
+        "on" => cmd.push("--kv-unified".into()),
+        "off" => cmd.push("--no-kv-unified".into()),
+        _ => {}
     }
     if config.no_kv_offload {
         cmd.push("--no-kv-offload".into());
@@ -535,7 +567,7 @@ fn append_speculative_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec
         if !config.draft_model_path.is_empty() {
             cmd.extend_from_slice(&["-md".into(), config.draft_model_path.clone()]);
         }
-        if config.draft_gpu_layers > 0 && config.draft_gpu_layers < 99 {
+        if config.draft_gpu_layers != 99 {
             cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]);
         }
         if config.draft_tokens > 0 {
@@ -619,6 +651,20 @@ fn append_network_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
     if !config.api_prefix.is_empty() {
         cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]);
     }
+    if !config.cors_origins.is_empty() {
+        cmd.extend_from_slice(&["--cors-origins".into(), config.cors_origins.clone()]);
+    }
+    if !config.cors_methods.is_empty() {
+        cmd.extend_from_slice(&["--cors-methods".into(), config.cors_methods.clone()]);
+    }
+    if !config.cors_headers.is_empty() {
+        cmd.extend_from_slice(&["--cors-headers".into(), config.cors_headers.clone()]);
+    }
+    match config.cors_credentials.as_str() {
+        "on" => cmd.push("--cors-credentials".into()),
+        "off" => cmd.push("--no-cors-credentials".into()),
+        _ => {}
+    }
     if !is_emb {
         if !config.ui_config_file.is_empty() {
             cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]);
@@ -649,11 +695,8 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
             cmd.push("--reranking".into());
         }
     } else {
-        if config.n_predict > 0 {
+        if config.n_predict != -1 {
             cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]);
-        } else if config.n_predict == 0 {
-        } else {
-            cmd.extend_from_slice(&["-n".into(), "-1".into()]);
         }
         if config.ignore_eos {
             cmd.push("--ignore-eos".into());
@@ -664,37 +707,37 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         if !config.json_schema_file.is_empty() {
             cmd.extend_from_slice(&["-jf".into(), config.json_schema_file.clone()]);
         }
-        if config.temp > 0.0 {
+        if (config.temp - 0.8).abs() > f32::EPSILON {
             cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]);
         }
-        if config.top_k > 0 {
+        if config.top_k != 40 {
             cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]);
         }
-        if config.top_p > 0.0 {
+        if (config.top_p - 0.95).abs() > f32::EPSILON {
             cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]);
         }
-        if config.repeat_penalty > 0.0 {
+        if (config.repeat_penalty - 1.0).abs() > f32::EPSILON {
             cmd.extend_from_slice(&["--repeat-penalty".into(), config.repeat_penalty.to_string()]);
         }
-        if config.seed >= 0 {
+        if config.seed != -1 {
             cmd.extend_from_slice(&["--seed".into(), config.seed.to_string()]);
         }
-        if config.min_p > 0.0 {
+        if (config.min_p - 0.05).abs() > f32::EPSILON {
             cmd.extend_from_slice(&["--min-p".into(), config.min_p.to_string()]);
         }
-        if config.presence_penalty > 0.0 {
+        if config.presence_penalty.abs() > f32::EPSILON {
             cmd.extend_from_slice(&[
                 "--presence-penalty".into(),
                 config.presence_penalty.to_string(),
             ]);
         }
-        if config.frequency_penalty > 0.0 {
+        if config.frequency_penalty.abs() > f32::EPSILON {
             cmd.extend_from_slice(&[
                 "--frequency-penalty".into(),
                 config.frequency_penalty.to_string(),
             ]);
         }
-        if config.repeat_last_n > 0 {
+        if config.repeat_last_n != 64 {
             cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]);
         }
         if !config.reverse_prompt.is_empty() {
@@ -713,10 +756,10 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         // Advanced sampling
         if config.mirostat > 0 {
             cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]);
-            if config.mirostat_lr > 0.0 {
+            if (config.mirostat_lr - 0.1).abs() > f32::EPSILON {
                 cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]);
             }
-            if config.mirostat_ent > 0.0 {
+            if (config.mirostat_ent - 5.0).abs() > f32::EPSILON {
                 cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]);
             }
         }
@@ -725,7 +768,7 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
                 "--xtc-probability".into(),
                 config.xtc_probability.to_string(),
             ]);
-            if config.xtc_threshold > 0.0 {
+            if (config.xtc_threshold - 0.1).abs() > f32::EPSILON {
                 cmd.extend_from_slice(&[
                     "--xtc-threshold".into(),
                     config.xtc_threshold.to_string(),
@@ -734,25 +777,25 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         }
         if config.dynatemp_range > 0.0 {
             cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]);
-            if config.dynatemp_exp > 0.0 {
+            if (config.dynatemp_exp - 1.0).abs() > f32::EPSILON {
                 cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]);
             }
         }
-        if config.typical_p < 1.0 && config.typical_p > 0.0 {
+        if (config.typical_p - 1.0).abs() > f32::EPSILON {
             cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]);
         }
         if config.dry_multiplier > 0.0 {
             cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]);
-            if config.dry_base > 0.0 {
+            if (config.dry_base - 1.75).abs() > f32::EPSILON {
                 cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]);
             }
-            if config.dry_allowed_length > 0 {
+            if config.dry_allowed_length != 2 {
                 cmd.extend_from_slice(&[
                     "--dry-allowed-length".into(),
                     config.dry_allowed_length.to_string(),
                 ]);
             }
-            if config.dry_penalty_last_n > 0 {
+            if config.dry_penalty_last_n != -1 {
                 cmd.extend_from_slice(&[
                     "--dry-penalty-last-n".into(),
                     config.dry_penalty_last_n.to_string(),
@@ -765,12 +808,12 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
                 ]);
             }
         }
-        if config.adaptive_target > 0.0 {
+        if (config.adaptive_target + 1.0).abs() > f32::EPSILON {
             cmd.extend_from_slice(&[
                 "--adaptive-target".into(),
                 config.adaptive_target.to_string(),
             ]);
-            if config.adaptive_decay > 0.0 {
+            if (config.adaptive_decay - 0.9).abs() > f32::EPSILON {
                 cmd.extend_from_slice(&[
                     "--adaptive-decay".into(),
                     config.adaptive_decay.to_string(),
@@ -819,11 +862,14 @@ fn append_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Stri
         if !config.slot_save_path.is_empty() {
             cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]);
         }
+        if !config.log_prompts_dir.is_empty() {
+            cmd.extend_from_slice(&["--log-prompts-dir".into(), config.log_prompts_dir.clone()]);
+        }
         if (config.slot_prompt_similarity - 0.1).abs() > f32::EPSILON {
             cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
         }
-        if config.prefill_assistant {
-            cmd.push("--prefill-assistant".into());
+        if !config.prefill_assistant {
+            cmd.push("--no-prefill-assistant".into());
         }
     }
 }
@@ -854,8 +900,8 @@ fn append_extended_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut
         if config.models_max != 4 {
             cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
         }
-        if config.models_autoload {
-            cmd.push("--models-autoload".into());
+        if !config.models_autoload {
+            cmd.push("--no-models-autoload".into());
         }
         if config.image_min_tokens > 0 {
             cmd.extend_from_slice(&[
@@ -2960,6 +3006,139 @@ mod perf_parser_tests {
             custom_args: vec!["--temp 1.5".into()],
             ..InstanceConfig::default()
         }
+    }
+
+    fn has_flag_value(command: &[String], flag: &str, value: &str) -> bool {
+        command
+            .windows(2)
+            .any(|arguments| arguments[0] == flag && arguments[1] == value)
+    }
+
+    #[test]
+    fn upstream_defaults_do_not_emit_redundant_overrides() {
+        let command = generate_normalized_command(&InstanceConfig::default(), "llama-server");
+
+        for flag in [
+            "-cram",
+            "-cms",
+            "--fit",
+            "--jinja",
+            "--no-jinja",
+            "--warmup",
+            "--no-warmup",
+            "-cb",
+            "--no-cont-batching",
+            "--prefill-assistant",
+            "--no-prefill-assistant",
+            "--models-autoload",
+            "--no-models-autoload",
+            "-n",
+            "--temp",
+            "--top-k",
+            "--min-p",
+        ] {
+            assert!(
+                !command.iter().any(|argument| argument == flag),
+                "default command unexpectedly contains {flag}: {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_zero_negative_and_default_true_overrides_reach_llama_server() {
+        let config = InstanceConfig {
+            model_path: "C:/models/chat.gguf".into(),
+            reasoning_preserve: "off".into(),
+            jinja: false,
+            cont_batching: false,
+            keep: -1,
+            cache_ram: 0,
+            warmup: false,
+            checkpoint_min_step: 0,
+            numa_mode: "isolate".into(),
+            fit_mode: "off".into(),
+            kv_unified_mode: "off".into(),
+            mmproj_mode: "off".into(),
+            spec_type: "draft-simple".into(),
+            draft_gpu_layers: 0,
+            cors_origins: "https://example.test".into(),
+            cors_methods: "GET, POST".into(),
+            cors_headers: "Authorization, Content-Type".into(),
+            cors_credentials: "off".into(),
+            n_predict: 0,
+            temp: 0.0,
+            top_k: 0,
+            min_p: 0.0,
+            presence_penalty: -0.5,
+            frequency_penalty: -0.25,
+            repeat_last_n: 0,
+            dry_multiplier: 1.0,
+            dry_penalty_last_n: 0,
+            adaptive_target: 0.0,
+            prefill_assistant: false,
+            log_prompts_dir: "C:/logs/prompts".into(),
+            models_autoload: false,
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+
+        for flag in [
+            "--no-reasoning-preserve",
+            "--no-jinja",
+            "--no-cont-batching",
+            "--no-warmup",
+            "--no-cors-credentials",
+            "--no-kv-unified",
+            "--no-mmproj",
+            "--no-prefill-assistant",
+            "--no-models-autoload",
+        ] {
+            assert!(
+                command.iter().any(|argument| argument == flag),
+                "missing {flag}"
+            );
+        }
+        for (flag, value) in [
+            ("--keep", "-1"),
+            ("-cram", "0"),
+            ("-cms", "0"),
+            ("--numa", "isolate"),
+            ("--fit", "off"),
+            ("-ngld", "0"),
+            ("--cors-origins", "https://example.test"),
+            ("--cors-methods", "GET, POST"),
+            ("--cors-headers", "Authorization, Content-Type"),
+            ("-n", "0"),
+            ("--temp", "0"),
+            ("--top-k", "0"),
+            ("--min-p", "0"),
+            ("--presence-penalty", "-0.5"),
+            ("--frequency-penalty", "-0.25"),
+            ("--repeat-last-n", "0"),
+            ("--dry-penalty-last-n", "0"),
+            ("--adaptive-target", "0"),
+            ("--log-prompts-dir", "C:/logs/prompts"),
+        ] {
+            assert!(
+                has_flag_value(&command, flag, value),
+                "missing {flag} {value}: {command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedding_normalization_accepts_all_official_normalization_modes() {
+        let command = generate_normalized_command(
+            &InstanceConfig {
+                model_path: "C:/models/embedding.gguf".into(),
+                embedding: true,
+                embd_normalize: -1,
+                ..InstanceConfig::default()
+            },
+            "llama-server",
+        );
+
+        assert!(has_flag_value(&command, "--embd-normalize", "-1"));
     }
 
     #[test]

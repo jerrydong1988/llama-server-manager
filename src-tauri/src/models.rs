@@ -119,6 +119,7 @@ pub struct InstanceConfig {
     pub reasoning_format: String,
     pub reasoning_effort: String,
     pub reasoning: String,
+    pub reasoning_preserve: String,
     pub jinja: bool,
     pub reasoning_budget: String,
     #[serde(default)]
@@ -141,7 +142,7 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub threads_http: i32,
     #[serde(default)]
-    pub keep: u32,
+    pub keep: i32,
     #[serde(default)]
     pub cache_reuse: u32,
     #[serde(default)]
@@ -184,6 +185,7 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub direct_io: bool,
     pub numa: bool,
+    pub numa_mode: String,
     pub context_shift: bool,
     #[serde(default)]
     pub check_tensors: bool,
@@ -191,12 +193,14 @@ pub struct InstanceConfig {
     pub perf: bool,
     #[serde(default)]
     pub fit: bool,
+    pub fit_mode: String,
     #[serde(default)]
     pub fit_target: String,
     #[serde(default = "default_fit_ctx")]
     pub fit_ctx: u32,
     #[serde(default)]
     pub kv_unified: bool,
+    pub kv_unified_mode: String,
     #[serde(default)]
     pub cache_idle_slots: bool,
     #[serde(default)]
@@ -252,6 +256,10 @@ pub struct InstanceConfig {
     pub path_prefix: String,
     #[serde(default)]
     pub api_prefix: String,
+    pub cors_origins: String,
+    pub cors_methods: String,
+    pub cors_headers: String,
+    pub cors_credentials: String,
     pub no_ui: bool,
     #[serde(default)]
     pub offline: bool,
@@ -266,7 +274,7 @@ pub struct InstanceConfig {
     pub embedding: bool,
     pub pooling: String,
     #[serde(default)]
-    pub embd_normalize: u32,
+    pub embd_normalize: i32,
     pub reranking: bool,
     #[serde(default)]
     pub metrics: bool,
@@ -276,6 +284,7 @@ pub struct InstanceConfig {
     pub slots_enabled: bool,
     #[serde(default)]
     pub slot_save_path: String,
+    pub log_prompts_dir: String,
     #[serde(default)]
     pub slot_prompt_similarity: f32,
     pub prefill_assistant: bool,
@@ -292,6 +301,7 @@ pub struct InstanceConfig {
     pub mmproj_url: String,
     #[serde(default)]
     pub mmproj_auto: bool,
+    pub mmproj_mode: String,
     #[serde(default)]
     pub no_mmproj: bool,
     #[serde(default)]
@@ -388,6 +398,7 @@ impl Default for InstanceConfig {
             reasoning_format: String::new(),
             reasoning_effort: String::new(),
             reasoning: String::new(),
+            reasoning_preserve: String::new(),
             jinja: true,
             reasoning_budget: String::new(),
             reasoning_budget_message: String::new(),
@@ -410,7 +421,7 @@ impl Default for InstanceConfig {
             cache_ram: 8192,
             warmup: true,
             ctx_checkpoints: 32,
-            checkpoint_min_step: 256,
+            checkpoint_min_step: 8192,
             swa_full: false,
             rope_scaling: String::new(),
             rope_scale: 0.0,
@@ -429,13 +440,16 @@ impl Default for InstanceConfig {
             no_repack: false,
             direct_io: false,
             numa: false,
+            numa_mode: String::new(),
             context_shift: false,
             perf: false,
             check_tensors: false,
             fit: false,
+            fit_mode: String::new(),
             fit_target: String::new(),
             fit_ctx: 4096,
             kv_unified: false,
+            kv_unified_mode: String::new(),
             cache_idle_slots: true,
             no_kv_offload: false,
             cache_type_k: String::new(),
@@ -469,6 +483,10 @@ impl Default for InstanceConfig {
             ssl_cert_file: String::new(),
             path_prefix: String::new(),
             api_prefix: String::new(),
+            cors_origins: String::new(),
+            cors_methods: String::new(),
+            cors_headers: String::new(),
+            cors_credentials: String::new(),
             no_ui: false,
             offline: false,
             ui_config_file: String::new(),
@@ -483,6 +501,7 @@ impl Default for InstanceConfig {
             props: false,
             slots_enabled: true,
             slot_save_path: String::new(),
+            log_prompts_dir: String::new(),
             slot_prompt_similarity: 0.1,
             prefill_assistant: true,
             models_dir: String::new(),
@@ -491,6 +510,7 @@ impl Default for InstanceConfig {
             models_autoload: true,
             mmproj_url: String::new(),
             mmproj_auto: false,
+            mmproj_mode: String::new(),
             no_mmproj: false,
             no_mmproj_offload: false,
             image_min_tokens: 0,

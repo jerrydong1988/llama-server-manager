@@ -53,14 +53,17 @@ const VECTOR_ALLOWED_FIELDS: &[&str] = &[
     "no_repack",
     "direct_io",
     "numa",
+    "numa_mode",
     "perf",
     "check_tensors",
     "fit",
+    "fit_mode",
     "fit_target",
     "fit_ctx",
     "cache_type_k",
     "cache_type_v",
     "kv_unified",
+    "kv_unified_mode",
     "cache_idle_slots",
     "no_kv_offload",
     "device",
@@ -76,6 +79,10 @@ const VECTOR_ALLOWED_FIELDS: &[&str] = &[
     "ssl_cert_file",
     "path_prefix",
     "api_prefix",
+    "cors_origins",
+    "cors_methods",
+    "cors_headers",
+    "cors_credentials",
     "no_ui",
     "offline",
     "metrics",
@@ -345,6 +352,9 @@ mod tests {
             ubatch_size: 512,
             spec_type: "draft-mtp".into(),
             cache_type_draft_k: "q8_0".into(),
+            reasoning_preserve: "on".into(),
+            log_prompts_dir: "C:/logs/prompts".into(),
+            cors_origins: "localhost".into(),
             custom_args: vec!["--temp 1.5".into()],
             ..InstanceConfig::default()
         };
@@ -356,6 +366,9 @@ mod tests {
         assert_eq!(normalized.config.batch_size, 512);
         assert!(normalized.config.spec_type.is_empty());
         assert!(normalized.config.cache_type_draft_k.is_empty());
+        assert!(normalized.config.reasoning_preserve.is_empty());
+        assert!(normalized.config.log_prompts_dir.is_empty());
+        assert_eq!(normalized.config.cors_origins, "localhost");
         assert!(normalized.config.custom_args.is_empty());
 
         let reranker = normalize_for_launch(InstanceConfig {

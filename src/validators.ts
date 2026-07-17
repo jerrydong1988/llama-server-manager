@@ -15,10 +15,11 @@ export const KNOWN_FLAGS = new Set([
   '--mmproj', '--mmproj-url', '--mmproj-auto', '--no-mmproj', '--no-mmproj-offload',
   '--chat-template', '--chat-template-file', '--skip-chat-parsing',
   '--reasoning-format', '--reasoning', '--reasoning-budget', '--reasoning-budget-message',
-  '--chat-template-kwargs', '--jinja', '--grammar-file', '--grammar',
+  '--reasoning-preserve', '--no-reasoning-preserve',
+  '--chat-template-kwargs', '--jinja', '--no-jinja', '--grammar-file', '--grammar',
   // Performance & Context
-  '-c', '-ngl', '-t', '-b', '-ub', '-np', '-cb', '--no-cache-prompt',
-  '--threads-batch', '--threads-http', '--keep', '--cache-reuse', '-cram', '--warmup',
+  '-c', '-ngl', '-t', '-b', '-ub', '-np', '-cb', '--no-cont-batching', '--no-cache-prompt',
+  '--threads-batch', '--threads-http', '--keep', '--cache-reuse', '-cram', '--warmup', '--no-warmup',
   '-ctxcp', '-cms', '--swa-full',
   // RoPE / YaRN
   '--rope-scaling', '--rope-scale', '--rope-freq-base', '--rope-freq-scale',
@@ -27,20 +28,22 @@ export const KNOWN_FLAGS = new Set([
   '-fa', '--n-cpu-moe', '--cpu-moe', '-cmoe', '--mlock', '--no-mmap', '--no-repack', '--numa',
   '--check-tensors', '--perf', '--fit', '-fitt', '-fitc', '--direct-io', '-dio',
   // KV Cache
-  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-offload', '--no-cache-idle-slots',
+  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-unified', '--no-kv-offload', '--no-cache-idle-slots',
   // GPU & Device
   '-dev', '-sm', '-ts', '-mg', '--override-kv',
   // Server & Network
   '--host', '--port', '--api-key', '--api-key-file',
   '--ssl-key-file', '--ssl-cert-file', '--path', '--api-prefix',
+  '--cors-origins', '--cors-methods', '--cors-headers', '--cors-credentials', '--no-cors-credentials',
   '--no-ui', '--offline', '--ui-config-file', '--ui-config', '--ui-mcp-proxy', '--agent', '-ag',
   // Embedding & Generation
   '--embedding', '--pooling', '--embd-normalize', '--reranking',
   // Server features
-  '--metrics', '--props', '--no-slots', '--slot-save-path', '-sps', '--prefill-assistant',
+  '--metrics', '--props', '--no-slots', '--slot-save-path', '--log-prompts-dir', '-sps',
+  '--prefill-assistant', '--no-prefill-assistant',
   '--rpc', '--sse-ping-interval', '--reuse-port',
   // Multi-Model & Media
-  '--models-dir', '--models-preset', '--models-max', '--models-autoload',
+  '--models-dir', '--models-preset', '--models-max', '--models-autoload', '--no-models-autoload',
   '--image-min-tokens', '--image-max-tokens', '--mtmd-batch-max-tokens', '--tags', '--media-path', '--tools',
   // Generation
   '-n', '--ignore-eos', '--json-schema', '-jf',
@@ -104,7 +107,8 @@ export function validateConfig(
     (config.reasoning_effort && config.reasoning_effort !== '') ||
     (config.reasoning_format && config.reasoning_format !== '' && config.reasoning_format !== 'none') ||
     (config.reasoning_budget && config.reasoning_budget !== '') ||
-    (config.reasoning_budget_message && config.reasoning_budget_message !== '')
+    (config.reasoning_budget_message && config.reasoning_budget_message !== '') ||
+    (config.reasoning_preserve && config.reasoning_preserve !== '')
   ))
     w.push({ field: 'reasoning', severity: 'high', key: 'warnA1' })
 
@@ -204,7 +208,7 @@ export function validateConfig(
   // Group B: redundant or meaningless settings.
 
   // B2: cache_ram or cache_reuse is set while cache_prompt is disabled.
-  if ((config.cache_ram > 0 || config.cache_reuse > 0) && !config.cache_prompt)
+  if ((config.cache_ram !== 0 || config.cache_reuse > 0) && !config.cache_prompt)
     w.push({ field: 'cache_prompt', severity: 'low', key: 'warnB2' })
 
   // B3: slot-related parameters are set while slots_enabled is disabled.
@@ -240,8 +244,8 @@ export function validateConfig(
       (!config.spec_type || !config.spec_type.includes('ngram')))
     w.push({ field: 'lookup_cache_static', severity: 'low', key: 'warnB9' })
 
-  // B10: --no-mmproj and --mmproj are both set.
-  if (config.no_mmproj && config.mmproj_path)
+  // B10: --no-mmproj and --mmproj are both set (new tri-state or legacy boolean).
+  if ((config.mmproj_mode === 'off' || (!config.mmproj_mode && config.no_mmproj)) && config.mmproj_path)
     w.push({ field: 'no_mmproj', severity: 'low', key: 'warnB10' })
 
   // B11: json_schema and json_schema_file are both set.

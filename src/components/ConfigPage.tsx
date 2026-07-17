@@ -130,6 +130,8 @@ const ConfigPage = () => {
   const modelWorkloadLocked = useMemo(() => (
     local ? isModelWorkloadLocked(currentModel, local.model_path) : false
   ), [currentModel, local?.model_path])
+  const labels = useMemo(() => getConfigPageLabels(lang), [lang])
+  const quickTemplates = useMemo(() => getConfigTemplates(lang), [lang])
 
   if (!local) {
     return (
@@ -243,7 +245,6 @@ const ConfigPage = () => {
   }
 
   const pickerTrees = modelDirs.map(dir => buildPickerTree(dir, models))
-  const labels = useMemo(() => getConfigPageLabels(lang), [lang])
 
   const vectorCleanupGroups: Array<{ group: VectorCleanupChange['group']; label: string }> = [
     { group: 'speculative', label: t.configPage.vectorCleanupSpeculative },
@@ -280,8 +281,6 @@ const ConfigPage = () => {
     ...(!currentEngine ? [{ tone: 'amber', text: labels.missingEngine }] : []),
     ...(liveWarnings.length > 0 ? [{ tone: liveWarnings.some(warning => warning.severity === 'high') ? 'red' : 'amber', text: `${liveWarnings.length} ${labels.liveWarnings}` }] : []),
   ]
-  const quickTemplates = useMemo(() => getConfigTemplates(lang), [lang])
-
   const selectedTemplate = quickTemplates.find(template => template.id === selectedTemplateId) ?? quickTemplates[0]
   const selectedTemplateChanges = selectedTemplate ? getTemplateChanges(local, selectedTemplate.changes, t, labels) : []
   const selectedTemplateGroups = groupTemplateChanges(selectedTemplateChanges, [
