@@ -22,9 +22,17 @@ The application uses three complementary controls so parameter support does not 
 
 探测不经过 Shell，只直接执行 `--version` 和 `--help`；同时限制执行时间和输出容量，在 Windows 隐藏控制台，并持续排空输出管道。结果绑定二进制指纹，文件变化后自动失效。
 
-只有完整的 `detected` 结果会启用强制拦截。结果不完整、超时、失败、离线或旧数据状态不会阻止使用，并保留原始启动错误。确认支持情况后，程序会在保存配置和启动进程前两次拦截当前引擎不支持的活动参数。
+版本识别与参数能力相互独立。程序只接受 `version:`、`llama-server version` 或 `llama.cpp version` 等明确版本行；初始化日志不会被当作版本。未能识别标准版本号时会显示提醒，但只要 `--help` 能力完整，参数仍按实际能力严格校验。
 
-Scanning never executes every discovered binary. Probes run only for explicitly selected engines, without a shell, with time and output limits. Complete results enforce compatibility at save and launch; unknown results preserve the original startup path.
+参数能力分为三档：
+
+- `detected`：生成完整命令，并在保存配置和启动进程前拦截不受支持的活动参数。
+- `partial`：完整配置继续保留，命令仅传递已识别参数以及模型、地址端口、工作模式和认证等必要参数。
+- `unprobed`、`timeout` 或 `failed`：完整配置继续保留，启动时使用最小必要命令；批量参数预设暂不启用。
+
+保守模式不会静默删除配置。更换回能力完整的引擎后，原有参数可以重新参与校验和命令生成。Embedding 与 Reranker 的工作模式参数以及认证/TLS 等安全参数不会因保守模式被静默移除。
+
+Scanning never executes every discovered binary. Probes run only for explicitly selected engines, without a shell, with time and output limits. Version recognition is independent from parameter capability detection. Complete results enforce compatibility at save and launch; partial results retain recognized and essential flags; unknown results use a minimal command without deleting saved configuration.
 
 ## 上游监控 / Upstream Watcher
 

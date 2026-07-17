@@ -43,9 +43,12 @@ export interface EngineInfo {
 }
 
 export type EngineCapabilityStatus = 'unprobed' | 'detected' | 'partial' | 'timeout' | 'failed'
+export type EngineVersionStatus = 'unprobed' | 'detected' | 'unknown'
 
 export interface EngineCapabilities {
   status: EngineCapabilityStatus | string
+  versionStatus?: EngineVersionStatus | string
+  versionProbeDetail?: string
   supportedFlags: string[]
   helpHash: string
   executableFingerprint: string

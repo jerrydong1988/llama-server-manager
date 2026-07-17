@@ -1,10 +1,10 @@
 use crate::commands::adlx;
 use crate::commands::engine_capabilities::{
-    capabilities_match_executable, unsupported_command_flags,
+    capabilities_match_executable, command_for_capabilities, unsupported_command_flags,
 };
 use crate::commands::nvml;
 use crate::error::{AppError, AppResult};
-use crate::models::{AppState, InstanceConfig, RunningInstance, SystemMetrics};
+use crate::models::{AppState, EngineCapabilities, InstanceConfig, RunningInstance, SystemMetrics};
 use crate::vector_policy::{normalize_for_launch, ModelWorkload};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -979,6 +979,24 @@ fn prepare_launch(
     (config, workload, command)
 }
 
+fn trusted_engine_capabilities(
+    state: &AppState,
+    config: &InstanceConfig,
+    engine_exe: &str,
+) -> Option<EngineCapabilities> {
+    state
+        .engines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|engine| {
+            engine.id == config.engine_id
+                || std::path::Path::new(&engine.exe) == std::path::Path::new(engine_exe)
+        })
+        .map(|engine| engine.capabilities.clone())
+        .filter(|capabilities| capabilities_match_executable(engine_exe, capabilities))
+}
+
 fn reserve_start_slot(
     running: &std::collections::HashMap<String, RunningInstance>,
     starting: &mut std::collections::HashSet<String>,
@@ -1017,8 +1035,11 @@ fn reserve_instance_start<'a>(
 pub async fn generate_server_command(
     config: InstanceConfig,
     engine_exe: String,
+    state: tauri::State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
-    Ok(generate_command(&config, &engine_exe))
+    let capabilities = trusted_engine_capabilities(state.inner(), &config, &engine_exe);
+    let command = generate_command(&config, &engine_exe);
+    Ok(command_for_capabilities(&command, capabilities.as_ref()))
 }
 
 #[tauri::command]
@@ -1031,21 +1052,10 @@ pub async fn start_server(
     app: tauri::AppHandle,
 ) -> AppResult<()> {
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
-    let (config, workload, cmd) = prepare_launch(config, &engine_exe);
-    let engine_capabilities = state
-        .engines
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|engine| {
-            engine.id == config.engine_id
-                || std::path::Path::new(&engine.exe) == std::path::Path::new(&engine_exe)
-        })
-        .map(|engine| engine.capabilities.clone());
-    if let Some(capabilities) = engine_capabilities
-        .filter(|capabilities| capabilities_match_executable(&engine_exe, capabilities))
-    {
-        let unsupported = unsupported_command_flags(&cmd, &capabilities);
+    let (config, workload, generated_cmd) = prepare_launch(config, &engine_exe);
+    let engine_capabilities = trusted_engine_capabilities(state.inner(), &config, &engine_exe);
+    if let Some(capabilities) = engine_capabilities.as_ref() {
+        let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
         if !unsupported.is_empty() {
             return Err(AppError::new(
                 "ENGINE_PARAMETER_UNSUPPORTED",
@@ -1057,6 +1067,7 @@ pub async fn start_server(
             ));
         }
     }
+    let cmd = command_for_capabilities(&generated_cmd, engine_capabilities.as_ref());
     let cmd_str = cmd.join(" ");
     let cmd_display = mask_api_key_in_cmd(&cmd_str);
 
@@ -3170,12 +3181,8 @@ mod perf_parser_tests {
     }
 
     #[test]
-    fn generate_server_command_uses_launch_normalization() {
-        let cmd = tauri::async_runtime::block_on(generate_server_command(
-            polluted_embedding_config(),
-            String::new(),
-        ))
-        .unwrap();
+    fn command_preview_uses_launch_normalization() {
+        let (_, _, cmd) = prepare_launch(polluted_embedding_config(), "");
 
         assert!(cmd.iter().any(|arg| arg == "--embedding"));
         assert!(cmd.windows(2).any(|args| args == ["-fa", "on"]));
@@ -3697,8 +3704,9 @@ pub mod ipc {
     pub async fn generate_server_command(
         config: InstanceConfig,
         engine_exe: String,
+        state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<Vec<String>> {
-        super::generate_server_command(config, engine_exe)
+        super::generate_server_command(config, engine_exe, state)
             .await
             .map_err(crate::error::AppError::from)
     }

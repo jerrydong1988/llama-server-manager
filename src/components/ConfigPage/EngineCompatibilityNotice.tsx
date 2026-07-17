@@ -1,6 +1,6 @@
 import { AlertTriangle, LoaderCircle } from 'lucide-react'
 import type { EngineInfo } from '../../store'
-import { normalizeEngineCapabilityStatus } from '../../engineCapabilities'
+import { normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../../engineCapabilities'
 import type { getConfigPageLabels } from '../../i18n/configPageCopy'
 
 type Props = {
@@ -36,13 +36,25 @@ export function EngineCompatibilityNotice({ engine, unsupportedFlags, probing, l
       </div>
     )
   }
-  if (!['unprobed', 'partial', 'timeout', 'failed'].includes(normalizeEngineCapabilityStatus(engine.capabilities))) {
-    return null
+  const capabilityStatus = normalizeEngineCapabilityStatus(engine.capabilities)
+  if (capabilityStatus !== 'detected') {
+    const message = capabilityStatus === 'partial'
+      ? labels.engineCompatibilityPartial
+      : labels.engineCompatibilityMinimal
+    return (
+      <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>{message}</span>
+      </div>
+    )
   }
-  return (
-    <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-      <span>{labels.engineCompatibilityUnknown}</span>
-    </div>
-  )
+  if (normalizeEngineVersionStatus(engine.capabilities) !== 'detected') {
+    return (
+      <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>{labels.engineVersionUnknown}</span>
+      </div>
+    )
+  }
+  return null
 }

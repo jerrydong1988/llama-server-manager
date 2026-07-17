@@ -254,15 +254,18 @@ export function getEngineLabels(lang: string) {
     search: zh ? '搜索引擎、后端、版本、路径...' : 'Search engines, backend, version, path...', allBackends: zh ? '所有后端' : 'All backends',
     emptyDescription: zh ? '添加引擎根目录并扫描，发现应用可启动的 server 二进制文件。' : 'Add an engine root directory and scan it to discover server binaries that the app can launch.',
     engine: zh ? '引擎' : 'Engine', backend: zh ? '后端' : 'Backend', version: zh ? '版本' : 'Version', actions: zh ? '操作' : 'Actions',
+    versionRecognition: zh ? '版本识别' : 'Version recognition', versionDetected: zh ? '已识别' : 'Detected',
+    versionUnknown: zh ? '未能识别版本' : 'Version not identified', versionUnprobed: zh ? '尚未探测' : 'Not probed',
+    versionUnknownWarning: zh ? '未能识别该引擎的标准版本号。参数兼容性将独立依据 --help 探测结果处理，请留意配置页中的命令预览和兼容性提示。' : 'The standard engine version could not be identified. Parameter compatibility is handled independently from --help; review the command preview and compatibility notice on the configuration page.',
     rename: zh ? '重命名引擎' : 'Rename engine', details: zh ? '引擎详情' : 'Engine Details',
     detailsDescription: zh ? '查看选中二进制及其在运行时栈中的角色。' : 'Inspect the selected binary and review its role in the runtime stack.',
     noSelection: zh ? '选择一个引擎后可在这里查看详情。' : 'Select an engine to inspect it here.',
     yes: zh ? '是' : 'Yes', no: zh ? '否' : 'No', scanRoot: zh ? '扫描根目录' : 'Scan root',
     compatibility: zh ? '参数兼容性' : 'Parameter compatibility', supportedFlags: zh ? '已识别参数' : 'Recognized flags',
-    lastProbe: zh ? '最近探测' : 'Last probe', never: zh ? '从未' : 'Never', probeNow: zh ? '探测参数能力' : 'Probe parameter capabilities',
+    lastProbe: zh ? '最近探测' : 'Last probe', never: zh ? '从未' : 'Never', probeNow: zh ? '探测版本与参数能力' : 'Probe version and parameter capabilities',
     probing: zh ? '正在探测...' : 'Probing...', capabilityDetected: zh ? '已确认' : 'Detected', capabilityUnprobed: zh ? '未探测' : 'Not probed',
     capabilityPartial: zh ? '结果不完整' : 'Partial', capabilityTimeout: zh ? '探测超时' : 'Timed out', capabilityFailed: zh ? '探测失败' : 'Failed',
-    probeFailed: zh ? '引擎参数能力探测失败：{error}' : 'Engine capability probe failed: {error}',
+    probeFailed: zh ? '引擎版本与参数能力探测失败：{error}' : 'Engine version and capability probe failed: {error}',
   }
 }
 

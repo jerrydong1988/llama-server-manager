@@ -86,6 +86,10 @@ pub struct ModelInfo {
 pub struct EngineCapabilities {
     #[serde(default = "default_engine_capability_status")]
     pub status: String,
+    #[serde(default = "default_engine_version_status")]
+    pub version_status: String,
+    #[serde(default)]
+    pub version_probe_detail: Option<String>,
     #[serde(default)]
     pub supported_flags: Vec<String>,
     #[serde(default)]
@@ -102,10 +106,16 @@ fn default_engine_capability_status() -> String {
     "unprobed".to_string()
 }
 
+fn default_engine_version_status() -> String {
+    "unprobed".to_string()
+}
+
 impl Default for EngineCapabilities {
     fn default() -> Self {
         Self {
             status: default_engine_capability_status(),
+            version_status: default_engine_version_status(),
+            version_probe_detail: None,
             supported_flags: Vec::new(),
             help_hash: String::new(),
             executable_fingerprint: String::new(),

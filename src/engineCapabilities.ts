@@ -4,6 +4,19 @@ export const normalizeEngineCapabilityStatus = (capabilities?: EngineCapabilitie
   capabilities?.status || 'unprobed'
 )
 
+export const normalizeEngineVersionStatus = (capabilities?: EngineCapabilities) => (
+  capabilities?.versionStatus || 'unprobed'
+)
+
+export type EngineCompatibilityMode = 'full' | 'recognized' | 'minimal'
+
+export const getEngineCompatibilityMode = (capabilities?: EngineCapabilities): EngineCompatibilityMode => {
+  const status = normalizeEngineCapabilityStatus(capabilities)
+  if (status === 'detected') return 'full'
+  if (status === 'partial') return 'recognized'
+  return 'minimal'
+}
+
 const commandFlag = (token: string) => {
   if (!token.startsWith('-')) return null
   const flag = token.split('=', 1)[0]

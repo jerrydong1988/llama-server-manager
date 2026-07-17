@@ -14,6 +14,7 @@ export type {
   EngineInfo,
   EngineCapabilities,
   EngineCapabilityStatus,
+  EngineVersionStatus,
   InstanceConfig,
   Instance,
   LogEntry,

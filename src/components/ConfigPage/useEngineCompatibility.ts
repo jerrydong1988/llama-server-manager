@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore, type EngineInfo, type InstanceConfig } from '../../store'
-import { findUnsupportedEngineFlags, normalizeEngineCapabilityStatus } from '../../engineCapabilities'
+import { findUnsupportedEngineFlags, normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../../engineCapabilities'
 
 type CompatibilityInput = {
   local: InstanceConfig | null
@@ -26,16 +26,17 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
   }, [])
 
   const status = normalizeEngineCapabilityStatus(currentEngine?.capabilities)
+  const versionStatus = normalizeEngineVersionStatus(currentEngine?.capabilities)
   const isTrustedSelection = Boolean(currentEngine && currentEngine.id === trustedEngineId)
   const capabilityProbeRequired = isTrustedSelection
-    && status === 'unprobed'
+    && (status === 'unprobed' || versionStatus === 'unprobed')
     && autoProbeFailedFor !== currentEngine?.id
 
   useEffect(() => {
     if (!currentEngine || !capabilityProbeRequired) {
       probeTargetRef.current = null
       setProbingEngineCompatibility(false)
-      if (status !== 'unprobed') setAutoProbeFailedFor(null)
+      if (status !== 'unprobed' && versionStatus !== 'unprobed') setAutoProbeFailedFor(null)
       return
     }
     if (probeInFlightRef.current.has(currentEngine.id)) {
@@ -60,7 +61,7 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
           setProbingEngineCompatibility(false)
         }
       })
-  }, [capabilityProbeRequired, currentEngine, probeEngineCapabilities, status])
+  }, [capabilityProbeRequired, currentEngine, probeEngineCapabilities, status, versionStatus])
 
   useEffect(() => {
     if (!local || !currentEngine || status !== 'detected') {

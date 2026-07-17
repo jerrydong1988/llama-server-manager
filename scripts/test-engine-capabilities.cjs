@@ -5,7 +5,7 @@ const esbuild = require('esbuild')
 
 const entry = `
   import assert from 'node:assert/strict'
-  import { findUnsupportedEngineFlags, normalizeEngineCapabilityStatus } from './src/engineCapabilities'
+  import { findUnsupportedEngineFlags, getEngineCompatibilityMode, normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from './src/engineCapabilities'
 
   const detected = {
     status: 'detected',
@@ -18,6 +18,11 @@ const entry = `
   assert.deepEqual(findUnsupportedEngineFlags(command, { ...detected, status: 'partial' }), [])
   assert.deepEqual(findUnsupportedEngineFlags(command, { ...detected, status: 'timeout' }), [])
   assert.equal(normalizeEngineCapabilityStatus(undefined), 'unprobed')
+  assert.equal(normalizeEngineVersionStatus(undefined), 'unprobed')
+  assert.equal(normalizeEngineVersionStatus({ ...detected, versionStatus: 'unknown' }), 'unknown')
+  assert.equal(getEngineCompatibilityMode(detected), 'full')
+  assert.equal(getEngineCompatibilityMode({ ...detected, status: 'partial' }), 'recognized')
+  assert.equal(getEngineCompatibilityMode({ ...detected, status: 'failed' }), 'minimal')
   console.log('engine capability frontend regression tests passed')
 `
 

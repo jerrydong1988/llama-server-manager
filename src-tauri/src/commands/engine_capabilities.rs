@@ -192,6 +192,34 @@ fn first_nonempty_line(output: &str) -> Option<String> {
     })
 }
 
+fn extract_engine_version(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let lowercase = trimmed.to_ascii_lowercase();
+        let payload = [
+            "version:",
+            "version =",
+            "llama-server version",
+            "llama.cpp version",
+        ]
+        .iter()
+        .find_map(|prefix| {
+            lowercase
+                .strip_prefix(prefix)
+                .map(|rest| rest.trim_start_matches([' ', ':', '=']).trim())
+        });
+        if !matches!(payload, Some(value) if !value.is_empty()) {
+            return None;
+        }
+        let sanitized = trimmed
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(160)
+            .collect::<String>();
+        (!sanitized.is_empty()).then_some(sanitized)
+    })
+}
+
 fn compact_error(message: impl Into<String>) -> String {
     message
         .into()
@@ -251,6 +279,11 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let help_output = run_bounded(&engine.exe, "--help");
     let supported_flags = extract_supported_flags(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
+    let fingerprint = executable_fingerprint(&engine.exe);
+    let detected_version = extract_engine_version(&version_output.text);
+    let preserve_existing_version = engine.capabilities.version_status == "detected"
+        && engine.capabilities.executable_fingerprint == fingerprint
+        && !engine.version.trim().is_empty();
 
     let mut errors = Vec::new();
     if version_output.timed_out {
@@ -272,18 +305,26 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         errors.push("llama-server help did not expose recognizable command-line flags".to_string());
     }
 
-    if let Some(version) = first_nonempty_line(&version_output.text) {
+    if let Some(version) = detected_version {
         engine.version = version;
+    } else if !preserve_existing_version {
+        engine.version.clear();
     }
     engine.capabilities = EngineCapabilities {
         status: status.to_string(),
+        version_status: if engine.version.trim().is_empty() {
+            "unknown".to_string()
+        } else {
+            "detected".to_string()
+        },
+        version_probe_detail: first_nonempty_line(&version_output.text),
         supported_flags,
         help_hash: if help_output.text.is_empty() {
             String::new()
         } else {
             help_hash(&help_output.text)
         },
-        executable_fingerprint: executable_fingerprint(&engine.exe),
+        executable_fingerprint: fingerprint,
         probed_at: Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -336,6 +377,68 @@ pub(crate) fn unsupported_command_flags(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
+}
+
+fn preserve_in_conservative_mode(flag: &str) -> bool {
+    matches!(
+        flag,
+        "-m" | "--model"
+            | "--host"
+            | "--port"
+            | "--embedding"
+            | "--reranking"
+            | "--pooling"
+            | "--api-key"
+            | "--api-key-file"
+            | "--ssl-key-file"
+            | "--ssl-cert-file"
+            | "--offline"
+            | "--no-ui"
+    )
+}
+
+pub(crate) fn command_for_capabilities(
+    command: &[String],
+    capabilities: Option<&EngineCapabilities>,
+) -> Vec<String> {
+    let Some(executable) = command.first() else {
+        return Vec::new();
+    };
+    if capabilities.is_some_and(|value| value.status == "detected") {
+        return command.to_vec();
+    }
+
+    let recognized = capabilities
+        .filter(|value| value.status == "partial")
+        .map(|value| {
+            value
+                .supported_flags
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut projected = vec![executable.clone()];
+    let mut index = 1;
+    while index < command.len() {
+        let token = &command[index];
+        let Some(flag) = command_flag(token) else {
+            index += 1;
+            continue;
+        };
+        let retain = preserve_in_conservative_mode(flag) || recognized.contains(flag);
+        if retain {
+            projected.push(token.clone());
+        }
+        index += 1;
+        while index < command.len() && command_flag(&command[index]).is_none() {
+            if retain {
+                projected.push(command[index].clone());
+            }
+            index += 1;
+        }
+    }
+    projected
 }
 
 pub async fn probe_engine_capabilities(
@@ -408,6 +511,24 @@ mod tests {
     }
 
     #[test]
+    fn version_extraction_skips_backend_logs_and_requires_a_version_marker() {
+        let output = "load_backend: loaded RPC backend\nversion: 9055 (8e52631d5)\nbuilt with MSVC";
+        assert_eq!(
+            extract_engine_version(output).as_deref(),
+            Some("version: 9055 (8e52631d5)")
+        );
+        assert_eq!(
+            extract_engine_version("ggml_cuda_init: found 1 device"),
+            None
+        );
+        assert_eq!(extract_engine_version("version:"), None);
+        assert_eq!(
+            extract_engine_version("llama-server version 1.2.3").as_deref(),
+            Some("llama-server version 1.2.3")
+        );
+    }
+
+    #[test]
     fn validates_only_detected_capabilities_and_deduplicates_flags() {
         let command = vec![
             "llama-server".to_string(),
@@ -426,6 +547,74 @@ mod tests {
         let mut unknown = detected(&["-m"]);
         unknown.status = "partial".to_string();
         assert!(unsupported_command_flags(&command, &unknown).is_empty());
+    }
+
+    #[test]
+    fn conservative_projection_keeps_only_recognized_and_essential_parameters() {
+        let command = vec![
+            "llama-server".to_string(),
+            "-m".to_string(),
+            "model.gguf".to_string(),
+            "-c".to_string(),
+            "8192".to_string(),
+            "--temp".to_string(),
+            "-1".to_string(),
+            "--future=value".to_string(),
+            "--host".to_string(),
+            "127.0.0.1".to_string(),
+            "--port".to_string(),
+            "8080".to_string(),
+        ];
+        let partial = EngineCapabilities {
+            status: "partial".to_string(),
+            supported_flags: vec!["-c".to_string()],
+            ..EngineCapabilities::default()
+        };
+        assert_eq!(
+            command_for_capabilities(&command, Some(&partial)),
+            vec![
+                "llama-server",
+                "-m",
+                "model.gguf",
+                "-c",
+                "8192",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8080",
+            ]
+        );
+    }
+
+    #[test]
+    fn minimal_projection_preserves_vector_mode_and_security_but_not_tuning() {
+        let command = vec![
+            "llama-server".to_string(),
+            "-m".to_string(),
+            "embedding.gguf".to_string(),
+            "-b".to_string(),
+            "2048".to_string(),
+            "--embedding".to_string(),
+            "--pooling".to_string(),
+            "rank".to_string(),
+            "--reranking".to_string(),
+            "--api-key".to_string(),
+            "secret".to_string(),
+        ];
+        assert_eq!(
+            command_for_capabilities(&command, None),
+            vec![
+                "llama-server",
+                "-m",
+                "embedding.gguf",
+                "--embedding",
+                "--pooling",
+                "rank",
+                "--reranking",
+                "--api-key",
+                "secret",
+            ]
+        );
     }
 
     #[test]

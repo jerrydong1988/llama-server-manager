@@ -20,7 +20,7 @@ import { pathBasename, pathDirname } from '../utils/path'
 import { formatHostPort } from '../utils/network'
 import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
-import { findUnsupportedEngineFlags, normalizeEngineCapabilityStatus } from '../engineCapabilities'
+import { findUnsupportedEngineFlags, getEngineCompatibilityMode, normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../engineCapabilities'
 import { _matchedElements } from './ConfigPage/shared'
 import { buildPickerTree, countActive, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, type PickerNode, type TemplateSnapshot } from './ConfigPage/configWorkspace'
 import { useEngineCompatibility } from './ConfigPage/useEngineCompatibility'
@@ -287,6 +287,8 @@ const ConfigPage = () => {
   const configChanges = getConfigChanges(local, savedBaseline, t, labels)
     .filter(change => !vectorCleanupKeys.has(change.key))
   const liveWarnings = validateConfig(local, currentModel, currentEngine)
+  const engineCompatibilityMode = getEngineCompatibilityMode(currentEngine?.capabilities)
+  const engineVersionStatus = normalizeEngineVersionStatus(currentEngine?.capabilities)
   const visibleWarnings = saved ? saveWarnings : liveWarnings
   const warningCounts = {
     high: liveWarnings.filter(warning => warning.severity === 'high').length,
@@ -297,6 +299,8 @@ const ConfigPage = () => {
     ...(!primaryModelPath ? [{ tone: 'red', text: labels.missingModel }] : []),
     ...(!currentEngine ? [{ tone: 'amber', text: labels.missingEngine }] : []),
     ...(unsupportedEngineFlags.length > 0 ? [{ tone: 'red', text: labels.engineCompatibilityBlocked }] : []),
+    ...(currentEngine && engineCompatibilityMode !== 'full' ? [{ tone: 'amber', text: labels.engineCompatibilityLimitedCheck }] : []),
+    ...(currentEngine && engineVersionStatus === 'unknown' ? [{ tone: 'amber', text: labels.engineVersionUnknownCheck }] : []),
     ...(liveWarnings.length > 0 ? [{ tone: liveWarnings.some(warning => warning.severity === 'high') ? 'red' : 'amber', text: `${liveWarnings.length} ${labels.liveWarnings}` }] : []),
   ]
   const selectedTemplate = quickTemplates.find(template => template.id === selectedTemplateId) ?? quickTemplates[0]
@@ -513,7 +517,13 @@ const ConfigPage = () => {
           <Surface className="p-5" data-guide="config-presets">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
-              <Button onClick={() => setShowPresetAssistant(true)} icon={<Sparkles className="h-4 w-4" />} className="shrink-0">
+              <Button
+                onClick={() => setShowPresetAssistant(true)}
+                disabled={engineCompatibilityMode !== 'full'}
+                title={engineCompatibilityMode !== 'full' ? labels.templateCompatibilityDisabled : undefined}
+                icon={<Sparkles className="h-4 w-4" />}
+                className="shrink-0"
+              >
                 {labels.openPresetAssistant}
               </Button>
             </div>

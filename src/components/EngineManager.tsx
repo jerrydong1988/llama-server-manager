@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Cpu, FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Search, ShieldCheck, Star, Trash2 } from 'lucide-react'
 import { confirm, open } from '@tauri-apps/plugin-dialog'
-import { useAppStore } from '../store'
+import { useAppStore, type EngineInfo } from '../store'
 import { formatMessage, useI18n } from '../i18n'
 import { getEngineLabels } from '../i18n/pageLabels'
-import { normalizeEngineCapabilityStatus } from '../engineCapabilities'
+import { normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../engineCapabilities'
 import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
 const backendTone = (backend: string) => {
@@ -160,6 +160,19 @@ const EngineManager = () => {
     if (status === 'failed') return labels.capabilityFailed
     return labels.capabilityUnprobed
   }
+
+  const versionStatusLabel = (engine: EngineInfo) => {
+    const status = normalizeEngineVersionStatus(engine.capabilities)
+    if (status === 'detected') return labels.versionDetected
+    if (status === 'unknown') return labels.versionUnknown
+    return labels.versionUnprobed
+  }
+
+  const versionLabel = (engine: EngineInfo) => (
+    normalizeEngineVersionStatus(engine.capabilities) === 'detected' && engine.version.trim()
+      ? engine.version
+      : versionStatusLabel(engine)
+  )
 
   return (
     <div className="space-y-5">
@@ -380,7 +393,7 @@ const EngineManager = () => {
                         </span>
                       </div>
                       <div className="min-w-0 self-center">
-                        <p className="truncate text-sm text-slate-300" title={engine.version}>{engine.version || '--'}</p>
+                        <p className="truncate text-sm text-slate-300" title={versionLabel(engine)}>{versionLabel(engine)}</p>
                         <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] ${capabilityTone(normalizeEngineCapabilityStatus(engine.capabilities))}`}>
                           {capabilityLabel(normalizeEngineCapabilityStatus(engine.capabilities))}
                         </span>
@@ -460,7 +473,8 @@ const EngineManager = () => {
               <InsetSurface className="space-y-3 p-4">
                 {[
                   [labels.backend, selectedEngine.backend],
-                  [labels.version, selectedEngine.version || '--'],
+                  [labels.version, versionLabel(selectedEngine)],
+                  [labels.versionRecognition, versionStatusLabel(selectedEngine)],
                   [labels.compatibility, capabilityLabel(normalizeEngineCapabilityStatus(selectedEngine.capabilities))],
                   [labels.supportedFlags, selectedEngine.capabilities?.supportedFlags?.length ?? 0],
                   [labels.lastProbe, selectedEngine.capabilities?.probedAt
@@ -483,6 +497,12 @@ const EngineManager = () => {
               {selectedEngine.capabilities?.error && (
                 <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
                   {selectedEngine.capabilities.error}
+                </div>
+              )}
+
+              {normalizeEngineVersionStatus(selectedEngine.capabilities) === 'unknown' && (
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
+                  {labels.versionUnknownWarning}
                 </div>
               )}
 
