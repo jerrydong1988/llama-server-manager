@@ -1,6 +1,6 @@
 # Llama Server Manager 使用说明 / User Guide
 
-> v2.9.28 · Windows / macOS / Linux
+> v2.9.29 · Windows / macOS / Linux
 
 本说明按实际操作顺序介绍模型、引擎、实例、路由和监控功能。应用内“使用说明”页面会随安装包离线提供同一份内容和图片。
 
