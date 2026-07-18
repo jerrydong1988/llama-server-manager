@@ -5,6 +5,7 @@ import { formatStartupCommand } from './commandFormatting'
 import type {
   AppState,
   DownloadProgress,
+  InstanceConfig,
   MonitoringFrame,
   PerfUpdateEvent,
   SystemMetrics,
@@ -212,8 +213,16 @@ export function registerGlobalStoreListeners(
     })))
   })
 
-  registerListener<{ instanceId: string; pid: number; port: number; command: string }>(store, 'server-started', (event) => {
+  registerListener<{
+    instanceId: string
+    pid: number
+    port: number
+    host: string
+    command: string
+    effectiveConfig?: Partial<InstanceConfig>
+  }>(store, 'server-started', (event) => {
     const state = store.getState()
+    const instance = state.instances.find(item => item.id === event.payload.instanceId)
     store.setState(current => ({
       runningTasksByInstance: {
         ...current.runningTasksByInstance,
@@ -228,6 +237,9 @@ export function registerGlobalStoreListeners(
       status: 'running',
       healthCheck: 'pending',
       startTime: Date.now(),
+      ...(instance && event.payload.effectiveConfig
+        ? { config: { ...instance.config, ...event.payload.effectiveConfig } }
+        : {}),
     })
     state.addLog({
       instanceId: event.payload.instanceId,

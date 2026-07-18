@@ -18,6 +18,9 @@ const EMBEDDING_HINTS: &[&str] = &[
 const RERANKER_HINTS: &[&str] = &["rerank", "reranker", "cross-encoder"];
 
 const VECTOR_ALLOWED_FIELDS: &[&str] = &[
+    "launch_mode",
+    "manual_command",
+    "explicit_overrides",
     "id",
     "name",
     "engine_id",
@@ -204,6 +207,9 @@ fn normalize_for_vector_workload(
     };
     let mut config: InstanceConfig =
         serde_json::from_value(normalized).expect("normalized InstanceConfig must deserialize");
+    if let Some(overrides) = config.explicit_overrides.as_mut() {
+        overrides.retain(|field| VECTOR_ALLOWED_FIELDS.contains(&field.as_str()));
+    }
     config.embedding = true;
     if workload == ModelWorkload::Reranker {
         config.reranking = true;
@@ -216,6 +222,11 @@ fn normalize_for_vector_workload(
     }
     if config.batch_size > config.ubatch_size {
         config.batch_size = config.ubatch_size;
+        if let Some(overrides) = config.explicit_overrides.as_mut() {
+            if !overrides.iter().any(|field| field == "batch_size") {
+                overrides.push("batch_size".to_string());
+            }
+        }
     }
     VectorNormalization { config, workload }
 }
@@ -399,5 +410,21 @@ mod tests {
             serde_json::to_value(&normalized.config).unwrap(),
             serde_json::to_value(&inference).unwrap()
         );
+    }
+
+    #[test]
+    fn vector_batch_safety_becomes_an_explicit_launch_override() {
+        let normalized = normalize_for_launch(InstanceConfig {
+            embedding: true,
+            explicit_overrides: Some(Vec::new()),
+            ..InstanceConfig::default()
+        });
+
+        assert_eq!(normalized.config.batch_size, normalized.config.ubatch_size);
+        assert!(normalized
+            .config
+            .explicit_overrides
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|field| field == "batch_size")));
     }
 }

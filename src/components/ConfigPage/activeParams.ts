@@ -7,6 +7,46 @@ import { VECTOR_ALLOWED_FIELDS } from '../../modelPolicy'
  * in the generated command (given the current config + isEmbedding state).
  */
 export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): Set<keyof InstanceConfig> {
+  if (config.launch_mode === 'manual') {
+    return new Set(config.manual_command.trim() ? ['manual_command'] : [])
+  }
+
+  if (Array.isArray(config.explicit_overrides)) {
+    const a = new Set<keyof InstanceConfig>(config.explicit_overrides as Array<keyof InstanceConfig>)
+    a.add('model_path'); a.add('host'); a.add('port')
+    if (config.metrics) a.add('metrics')
+    if (config.props) a.add('props')
+    a.add('slots_enabled')
+    if (config.embedding) a.add('embedding')
+    if (config.embedding && config.pooling) a.add('pooling')
+    if (config.reranking) a.add('reranking')
+
+    const remove = (keys: Array<keyof InstanceConfig>) => keys.forEach(key => a.delete(key))
+    const specActive = !isEmbedding && !!config.spec_type && config.spec_type !== 'none' && a.has('spec_type')
+    if (!specActive) remove([
+      'draft_model_path', 'draft_gpu_layers', 'draft_tokens', 'spec_draft_n_min',
+      'spec_draft_p_min', 'spec_draft_p_split', 'spec_draft_device',
+      'lookup_cache_static', 'lookup_cache_dynamic', 'spec_default',
+      'spec_draft_backend_sampling', 'spec_draft_threads', 'spec_draft_threads_batch',
+      'cache_type_draft_k', 'cache_type_draft_v',
+    ])
+    const fitMode = config.fit_mode || (config.fit ? 'on' : '')
+    if (fitMode !== 'on') remove(['fit_target', 'fit_ctx'])
+    if (!(config.mirostat > 0 && a.has('mirostat'))) remove(['mirostat_lr', 'mirostat_ent'])
+    if (!(config.xtc_probability > 0 && a.has('xtc_probability'))) remove(['xtc_threshold'])
+    if (!(config.dynatemp_range > 0 && a.has('dynatemp_range'))) remove(['dynatemp_exp'])
+    if (!(config.dry_multiplier > 0 && a.has('dry_multiplier'))) remove([
+      'dry_base', 'dry_allowed_length', 'dry_penalty_last_n', 'dry_sequence_breaker',
+    ])
+    if (!(config.adaptive_target >= 0 && a.has('adaptive_target'))) remove(['adaptive_decay'])
+    if (isEmbedding) {
+      for (const key of a) {
+        if (!VECTOR_ALLOWED_FIELDS.has(key)) a.delete(key)
+      }
+    }
+    return a
+  }
+
   const a = new Set<keyof InstanceConfig>()
   const e = isEmbedding
   const specActive = !e && !!config.spec_type && config.spec_type !== 'none'

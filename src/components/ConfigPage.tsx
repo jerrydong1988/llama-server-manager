@@ -23,6 +23,9 @@ import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
 import { resolveEffectiveEngine } from '../store/engineResolution'
 import { findMatchingProjector } from '../modelProjector'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
+import { applyExplicitOverrides, explicitOverrideKeys, inheritParameters, markExplicitOverride, migrateParameterIntent } from '../parameterIntent'
+import { LaunchModePanel } from './ConfigPage/LaunchModePanel'
+import { ConfigDirectory } from './ConfigPage/ConfigDirectory'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -94,7 +97,7 @@ const ConfigPage = () => {
   useEffect(() => {
     const selected = useAppStore.getState().instances.find(instance => instance.id === configInstanceId)
     if (selected) {
-      const next = { ...defaultInstanceConfig(), ...selected.config }
+      const next = migrateParameterIntent(selected.config)
       setLocal(next)
       setBaseline(next)
       editRevisionRef.current = 0
@@ -118,7 +121,14 @@ const ConfigPage = () => {
     editRevisionRef.current += 1
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
-    setLocal(current => (current ? { ...current, [key]: value } : current))
+    setLocal(current => (current ? markExplicitOverride(current, key, value) : current))
+  }
+
+  const inherit = (keys: Array<keyof InstanceConfig>) => {
+    editRevisionRef.current += 1
+    setAppliedTemplateId(null)
+    setLastTemplateSnapshot(null)
+    setLocal(current => (current ? inheritParameters(current, keys) : current))
   }
 
   const currentModel = useMemo(() => {
@@ -162,7 +172,8 @@ const ConfigPage = () => {
 
     const selectedModel = models.find(model => normalizeModelPath(model.path) === normalizedPath)
     const mmproj = selectedModel ? findMatchingProjector(selectedModel, models) : null
-    const candidate = { ...local, model_path: modelPath, mmproj_path: mmproj?.path ?? '' }
+    const withModel = markExplicitOverride(local, 'model_path', modelPath)
+    const candidate = markExplicitOverride(withModel, 'mmproj_path', mmproj?.path ?? '')
     const normalized = normalizeConfigForSelectedModel(candidate, selectedModel)
     editRevisionRef.current += 1
     committedModelPathRef.current = normalizedPath
@@ -181,8 +192,10 @@ const ConfigPage = () => {
     setShowPicker(false)
   }
 
+  const manualMode = local.launch_mode === 'manual'
+
   const save = async () => {
-    if (!inst || saveInFlightRef.current || probingEngineCompatibility || capabilityProbeRequired) {
+    if (!inst || saveInFlightRef.current || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired))) {
       return
     }
 
@@ -200,7 +213,11 @@ const ConfigPage = () => {
     const localSnapshot = local
     const engine = resolveEffectiveEngine(localSnapshot, engines, defaultEngineId)
     const modelPathChanged = normalizeModelPath(localSnapshot.model_path) !== committedModelPathRef.current
-    const normalized = modelPathChanged ? normalizeConfigForSelectedModel(localSnapshot, currentModel) : normalizeInstanceConfig(localSnapshot, currentModel)
+    const normalized = manualMode
+      ? { config: localSnapshot, workload: 'inference' as const, vectorMode: false, changes: [] as VectorCleanupChange[] }
+      : modelPathChanged
+        ? normalizeConfigForSelectedModel(localSnapshot, currentModel)
+        : normalizeInstanceConfig(localSnapshot, currentModel)
 
     try {
       if (engine) {
@@ -244,7 +261,9 @@ const ConfigPage = () => {
     } catch (error) {
       updateInstance(targetInstanceId, { config: previousSave.config })
       if (saveIsCurrent()) { committedModelPathRef.current = previousSave.committedModelPath; setLocal(localSnapshot) }
-      if (error && typeof error === 'object' && String((error as { code?: string }).code || '').startsWith('ENGINE_')) {
+      if (manualMode) {
+        addRuntimeWarning(`${labels.manualValidationFailed}: ${String(error)}`)
+      } else if (error && typeof error === 'object' && String((error as { code?: string }).code || '').startsWith('ENGINE_')) {
         addRuntimeWarning(`配置保存前的引擎兼容性检查失败：${String(error)}`)
       }
       return
@@ -257,6 +276,7 @@ const ConfigPage = () => {
   const sectionProps = {
     local,
     set,
+    inherit,
     t,
     isEmbedding,
     workload,
@@ -299,7 +319,8 @@ const ConfigPage = () => {
   )
   const configChanges = getConfigChanges(local, savedBaseline, t, labels)
     .filter(change => !vectorCleanupKeys.has(change.key))
-  const liveWarnings = validateConfig(local, currentModel, currentEngine)
+  const overrideKeys = explicitOverrideKeys(local)
+  const liveWarnings = manualMode ? [] : validateConfig(local, currentModel, currentEngine)
   const engineCompatibilityMode = getEngineCompatibilityMode(currentEngine?.capabilities)
   const engineVersionStatus = normalizeEngineVersionStatus(currentEngine?.capabilities)
   const visibleWarnings = saved ? saveWarnings : liveWarnings
@@ -309,11 +330,11 @@ const ConfigPage = () => {
     low: liveWarnings.filter(warning => warning.severity === 'low').length,
   }
   const checkMessages = [
-    ...(!primaryModelPath ? [{ tone: 'red', text: labels.missingModel }] : []),
+    ...(!manualMode && !primaryModelPath ? [{ tone: 'red', text: labels.missingModel }] : []),
     ...(!currentEngine ? [{ tone: 'amber', text: labels.missingEngine }] : []),
-    ...(unsupportedEngineFlags.length > 0 ? [{ tone: 'red', text: labels.engineCompatibilityBlocked }] : []),
-    ...(currentEngine && engineCompatibilityMode !== 'full' ? [{ tone: 'amber', text: labels.engineCompatibilityLimitedCheck }] : []),
-    ...(currentEngine && engineVersionStatus === 'unknown' ? [{ tone: 'amber', text: labels.engineVersionUnknownCheck }] : []),
+    ...(!manualMode && unsupportedEngineFlags.length > 0 ? [{ tone: 'red', text: labels.engineCompatibilityBlocked }] : []),
+    ...(!manualMode && currentEngine && engineCompatibilityMode !== 'full' ? [{ tone: 'amber', text: labels.engineCompatibilityLimitedCheck }] : []),
+    ...(!manualMode && currentEngine && engineVersionStatus === 'unknown' ? [{ tone: 'amber', text: labels.engineVersionUnknownCheck }] : []),
     ...(liveWarnings.length > 0 ? [{ tone: liveWarnings.some(warning => warning.severity === 'high') ? 'red' : 'amber', text: `${liveWarnings.length} ${labels.liveWarnings}` }] : []),
   ]
   const selectedTemplate = quickTemplates.find(template => template.id === selectedTemplateId) ?? quickTemplates[0]
@@ -334,7 +355,7 @@ const ConfigPage = () => {
     }
     editRevisionRef.current += 1
     setLastTemplateSnapshot({ templateId: template.id, templateTitle: template.title, config: { ...local } })
-    setLocal({ ...local, ...template.changes })
+    setLocal(applyExplicitOverrides(local, template.changes))
     setAppliedTemplateId(template.id)
     setShowPresetAssistant(false)
     setSaved(false)
@@ -386,10 +407,6 @@ const ConfigPage = () => {
     },
   ]
 
-  const scrollToSection = (id: string) => {
-    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
-
   return (
     <div className="space-y-5">
       <Surface as="section">
@@ -412,7 +429,7 @@ const ConfigPage = () => {
 
           <Button
             onClick={save}
-            disabled={!inst || saving || probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0}
+            disabled={!inst || saving || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))}
             variant="primary"
             data-guide="config-save"
             icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
@@ -434,39 +451,8 @@ const ConfigPage = () => {
         ))}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[220px,minmax(0,1fr)] 2xl:grid-cols-[220px,minmax(0,1fr)_320px]">
-        <Surface as="aside" className="h-fit p-4 xl:sticky xl:top-4">
-          <SectionHeader title={labels.parameterGroups} />
-          <nav className="mt-4 space-y-1">
-            {directoryGroups.map(group => (
-              <div key={group.id}>
-                <button
-                  type="button"
-                  onClick={() => scrollToSection(group.id)}
-                  className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
-                >
-                  <span className="min-w-0 truncate">{group.title}</span>
-                  {group.count > 0 && <Badge tone="emerald" className="shrink-0 px-2 py-0.5">{group.count}</Badge>}
-                </button>
-                {'children' in group && group.children && (
-                  <div className="mt-1 space-y-1 border-l border-slate-200 pl-3 dark:border-slate-800">
-                    {group.children.map(child => (
-                      <button
-                        key={child.id}
-                        type="button"
-                        onClick={() => scrollToSection(child.id)}
-                        className="flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-                      >
-                        <span className="min-w-0 truncate">{child.title}</span>
-                        {child.count > 0 && <span className="shrink-0 rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[11px] text-emerald-300">{child.count}</span>}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </nav>
-        </Surface>
+      <div className={manualMode ? 'grid gap-5 2xl:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-5 xl:grid-cols-[220px,minmax(0,1fr)] 2xl:grid-cols-[220px,minmax(0,1fr)_320px]'}>
+        {!manualMode && <ConfigDirectory title={labels.parameterGroups} groups={directoryGroups} />}
 
         <div className="space-y-4">
           {saved && (
@@ -482,20 +468,32 @@ const ConfigPage = () => {
             </div>
           )}
 
-          {isEmbedding && (
+          {!manualMode && isEmbedding && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
               {t.configPage.embeddingBanner}
             </div>
           )}
 
-          <EngineCompatibilityNotice
+          <LaunchModePanel
+            config={local}
             engine={currentEngine}
-            unsupportedFlags={unsupportedEngineFlags}
-            probing={probingEngineCompatibility}
             labels={labels}
+            t={t}
+            overrideKeys={overrideKeys}
+            set={set}
+            inherit={inherit}
           />
 
-          {visibleVectorCleanupGroups.length > 0 && (
+          {!manualMode && (
+            <EngineCompatibilityNotice
+              engine={currentEngine}
+              unsupportedFlags={unsupportedEngineFlags}
+              probing={probingEngineCompatibility}
+              labels={labels}
+            />
+          )}
+
+          {!manualMode && visibleVectorCleanupGroups.length > 0 && (
             <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
               <div className="min-w-0">
@@ -512,7 +510,7 @@ const ConfigPage = () => {
             </div>
           )}
 
-          {!isEmbedding && lastTemplateSnapshot && (
+          {!manualMode && !isEmbedding && lastTemplateSnapshot && (
             <div className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200 sm:flex-row sm:items-center sm:justify-between">
               <span className="inline-flex min-w-0 items-center gap-2">
                 <Sparkles className="h-4 w-4 shrink-0" />
@@ -526,7 +524,7 @@ const ConfigPage = () => {
             </div>
           )}
 
-          {!isEmbedding && (
+          {!manualMode && !isEmbedding && (
           <Surface className="p-5" data-guide="config-presets">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
@@ -557,23 +555,25 @@ const ConfigPage = () => {
           </Surface>
           )}
 
-          <Surface className="p-5">
-            <div className="mb-4">
-              <SectionHeader title={labels.parameterSearch} description={labels.parameterSearchDesc} />
-            </div>
-            <TextInput
-              type="text"
-              value={searchQuery}
-              onChange={event => setSearchQuery(event.target.value)}
-              placeholder={(t.configPage as any).searchParams || t.perfBlock.searchParams}
-              leadingIcon={<Search className="h-4 w-4" />}
-            />
-          </Surface>
+          {!manualMode && <>
+            <Surface className="p-5">
+              <div className="mb-4">
+                <SectionHeader title={labels.parameterSearch} description={labels.parameterSearchDesc} />
+              </div>
+              <TextInput
+                type="text"
+                value={searchQuery}
+                onChange={event => setSearchQuery(event.target.value)}
+                placeholder={(t.configPage as any).searchParams || t.perfBlock.searchParams}
+                leadingIcon={<Search className="h-4 w-4" />}
+              />
+            </Surface>
 
-          <BasicSection {...sectionProps} />
-          {!isEmbedding && <ReasoningSection {...sectionProps} />}
-          <PerformanceSection {...sectionProps} />
-          <AdvancedSection {...sectionProps} />
+            <BasicSection {...sectionProps} />
+            {!isEmbedding && <ReasoningSection {...sectionProps} />}
+            <PerformanceSection {...sectionProps} />
+            <AdvancedSection {...sectionProps} />
+          </>}
         </div>
 
         <Surface as="aside" className="h-fit p-5 xl:col-span-2 2xl:sticky 2xl:top-4 2xl:col-span-1">

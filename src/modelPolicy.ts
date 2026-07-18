@@ -24,6 +24,7 @@ const EMBEDDING_HINTS = [
 const RERANKER_HINTS = ['rerank', 'reranker', 'cross-encoder']
 
 export const VECTOR_ALLOWED_FIELDS = new Set<keyof InstanceConfig>([
+  'launch_mode', 'manual_command', 'explicit_overrides',
   'id', 'name', 'engine_id', 'model_path', 'alias', 'auto_start',
   'ctx_size', 'ctx_size_auto', 'gpu_layers_auto', 'gpu_layers', 'threads',
   'threads_batch', 'threads_http', 'batch_size', 'ubatch_size', 'parallel',
@@ -157,6 +158,7 @@ function sameValue(left: unknown, right: unknown): boolean {
 
 function diffVectorCleanup(before: InstanceConfig, after: InstanceConfig): VectorCleanupChange[] {
   return (Object.keys(after) as Array<keyof InstanceConfig>)
+    .filter(key => key !== 'explicit_overrides')
     .filter(key => !sameValue(before[key], after[key]))
     .map(key => ({ key, group: cleanupGroup(key), before: before[key], after: after[key] }))
 }
@@ -180,6 +182,9 @@ export function normalizeInstanceConfig(
   const defaults = defaultInstanceConfig()
   const next: InstanceConfig = { ...config, embedding: true }
   for (const key of VECTOR_INCOMPATIBLE_FIELDS) next[key] = defaults[key] as never
+  if (Array.isArray(config.explicit_overrides)) {
+    next.explicit_overrides = config.explicit_overrides.filter(key => VECTOR_ALLOWED_FIELDS.has(key as keyof InstanceConfig))
+  }
 
   if (workload === 'reranker') {
     next.reranking = true
@@ -189,7 +194,12 @@ export function normalizeInstanceConfig(
     if (next.pooling === 'rank') next.pooling = defaults.pooling
   }
 
-  if (next.batch_size > next.ubatch_size) next.batch_size = next.ubatch_size
+  if (next.batch_size > next.ubatch_size) {
+    next.batch_size = next.ubatch_size
+    if (Array.isArray(next.explicit_overrides) && !next.explicit_overrides.includes('batch_size')) {
+      next.explicit_overrides = [...next.explicit_overrides, 'batch_size']
+    }
+  }
 
   return {
     config: next,
@@ -207,6 +217,9 @@ export function normalizeConfigForSelectedModel(
   const defaults = defaultInstanceConfig()
   const candidate: InstanceConfig = {
     ...config,
+    explicit_overrides: Array.isArray(config.explicit_overrides)
+      ? config.explicit_overrides.filter(key => !['embedding', 'pooling', 'reranking'].includes(key))
+      : config.explicit_overrides,
     embedding: defaults.embedding,
     pooling: defaults.pooling,
     reranking: defaults.reranking,

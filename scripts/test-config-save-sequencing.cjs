@@ -39,7 +39,11 @@ assert.match(
   /const targetIsActive = \(\) => mountedRef\.current[\s\S]*if \(!targetIsActive\(\)\) return[\s\S]*setSaved\(true\)/,
   'a completed save must not update feedback for another instance',
 )
-assert.match(configPageSource, /disabled=\{!inst \|\| saving[^}]*unsupportedEngineFlags\.length > 0\}/)
+assert.match(
+  configPageSource,
+  /disabled=\{!inst \|\| saving \|\| \(!manualMode && \([^}]*unsupportedEngineFlags\.length > 0\)\)\}/,
+  'managed mode must block unsupported flags while manual mode remains available to legacy engines',
+)
 assert.match(configPageSource, /saving \? t\.configPage\.saving :/)
 assert.match(configPageSource, /const editRevisionRef = useRef\(0\)/)
 assert.match(configPageSource, /const saveInFlightRef = useRef\(false\)/)

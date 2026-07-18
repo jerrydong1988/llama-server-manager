@@ -1,5 +1,4 @@
 ﻿import type { InstanceConfig } from '../../store'
-import { defaultInstanceConfig } from '../../store'
 import { useState, useEffect } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import { Section, Input, Num, Switch, Select, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
@@ -97,6 +96,7 @@ const countSummary = (count: number) =>
 interface Props {
   local: InstanceConfig
   set: (k: keyof InstanceConfig, v: any) => void
+  inherit: (keys: Array<keyof InstanceConfig>) => void
   t: any
   isEmbedding: boolean
   workload: ModelWorkload
@@ -189,19 +189,17 @@ export function PerformanceSection({ local, set, t, activeParams, searchQuery }:
 
 // ━━━━━━━━━━━━━━━━━━━━━━ ADVANCED CONTAINER ━━━━━━━━━━━━━━━━━━━━━━
 
-export function AdvancedSection({ local, set, t, isEmbedding, modelWorkloadLocked, onShowDraftPicker, activeParams, searchQuery }: Props) {
+export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWorkloadLocked, onShowDraftPicker, activeParams, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => activeParams.has(k)
   const resetAll = () => {
-    const cfg = defaultInstanceConfig()
-    for (const key of getResettableFields(ADVANCED_CONFIG_KEYS, isEmbedding, modelWorkloadLocked)) set(key, cfg[key])
+    inherit(getResettableFields(ADVANCED_CONFIG_KEYS, isEmbedding, modelWorkloadLocked))
   }
 
   const resetGroup = (id: string) => {
     const keys = ADVANCED_GROUP_CONFIG_KEYS[id]
     if (!keys) return
 
-    const cfg = defaultInstanceConfig()
-    for (const key of getResettableFields(keys, isEmbedding, modelWorkloadLocked)) set(key, cfg[key])
+    inherit(getResettableFields(keys, isEmbedding, modelWorkloadLocked))
   }
 
   // ── 自定义参数：结构化键值对编辑器 ──

@@ -251,7 +251,11 @@ fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> N
     let mut all = HashMap::with_capacity(instances.len());
     let mut changed = HashMap::new();
     for (id, config) in instances {
-        let normalized = normalize_for_launch(config.clone()).into_config();
+        let normalized = if config.launch_mode.eq_ignore_ascii_case("manual") {
+            config.clone()
+        } else {
+            normalize_for_launch(config.clone()).into_config()
+        };
         if normalized != config {
             changed.insert(id.clone(), normalized.clone());
         }

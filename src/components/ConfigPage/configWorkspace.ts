@@ -148,6 +148,7 @@ export const fieldLabel = (key: keyof InstanceConfig, t: any) => {
 
 export const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig, t: any, labels: Record<string, string>): ConfigChange[] =>
   (Object.keys(local) as Array<keyof InstanceConfig>)
+    .filter(key => key !== 'explicit_overrides')
     .filter(key => !isEqualValue(local[key], baseline[key]))
     .map(key => ({
       key,

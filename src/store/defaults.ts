@@ -2,6 +2,7 @@ import type { InstanceConfig } from './types'
 
 export function defaultInstanceConfig(): InstanceConfig {
   return {
+    launch_mode: 'managed', manual_command: '', explicit_overrides: [],
     id: '', name: '', engine_id: '', model_path: '', alias: '',
     lora_path: '', mmproj_path: '', lora_init_without_apply: false, lora_scaled: '',
     chat_template: '', chat_template_file: '', skip_chat_parsing: false,

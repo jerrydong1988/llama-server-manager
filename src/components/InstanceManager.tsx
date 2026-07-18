@@ -11,6 +11,7 @@ import type { Instance } from '../store/types'
 import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
 import { resolveEffectiveEngine } from '../store/engineResolution'
+import { markExplicitOverride } from '../parameterIntent'
 
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 
@@ -149,11 +150,11 @@ const InstanceManager = () => {
     }
 
     const id = crypto.randomUUID()
-    const config = defaultInstanceConfig()
+    let config = defaultInstanceConfig()
     config.id = id
     config.name = newInst.name || model.name.replace('.gguf', '')
     config.model_path = newInst.modelPath
-    config.mmproj_path = newInst.mmprojPath
+    config = markExplicitOverride(config, 'mmproj_path', newInst.mmprojPath)
     config.port = newInst.port
     config.host = '127.0.0.1'
     config.engine_id = newInst.engineId || defaultEngineId || ''

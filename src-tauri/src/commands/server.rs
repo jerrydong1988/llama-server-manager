@@ -284,29 +284,67 @@ fn telemetry_config_hash(config: &InstanceConfig) -> String {
     format!("{:016x}", hasher.finish())
 }
 
+#[cfg(test)]
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
     prepare_launch(config.clone(), engine_path).2
 }
 
+fn uses_manual_command(config: &InstanceConfig) -> bool {
+    config.launch_mode.eq_ignore_ascii_case("manual")
+}
+
+fn should_emit(config: &InstanceConfig, field: &str, legacy_condition: bool) -> bool {
+    config
+        .explicit_overrides
+        .as_ref()
+        .map_or(legacy_condition, |fields| {
+            fields.iter().any(|candidate| candidate == field)
+        })
+}
+
+fn should_emit_any(config: &InstanceConfig, fields: &[&str], legacy_condition: bool) -> bool {
+    config
+        .explicit_overrides
+        .as_ref()
+        .map_or(legacy_condition, |configured| {
+            fields
+                .iter()
+                .any(|field| configured.iter().any(|candidate| candidate == field))
+        })
+}
+
 fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Basic.
-    if !config.alias.is_empty() {
+    if should_emit(config, "alias", !config.alias.is_empty()) && !config.alias.is_empty() {
         cmd.extend_from_slice(&["-a".into(), config.alias.clone()]);
     }
     if !is_emb {
-        if !config.lora_path.is_empty() {
+        if should_emit(config, "lora_path", !config.lora_path.is_empty())
+            && !config.lora_path.is_empty()
+        {
             cmd.extend_from_slice(&["--lora".into(), config.lora_path.clone()]);
         }
-        if config.lora_init_without_apply {
+        if should_emit(
+            config,
+            "lora_init_without_apply",
+            config.lora_init_without_apply,
+        ) && config.lora_init_without_apply
+        {
             cmd.push("--lora-init-without-apply".into());
         }
-        if !config.lora_scaled.is_empty() {
+        if should_emit(config, "lora_scaled", !config.lora_scaled.is_empty())
+            && !config.lora_scaled.is_empty()
+        {
             cmd.extend_from_slice(&["--lora-scaled".into(), config.lora_scaled.clone()]);
         }
-        if !config.mmproj_path.is_empty() {
+        if should_emit(config, "mmproj_path", !config.mmproj_path.is_empty())
+            && !config.mmproj_path.is_empty()
+        {
             cmd.extend_from_slice(&["--mmproj".into(), config.mmproj_path.clone()]);
         }
-        if !config.mmproj_url.is_empty() {
+        if should_emit(config, "mmproj_url", !config.mmproj_url.is_empty())
+            && !config.mmproj_url.is_empty()
+        {
             cmd.extend_from_slice(&["--mmproj-url".into(), config.mmproj_url.clone()]);
         }
         let mmproj_mode = if !config.mmproj_mode.is_empty() {
@@ -318,59 +356,109 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
         } else {
             ""
         };
-        match mmproj_mode {
-            "on" => cmd.push("--mmproj-auto".into()),
-            "off" => cmd.push("--no-mmproj".into()),
-            _ => {}
+        if should_emit_any(
+            config,
+            &["mmproj_mode", "mmproj_auto", "no_mmproj"],
+            !mmproj_mode.is_empty(),
+        ) {
+            match mmproj_mode {
+                "on" => cmd.push("--mmproj-auto".into()),
+                "off" => cmd.push("--no-mmproj".into()),
+                _ => {}
+            }
         }
-        if config.no_mmproj_offload {
+        if should_emit(config, "no_mmproj_offload", config.no_mmproj_offload)
+            && config.no_mmproj_offload
+        {
             cmd.push("--no-mmproj-offload".into());
         }
-        if !config.chat_template.is_empty() {
+        if should_emit(config, "chat_template", !config.chat_template.is_empty())
+            && !config.chat_template.is_empty()
+        {
             cmd.extend_from_slice(&["--chat-template".into(), config.chat_template.clone()]);
         }
-        if !config.chat_template_file.is_empty() {
+        if should_emit(
+            config,
+            "chat_template_file",
+            !config.chat_template_file.is_empty(),
+        ) && !config.chat_template_file.is_empty()
+        {
             cmd.extend_from_slice(&[
                 "--chat-template-file".into(),
                 config.chat_template_file.clone(),
             ]);
         }
-        if config.skip_chat_parsing {
+        if should_emit(config, "skip_chat_parsing", config.skip_chat_parsing)
+            && config.skip_chat_parsing
+        {
             cmd.push("--skip-chat-parsing".into());
         }
-        if !config.reasoning_format.is_empty() {
+        if should_emit(
+            config,
+            "reasoning_format",
+            !config.reasoning_format.is_empty(),
+        ) && !config.reasoning_format.is_empty()
+        {
             cmd.extend_from_slice(&["--reasoning-format".into(), config.reasoning_format.clone()]);
         }
-        if !config.reasoning.is_empty() {
+        if should_emit(config, "reasoning", !config.reasoning.is_empty())
+            && !config.reasoning.is_empty()
+        {
             cmd.extend_from_slice(&["--reasoning".into(), config.reasoning.clone()]);
         }
-        match config.reasoning_preserve.as_str() {
-            "on" => cmd.push("--reasoning-preserve".into()),
-            "off" => cmd.push("--no-reasoning-preserve".into()),
-            _ => {}
+        if should_emit(
+            config,
+            "reasoning_preserve",
+            !config.reasoning_preserve.is_empty(),
+        ) {
+            match config.reasoning_preserve.as_str() {
+                "on" => cmd.push("--reasoning-preserve".into()),
+                "off" => cmd.push("--no-reasoning-preserve".into()),
+                _ => {}
+            }
         }
-        if !config.reasoning_budget.is_empty() {
+        if should_emit(
+            config,
+            "reasoning_budget",
+            !config.reasoning_budget.is_empty(),
+        ) && !config.reasoning_budget.is_empty()
+        {
             cmd.extend_from_slice(&["--reasoning-budget".into(), config.reasoning_budget.clone()]);
         }
-        if !config.reasoning_budget_message.is_empty() {
+        if should_emit(
+            config,
+            "reasoning_budget_message",
+            !config.reasoning_budget_message.is_empty(),
+        ) && !config.reasoning_budget_message.is_empty()
+        {
             cmd.extend_from_slice(&[
                 "--reasoning-budget-message".into(),
                 config.reasoning_budget_message.clone(),
             ]);
         }
-        if !config.reasoning_effort.is_empty() {
+        if should_emit(
+            config,
+            "reasoning_effort",
+            !config.reasoning_effort.is_empty(),
+        ) && !config.reasoning_effort.is_empty()
+        {
             let re = format!("{{\"reasoning_effort\": \"{}\"}}", config.reasoning_effort);
             cmd.extend_from_slice(&["--chat-template-kwargs".into(), re]);
         }
-        cmd.push(if config.jinja {
-            "--jinja".into()
-        } else {
-            "--no-jinja".into()
-        });
-        if !config.grammar_file.is_empty() {
+        if should_emit(config, "jinja", true) {
+            cmd.push(if config.jinja {
+                "--jinja".into()
+            } else {
+                "--no-jinja".into()
+            });
+        }
+        if should_emit(config, "grammar_file", !config.grammar_file.is_empty())
+            && !config.grammar_file.is_empty()
+        {
             cmd.extend_from_slice(&["--grammar-file".into(), config.grammar_file.clone()]);
         }
-        if !config.grammar.is_empty() {
+        if should_emit(config, "grammar", !config.grammar.is_empty()) && !config.grammar.is_empty()
+        {
             cmd.extend_from_slice(&["--grammar".into(), config.grammar.clone()]);
         }
     }
@@ -378,56 +466,87 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
 
 fn append_context_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Performance and context.
-    if !config.ctx_size_auto {
+    if !config.ctx_size_auto
+        && should_emit_any(
+            config,
+            &["ctx_size", "ctx_size_auto"],
+            !config.ctx_size_auto,
+        )
+    {
         cmd.extend_from_slice(&["-c".into(), config.ctx_size.to_string()]);
     }
-    if !config.gpu_layers_auto {
+    if !config.gpu_layers_auto
+        && should_emit_any(
+            config,
+            &["gpu_layers", "gpu_layers_auto"],
+            !config.gpu_layers_auto,
+        )
+    {
         cmd.extend_from_slice(&["-ngl".into(), config.gpu_layers.to_string()]);
     }
-    if config.threads > 0 {
+    if should_emit(config, "threads", config.threads > 0) && config.threads > 0 {
         cmd.extend_from_slice(&["-t".into(), config.threads.to_string()]);
     }
-    if config.batch_size > 0 {
+    if should_emit(config, "batch_size", config.batch_size > 0) && config.batch_size > 0 {
         cmd.extend_from_slice(&["-b".into(), config.batch_size.to_string()]);
     }
-    if config.ubatch_size > 0 {
+    if should_emit(config, "ubatch_size", config.ubatch_size > 0) && config.ubatch_size > 0 {
         cmd.extend_from_slice(&["-ub".into(), config.ubatch_size.to_string()]);
     }
-    if config.parallel > 0 || config.parallel == -1 {
+    if should_emit(
+        config,
+        "parallel",
+        config.parallel > 0 || config.parallel == -1,
+    ) && (config.parallel > 0 || config.parallel == -1)
+    {
         cmd.extend_from_slice(&["-np".into(), config.parallel.to_string()]);
     }
-    cmd.push(if config.cont_batching {
-        "-cb".into()
-    } else {
-        "--no-cont-batching".into()
-    });
-    if !is_emb {
+    if should_emit(config, "cont_batching", true) {
+        cmd.push(if config.cont_batching {
+            "-cb".into()
+        } else {
+            "--no-cont-batching".into()
+        });
+    }
+    if !is_emb && should_emit(config, "cache_prompt", true) {
         cmd.push(if config.cache_prompt {
             "--cache-prompt".into()
         } else {
             "--no-cache-prompt".into()
         });
     }
-    if config.threads_batch > 0 {
+    if should_emit(config, "threads_batch", config.threads_batch > 0) && config.threads_batch > 0 {
         cmd.extend_from_slice(&["--threads-batch".into(), config.threads_batch.to_string()]);
     }
-    if config.threads_http >= 0 {
+    if should_emit(config, "threads_http", config.threads_http >= 0) && config.threads_http >= 0 {
         cmd.extend_from_slice(&["--threads-http".into(), config.threads_http.to_string()]);
     }
     if !is_emb {
-        cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
-        cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
-        cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
+        if should_emit(config, "keep", true) {
+            cmd.extend_from_slice(&["--keep".into(), config.keep.to_string()]);
+        }
+        if should_emit(config, "cache_reuse", true) {
+            cmd.extend_from_slice(&["--cache-reuse".into(), config.cache_reuse.to_string()]);
+        }
+        if should_emit(config, "cache_ram", true) {
+            cmd.extend_from_slice(&["-cram".into(), config.cache_ram.to_string()]);
+        }
     }
-    cmd.push(if config.warmup {
-        "--warmup".into()
-    } else {
-        "--no-warmup".into()
-    });
+    if should_emit(config, "warmup", true) {
+        cmd.push(if config.warmup {
+            "--warmup".into()
+        } else {
+            "--no-warmup".into()
+        });
+    }
     if !is_emb {
-        cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
-        cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
-        if config.swa_full {
+        if should_emit(config, "ctx_checkpoints", true) {
+            cmd.extend_from_slice(&["-ctxcp".into(), config.ctx_checkpoints.to_string()]);
+        }
+        if should_emit(config, "checkpoint_min_step", true) {
+            cmd.extend_from_slice(&["-cms".into(), config.checkpoint_min_step.to_string()]);
+        }
+        if should_emit(config, "swa_full", config.swa_full) && config.swa_full {
             cmd.push("--swa-full".into());
         }
     }
@@ -435,40 +554,44 @@ fn append_context_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
 
 fn append_rope_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // RoPE / YaRN.
-    if !config.rope_scaling.is_empty() {
+    if should_emit(config, "rope_scaling", !config.rope_scaling.is_empty())
+        && !config.rope_scaling.is_empty()
+    {
         cmd.extend_from_slice(&["--rope-scaling".into(), config.rope_scaling.clone()]);
     }
-    if config.rope_scale > 0.0 {
+    if should_emit(config, "rope_scale", config.rope_scale > 0.0) {
         cmd.extend_from_slice(&["--rope-scale".into(), config.rope_scale.to_string()]);
     }
-    if config.rope_freq_base > 0.0 {
+    if should_emit(config, "rope_freq_base", config.rope_freq_base > 0.0) {
         cmd.extend_from_slice(&["--rope-freq-base".into(), config.rope_freq_base.to_string()]);
     }
-    if config.rope_freq_scale > 0.0 {
+    if should_emit(config, "rope_freq_scale", config.rope_freq_scale > 0.0) {
         cmd.extend_from_slice(&[
             "--rope-freq-scale".into(),
             config.rope_freq_scale.to_string(),
         ]);
     }
-    if config.yarn_ext_factor >= 0.0 {
+    if should_emit(config, "yarn_ext_factor", config.yarn_ext_factor >= 0.0)
+        && config.yarn_ext_factor >= 0.0
+    {
         cmd.extend_from_slice(&[
             "--yarn-ext-factor".into(),
             config.yarn_ext_factor.to_string(),
         ]);
     }
-    if config.yarn_attn_factor != -1.0 {
+    if should_emit(config, "yarn_attn_factor", config.yarn_attn_factor != -1.0) {
         cmd.extend_from_slice(&[
             "--yarn-attn-factor".into(),
             config.yarn_attn_factor.to_string(),
         ]);
     }
-    if config.yarn_beta_slow > 0.0 {
+    if should_emit(config, "yarn_beta_slow", config.yarn_beta_slow > 0.0) {
         cmd.extend_from_slice(&["--yarn-beta-slow".into(), config.yarn_beta_slow.to_string()]);
     }
-    if config.yarn_beta_fast != -1.0 {
+    if should_emit(config, "yarn_beta_fast", config.yarn_beta_fast != -1.0) {
         cmd.extend_from_slice(&["--yarn-beta-fast".into(), config.yarn_beta_fast.to_string()]);
     }
-    if config.yarn_orig_ctx > 0 {
+    if should_emit(config, "yarn_orig_ctx", config.yarn_orig_ctx > 0) {
         cmd.extend_from_slice(&["--yarn-orig-ctx".into(), config.yarn_orig_ctx.to_string()]);
     }
 }
@@ -476,29 +599,30 @@ fn append_rope_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
 fn append_flash_attention_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // Flash Attention.
     let fa = config.flash_attn.as_str();
-    if fa != "auto" && !fa.is_empty() {
+    if should_emit(config, "flash_attn", fa != "auto" && !fa.is_empty()) && !fa.is_empty() {
         cmd.extend_from_slice(&["-fa".into(), fa.to_string()]);
     }
 }
 
 fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // Memory and loading.
-    if config.moe_cpu_layers > 0 {
+    if should_emit(config, "moe_cpu_layers", config.moe_cpu_layers > 0) && config.moe_cpu_layers > 0
+    {
         cmd.extend_from_slice(&["--n-cpu-moe".into(), config.moe_cpu_layers.to_string()]);
     }
-    if config.cpu_moe {
+    if should_emit(config, "cpu_moe", config.cpu_moe) && config.cpu_moe {
         cmd.push("--cpu-moe".into());
     }
-    if config.mlock {
+    if should_emit(config, "mlock", config.mlock) && config.mlock {
         cmd.push("--mlock".into());
     }
-    if config.no_mmap {
+    if should_emit(config, "no_mmap", config.no_mmap) && config.no_mmap {
         cmd.push("--no-mmap".into());
     }
-    if config.no_repack {
+    if should_emit(config, "no_repack", config.no_repack) && config.no_repack {
         cmd.push("--no-repack".into());
     }
-    if config.direct_io {
+    if should_emit(config, "direct_io", config.direct_io) && config.direct_io {
         cmd.push("--direct-io".into());
     }
     let numa_mode = if config.numa_mode.is_empty() && config.numa {
@@ -506,13 +630,15 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     } else {
         config.numa_mode.as_str()
     };
-    if !numa_mode.is_empty() {
+    if should_emit_any(config, &["numa_mode", "numa"], !numa_mode.is_empty())
+        && !numa_mode.is_empty()
+    {
         cmd.extend_from_slice(&["--numa".into(), numa_mode.into()]);
     }
-    if config.check_tensors {
+    if should_emit(config, "check_tensors", config.check_tensors) && config.check_tensors {
         cmd.push("--check-tensors".into());
     }
-    if config.perf {
+    if should_emit(config, "perf", config.perf) && config.perf {
         cmd.push("--perf".into());
     }
     let fit_mode = if config.fit_mode.is_empty() && config.fit {
@@ -520,30 +646,53 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     } else {
         config.fit_mode.as_str()
     };
-    if matches!(fit_mode, "on" | "off") {
+    if should_emit_any(
+        config,
+        &["fit_mode", "fit"],
+        matches!(fit_mode, "on" | "off"),
+    ) && matches!(fit_mode, "on" | "off")
+    {
         cmd.extend_from_slice(&["--fit".into(), fit_mode.into()]);
     }
-    if fit_mode != "off" {
-        if !config.fit_target.is_empty() {
+    if fit_mode == "on" {
+        if should_emit(config, "fit_target", !config.fit_target.is_empty())
+            && !config.fit_target.is_empty()
+        {
             cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]);
         }
-        cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
+        if should_emit(config, "fit_ctx", true) {
+            cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
+        }
     }
 }
 
 fn append_kv_cache_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // KV cache.
-    if !config.cache_type_k.is_empty() {
+    if should_emit(config, "cache_type_k", !config.cache_type_k.is_empty())
+        && !config.cache_type_k.is_empty()
+    {
         cmd.extend_from_slice(&["-ctk".into(), config.cache_type_k.clone()]);
     }
-    if !config.cache_type_v.is_empty() {
+    if should_emit(config, "cache_type_v", !config.cache_type_v.is_empty())
+        && !config.cache_type_v.is_empty()
+    {
         cmd.extend_from_slice(&["-ctv".into(), config.cache_type_v.clone()]);
     }
     if !is_emb {
-        if !config.cache_type_draft_k.is_empty() {
+        if should_emit(
+            config,
+            "cache_type_draft_k",
+            !config.cache_type_draft_k.is_empty(),
+        ) && !config.cache_type_draft_k.is_empty()
+        {
             cmd.extend_from_slice(&["-ctkd".into(), config.cache_type_draft_k.clone()]);
         }
-        if !config.cache_type_draft_v.is_empty() {
+        if should_emit(
+            config,
+            "cache_type_draft_v",
+            !config.cache_type_draft_v.is_empty(),
+        ) && !config.cache_type_draft_v.is_empty()
+        {
             cmd.extend_from_slice(&["-ctvd".into(), config.cache_type_draft_v.clone()]);
         }
     }
@@ -552,84 +701,143 @@ fn append_kv_cache_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<St
     } else {
         config.kv_unified_mode.as_str()
     };
-    match kv_unified_mode {
-        "on" => cmd.push("--kv-unified".into()),
-        "off" => cmd.push("--no-kv-unified".into()),
-        _ => {}
+    if should_emit_any(
+        config,
+        &["kv_unified_mode", "kv_unified"],
+        !kv_unified_mode.is_empty(),
+    ) {
+        match kv_unified_mode {
+            "on" => cmd.push("--kv-unified".into()),
+            "off" => cmd.push("--no-kv-unified".into()),
+            _ => {}
+        }
     }
-    if config.no_kv_offload {
+    if should_emit(config, "no_kv_offload", config.no_kv_offload) && config.no_kv_offload {
         cmd.push("--no-kv-offload".into());
     }
-    cmd.push(if config.cache_idle_slots {
-        "--cache-idle-slots".into()
-    } else {
-        "--no-cache-idle-slots".into()
-    });
+    if should_emit(config, "cache_idle_slots", true) {
+        cmd.push(if config.cache_idle_slots {
+            "--cache-idle-slots".into()
+        } else {
+            "--no-cache-idle-slots".into()
+        });
+    }
 }
 
 fn append_device_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     // GPU and device.
-    if !config.device.is_empty() {
+    if should_emit(config, "device", !config.device.is_empty()) && !config.device.is_empty() {
         cmd.extend_from_slice(&["-dev".into(), config.device.clone()]);
     }
-    if !config.split_mode.is_empty() {
+    if should_emit(config, "split_mode", !config.split_mode.is_empty())
+        && !config.split_mode.is_empty()
+    {
         cmd.extend_from_slice(&["-sm".into(), config.split_mode.clone()]);
     }
-    if !config.tensor_split.is_empty() {
+    if should_emit(config, "tensor_split", !config.tensor_split.is_empty())
+        && !config.tensor_split.is_empty()
+    {
         cmd.extend_from_slice(&["-ts".into(), config.tensor_split.clone()]);
     }
-    if config.main_gpu > 0 {
+    if should_emit(config, "main_gpu", config.main_gpu > 0) {
         cmd.extend_from_slice(&["-mg".into(), config.main_gpu.to_string()]);
     }
-    if !config.override_kv.is_empty() {
+    if should_emit(config, "override_kv", !config.override_kv.is_empty())
+        && !config.override_kv.is_empty()
+    {
         cmd.extend_from_slice(&["--override-kv".into(), config.override_kv.clone()]);
     }
 }
 
 fn append_speculative_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Speculative decoding.
-    let spec_active = !is_emb && !config.spec_type.is_empty() && config.spec_type != "none";
+    let spec_active = !is_emb
+        && !config.spec_type.is_empty()
+        && config.spec_type != "none"
+        && should_emit(config, "spec_type", true);
     if spec_active {
-        if !config.draft_model_path.is_empty() {
+        if should_emit(
+            config,
+            "draft_model_path",
+            !config.draft_model_path.is_empty(),
+        ) && !config.draft_model_path.is_empty()
+        {
             cmd.extend_from_slice(&["-md".into(), config.draft_model_path.clone()]);
         }
-        cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]);
-        cmd.extend_from_slice(&["--spec-draft-n-max".into(), config.draft_tokens.to_string()]);
-        cmd.extend_from_slice(&[
-            "--spec-draft-n-min".into(),
-            config.spec_draft_n_min.to_string(),
-        ]);
+        if should_emit(config, "draft_gpu_layers", true) {
+            cmd.extend_from_slice(&["-ngld".into(), config.draft_gpu_layers.to_string()]);
+        }
+        if should_emit(config, "draft_tokens", true) {
+            cmd.extend_from_slice(&["--spec-draft-n-max".into(), config.draft_tokens.to_string()]);
+        }
+        if should_emit(config, "spec_draft_n_min", true) {
+            cmd.extend_from_slice(&[
+                "--spec-draft-n-min".into(),
+                config.spec_draft_n_min.to_string(),
+            ]);
+        }
         cmd.extend_from_slice(&["--spec-type".into(), config.spec_type.clone()]);
-        cmd.extend_from_slice(&[
-            "--spec-draft-p-min".into(),
-            config.spec_draft_p_min.to_string(),
-        ]);
-        cmd.extend_from_slice(&[
-            "--spec-draft-p-split".into(),
-            config.spec_draft_p_split.to_string(),
-        ]);
-        if !config.spec_draft_device.is_empty() {
+        if should_emit(config, "spec_draft_p_min", true) {
+            cmd.extend_from_slice(&[
+                "--spec-draft-p-min".into(),
+                config.spec_draft_p_min.to_string(),
+            ]);
+        }
+        if should_emit(config, "spec_draft_p_split", true) {
+            cmd.extend_from_slice(&[
+                "--spec-draft-p-split".into(),
+                config.spec_draft_p_split.to_string(),
+            ]);
+        }
+        if should_emit(
+            config,
+            "spec_draft_device",
+            !config.spec_draft_device.is_empty(),
+        ) && !config.spec_draft_device.is_empty()
+        {
             cmd.extend_from_slice(&[
                 "--spec-draft-device".into(),
                 config.spec_draft_device.clone(),
             ]);
         }
-        if !config.lookup_cache_static.is_empty() {
+        if should_emit(
+            config,
+            "lookup_cache_static",
+            !config.lookup_cache_static.is_empty(),
+        ) && !config.lookup_cache_static.is_empty()
+        {
             cmd.extend_from_slice(&["-lcs".into(), config.lookup_cache_static.clone()]);
         }
-        if !config.lookup_cache_dynamic.is_empty() {
+        if should_emit(
+            config,
+            "lookup_cache_dynamic",
+            !config.lookup_cache_dynamic.is_empty(),
+        ) && !config.lookup_cache_dynamic.is_empty()
+        {
             cmd.extend_from_slice(&["-lcd".into(), config.lookup_cache_dynamic.clone()]);
         }
-        if config.spec_default {
+        if should_emit(config, "spec_default", config.spec_default) && config.spec_default {
             cmd.push("--spec-default".into());
         }
-        if !config.spec_draft_backend_sampling {
+        if should_emit(
+            config,
+            "spec_draft_backend_sampling",
+            !config.spec_draft_backend_sampling,
+        ) && !config.spec_draft_backend_sampling
+        {
             cmd.push("--no-spec-draft-backend-sampling".into());
         }
-        if config.spec_draft_threads > 0 {
+        if should_emit(config, "spec_draft_threads", config.spec_draft_threads > 0)
+            && config.spec_draft_threads > 0
+        {
             cmd.extend_from_slice(&["-td".into(), config.spec_draft_threads.to_string()]);
         }
-        if config.spec_draft_threads_batch > 0 {
+        if should_emit(
+            config,
+            "spec_draft_threads_batch",
+            config.spec_draft_threads_batch > 0,
+        ) && config.spec_draft_threads_batch > 0
+        {
             cmd.extend_from_slice(&["-tbd".into(), config.spec_draft_threads_batch.to_string()]);
         }
     }
@@ -655,43 +863,63 @@ fn append_network_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
     if !config.ssl_cert_file.is_empty() {
         cmd.extend_from_slice(&["--ssl-cert-file".into(), config.ssl_cert_file.clone()]);
     }
-    if config.no_ui {
+    if should_emit(config, "no_ui", config.no_ui) && config.no_ui {
         cmd.push("--no-ui".into());
     }
-    if config.offline {
+    if should_emit(config, "offline", config.offline) && config.offline {
         cmd.push("--offline".into());
     }
-    if !config.path_prefix.is_empty() {
+    if should_emit(config, "path_prefix", !config.path_prefix.is_empty())
+        && !config.path_prefix.is_empty()
+    {
         cmd.extend_from_slice(&["--path".into(), config.path_prefix.clone()]);
     }
-    if !config.api_prefix.is_empty() {
+    if should_emit(config, "api_prefix", !config.api_prefix.is_empty())
+        && !config.api_prefix.is_empty()
+    {
         cmd.extend_from_slice(&["--api-prefix".into(), config.api_prefix.clone()]);
     }
-    if !config.cors_origins.is_empty() {
+    if should_emit(config, "cors_origins", !config.cors_origins.is_empty())
+        && !config.cors_origins.is_empty()
+    {
         cmd.extend_from_slice(&["--cors-origins".into(), config.cors_origins.clone()]);
     }
-    if !config.cors_methods.is_empty() {
+    if should_emit(config, "cors_methods", !config.cors_methods.is_empty())
+        && !config.cors_methods.is_empty()
+    {
         cmd.extend_from_slice(&["--cors-methods".into(), config.cors_methods.clone()]);
     }
-    if !config.cors_headers.is_empty() {
+    if should_emit(config, "cors_headers", !config.cors_headers.is_empty())
+        && !config.cors_headers.is_empty()
+    {
         cmd.extend_from_slice(&["--cors-headers".into(), config.cors_headers.clone()]);
     }
-    match config.cors_credentials.as_str() {
-        "on" => cmd.push("--cors-credentials".into()),
-        "off" => cmd.push("--no-cors-credentials".into()),
-        _ => {}
+    if should_emit(
+        config,
+        "cors_credentials",
+        !config.cors_credentials.is_empty(),
+    ) {
+        match config.cors_credentials.as_str() {
+            "on" => cmd.push("--cors-credentials".into()),
+            "off" => cmd.push("--no-cors-credentials".into()),
+            _ => {}
+        }
     }
     if !is_emb {
-        if !config.ui_config_file.is_empty() {
+        if should_emit(config, "ui_config_file", !config.ui_config_file.is_empty())
+            && !config.ui_config_file.is_empty()
+        {
             cmd.extend_from_slice(&["--ui-config-file".into(), config.ui_config_file.clone()]);
         }
-        if !config.ui_config.is_empty() {
+        if should_emit(config, "ui_config", !config.ui_config.is_empty())
+            && !config.ui_config.is_empty()
+        {
             cmd.extend_from_slice(&["--ui-config".into(), config.ui_config.clone()]);
         }
-        if config.ui_mcp_proxy {
+        if should_emit(config, "ui_mcp_proxy", config.ui_mcp_proxy) && config.ui_mcp_proxy {
             cmd.push("--ui-mcp-proxy".into());
         }
-        if config.agent {
+        if should_emit(config, "agent", config.agent) && config.agent {
             cmd.push("--agent".into());
         }
     }
@@ -704,124 +932,198 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         if !config.pooling.is_empty() {
             cmd.extend_from_slice(&["--pooling".into(), config.pooling.clone()]);
         }
-        cmd.extend_from_slice(&["--embd-normalize".into(), config.embd_normalize.to_string()]);
+        if should_emit(config, "embd_normalize", true) {
+            cmd.extend_from_slice(&["--embd-normalize".into(), config.embd_normalize.to_string()]);
+        }
         if config.reranking {
             cmd.push("--reranking".into());
         }
     } else {
-        if config.n_predict != -1 {
+        if should_emit(config, "n_predict", config.n_predict != -1) {
             cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]);
         }
-        if config.ignore_eos {
+        if should_emit(config, "ignore_eos", config.ignore_eos) && config.ignore_eos {
             cmd.push("--ignore-eos".into());
         }
-        if !config.json_schema.is_empty() {
+        if should_emit(config, "json_schema", !config.json_schema.is_empty())
+            && !config.json_schema.is_empty()
+        {
             cmd.extend_from_slice(&["--json-schema".into(), config.json_schema.clone()]);
         }
-        if !config.json_schema_file.is_empty() {
+        if should_emit(
+            config,
+            "json_schema_file",
+            !config.json_schema_file.is_empty(),
+        ) && !config.json_schema_file.is_empty()
+        {
             cmd.extend_from_slice(&["-jf".into(), config.json_schema_file.clone()]);
         }
-        if (config.temp - 0.8).abs() > f32::EPSILON {
+        if should_emit(config, "temp", (config.temp - 0.8).abs() > f32::EPSILON) {
             cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]);
         }
-        if config.top_k != 40 {
+        if should_emit(config, "top_k", config.top_k != 40) {
             cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]);
         }
-        if (config.top_p - 0.95).abs() > f32::EPSILON {
+        if should_emit(config, "top_p", (config.top_p - 0.95).abs() > f32::EPSILON) {
             cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]);
         }
-        if (config.repeat_penalty - 1.0).abs() > f32::EPSILON {
+        if should_emit(
+            config,
+            "repeat_penalty",
+            (config.repeat_penalty - 1.0).abs() > f32::EPSILON,
+        ) {
             cmd.extend_from_slice(&["--repeat-penalty".into(), config.repeat_penalty.to_string()]);
         }
-        if config.seed != -1 {
+        if should_emit(config, "seed", config.seed != -1) {
             cmd.extend_from_slice(&["--seed".into(), config.seed.to_string()]);
         }
-        if (config.min_p - 0.05).abs() > f32::EPSILON {
+        if should_emit(config, "min_p", (config.min_p - 0.05).abs() > f32::EPSILON) {
             cmd.extend_from_slice(&["--min-p".into(), config.min_p.to_string()]);
         }
-        if config.presence_penalty.abs() > f32::EPSILON {
+        if should_emit(
+            config,
+            "presence_penalty",
+            config.presence_penalty.abs() > f32::EPSILON,
+        ) {
             cmd.extend_from_slice(&[
                 "--presence-penalty".into(),
                 config.presence_penalty.to_string(),
             ]);
         }
-        if config.frequency_penalty.abs() > f32::EPSILON {
+        if should_emit(
+            config,
+            "frequency_penalty",
+            config.frequency_penalty.abs() > f32::EPSILON,
+        ) {
             cmd.extend_from_slice(&[
                 "--frequency-penalty".into(),
                 config.frequency_penalty.to_string(),
             ]);
         }
-        if config.repeat_last_n != 64 {
+        if should_emit(config, "repeat_last_n", config.repeat_last_n != 64) {
             cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]);
         }
-        if !config.reverse_prompt.is_empty() {
+        if should_emit(config, "reverse_prompt", !config.reverse_prompt.is_empty())
+            && !config.reverse_prompt.is_empty()
+        {
             cmd.extend_from_slice(&["-r".into(), config.reverse_prompt.clone()]);
         }
-        if config.special {
+        if should_emit(config, "special", config.special) && config.special {
             cmd.push("-sp".into());
         }
-        if config.spm_infill {
+        if should_emit(config, "spm_infill", config.spm_infill) && config.spm_infill {
             cmd.push("--spm-infill".into());
         }
-        if config.backend_sampling {
+        if should_emit(config, "backend_sampling", config.backend_sampling)
+            && config.backend_sampling
+        {
             cmd.push("-bs".into());
         }
 
         // Advanced sampling
-        if config.mirostat > 0 {
+        if should_emit(config, "mirostat", config.mirostat > 0) && config.mirostat > 0 {
             cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]);
-            cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]);
-            cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]);
+            if should_emit(config, "mirostat_lr", true) {
+                cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]);
+            }
+            if should_emit(config, "mirostat_ent", true) {
+                cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]);
+            }
         }
-        if config.xtc_probability > 0.0 {
+        if should_emit(config, "xtc_probability", config.xtc_probability > 0.0)
+            && config.xtc_probability > 0.0
+        {
             cmd.extend_from_slice(&[
                 "--xtc-probability".into(),
                 config.xtc_probability.to_string(),
             ]);
-            cmd.extend_from_slice(&["--xtc-threshold".into(), config.xtc_threshold.to_string()]);
+            if should_emit(config, "xtc_threshold", true) {
+                cmd.extend_from_slice(&[
+                    "--xtc-threshold".into(),
+                    config.xtc_threshold.to_string(),
+                ]);
+            }
         }
-        if config.dynatemp_range > 0.0 {
+        if should_emit(config, "dynatemp_range", config.dynatemp_range > 0.0)
+            && config.dynatemp_range > 0.0
+        {
             cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]);
-            cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]);
+            if should_emit(config, "dynatemp_exp", true) {
+                cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]);
+            }
         }
-        if (config.typical_p - 1.0).abs() > f32::EPSILON {
+        if should_emit(
+            config,
+            "typical_p",
+            (config.typical_p - 1.0).abs() > f32::EPSILON,
+        ) {
             cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]);
         }
-        if config.dry_multiplier > 0.0 {
+        if should_emit(config, "dry_multiplier", config.dry_multiplier > 0.0)
+            && config.dry_multiplier > 0.0
+        {
             cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]);
-            cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]);
-            cmd.extend_from_slice(&[
-                "--dry-allowed-length".into(),
-                config.dry_allowed_length.to_string(),
-            ]);
-            cmd.extend_from_slice(&[
-                "--dry-penalty-last-n".into(),
-                config.dry_penalty_last_n.to_string(),
-            ]);
+            if should_emit(config, "dry_base", true) {
+                cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]);
+            }
+            if should_emit(config, "dry_allowed_length", true) {
+                cmd.extend_from_slice(&[
+                    "--dry-allowed-length".into(),
+                    config.dry_allowed_length.to_string(),
+                ]);
+            }
+            if should_emit(config, "dry_penalty_last_n", true) {
+                cmd.extend_from_slice(&[
+                    "--dry-penalty-last-n".into(),
+                    config.dry_penalty_last_n.to_string(),
+                ]);
+            }
         }
-        if config.dry_multiplier > 0.0 && !config.dry_sequence_breaker.is_empty() {
+        if config.dry_multiplier > 0.0
+            && should_emit(
+                config,
+                "dry_sequence_breaker",
+                !config.dry_sequence_breaker.is_empty(),
+            )
+            && !config.dry_sequence_breaker.is_empty()
+        {
             cmd.extend_from_slice(&[
                 "--dry-sequence-breaker".into(),
                 config.dry_sequence_breaker.clone(),
             ]);
         }
-        if config.adaptive_target >= 0.0 {
+        if should_emit(config, "adaptive_target", config.adaptive_target >= 0.0)
+            && config.adaptive_target >= 0.0
+        {
             cmd.extend_from_slice(&[
                 "--adaptive-target".into(),
                 config.adaptive_target.to_string(),
             ]);
-            cmd.extend_from_slice(&["--adaptive-decay".into(), config.adaptive_decay.to_string()]);
+            if should_emit(config, "adaptive_decay", true) {
+                cmd.extend_from_slice(&[
+                    "--adaptive-decay".into(),
+                    config.adaptive_decay.to_string(),
+                ]);
+            }
         }
-        if config.top_n_sigma >= 0.0 {
+        if should_emit(config, "top_n_sigma", config.top_n_sigma >= 0.0)
+            && config.top_n_sigma >= 0.0
+        {
             cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]);
         }
-        if !config.logit_bias.is_empty() {
+        if should_emit(config, "logit_bias", !config.logit_bias.is_empty())
+            && !config.logit_bias.is_empty()
+        {
             cmd.extend_from_slice(&["-l".into(), config.logit_bias.clone()]);
         }
-        if !config.samplers.is_empty() {
+        if should_emit(config, "samplers", !config.samplers.is_empty())
+            && !config.samplers.is_empty()
+        {
             cmd.extend_from_slice(&["--samplers".into(), config.samplers.clone()]);
         }
-        if !config.sampler_seq.is_empty() {
+        if should_emit(config, "sampler_seq", !config.sampler_seq.is_empty())
+            && !config.sampler_seq.is_empty()
+        {
             cmd.extend_from_slice(&["--sampler-seq".into(), config.sampler_seq.clone()]);
         }
     }
@@ -829,20 +1131,20 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
 
 fn append_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Server features.
-    if config.timeout > 0 {
+    if should_emit(config, "timeout", config.timeout > 0) && config.timeout > 0 {
         cmd.extend_from_slice(&["-to".into(), config.timeout.to_string()]);
     }
-    if config.sleep_idle >= 0 {
+    if should_emit(config, "sleep_idle", config.sleep_idle >= 0) && config.sleep_idle >= 0 {
         cmd.extend_from_slice(&["--sleep-idle-seconds".into(), config.sleep_idle.to_string()]);
     }
-    if !is_emb {
+    if !is_emb && should_emit(config, "context_shift", true) {
         cmd.push(if config.context_shift {
             "--context-shift".into()
         } else {
             "--no-context-shift".into()
         });
     }
-    if config.verbose {
+    if should_emit(config, "verbose", config.verbose) && config.verbose {
         cmd.push("-v".into());
     }
     if config.metrics {
@@ -857,82 +1159,111 @@ fn append_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Stri
         "--no-slots".into()
     });
     if !is_emb {
-        if !config.slot_save_path.is_empty() {
+        if should_emit(config, "slot_save_path", !config.slot_save_path.is_empty())
+            && !config.slot_save_path.is_empty()
+        {
             cmd.extend_from_slice(&["--slot-save-path".into(), config.slot_save_path.clone()]);
         }
-        if !config.log_prompts_dir.is_empty() {
+        if should_emit(
+            config,
+            "log_prompts_dir",
+            !config.log_prompts_dir.is_empty(),
+        ) && !config.log_prompts_dir.is_empty()
+        {
             cmd.extend_from_slice(&["--log-prompts-dir".into(), config.log_prompts_dir.clone()]);
         }
-        cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
-        cmd.push(if config.prefill_assistant {
-            "--prefill-assistant".into()
-        } else {
-            "--no-prefill-assistant".into()
-        });
+        if should_emit(config, "slot_prompt_similarity", true) {
+            cmd.extend_from_slice(&["-sps".into(), config.slot_prompt_similarity.to_string()]);
+        }
+        if should_emit(config, "prefill_assistant", true) {
+            cmd.push(if config.prefill_assistant {
+                "--prefill-assistant".into()
+            } else {
+                "--no-prefill-assistant".into()
+            });
+        }
     }
 }
 
 fn append_extended_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // New server features aligned with llama.cpp master.
-    if !config.rpc_servers.is_empty() {
+    if should_emit(config, "rpc_servers", !config.rpc_servers.is_empty())
+        && !config.rpc_servers.is_empty()
+    {
         cmd.extend_from_slice(&["--rpc".into(), config.rpc_servers.clone()]);
     }
-    if config.sse_ping_interval != 30 {
+    if should_emit(config, "sse_ping_interval", config.sse_ping_interval != 30) {
         cmd.extend_from_slice(&[
             "--sse-ping-interval".into(),
             config.sse_ping_interval.to_string(),
         ]);
     }
-    if config.reuse_port {
+    if should_emit(config, "reuse_port", config.reuse_port) && config.reuse_port {
         cmd.push("--reuse-port".into());
     }
 
     if !is_emb {
         // Multi-model and media.
-        if !config.models_dir.is_empty() {
+        if should_emit(config, "models_dir", !config.models_dir.is_empty())
+            && !config.models_dir.is_empty()
+        {
             cmd.extend_from_slice(&["--models-dir".into(), config.models_dir.clone()]);
         }
-        if !config.models_preset.is_empty() {
+        if should_emit(config, "models_preset", !config.models_preset.is_empty())
+            && !config.models_preset.is_empty()
+        {
             cmd.extend_from_slice(&["--models-preset".into(), config.models_preset.clone()]);
         }
-        cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
-        cmd.push(if config.models_autoload {
-            "--models-autoload".into()
-        } else {
-            "--no-models-autoload".into()
-        });
-        if config.image_min_tokens > 0 {
+        if should_emit(config, "models_max", true) {
+            cmd.extend_from_slice(&["--models-max".into(), config.models_max.to_string()]);
+        }
+        if should_emit(config, "models_autoload", true) {
+            cmd.push(if config.models_autoload {
+                "--models-autoload".into()
+            } else {
+                "--no-models-autoload".into()
+            });
+        }
+        if should_emit(config, "image_min_tokens", config.image_min_tokens > 0) {
             cmd.extend_from_slice(&[
                 "--image-min-tokens".into(),
                 config.image_min_tokens.to_string(),
             ]);
         }
-        if config.image_max_tokens > 0 {
+        if should_emit(config, "image_max_tokens", config.image_max_tokens > 0) {
             cmd.extend_from_slice(&[
                 "--image-max-tokens".into(),
                 config.image_max_tokens.to_string(),
             ]);
         }
-        if config.mtmd_batch_max_tokens != 1024 {
+        if should_emit(
+            config,
+            "mtmd_batch_max_tokens",
+            config.mtmd_batch_max_tokens != 1024,
+        ) {
             cmd.extend_from_slice(&[
                 "--mtmd-batch-max-tokens".into(),
                 config.mtmd_batch_max_tokens.to_string(),
             ]);
         }
-        if !config.tags.is_empty() {
+        if should_emit(config, "tags", !config.tags.is_empty()) && !config.tags.is_empty() {
             cmd.extend_from_slice(&["--tags".into(), config.tags.clone()]);
         }
-        if !config.media_path.is_empty() {
+        if should_emit(config, "media_path", !config.media_path.is_empty())
+            && !config.media_path.is_empty()
+        {
             cmd.extend_from_slice(&["--media-path".into(), config.media_path.clone()]);
         }
-        if !config.tools.is_empty() {
+        if should_emit(config, "tools", !config.tools.is_empty()) && !config.tools.is_empty() {
             cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]);
         }
 
         // Custom args (#13: support double-quoted arguments).
-        for arg in &config.custom_args {
-            if !arg.is_empty() {
-                cmd.extend(split_args(arg));
+        if should_emit(config, "custom_args", !config.custom_args.is_empty()) {
+            for arg in &config.custom_args {
+                if !arg.is_empty() {
+                    cmd.extend(split_args(arg));
+                }
             }
         }
     }
@@ -972,6 +1303,151 @@ fn prepare_launch(
     let config = normalized.into_config();
     let command = generate_normalized_command(&config, engine_path);
     (config, workload, command)
+}
+
+fn manual_option_value(arguments: &[String], names: &[&str]) -> AppResult<Option<String>> {
+    let mut value = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if names.iter().any(|name| argument == name) {
+            let Some(next) = arguments.get(index + 1) else {
+                return Err(AppError::new(
+                    "MANUAL_COMMAND_VALUE_MISSING",
+                    format!("手动命令中的参数 {argument} 缺少取值。"),
+                    false,
+                ));
+            };
+            value = Some(next.clone());
+            index += 2;
+            continue;
+        }
+        for name in names {
+            if let Some(inline) = argument.strip_prefix(&format!("{name}=")) {
+                value = Some(inline.to_string());
+            }
+        }
+        index += 1;
+    }
+    Ok(value)
+}
+
+fn same_executable(left: &str, right: &str) -> bool {
+    let left_path = normalized_engine_path(left);
+    let right_path = normalized_engine_path(right);
+    if left_path == right_path {
+        return true;
+    }
+    left_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .zip(right_path.file_name().and_then(|value| value.to_str()))
+        .map(|(left, right)| left.eq_ignore_ascii_case(right))
+        .unwrap_or(false)
+}
+
+fn prepare_manual_launch(
+    mut config: InstanceConfig,
+    engine_path: &str,
+) -> AppResult<(InstanceConfig, ModelWorkload, Vec<String>)> {
+    let mut arguments = split_args_checked(config.manual_command.trim())
+        .map_err(|message| AppError::new("MANUAL_COMMAND_PARSE_FAILED", message, false))?;
+    if arguments.is_empty() {
+        return Err(AppError::new(
+            "MANUAL_COMMAND_EMPTY",
+            "手动启动命令不能为空。",
+            false,
+        ));
+    }
+
+    if !arguments[0].starts_with('-') {
+        let supplied_executable = arguments.remove(0);
+        if !same_executable(&supplied_executable, engine_path) {
+            return Err(AppError::new(
+                "MANUAL_COMMAND_ENGINE_MISMATCH",
+                "手动命令中的可执行文件与当前选中的引擎不一致。请删除命令开头的可执行文件，或改为当前引擎。",
+                false,
+            ));
+        }
+    }
+    if arguments.is_empty() {
+        return Err(AppError::new(
+            "MANUAL_COMMAND_ARGUMENTS_EMPTY",
+            "手动命令至少需要一个 llama-server 参数。",
+            false,
+        ));
+    }
+
+    config.host =
+        manual_option_value(&arguments, &["--host"])?.unwrap_or_else(|| "127.0.0.1".to_string());
+    if config.host.trim().is_empty() {
+        return Err(AppError::new(
+            "MANUAL_COMMAND_HOST_INVALID",
+            "手动命令中的监听地址不能为空。",
+            false,
+        ));
+    }
+    let port = manual_option_value(&arguments, &["--port"])?.unwrap_or_else(|| "8080".to_string());
+    config.port = port.parse::<u16>().map_err(|_| {
+        AppError::new(
+            "MANUAL_COMMAND_PORT_INVALID",
+            format!("手动命令中的端口 {port} 无效，必须为 1 到 65535。"),
+            false,
+        )
+    })?;
+    if config.port == 0 {
+        return Err(AppError::new(
+            "MANUAL_COMMAND_PORT_INVALID",
+            "手动命令中的端口必须为 1 到 65535。",
+            false,
+        ));
+    }
+    if let Some(model_path) = manual_option_value(&arguments, &["-m", "--model"])? {
+        config.model_path = model_path;
+    }
+    if let Some(alias) = manual_option_value(&arguments, &["-a", "--alias"])? {
+        config.alias = alias;
+    }
+    config.api_key = manual_option_value(&arguments, &["--api-key"])?.unwrap_or_default();
+    config.api_key_file = manual_option_value(&arguments, &["--api-key-file"])?.unwrap_or_default();
+    config.ssl_key_file = manual_option_value(&arguments, &["--ssl-key-file"])?.unwrap_or_default();
+    config.ssl_cert_file =
+        manual_option_value(&arguments, &["--ssl-cert-file"])?.unwrap_or_default();
+    config.path_prefix = manual_option_value(&arguments, &["--path"])?.unwrap_or_default();
+    config.api_prefix = manual_option_value(&arguments, &["--api-prefix"])?.unwrap_or_default();
+
+    let reranking = arguments.iter().any(|argument| argument == "--reranking");
+    let embedding = reranking || arguments.iter().any(|argument| argument == "--embedding");
+    config.embedding = embedding;
+    config.reranking = reranking;
+    let workload = if reranking {
+        ModelWorkload::Reranker
+    } else if embedding {
+        ModelWorkload::Embedding
+    } else {
+        ModelWorkload::Inference
+    };
+
+    let executable = if engine_path.trim().is_empty() {
+        "llama-server".to_string()
+    } else {
+        engine_path.to_string()
+    };
+    let mut command = Vec::with_capacity(arguments.len() + 1);
+    command.push(executable);
+    command.extend(arguments);
+    Ok((config, workload, command))
+}
+
+fn prepare_launch_checked(
+    config: InstanceConfig,
+    engine_path: &str,
+) -> AppResult<(InstanceConfig, ModelWorkload, Vec<String>)> {
+    if uses_manual_command(&config) {
+        prepare_manual_launch(config, engine_path)
+    } else {
+        Ok(prepare_launch(config, engine_path))
+    }
 }
 
 enum EngineCapabilityResolution {
@@ -1104,14 +1580,21 @@ pub async fn generate_server_command(
     engine_exe: String,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<GeneratedServerCommand> {
-    validate_tls_configuration(&config)?;
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
+    let manual = uses_manual_command(&config);
+    let (config, _, command) = prepare_launch_checked(config, &engine_exe)?;
+    validate_tls_configuration(&config)?;
+    if manual {
+        return Ok(GeneratedServerCommand {
+            command,
+            unsupported_flags: Vec::new(),
+        });
+    }
     let capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
         EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
         EngineCapabilityResolution::Missing => None,
         EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
     };
-    let command = generate_command(&config, &engine_exe);
     let unsupported_flags = capabilities
         .as_ref()
         .map(|value| unsupported_command_flags(&command, value))
@@ -1142,41 +1625,46 @@ pub async fn start_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> AppResult<()> {
-    validate_tls_configuration(&config)?;
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
-    let (config, workload, generated_cmd) = prepare_launch(config, &engine_exe);
-    let engine_capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe)
-    {
-        EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
-        EngineCapabilityResolution::Missing => None,
-        EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
-    };
-    if let Some(capabilities) = engine_capabilities.as_ref() {
-        let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
-        if !unsupported.is_empty() {
+    let manual = uses_manual_command(&config);
+    let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
+    validate_tls_configuration(&config)?;
+    let cmd = if manual {
+        generated_cmd
+    } else {
+        let engine_capabilities =
+            match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
+                EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
+                EngineCapabilityResolution::Missing => None,
+                EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
+            };
+        if let Some(capabilities) = engine_capabilities.as_ref() {
+            let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
+            if !unsupported.is_empty() {
+                return Err(AppError::new(
+                    "ENGINE_PARAMETER_UNSUPPORTED",
+                    format!(
+                        "当前 llama-server 不支持以下已启用参数：{}。请返回参数配置清除这些参数，或更换兼容的引擎版本。",
+                        unsupported.join(", ")
+                    ),
+                    false,
+                ));
+            }
+        }
+        let blocked = blocked_security_flags(&generated_cmd, engine_capabilities.as_ref());
+        if !blocked.is_empty() {
             return Err(AppError::new(
-                "ENGINE_PARAMETER_UNSUPPORTED",
+                "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
                 format!(
-                    "当前 llama-server 不支持以下已启用参数：{}。请返回参数配置清除这些参数，或更换兼容的引擎版本。",
-                    unsupported.join(", ")
+                    "当前引擎尚未确认支持以下安全参数：{}。请先完成引擎能力探测。",
+                    blocked.join(", ")
                 ),
                 false,
             ));
         }
-    }
-    let blocked = blocked_security_flags(&generated_cmd, engine_capabilities.as_ref());
-    if !blocked.is_empty() {
-        return Err(AppError::new(
-            "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
-            format!(
-                "当前引擎尚未确认支持以下安全参数：{}。请先完成引擎能力探测。",
-                blocked.join(", ")
-            ),
-            false,
-        ));
-    }
-    let cmd = command_for_capabilities(&generated_cmd, engine_capabilities.as_ref());
+        command_for_capabilities(&generated_cmd, engine_capabilities.as_ref())
+    };
     let cmd_display = format_command_for_display(&cmd);
 
     // Create a log file; llama-server writes here directly without pipe forwarding.
@@ -1335,7 +1823,22 @@ pub async fn start_server(
             "instanceId": instance_id,
             "pid": pid,
             "port": config.port,
+            "host": config.host,
             "command": cmd_display,
+            "effectiveConfig": {
+                "model_path": config.model_path,
+                "alias": config.alias,
+                "host": config.host,
+                "port": config.port,
+                "api_key": config.api_key,
+                "api_key_file": config.api_key_file,
+                "ssl_key_file": config.ssl_key_file,
+                "ssl_cert_file": config.ssl_cert_file,
+                "path_prefix": config.path_prefix,
+                "api_prefix": config.api_prefix,
+                "embedding": config.embedding,
+                "reranking": config.reranking,
+            },
         }),
     )
     .ok();
@@ -3274,14 +3777,23 @@ fn tail_log_file(
 
 /// Split custom argument strings while preserving ordinary Windows path separators.
 fn split_args(input: &str) -> Vec<String> {
+    split_args_checked(input).unwrap_or_default()
+}
+
+fn split_args_checked(input: &str) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
+    let mut token_started = false;
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
-            '"' => in_quotes = !in_quotes,
+            '"' => {
+                in_quotes = !in_quotes;
+                token_started = true;
+            }
             '\\' => {
+                token_started = true;
                 let mut count = 1;
                 while chars.peek() == Some(&'\\') {
                     chars.next();
@@ -3303,18 +3815,25 @@ fn split_args(input: &str) -> Vec<String> {
                     }
                 }
             }
-            ' ' | '\t' if !in_quotes => {
-                if !current.is_empty() {
+            ' ' | '\t' | '\r' | '\n' if !in_quotes => {
+                if token_started {
                     args.push(std::mem::take(&mut current));
+                    token_started = false;
                 }
             }
-            _ => current.push(ch),
+            _ => {
+                token_started = true;
+                current.push(ch);
+            }
         }
     }
-    if !current.is_empty() {
+    if in_quotes {
+        return Err("手动命令包含未闭合的双引号。".to_string());
+    }
+    if token_started {
         args.push(current);
     }
-    args
+    Ok(args)
 }
 
 #[cfg(test)]
@@ -3377,6 +3896,135 @@ mod perf_parser_tests {
             split_args(r#"--model "\\server\share\chat.gguf""#),
             vec!["--model", r"\\server\share\chat.gguf"]
         );
+    }
+
+    #[test]
+    fn tracked_defaults_emit_only_application_required_arguments() {
+        let config = InstanceConfig {
+            model_path: "C:/models/chat.gguf".into(),
+            explicit_overrides: Some(Vec::new()),
+            ..InstanceConfig::default()
+        };
+
+        assert_eq!(
+            generate_normalized_command(&config, "llama-server"),
+            vec![
+                "llama-server",
+                "-m",
+                "C:/models/chat.gguf",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8080",
+                "--metrics",
+                "--props",
+                "--slots",
+            ]
+        );
+    }
+
+    #[test]
+    fn tracked_speculative_command_omits_inherited_children() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            spec_type: "draft-mtp".into(),
+            draft_tokens: 2,
+            explicit_overrides: Some(vec!["spec_type".into(), "draft_tokens".into()]),
+            ..InstanceConfig::default()
+        };
+
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(&command, "--spec-type", "draft-mtp"));
+        assert!(has_flag_value(&command, "--spec-draft-n-max", "2"));
+        for inherited in [
+            "-ngld",
+            "--spec-draft-n-min",
+            "--spec-draft-p-min",
+            "--spec-draft-p-split",
+        ] {
+            assert!(!command.iter().any(|argument| argument == inherited));
+        }
+    }
+
+    #[test]
+    fn tracked_default_valued_and_sentinel_overrides_are_preserved() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            temp: 0.8,
+            n_predict: -1,
+            explicit_overrides: Some(vec!["temp".into(), "n_predict".into()]),
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(&command, "--temp", "0.8"));
+        assert!(has_flag_value(&command, "-n", "-1"));
+    }
+
+    #[test]
+    fn tracked_dependent_parameter_does_not_activate_its_controller() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            spec_type: "draft-mtp".into(),
+            spec_draft_n_min: 1,
+            explicit_overrides: Some(vec!["spec_draft_n_min".into()]),
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(!command.iter().any(|argument| argument == "--spec-type"));
+        assert!(!command
+            .iter()
+            .any(|argument| argument == "--spec-draft-n-min"));
+    }
+
+    #[test]
+    fn manual_command_uses_selected_executable_and_syncs_runtime_metadata() {
+        let engine = r"C:\Program Files\llama\llama-server.exe";
+        let config = InstanceConfig {
+            launch_mode: "manual".into(),
+            manual_command: format!(
+                "\"{engine}\" -m \"C:\\models\\embed model.gguf\"\n--host 0.0.0.0 --port=9001 --api-key secret --embedding"
+            ),
+            ..InstanceConfig::default()
+        };
+
+        let (effective, workload, command) = prepare_launch_checked(config, engine).unwrap();
+        assert_eq!(command[0], engine);
+        assert!(has_flag_value(
+            &command,
+            "-m",
+            r"C:\models\embed model.gguf"
+        ));
+        assert_eq!(effective.host, "0.0.0.0");
+        assert_eq!(effective.port, 9001);
+        assert_eq!(effective.api_key, "secret");
+        assert_eq!(workload, ModelWorkload::Embedding);
+        let display = format_command_for_display(&command);
+        assert!(display.contains("--api-key ********"));
+        assert!(!display.contains("--api-key secret"));
+    }
+
+    #[test]
+    fn manual_command_rejects_mismatched_executable_and_unclosed_quotes() {
+        let mismatched = InstanceConfig {
+            launch_mode: "manual".into(),
+            manual_command: r#""C:\other\llama-server.exe" -m model.gguf"#.into(),
+            ..InstanceConfig::default()
+        };
+        assert!(prepare_launch_checked(mismatched, r"C:\selected\different-server.exe").is_err());
+
+        let malformed = InstanceConfig {
+            launch_mode: "manual".into(),
+            manual_command: r#"-m "model.gguf"#.into(),
+            ..InstanceConfig::default()
+        };
+        assert!(prepare_launch_checked(malformed, "llama-server").is_err());
+
+        let zero_port = InstanceConfig {
+            launch_mode: "manual".into(),
+            manual_command: "-m model.gguf --port 0".into(),
+            ..InstanceConfig::default()
+        };
+        assert!(prepare_launch_checked(zero_port, "llama-server").is_err());
     }
 
     #[test]

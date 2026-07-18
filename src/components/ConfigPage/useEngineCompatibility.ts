@@ -27,8 +27,9 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
 
   const status = normalizeEngineCapabilityStatus(currentEngine?.capabilities)
   const versionStatus = normalizeEngineVersionStatus(currentEngine?.capabilities)
+  const managedMode = local?.launch_mode !== 'manual'
   const isTrustedSelection = Boolean(currentEngine && currentEngine.id === trustedEngineId)
-  const capabilityProbeRequired = isTrustedSelection
+  const capabilityProbeRequired = managedMode && isTrustedSelection
     && (status === 'unprobed' || versionStatus === 'unprobed')
     && autoProbeFailedFor !== currentEngine?.id
 
@@ -64,7 +65,7 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
   }, [capabilityProbeRequired, currentEngine, probeEngineCapabilities, status, versionStatus])
 
   useEffect(() => {
-    if (!local || !currentEngine || status !== 'detected') {
+    if (!local || local.launch_mode === 'manual' || !currentEngine || status !== 'detected') {
       setUnsupportedEngineFlags([])
       return
     }

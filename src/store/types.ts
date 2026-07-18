@@ -62,6 +62,10 @@ export interface GeneratedServerCommand {
 }
 
 export interface InstanceConfig {
+  // Launch policy. null explicit_overrides identifies a legacy config that has
+  // not yet been migrated to intent-based command generation.
+  launch_mode: 'managed' | 'manual'; manual_command: string;
+  explicit_overrides: string[] | null;
   // Basic
   id: string; name: string; engine_id: string; model_path: string; alias: string;
   lora_path: string; mmproj_path: string; lora_init_without_apply: boolean; lora_scaled: string;

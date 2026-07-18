@@ -177,6 +177,16 @@ pub struct EngineInfo {
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InstanceConfig {
+    /// Managed mode builds argv from structured fields. Manual mode launches
+    /// the selected executable with the exact argv supplied by the user.
+    #[serde(default = "default_launch_mode")]
+    pub launch_mode: String,
+    #[serde(default)]
+    pub manual_command: String,
+    /// None means a legacy configuration whose emission intent is unknown.
+    /// Some (including an empty vector) enables intent-based emission.
+    #[serde(default)]
+    pub explicit_overrides: Option<Vec<String>>,
     pub id: String,
     pub name: String,
     #[serde(default)]
@@ -461,6 +471,9 @@ pub struct InstanceConfig {
 impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
+            launch_mode: default_launch_mode(),
+            manual_command: String::new(),
+            explicit_overrides: None,
             id: String::new(),
             name: String::new(),
             engine_id: String::new(),
@@ -953,6 +966,10 @@ pub struct DownloadArtifactState {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_launch_mode() -> String {
+    "managed".to_string()
 }
 
 fn default_negative_one_i32() -> i32 {

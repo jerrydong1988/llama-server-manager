@@ -1,6 +1,7 @@
 import { startTransition } from 'react'
 import { invokeApp as invoke } from '../lib/ipc'
 import { normalizeInstanceConfig } from '../modelPolicy'
+import { migrateParameterIntent } from '../parameterIntent'
 import { pathBasename } from '../utils/path'
 import { resolveHydratedHealth } from './bootstrapHealth'
 import { restoredDownloadStatus, restoredDownloadTimestamp } from './downloadMerge'
@@ -91,11 +92,15 @@ export function normalizeModelPath(value: string): string {
 }
 
 export function normalizeStoredConfig(config: InstanceConfig, models: ModelInfo[]) {
-  const modelPath = normalizeModelPath(config.model_path)
+  const migrated = migrateParameterIntent(config)
+  if (migrated.launch_mode === 'manual') {
+    return { config: migrated, workload: 'inference' as const, vectorMode: false, changes: [] }
+  }
+  const modelPath = normalizeModelPath(migrated.model_path)
   const model = modelPath
     ? models.find(item => normalizeModelPath(item.path) === modelPath)
     : undefined
-  return normalizeInstanceConfig(config, model)
+  return normalizeInstanceConfig(migrated, model)
 }
 
 export function reconcileInstancesWithModels(instances: Instance[], models: ModelInfo[]) {
@@ -107,6 +112,7 @@ export function reconcileInstancesWithModels(instances: Instance[], models: Mode
 
   let changed = false
   const next = instances.map((instance) => {
+    if (instance.config.launch_mode === 'manual') return instance
     const modelPath = normalizeModelPath(instance.config.model_path)
     const normalized = normalizeInstanceConfig(
       instance.config,
@@ -225,16 +231,17 @@ async function processConfig(
   const existingInstances = get().instances
 
   const instances: Instance[] = Object.entries(global.instances).map(([id, config]) => {
+    const migratedConfig = migrateParameterIntent(config)
     const startedAt = global.running?.[id]?.start_time ?? 0
     const status: Instance['status'] = runningIds.has(id) ? 'running' : 'stopped'
     return {
       id,
-      name: config.name || 'Unnamed instance',
+      name: migratedConfig.name || 'Unnamed instance',
       status,
-      model: pathBasename(config.model_path),
-      port: config.port,
+      model: pathBasename(migratedConfig.model_path),
+      port: migratedConfig.port,
       healthCheck: resolveHydratedHealth(id, status, existingInstances),
-      config,
+      config: migratedConfig,
       startTime: startedAt > 0 ? startedAt * 1000 : undefined,
     }
   })

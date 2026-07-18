@@ -371,6 +371,7 @@ const createInstanceSource = section(instanceManagerSource, 'const handleCreate'
 assert.match(createInstanceSource, /normalizeInstanceConfig\(/, 'new instances must use the vector policy')
 assert.match(createInstanceSource, /context:\s*'create'/, 'new instance cleanup must be silent')
 assert.match(createInstanceSource, /config:\s*normalized\.config/, 'new instances must store the normalized config')
+assert.match(createInstanceSource, /markExplicitOverride\(config, 'mmproj_path'/, 'auto-selected projectors must remain explicit launch arguments')
 assert.ok(
   createInstanceSource.indexOf('config.engine_id') < createInstanceSource.indexOf('normalizeInstanceConfig('),
   'new instance identity and launch fields must be assigned before normalization',
@@ -391,7 +392,7 @@ assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must b
 assert.match(configDiffSource, /isEqualValue\(local\[change\.key\],\s*change\.after\)/, 'manual edits after cleanup must remain visible in the ordinary diff')
 assert.match(configWorkspaceSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
 const saveSource = section(configPageSource, 'const save =', 'const sectionProps')
-assert.match(saveSource, /const normalized = modelPathChanged/, 'save must select normalization based on whether the model path changed')
+assert.match(saveSource, /const normalized = manualMode[\s\S]*: modelPathChanged/, 'managed saves must select normalization based on whether the model path changed')
 assert.match(saveSource, /modelPathChanged[\s\S]*normalizeConfigForSelectedModel/, 'save must treat a manually edited model path as an explicit model switch')
 assert.match(saveSource, /validateConfig\(persistedConfig, currentModel, engine\)/, 'save validation must inspect the backend-normalized configuration')
 assert.match(saveSource, /config:\s*normalized\.config/, 'save must persist the same normalized configuration that was validated')
@@ -405,7 +406,7 @@ assert.ok(
   'cleanup summary must clear after persistence succeeds',
 )
 assert.match(configPageSource, /\{!isEmbedding && <ReasoningSection/, 'reasoning section must be absent in vector mode')
-assert.match(configPageSource, /\{!isEmbedding && \(\s*<Surface[^>]*data-guide="config-presets"/s, 'inference presets must be absent in vector mode')
+assert.match(configPageSource, /\{!manualMode && !isEmbedding && \(\s*<Surface[^>]*data-guide="config-presets"/s, 'inference presets must be absent in vector and manual modes')
 assert.match(configPageSource, /showPresetAssistant && !isEmbedding/, 'preset assistant must not render in vector mode')
 
 const sectionsSource = readSource('src', 'components', 'ConfigPage', 'sections.tsx')
