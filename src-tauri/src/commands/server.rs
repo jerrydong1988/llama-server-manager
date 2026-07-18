@@ -709,7 +709,9 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
             cmd.push("--reranking".into());
         }
     } else {
-        cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]);
+        if config.n_predict != -1 {
+            cmd.extend_from_slice(&["-n".into(), config.n_predict.to_string()]);
+        }
         if config.ignore_eos {
             cmd.push("--ignore-eos".into());
         }
@@ -719,21 +721,39 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         if !config.json_schema_file.is_empty() {
             cmd.extend_from_slice(&["-jf".into(), config.json_schema_file.clone()]);
         }
-        cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]);
-        cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]);
-        cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]);
-        cmd.extend_from_slice(&["--repeat-penalty".into(), config.repeat_penalty.to_string()]);
-        cmd.extend_from_slice(&["--seed".into(), config.seed.to_string()]);
-        cmd.extend_from_slice(&["--min-p".into(), config.min_p.to_string()]);
-        cmd.extend_from_slice(&[
-            "--presence-penalty".into(),
-            config.presence_penalty.to_string(),
-        ]);
-        cmd.extend_from_slice(&[
-            "--frequency-penalty".into(),
-            config.frequency_penalty.to_string(),
-        ]);
-        cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]);
+        if (config.temp - 0.8).abs() > f32::EPSILON {
+            cmd.extend_from_slice(&["--temp".into(), config.temp.to_string()]);
+        }
+        if config.top_k != 40 {
+            cmd.extend_from_slice(&["--top-k".into(), config.top_k.to_string()]);
+        }
+        if (config.top_p - 0.95).abs() > f32::EPSILON {
+            cmd.extend_from_slice(&["--top-p".into(), config.top_p.to_string()]);
+        }
+        if (config.repeat_penalty - 1.0).abs() > f32::EPSILON {
+            cmd.extend_from_slice(&["--repeat-penalty".into(), config.repeat_penalty.to_string()]);
+        }
+        if config.seed != -1 {
+            cmd.extend_from_slice(&["--seed".into(), config.seed.to_string()]);
+        }
+        if (config.min_p - 0.05).abs() > f32::EPSILON {
+            cmd.extend_from_slice(&["--min-p".into(), config.min_p.to_string()]);
+        }
+        if config.presence_penalty.abs() > f32::EPSILON {
+            cmd.extend_from_slice(&[
+                "--presence-penalty".into(),
+                config.presence_penalty.to_string(),
+            ]);
+        }
+        if config.frequency_penalty.abs() > f32::EPSILON {
+            cmd.extend_from_slice(&[
+                "--frequency-penalty".into(),
+                config.frequency_penalty.to_string(),
+            ]);
+        }
+        if config.repeat_last_n != 64 {
+            cmd.extend_from_slice(&["--repeat-last-n".into(), config.repeat_last_n.to_string()]);
+        }
         if !config.reverse_prompt.is_empty() {
             cmd.extend_from_slice(&["-r".into(), config.reverse_prompt.clone()]);
         }
@@ -748,41 +768,53 @@ fn append_workload_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         }
 
         // Advanced sampling
-        cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]);
         if config.mirostat > 0 {
+            cmd.extend_from_slice(&["--mirostat".into(), config.mirostat.to_string()]);
             cmd.extend_from_slice(&["--mirostat-lr".into(), config.mirostat_lr.to_string()]);
             cmd.extend_from_slice(&["--mirostat-ent".into(), config.mirostat_ent.to_string()]);
         }
-        cmd.extend_from_slice(&[
-            "--xtc-probability".into(),
-            config.xtc_probability.to_string(),
-        ]);
-        cmd.extend_from_slice(&["--xtc-threshold".into(), config.xtc_threshold.to_string()]);
-        cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]);
-        cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]);
-        cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]);
-        cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]);
-        cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]);
-        cmd.extend_from_slice(&[
-            "--dry-allowed-length".into(),
-            config.dry_allowed_length.to_string(),
-        ]);
-        cmd.extend_from_slice(&[
-            "--dry-penalty-last-n".into(),
-            config.dry_penalty_last_n.to_string(),
-        ]);
+        if config.xtc_probability > 0.0 {
+            cmd.extend_from_slice(&[
+                "--xtc-probability".into(),
+                config.xtc_probability.to_string(),
+            ]);
+            cmd.extend_from_slice(&["--xtc-threshold".into(), config.xtc_threshold.to_string()]);
+        }
+        if config.dynatemp_range > 0.0 {
+            cmd.extend_from_slice(&["--dynatemp-range".into(), config.dynatemp_range.to_string()]);
+            cmd.extend_from_slice(&["--dynatemp-exp".into(), config.dynatemp_exp.to_string()]);
+        }
+        if (config.typical_p - 1.0).abs() > f32::EPSILON {
+            cmd.extend_from_slice(&["--typical-p".into(), config.typical_p.to_string()]);
+        }
+        if config.dry_multiplier > 0.0 {
+            cmd.extend_from_slice(&["--dry-multiplier".into(), config.dry_multiplier.to_string()]);
+            cmd.extend_from_slice(&["--dry-base".into(), config.dry_base.to_string()]);
+            cmd.extend_from_slice(&[
+                "--dry-allowed-length".into(),
+                config.dry_allowed_length.to_string(),
+            ]);
+            cmd.extend_from_slice(&[
+                "--dry-penalty-last-n".into(),
+                config.dry_penalty_last_n.to_string(),
+            ]);
+        }
         if config.dry_multiplier > 0.0 && !config.dry_sequence_breaker.is_empty() {
             cmd.extend_from_slice(&[
                 "--dry-sequence-breaker".into(),
                 config.dry_sequence_breaker.clone(),
             ]);
         }
-        cmd.extend_from_slice(&[
-            "--adaptive-target".into(),
-            config.adaptive_target.to_string(),
-        ]);
-        cmd.extend_from_slice(&["--adaptive-decay".into(), config.adaptive_decay.to_string()]);
-        cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]);
+        if config.adaptive_target >= 0.0 {
+            cmd.extend_from_slice(&[
+                "--adaptive-target".into(),
+                config.adaptive_target.to_string(),
+            ]);
+            cmd.extend_from_slice(&["--adaptive-decay".into(), config.adaptive_decay.to_string()]);
+        }
+        if config.top_n_sigma >= 0.0 {
+            cmd.extend_from_slice(&["--top-n-sigma".into(), config.top_n_sigma.to_string()]);
+        }
         if !config.logit_bias.is_empty() {
             cmd.extend_from_slice(&["-l".into(), config.logit_bias.clone()]);
         }
@@ -3348,7 +3380,7 @@ mod perf_parser_tests {
     }
 
     #[test]
-    fn application_defaults_are_explicit_in_detected_engine_commands() {
+    fn non_sampling_application_defaults_remain_explicit() {
         let command = generate_normalized_command(&InstanceConfig::default(), "llama-server");
 
         for flag in [
@@ -3367,18 +3399,17 @@ mod perf_parser_tests {
                 "default command is missing explicit {flag}: {command:?}"
             );
         }
-        for (flag, value) in [
-            ("-cram", "8192"),
-            ("-cms", "8192"),
-            ("-n", "-1"),
-            ("--temp", "0.8"),
-            ("--top-k", "40"),
-            ("--min-p", "0.05"),
-            ("--models-max", "4"),
-        ] {
+        for (flag, value) in [("-cram", "8192"), ("-cms", "8192"), ("--models-max", "4")] {
             assert!(
                 has_flag_value(&command, flag, value),
                 "default command is missing explicit {flag} {value}: {command:?}"
+            );
+        }
+
+        for flag in ["-n", "--temp", "--top-k", "--top-p", "--min-p"] {
+            assert!(
+                !command.iter().any(|argument| argument == flag),
+                "default sampling flag should be omitted: {flag}: {command:?}"
             );
         }
     }

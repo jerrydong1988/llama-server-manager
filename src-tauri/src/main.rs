@@ -578,15 +578,174 @@ mod tests {
     }
 
     #[test]
-    fn test_advanced_sampling_defaults_are_explicit() {
+    fn test_sampling_defaults_are_omitted() {
         let c = cfg();
         let cmd = generate_command(&c, "");
-        assert!(cmd.windows(2).any(|args| args == ["--mirostat", "0"]));
-        assert!(!cmd.iter().any(|a| a == "--mirostat-lr"));
-        assert!(cmd
-            .windows(2)
-            .any(|args| args == ["--xtc-probability", "0"]));
-        assert!(cmd.windows(2).any(|args| args == ["--dry-multiplier", "0"]));
+        for omitted in [
+            "-n",
+            "--temp",
+            "--top-k",
+            "--top-p",
+            "--repeat-penalty",
+            "--seed",
+            "--min-p",
+            "--presence-penalty",
+            "--frequency-penalty",
+            "--repeat-last-n",
+            "--mirostat",
+            "--xtc-probability",
+            "--xtc-threshold",
+            "--dynatemp-range",
+            "--dynatemp-exp",
+            "--typical-p",
+            "--dry-multiplier",
+            "--dry-base",
+            "--dry-allowed-length",
+            "--dry-penalty-last-n",
+            "--adaptive-target",
+            "--adaptive-decay",
+            "--top-n-sigma",
+        ] {
+            assert!(!cmd.iter().any(|arg| arg == omitted), "leaked {omitted}");
+        }
+    }
+
+    #[test]
+    fn common_sampling_tuning_emits_only_changed_values() {
+        let mut c = cfg();
+        c.temp = 0.6;
+        c.top_k = 20;
+        c.top_p = 0.7;
+        c.repeat_last_n = 0;
+        let cmd = generate_command(&c, "");
+
+        for (flag, value) in [
+            ("--temp", "0.6"),
+            ("--top-k", "20"),
+            ("--top-p", "0.7"),
+            ("--repeat-last-n", "0"),
+        ] {
+            assert!(
+                cmd.windows(2).any(|args| args == [flag, value]),
+                "missing tuned value {flag} {value}"
+            );
+        }
+        for omitted in [
+            "-n",
+            "--repeat-penalty",
+            "--seed",
+            "--min-p",
+            "--presence-penalty",
+            "--frequency-penalty",
+            "--mirostat",
+            "--xtc-probability",
+            "--dynatemp-range",
+            "--typical-p",
+            "--dry-multiplier",
+            "--adaptive-target",
+            "--top-n-sigma",
+        ] {
+            assert!(!cmd.iter().any(|arg| arg == omitted), "leaked {omitted}");
+        }
+    }
+
+    #[test]
+    fn meaningful_zero_sampling_overrides_are_preserved() {
+        let mut c = cfg();
+        c.n_predict = 0;
+        c.temp = 0.0;
+        c.top_k = 0;
+        c.top_p = 1.0;
+        c.min_p = 0.0;
+        c.repeat_last_n = 0;
+        c.adaptive_target = 0.0;
+        c.top_n_sigma = 0.0;
+        let cmd = generate_command(&c, "");
+
+        for (flag, value) in [
+            ("-n", "0"),
+            ("--temp", "0"),
+            ("--top-k", "0"),
+            ("--top-p", "1"),
+            ("--min-p", "0"),
+            ("--repeat-last-n", "0"),
+            ("--adaptive-target", "0"),
+            ("--top-n-sigma", "0"),
+        ] {
+            assert!(
+                cmd.windows(2).any(|args| args == [flag, value]),
+                "missing {flag} {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_sampling_dependents_follow_their_controller() {
+        let mut disabled = cfg();
+        disabled.xtc_threshold = 0.4;
+        disabled.dynatemp_exp = 2.0;
+        disabled.dry_base = 2.0;
+        disabled.dry_allowed_length = 8;
+        disabled.dry_penalty_last_n = 128;
+        disabled.dry_sequence_breaker = "none".into();
+        disabled.adaptive_decay = 0.5;
+        let disabled_cmd = generate_command(&disabled, "");
+        for omitted in [
+            "--xtc-threshold",
+            "--dynatemp-exp",
+            "--dry-base",
+            "--dry-allowed-length",
+            "--dry-penalty-last-n",
+            "--dry-sequence-breaker",
+            "--adaptive-decay",
+        ] {
+            assert!(
+                !disabled_cmd.iter().any(|arg| arg == omitted),
+                "leaked disabled dependent {omitted}"
+            );
+        }
+
+        let mut enabled = cfg();
+        enabled.mirostat = 2;
+        enabled.mirostat_lr = 0.2;
+        enabled.mirostat_ent = 6.0;
+        enabled.xtc_probability = 0.5;
+        enabled.xtc_threshold = 0.2;
+        enabled.dynatemp_range = 0.4;
+        enabled.dynatemp_exp = 1.5;
+        enabled.typical_p = 0.9;
+        enabled.dry_multiplier = 0.8;
+        enabled.dry_base = 2.0;
+        enabled.dry_allowed_length = 4;
+        enabled.dry_penalty_last_n = 96;
+        enabled.dry_sequence_breaker = "none".into();
+        enabled.adaptive_target = 0.4;
+        enabled.adaptive_decay = 0.8;
+        enabled.top_n_sigma = 1.2;
+        let enabled_cmd = generate_command(&enabled, "");
+        for (flag, value) in [
+            ("--mirostat", "2"),
+            ("--mirostat-lr", "0.2"),
+            ("--mirostat-ent", "6"),
+            ("--xtc-probability", "0.5"),
+            ("--xtc-threshold", "0.2"),
+            ("--dynatemp-range", "0.4"),
+            ("--dynatemp-exp", "1.5"),
+            ("--typical-p", "0.9"),
+            ("--dry-multiplier", "0.8"),
+            ("--dry-base", "2"),
+            ("--dry-allowed-length", "4"),
+            ("--dry-penalty-last-n", "96"),
+            ("--dry-sequence-breaker", "none"),
+            ("--adaptive-target", "0.4"),
+            ("--adaptive-decay", "0.8"),
+            ("--top-n-sigma", "1.2"),
+        ] {
+            assert!(
+                enabled_cmd.windows(2).any(|args| args == [flag, value]),
+                "missing enabled sampling option {flag} {value}"
+            );
+        }
     }
 
     #[test]
