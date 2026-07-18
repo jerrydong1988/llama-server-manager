@@ -741,33 +741,41 @@ pub async fn get_cluster_metrics(state: State<'_, AppState>) -> Result<serde_jso
         .lock()
         .map_err(|_| "worker state lock is poisoned".to_string())?
         .clone();
-    let online: Vec<&WorkerInfo> = workers
+    let online: Vec<WorkerInfo> = workers
         .iter()
         .filter(|w| w.status == WorkerStatus::Online)
+        .cloned()
         .collect();
-
-    let mut worker_metrics = Vec::new();
-    let mut reachable_count = 0u32;
-    for w in &online {
-        let reachable =
-            utils::connect_tcp(&w.host, w.port, std::time::Duration::from_millis(500)).is_ok();
-        if reachable {
-            reachable_count += 1;
-        }
-
-        worker_metrics.push(serde_json::json!({
-            "host": w.host,
-            "port": w.port,
-            "name": w.name,
+    let probes = online.into_iter().map(|worker| async move {
+        let reachable = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            tokio::net::TcpStream::connect((worker.host.as_str(), worker.port)),
+        )
+        .await
+        .is_ok_and(|result| result.is_ok());
+        let metrics = serde_json::json!({
+            "host": worker.host,
+            "port": worker.port,
+            "name": worker.name,
             "online": reachable,
-            "devices": w.devices.iter().map(|d| serde_json::json!({
+            "devices": worker.devices.iter().map(|d| serde_json::json!({
                 "type": d.device_type,
                 "name": d.name,
                 "vram_mb": d.vram_mb,
                 "free_mb": d.free_mb,
             })).collect::<Vec<_>>(),
-        }));
-    }
+        });
+        (reachable, metrics)
+    });
+    let probe_results = futures_util::future::join_all(probes).await;
+    let reachable_count = probe_results
+        .iter()
+        .filter(|(reachable, _)| *reachable)
+        .count() as u32;
+    let worker_metrics = probe_results
+        .into_iter()
+        .map(|(_, metrics)| metrics)
+        .collect::<Vec<_>>();
 
     Ok(serde_json::json!({
         "total_workers": workers.len(),

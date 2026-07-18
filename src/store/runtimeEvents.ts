@@ -304,12 +304,14 @@ export function registerGlobalStoreListeners(
   })
 
   registerListener<DownloadEventPayload>(store, 'download-complete', (event) => {
+    const taskId = taskIdFromEvent(event.payload, store.getState().downloadTasks)
     const applied = applyDownloadPatch(store, event.payload, {
       status: 'completed',
       path: event.payload.path,
       speed: 0,
     })
     if (!applied) return
+    if (taskId) delete lastProgressUpdate[taskId]
 
     const state = store.getState()
     void state.processDownloadQueue()
@@ -321,8 +323,10 @@ export function registerGlobalStoreListeners(
   })
 
   registerListener<DownloadEventPayload>(store, 'download-cancelled', (event) => {
+    const taskId = taskIdFromEvent(event.payload, store.getState().downloadTasks)
     const applied = applyDownloadPatch(store, event.payload, { status: 'cancelled', speed: 0 })
     if (!applied) return
+    if (taskId) delete lastProgressUpdate[taskId]
 
     void store.getState().processDownloadQueue()
   })
@@ -337,12 +341,14 @@ export function registerGlobalStoreListeners(
   })
 
   registerListener<DownloadEventPayload>(store, 'download-error', (event) => {
+    const taskId = taskIdFromEvent(event.payload, store.getState().downloadTasks)
     const applied = applyDownloadPatch(store, event.payload, {
       status: 'error',
       error: event.payload.error,
       speed: 0,
     })
     if (!applied) return
+    if (taskId) delete lastProgressUpdate[taskId]
 
     void store.getState().processDownloadQueue()
   })
@@ -391,6 +397,7 @@ export function registerGlobalStoreListeners(
 
     const tasks = { ...state.downloadTasks }
     delete tasks[taskId]
+    delete lastProgressUpdate[taskId]
     state.setDownloadTasks(tasks)
   })
 

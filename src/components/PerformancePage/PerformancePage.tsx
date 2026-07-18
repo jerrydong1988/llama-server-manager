@@ -54,6 +54,7 @@ const emptyOverview: TelemetryOverview = {
   sessions_24h: 0,
   avg_tokens_per_sec_24h: 0,
   peak_vram_mb_24h: 0,
+  dropped_writes: 0,
   latest_samples: [],
 }
 
@@ -371,6 +372,16 @@ export default function PerformancePage() {
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
             <div className="font-semibold">{labels.telemetryError}</div>
             <div className="mt-1 truncate text-xs opacity-90" title={telemetryError}>{telemetryError}</div>
+          </div>
+        ) : null}
+        {overview.dropped_writes > 0 ? (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-100">
+            <div className="font-semibold">
+              {labels.telemetryDropped}
+            </div>
+            <div className="mt-1 text-xs opacity-90">
+              {labels.telemetryDroppedDetail(overview.dropped_writes)}
+            </div>
           </div>
         ) : null}
 

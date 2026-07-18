@@ -177,8 +177,9 @@ const InstanceManager = () => {
 
   const handleDelete = async (id: string) => {
     if (!await confirm(t.instance.confirmDelete, { title: t.instance.delete, kind: 'warning' })) return
+    await stopInstance(id)
     deleteInstance(id)
-    void useAppStore.getState().saveConfig().catch(() => {})
+    await useAppStore.getState().saveConfig()
   }
 
   const [copyFeedback, setCopyFeedback] = useState(false)

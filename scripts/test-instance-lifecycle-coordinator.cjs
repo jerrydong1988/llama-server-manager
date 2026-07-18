@@ -25,6 +25,23 @@ const serverSource = fs.readFileSync(
   path.join(__dirname, '..', 'src-tauri', 'src', 'commands', 'server.rs'),
   'utf8',
 )
+const instanceManagerSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'components', 'InstanceManager.tsx'),
+  'utf8',
+)
+const deleteSection = instanceManagerSource.slice(
+  instanceManagerSource.indexOf('const handleDelete'),
+  instanceManagerSource.indexOf('const [copyFeedback'),
+)
+assert.ok(
+  deleteSection.indexOf('await stopInstance(id)') < deleteSection.indexOf('deleteInstance(id)'),
+  'deleting an instance must stop its backend process before removing the config',
+)
+assert.match(
+  serverSource,
+  /let ri = state\.running[\s\S]*if ri\.is_none\(\) \{\s*return Ok\(\(\)\)/,
+  'stop_server must be idempotent so deletion can always coordinate with the backend',
+)
 const startServerSource = serverSource.slice(
   serverSource.indexOf('pub async fn start_server'),
   serverSource.indexOf('fn monitor_loop'),

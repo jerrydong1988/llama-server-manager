@@ -187,22 +187,20 @@ const ConfigPage = () => {
     }
 
     saveInFlightRef.current = true
-    setSaving(true)
-    setSaved(false)
+    setSaving(true); setSaved(false)
     if (saveFeedbackTimerRef.current !== null) {
       clearTimeout(saveFeedbackTimerRef.current)
       saveFeedbackTimerRef.current = null
     }
     const targetInstanceId = inst.id
     const saveRevision = editRevisionRef.current
+    const previousSave = { config: inst.config, committedModelPath: committedModelPathRef.current }
     const targetIsActive = () => mountedRef.current && useAppStore.getState().activeConfigInstanceId === targetInstanceId
     const saveIsCurrent = () => targetIsActive() && editRevisionRef.current === saveRevision
     const localSnapshot = local
     const engine = engines.find(item => item.id === (localSnapshot.engine_id || defaultEngineId || '')) || engines[0]
     const modelPathChanged = normalizeModelPath(localSnapshot.model_path) !== committedModelPathRef.current
-    const normalized = modelPathChanged
-      ? normalizeConfigForSelectedModel(localSnapshot, currentModel)
-      : normalizeInstanceConfig(localSnapshot, currentModel)
+    const normalized = modelPathChanged ? normalizeConfigForSelectedModel(localSnapshot, currentModel) : normalizeInstanceConfig(localSnapshot, currentModel)
 
     try {
       if (engine) {
@@ -244,6 +242,8 @@ const ConfigPage = () => {
         saveFeedbackTimerRef.current = null
       }, 6000)
     } catch (error) {
+      updateInstance(targetInstanceId, { config: previousSave.config })
+      if (saveIsCurrent()) { committedModelPathRef.current = previousSave.committedModelPath; setLocal(localSnapshot) }
       if (error && typeof error === 'object' && String((error as { code?: string }).code || '').startsWith('ENGINE_')) {
         addRuntimeWarning(`配置保存前的引擎兼容性检查失败：${String(error)}`)
       }

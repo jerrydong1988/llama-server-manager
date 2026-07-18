@@ -11,6 +11,23 @@ struct DiscoveryTask {
 
 static DISCOVERY_TASK: Mutex<Option<DiscoveryTask>> = Mutex::const_new(None);
 
+fn service_name_from_fullname(fullname: &str) -> String {
+    fullname.trim_end_matches("._rpc._tcp.local.").to_string()
+}
+
+fn mark_removed_service_offline(workers: &mut [WorkerInfo], service_name: &str) -> bool {
+    let mut changed = false;
+    for worker in workers.iter_mut().filter(|worker| {
+        worker.auto_discovered
+            && worker.name == service_name
+            && worker.status != WorkerStatus::Offline
+    }) {
+        worker.status = WorkerStatus::Offline;
+        changed = true;
+    }
+    changed
+}
+
 pub async fn start_mdns_discovery(app: tauri::AppHandle) -> Result<String, String> {
     let mut task = DISCOVERY_TASK.lock().await;
     if task
@@ -66,39 +83,55 @@ async fn run_mdns_discovery(
                 std::time::Duration::from_secs(3),
                 receiver.recv_async(),
             ) => {
-                if let Ok(Ok(mdns_sd::ServiceEvent::ServiceResolved(info))) = event {
-                    let host = info
-                        .get_addresses()
-                        .iter()
-                        .find(|a| a.is_ipv4())
-                        .map(|a| a.to_string())
-                        .unwrap_or_else(|| info.get_hostname().to_string());
-                    let port = info.get_port();
-                    let service_name = info
-                        .get_fullname()
-                        .trim_end_matches("._rpc._tcp.local.")
-                        .to_string();
-                    let state = app.state::<AppState>();
-                    update_workers(&state, |workers| {
-                        if let Some(worker) = workers
-                            .iter_mut()
-                            .find(|worker| worker.host == host && worker.port == port)
-                        {
-                            worker.status = WorkerStatus::Online;
-                            worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
-                            return;
-                        }
-                        workers.push(WorkerInfo {
-                            id: stable_discovered_worker_id(&host, port, &service_name),
-                            host,
-                            port,
-                            name: service_name,
-                            devices: Vec::new(),
-                            status: WorkerStatus::Online,
-                            last_seen: Some(chrono::Utc::now().to_rfc3339()),
-                            auto_discovered: true,
+                match event {
+                    Ok(Ok(mdns_sd::ServiceEvent::ServiceResolved(info))) => {
+                        let host = info
+                            .get_addresses()
+                            .iter()
+                            .find(|a| a.is_ipv4())
+                            .map(|a| a.to_string())
+                            .unwrap_or_else(|| info.get_hostname().to_string());
+                        let port = info.get_port();
+                        let service_name = service_name_from_fullname(info.get_fullname());
+                        let state = app.state::<AppState>();
+                        update_workers(&state, |workers| {
+                            if let Some(worker) = workers
+                                .iter_mut()
+                                .find(|worker| worker.host == host && worker.port == port)
+                            {
+                                worker.status = WorkerStatus::Online;
+                                worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                                return;
+                            }
+                            workers.push(WorkerInfo {
+                                id: stable_discovered_worker_id(&host, port, &service_name),
+                                host,
+                                port,
+                                name: service_name,
+                                devices: Vec::new(),
+                                status: WorkerStatus::Online,
+                                last_seen: Some(chrono::Utc::now().to_rfc3339()),
+                                auto_discovered: true,
+                            });
+                        })?;
+                    }
+                    Ok(Ok(mdns_sd::ServiceEvent::ServiceRemoved(_, fullname))) => {
+                        let service_name = service_name_from_fullname(&fullname);
+                        let state = app.state::<AppState>();
+                        let should_update = state.workers.lock().is_ok_and(|workers| {
+                            workers.iter().any(|worker| {
+                                worker.auto_discovered
+                                    && worker.name == service_name
+                                    && worker.status != WorkerStatus::Offline
+                            })
                         });
-                    })?;
+                        if should_update {
+                            update_workers(&state, |workers| {
+                                mark_removed_service_offline(workers, &service_name);
+                            })?;
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -106,6 +139,37 @@ async fn run_mdns_discovery(
 
     let _ = mdns.shutdown();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_removal_fullname_maps_to_the_persisted_worker_name() {
+        assert_eq!(
+            service_name_from_fullname("rpc-worker._rpc._tcp.local."),
+            "rpc-worker"
+        );
+
+        let discovered = WorkerInfo {
+            id: "auto".into(),
+            host: "127.0.0.1".into(),
+            port: 50052,
+            name: "rpc-worker".into(),
+            devices: Vec::new(),
+            status: WorkerStatus::Online,
+            last_seen: None,
+            auto_discovered: true,
+        };
+        let mut manual = discovered.clone();
+        manual.id = "manual".into();
+        manual.auto_discovered = false;
+        let mut workers = vec![discovered, manual];
+        assert!(mark_removed_service_offline(&mut workers, "rpc-worker"));
+        assert_eq!(workers[0].status, WorkerStatus::Offline);
+        assert_eq!(workers[1].status, WorkerStatus::Online);
+    }
 }
 
 // IPC compatibility boundary: legacy command internals keep their existing error flow,

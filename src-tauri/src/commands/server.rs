@@ -1553,7 +1553,6 @@ fn monitor_loop(
         };
 
         // llama metrics.
-        let mut llama_metrics: Option<serde_json::Value> = None;
         let mut llama_sample: Option<crate::commands::telemetry::LlamaMetricSample> = None;
         let mut req = client.get(&metrics_url);
         if !api_key.is_empty() {
@@ -1563,17 +1562,6 @@ fn monitor_loop(
             if resp.status().is_success() {
                 if let Ok(body) = resp.text() {
                     let sample = parse_llama_metric_sample(&body);
-                    llama_metrics = Some(serde_json::json!({
-                        "tokens_per_sec": sample.tokens_per_sec,
-                        "prompt_tokens": sample.prompt_tokens,
-                        "gen_tokens": sample.gen_tokens,
-                        "decode_calls_total": sample.decode_calls_total,
-                        "max_tokens_observed": sample.max_tokens_observed,
-                        "prompt_tokens_per_sec": sample.prompt_tokens_per_sec,
-                        "requests_processing": sample.requests_processing,
-                        "requests_deferred": sample.requests_deferred,
-                        "busy_slots_per_decode": sample.busy_slots_per_decode,
-                    }));
                     llama_sample = Some(sample);
                 }
             }
@@ -1646,25 +1634,12 @@ fn monitor_loop(
             }
         }
 
-        let _ = app.emit(
-            "metrics-update",
-            serde_json::json!({
-                "instanceId": instance_id,
-                "system": sys_metrics,
-                "llama": llama_metrics,
-                "ts": std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0),
-            }),
-        );
         std::thread::sleep(
             std::time::Duration::from_secs(5).saturating_sub(iteration_started.elapsed()),
         );
     }
 }
 
-#[cfg(unix)]
 fn wait_for_recorded_process_exit(ri: &RunningInstance, timeout: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
@@ -1698,51 +1673,119 @@ fn terminate_unix_process(ri: &RunningInstance) -> bool {
     kill_sent && wait_for_recorded_process_exit(ri, std::time::Duration::from_secs(2))
 }
 
+fn terminate_running_instance(ri: &RunningInstance) -> bool {
+    if !running_instance_matches_live_process(ri) {
+        return true;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        CommandExt::creation_flags(&mut Command::new("taskkill"), 0x08000000)
+            .args(["/F", "/T", "/PID", &ri.pid.to_string()])
+            .output()
+            .map(|output| {
+                (output.status.success()
+                    && wait_for_recorded_process_exit(ri, std::time::Duration::from_secs(3)))
+                    || !running_instance_matches_live_process(ri)
+            })
+            .unwrap_or_else(|_| !running_instance_matches_live_process(ri))
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        terminate_unix_process(ri)
+    }
+}
+
+pub(crate) fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<String> {
+    let state = app.state::<AppState>();
+    let running = state.running.lock().unwrap().clone();
+    let mut failures = Vec::new();
+
+    for (instance_id, recorded) in running {
+        if !terminate_running_instance(&recorded) {
+            failures.push(format!("{instance_id} (PID {})", recorded.pid));
+            continue;
+        }
+
+        let removed = {
+            let mut current = state.running.lock().unwrap();
+            if current
+                .get(&instance_id)
+                .is_some_and(|candidate| candidate.pid == recorded.pid)
+            {
+                current.remove(&instance_id)
+            } else {
+                None
+            }
+        };
+        if let Some(removed) = removed {
+            let _ = crate::commands::telemetry::finish_run_session(
+                removed.telemetry_session_id.as_deref(),
+                None,
+                "app-exit",
+            );
+        }
+    }
+
+    let remaining_ids = state
+        .running
+        .lock()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    state
+        .restored_runtime_instances
+        .lock()
+        .unwrap()
+        .retain(|key| {
+            key.split_once(':')
+                .is_some_and(|(instance_id, _)| remaining_ids.contains(instance_id))
+        });
+    failures
+}
+
 pub async fn stop_server(
     instance_id: String,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let ri = state.running.lock().unwrap().get(&instance_id).cloned();
-    let mut killed = false;
-
+    if ri.is_none() {
+        return Ok(());
+    }
     if let Some(ref ri) = ri {
         if !running_instance_matches_live_process(ri) {
             cleanup_running_instance(&app, &instance_id, ri.pid, "identity-mismatch");
             return Ok(());
         }
-        // Prefer taskkill /T, including child processes; PowerShell by port is the fallback.
-        #[cfg(target_os = "windows")]
-        {
-            let r = std::os::windows::process::CommandExt::creation_flags(
-                &mut Command::new("taskkill"),
-                0x08000000,
-            )
-            .args(["/F", "/T", "/PID", &ri.pid.to_string()])
-            .output();
-            killed = r.map(|o| o.status.success()).unwrap_or(false);
-        }
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        {
-            killed = terminate_unix_process(ri);
-        }
     }
 
-    if !killed {
-        if let Some(ref ri) = ri {
-            killed = !is_recorded_process_alive(ri.pid);
-        }
-    }
+    let killed = ri.as_ref().is_some_and(terminate_running_instance);
 
     if killed {
-        state.running.lock().unwrap().remove(&instance_id);
+        let removed = {
+            let mut running = state.running.lock().unwrap();
+            if running
+                .get(&instance_id)
+                .is_some_and(|current| Some(current.pid) == ri.as_ref().map(|item| item.pid))
+            {
+                running.remove(&instance_id)
+            } else {
+                None
+            }
+        };
+        if removed.is_none() {
+            return Ok(());
+        }
         {
             let mut restored = state.restored_runtime_instances.lock().unwrap();
             let prefix = format!("{}:", instance_id);
             restored.retain(|key| !key.starts_with(&prefix));
         }
         let _ = crate::commands::telemetry::finish_run_session(
-            ri.as_ref()
+            removed
+                .as_ref()
                 .and_then(|item| item.telemetry_session_id.as_deref()),
             None,
             "manual-stop",
@@ -3005,14 +3048,37 @@ fn tail_log_file(
     );
 }
 
-/// #13: Simple shell-style argument splitting with double-quote support.
+/// Split custom argument strings while preserving ordinary Windows path separators.
 fn split_args(input: &str) -> Vec<String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
-    for ch in input.chars() {
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
         match ch {
             '"' => in_quotes = !in_quotes,
+            '\\' => {
+                let mut count = 1;
+                while chars.peek() == Some(&'\\') {
+                    chars.next();
+                    count += 1;
+                }
+                if chars.peek() == Some(&'"') {
+                    for _ in 0..count / 2 {
+                        current.push('\\');
+                    }
+                    chars.next();
+                    if count % 2 == 0 {
+                        in_quotes = !in_quotes;
+                    } else {
+                        current.push('"');
+                    }
+                } else {
+                    for _ in 0..count {
+                        current.push('\\');
+                    }
+                }
+            }
             ' ' | '\t' if !in_quotes => {
                 if !current.is_empty() {
                     args.push(std::mem::take(&mut current));
@@ -3069,6 +3135,24 @@ mod perf_parser_tests {
         command
             .windows(2)
             .any(|arguments| arguments[0] == flag && arguments[1] == value)
+    }
+
+    #[test]
+    fn custom_argument_splitter_handles_escaped_quotes_and_windows_paths() {
+        assert_eq!(
+            split_args(r#"--prompt "say \"hello\"" --model C:\models\chat.gguf"#),
+            vec![
+                "--prompt",
+                "say \"hello\"",
+                "--model",
+                r"C:\models\chat.gguf",
+            ]
+        );
+        assert_eq!(split_args(r#"--value "a\\b""#), vec!["--value", r"a\\b"]);
+        assert_eq!(
+            split_args(r#"--model "\\server\share\chat.gguf""#),
+            vec!["--model", r"\\server\share\chat.gguf"]
+        );
     }
 
     #[test]

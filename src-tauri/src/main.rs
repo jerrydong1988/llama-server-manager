@@ -98,8 +98,15 @@ fn persist_runtime_state(app: &tauri::AppHandle) {
 }
 
 fn finalize_app_exit(app: &tauri::AppHandle) {
-    persist_runtime_state(app);
     flush_download_manager_state(app);
+    let failures = crate::commands::server::terminate_all_servers_for_exit(app);
+    if !failures.is_empty() {
+        eprintln!(
+            "Failed to terminate server processes during shutdown: {}",
+            failures.join(", ")
+        );
+    }
+    persist_runtime_state(app);
     if let Err(error) = crate::commands::telemetry::flush_telemetry_writer() {
         eprintln!("Telemetry flush failed during shutdown: {error}");
     }

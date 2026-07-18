@@ -2,6 +2,7 @@ use crate::models::{AppState, DownloadArtifactState, MsFileEntry, PersistedQueue
 use crate::utils;
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, CONTENT_LENGTH, CONTENT_RANGE, IF_RANGE};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -274,6 +275,20 @@ fn response_content_range(headers: &HeaderMap) -> Option<ParsedContentRange> {
         .get(CONTENT_RANGE)
         .and_then(|value| value.to_str().ok())
         .and_then(parse_content_range)
+}
+
+fn response_total_size(headers: &HeaderMap, resume_from: u64, fallback_size: u64) -> u64 {
+    if resume_from > 0 {
+        if let Some(total) = response_content_range(headers).and_then(|range| range.total) {
+            return total;
+        }
+    }
+    headers
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .map(|content_length| content_length.saturating_add(resume_from))
+        .unwrap_or(fallback_size)
 }
 
 fn validate_partial_response(
@@ -1136,11 +1151,7 @@ async fn download_single_file(
             return;
         }
     }
-    let total = if resume_from > 0 {
-        resp.content_length().unwrap_or(0) + resume_from
-    } else {
-        resp.content_length().unwrap_or(file_size)
-    };
+    let total = response_total_size(resp.headers(), resume_from, file_size);
     let mut downloaded = resume_from;
     let mut win_start = std::time::Instant::now();
     let mut win_bytes: u64 = 0;
@@ -1688,6 +1699,10 @@ pub async fn cancel_and_cleanup_download(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let _ = sanitize_file_name(&file_name)?;
+    let _scheduler = state
+        .download_scheduler_lock
+        .lock()
+        .map_err(|_| "download scheduler lock is poisoned".to_string())?;
     let run_id_for_match = run_id.as_deref();
     let mut entries = load_download_state(&state)?;
     entries.extend(state.download_queue.lock().unwrap().clone());
@@ -1722,10 +1737,10 @@ pub async fn cancel_and_cleanup_download(
     let key = run_id.unwrap_or_else(|| task_id.clone());
     state.cancel_flags.lock().unwrap().insert(key.clone(), true);
     state.pause_flags.lock().unwrap().remove(&key);
+    remove_manager_file(&state, &task_id)?;
     let _ = std::fs::remove_file(&cpath);
     let _ = std::fs::remove_file(&ctemp);
     let _ = std::fs::remove_file(&cmetadata);
-    remove_manager_file(&state, &task_id);
     let _ = app.emit("download-removed", serde_json::json!({ "taskId": task_id, "fileName": file_name, "version": version.unwrap_or(0) }));
     Ok(())
 }
@@ -2067,31 +2082,9 @@ fn update_manager_file_state(state: &AppState, task_id: &str, patch: FileStatePa
     changed
 }
 
-fn remove_manager_file(state: &AppState, task_id: &str) -> bool {
-    {
-        let mut active_entries = state.download_active_entries.lock().unwrap();
-        let mut changed = false;
-        active_entries.retain(|_, entry| {
-            let old_len = entry.files.len();
-            entry
-                .files
-                .retain(|file| file.task_id.as_deref() != Some(task_id));
-            if entry.files.len() != old_len {
-                changed = true;
-            }
-            entry.status = derive_entry_status(entry);
-            !entry.files.is_empty()
-        });
-        if changed {
-            drop(active_entries);
-            persist_active_entries_snapshot(state, true);
-            return true;
-        }
-    }
-
-    let mut queue = state.download_queue.lock().unwrap();
+fn remove_task_from_entries(entries: &mut Vec<PersistedQueueEntry>, task_id: &str) -> bool {
     let mut changed = false;
-    queue.retain_mut(|entry| {
+    entries.retain_mut(|entry| {
         let old_file_len = entry.files.len();
         entry
             .files
@@ -2102,22 +2095,75 @@ fn remove_manager_file(state: &AppState, task_id: &str) -> bool {
         entry.status = derive_entry_status(entry);
         !entry.files.is_empty()
     });
-    if changed {
-        drop(queue);
-        if let Err(error) = persist_manager_queue(state) {
-            eprintln!("Failed to persist download queue cleanup: {error}");
-        }
-    }
     changed
 }
 
-fn persist_terminal_entry(state: &AppState, mut entry: PersistedQueueEntry) -> Result<(), String> {
-    entry.files.retain(|file| {
-        !matches!(
-            file.status.as_deref(),
-            Some("completed") | Some("cancelled")
-        )
+fn remove_manager_file(state: &AppState, task_id: &str) -> Result<bool, String> {
+    let (previous_persisted, persisted_changed) = update_download_state(state, |persisted| {
+        let previous = persisted.clone();
+        let changed = remove_task_from_entries(persisted, task_id);
+        Ok((previous, changed))
+    })?;
+
+    let inflight_result = update_inflight_state(state, |inflight| {
+        remove_task_from_entries(inflight, task_id)
     });
+    let inflight_changed = match inflight_result {
+        Ok(changed) => changed,
+        Err(error) => {
+            let rollback = save_download_state(&previous_persisted, state);
+            return Err(match rollback {
+                Ok(()) => format!("failed to remove task from inflight state: {error}"),
+                Err(rollback_error) => format!(
+                    "failed to remove task from inflight state: {error}; download state rollback failed: {rollback_error}"
+                ),
+            });
+        }
+    };
+
+    let active_changed = {
+        let mut active_entries = state.download_active_entries.lock().unwrap();
+        let mut changed = false;
+        active_entries.retain(|_, entry| {
+            let old_len = entry.files.len();
+            entry
+                .files
+                .retain(|file| file.task_id.as_deref() != Some(task_id));
+            changed |= entry.files.len() != old_len;
+            entry.status = derive_entry_status(entry);
+            !entry.files.is_empty()
+        });
+        changed
+    };
+    let runtime_changed =
+        remove_task_from_entries(&mut state.download_queue.lock().unwrap(), task_id);
+
+    Ok(persisted_changed || inflight_changed || active_changed || runtime_changed)
+}
+
+fn cleanup_requested(
+    file: &MsFileEntry,
+    cancel_flags: &HashMap<String, bool>,
+    pause_flags: &HashMap<String, bool>,
+) -> bool {
+    let key = file.run_id.as_deref().or(file.task_id.as_deref());
+    key.is_some_and(|key| {
+        cancel_flags.get(key).copied().unwrap_or(false)
+            && !pause_flags.get(key).copied().unwrap_or(false)
+    })
+}
+
+fn persist_terminal_entry(state: &AppState, mut entry: PersistedQueueEntry) -> Result<(), String> {
+    {
+        let cancel_flags = state.cancel_flags.lock().unwrap().clone();
+        let pause_flags = state.pause_flags.lock().unwrap().clone();
+        entry.files.retain(|file| {
+            !matches!(
+                file.status.as_deref(),
+                Some("completed") | Some("cancelled")
+            ) && !cleanup_requested(file, &cancel_flags, &pause_flags)
+        });
+    }
 
     let runtime_queue = state.download_queue.lock().unwrap().clone();
     update_download_state(state, move |persisted| {
@@ -2501,14 +2547,15 @@ fn load_inflight_state_unlocked(state: &AppState) -> Result<Vec<PersistedQueueEn
         .map_err(|error| format!("failed to parse inflight download state: {error}"))
 }
 
-fn update_inflight_state<F>(state: &AppState, update: F) -> Result<(), String>
+fn update_inflight_state<R, F>(state: &AppState, update: F) -> Result<R, String>
 where
-    F: FnOnce(&mut Vec<PersistedQueueEntry>),
+    F: FnOnce(&mut Vec<PersistedQueueEntry>) -> R,
 {
     let _guard = state.download_inflight_lock.lock().unwrap();
     let mut inflight = load_inflight_state_unlocked(state)?;
-    update(&mut inflight);
-    save_inflight_state_unlocked(&inflight, state)
+    let result = update(&mut inflight);
+    save_inflight_state_unlocked(&inflight, state)?;
+    Ok(result)
 }
 
 fn clear_inflight_state(state: &AppState) -> Result<(), String> {
@@ -3351,6 +3398,57 @@ mod audit_remediation_tests {
     }
 
     #[test]
+    fn persisted_only_paused_task_is_removed_by_task_id() {
+        let mut entries = vec![PersistedQueueEntry {
+            id: "paused-entry".into(),
+            repo_id: "org/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "paused".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "model".into(),
+                downloaded: Some(25),
+                status: Some("paused".into()),
+                error: None,
+                task_id: Some("paused-task".into()),
+                run_id: Some("paused-run".into()),
+                version: Some(1),
+            }],
+        }];
+
+        assert!(remove_task_from_entries(&mut entries, "paused-task"));
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn cleanup_tombstone_does_not_mistake_a_pause_for_cancellation() {
+        let file = MsFileEntry {
+            name: "model.gguf".into(),
+            path: "model.gguf".into(),
+            size: 100,
+            file_type: "model".into(),
+            downloaded: Some(25),
+            status: Some("paused".into()),
+            error: None,
+            task_id: Some("paused-task".into()),
+            run_id: Some("paused-run".into()),
+            version: Some(1),
+        };
+        let cancel_flags = HashMap::from([("paused-run".into(), true)]);
+        let pause_flags = HashMap::from([("paused-run".into(), true)]);
+
+        assert!(!cleanup_requested(&file, &cancel_flags, &pause_flags));
+        assert!(cleanup_requested(&file, &cancel_flags, &HashMap::new()));
+    }
+
+    #[test]
     fn corrupt_download_state_is_quarantined_without_overwrite() {
         let dir = std::env::temp_dir().join(format!(
             "lsm-corrupt-download-state-test-{}",
@@ -3444,6 +3542,15 @@ mod audit_remediation_tests {
         assert!(validate_partial_response(&headers, 10, 99)
             .unwrap_err()
             .contains("object size changed"));
+    }
+
+    #[test]
+    fn resumed_total_prefers_content_range_over_chunk_length() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_RANGE, "bytes 10-19/100".parse().unwrap());
+        headers.insert(CONTENT_LENGTH, "10".parse().unwrap());
+
+        assert_eq!(response_total_size(&headers, 10, 100), 100);
     }
 
     #[test]

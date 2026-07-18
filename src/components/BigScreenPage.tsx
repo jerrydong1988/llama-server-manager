@@ -52,6 +52,7 @@ const emptyOverview: TelemetryOverview = {
   sessions_24h: 0,
   avg_tokens_per_sec_24h: 0,
   peak_vram_mb_24h: 0,
+  dropped_writes: 0,
   latest_samples: [],
 }
 

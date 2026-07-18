@@ -25,31 +25,44 @@ impl AppError {
     pub fn from_legacy(message: impl Into<String>) -> Self {
         let message = message.into();
         let normalized = message.to_ascii_lowercase();
-        let (code, retryable) = if normalized.contains("already")
-            || normalized.contains("conflict")
+        let has_term = |term: &str| {
+            normalized.match_indices(term).any(|(start, matched)| {
+                let end = start + matched.len();
+                let before = normalized[..start].chars().next_back();
+                let after = normalized[end..].chars().next();
+                before.map_or(true, |ch| !ch.is_ascii_alphanumeric() && ch != '_')
+                    && after.map_or(true, |ch| !ch.is_ascii_alphanumeric() && ch != '_')
+            })
+        };
+        let (code, retryable) = if has_term("already")
+            || has_term("conflict")
             || message.contains("已在")
             || message.contains("冲突")
         {
             ("CONFLICT", false)
         } else if normalized.contains("not found") || message.contains("未找到") {
             ("NOT_FOUND", false)
-        } else if normalized.contains("timeout") || message.contains("超时") {
+        } else if has_term("timeout")
+            || normalized.contains("timed out")
+            || message.contains("超时")
+        {
             ("TIMEOUT", true)
-        } else if normalized.contains("connect")
-            || normalized.contains("network")
+        } else if has_term("connect")
+            || has_term("connection")
+            || has_term("network")
             || message.contains("网络")
             || message.contains("连接")
         {
             ("NETWORK", true)
-        } else if normalized.contains("invalid")
-            || normalized.contains("required")
+        } else if has_term("invalid")
+            || has_term("required")
             || message.contains("无效")
             || message.contains("必须")
         {
             ("VALIDATION", false)
-        } else if normalized.contains("permission")
-            || normalized.contains("disk")
-            || normalized.contains("file")
+        } else if has_term("permission")
+            || has_term("disk")
+            || has_term("file")
             || message.contains("文件")
             || message.contains("磁盘")
         {
@@ -101,6 +114,12 @@ mod tests {
         let validation = AppError::from_legacy("invalid port");
         assert_eq!(validation.code, "VALIDATION");
         assert!(!validation.retryable);
+
+        let unrelated = AppError::from_legacy("profile metadata could not be loaded");
+        assert_eq!(unrelated.code, "INTERNAL");
+
+        let file_error = AppError::from_legacy("file could not be opened");
+        assert_eq!(file_error.code, "IO");
     }
 
     #[test]

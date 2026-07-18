@@ -99,6 +99,10 @@ export function getPerformanceLabels(lang: string) {
     sqliteBacked: zh ? 'SQLite 遥测' : 'SQLite Telemetry',
     refresh: zh ? '刷新' : 'Refresh',
     telemetryError: zh ? '遥测数据读取异常' : 'Telemetry query failed',
+    telemetryDropped: zh ? '遥测写入队列发生丢弃' : 'Telemetry writes were dropped',
+    telemetryDroppedDetail: (count: number) => zh
+      ? `本次运行已丢弃 ${count} 条遥测写入，请检查磁盘性能或负载。`
+      : `${count} telemetry writes were dropped during this run. Check disk performance or workload pressure.`,
     monitoringObject: zh ? '监控对象' : 'Monitoring Target',
     runningInstance: zh ? '运行中实例' : 'Running Instance',
     noRunning: zh ? '暂无运行中实例' : 'No running instance',

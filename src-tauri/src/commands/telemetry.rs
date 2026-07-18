@@ -4,7 +4,7 @@ use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -14,6 +14,7 @@ const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
 
 static TELEMETRY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
+static TELEMETRY_DROPPED_WRITES: AtomicU64 = AtomicU64::new(0);
 static TELEMETRY_SCHEMA_LOCK: Mutex<()> = Mutex::new(());
 static TELEMETRY_WRITER: Mutex<Option<mpsc::SyncSender<TelemetryWrite>>> = Mutex::new(None);
 
@@ -23,6 +24,7 @@ pub struct TelemetryOverview {
     pub sessions_24h: u32,
     pub avg_tokens_per_sec_24h: f64,
     pub peak_vram_mb_24h: f64,
+    pub dropped_writes: u64,
     pub latest_samples: Vec<TelemetrySampleSummary>,
 }
 
@@ -722,10 +724,13 @@ fn enqueue_telemetry(write: TelemetryWrite) -> Result<(), String> {
             reset_telemetry_writer();
             match telemetry_writer()?.try_send(pending) {
                 Ok(()) => Ok(()),
-                Err(mpsc::TrySendError::Full(_)) => Err(
-                    "telemetry write queue is full; sample was dropped to protect runtime latency"
-                        .to_string(),
-                ),
+                Err(mpsc::TrySendError::Full(_)) => {
+                    TELEMETRY_DROPPED_WRITES.fetch_add(1, Ordering::Relaxed);
+                    Err(
+                        "telemetry write queue is full; sample was dropped to protect runtime latency"
+                            .to_string(),
+                    )
+                }
                 Err(mpsc::TrySendError::Disconnected(_)) => {
                     Err("telemetry writer is unavailable after restart".to_string())
                 }
@@ -733,6 +738,7 @@ fn enqueue_telemetry(write: TelemetryWrite) -> Result<(), String> {
         }
         Err(error) => Err(match error {
             mpsc::TrySendError::Full(_) => {
+                TELEMETRY_DROPPED_WRITES.fetch_add(1, Ordering::Relaxed);
                 "telemetry write queue is full; sample was dropped to protect runtime latency"
                     .to_string()
             }
@@ -1273,6 +1279,7 @@ pub async fn get_telemetry_overview() -> Result<TelemetryOverview, String> {
             sessions_24h,
             avg_tokens_per_sec_24h,
             peak_vram_mb_24h,
+            dropped_writes: TELEMETRY_DROPPED_WRITES.load(Ordering::Relaxed),
             latest_samples,
         })
     })

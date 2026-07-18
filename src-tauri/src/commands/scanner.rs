@@ -2,7 +2,7 @@ use crate::commands::engine_capabilities::capabilities_match_executable;
 use crate::commands::model_inventory::{
     self, InventoryDirectoryRecord, InventoryEngineRecord, InventoryModelRecord,
 };
-use crate::models::{AppState, EngineInfo, ModelCapabilities, ModelInfo};
+use crate::models::{AppState, EngineInfo, InstanceConfig, ModelCapabilities, ModelInfo};
 use crate::utils;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -34,6 +34,38 @@ fn engine_path_identity(path: &Path) -> String {
     {
         key
     }
+}
+
+fn instances_referencing_model(
+    instances: &HashMap<String, InstanceConfig>,
+    target: &Path,
+) -> Vec<String> {
+    let target_identity = engine_path_identity(target);
+    instances
+        .values()
+        .filter(|instance| {
+            [
+                instance.model_path.as_str(),
+                instance.draft_model_path.as_str(),
+                instance.mmproj_path.as_str(),
+            ]
+            .into_iter()
+            .filter(|candidate| !candidate.trim().is_empty())
+            .any(|candidate| engine_path_identity(Path::new(candidate)) == target_identity)
+        })
+        .map(|instance| instance.name.clone())
+        .collect()
+}
+
+fn instances_referencing_engine(
+    instances: &HashMap<String, InstanceConfig>,
+    engine_id: &str,
+) -> Vec<String> {
+    instances
+        .values()
+        .filter(|instance| instance.engine_id == engine_id)
+        .map(|instance| instance.name.clone())
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -790,6 +822,13 @@ pub async fn delete_model_file(
     if !is_known {
         return Err("文件不在已扫描的模型列表中".to_string());
     }
+    let referenced_by = instances_referencing_model(&state.instances.lock().unwrap(), &canonical);
+    if !referenced_by.is_empty() {
+        return Err(format!(
+            "模型文件正被实例引用，无法删除: {}",
+            referenced_by.join(", ")
+        ));
+    }
     std::fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
     let _ = model_inventory::delete_model(&canonical.to_string_lossy());
     let mut models = state.models.lock().unwrap();
@@ -1129,9 +1168,40 @@ mod incremental_scan_tests {
         #[cfg(not(target_os = "windows"))]
         assert_ne!(engine_path_identity(upper), engine_path_identity(lower));
     }
+
+    #[test]
+    fn referenced_models_and_engines_are_identified_before_deletion() {
+        let mut instances = HashMap::new();
+        instances.insert(
+            "primary".into(),
+            InstanceConfig {
+                name: "Primary".into(),
+                model_path: "/models/chat.gguf".into(),
+                engine_id: "engine-1".into(),
+                ..InstanceConfig::default()
+            },
+        );
+
+        assert_eq!(
+            instances_referencing_model(&instances, Path::new("/models/chat.gguf")),
+            vec!["Primary"]
+        );
+        assert_eq!(
+            instances_referencing_engine(&instances, "engine-1"),
+            vec!["Primary"]
+        );
+        assert!(instances_referencing_engine(&instances, "engine-2").is_empty());
+    }
 }
 
 pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let referenced_by = instances_referencing_engine(&state.instances.lock().unwrap(), &id);
+    if !referenced_by.is_empty() {
+        return Err(format!(
+            "引擎正被实例引用，无法删除: {}",
+            referenced_by.join(", ")
+        ));
+    }
     let mut engines = state.engines.lock().unwrap();
     engines.retain(|e| e.id != id);
     let _ = model_inventory::delete_engine(&id);

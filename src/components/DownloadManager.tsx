@@ -383,9 +383,7 @@ export default function DownloadManager() {
   }
 
   const handleCancelPersisted = (task: DownloadProgress) => {
-    const current = downloadTasks[task.id]
-    if (current) setDownloadTasks({ ...downloadTasks, [task.id]: { ...current, status: 'cancelled' } })
-    cancelAndCleanupDownload(task.id, task.fileName, pathJoin(task.saveDir, task.repoId, task.fileName), task.runId, task.version)
+    void cancelAndCleanupDownload(task.id, task.fileName, pathJoin(task.saveDir, task.repoId, task.fileName), task.runId, task.version)
   }
 
   const taskLocalPath = (task: DownloadProgress) => task.path || pathJoin(task.saveDir, task.repoId, task.fileName)

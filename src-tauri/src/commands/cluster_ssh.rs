@@ -56,7 +56,7 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
             binary,
             port,
             &format!(
-                "ss -tlnp 2>/dev/null | grep -q ':{}' || netstat -tlnp 2>/dev/null | grep -q ':{}'",
+                "ss -tlnH 2>/dev/null | awk -v port='{}' '$4 ~ (\":\" port \"$\") {{ found=1 }} END {{ exit !found }}' || netstat -tln 2>/dev/null | awk -v port='{}' '$4 ~ (\":\" port \"$\") {{ found=1 }} END {{ exit !found }}'",
                 port, port
             ),
         ),
@@ -76,7 +76,7 @@ fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
             binary,
             port,
             &format!(
-                "ss -tlnp 2>/dev/null | grep -q ':{}' || netstat -tlnp 2>/dev/null | grep -q ':{}'",
+                "ss -tlnH 2>/dev/null | awk -v port='{}' '$4 ~ (\":\" port \"$\") {{ found=1 }} END {{ exit !found }}' || netstat -tln 2>/dev/null | awk -v port='{}' '$4 ~ (\":\" port \"$\") {{ found=1 }} END {{ exit !found }}'",
                 port, port
             ),
         ),
@@ -170,7 +170,9 @@ mod tests {
     #[test]
     fn linux_remote_command_uses_linux_socket_tools() {
         let command = build_remote_cmd("/opt/llama/rpc-server", 50052, "linux");
-        assert!(command.contains("ss -tlnp"));
+        assert!(command.contains("ss -tlnH"));
+        assert!(command.contains("port \"$\""));
+        assert!(!command.contains("grep -q ':50052'"));
         assert!(command.contains("PORT-OK"));
         assert!(!command.contains("/tmp/rpc-server"));
     }
@@ -179,7 +181,7 @@ mod tests {
     fn macos_remote_command_uses_lsof_instead_of_linux_netstat_flags() {
         let command = build_remote_cmd("/Applications/llama rpc/rpc-server", 50052, "macos");
         assert!(command.contains("lsof -nP -iTCP:50052 -sTCP:LISTEN"));
-        assert!(!command.contains("ss -tlnp"));
+        assert!(!command.contains("ss -tlnH"));
         assert!(!command.contains("netstat -tlnp"));
         assert!(command.contains("PORT-OK"));
         assert!(!command.contains("/tmp/rpc-server"));

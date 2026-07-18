@@ -86,6 +86,11 @@ assert.match(
   /await saveConfig\(\)[\s\S]*useAppStore\.getState\(\)\.instances[\s\S]*setBaseline\(persistedConfig\)/,
   'save feedback must use the backend-normalized configuration',
 )
+assert.match(
+  configPageSource,
+  /const previousSave =[\s\S]*catch \(error\)[\s\S]*updateInstance\(targetInstanceId, \{ config: previousSave\.config \}\)/,
+  'a failed config persistence must restore the previously persisted store value',
+)
 
 const entry = `
   import assert from 'node:assert/strict'

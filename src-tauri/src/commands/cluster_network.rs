@@ -4,7 +4,9 @@ use tauri::State;
 pub async fn detect_usb4_adapters(state: State<'_, AppState>) -> Result<Vec<Usb4Adapter>, String> {
     #[cfg(target_os = "windows")]
     {
-        let adapters = detect_usb4_windows().unwrap_or_default();
+        let adapters = tokio::task::spawn_blocking(detect_usb4_windows)
+            .await
+            .map_err(|error| format!("USB4 adapter detection task failed: {error}"))??;
         if let Ok(mut a) = state.usb4_adapters.lock() {
             *a = adapters.clone();
         }

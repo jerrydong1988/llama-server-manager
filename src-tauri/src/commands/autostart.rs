@@ -55,7 +55,7 @@ pub fn enable_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let quoted = format!("\"{}\"", exe);
-        std::process::Command::new("reg")
+        let output = std::process::Command::new("reg")
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -69,6 +69,12 @@ pub fn enable_autostart() -> Result<(), String> {
             ])
             .output()
             .map_err(|e| format!("注册表写入失败: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "注册表写入失败: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
     }
 
     #[cfg(target_os = "macos")]

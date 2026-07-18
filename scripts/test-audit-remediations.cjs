@@ -67,6 +67,9 @@ const serverSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'comman
 const telemetrySource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'commands', 'telemetry.rs'), 'utf8')
 const downloadManagerSource = fs.readFileSync(path.join(root, 'src', 'components', 'DownloadManager.tsx'), 'utf8')
 const bigScreenSource = fs.readFileSync(path.join(root, 'src', 'components', 'BigScreenPage.tsx'), 'utf8')
+const mainSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'main.rs'), 'utf8')
+const downloadSliceSource = fs.readFileSync(path.join(root, 'src', 'store', 'downloadSlice.ts'), 'utf8')
+const runtimeEventsSource = fs.readFileSync(path.join(root, 'src', 'store', 'runtimeEvents.ts'), 'utf8')
 
 assert.match(downloadSource, /fn verified_managed_cleanup_path/, 'cleanup must canonicalize managed download paths')
 assert.match(downloadSource, /download_shutting_down\.load\(Ordering::SeqCst\)/, 'the scheduler must stop admitting work during shutdown')
@@ -76,6 +79,27 @@ assert.match(downloadSource, /Some\("completed" \| "cancelled"\)/, 'cancelled fi
 assert.match(proxySource, /proxy_lifecycle_lock\.lock\(\)\.await/, 'proxy lifecycle transitions must be serialized')
 assert.match(serverSource, /stdout_pump\.join\(\)/, 'server exit must drain stdout before final telemetry parsing')
 assert.match(serverSource, /stderr_pump\.join\(\)/, 'server exit must drain stderr before final telemetry parsing')
+assert.doesNotMatch(serverSource, /"metrics-update"/, 'the backend must not emit an event without a frontend consumer')
+assert.match(mainSource, /terminate_all_servers_for_exit/, 'application exit must terminate managed server processes')
+assert.match(telemetrySource, /TELEMETRY_DROPPED_WRITES\.fetch_add/, 'telemetry queue pressure must be observable')
+assert.match(downloadSliceSource, /resumeAllDownloads:[\s\S]*error: undefined[\s\S]*completedAt: undefined/, 'bulk resume must clear stale terminal state')
+assert.match(runtimeEventsSource, /delete lastProgressUpdate\[taskId\]/, 'terminal download events must clear progress throttling state')
+const removeManagerFileSource = downloadSource.slice(
+  downloadSource.indexOf('fn remove_manager_file'),
+  downloadSource.indexOf('fn cleanup_requested'),
+)
+assert.match(removeManagerFileSource, /update_download_state/, 'paused task cancellation must remove persisted queue state')
+assert.match(removeManagerFileSource, /update_inflight_state/, 'paused task cancellation must remove crash-recovery state')
+assert.match(
+  downloadSource,
+  /remove_manager_file\(&state, &task_id\)\?;[\s\S]*emit\("download-removed"/,
+  'the backend must emit removal only after durable task cleanup succeeds',
+)
+const cancelPersistedSource = downloadManagerSource.slice(
+  downloadManagerSource.indexOf('const handleCancelPersisted'),
+  downloadManagerSource.indexOf('const taskLocalPath'),
+)
+assert.doesNotMatch(cancelPersistedSource, /status: 'cancelled'/, 'the frontend must not hide a paused task before backend confirmation')
 assert.match(telemetrySource, /completed_at = inference_requests\.completed_at/, 'log replay must preserve the original completion time')
 assert.match(downloadManagerSource, /useAppStore\.setState\(state =>/, 'local file discovery must merge into the latest download state')
 assert.match(downloadManagerSource, /latest\.updatedAt[\s\S]*browseStartedAt/, 'local discovery must not overwrite concurrent progress')

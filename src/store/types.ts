@@ -288,6 +288,7 @@ export interface TelemetryOverview {
   sessions_24h: number
   avg_tokens_per_sec_24h: number
   peak_vram_mb_24h: number
+  dropped_writes: number
   latest_samples: TelemetrySampleSummary[]
 }
 
