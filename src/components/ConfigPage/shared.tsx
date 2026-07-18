@@ -91,22 +91,22 @@ export const Section = ({
   )
 }
 
-export const Input = ({ label, value, onChange, placeholder, type, title, disabled, active }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; active?: boolean }) => {
+export const Input = ({ label, value, onChange, placeholder, type, title, disabled }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; active?: boolean }) => {
   const match = useLabelMatch(label)
   const ref = useSearchScroll(match)
   return (
   <div title={title} ref={ref}>
-    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : active ? 'text-emerald-300' : 'text-slate-400'}`}>{label}</label>
+    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}>{label}</label>
     <TextInput type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`h-10 ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`} />
   </div>
 )}
 
-export const Num = ({ label, value, onChange, min, max, step, title, disabled, active }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; active?: boolean }) => {
+export const Num = ({ label, value, onChange, min, max, step, title, disabled }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; active?: boolean }) => {
   const match = useLabelMatch(label)
   const ref = useSearchScroll(match)
   return (
   <div title={title} ref={ref}>
-    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : active ? 'text-emerald-300' : 'text-slate-400'}`}>{label}</label>
+    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}>{label}</label>
     <TextInput type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`h-10 ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`} />
   </div>
 )}
@@ -118,7 +118,7 @@ export const Toggle = ({ label, value, onChange, title, disabled }: { label: str
   </label>
 )
 
-export const Switch = ({ label, value, onChange, title, disabled, active }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; active?: boolean }) => {
+export const Switch = ({ label, value, onChange, title, disabled }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; active?: boolean }) => {
   const match = useLabelMatch(label)
   const ref = useSearchScroll(match)
   return (
@@ -133,16 +133,16 @@ export const Switch = ({ label, value, onChange, title, disabled, active }: { la
     >
       <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
     </button>
-    <span className={`text-sm ${match ? 'text-amber-300' : active ? 'text-emerald-300' : 'text-slate-200'}`}>{label}</span>
+    <span className={`text-sm ${match ? 'text-amber-300' : 'text-slate-200'}`}>{label}</span>
   </label>
 )}
 
-export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, active }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; active?: boolean }) => {
+export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; active?: boolean }) => {
   const match = useLabelMatch(label)
   const ref = useSearchScroll(match)
   return (
   <div title={title} ref={ref}>
-    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : active ? 'text-emerald-300' : 'text-slate-400'}`}>{label}</label>
+    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}>{label}</label>
     <SelectInput value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`h-10 w-full ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`}>
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
     </SelectInput>

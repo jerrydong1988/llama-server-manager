@@ -493,13 +493,6 @@ mod tests {
         c.media_path = "/test/media".into();
         c.tools = "tool.json".into();
         c.slot_prompt_similarity = 0.9;
-        c.custom_args = vec![
-            "--spec-type draft-mtp".into(),
-            "--temp 1.5".into(),
-            "--draft-model /test/draft.gguf".into(),
-            "-ctkd q8_0".into(),
-        ];
-
         let cmd = generate_command(&c, "");
 
         for forbidden in [

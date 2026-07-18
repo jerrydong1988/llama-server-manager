@@ -101,6 +101,7 @@ const VECTOR_ALLOWED_FIELDS: &[&str] = &[
     "pooling",
     "embd_normalize",
     "reranking",
+    "custom_args",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -380,7 +381,7 @@ mod tests {
         assert!(normalized.config.reasoning_preserve.is_empty());
         assert!(normalized.config.log_prompts_dir.is_empty());
         assert_eq!(normalized.config.cors_origins, "localhost");
-        assert!(normalized.config.custom_args.is_empty());
+        assert_eq!(normalized.config.custom_args, vec!["--temp 1.5"]);
 
         let reranker = normalize_for_launch(InstanceConfig {
             model_path: "C:/models/bge-reranker-v2.gguf".into(),

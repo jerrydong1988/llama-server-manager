@@ -161,7 +161,11 @@ const ConfigPage = () => {
     )
   }
 
-  const activeParams = getActiveParams(local, isEmbedding)
+  const overrideKeys = explicitOverrideKeys(local)
+  const generatedParams = getActiveParams(local, isEmbedding)
+  const activeParams = local.launch_mode === 'manual'
+    ? generatedParams
+    : new Set([...generatedParams].filter(key => overrideKeys.includes(key)))
   const primaryModelPath = currentModel?.path || local.model_path || ''
   const draftModelPath = local.draft_model_path || ''
   const endpoint = formatHostPort(local.host || '127.0.0.1', local.port)
@@ -319,23 +323,19 @@ const ConfigPage = () => {
   )
   const configChanges = getConfigChanges(local, savedBaseline, t, labels)
     .filter(change => !vectorCleanupKeys.has(change.key))
-  const overrideKeys = explicitOverrideKeys(local)
   const liveWarnings = manualMode ? [] : validateConfig(local, currentModel, currentEngine)
   const engineCompatibilityMode = getEngineCompatibilityMode(currentEngine?.capabilities)
   const engineVersionStatus = normalizeEngineVersionStatus(currentEngine?.capabilities)
   const visibleWarnings = saved ? saveWarnings : liveWarnings
-  const warningCounts = {
-    high: liveWarnings.filter(warning => warning.severity === 'high').length,
-    medium: liveWarnings.filter(warning => warning.severity === 'medium').length,
-    low: liveWarnings.filter(warning => warning.severity === 'low').length,
-  }
+  const warningCounts = { high: liveWarnings.filter(warning => warning.severity === 'high').length, medium: liveWarnings.filter(warning => warning.severity === 'medium').length, low: liveWarnings.filter(warning => warning.severity === 'low').length }
+  const warningTone = warningCounts.high > 0 ? 'red' : warningCounts.medium > 0 ? 'amber' : warningCounts.low > 0 ? 'sky' : 'emerald'
   const checkMessages = [
     ...(!manualMode && !primaryModelPath ? [{ tone: 'red', text: labels.missingModel }] : []),
     ...(!currentEngine ? [{ tone: 'amber', text: labels.missingEngine }] : []),
     ...(!manualMode && unsupportedEngineFlags.length > 0 ? [{ tone: 'red', text: labels.engineCompatibilityBlocked }] : []),
     ...(!manualMode && currentEngine && engineCompatibilityMode !== 'full' ? [{ tone: 'amber', text: labels.engineCompatibilityLimitedCheck }] : []),
     ...(!manualMode && currentEngine && engineVersionStatus === 'unknown' ? [{ tone: 'amber', text: labels.engineVersionUnknownCheck }] : []),
-    ...(liveWarnings.length > 0 ? [{ tone: liveWarnings.some(warning => warning.severity === 'high') ? 'red' : 'amber', text: `${liveWarnings.length} ${labels.liveWarnings}` }] : []),
+    ...(liveWarnings.length > 0 ? [{ tone: warningTone, text: `${liveWarnings.length} ${labels.liveWarnings}` }] : []),
   ]
   const selectedTemplate = quickTemplates.find(template => template.id === selectedTemplateId) ?? quickTemplates[0]
   const selectedTemplateChanges = selectedTemplate ? getTemplateChanges(local, selectedTemplate.changes, t, labels) : []
@@ -390,10 +390,8 @@ const ConfigPage = () => {
     { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedHardware) },
     { id: 'config-advanced-server', title: t.configPage.subAdvServer, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
     { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
-    ...(!isEmbedding ? [
-      { id: 'config-advanced-multi', title: t.configPage.subAdvMulti, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) },
-      { id: 'config-advanced-custom', title: t.configPage.customArgs, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
-    ] : []),
+    ...(!isEmbedding ? [{ id: 'config-advanced-multi', title: t.configPage.subAdvMulti, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) }] : []),
+    { id: 'config-advanced-custom', title: t.configPage.customArgs, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
   ]
   const directoryGroups = [
     { id: 'config-basic', title: t.configPage.basic, count: countActive(activeParams, BASIC_CONFIG_KEYS) },
@@ -442,8 +440,8 @@ const ConfigPage = () => {
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
-          { label: labels.activeParams, value: activeParams.size, icon: SlidersHorizontal, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
-          { label: labels.warnings, value: liveWarnings.length, icon: AlertTriangle, tone: 'text-amber-300 bg-amber-500/10 border-amber-500/20' },
+          { label: labels.activeParams, value: local.launch_mode === 'manual' ? activeParams.size : overrideKeys.length, icon: SlidersHorizontal, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
+          { label: labels.warnings, value: liveWarnings.length, icon: AlertTriangle, tone: warningTone === 'red' ? 'text-red-300 bg-red-500/10 border-red-500/20' : warningTone === 'amber' ? 'text-amber-300 bg-amber-500/10 border-amber-500/20' : warningTone === 'sky' ? 'text-sky-300 bg-sky-500/10 border-sky-500/20' : 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
           { label: labels.model, value: currentModel ? pathBasename(currentModel.path) : '--', icon: File, tone: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/20' },
           { label: labels.engine, value: currentEngine?.name || '--', icon: Cpu, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
         ].map(card => (
@@ -478,7 +476,6 @@ const ConfigPage = () => {
             config={local}
             engine={currentEngine}
             labels={labels}
-            t={t}
             overrideKeys={overrideKeys}
             set={set}
             inherit={inherit}
@@ -641,9 +638,9 @@ const ConfigPage = () => {
                   <div
                     key={`${message.text}-${index}`}
                     className={`rounded-lg px-3 py-2 text-sm ${
-                      message.tone === 'red'
-                        ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
-                        : 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
+                      message.tone === 'red' ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
+                        : message.tone === 'amber' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
+                          : 'bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-200'
                     }`}
                   >
                     {message.text}

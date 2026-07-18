@@ -41,7 +41,7 @@ export const VECTOR_ALLOWED_FIELDS = new Set<keyof InstanceConfig>([
   'cors_credentials', 'no_ui', 'offline', 'metrics', 'props',
   'slots_enabled', 'timeout', 'sleep_idle', 'verbose', 'rpc_servers',
   'sse_ping_interval', 'reuse_port',
-  'embedding', 'pooling', 'embd_normalize', 'reranking',
+  'embedding', 'pooling', 'embd_normalize', 'reranking', 'custom_args',
 ])
 
 export const VECTOR_INCOMPATIBLE_FIELDS = Object.keys(defaultInstanceConfig())

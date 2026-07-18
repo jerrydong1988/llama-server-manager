@@ -151,6 +151,7 @@ const entry = `
     temp: 1.5,
     mmproj_path: 'C:/models/mmproj.gguf',
     custom_args: ['--spec-type', 'draft-mtp'],
+    explicit_overrides: ['custom_args'],
     batch_size: 2048,
     ubatch_size: 512,
   }
@@ -163,13 +164,13 @@ const entry = `
   assert.equal(result.config.chat_template, '')
   assert.equal(result.config.temp, defaultInstanceConfig().temp)
   assert.equal(result.config.mmproj_path, '')
-  assert.deepEqual(result.config.custom_args, [])
+  assert.deepEqual(result.config.custom_args, polluted.custom_args)
   assert.equal(result.config.batch_size, 512)
   assert.deepEqual(new Set(Object.keys(defaultInstanceConfig())), VECTOR_CLASSIFIED_FIELDS)
   for (const key of VECTOR_ALLOWED_FIELDS) assert.ok(key in defaultInstanceConfig(), 'unknown allowed key: ' + key)
   assert.ok(result.changes.some(change => change.key === 'spec_type' && change.group === 'speculative'))
   assert.ok(result.changes.some(change => change.key === 'temp' && change.group === 'generation'))
-  assert.ok(result.changes.some(change => change.key === 'custom_args' && change.group === 'custom'))
+  assert.equal(result.changes.some(change => change.key === 'custom_args'), false)
 
   const created = normalizeInstanceConfig(polluted, null, { context: 'create' })
   assert.equal(created.config.spec_type, '')
@@ -180,7 +181,7 @@ const entry = `
     assert.ok(VECTOR_ALLOWED_FIELDS.has(key), 'vector active params exposed an incompatible field: ' + key)
   }
   assert.equal(activeVectorParams.has('spec_type'), false)
-  assert.equal(activeVectorParams.has('custom_args'), false)
+  assert.equal(activeVectorParams.has('custom_args'), true)
   assert.equal(activeVectorParams.has('prefill_assistant'), false)
 
   assert.equal(normalizeModelPath('C:\\\\Models\\\\Qwen3-Instruct.gguf'), 'c:/models/qwen3-instruct.gguf')
@@ -232,12 +233,14 @@ const entry = `
     embedding: false,
     temp: 1.5,
     custom_args: ['--temp', '1.5'],
+    explicit_overrides: null,
   }
   const normalizedStored = normalizeStoredConfig(storedVectorConfig, [indexedVectorModel])
   assert.equal(normalizedStored.workload, 'embedding')
   assert.equal(normalizedStored.config.embedding, true)
   assert.equal(normalizedStored.config.temp, defaultInstanceConfig().temp)
-  assert.deepEqual(normalizedStored.config.custom_args, [])
+  assert.deepEqual(normalizedStored.config.custom_args, storedVectorConfig.custom_args)
+  assert.equal(normalizedStored.config.explicit_overrides?.includes('custom_args'), true)
 
   const missingInferenceConfig = {
     ...defaultInstanceConfig(),
@@ -414,12 +417,15 @@ const basicSectionSource = section(sectionsSource, 'export function BasicSection
 assert.match(basicSectionSource, /onBlur=\{e => onCommitModelPath\?\.\(e\.target\.value\)\}/, 'manual model path edits must commit through the model policy')
 assert.match(basicSectionSource, /disabled=\{modelWorkloadLocked\}/, 'classified model workloads must lock the embedding switch')
 const advancedSectionSource = section(sectionsSource, 'export function AdvancedSection', '\n}\n')
-for (const id of ['reasoning', 'model', 'sampling', 'sampling-ext', 'spec', 'multi', 'custom']) {
+for (const id of ['reasoning', 'model', 'sampling', 'sampling-ext', 'spec', 'multi']) {
   const marker = `config-advanced-${id}`
   const markerIndex = advancedSectionSource.indexOf(marker)
   assert.ok(markerIndex >= 0, `missing advanced group marker: ${marker}`)
   assert.match(advancedSectionSource.slice(Math.max(0, markerIndex - 180), markerIndex), /!isEmbedding/, `${marker} must be hidden in vector mode`)
 }
+const customMarkerIndex = advancedSectionSource.indexOf('config-advanced-custom')
+assert.ok(customMarkerIndex >= 0, 'missing advanced custom argument group')
+assert.doesNotMatch(advancedSectionSource.slice(Math.max(0, customMarkerIndex - 180), customMarkerIndex), /!isEmbedding/, 'custom arguments must remain visible in vector mode')
 assert.match(advancedSectionSource, /config-advanced-vector/, 'vector mode must expose a dedicated vector group')
 const vectorGroupSource = advancedSectionSource.slice(advancedSectionSource.indexOf('config-advanced-vector'))
 assert.match(vectorGroupSource, /reranking[^\n]*disabled=\{modelWorkloadLocked\}/, 'manually configured vector workloads must retain a reranking control')

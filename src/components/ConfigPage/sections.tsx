@@ -116,7 +116,7 @@ export function BasicSection({ local, set, t, isEmbedding, workload, modelWorklo
     <Section id="config-basic" title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery} summary={countSummary(countActive(activeParams, BASIC_CONFIG_KEYS))}>
       <div className={formGridClassName}>
         <div title={t.configPage.modelPathTip}>
-          <label className={`mb-1 block text-xs font-medium ${a('model_path') ? 'text-emerald-300' : 'text-slate-400'}`}>{`${t.configPage.modelPath} (--model, -m)`}</label>
+          <label className="mb-1 block text-xs font-medium text-slate-400">{`${t.configPage.modelPath} (--model, -m)`}</label>
           <div className="flex gap-1">
             <TextInput type="text" value={local.model_path} onChange={e => set('model_path', e.target.value)} onBlur={e => onCommitModelPath?.(e.target.value)} className="h-10 flex-1" />
             <Button onClick={onShowPicker} variant="primary" size="icon" title={t.configPage.modelPathBtn}><FolderOpen className="h-4 w-4" /></Button>
@@ -353,7 +353,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
           {!specActive && <div className="mb-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-500">{t.configPage.specDisabled}</div>}
           <div className={formGridClassName}>
             <div title={t.configPage.draftModelTip}>
-              <label className={`mb-1 block text-xs font-medium ${a('draft_model_path') ? 'text-emerald-300' : 'text-slate-400'}`}>{`${t.configPage.draftModel} (--draft-model, -md)`}</label>
+              <label className="mb-1 block text-xs font-medium text-slate-400">{`${t.configPage.draftModel} (--draft-model, -md)`}</label>
               <div className="flex gap-1">
                 <TextInput type="text" value={local.draft_model_path} onChange={e => set('draft_model_path', e.target.value)} disabled={isEmbedding} className="h-10 flex-1" />
                 <Button onClick={onShowDraftPicker} disabled={isEmbedding} variant="primary" size="icon" title={t.configPage.draftModelTip}><FolderOpen className="h-4 w-4" /></Button>
@@ -510,7 +510,6 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
         </CollapsibleGroup>
         )}
 
-        {!isEmbedding && (
         <CollapsibleGroup
           id="config-advanced-custom"
           title={t.configPage.customArgs}
@@ -561,7 +560,6 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             )}
           </div>
         </CollapsibleGroup>
-        )}
       </div>
     </Section>
   )

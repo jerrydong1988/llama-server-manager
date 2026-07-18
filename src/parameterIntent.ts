@@ -41,7 +41,9 @@ export function migrateParameterIntent(config: InstanceConfig): InstanceConfig {
   const defaults = defaultInstanceConfig()
   const merged = { ...defaults, ...config }
   if (Array.isArray(config.explicit_overrides)) {
-    return { ...merged, explicit_overrides: sanitizeExplicitOverrides(config.explicit_overrides) }
+    const explicit_overrides = sanitizeExplicitOverrides(config.explicit_overrides)
+      .filter(key => !sameValue(merged[key as keyof InstanceConfig], defaults[key as keyof InstanceConfig]))
+    return { ...merged, explicit_overrides }
   }
 
   const explicit_overrides = (Object.keys(defaults) as Array<keyof InstanceConfig>)
@@ -57,7 +59,7 @@ export function markExplicitOverride(
   if (INTENT_METADATA_FIELDS.has(key)) return { ...config, [key]: value }
   const overrides = new Set(sanitizeExplicitOverrides(config.explicit_overrides))
   const defaultValue = defaultInstanceConfig()[key]
-  if (sameValue(value, defaultValue) && (value === '' || (Array.isArray(value) && value.length === 0))) {
+  if (sameValue(value, defaultValue)) {
     overrides.delete(key)
   } else {
     overrides.add(key)
@@ -86,8 +88,11 @@ export function applyExplicitOverrides(
   changes: Partial<InstanceConfig>,
 ): InstanceConfig {
   const overrides = new Set(sanitizeExplicitOverrides(config.explicit_overrides))
+  const defaults = defaultInstanceConfig()
   for (const key of Object.keys(changes) as Array<keyof InstanceConfig>) {
-    if (!INTENT_METADATA_FIELDS.has(key)) overrides.add(key)
+    if (INTENT_METADATA_FIELDS.has(key)) continue
+    if (sameValue(changes[key], defaults[key])) overrides.delete(key)
+    else overrides.add(key)
   }
   return { ...config, ...changes, explicit_overrides: [...overrides] }
 }

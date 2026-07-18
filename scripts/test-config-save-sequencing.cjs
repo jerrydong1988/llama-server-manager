@@ -22,6 +22,9 @@ const configPageSource = fs.readFileSync(
   path.join(__dirname, '..', 'src', 'components', 'ConfigPage.tsx'),
   'utf8',
 )
+assert.match(configPageSource, /const warningTone = warningCounts\.high > 0 \? 'red' : warningCounts\.medium > 0 \? 'amber' : warningCounts\.low > 0 \? 'sky' : 'emerald'/)
+assert.match(configPageSource, /label: labels\.warnings[\s\S]*tone: warningTone === 'red'[\s\S]*warningTone === 'sky'/)
+assert.match(configPageSource, /message\.tone === 'amber'[\s\S]*bg-sky-50/)
 assert.match(configPageSource, /const \[saving, setSaving\] = useState\(false\)/)
 assert.match(
   configPageSource,

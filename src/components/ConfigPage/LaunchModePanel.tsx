@@ -1,8 +1,7 @@
-import { AlertTriangle, RotateCcw, SlidersHorizontal, Terminal, X } from 'lucide-react'
+import { AlertTriangle, RotateCcw, SlidersHorizontal, Terminal } from 'lucide-react'
 import type { EngineInfo, InstanceConfig } from '../../store'
 import type { getConfigPageLabels } from '../../i18n/configPageCopy'
 import { getEngineCompatibilityMode } from '../../engineCapabilities'
-import { fieldLabel } from './configWorkspace'
 import { Badge, Button, InsetSurface, PathText, SectionHeader, Surface } from '../ui'
 
 type Labels = ReturnType<typeof getConfigPageLabels>
@@ -11,13 +10,12 @@ type Props = {
   config: InstanceConfig
   engine: EngineInfo | null
   labels: Labels
-  t: any
   overrideKeys: Array<keyof InstanceConfig>
   set: (key: keyof InstanceConfig, value: any) => void
   inherit: (keys: Array<keyof InstanceConfig>) => void
 }
 
-export function LaunchModePanel({ config, engine, labels, t, overrideKeys, set, inherit }: Props) {
+export function LaunchModePanel({ config, engine, labels, overrideKeys, set, inherit }: Props) {
   const manualMode = config.launch_mode === 'manual'
   const manualRecommended = Boolean(engine && getEngineCompatibilityMode(engine.capabilities) !== 'full')
   return (
@@ -73,35 +71,21 @@ export function LaunchModePanel({ config, engine, labels, t, overrideKeys, set, 
         </div>
       ) : (
         <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.explicitOverrides}</p>
               <p className="mt-1 text-sm text-slate-500">{labels.explicitOverridesDesc}</p>
             </div>
-            {overrideKeys.length > 0 && (
-              <Button onClick={() => inherit(overrideKeys)} variant="secondary" size="sm" icon={<RotateCcw className="h-4 w-4" />} className="shrink-0">
-                {labels.inheritAll}
-              </Button>
-            )}
-          </div>
-          {overrideKeys.length === 0 ? (
-            <p className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">{labels.noExplicitOverrides}</p>
-          ) : (
-            <div className="mt-4 flex flex-wrap gap-2">
-              {overrideKeys.map(key => (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => inherit([key])}
-                  title={`${labels.inheritOne}: ${key}`}
-                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-700 transition hover:bg-emerald-500/20 dark:text-emerald-200"
-                >
-                  <span>{fieldLabel(key, t)}</span>
-                  <X className="h-3 w-3" />
-                </button>
-              ))}
+            <div className="flex shrink-0 items-center gap-2">
+              <Badge tone={overrideKeys.length > 0 ? 'blue' : 'emerald'}>{overrideKeys.length} {labels.activeParams}</Badge>
+              {overrideKeys.length > 0 && (
+                <Button onClick={() => inherit(overrideKeys)} variant="secondary" size="sm" icon={<RotateCcw className="h-4 w-4" />}>
+                  {labels.inheritAll}
+                </Button>
+              )}
             </div>
-          )}
+          </div>
+          {overrideKeys.length === 0 && <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-300">{labels.noExplicitOverrides}</p>}
           <p className="mt-3 text-xs text-slate-500">{labels.systemArgsHint}</p>
         </div>
       )}

@@ -471,7 +471,7 @@ mod tests {
         let config = &normalized.all["embedding"];
         assert!(config.embedding);
         assert!(config.spec_type.is_empty());
-        assert!(config.custom_args.is_empty());
+        assert_eq!(config.custom_args, vec!["--temp 1.5"]);
         assert_eq!(normalized.changed["embedding"], *config);
     }
 

@@ -1257,13 +1257,13 @@ fn append_extended_server_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut
         if should_emit(config, "tools", !config.tools.is_empty()) && !config.tools.is_empty() {
             cmd.extend_from_slice(&["--tools".into(), config.tools.clone()]);
         }
+    }
 
-        // Custom args (#13: support double-quoted arguments).
-        if should_emit(config, "custom_args", !config.custom_args.is_empty()) {
-            for arg in &config.custom_args {
-                if !arg.is_empty() {
-                    cmd.extend(split_args(arg));
-                }
+    // User-defined arguments are the final managed-mode escape hatch for every workload.
+    if should_emit(config, "custom_args", !config.custom_args.is_empty()) {
+        for arg in &config.custom_args {
+            if !arg.is_empty() {
+                cmd.extend(split_args(arg));
             }
         }
     }
@@ -1533,6 +1533,21 @@ fn stale_engine_error() -> AppError {
     )
 }
 
+fn validate_custom_argument_capabilities(
+    config: &InstanceConfig,
+    capabilities: Option<&EngineCapabilities>,
+) -> AppResult<()> {
+    if config.custom_args.is_empty() || capabilities.is_some_and(|value| value.status == "detected")
+    {
+        return Ok(());
+    }
+    Err(AppError::new(
+        "ENGINE_CUSTOM_ARGUMENTS_REQUIRE_FULL_CAPABILITY_PROBE",
+        "用户自定义参数不会被静默过滤。请先完成引擎参数能力探测；旧引擎请改用手动命令模式。",
+        false,
+    ))
+}
+
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneratedServerCommand {
@@ -1595,6 +1610,7 @@ pub async fn generate_server_command(
         EngineCapabilityResolution::Missing => None,
         EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
     };
+    validate_custom_argument_capabilities(&config, capabilities.as_ref())?;
     let unsupported_flags = capabilities
         .as_ref()
         .map(|value| unsupported_command_flags(&command, value))
@@ -1639,6 +1655,7 @@ pub async fn start_server(
                 EngineCapabilityResolution::Missing => None,
                 EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
             };
+        validate_custom_argument_capabilities(&config, engine_capabilities.as_ref())?;
         if let Some(capabilities) = engine_capabilities.as_ref() {
             let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
             if !unsupported.is_empty() {
@@ -3977,6 +3994,26 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn custom_arguments_are_never_silently_projected_from_incomplete_capabilities() {
+        let config = InstanceConfig {
+            custom_args: vec!["--future-flag 1".into()],
+            ..InstanceConfig::default()
+        };
+        let partial = EngineCapabilities {
+            status: "partial".into(),
+            ..EngineCapabilities::default()
+        };
+        let detected = EngineCapabilities {
+            status: "detected".into(),
+            ..EngineCapabilities::default()
+        };
+
+        assert!(validate_custom_argument_capabilities(&config, None).is_err());
+        assert!(validate_custom_argument_capabilities(&config, Some(&partial)).is_err());
+        assert!(validate_custom_argument_capabilities(&config, Some(&detected)).is_ok());
+    }
+
+    #[test]
     fn manual_command_uses_selected_executable_and_syncs_runtime_metadata() {
         let engine = r"C:\Program Files\llama\llama-server.exe";
         let config = InstanceConfig {
@@ -4166,7 +4203,7 @@ mod perf_parser_tests {
         assert!(cmd.iter().any(|arg| arg == "--embedding"));
         assert!(cmd.windows(2).any(|args| args == ["-fa", "on"]));
         assert!(!cmd.iter().any(|arg| arg == "--spec-type"));
-        assert!(!cmd.iter().any(|arg| arg == "--temp"));
+        assert!(has_flag_value(&cmd, "--temp", "1.5"));
     }
 
     #[test]
@@ -4176,10 +4213,11 @@ mod perf_parser_tests {
         assert_eq!(workload, crate::vector_policy::ModelWorkload::Embedding);
         assert!(config.embedding);
         assert!(config.spec_type.is_empty());
-        assert!(config.custom_args.is_empty());
+        assert_eq!(config.custom_args, vec!["--temp 1.5"]);
         assert!(cmd.iter().any(|arg| arg == "--embedding"));
         assert!(cmd.windows(2).any(|args| args == ["-fa", "on"]));
         assert!(!cmd.iter().any(|arg| arg == "--spec-type"));
+        assert!(has_flag_value(&cmd, "--temp", "1.5"));
         assert_eq!(
             telemetry_config_hash(&config),
             telemetry_config_hash(&normalize_for_launch(config.clone()).config)
@@ -4270,8 +4308,8 @@ mod perf_parser_tests {
                     custom_args: vec!["--top-p 0.2".into()],
                     ..InstanceConfig::default()
                 },
-                required: &["-dev", "CUDA0", "--embedding"],
-                forbidden: &["--reranking", "--spec-type", "--top-p"],
+                required: &["-dev", "CUDA0", "--embedding", "--top-p", "0.2"],
+                forbidden: &["--reranking", "--spec-type"],
             },
             Case {
                 name: "reranker-cpu-cleans-generation",

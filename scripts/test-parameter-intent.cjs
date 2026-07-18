@@ -1,6 +1,13 @@
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const Module = require('node:module')
 const path = require('node:path')
 const esbuild = require('esbuild')
+
+const sharedControlsSource = fs.readFileSync(path.join(process.cwd(), 'src', 'components', 'ConfigPage', 'shared.tsx'), 'utf8')
+const launchModeSource = fs.readFileSync(path.join(process.cwd(), 'src', 'components', 'ConfigPage', 'LaunchModePanel.tsx'), 'utf8')
+assert.doesNotMatch(sharedControlsSource, /active \? 'text-emerald/, 'control colors must describe values, not internal emission metadata')
+assert.doesNotMatch(launchModeSource, /overrideKeys\.map/, 'managed mode must not expose every internal override as a primary UI chip')
 
 const entry = `
   import assert from 'node:assert/strict'
@@ -31,7 +38,16 @@ const entry = `
   assert.deepEqual(new Set(migrated.explicit_overrides), new Set(['batch_size', 'spec_type']))
 
   const explicitDefault = markExplicitOverride(defaults, 'temp', defaults.temp)
-  assert.deepEqual(explicitDefault.explicit_overrides, ['temp'])
+  assert.deepEqual(explicitDefault.explicit_overrides, [])
+  const changedThenRestored = markExplicitOverride(
+    markExplicitOverride(defaults, 'temp', 0.6),
+    'temp',
+    defaults.temp,
+  )
+  assert.deepEqual(changedThenRestored.explicit_overrides, [])
+  const disabledAutoload = markExplicitOverride(defaults, 'models_autoload', false)
+  assert.deepEqual(disabledAutoload.explicit_overrides, ['models_autoload'])
+  assert.deepEqual(markExplicitOverride(disabledAutoload, 'models_autoload', true).explicit_overrides, [])
   const emptyAlias = markExplicitOverride(
     { ...defaults, alias: 'chat', explicit_overrides: ['alias'] },
     'alias',
@@ -47,7 +63,12 @@ const entry = `
   assert.deepEqual(inherited.explicit_overrides, ['top_k'])
 
   const preset = applyExplicitOverrides(defaults, { temp: defaults.temp, parallel: 1 })
-  assert.deepEqual(new Set(preset.explicit_overrides), new Set(['temp', 'parallel']))
+  assert.deepEqual(preset.explicit_overrides, ['parallel'])
+  const compactedTracked = migrateParameterIntent({
+    ...defaults,
+    explicit_overrides: ['temp', 'models_autoload'],
+  })
+  assert.deepEqual(compactedTracked.explicit_overrides, [])
 
   const systemOnly = getActiveParams(defaults, false)
   assert.deepEqual(
@@ -79,10 +100,13 @@ const entry = `
     ...defaults,
     embedding: true,
     temp: 0.4,
-    explicit_overrides: ['embedding', 'temp', 'batch_size'],
+    custom_args: ['--ubatch-size', '256'],
+    explicit_overrides: ['embedding', 'temp', 'batch_size', 'custom_args'],
   }, null)
   assert.equal(vector.config.explicit_overrides?.includes('temp'), false)
   assert.equal(vector.config.explicit_overrides?.includes('batch_size'), true)
+  assert.equal(vector.config.explicit_overrides?.includes('custom_args'), true)
+  assert.deepEqual(vector.config.custom_args, ['--ubatch-size', '256'])
 
   const freshVector = normalizeInstanceConfig({ ...defaults, embedding: true }, null)
   assert.equal(freshVector.config.batch_size, freshVector.config.ubatch_size)
