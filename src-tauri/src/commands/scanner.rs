@@ -7,6 +7,7 @@ use crate::utils;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 
 fn file_mtime(path: &Path) -> u64 {
     path.metadata()
@@ -561,6 +562,7 @@ pub async fn scan_models(
     state: tauri::State<'_, AppState>,
     _app: tauri::AppHandle,
 ) -> Result<Vec<ModelInfo>, String> {
+    let generation = state.model_scan_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let app_dir = utils::get_data_dir();
     let default_path = app_dir.join("models");
     let default_path_for_check = default_path.clone();
@@ -728,6 +730,9 @@ pub async fn scan_models(
         Err(errors) => return Err(errors.join("; ")),
     };
 
+    if state.model_scan_generation.load(Ordering::Acquire) != generation {
+        return Ok(state.models.lock().unwrap().clone());
+    }
     let mut state_models = state.models.lock().unwrap();
     *state_models = models.clone();
     Ok(models)
@@ -873,6 +878,7 @@ pub async fn scan_engines(
     paths: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<EngineInfo>, String> {
+    let generation = state.engine_scan_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let mut engines = tokio::task::spawn_blocking(move || -> Result<Vec<EngineInfo>, String> {
         let (inventory, directory_inventory) = model_inventory::load_engine_scan_indexes()?;
         let mut engines: Vec<EngineInfo> = Vec::new();
@@ -1022,6 +1028,10 @@ pub async fn scan_engines(
     })
     .await
     .map_err(|e| format!("scan thread failed: {}", e))??;
+
+    if state.engine_scan_generation.load(Ordering::Acquire) != generation {
+        return Ok(state.engines.lock().unwrap().clone());
+    }
 
     // Preserve custom engine names; state access stays outside spawn_blocking.
     {

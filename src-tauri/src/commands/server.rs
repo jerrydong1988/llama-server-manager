@@ -228,7 +228,12 @@ fn format_command_for_display(command: &[String]) -> String {
 pub(crate) fn effective_api_key(config: &InstanceConfig) -> String {
     let inline = config.api_key.trim();
     if !inline.is_empty() {
-        return inline.to_string();
+        return inline
+            .split(',')
+            .map(str::trim)
+            .find(|key| !key.is_empty())
+            .unwrap_or_default()
+            .to_string();
     }
 
     if config.api_key_file.trim().is_empty() {
@@ -240,7 +245,7 @@ pub(crate) fn effective_api_key(config: &InstanceConfig) -> String {
         .and_then(|content| {
             content.lines().find_map(|line| {
                 let key = line.trim().trim_start_matches('\u{feff}');
-                if key.is_empty() {
+                if key.is_empty() || key.starts_with('#') {
                     None
                 } else {
                     Some(key.to_string())
@@ -248,6 +253,27 @@ pub(crate) fn effective_api_key(config: &InstanceConfig) -> String {
             })
         })
         .unwrap_or_default()
+}
+
+pub(crate) fn effective_server_scheme(config: &InstanceConfig) -> &'static str {
+    if !config.ssl_key_file.trim().is_empty() && !config.ssl_cert_file.trim().is_empty() {
+        "https"
+    } else {
+        "http"
+    }
+}
+
+fn validate_tls_configuration(config: &InstanceConfig) -> AppResult<()> {
+    let has_key = !config.ssl_key_file.trim().is_empty();
+    let has_cert = !config.ssl_cert_file.trim().is_empty();
+    if has_key != has_cert {
+        return Err(AppError::new(
+            "TLS_KEY_CERT_PAIR_REQUIRED",
+            "TLS 私钥和证书必须同时配置，不能只填写其中一个。",
+            false,
+        ));
+    }
+    Ok(())
 }
 
 fn telemetry_config_hash(config: &InstanceConfig) -> String {
@@ -933,14 +959,15 @@ fn trusted_engine_capabilities(
 ) -> EngineCapabilityResolution {
     let requested_path = normalized_engine_path(engine_exe);
     let mut engines = state.engines.lock().unwrap();
-    let selected_index = engines
-        .iter()
-        .position(|engine| normalized_engine_path(&engine.exe) == requested_path)
-        .or_else(|| {
-            engines
-                .iter()
-                .position(|engine| engine.id == config.engine_id)
-        });
+    let selected_index = if config.engine_id.trim().is_empty() {
+        engines
+            .iter()
+            .position(|engine| normalized_engine_path(&engine.exe) == requested_path)
+    } else {
+        engines
+            .iter()
+            .position(|engine| engine.id == config.engine_id)
+    };
     let Some(selected_index) = selected_index else {
         return EngineCapabilityResolution::Missing;
     };
@@ -961,6 +988,33 @@ fn trusted_engine_capabilities(
     };
     let _ = crate::commands::model_inventory::update_engine_probe(engine);
     EngineCapabilityResolution::Stale
+}
+
+fn validate_configured_engine(
+    state: &AppState,
+    config: &InstanceConfig,
+    engine_exe: &str,
+) -> AppResult<()> {
+    if config.engine_id.trim().is_empty() {
+        return Ok(());
+    }
+    let requested_path = normalized_engine_path(engine_exe);
+    let engines = state.engines.lock().unwrap();
+    let Some(engine) = engines.iter().find(|engine| engine.id == config.engine_id) else {
+        return Err(AppError::new(
+            "CONFIGURED_ENGINE_NOT_FOUND",
+            "实例配置引用的 llama-server 引擎已不存在，请重新选择引擎。",
+            false,
+        ));
+    };
+    if normalized_engine_path(&engine.exe) != requested_path {
+        return Err(AppError::new(
+            "CONFIGURED_ENGINE_MISMATCH",
+            "请求启动的引擎与实例配置引用的引擎不一致。",
+            false,
+        ));
+    }
+    Ok(())
 }
 
 fn stale_engine_error() -> AppError {
@@ -1018,6 +1072,8 @@ pub async fn generate_server_command(
     engine_exe: String,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<GeneratedServerCommand> {
+    validate_tls_configuration(&config)?;
+    validate_configured_engine(state.inner(), &config, &engine_exe)?;
     let capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
         EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
         EngineCapabilityResolution::Missing => None,
@@ -1054,6 +1110,8 @@ pub async fn start_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> AppResult<()> {
+    validate_tls_configuration(&config)?;
+    validate_configured_engine(state.inner(), &config, &engine_exe)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let (config, workload, generated_cmd) = prepare_launch(config, &engine_exe);
     let engine_capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe)
@@ -1168,6 +1226,7 @@ pub async fn start_server(
                     executable_path: executable_path.to_string_lossy().to_string(),
                     telemetry_session_id: telemetry_session_id.clone(),
                     workload: workload.as_str().to_string(),
+                    launch_config: Some(config.clone()),
                 },
             );
             false
@@ -1364,7 +1423,15 @@ pub async fn start_server(
             }) {
                 eprintln!("Failed to persist process exit for {id}: {error}");
             }
-            let _ = app_clone.emit("server-stopped", serde_json::json!({ "instanceId": id }));
+            let _ = app_clone.emit(
+                "server-stopped",
+                serde_json::json!({
+                    "instanceId": id,
+                    "expected": false,
+                    "reason": "process-exited",
+                    "exitCode": exit_code,
+                }),
+            );
         }
     });
 
@@ -1376,7 +1443,13 @@ pub async fn start_server(
     } else {
         config.host.clone()
     };
-    let port_metrics = config.port;
+    let endpoint_base_metrics = crate::utils::service_url(
+        effective_server_scheme(&config),
+        &host_metrics,
+        config.port,
+        &config.api_prefix,
+        "",
+    );
     let api_key_metrics = effective_api_key(&config);
     let telemetry_session_metrics = telemetry_session_id.clone();
     std::thread::spawn(move || {
@@ -1384,8 +1457,7 @@ pub async fn start_server(
             &id_metrics,
             pid,
             MonitorLoopConfig {
-                host: host_metrics,
-                port: port_metrics,
+                endpoint_base: endpoint_base_metrics,
                 api_key: api_key_metrics,
                 telemetry_session_id: telemetry_session_metrics,
                 workload,
@@ -1399,8 +1471,7 @@ pub async fn start_server(
 
 /// Background metrics loop that samples every 5 seconds, pushes to the frontend, and records history.
 struct MonitorLoopConfig {
-    host: String,
-    port: u16,
+    endpoint_base: String,
     api_key: String,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
@@ -1447,8 +1518,7 @@ fn monitor_loop(
     app: tauri::AppHandle,
 ) {
     let MonitorLoopConfig {
-        host,
-        port,
+        endpoint_base,
         api_key,
         telemetry_session_id,
         workload,
@@ -1473,10 +1543,10 @@ fn monitor_loop(
     };
 
     let client = reqwest::blocking::Client::new();
-    let metrics_url = crate::utils::http_url(&host, port, "/metrics");
-    let slots_url = crate::utils::http_url(&host, port, "/slots");
-    let health_url = crate::utils::http_url(&host, port, "/health");
-    let models_url = crate::utils::http_url(&host, port, "/v1/models");
+    let metrics_url = format!("{endpoint_base}/metrics");
+    let slots_url = format!("{endpoint_base}/slots");
+    let health_url = format!("{endpoint_base}/health");
+    let models_url = format!("{endpoint_base}/v1/models");
 
     // Startup timestamp used to compute uptime.
     let start_instant = std::time::Instant::now();
@@ -1561,8 +1631,9 @@ fn monitor_loop(
         if let Ok(resp) = req.timeout(std::time::Duration::from_secs(2)).send() {
             if resp.status().is_success() {
                 if let Ok(body) = resp.text() {
-                    let sample = parse_llama_metric_sample(&body);
-                    llama_sample = Some(sample);
+                    if let Ok(sample) = parse_llama_metric_sample(&body) {
+                        llama_sample = Some(sample);
+                    }
                 }
             }
         }
@@ -1808,6 +1879,9 @@ pub async fn stop_server(
             "server-stopped",
             serde_json::json!({
                 "instanceId": instance_id,
+                "expected": true,
+                "reason": "manual-stop",
+                "exitCode": null,
             }),
         )
         .ok();
@@ -1925,12 +1999,19 @@ fn cleanup_running_instance(
         serde_json::json!({
             "instanceId": instance_id,
             "reason": reason,
+            "expected": false,
+            "exitCode": null,
         }),
     );
     true
 }
 
-fn browser_url_for_host(host: &str, port: u16) -> Result<String, String> {
+fn browser_url_for_host(
+    host: &str,
+    port: u16,
+    use_tls: bool,
+    api_prefix: &str,
+) -> Result<String, String> {
     let normalized = if host == "0.0.0.0" || host == "::" {
         "localhost".to_string()
     } else {
@@ -1939,11 +2020,14 @@ fn browser_url_for_host(host: &str, port: u16) -> Result<String, String> {
     if normalized.is_empty() {
         return Err("Invalid host: empty".into());
     }
-    if let Ok(ip) = normalized.parse::<std::net::IpAddr>() {
-        return Ok(match ip {
-            std::net::IpAddr::V4(_) => format!("http://{}:{}", ip, port),
-            std::net::IpAddr::V6(_) => format!("http://[{}]:{}", ip, port),
-        });
+    if normalized.parse::<std::net::IpAddr>().is_ok() {
+        return Ok(crate::utils::service_url(
+            if use_tls { "https" } else { "http" },
+            &normalized,
+            port,
+            api_prefix,
+            "",
+        ));
     }
     let valid_hostname = normalized
         .chars()
@@ -1954,11 +2038,49 @@ fn browser_url_for_host(host: &str, port: u16) -> Result<String, String> {
     if !valid_hostname {
         return Err(format!("Invalid host: {}", host));
     }
-    Ok(format!("http://{}:{}", normalized, port))
+    Ok(crate::utils::service_url(
+        if use_tls { "https" } else { "http" },
+        &normalized,
+        port,
+        api_prefix,
+        "",
+    ))
 }
 
-pub async fn open_browser(host: String, port: u16) -> Result<(), String> {
-    let url = browser_url_for_host(&host, port)?;
+pub async fn open_browser(
+    host: String,
+    port: u16,
+    use_tls: Option<bool>,
+    api_prefix: Option<String>,
+    instance_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let launch_config = instance_id.as_deref().and_then(|instance_id| {
+        state
+            .running
+            .lock()
+            .unwrap()
+            .get(instance_id)
+            .and_then(|running| running.launch_config.clone())
+    });
+    let url = browser_url_for_host(
+        launch_config
+            .as_ref()
+            .map(|config| config.host.as_str())
+            .unwrap_or(&host),
+        launch_config
+            .as_ref()
+            .map(|config| config.port)
+            .unwrap_or(port),
+        launch_config
+            .as_ref()
+            .map(|config| effective_server_scheme(config) == "https")
+            .unwrap_or_else(|| use_tls.unwrap_or(false)),
+        launch_config
+            .as_ref()
+            .map(|config| config.api_prefix.as_str())
+            .unwrap_or_else(|| api_prefix.as_deref().unwrap_or("")),
+    )?;
     #[cfg(target_os = "windows")]
     {
         std::os::windows::process::CommandExt::creation_flags(
@@ -1986,42 +2108,84 @@ pub async fn open_browser(host: String, port: u16) -> Result<(), String> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Tauri expands the endpoint snapshot into IPC fields.
 pub async fn test_connection(
     host: String,
     port: u16,
     api_key: Option<String>,
     api_key_file: Option<String>,
+    use_tls: Option<bool>,
+    api_prefix: Option<String>,
+    instance_id: Option<String>,
+    state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    let effective_api_key = api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            api_key_file
-                .as_deref()
-                .map(str::trim)
-                .filter(|path| !path.is_empty())
-                .and_then(|path| {
-                    std::fs::read_to_string(path).ok().and_then(|content| {
-                        content.lines().find_map(|line| {
-                            let key = line.trim().trim_start_matches('\u{feff}');
-                            if key.is_empty() {
-                                None
-                            } else {
-                                Some(key.to_string())
-                            }
+    let launch_config = instance_id.as_deref().and_then(|instance_id| {
+        state
+            .running
+            .lock()
+            .unwrap()
+            .get(instance_id)
+            .and_then(|running| running.launch_config.clone())
+    });
+    let effective_api_key = launch_config.as_ref().map(effective_api_key).or_else(|| {
+        api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .and_then(|keys| {
+                keys.split(',').find_map(|key| {
+                    let key = key.trim();
+                    (!key.is_empty()).then(|| key.to_string())
+                })
+            })
+            .or_else(|| {
+                api_key_file
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|path| !path.is_empty())
+                    .and_then(|path| {
+                        std::fs::read_to_string(path).ok().and_then(|content| {
+                            content.lines().find_map(|line| {
+                                let key = line.trim().trim_start_matches('\u{feff}');
+                                if key.is_empty() || key.starts_with('#') {
+                                    None
+                                } else {
+                                    Some(key.to_string())
+                                }
+                            })
                         })
                     })
-                })
-        });
-    let connect_host = if host == "0.0.0.0" || host == "::" {
+            })
+    });
+    let endpoint_host = launch_config
+        .as_ref()
+        .map(|config| config.host.as_str())
+        .unwrap_or(&host);
+    let endpoint_port = launch_config
+        .as_ref()
+        .map(|config| config.port)
+        .unwrap_or(port);
+    let connect_host = if endpoint_host == "0.0.0.0" || endpoint_host == "::" {
         "localhost"
     } else {
-        &host
+        endpoint_host
     };
-    let base_url = crate::utils::http_url(connect_host, port, "");
-    let health_url = format!("{}/health", base_url);
+    let scheme = launch_config
+        .as_ref()
+        .map(effective_server_scheme)
+        .unwrap_or_else(|| {
+            if use_tls.unwrap_or(false) {
+                "https"
+            } else {
+                "http"
+            }
+        });
+    let prefix = launch_config
+        .as_ref()
+        .map(|config| config.api_prefix.as_str())
+        .unwrap_or_else(|| api_prefix.as_deref().unwrap_or(""));
+    let health_url =
+        crate::utils::service_url(scheme, connect_host, endpoint_port, prefix, "/health");
     let health_status = match http_get(&health_url, effective_api_key.as_deref())
         .timeout(std::time::Duration::from_secs(3))
         .send()
@@ -2036,7 +2200,8 @@ pub async fn test_connection(
         return classify_test_connection_result(health_status, Err("not checked".to_string()));
     }
 
-    let models_url = format!("{}/v1/models", base_url);
+    let models_url =
+        crate::utils::service_url(scheme, connect_host, endpoint_port, prefix, "/v1/models");
     let models_status = match http_get(&models_url, effective_api_key.as_deref())
         .timeout(std::time::Duration::from_secs(3))
         .send()
@@ -2221,12 +2386,8 @@ pub async fn get_system_metrics(
         let mut proc_sys = System::new_all();
         let (cpu, mem) = get_process_metrics(&mut proc_sys, pid);
         SystemMetrics {
-            cpu_percent: gpu_system.cpu_percent.unwrap_or(cpu),
-            memory_mb: if gpu_system.cpu_percent.is_some() {
-                gpu_system.memory_mb.unwrap_or(mem)
-            } else {
-                (mem * 10.0).round() / 10.0
-            },
+            cpu_percent: cpu,
+            memory_mb: (mem * 10.0).round() / 10.0,
             uptime_secs: uptime,
             gpu_percent: gpu_system.gpu_percent,
             vram_used_mb: gpu_system.vram_used_mb,
@@ -2297,13 +2458,25 @@ pub async fn get_slots(
     host: String,
     port: u16,
     api_key: Option<String>,
+    use_tls: Option<bool>,
+    api_prefix: Option<String>,
 ) -> Result<Vec<SlotInfo>, String> {
     let h = if host == "0.0.0.0" {
         "localhost"
     } else {
         &host
     };
-    let url = crate::utils::http_url(h, port, "/slots");
+    let url = crate::utils::service_url(
+        if use_tls.unwrap_or(false) {
+            "https"
+        } else {
+            "http"
+        },
+        h,
+        port,
+        api_prefix.as_deref().unwrap_or(""),
+        "/slots",
+    );
     let resp = http_get(&url, api_key.as_deref())
         .send()
         .await
@@ -2340,20 +2513,32 @@ pub async fn get_metrics(
     host: String,
     port: u16,
     api_key: Option<String>,
+    use_tls: Option<bool>,
+    api_prefix: Option<String>,
 ) -> Result<Option<MetricsInfo>, String> {
     let h = if host == "0.0.0.0" {
         "localhost"
     } else {
         &host
     };
-    let url = crate::utils::http_url(h, port, "/metrics");
+    let url = crate::utils::service_url(
+        if use_tls.unwrap_or(false) {
+            "https"
+        } else {
+            "http"
+        },
+        h,
+        port,
+        api_prefix.as_deref().unwrap_or(""),
+        "/metrics",
+    );
     let resp = match http_get(&url, api_key.as_deref()).send().await {
         Ok(r) if r.status().is_success() => r,
         Ok(r) if r.status().as_u16() == 404 => return Ok(None),
         _ => return Ok(None),
     };
     let body = resp.text().await.map_err(|e| format!("读取失败: {}", e))?;
-    let sample = parse_llama_metric_sample(&body);
+    let sample = parse_llama_metric_sample(&body)?;
     Ok(Some(MetricsInfo {
         tokens_per_sec: sample.tokens_per_sec,
         prompt_tokens: sample.prompt_tokens,
@@ -2367,24 +2552,26 @@ pub async fn get_metrics(
     }))
 }
 
-fn parse_llama_metric_sample(body: &str) -> crate::commands::telemetry::LlamaMetricSample {
-    let extract = |key: &str| -> f64 {
+fn parse_llama_metric_sample(
+    body: &str,
+) -> Result<crate::commands::telemetry::LlamaMetricSample, String> {
+    let extract = |key: &str| -> Result<f64, String> {
         body.lines()
             .find(|line| line.starts_with(key))
             .and_then(|line| line.split_whitespace().last()?.parse().ok())
-            .unwrap_or(0.0)
+            .ok_or_else(|| format!("Missing or invalid llama metric: {key}"))
     };
-    crate::commands::telemetry::LlamaMetricSample {
-        tokens_per_sec: extract("llamacpp:predicted_tokens_seconds"),
-        prompt_tokens: extract("llamacpp:prompt_tokens_total") as u64,
-        gen_tokens: extract("llamacpp:tokens_predicted_total") as u64,
-        decode_calls_total: extract("llamacpp:n_decode_total") as u64,
-        max_tokens_observed: extract("llamacpp:n_tokens_max") as u64,
-        prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds"),
-        requests_processing: extract("llamacpp:requests_processing") as u64,
-        requests_deferred: extract("llamacpp:requests_deferred") as u64,
-        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode"),
-    }
+    Ok(crate::commands::telemetry::LlamaMetricSample {
+        tokens_per_sec: extract("llamacpp:predicted_tokens_seconds")?,
+        prompt_tokens: extract("llamacpp:prompt_tokens_total")? as u64,
+        gen_tokens: extract("llamacpp:tokens_predicted_total")? as u64,
+        decode_calls_total: extract("llamacpp:n_decode_total")? as u64,
+        max_tokens_observed: extract("llamacpp:n_tokens_max")? as u64,
+        prompt_tokens_per_sec: extract("llamacpp:prompt_tokens_seconds")?,
+        requests_processing: extract("llamacpp:requests_processing")? as u64,
+        requests_deferred: extract("llamacpp:requests_deferred")? as u64,
+        busy_slots_per_decode: extract("llamacpp:n_busy_slots_per_decode")?,
+    })
 }
 
 // Restore logs and monitoring after app restart.
@@ -2406,10 +2593,8 @@ pub fn register_restored_runtime_instance(
 pub fn reconnect_running_instance(
     instance_id: &str,
     pid: u32,
-    host: &str,
-    port: u16,
+    config: &InstanceConfig,
     config_dir: &std::path::Path,
-    api_key: &str,
     app: tauri::AppHandle,
 ) {
     let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
@@ -2441,12 +2626,19 @@ pub fn reconnect_running_instance(
     {
         let app_metrics = app.clone();
         let id_metrics = instance_id.to_string();
-        let host_m = if host == "0.0.0.0" {
+        let host_m = if config.host == "0.0.0.0" {
             "localhost".to_string()
         } else {
-            host.to_string()
+            config.host.clone()
         };
-        let ak = api_key.to_string();
+        let endpoint_base = crate::utils::service_url(
+            effective_server_scheme(config),
+            &host_m,
+            config.port,
+            &config.api_prefix,
+            "",
+        );
+        let ak = effective_api_key(config);
         let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_metrics)
             .ok()
             .flatten();
@@ -2458,8 +2650,7 @@ pub fn reconnect_running_instance(
                 &id_metrics,
                 pid,
                 MonitorLoopConfig {
-                    host: host_m,
-                    port,
+                    endpoint_base,
                     api_key: ak,
                     telemetry_session_id,
                     workload,
@@ -3046,6 +3237,7 @@ fn tail_log_file(
         0,
         0.0,
     );
+    emit_perf(&app, &HashMap::new(), &last_completed);
 }
 
 /// Split custom argument strings while preserving ordinary Windows path separators.
@@ -3327,12 +3519,20 @@ mod perf_parser_tests {
              llamacpp:requests_processing 2\n\
              llamacpp:requests_deferred 1\n\
              llamacpp:n_busy_slots_per_decode 1.5\n",
-        );
+        )
+        .unwrap();
 
         assert_eq!(sample.decode_calls_total, 9);
         assert_eq!(sample.max_tokens_observed, 4096);
         assert_eq!(sample.tokens_per_sec, 12.5);
         assert_eq!(sample.prompt_tokens_per_sec, 48.0);
+    }
+
+    #[test]
+    fn malformed_llama_metrics_are_not_reported_as_zero() {
+        let error =
+            parse_llama_metric_sample("llamacpp:predicted_tokens_seconds nope").unwrap_err();
+        assert!(error.contains("Missing or invalid llama metric"));
     }
 
     #[test]
@@ -3620,7 +3820,7 @@ mod perf_parser_tests {
 
     #[test]
     fn browser_url_rejects_command_metacharacters_in_host() {
-        let err = browser_url_for_host("127.0.0.1 & calc", 8080).unwrap_err();
+        let err = browser_url_for_host("127.0.0.1 & calc", 8080, false, "").unwrap_err();
         assert!(err.contains("Invalid host"));
     }
 
@@ -3665,8 +3865,31 @@ mod perf_parser_tests {
 
     #[test]
     fn browser_url_maps_wildcard_host_to_localhost() {
-        let url = browser_url_for_host("0.0.0.0", 8080).unwrap();
+        let url = browser_url_for_host("0.0.0.0", 8080, false, "").unwrap();
         assert_eq!(url, "http://localhost:8080");
+    }
+
+    #[test]
+    fn browser_url_uses_tls_and_api_prefix() {
+        let url = browser_url_for_host("::1", 8443, true, "/llama/").unwrap();
+        assert_eq!(url, "https://[::1]:8443/llama");
+    }
+
+    #[test]
+    fn tls_configuration_requires_an_atomic_key_certificate_pair() {
+        let key_only = InstanceConfig {
+            ssl_key_file: "server.key".into(),
+            ..InstanceConfig::default()
+        };
+        assert!(validate_tls_configuration(&key_only).is_err());
+
+        let complete = InstanceConfig {
+            ssl_key_file: "server.key".into(),
+            ssl_cert_file: "server.crt".into(),
+            ..InstanceConfig::default()
+        };
+        assert!(validate_tls_configuration(&complete).is_ok());
+        assert_eq!(effective_server_scheme(&complete), "https");
     }
 
     #[test]
@@ -3681,11 +3904,20 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn effective_api_key_uses_first_inline_csv_key() {
+        let config = InstanceConfig {
+            api_key: " first-key, second-key ".into(),
+            ..InstanceConfig::default()
+        };
+        assert_eq!(effective_api_key(&config), "first-key");
+    }
+
+    #[test]
     fn effective_api_key_reads_first_non_empty_file_line() {
         let dir = std::env::temp_dir().join(format!("lsm-api-key-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("api-key.txt");
-        std::fs::write(&path, "\n file-key \n second-key \n").unwrap();
+        std::fs::write(&path, "\n # comment \n file-key \n second-key \n").unwrap();
 
         let config = InstanceConfig {
             api_key_file: path.to_string_lossy().to_string(),
@@ -3708,6 +3940,7 @@ mod perf_parser_tests {
             executable_path: "C:\\tools\\llama-server.exe".into(),
             telemetry_session_id: None,
             workload: "inference".into(),
+            launch_config: None,
         };
 
         assert!(!process_identity_matches(
@@ -3850,22 +4083,43 @@ pub mod ipc {
     }
 
     #[tauri::command]
-    pub async fn open_browser(host: String, port: u16) -> crate::error::AppResult<()> {
-        super::open_browser(host, port)
+    pub async fn open_browser(
+        host: String,
+        port: u16,
+        use_tls: Option<bool>,
+        api_prefix: Option<String>,
+        instance_id: Option<String>,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<()> {
+        super::open_browser(host, port, use_tls, api_prefix, instance_id, state)
             .await
             .map_err(crate::error::AppError::from)
     }
 
     #[tauri::command]
+    #[allow(clippy::too_many_arguments)] // IPC compatibility wrapper mirrors the command fields.
     pub async fn test_connection(
         host: String,
         port: u16,
         api_key: Option<String>,
         api_key_file: Option<String>,
+        use_tls: Option<bool>,
+        api_prefix: Option<String>,
+        instance_id: Option<String>,
+        state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<String> {
-        super::test_connection(host, port, api_key, api_key_file)
-            .await
-            .map_err(crate::error::AppError::from)
+        super::test_connection(
+            host,
+            port,
+            api_key,
+            api_key_file,
+            use_tls,
+            api_prefix,
+            instance_id,
+            state,
+        )
+        .await
+        .map_err(crate::error::AppError::from)
     }
 
     #[tauri::command]
@@ -3897,8 +4151,10 @@ pub mod ipc {
         host: String,
         port: u16,
         api_key: Option<String>,
+        use_tls: Option<bool>,
+        api_prefix: Option<String>,
     ) -> crate::error::AppResult<Vec<SlotInfo>> {
-        super::get_slots(host, port, api_key)
+        super::get_slots(host, port, api_key, use_tls, api_prefix)
             .await
             .map_err(crate::error::AppError::from)
     }
@@ -3908,8 +4164,10 @@ pub mod ipc {
         host: String,
         port: u16,
         api_key: Option<String>,
+        use_tls: Option<bool>,
+        api_prefix: Option<String>,
     ) -> crate::error::AppResult<Option<MetricsInfo>> {
-        super::get_metrics(host, port, api_key)
+        super::get_metrics(host, port, api_key, use_tls, api_prefix)
             .await
             .map_err(crate::error::AppError::from)
     }

@@ -10,6 +10,7 @@ import { normalizeInstanceConfig } from '../modelPolicy'
 import type { Instance } from '../store/types'
 import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
+import { resolveEffectiveEngine } from '../store/engineResolution'
 
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 
@@ -196,7 +197,7 @@ const InstanceManager = () => {
   const handleShowCommand = async (id: string) => {
     const inst = instances.find(i => i.id === id)
     if (!inst) return
-    const engine = engines.find(e => e.id === inst.config.engine_id) || engines.find(e => e.id === defaultEngineId) || engines[0]
+    const engine = resolveEffectiveEngine(inst.config, engines, defaultEngineId)
     if (!engine) return
     try {
       const { command: cmd } = await generateCommand(inst.config, engine.exe)
@@ -221,6 +222,9 @@ const InstanceManager = () => {
         port: inst.config.port,
         apiKey: inst.config.api_key || null,
         apiKeyFile: inst.config.api_key_file || null,
+        useTls: Boolean(inst.config.ssl_key_file && inst.config.ssl_cert_file),
+        apiPrefix: inst.config.api_prefix || null,
+        instanceId: inst.id,
       })
       if (!mountedRef.current) return
       setTestResults(state => ({ ...state, [inst.id]: `ok:${String(result)}` }))
@@ -495,7 +499,7 @@ const InstanceManager = () => {
                         </Button>
                       )}
                       <Button
-                        onClick={() => openBrowser(inst.config.host, inst.config.port)}
+                        onClick={() => openBrowser(inst.id, inst.config.host, inst.config.port, Boolean(inst.config.ssl_key_file && inst.config.ssl_cert_file), inst.config.api_prefix)}
                         disabled={!isRunning}
                         variant="subtle"
                         size="icon"
@@ -653,7 +657,7 @@ const InstanceManager = () => {
                   ) : (
                     <Button onClick={() => void startInstance(selectedInstance.id).catch(() => {})} variant="success" icon={<Play className="h-4 w-4" />}>{t.instance.start}</Button>
                   )}
-                  <Button onClick={() => openBrowser(selectedInstance.config.host, selectedInstance.config.port)} disabled={selectedInstance.status !== 'running'} icon={<Globe className="h-4 w-4" />}>{t.instance.openBrowser}</Button>
+                  <Button onClick={() => openBrowser(selectedInstance.id, selectedInstance.config.host, selectedInstance.config.port, Boolean(selectedInstance.config.ssl_key_file && selectedInstance.config.ssl_cert_file), selectedInstance.config.api_prefix)} disabled={selectedInstance.status !== 'running'} icon={<Globe className="h-4 w-4" />}>{t.instance.openBrowser}</Button>
                 </div>
               </div>
 

@@ -81,6 +81,7 @@ export default function PerformancePage() {
   const [trendRange, setTrendRange] = useState<'1m' | '5m' | '15m' | '1h'>('5m')
   const [vectorTrendMetric, setVectorTrendMetric] = useState<'input' | 'items'>('input')
   const selectedSessionIdRef = useRef('')
+  const sessionSelectionInitializedRef = useRef(false)
   const telemetryInFlightRef = useRef(false)
   const detailInFlightRef = useRef(new Set<string>())
   const detailReady = Boolean(selectedSessionId) && detailSessionId === selectedSessionId
@@ -122,14 +123,18 @@ export default function PerformancePage() {
     try {
       const [nextOverview, nextSessions] = await Promise.all([
         invoke<TelemetryOverview>('get_telemetry_overview'),
-        invoke<TelemetrySessionSummary[]>('list_telemetry_sessions', { limit: 36 }),
+        invoke<TelemetrySessionSummary[]>('list_telemetry_sessions', { limit: 200 }),
       ])
       setOverview(nextOverview)
       setSessions(nextSessions)
       setSelectedSessionId(current => {
-        const nextSessionId = current && nextSessions.some(session => session.id === current)
-          ? current
-          : nextSessions[0]?.id || ''
+        let nextSessionId = ''
+        if (current && nextSessions.some(session => session.id === current)) {
+          nextSessionId = current
+        } else if (!sessionSelectionInitializedRef.current && nextSessions.length > 0) {
+          nextSessionId = nextSessions[0].id
+          sessionSelectionInitializedRef.current = true
+        }
         selectedSessionIdRef.current = nextSessionId
         return nextSessionId
       })
@@ -148,7 +153,7 @@ export default function PerformancePage() {
     try {
       const detail = await invoke<TelemetrySessionDetail>('get_telemetry_session_detail', {
         sessionId,
-        sampleLimit: 220,
+        sampleLimit: 1000,
         requestLimit: 18,
       })
       if (selectedSessionIdRef.current !== sessionId) return
@@ -194,12 +199,13 @@ export default function PerformancePage() {
       return
     }
     void refreshSelectedSessionDetails(selectedSessionId)
+    if (selectedSession?.stopped_at) return
     const timer = window.setInterval(
       () => void refreshSelectedSessionDetails(selectedSessionId),
       TELEMETRY_DETAIL_REFRESH_MS,
     )
     return () => window.clearInterval(timer)
-  }, [selectedSessionId, refreshSelectedSessionDetails])
+  }, [selectedSessionId, selectedSession?.stopped_at, refreshSelectedSessionDetails])
 
   useEffect(() => {
     if (selectedSession) setSelectedInstanceId(selectedSession.instance_id)
@@ -398,7 +404,7 @@ export default function PerformancePage() {
                       setSelectedInstanceId(nextId)
                       const nextSession = sessions.find(session => session.instance_id === nextId && !session.stopped_at)
                         || sessions.find(session => session.instance_id === nextId)
-                      if (nextSession) setSelectedSessionId(nextSession.id)
+                      setSelectedSessionId(nextSession?.id || '')
                     }}
                     className="select-custom h-11 w-full rounded-lg border border-slate-300 bg-white pl-3 pr-8 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                   >
@@ -747,7 +753,8 @@ function buildSessionBenchmark(selectedSession: TelemetrySessionSummary | undefi
     session.sample_count > 0
   )
   const sameConfig = history.filter(session =>
-    session.model_name === selectedSession.model_name &&
+    session.config_hash === selectedSession.config_hash &&
+    session.model_path === selectedSession.model_path &&
     session.engine_id === selectedSession.engine_id &&
     session.backend === selectedSession.backend &&
     session.workload === selectedSession.workload

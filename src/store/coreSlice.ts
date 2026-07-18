@@ -1,5 +1,14 @@
 import { invokeApp as invoke } from '../lib/ipc'
-import { applyModelInventory, beginModelInventoryRequest } from './bootstrap'
+import {
+  applyEngineInventory,
+  applyModelInventory,
+  beginEngineInventoryRequest,
+  beginModelInventoryRequest,
+  currentEngineInventoryRequest,
+  currentModelInventoryRequest,
+  isCurrentEngineInventoryRequest,
+  isCurrentModelInventoryRequest,
+} from './bootstrap'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'
 
@@ -68,15 +77,25 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     loadInitialData: async () => {
       set({ isLoading: true })
-      const requestGeneration = beginModelInventoryRequest()
+      const modelRequestGeneration = currentModelInventoryRequest()
+      const engineRequestGeneration = currentEngineInventoryRequest()
       try {
         const [models, engines] = await Promise.all([
-          invoke<ModelInfo[]>('get_models').catch(() => [] as ModelInfo[]),
-          invoke<EngineInfo[]>('get_engines').catch(() => [] as EngineInfo[]),
+          invoke<ModelInfo[]>('get_models'),
+          invoke<EngineInfo[]>('get_engines'),
         ])
-        applyModelInventory(models, get, set, { engines, isLoading: false }, requestGeneration)
-      } catch {
-        set({ isLoading: false })
+        applyModelInventory(models, get, set, {}, modelRequestGeneration)
+        applyEngineInventory(engines, set, {}, engineRequestGeneration)
+        if (
+          isCurrentModelInventoryRequest(modelRequestGeneration)
+          && isCurrentEngineInventoryRequest(engineRequestGeneration)
+        ) set({ isLoading: false })
+      } catch (error) {
+        get().addRuntimeWarning(`inventory load failed: ${String(error)}`)
+        if (
+          isCurrentModelInventoryRequest(modelRequestGeneration)
+          && isCurrentEngineInventoryRequest(engineRequestGeneration)
+        ) set({ isLoading: false })
       }
     },
     scanModels: async (paths) => {
@@ -88,7 +107,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         return null
       } catch (error: any) {
         console.error('scan_models error:', error)
-        set({ isLoading: false })
+        if (isCurrentModelInventoryRequest(requestGeneration)) set({ isLoading: false })
         return error?.message || error?.toString() || 'Scan failed'
       }
     },
@@ -102,12 +121,13 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     readGgufMetadata: async (path) => invoke<GgufMetadataSummary>('read_gguf_metadata', { path }),
     scanEngines: async (paths) => {
       set({ isLoading: true })
+      const requestGeneration = beginEngineInventoryRequest()
       try {
         const engines = await invoke<EngineInfo[]>('scan_engines', { paths })
-        set({ engines, engineDirs: paths, isLoading: false })
+        applyEngineInventory(engines, set, { engineDirs: paths, isLoading: false }, requestGeneration)
       } catch (error) {
         console.error('scan_engines error:', error)
-        set({ isLoading: false })
+        if (isCurrentEngineInventoryRequest(requestGeneration)) set({ isLoading: false })
       }
     },
     probeEngineCapabilities: async (id) => {

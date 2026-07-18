@@ -339,9 +339,20 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
             Ok(merged)
         }
         Err(_) => {
-            // Timeout: return whatever was found so far.
             let partial = discovered.lock().await.clone();
-            Ok(partial)
+            update_workers(&state, |existing| {
+                for discovered in &partial {
+                    if let Some(worker) = existing.iter_mut().find(|worker| {
+                        worker.host == discovered.host && worker.port == discovered.port
+                    }) {
+                        worker.status = WorkerStatus::Online;
+                        worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                    } else {
+                        existing.push(discovered.clone());
+                    }
+                }
+                existing.clone()
+            })
         }
     }
 }

@@ -23,13 +23,14 @@ use crate::commands::config::{
 use crate::commands::download::{
     browse_huggingface, browse_modelscope, cancel_all_downloads, cancel_and_cleanup_download,
     cancel_file_download, check_local_file, clear_download_tasks_by_status,
-    download_huggingface_files, download_modelscope_files, enqueue_download_queue,
-    flush_download_manager_state, get_download_bandwidth_limit, get_download_concurrency,
-    get_download_low_priority_throttle, get_download_manager_snapshot, get_download_resume_policy,
-    pause_all_downloads, pause_file_download, persist_download_queue, process_download_queue,
-    remove_download_queue_entry, reset_download_for_redownload, restore_download_queue,
-    resume_all_downloads, resume_download_task, set_download_bandwidth_limit,
-    set_download_concurrency, set_download_low_priority_throttle, set_download_resume_policy,
+    delete_managed_local_file, download_huggingface_files, download_modelscope_files,
+    enqueue_download_queue, flush_download_manager_state, get_download_bandwidth_limit,
+    get_download_concurrency, get_download_low_priority_throttle, get_download_manager_snapshot,
+    get_download_resume_policy, pause_all_downloads, pause_file_download, persist_download_queue,
+    process_download_queue, remove_download_queue_entry, reset_download_for_redownload,
+    restore_download_queue, resume_all_downloads, resume_download_task,
+    set_download_bandwidth_limit, set_download_concurrency, set_download_low_priority_throttle,
+    set_download_resume_policy,
 };
 use crate::commands::engine_capabilities::ipc::probe_engine_capabilities;
 use crate::commands::monitoring::get_monitoring_series;
@@ -307,17 +308,23 @@ fn main() {
                 if !crate::commands::server::register_restored_runtime_instance(app.handle(), id, ri.pid) {
                     continue;
                 }
-                let host = if ri.host == "0.0.0.0" { "localhost".to_string() } else { ri.host.clone() };
-                let port = ri.port;
                 let pid = ri.pid;
                 let app_reconnect = app.handle().clone();
                 let config_dir_clone = config_dir.clone();
 
-                let api_key = config.instances.get(id)
-                    .map(crate::commands::server::effective_api_key)
-                    .filter(|key| !key.is_empty())
-                    .unwrap_or_default();
-                crate::commands::server::reconnect_running_instance(id, pid, &host, port, &config_dir_clone, &api_key, app_reconnect);
+                let launch_config = ri
+                    .launch_config
+                    .as_ref()
+                    .or_else(|| config.instances.get(id));
+                if let Some(launch_config) = launch_config {
+                    crate::commands::server::reconnect_running_instance(
+                        id,
+                        pid,
+                        launch_config,
+                        &config_dir_clone,
+                        app_reconnect,
+                    );
+                }
             }
 
             if config.proxy_config.enabled {
@@ -343,6 +350,8 @@ fn main() {
         .manage(AppState {
             models: Mutex::new(default_models),
             engines: Mutex::new(default_engines),
+            model_scan_generation: std::sync::atomic::AtomicU64::new(0),
+            engine_scan_generation: std::sync::atomic::AtomicU64::new(0),
             engine_names: Mutex::new(HashMap::new()),
             instances: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
@@ -383,7 +392,7 @@ fn main() {
             generate_server_command, start_server, stop_server, open_browser,
             save_config, load_config,
             browse_modelscope, download_modelscope_files,
-            browse_huggingface, download_huggingface_files, check_local_file,
+            browse_huggingface, download_huggingface_files, check_local_file, delete_managed_local_file,
             enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue,
             cancel_file_download, pause_file_download, cancel_and_cleanup_download, reset_download_for_redownload,
             persist_download_queue, restore_download_queue,

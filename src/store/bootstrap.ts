@@ -17,6 +17,7 @@ import type {
 } from './types'
 
 export type GlobalConfigShape = {
+  config_load_warning?: string | null
   instances: Record<string, InstanceConfig>
   model_dirs: string[]
   engine_dirs: string[]
@@ -43,14 +44,32 @@ declare global {
 }
 
 let modelInventoryRequestGeneration = 0
+let engineInventoryRequestGeneration = 0
 
 export function beginModelInventoryRequest(): number {
   modelInventoryRequestGeneration += 1
   return modelInventoryRequestGeneration
 }
 
+export function currentModelInventoryRequest(): number {
+  return modelInventoryRequestGeneration
+}
+
 export function isCurrentModelInventoryRequest(requestGeneration: number): boolean {
   return requestGeneration === modelInventoryRequestGeneration
+}
+
+export function beginEngineInventoryRequest(): number {
+  engineInventoryRequestGeneration += 1
+  return engineInventoryRequestGeneration
+}
+
+export function currentEngineInventoryRequest(): number {
+  return engineInventoryRequestGeneration
+}
+
+export function isCurrentEngineInventoryRequest(requestGeneration: number): boolean {
+  return requestGeneration === engineInventoryRequestGeneration
 }
 
 export function normalizeModelPath(value: string): string {
@@ -128,6 +147,19 @@ export function applyModelInventory(
   return reconciled.changed
 }
 
+export function applyEngineInventory(
+  engines: EngineInfo[],
+  set: AppStoreSet,
+  additionalState: Partial<AppState> = {},
+  requestGeneration?: number,
+): boolean {
+  if (requestGeneration !== undefined && !isCurrentEngineInventoryRequest(requestGeneration)) {
+    return false
+  }
+  set({ ...additionalState, engines })
+  return true
+}
+
 function hydrateDownloadTasksFromSnapshot(
   snapshot: DownloadManagerSnapshot,
   get: AppStoreGet,
@@ -182,7 +214,11 @@ async function processConfig(
   get: AppStoreGet,
   set: AppStoreSet,
 ) {
+  if (global.config_load_warning) {
+    get().addRuntimeWarning(global.config_load_warning)
+  }
   const modelScanRequest = beginModelInventoryRequest()
+  const engineScanRequest = beginEngineInventoryRequest()
   const runningIds = new Set(Object.keys(global.running || {}))
   const order = global.instance_order || Object.keys(global.instances)
   const orderIndex = new Map(order.map((id, index) => [id, index]))
@@ -211,7 +247,6 @@ async function processConfig(
   startTransition(() => {
     set({
       instances,
-      models: [],
       modelDirs: global.model_dirs || [],
       engineDirs: global.engine_dirs || [],
       defaultEngineId: global.default_engine_id || null,
@@ -260,7 +295,7 @@ async function processConfig(
   invoke<EngineInfo[]>('scan_engines', { paths: global.engine_dirs || [] })
     .then((engines) => {
       startTransition(() => {
-        set({ engines })
+        applyEngineInventory(engines, set, {}, engineScanRequest)
       })
     })
     .catch((error) => {
@@ -285,12 +320,14 @@ export async function loadAppBootstrap(
         get().addRuntimeWarning(`startup timing failed: ${error?.message || String(error)}`)
       })
 
-    const cachedScanRequest = beginModelInventoryRequest()
+    const cachedModelScanRequest = beginModelInventoryRequest()
+    const cachedEngineScanRequest = beginEngineInventoryRequest()
     invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan')
       .then((data) => {
         if (data) {
           startTransition(() => {
-            applyModelInventory(data[0], get, set, { engines: data[1] }, cachedScanRequest)
+            applyModelInventory(data[0], get, set, {}, cachedModelScanRequest)
+            applyEngineInventory(data[1], set, {}, cachedEngineScanRequest)
           })
         }
       })

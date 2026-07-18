@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -30,7 +30,7 @@ pub struct ModelCapabilities {
 
 #[cfg(test)]
 mod model_capability_tests {
-    use super::ModelCapabilities;
+    use super::{InstanceConfig, ModelCapabilities};
 
     #[test]
     fn vector_capabilities_distinguish_missing_cache_fields_from_explicit_false() {
@@ -51,6 +51,38 @@ mod model_capability_tests {
         let scanned_json = serde_json::to_value(&scanned).unwrap();
         assert_eq!(scanned_json["is_embedding_model"], false);
         assert_eq!(scanned_json["is_reranker_model"], false);
+    }
+
+    #[test]
+    fn legacy_instance_config_uses_business_defaults_for_missing_fields() {
+        let config: InstanceConfig = serde_json::from_str("{}").unwrap();
+        let expected = InstanceConfig::default();
+        assert_eq!(config.threads_http, expected.threads_http);
+        assert_eq!(config.cache_ram, expected.cache_ram);
+        assert_eq!(config.warmup, expected.warmup);
+        assert_eq!(config.ctx_checkpoints, expected.ctx_checkpoints);
+        assert_eq!(config.checkpoint_min_step, expected.checkpoint_min_step);
+        assert_eq!(config.yarn_ext_factor, expected.yarn_ext_factor);
+        assert_eq!(config.yarn_attn_factor, expected.yarn_attn_factor);
+        assert_eq!(config.yarn_beta_slow, expected.yarn_beta_slow);
+        assert_eq!(config.yarn_beta_fast, expected.yarn_beta_fast);
+        assert_eq!(config.cache_idle_slots, expected.cache_idle_slots);
+        assert_eq!(config.spec_draft_p_split, expected.spec_draft_p_split);
+        assert_eq!(config.embd_normalize, expected.embd_normalize);
+        assert_eq!(config.metrics, expected.metrics);
+        assert_eq!(config.props, expected.props);
+        assert_eq!(config.slots_enabled, expected.slots_enabled);
+        assert_eq!(
+            config.slot_prompt_similarity,
+            expected.slot_prompt_similarity
+        );
+        assert_eq!(config.models_max, expected.models_max);
+        assert_eq!(config.models_autoload, expected.models_autoload);
+        assert_eq!(config.mtmd_batch_max_tokens, expected.mtmd_batch_max_tokens);
+        assert_eq!(config.adaptive_target, expected.adaptive_target);
+        assert_eq!(config.adaptive_decay, expected.adaptive_decay);
+        assert_eq!(config.top_n_sigma, expected.top_n_sigma);
+        assert_eq!(config.sse_ping_interval, expected.sse_ping_interval);
     }
 }
 
@@ -185,19 +217,19 @@ pub struct InstanceConfig {
     pub cont_batching: bool,
     pub cache_prompt: bool,
     pub threads_batch: u32,
-    #[serde(default)]
+    #[serde(default = "default_negative_one_i32")]
     pub threads_http: i32,
     #[serde(default)]
     pub keep: i32,
     #[serde(default)]
     pub cache_reuse: u32,
-    #[serde(default)]
+    #[serde(default = "default_cache_ram")]
     pub cache_ram: i32,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub warmup: bool,
-    #[serde(default)]
+    #[serde(default = "default_ctx_checkpoints")]
     pub ctx_checkpoints: u32,
-    #[serde(default)]
+    #[serde(default = "default_checkpoint_min_step")]
     pub checkpoint_min_step: u32,
     #[serde(default)]
     pub swa_full: bool,
@@ -210,13 +242,13 @@ pub struct InstanceConfig {
     pub rope_freq_base: f32,
     #[serde(default)]
     pub rope_freq_scale: f32,
-    #[serde(default)]
+    #[serde(default = "default_negative_one_f32")]
     pub yarn_ext_factor: f32,
-    #[serde(default)]
+    #[serde(default = "default_negative_one_f32")]
     pub yarn_attn_factor: f32,
-    #[serde(default)]
+    #[serde(default = "default_negative_one_f32")]
     pub yarn_beta_slow: f32,
-    #[serde(default)]
+    #[serde(default = "default_negative_one_f32")]
     pub yarn_beta_fast: f32,
     #[serde(default)]
     pub yarn_orig_ctx: u32,
@@ -247,7 +279,7 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub kv_unified: bool,
     pub kv_unified_mode: String,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub cache_idle_slots: bool,
     #[serde(default)]
     pub no_kv_offload: bool,
@@ -264,7 +296,7 @@ pub struct InstanceConfig {
     pub spec_type: String,
     #[serde(default)]
     pub spec_draft_p_min: f32,
-    #[serde(default)]
+    #[serde(default = "default_point_one")]
     pub spec_draft_p_split: f32,
     #[serde(default)]
     pub spec_draft_device: String,
@@ -319,19 +351,19 @@ pub struct InstanceConfig {
     pub agent: bool,
     pub embedding: bool,
     pub pooling: String,
-    #[serde(default)]
+    #[serde(default = "default_embd_normalize")]
     pub embd_normalize: i32,
     pub reranking: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub metrics: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub props: bool,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub slots_enabled: bool,
     #[serde(default)]
     pub slot_save_path: String,
     pub log_prompts_dir: String,
-    #[serde(default)]
+    #[serde(default = "default_point_one")]
     pub slot_prompt_similarity: f32,
     pub prefill_assistant: bool,
     // Multi-Model & Media
@@ -339,9 +371,9 @@ pub struct InstanceConfig {
     pub models_dir: String,
     #[serde(default)]
     pub models_preset: String,
-    #[serde(default)]
+    #[serde(default = "default_models_max")]
     pub models_max: u32,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub models_autoload: bool,
     #[serde(default)]
     pub mmproj_url: String,
@@ -356,7 +388,7 @@ pub struct InstanceConfig {
     pub image_min_tokens: u32,
     #[serde(default)]
     pub image_max_tokens: u32,
-    #[serde(default)]
+    #[serde(default = "default_mtmd_batch_max_tokens")]
     pub mtmd_batch_max_tokens: u32,
     #[serde(default)]
     pub tags: String,
@@ -399,11 +431,11 @@ pub struct InstanceConfig {
     pub dry_allowed_length: u32,
     pub dry_penalty_last_n: i32,
     pub dry_sequence_breaker: String,
-    #[serde(default)]
+    #[serde(default = "default_negative_one_f32")]
     pub adaptive_target: f32,
-    #[serde(default)]
+    #[serde(default = "default_adaptive_decay")]
     pub adaptive_decay: f32,
-    #[serde(default)]
+    #[serde(default = "default_negative_one_f32")]
     pub top_n_sigma: f32,
     #[serde(default)]
     pub logit_bias: String,
@@ -418,8 +450,8 @@ pub struct InstanceConfig {
     // Server features (aligned with llama.cpp master)
     #[serde(default)]
     pub rpc_servers: String,
-    #[serde(default)]
-    pub sse_ping_interval: u32,
+    #[serde(default = "default_sse_ping_interval")]
+    pub sse_ping_interval: i32,
     #[serde(default)]
     pub reuse_port: bool,
     #[serde(default)]
@@ -544,7 +576,7 @@ impl Default for InstanceConfig {
             embd_normalize: 2,
             reranking: false,
             metrics: true,
-            props: false,
+            props: true,
             slots_enabled: true,
             slot_save_path: String::new(),
             log_prompts_dir: String::new(),
@@ -628,6 +660,9 @@ pub struct RunningInstance {
     pub telemetry_session_id: Option<String>,
     #[serde(default)]
     pub workload: String,
+    /// Immutable configuration snapshot used by runtime consumers until restart.
+    #[serde(default)]
+    pub launch_config: Option<InstanceConfig>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -767,6 +802,8 @@ pub struct ProxyTarget {
 pub struct AppState {
     pub models: Mutex<Vec<ModelInfo>>,
     pub engines: Mutex<Vec<EngineInfo>>,
+    pub model_scan_generation: AtomicU64,
+    pub engine_scan_generation: AtomicU64,
     pub engine_names: Mutex<HashMap<String, String>>,
     pub instances: Mutex<HashMap<String, InstanceConfig>>,
     pub running: Mutex<HashMap<String, RunningInstance>>,
@@ -817,6 +854,8 @@ impl Default for DownloadBandwidthLimiter {
 // Global config structure for JSON serialization.
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct GlobalConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_load_warning: Option<String>,
     pub instances: HashMap<String, InstanceConfig>,
     pub model_dirs: Vec<String>,
     pub engine_dirs: Vec<String>,
@@ -914,6 +953,50 @@ pub struct DownloadArtifactState {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_negative_one_i32() -> i32 {
+    -1
+}
+
+fn default_negative_one_f32() -> f32 {
+    -1.0
+}
+
+fn default_cache_ram() -> i32 {
+    8192
+}
+
+fn default_ctx_checkpoints() -> u32 {
+    32
+}
+
+fn default_checkpoint_min_step() -> u32 {
+    8192
+}
+
+fn default_point_one() -> f32 {
+    0.1
+}
+
+fn default_embd_normalize() -> i32 {
+    2
+}
+
+fn default_models_max() -> u32 {
+    4
+}
+
+fn default_mtmd_batch_max_tokens() -> u32 {
+    1024
+}
+
+fn default_adaptive_decay() -> f32 {
+    0.9
+}
+
+fn default_sse_ping_interval() -> i32 {
+    30
 }
 fn default_fit_ctx() -> u32 {
     4096

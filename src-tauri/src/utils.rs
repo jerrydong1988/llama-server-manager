@@ -458,13 +458,21 @@ pub fn format_host_port(host: &str, port: u16) -> String {
     }
 }
 
-pub fn http_url(host: &str, port: u16, path: &str) -> String {
-    let suffix = if path.is_empty() || path.starts_with('/') {
-        path.to_string()
+pub fn service_url(scheme: &str, host: &str, port: u16, api_prefix: &str, path: &str) -> String {
+    let scheme = if scheme.eq_ignore_ascii_case("https") {
+        "https"
     } else {
-        format!("/{}", path)
+        "http"
     };
-    format!("http://{}{}", format_host_port(host, port), suffix)
+    let prefix = api_prefix.trim_matches('/');
+    let path = path.trim_start_matches('/');
+    let suffix = match (prefix.is_empty(), path.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => format!("/{path}"),
+        (false, true) => format!("/{prefix}"),
+        (false, false) => format!("/{prefix}/{path}"),
+    };
+    format!("{scheme}://{}{}", format_host_port(host, port), suffix)
 }
 
 pub fn resolve_socket_addrs(host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>, String> {
@@ -664,7 +672,10 @@ mod tests {
         );
         assert_eq!(format_host_port("::1", 50052), "[::1]:50052");
         assert_eq!(format_host_port("[::1]", 50052), "[::1]:50052");
-        assert_eq!(http_url("::1", 8080, "/health"), "http://[::1]:8080/health");
+        assert_eq!(
+            service_url("http", "::1", 8080, "", "/health"),
+            "http://[::1]:8080/health"
+        );
     }
 
     #[test]

@@ -205,6 +205,7 @@ function AppInner() {
         if (inst.config.rpc_servers) {
           const configuredServers = inst.config.rpc_servers.split(/[, ]+/).filter(Boolean)
           const hasMatchingWorker = currentWorkers.some(w =>
+            w.status === 'Online' &&
             configuredServers.some(s => {
               const endpoint = parseHostPort(s, 50052)
               return w.host === endpoint.host && w.port === endpoint.port

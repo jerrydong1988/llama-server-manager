@@ -11,6 +11,7 @@ static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()))
 
 fn default_global_config() -> GlobalConfig {
     GlobalConfig {
+        config_load_warning: None,
         instances: HashMap::new(),
         model_dirs: vec![],
         engine_dirs: vec![],
@@ -33,7 +34,13 @@ fn persist_global_config_unlocked(
     global: &GlobalConfig,
 ) -> Result<bool, String> {
     let path = config_dir.join("instances.json");
-    let json = serde_json::to_string_pretty(global).map_err(|e| format!("序列化失败: {}", e))?;
+    let mut persisted_value =
+        serde_json::to_value(global).map_err(|e| format!("序列化失败: {}", e))?;
+    if let Some(object) = persisted_value.as_object_mut() {
+        object.remove("config_load_warning");
+    }
+    let json =
+        serde_json::to_string_pretty(&persisted_value).map_err(|e| format!("序列化失败: {}", e))?;
     if std::fs::read_to_string(&path).is_ok_and(|current| current == json) {
         let backup = config_dir.join("instances.json.bak");
         if !backup.exists() {
@@ -80,24 +87,46 @@ where
 
 fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
     let path = config_dir.join("instances.json");
-    let primary_result = std::fs::read_to_string(&path);
-    let json = match primary_result {
-        Ok(json) => Some(json),
-        Err(_) => {
-            let backup_path = config_dir.join("instances.json.bak");
-            std::fs::read_to_string(backup_path).ok()
+    let backup_path = config_dir.join("instances.json.bak");
+    match std::fs::read_to_string(&path) {
+        Ok(json) => match serde_json::from_str::<GlobalConfig>(&json) {
+            Ok(config) => config,
+            Err(primary_error) => match std::fs::read_to_string(&backup_path)
+                .ok()
+                .and_then(|backup| serde_json::from_str::<GlobalConfig>(&backup).ok())
+            {
+                Some(mut config) => {
+                    config.config_load_warning =
+                        Some(format!("主配置损坏，已从备份恢复：{primary_error}"));
+                    config
+                }
+                None => {
+                    let mut config = default_global_config();
+                    config.config_load_warning = Some(format!(
+                        "主配置与备份均损坏，已进入只读恢复状态：{primary_error}"
+                    ));
+                    config
+                }
+            },
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            match std::fs::read_to_string(&backup_path)
+                .ok()
+                .and_then(|backup| serde_json::from_str::<GlobalConfig>(&backup).ok())
+            {
+                Some(mut config) => {
+                    config.config_load_warning = Some("主配置缺失，已从备份恢复".to_string());
+                    config
+                }
+                None => default_global_config(),
+            }
         }
-    };
-    let Some(json) = json else {
-        return default_global_config();
-    };
-    serde_json::from_str(&json).unwrap_or_else(|_| {
-        let backup_path = config_dir.join("instances.json.bak");
-        std::fs::read_to_string(backup_path)
-            .ok()
-            .and_then(|backup| serde_json::from_str(&backup).ok())
-            .unwrap_or_else(default_global_config)
-    })
+        Err(error) => {
+            let mut config = default_global_config();
+            config.config_load_warning = Some(format!("读取主配置失败：{error}"));
+            config
+        }
+    }
 }
 
 fn load_global_config_for_update_unlocked(
@@ -312,31 +341,24 @@ pub async fn load_config(
         if !crate::commands::server::register_restored_runtime_instance(&app, id, ri.pid) {
             continue;
         }
-        let host = if ri.host == "0.0.0.0" {
-            "localhost".to_string()
-        } else {
-            ri.host.clone()
-        };
-        let port = ri.port;
         let pid = ri.pid;
         let app_reconnect = app.clone();
         let config_dir = config_dir.clone();
 
-        let api_key = {
-            let stored = state.instances.lock().unwrap();
-            stored
-                .get(id)
-                .map(crate::commands::server::effective_api_key)
-                .filter(|key| !key.is_empty())
-                .unwrap_or_default()
-        };
+        let launch_config = ri
+            .launch_config
+            .clone()
+            .or_else(|| global.instances.get(id).cloned())
+            .unwrap_or_else(|| InstanceConfig {
+                host: ri.host.clone(),
+                port: ri.port,
+                ..InstanceConfig::default()
+            });
         crate::commands::server::reconnect_running_instance(
             id,
             pid,
-            &host,
-            port,
+            &launch_config,
             &config_dir,
-            &api_key,
             app_reconnect,
         );
     }
@@ -471,6 +493,7 @@ mod tests {
 
     fn sample_config() -> GlobalConfig {
         GlobalConfig {
+            config_load_warning: None,
             instances: HashMap::new(),
             model_dirs: vec!["models-a".into()],
             engine_dirs: vec!["engines-a".into()],
@@ -503,10 +526,49 @@ mod tests {
 
         assert_eq!(loaded.default_engine_id, expected.default_engine_id);
         assert_eq!(loaded.last_tab, expected.last_tab);
+        assert!(loaded
+            .config_load_warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("已从备份恢复")));
         assert_eq!(
             loaded.download_max_concurrent,
             expected.download_max_concurrent
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn double_corruption_is_reported_and_cannot_be_silently_overwritten() {
+        let dir = temp_config_dir("double-corruption");
+        std::fs::write(dir.join("instances.json"), "{broken-primary").unwrap();
+        std::fs::write(dir.join("instances.json.bak"), "{broken-backup").unwrap();
+
+        let loaded = read_config_from_disk(&dir);
+
+        assert!(loaded.instances.is_empty());
+        assert!(loaded
+            .config_load_warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("主配置与备份均损坏")));
+        assert!(load_global_config_for_update_unlocked(&dir).is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.join("instances.json")).unwrap(),
+            "{broken-primary"
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn transient_recovery_warning_is_never_persisted() {
+        let dir = temp_config_dir("transient-warning");
+        let mut config = sample_config();
+        config.config_load_warning = Some("do not persist".into());
+
+        persist_global_config_unlocked(&dir, &config).unwrap();
+
+        let json = std::fs::read_to_string(dir.join("instances.json")).unwrap();
+        assert!(!json.contains("config_load_warning"));
+        assert!(!json.contains("do not persist"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

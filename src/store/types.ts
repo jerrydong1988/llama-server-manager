@@ -143,6 +143,7 @@ export interface LogEntry {
   instanceId: string
   text: string
   timestamp: number
+  level?: 'info' | 'warning' | 'error'
 }
 
 export interface MsFileEntry {
@@ -289,6 +290,8 @@ export interface TelemetryOverview {
   avg_tokens_per_sec_24h: number
   peak_vram_mb_24h: number
   dropped_writes: number
+  last_write_error?: string | null
+  last_write_error_at?: number | null
   latest_samples: TelemetrySampleSummary[]
 }
 
@@ -298,6 +301,7 @@ export interface TelemetrySessionSummary {
   instance_name: string
   model_name: string
   model_path: string
+  config_hash: string
   engine_id: string
   backend: string
   workload: ModelWorkload
@@ -525,7 +529,7 @@ export interface AppState {
   generateCommand: (config: InstanceConfig, engineExe: string) => Promise<GeneratedServerCommand>
   startInstance: (id: string) => Promise<void>
   stopInstance: (id: string) => Promise<void>
-  openBrowser: (host: string, port: number) => Promise<void>
+  openBrowser: (instanceId: string, host: string, port: number, useTls?: boolean, apiPrefix?: string) => Promise<void>
 
   saveConfig: () => Promise<void>
   loadConfig: () => Promise<void>

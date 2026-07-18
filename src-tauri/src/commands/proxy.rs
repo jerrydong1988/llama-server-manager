@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
 use crate::commands::config::update_and_persist;
-use crate::commands::server::effective_api_key;
+use crate::commands::server::{effective_api_key, effective_server_scheme};
 use crate::commands::telemetry::{
     current_time_ms, record_proxy_request, record_vector_activity, ProxyRequestRecord,
     VectorActivityRecord,
@@ -128,6 +128,7 @@ struct ResolvedProxyTarget {
     public: ProxyTarget,
     api_key: String,
     api_prefix: String,
+    scheme: &'static str,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
 }
@@ -237,7 +238,7 @@ fn record_proxy_telemetry(
 }
 
 fn proxy_bound_addr(config: &ProxyConfig) -> String {
-    format!("{}:{}", config.host, config.port)
+    crate::utils::format_host_port(config.host.trim(), config.port)
 }
 
 fn proxy_bind_error_message(bind_addr: &str, err: &std::io::Error) -> String {
@@ -387,8 +388,9 @@ fn resolve_proxy_target(
     let instances = state.instances.lock().unwrap();
     let mut had_candidate = false;
     let resolve_id = |id: &str| {
-        let config = instances.get(id)?;
+        let stored_config = instances.get(id)?;
         let running_info = running.get(id)?;
+        let config = running_info.launch_config.as_ref().unwrap_or(stored_config);
         if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
             return None;
         }
@@ -404,6 +406,7 @@ fn resolve_proxy_target(
             },
             api_key: effective_api_key(config),
             api_prefix: config.api_prefix.clone(),
+            scheme: effective_server_scheme(config),
             telemetry_session_id: running_info.telemetry_session_id.clone(),
             workload,
         })
@@ -477,14 +480,27 @@ fn is_proxy_authorized(config: &ProxyConfig, headers: &HeaderMap) -> bool {
     let auth_ok = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
-        .map(|value| value == bearer || value == expected)
+        .map(|value| {
+            constant_time_eq(value.as_bytes(), bearer.as_bytes())
+                || constant_time_eq(value.as_bytes(), expected.as_bytes())
+        })
         .unwrap_or(false);
     let api_key_ok = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
-        .map(|value| value == expected)
+        .map(|value| constant_time_eq(value.as_bytes(), expected.as_bytes()))
         .unwrap_or(false);
     auth_ok || api_key_ok
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    let mut difference = left.len() ^ right.len();
+    for index in 0..left.len().max(right.len()) {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        difference |= usize::from(left_byte ^ right_byte);
+    }
+    difference == 0
 }
 
 fn proxy_request_is_authorized(config: &ProxyConfig, _path: &str, headers: &HeaderMap) -> bool {
@@ -528,7 +544,38 @@ fn target_url(target: &ResolvedProxyTarget, uri: &Uri) -> String {
     } else {
         format!("/{prefix}{original_path}")
     };
-    crate::utils::http_url(&target.public.host, target.public.port, &upstream_path)
+    crate::utils::service_url(
+        target.scheme,
+        &target.public.host,
+        target.public.port,
+        "",
+        &upstream_path,
+    )
+}
+
+fn validate_proxy_config_update(
+    current: &ProxyConfig,
+    next: &ProxyConfig,
+    running: bool,
+    actual_bound_addr: Option<&str>,
+) -> Result<(), String> {
+    if !running {
+        return Ok(());
+    }
+    let current_bound_addr = proxy_bound_addr(current);
+    let bound_addr = actual_bound_addr.unwrap_or(&current_bound_addr);
+    if proxy_bound_addr(next) != bound_addr {
+        return Err("代理运行期间不能修改监听地址或端口；请先停止代理再保存".to_string());
+    }
+    let bound_host = bound_addr
+        .strip_prefix('[')
+        .and_then(|value| value.split_once(']').map(|(host, _)| host))
+        .or_else(|| bound_addr.rsplit_once(':').map(|(host, _)| host))
+        .unwrap_or(bound_addr);
+    if !is_local_bind_host(bound_host) && next.public_api_key.trim().is_empty() {
+        return Err("代理正在监听非本机地址，公开 API Key 不能为空".to_string());
+    }
+    Ok(())
 }
 
 fn connection_header_tokens(headers: &HeaderMap) -> HashSet<String> {
@@ -801,10 +848,14 @@ pub async fn save_proxy_config(
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyConfig, String> {
     let _transition = state.proxy_lifecycle_lock.lock().await;
-    *state.proxy_config.lock().unwrap() = config.clone();
+    let current = state.proxy_config.lock().unwrap().clone();
+    let running = state.proxy_shutdown.lock().unwrap().is_some();
+    let bound_addr = state.proxy_bound_addr.lock().unwrap().clone();
+    validate_proxy_config_update(&current, &config, running, bound_addr.as_deref())?;
     update_and_persist(&state, |global| {
         global.proxy_config = config.clone();
     })?;
+    *state.proxy_config.lock().unwrap() = config.clone();
     Ok(config)
 }
 
@@ -947,6 +998,7 @@ mod tests {
             },
             api_key: String::new(),
             api_prefix: "v1".into(),
+            scheme: "https",
             telemetry_session_id: None,
             workload: ModelWorkload::Inference,
         };
@@ -954,7 +1006,7 @@ mod tests {
 
         assert_eq!(
             super::target_url(&target, &uri),
-            "http://[::1]:8080/v1/models?limit=1"
+            "https://[::1]:8080/v1/models?limit=1"
         );
     }
 
@@ -998,6 +1050,79 @@ mod tests {
         assert!(!headers.contains_key("authorization"));
         assert!(!headers.contains_key("x-api-key"));
         assert!(headers.contains_key("content-type"));
+    }
+
+    #[test]
+    fn proxy_auth_rejects_near_matches_and_accepts_both_supported_headers() {
+        let config = ProxyConfig {
+            public_api_key: "secret".into(),
+            ..ProxyConfig::default()
+        };
+        for value in ["Bearer secre", "Bearer secret!", "secret!", ""] {
+            let mut headers = HeaderMap::new();
+            headers.insert("authorization", value.parse().unwrap());
+            assert!(!super::is_proxy_authorized(&config, &headers));
+        }
+        let mut bearer = HeaderMap::new();
+        bearer.insert("authorization", "Bearer secret".parse().unwrap());
+        assert!(super::is_proxy_authorized(&config, &bearer));
+        let mut api_key = HeaderMap::new();
+        api_key.insert("x-api-key", "secret".parse().unwrap());
+        assert!(super::is_proxy_authorized(&config, &api_key));
+    }
+
+    #[test]
+    fn running_public_proxy_cannot_drop_auth_or_rebind_silently() {
+        let current = ProxyConfig {
+            host: "0.0.0.0".into(),
+            port: 11435,
+            public_api_key: "secret".into(),
+            ..ProxyConfig::default()
+        };
+        let mut no_key = current.clone();
+        no_key.public_api_key.clear();
+        assert!(super::validate_proxy_config_update(
+            &current,
+            &no_key,
+            true,
+            Some("0.0.0.0:11435"),
+        )
+        .is_err());
+
+        let mut rebound = current.clone();
+        rebound.port += 1;
+        assert!(super::validate_proxy_config_update(
+            &current,
+            &rebound,
+            true,
+            Some("0.0.0.0:11435"),
+        )
+        .is_err());
+        assert!(super::validate_proxy_config_update(&current, &no_key, false, None).is_ok());
+
+        let local = ProxyConfig {
+            host: "127.0.0.1".into(),
+            public_api_key: String::new(),
+            ..ProxyConfig::default()
+        };
+        assert!(
+            super::validate_proxy_config_update(&local, &local, true, Some("127.0.0.1:11435"),)
+                .is_ok()
+        );
+
+        let stale_display = ProxyConfig {
+            host: "127.0.0.1".into(),
+            port: 11435,
+            public_api_key: String::new(),
+            ..ProxyConfig::default()
+        };
+        assert!(super::validate_proxy_config_update(
+            &stale_display,
+            &stale_display,
+            true,
+            Some("0.0.0.0:11435"),
+        )
+        .is_err());
     }
 
     #[test]

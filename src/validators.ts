@@ -206,6 +206,10 @@ export function validateConfig(
   if (config.api_key && config.api_key_file)
     w.push({ field: 'api_key', severity: 'low', key: 'warnA13' })
 
+  // A14: TLS requires a complete key/certificate pair.
+  if (Boolean(config.ssl_key_file) !== Boolean(config.ssl_cert_file))
+    w.push({ field: config.ssl_key_file ? 'ssl_cert_file' : 'ssl_key_file', severity: 'high', key: 'warnA14' })
+
   // Group B: redundant or meaningless settings.
 
   // B2: cache_ram or cache_reuse is set while cache_prompt is disabled.

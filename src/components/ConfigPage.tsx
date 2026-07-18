@@ -10,7 +10,7 @@ import {
   ADVANCED_CONFIG_KEYS, ADVANCED_GROUP_CONFIG_KEYS,
 } from './ConfigPage/sections'
 import { getActiveParams } from './ConfigPage/activeParams'
-import { pathBasename, pathDirname } from '../utils/path'
+import { pathBasename } from '../utils/path'
 import { formatHostPort } from '../utils/network'
 import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
@@ -20,6 +20,8 @@ import { buildPickerTree, countActive, getConfigChanges, getTemplateChanges, gro
 import { useEngineCompatibility } from './ConfigPage/useEngineCompatibility'
 import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotice'
 import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
+import { resolveEffectiveEngine } from '../store/engineResolution'
+import { findMatchingProjector } from '../modelProjector'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
 
 const ConfigPage = () => {
@@ -136,9 +138,8 @@ const ConfigPage = () => {
   const labels = useMemo(() => getConfigPageLabels(lang), [lang])
   const quickTemplates = useMemo(() => getConfigTemplates(lang), [lang])
   const currentEngine = useMemo(() => {
-    const selectedId = local?.engine_id || defaultEngineId || ''
-    return engines.find(engine => engine.id === selectedId) ?? engines[0] ?? null
-  }, [defaultEngineId, engines, local?.engine_id])
+    return local ? resolveEffectiveEngine(local, engines, defaultEngineId) : null
+  }, [defaultEngineId, engines, local])
   const trustedEngineId = local?.engine_id || defaultEngineId || ''
   const { unsupportedEngineFlags, setUnsupportedEngineFlags, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local, currentEngine, trustedEngineId })
 
@@ -160,8 +161,7 @@ const ConfigPage = () => {
     if (normalizedPath === committedModelPathRef.current) return
 
     const selectedModel = models.find(model => normalizeModelPath(model.path) === normalizedPath)
-    const directory = pathDirname(modelPath)
-    const mmproj = models.find(model => pathDirname(model.path) === directory && model.file_type === 'mmproj')
+    const mmproj = selectedModel ? findMatchingProjector(selectedModel, models) : null
     const candidate = { ...local, model_path: modelPath, mmproj_path: mmproj?.path ?? '' }
     const normalized = normalizeConfigForSelectedModel(candidate, selectedModel)
     editRevisionRef.current += 1
@@ -198,7 +198,7 @@ const ConfigPage = () => {
     const targetIsActive = () => mountedRef.current && useAppStore.getState().activeConfigInstanceId === targetInstanceId
     const saveIsCurrent = () => targetIsActive() && editRevisionRef.current === saveRevision
     const localSnapshot = local
-    const engine = engines.find(item => item.id === (localSnapshot.engine_id || defaultEngineId || '')) || engines[0]
+    const engine = resolveEffectiveEngine(localSnapshot, engines, defaultEngineId)
     const modelPathChanged = normalizeModelPath(localSnapshot.model_path) !== committedModelPathRef.current
     const normalized = modelPathChanged ? normalizeConfigForSelectedModel(localSnapshot, currentModel) : normalizeInstanceConfig(localSnapshot, currentModel)
 

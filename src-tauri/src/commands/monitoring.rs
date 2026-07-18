@@ -205,19 +205,35 @@ impl InstanceMonitoringState {
             .iter()
             .filter(|event| event.completed_at >= now.saturating_sub(VECTOR_WINDOW_MS))
             .collect::<Vec<_>>();
-        let has_proxy_events = recent_events
-            .iter()
-            .any(|event| event.source == VectorMetricSource::Proxy);
-        let rate_events = recent_events
+        let proxy_events = recent_events
             .iter()
             .copied()
-            .filter(|event| !has_proxy_events || event.source == VectorMetricSource::Proxy)
+            .filter(|event| event.source == VectorMetricSource::Proxy)
             .collect::<Vec<_>>();
         let log_events = recent_events
             .iter()
             .copied()
             .filter(|event| event.source == VectorMetricSource::Log)
             .collect::<Vec<_>>();
+        let mut matched_proxy = vec![false; proxy_events.len()];
+        let mut rate_events = proxy_events.clone();
+        for log_event in &log_events {
+            let duplicate = proxy_events
+                .iter()
+                .enumerate()
+                .position(|(index, proxy_event)| {
+                    !matched_proxy[index]
+                        && proxy_event.item_count == log_event.item_count
+                        && proxy_event.completed_at.abs_diff(log_event.completed_at) <= 2_000
+                        && (proxy_event.duration_ms - log_event.duration_ms).abs()
+                            <= proxy_event.duration_ms.abs().max(1.0) * 0.25 + 50.0
+                });
+            if let Some(index) = duplicate {
+                matched_proxy[index] = true;
+            } else {
+                rate_events.push(*log_event);
+            }
+        }
 
         let items_per_second = self.workload.is_vector().then(|| {
             rate_events
@@ -679,6 +695,49 @@ mod tests {
         assert_eq!(frame.output_tokens_per_second, None);
         assert_eq!(frame.success_rate, Some(100.0));
         assert_eq!(frame.throughput_unit, "input tok/s");
+    }
+
+    #[test]
+    fn mixed_proxy_and_direct_vector_events_deduplicate_only_matching_requests() {
+        let now = 20_000;
+        let mut state = InstanceMonitoringState::new(
+            "instance",
+            Some("session"),
+            ModelWorkload::Embedding,
+            now,
+        );
+        state.vector_events.extend([
+            VectorLiveEvent {
+                source: VectorMetricSource::Proxy,
+                completed_at: now - 20,
+                item_count: 1,
+                input_tokens: Some(100),
+                duration_ms: 100.0,
+                succeeded: true,
+            },
+            VectorLiveEvent {
+                source: VectorMetricSource::Log,
+                completed_at: now - 10,
+                item_count: 1,
+                input_tokens: Some(100),
+                duration_ms: 100.0,
+                succeeded: true,
+            },
+            VectorLiveEvent {
+                source: VectorMetricSource::Log,
+                completed_at: now,
+                item_count: 2,
+                input_tokens: Some(200),
+                duration_ms: 200.0,
+                succeeded: false,
+            },
+        ]);
+
+        let frame = state.build_frame(now);
+
+        assert_eq!(frame.items_per_second, Some(1.0));
+        assert_eq!(frame.average_latency_ms, Some(150.0));
+        assert_eq!(frame.success_rate, Some(50.0));
     }
 
     #[test]

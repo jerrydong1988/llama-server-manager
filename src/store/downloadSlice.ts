@@ -234,6 +234,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     restoreDownloadQueue: (entries) => {
       const tasks = { ...get().downloadTasks }
+      const restoredQueue: AppState['downloadQueue'] = []
       for (const entry of entries) {
         const source = entry.source as 'modelscope' | 'huggingface'
         const saveDir = entry.save_dir || 'models'
@@ -249,8 +250,21 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
             addedAt: entry.added_at,
           })
         }
+        if (['queued', 'active'].includes(entry.status)) {
+          const pendingFiles = entry.files.filter(file => !['completed', 'cancelled'].includes(file.status || ''))
+          if (pendingFiles.length > 0) {
+            restoredQueue.push({
+              id: entry.id,
+              repoId: entry.repo_id,
+              source,
+              files: pendingFiles,
+              saveDir,
+              addedAt: entry.added_at,
+            })
+          }
+        }
       }
-      set({ downloadTasks: tasks })
+      set({ downloadTasks: tasks, downloadQueue: restoredQueue })
     },
     persistQueue: async () => {
       const { downloadQueue, downloadTasks } = get()
@@ -310,9 +324,8 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
 
       const tasks = { ...get().downloadTasks }
       const identityByTaskId = new Map(identities.map(identity => [identity.taskId, identity]))
-      for (const id of Object.keys(tasks)) {
-        if (tasks[id].status === 'paused' || tasks[id].status === 'pausing') {
-          const identity = identityByTaskId.get(id)
+      for (const [id, identity] of identityByTaskId) {
+        if (tasks[id] && (tasks[id].status === 'paused' || tasks[id].status === 'pausing')) {
           tasks[id] = {
             ...tasks[id],
             status: 'queued',
@@ -320,24 +333,26 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
             error: undefined,
             completedAt: undefined,
             updatedAt: Date.now(),
-            ...(identity ? { runId: identity.runId, version: identity.version } : {}),
+            runId: identity.runId,
+            version: identity.version,
           }
         }
       }
       set({ downloadTasks: tasks })
     },
     pauseAllDownloads: async () => {
+      let affected: string[] = []
       try {
-        await invoke('pause_all_downloads')
+        affected = await invoke<string[]>('pause_all_downloads')
       } catch (error) {
         console.error(error)
         return
       }
 
       const tasks = { ...get().downloadTasks }
-      for (const id of Object.keys(tasks)) {
-        if (tasks[id].status === 'active') {
-          tasks[id] = { ...tasks[id], status: 'pausing' }
+      for (const id of affected) {
+        if (tasks[id] && ['active', 'queued'].includes(tasks[id].status)) {
+          tasks[id] = { ...tasks[id], status: tasks[id].status === 'active' ? 'pausing' : 'paused' }
         }
       }
       set({ downloadTasks: tasks })

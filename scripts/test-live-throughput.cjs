@@ -175,6 +175,27 @@ const entry = `
     'one-instance wallboard and performance view must share the exact same points',
   )
 
+  const incompleteFleet = buildFleetThroughputSeries(
+    { a: instanceFrames },
+    { a: instanceFrames[1] },
+    ['a', 'missing'],
+  )
+  assert.deepEqual(incompleteFleet.points, [], 'fleet history must omit buckets missing an expected instance')
+  assert.equal(incompleteFleet.current, null, 'fleet current value must be unavailable when an expected instance is missing')
+
+  const completeFleet = buildFleetThroughputSeries(
+    {
+      a: [frame({ instanceId: 'a', ts: 5000, throughput: 10 }), frame({ instanceId: 'a', ts: 6000, throughput: 12 })],
+      b: [frame({ instanceId: 'b', ts: 5500, throughput: 20 })],
+    },
+    {
+      a: frame({ instanceId: 'a', ts: 6000, throughput: 12 }),
+      b: frame({ instanceId: 'b', ts: 5500, throughput: 20 }),
+    },
+    ['a', 'b'],
+  )
+  assert.deepEqual(completeFleet.points, [{ ts: 6000, value: 32 }], 'a fleet bucket must count each instance once')
+
   const vectorFrame = frame({
     instanceId: 'v',
     sessionId: 'session-v',
@@ -305,6 +326,29 @@ const entry = `
     }),
     { status: 'healthy', alertCount: 0 },
     'old log history must not keep the current service state critical forever',
+  )
+  assert.equal(
+    buildServiceStatus({
+      instances: [{ id: 'a', status: 'running', healthCheck: 'fail' }],
+      downloads: [],
+      logs: [],
+    }).status,
+    'critical',
+    'a running process with a failed health check must not appear healthy',
+  )
+  assert.equal(
+    buildServiceStatus({ instances: [], downloads: [], logs: [], droppedWrites: 1 }).status,
+    'critical',
+    'lost telemetry writes must degrade the service status',
+  )
+  assert.equal(
+    buildServiceStatus({
+      instances: [],
+      downloads: [],
+      logs: [{ id: 'ok', instanceId: 'a', timestamp: Date.now(), text: 'no errors', level: 'info' }],
+    }).status,
+    'healthy',
+    'structured info logs containing error-like words must not trigger an alert',
   )
 `
 

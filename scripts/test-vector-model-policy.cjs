@@ -19,19 +19,40 @@ const entry = `
     VECTOR_CLASSIFIED_FIELDS,
   } from './src/modelPolicy'
   import {
+    applyEngineInventory,
     applyModelInventory,
+    beginEngineInventoryRequest,
     beginModelInventoryRequest,
+    currentModelInventoryRequest,
+    isCurrentEngineInventoryRequest,
     isCurrentModelInventoryRequest,
     normalizeModelPath,
     normalizeStoredConfig,
     reconcileInstancesWithModels,
   } from './src/store/bootstrap'
   import { synchronizeInstanceSummary } from './src/store/instanceSummary'
+  import { findMatchingProjector } from './src/modelProjector'
+  import { resolveEffectiveEngine } from './src/store/engineResolution'
 
   const model = (overrides = {}) => ({
     id: 'model', name: 'model.gguf', path: 'C:/models/model.gguf', size: 1, file_type: 'gguf',
     ...overrides,
   })
+
+  const engines = [{ id: 'default', name: 'Default' }, { id: 'selected', name: 'Selected' }]
+  assert.equal(resolveEffectiveEngine({ engine_id: 'missing' }, engines, 'default'), null)
+  assert.equal(resolveEffectiveEngine({ engine_id: 'selected' }, engines, 'default')?.id, 'selected')
+  assert.equal(resolveEffectiveEngine({ engine_id: '' }, engines, 'default')?.id, 'default')
+
+  const visionModel = model({
+    path: 'C:/models/vision.gguf',
+    capabilities: { metadata_complete: true, vision_family: 'qwen2-vl' },
+  })
+  const projectors = [
+    model({ id: 'wrong', path: 'C:/models/mmproj-first.gguf', file_type: 'mmproj', capabilities: { projector_family: 'llava' } }),
+    model({ id: 'right', path: 'C:/models/mmproj-qwen.gguf', file_type: 'mmproj', capabilities: { projector_family: 'qwen2-vl' } }),
+  ]
+  assert.equal(findMatchingProjector(visionModel, projectors)?.id, 'right')
 
   assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true, is_embedding_model: true } })), 'embedding')
   assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true, is_embedding_model: true, is_reranker_model: true } })), 'reranker')
@@ -175,6 +196,7 @@ const entry = `
 
   const staleInventoryRequest = beginModelInventoryRequest()
   const currentInventoryRequest = beginModelInventoryRequest()
+  assert.equal(currentModelInventoryRequest(), currentInventoryRequest, 'passive reads must not supersede an active scan')
   assert.equal(isCurrentModelInventoryRequest(staleInventoryRequest), false)
   assert.equal(isCurrentModelInventoryRequest(currentInventoryRequest), true)
   const inventoryState = { instances: [], models: [] }
@@ -187,6 +209,14 @@ const entry = `
   )
   assert.equal(staleApplied, false)
   assert.deepEqual(inventoryState.models, [])
+
+  const staleEngineRequest = beginEngineInventoryRequest()
+  const currentEngineRequest = beginEngineInventoryRequest()
+  assert.equal(isCurrentEngineInventoryRequest(staleEngineRequest), false)
+  assert.equal(isCurrentEngineInventoryRequest(currentEngineRequest), true)
+  const engineState = { engines: [] }
+  assert.equal(applyEngineInventory([{ id: 'stale' }], partial => Object.assign(engineState, partial), {}, staleEngineRequest), false)
+  assert.deepEqual(engineState.engines, [])
 
   const indexedVectorModel = model({
     name: 'Qwen3-Instruct.gguf',
@@ -314,7 +344,7 @@ const bootstrapSource = readSource('src', 'store', 'bootstrap.ts')
 const reconcileSource = section(bootstrapSource, 'export function reconcileInstancesWithModels', 'export function applyModelInventory')
 assert.match(reconcileSource, /new Map<string, ModelInfo>\(\)/, 'instance reconciliation must index models once per batch')
 assert.doesNotMatch(reconcileSource, /models\.find\(/, 'instance reconciliation must not scan the full model list per instance')
-const cachedScanSource = section(bootstrapSource, 'const cachedScanRequest', 'const injected')
+const cachedScanSource = section(bootstrapSource, 'const cachedModelScanRequest', 'const injected')
 const initialScanSource = section(bootstrapSource, 'const modelScanRequest', "invoke<EngineInfo[]>('scan_engines'")
 assert.match(cachedScanSource, /applyModelInventory\(/, 'cached model inventory must reconcile instances')
 assert.match(cachedScanSource, /beginModelInventoryRequest\(/, 'cached inventory must claim a request generation')
@@ -327,12 +357,14 @@ const loadInitialDataSource = section(coreSliceSource, 'loadInitialData:', 'scan
 const scanModelsSource = section(coreSliceSource, 'scanModels:', 'deleteModelFile:')
 assert.match(setModelsSource, /isLoading:\s*false/, 'synchronous inventory replacement must end superseded loading')
 assert.match(loadInitialDataSource, /applyModelInventory\(/, 'get_models results must reconcile instances')
-assert.match(loadInitialDataSource, /beginModelInventoryRequest\(/, 'get_models must claim a request generation')
+assert.match(loadInitialDataSource, /currentModelInventoryRequest\(/, 'passive get_models must join the active request generation')
+assert.doesNotMatch(loadInitialDataSource, /beginModelInventoryRequest\(/, 'passive get_models must not supersede an in-flight scan')
+assert.match(loadInitialDataSource, /applyEngineInventory\(/, 'get_engines results must use the engine request generation')
 assert.match(scanModelsSource, /applyModelInventory\(/, 'manual model scans must reconcile instances')
 assert.match(scanModelsSource, /beginModelInventoryRequest\(/, 'manual scans must supersede older inventory requests')
 
 const processConfigSource = section(bootstrapSource, 'async function processConfig', "invoke<DownloadManagerSnapshot>('get_download_manager_snapshot')")
-assert.match(processConfigSource, /models:\s*\[\]/, 'hydration must not expose stale cached capabilities before fresh scan')
+assert.doesNotMatch(processConfigSource, /models:\s*\[\]/, 'hydration must retain the last good inventory until a fresh scan completes')
 
 const instanceManagerSource = readSource('src', 'components', 'InstanceManager.tsx')
 const createInstanceSource = section(instanceManagerSource, 'const handleCreate', 'const handleDelete')

@@ -16,10 +16,8 @@ import {
   type DownloadBandwidthUnit as BandwidthUnit,
   type DownloadResumePolicy as ResumePolicy,
 } from './DownloadManager/DownloadSettingsPanel'
-
 type DownloadSource = 'modelscope' | 'huggingface'
 type Section = 'queue' | 'active' | 'paused' | 'failed' | 'completed'
-
 export default function DownloadManager() {
   const { t } = useI18n()
   const downloadTasks = useAppStore(s => s.downloadTasks)
@@ -43,7 +41,6 @@ export default function DownloadManager() {
   const moveQueueEntry = useAppStore(s => s.moveQueueEntry)
   const scanModels = useAppStore(s => s.scanModels)
   const openModelFolder = useAppStore(s => s.openModelFolder)
-
   const [source, setSource] = useState<DownloadSource>('modelscope')
   const [repoId, setRepoId] = useState('')
   const [files, setFiles] = useState<MsFileEntry[]>([])
@@ -84,12 +81,10 @@ export default function DownloadManager() {
   const ui = t.downloadWorkspace
   const initialBandwidthUnitRef = useRef(bandwidthUnit)
   const settingsLoadFailedRef = useRef(ui.settingsLoadFailed)
-
   const settingsFailureText = (prefix: string, error: unknown) => {
     const message = error instanceof Error ? error.message : String(error)
     return `${prefix}: ${message}`
   }
-
   useEffect(() => {
     const meta = (window as any).__downloadSnapshotMeta
     if (meta) {
@@ -121,7 +116,6 @@ export default function DownloadManager() {
     }
     setTimeout(() => setInitialLoading(false), 300)
   }, [])
-
   useEffect(() => {
     try {
       localStorage.setItem('downloadBandwidthUnit', bandwidthUnit)
@@ -129,7 +123,6 @@ export default function DownloadManager() {
       // ignore
     }
   }, [bandwidthUnit])
-
   const handleResumePolicyChange = async (policy: ResumePolicy) => {
     const previous = resumePolicy
     setResumePolicy(policy)
@@ -141,7 +134,6 @@ export default function DownloadManager() {
       setSettingsError(settingsFailureText(ui.settingsSaveFailed, error))
     }
   }
-
   const handleConcurrencyChange = async (n: number) => {
     const previous = concurrency
     const next = clampConcurrency(n)
@@ -154,7 +146,6 @@ export default function DownloadManager() {
       setSettingsError(settingsFailureText(ui.settingsSaveFailed, error))
     }
   }
-
   const handleBandwidthLimitChange = async (value: number) => {
     const previous = bandwidthLimit
     const next = Math.max(0, Number.isFinite(value) ? value : 0)
@@ -167,13 +158,11 @@ export default function DownloadManager() {
       setSettingsError(settingsFailureText(ui.settingsSaveFailed, error))
     }
   }
-
   const handleBandwidthUnitChange = (unit: BandwidthUnit) => {
     const bytes = bandwidthToBytes(bandwidthLimit, bandwidthUnit)
     setBandwidthUnit(unit)
     setBandwidthLimit(bytesToBandwidth(bytes, unit))
   }
-
   const handleLowPriorityThrottleChange = async (enabled: boolean) => {
     const previous = lowPriorityThrottle
     setLowPriorityThrottle(enabled)
@@ -185,7 +174,6 @@ export default function DownloadManager() {
       setSettingsError(settingsFailureText(ui.settingsSaveFailed, error))
     }
   }
-
   const resetStrategyDefaults = async () => {
     await handleResumePolicyChange('manual')
     await handleConcurrencyChange(1)
@@ -193,11 +181,8 @@ export default function DownloadManager() {
     await handleBandwidthLimitChange(DEFAULT_BANDWIDTH_LIMIT)
     await handleLowPriorityThrottleChange(false)
   }
-
   const toggleSection = (section: Section) => setCollapsed(prev => ({ ...prev, [section]: !prev[section] }))
-
   const sourceName = (value: string) => value === 'modelscope' ? 'ModelScope' : 'HuggingFace'
-
   const taskStatusLabel = (task: DownloadProgress) => ({
     active: t.downloadPage.active,
     paused: t.downloadPage.paused,
@@ -207,14 +192,12 @@ export default function DownloadManager() {
     cancelled: t.modelRepo.cancelled,
     error: t.downloadPage.failed,
   }[task.status] || task.status)
-
   const tasksByFile = useMemo(() => new Map(
     Object.values(downloadTasks).map(task => [
       downloadFileKey(task.source, task.repoId, task.remotePath, task.saveDir),
       task,
     ]),
   ), [downloadTasks])
-
   const taskForFile = (file: MsFileEntry) => tasksByFile.get(
     downloadFileKey(source, browsedRepoId, file.path || file.name, saveDir),
   )
@@ -229,7 +212,6 @@ export default function DownloadManager() {
         return t.modelRepo.typeModel
     }
   }
-
   const modelTypeColor = (fileType: string) => {
     switch (fileType) {
       case 'mmproj':
@@ -266,10 +248,10 @@ export default function DownloadManager() {
 
       const resolvedDir = await invoke<string>('resolve_path', { path: saveDir })
       await forEachConcurrent(result, LOCAL_FILE_CHECK_CONCURRENCY, async file => {
-        const localPath = pathJoin(resolvedDir, trimmedRepoId, file.name)
+        const localPath = pathJoin(resolvedDir, trimmedRepoId, file.path || file.name)
         try {
           const actualSize = await invoke<number | null>('check_local_file', { path: localPath })
-          if (actualSize != null && actualSize >= file.size * 0.99) {
+          if (file.size > 0 && actualSize === file.size) {
             const existing = Object.values(allTasks).find(task =>
               task.source === source &&
               task.repoId === trimmedRepoId &&
@@ -375,7 +357,7 @@ export default function DownloadManager() {
   const handleCancel = (file: MsFileEntry) => {
     const task = taskForFile(file)
     if (!task) return
-    cancelAndCleanupDownload(task.id, file.name, pathJoin(task.saveDir, browsedRepoId, file.name), task.runId, task.version)
+    cancelAndCleanupDownload(task.id, file.name, pathJoin(task.saveDir, browsedRepoId, file.path || file.name), task.runId, task.version)
   }
 
   const handleResumePersisted = (task: DownloadProgress) => {
@@ -383,10 +365,28 @@ export default function DownloadManager() {
   }
 
   const handleCancelPersisted = (task: DownloadProgress) => {
-    void cancelAndCleanupDownload(task.id, task.fileName, pathJoin(task.saveDir, task.repoId, task.fileName), task.runId, task.version)
+    void cancelAndCleanupDownload(task.id, task.fileName, pathJoin(task.saveDir, task.repoId, task.remotePath || task.fileName), task.runId, task.version)
   }
 
-  const taskLocalPath = (task: DownloadProgress) => task.path || pathJoin(task.saveDir, task.repoId, task.fileName)
+  const handleDeleteCompleted = async (task: DownloadProgress) => {
+    try {
+      await invoke('delete_managed_local_file', {
+        filePath: task.path!,
+        saveDir: task.saveDir,
+        repoId: task.repoId,
+        remotePath: task.remotePath || task.fileName,
+      })
+      useAppStore.setState(state => {
+        const tasks = { ...state.downloadTasks }
+        delete tasks[task.id]
+        return { downloadTasks: tasks }
+      })
+    } catch (error) {
+      useAppStore.getState().addRuntimeWarning(`local model cleanup failed: ${String(error)}`)
+    }
+  }
+
+  const taskLocalPath = (task: DownloadProgress) => task.path || pathJoin(task.saveDir, task.repoId, task.remotePath || task.fileName)
 
   const taskEtaText = (task: DownloadProgress) => {
     const eta = formatETA(task.downloaded, task.total, task.speed || 0)
@@ -581,7 +581,7 @@ export default function DownloadManager() {
 
             {(task.status === 'completed' || task.status === 'cancelled') && task.path && (
               <button
-                onClick={() => cancelAndCleanupDownload(task.id, task.fileName, task.path!, task.runId, task.version)}
+                onClick={() => void handleDeleteCompleted(task)}
                 className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-rose-500 dark:hover:bg-slate-800"
                 title={t.common.delete}
               >

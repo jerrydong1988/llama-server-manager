@@ -59,9 +59,6 @@ export type ResourceSignal = {
   sparkline: number[]
 }
 
-const criticalLogPattern = /(error|fail|failed|fatal|panic|exception|错误|失败|异常)/i
-const warningLogPattern = /(warn|warning|警告|提醒)/i
-
 function validThroughput(value?: number | null): value is number {
   return value != null && Number.isFinite(value) && value >= 0
 }
@@ -253,8 +250,14 @@ export function buildFleetThroughputSeries(
   const currentFrames = instanceIds
     .map(instanceId => currentByInstance[instanceId])
     .filter((frame): frame is MonitoringFrame => Boolean(frame))
-  const hasInference = currentFrames.some(frame => frame.workload === 'inference')
-  const hasVector = currentFrames.some(frame => frame.workload !== 'inference')
+  const representativeFrames = instanceIds
+    .map(instanceId => {
+      const frames = framesByInstance[instanceId]
+      return currentByInstance[instanceId] || frames?.[frames.length - 1]
+    })
+    .filter((frame): frame is MonitoringFrame => Boolean(frame))
+  const hasInference = representativeFrames.some(frame => frame.workload === 'inference')
+  const hasVector = representativeFrames.some(frame => frame.workload !== 'inference')
   const mode = hasInference && hasVector
     ? 'mixed'
     : hasInference
@@ -266,8 +269,27 @@ export function buildFleetThroughputSeries(
   const included = (frame: MonitoringFrame) => primaryIsInference
     ? frame.workload === 'inference'
     : frame.workload !== 'inference'
-  const byTimestamp = new Map<number, { total: number; available: boolean }>()
+  const representedIds = new Set(representativeFrames.map(frame => frame.instanceId))
+  const expectedInstanceIds = new Set([
+    ...representativeFrames.filter(included).map(frame => frame.instanceId),
+    ...instanceIds.filter(instanceId => !representedIds.has(instanceId)),
+  ])
+  const singleInstanceId = expectedInstanceIds.size === 1
+    ? expectedInstanceIds.values().next().value as string
+    : null
+  const singleInstancePoints = singleInstanceId
+    ? (framesByInstance[singleInstanceId] || [])
+      .filter(frame => frame.ts >= startTs && included(frame))
+      .map(frame => ({
+        ts: frame.ts,
+        value: frame.state !== 'unavailable' && frame.throughput != null && Number.isFinite(frame.throughput)
+          ? Math.max(frame.throughput, 0)
+          : null,
+      }))
+    : null
+  const byTimestamp = new Map<number, { ts: number; values: Map<string, number> }>()
   for (const instanceId of instanceIds) {
+    if (singleInstancePoints) break
     const frames = framesByInstance[instanceId] || []
     let low = 0
     let high = frames.length
@@ -279,19 +301,25 @@ export function buildFleetThroughputSeries(
     for (let index = low; index < frames.length; index += 1) {
       const frame = frames[index]
       if (!included(frame)) continue
-      const bucket = byTimestamp.get(frame.ts) || { total: 0, available: false }
+      const bucketTs = Math.floor(frame.ts / 5000) * 5000
+      const bucket = byTimestamp.get(bucketTs) || { ts: frame.ts, values: new Map<string, number>() }
       if (frame.state !== 'unavailable' && frame.throughput != null && Number.isFinite(frame.throughput)) {
-        bucket.total += Math.max(frame.throughput, 0)
-        bucket.available = true
+        bucket.values.set(instanceId, Math.max(frame.throughput, 0))
       }
-      byTimestamp.set(frame.ts, bucket)
+      bucket.ts = Math.max(bucket.ts, frame.ts)
+      byTimestamp.set(bucketTs, bucket)
     }
   }
-  const points = [...byTimestamp.entries()]
-    .sort(([left], [right]) => left - right)
-    .map(([ts, bucket]) => ({ ts, value: bucket.available ? bucket.total : null }))
+  const points = singleInstancePoints || [...byTimestamp.values()]
+    .filter(bucket => bucket.values.size === expectedInstanceIds.size)
+    .map(bucket => ({
+      ts: bucket.ts,
+      value: [...bucket.values.values()].reduce((total, value) => total + value, 0),
+    }))
+    .sort((left, right) => left.ts - right.ts)
   const currentValues = currentFrames.filter(included)
-  const current = currentValues.some(frame => frame.throughput != null)
+  const current = currentValues.length === expectedInstanceIds.size
+    && currentValues.every(frame => frame.state !== 'unavailable' && frame.throughput != null)
     ? currentValues.reduce((total, frame) => total + Math.max(frame.throughput || 0, 0), 0)
     : null
   const vectorItemsPerSecond = currentFrames
@@ -311,17 +339,23 @@ export function buildServiceStatus(options: {
   downloads: DownloadProgress[]
   logs: LogEntry[]
   telemetryError?: string | null
+  droppedWrites?: number
+  lastWriteError?: string | null
   now?: number
   logWindowMs?: number
 }): { status: ServiceStatus; alertCount: number } {
   const errorInstances = options.instances.filter(instance => instance.status === 'error')
+  const unhealthyInstances = options.instances.filter(instance => (
+    instance.status === 'running' && instance.healthCheck === 'fail'
+  ))
   const failedDownloads = options.downloads.filter(task => task.status === 'error')
   const logCutoff = (options.now ?? Date.now()) - (options.logWindowMs ?? 5 * 60 * 1000)
   const recentLogs = options.logs.filter(entry => entry.timestamp >= logCutoff)
-  const criticalLogs = recentLogs.filter(entry => criticalLogPattern.test(entry.text))
-  const warningLogs = recentLogs.filter(entry => warningLogPattern.test(entry.text))
-  const alertCount = errorInstances.length + failedDownloads.length + criticalLogs.length + warningLogs.length + (options.telemetryError ? 1 : 0)
-  if (options.telemetryError || errorInstances.length > 0 || criticalLogs.length > 0) {
+  const criticalLogs = recentLogs.filter(entry => entry.level === 'error')
+  const warningLogs = recentLogs.filter(entry => entry.level === 'warning')
+  const telemetryUnhealthy = Boolean(options.telemetryError || options.lastWriteError || (options.droppedWrites || 0) > 0)
+  const alertCount = errorInstances.length + unhealthyInstances.length + failedDownloads.length + criticalLogs.length + warningLogs.length + (telemetryUnhealthy ? 1 : 0)
+  if (telemetryUnhealthy || errorInstances.length > 0 || unhealthyInstances.length > 0 || criticalLogs.length > 0) {
     return { status: 'critical', alertCount }
   }
   if (failedDownloads.length > 0 || warningLogs.length > 0) {
@@ -437,7 +471,7 @@ export function buildActivityFeed(options: {
     id: `log-${entry.instanceId}-${entry.timestamp}-${entry.text.slice(0, 20)}`,
     ts: entry.timestamp,
     kind: 'log' as const,
-    severity: criticalLogPattern.test(entry.text) ? 'critical' as const : warningLogPattern.test(entry.text) ? 'warning' as const : 'info' as const,
+    severity: entry.level === 'error' ? 'critical' as const : entry.level === 'warning' ? 'warning' as const : 'info' as const,
     label: options.labels.log,
     title: entry.instanceName || entry.instanceId,
     detail: entry.text,

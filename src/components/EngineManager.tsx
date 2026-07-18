@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Cpu, FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Search, ShieldCheck, Star, Trash2 } from 'lucide-react'
-import { confirm, open } from '@tauri-apps/plugin-dialog'
+import { confirm, message, open } from '@tauri-apps/plugin-dialog'
 import { useAppStore, type EngineInfo } from '../store'
 import { formatMessage, useI18n } from '../i18n'
 import { getEngineLabels } from '../i18n/pageLabels'
 import { normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../engineCapabilities'
+import { isPathWithinRoot } from '../utils/path'
 import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
 const backendTone = (backend: string) => {
@@ -112,6 +113,12 @@ const EngineManager = () => {
   }
 
   const handleRemoveDir = async (dir: string) => {
+    const removedEngineIds = new Set(engines.filter(engine => isPathWithinRoot(engine.dir, dir)).map(engine => engine.id))
+    const referenced = useAppStore.getState().instances.filter(instance => removedEngineIds.has(instance.config.engine_id))
+    if (referenced.length > 0) {
+      await message(formatMessage(t.engineMgr.removeDirInUse, { count: referenced.length }), { title: t.engineMgr.removeDirInUseTitle, kind: 'warning' })
+      return
+    }
     const confirmed = await confirm(t.engineMgr.removeDirConfirm, { title: t.engineMgr.remove, kind: 'warning' })
     if (!confirmed) return
 

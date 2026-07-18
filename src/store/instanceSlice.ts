@@ -10,6 +10,7 @@ import type { AppStoreGet, AppStoreSet } from './helpers'
 import { runInstanceStart } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
 import type { AppState, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
+import { resolveEffectiveEngine } from './engineResolution'
 
 const MAX_LOG_ENTRIES = 1000
 
@@ -170,12 +171,12 @@ export function createInstanceSlice(
         }
         await configSaveCoordinator.waitForIdle()
 
-        const engine = engines.find((item) => item.id === normalized.config.engine_id)
-          || engines.find((item) => item.id === defaultEngineId)
-          || engines[0]
+        const engine = resolveEffectiveEngine(normalized.config, engines, defaultEngineId)
 
         if (!engine) {
-          message('No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' })
+          message(normalized.config.engine_id
+            ? 'The configured llama-server engine is no longer available. Select another engine before starting.'
+            : 'No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' })
           return
         }
 
@@ -190,8 +191,9 @@ export function createInstanceSlice(
         if (isStaleEngineCapabilityError(error)) {
           const state = get()
           const instance = state.instances.find(item => item.id === id)
-          const engine = state.engines.find(item => item.id === instance?.config.engine_id)
-            || state.engines.find(item => item.id === state.defaultEngineId)
+          const engine = instance
+            ? resolveEffectiveEngine(instance.config, state.engines, state.defaultEngineId)
+            : null
           if (engine) invalidateEngineCapabilities(set, engine.exe)
         }
         console.error('start_server error:', error)
@@ -209,8 +211,8 @@ export function createInstanceSlice(
         throw error
       }
     },
-    openBrowser: async (host, port) => {
-      await invoke('open_browser', { host, port })
+    openBrowser: async (instanceId, host, port, useTls = false, apiPrefix = '') => {
+      await invoke('open_browser', { instanceId, host, port, useTls, apiPrefix })
     },
     saveConfig: async () => {
       const state = get()

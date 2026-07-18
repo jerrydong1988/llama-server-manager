@@ -1,8 +1,9 @@
 import { ChevronDown, ChevronRight, File, FolderOpen, Image, X } from 'lucide-react'
 import type { ModelInfo } from '../../store/types'
 import { useI18n } from '../../i18n'
-import { isPathWithinRoot, normalizePath, pathDirname, pathJoin } from '../../utils/path'
+import { isPathWithinRoot, normalizePath, pathJoin } from '../../utils/path'
 import { Button, Surface } from '../ui'
+import { findMatchingProjector } from '../../modelProjector'
 
 interface PickerNode {
   name: string
@@ -73,8 +74,7 @@ export function InstanceModelPicker({ models, modelDirs, collapsed, onToggle, on
       )
     }
 
-    const directory = pathDirname(model.path)
-    const mmproj = models.find(entry => pathDirname(entry.path) === directory && entry.file_type === 'mmproj')
+    const mmproj = findMatchingProjector(model, models)
     return (
       <button type="button" key={node.path} onClick={() => onPick(model, mmproj?.path || '')} style={{ paddingLeft: `${depth * 12 + 20}px` }} className="flex w-full items-center gap-2 rounded py-1 pr-2 text-left text-xs hover:bg-blue-50 dark:hover:bg-blue-950/30">
         <File className="h-3 w-3 shrink-0 text-blue-500" />

@@ -179,6 +179,16 @@ export function registerGlobalStoreListeners(
   store: StoreLike,
   startupTimings: { name: string; ms: number }[],
 ) {
+  const classifyLogLevel = (text: string): 'info' | 'warning' | 'error' => {
+    const normalized = text.trim().toLowerCase()
+    if (/\b(?:no errors?|errors?\s*[=:]\s*0|failed\s*[=:]\s*0)\b/.test(normalized)
+      || /(?:无错误|错误\s*[=:]\s*0|失败\s*[=:]\s*0)/.test(normalized)) return 'info'
+    if (/(?:^|[\s[({:])(fatal|panic|exception|error|failed)(?:[\s\])}:]|$)/.test(normalized)
+      || /(?:错误|失败|异常)/.test(normalized)) return 'error'
+    if (/(?:^|[\s[({:])(warn|warning)(?:[\s\])}:]|$)/.test(normalized)
+      || /(?:警告|提醒)/.test(normalized)) return 'warning'
+    return 'info'
+  }
   registerListener<{ name: string; ms: number }>(store, 'startup-timing', (event) => {
     startupTimings.push({ name: event.payload.name, ms: event.payload.ms })
   })
@@ -188,6 +198,7 @@ export function registerGlobalStoreListeners(
       instanceId: event.payload.instanceId,
       text: event.payload.text,
       timestamp: Date.now(),
+      level: classifyLogLevel(event.payload.text),
     })
   })
 
@@ -197,6 +208,7 @@ export function registerGlobalStoreListeners(
       instanceId: event.payload.instanceId,
       text,
       timestamp: timestamp + index,
+      level: classifyLogLevel(text),
     })))
   })
 
@@ -225,15 +237,18 @@ export function registerGlobalStoreListeners(
     void state.saveConfig().catch(error => warnAsyncFailure(store, 'runtime config save', error))
   })
 
-  registerListener<{ instanceId: string }>(store, 'server-stopped', (event) => {
+  registerListener<{ instanceId: string; expected?: boolean; reason?: string; exitCode?: number | null }>(store, 'server-stopped', (event) => {
     const state = store.getState()
     const instance = state.instances.find((item) => item.id === event.payload.instanceId)
     if (instance) {
-      const isError = instance.status === 'running' && instance.healthCheck !== 'ok'
+      const isError = event.payload.expected !== true
       state.updateInstance(event.payload.instanceId, {
         status: isError ? 'error' : 'stopped',
         healthCheck: isError ? 'fail' : 'pending',
       })
+    }
+    if (event.payload.expected !== true) {
+      state.addRuntimeWarning(`Instance exited unexpectedly (${event.payload.reason || 'process-exited'}, code ${event.payload.exitCode ?? 'unknown'})`)
     }
     void state.saveConfig().catch(error => warnAsyncFailure(store, 'runtime config save', error))
   })

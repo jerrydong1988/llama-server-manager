@@ -53,6 +53,8 @@ const emptyOverview: TelemetryOverview = {
   avg_tokens_per_sec_24h: 0,
   peak_vram_mb_24h: 0,
   dropped_writes: 0,
+  last_write_error: null,
+  last_write_error_at: null,
   latest_samples: [],
 }
 
@@ -206,8 +208,15 @@ export default function BigScreenPage() {
   )
 
   const serviceStatus = useMemo(
-    () => buildServiceStatus({ instances, downloads: allDownloads, logs: flatLogs, telemetryError }),
-    [instances, allDownloads, flatLogs, telemetryError],
+    () => buildServiceStatus({
+      instances,
+      downloads: allDownloads,
+      logs: flatLogs,
+      telemetryError,
+      droppedWrites: overview.dropped_writes,
+      lastWriteError: overview.last_write_error,
+    }),
+    [instances, allDownloads, flatLogs, telemetryError, overview.dropped_writes, overview.last_write_error],
   )
 
   const activeRequestTasks = useMemo(
@@ -324,6 +333,9 @@ export default function BigScreenPage() {
   const modelCount = models.filter(model => !model.is_shard && model.file_type === 'model').length
   const statusLabel = serviceStatus.status === 'critical' ? labels.abnormal : serviceStatus.status === 'attention' ? labels.needsAttention : labels.normal
   const statusTone: SignalTone = serviceStatus.status === 'critical' ? 'red' : serviceStatus.status === 'attention' ? 'amber' : 'emerald'
+  const statusDetail = serviceStatus.status === 'healthy'
+    ? labels.allServicesNormal
+    : (telemetryError || overview.last_write_error || `${serviceStatus.alertCount} ${labels.alerts}`)
 
   return (
     <div className="min-h-[calc(100vh-96px)] space-y-3 bg-slate-100 p-3 text-slate-950 dark:bg-slate-950 dark:text-slate-100" data-guide="monitoring-wall">
@@ -348,7 +360,7 @@ export default function BigScreenPage() {
       </header>
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-        <WallKpi label={labels.serviceStatus} value={statusLabel} detail={telemetryError || labels.allServicesNormal} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
+        <WallKpi label={labels.serviceStatus} value={statusLabel} detail={statusDetail} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
         <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
         <WallKpi label={labels.currentThroughput} value={formatRate(currentTps, fleetThroughput.unit)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps, fleetThroughput.unit)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />
         <WallKpi label={labels.requestPressure} value={pressure.percent == null ? '--' : `${pressure.percent}%`} detail={formatRequestPressureDetail(pressure, labels)} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : pressure.level === 'unknown' ? 'blue' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
@@ -465,7 +477,9 @@ export default function BigScreenPage() {
           <span>{labels.sessions24h}: {overview.sessions_24h}</span>
           <span>{labels.lastUpdated}: {formatTime(lastUpdatedAt)}</span>
         </div>
-        <div className="text-emerald-700 dark:text-emerald-300">{labels.dataLinkNormal}</div>
+        <div className={serviceStatus.status === 'healthy' ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}>
+          {serviceStatus.status === 'healthy' ? labels.dataLinkNormal : statusDetail}
+        </div>
       </footer>
     </div>
   )

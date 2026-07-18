@@ -617,7 +617,7 @@ export default function Dashboard() {
                             )}
                             <ActionIconButton
                               title={labels.open}
-                              onClick={() => openBrowser(instance.config.host, instance.config.port)}
+                              onClick={() => openBrowser(instance.id, instance.config.host, instance.config.port, Boolean(instance.config.ssl_key_file && instance.config.ssl_cert_file), instance.config.api_prefix)}
                               disabled={!isRunning}
                             >
                               <ArrowUpRight className="h-4 w-4" />

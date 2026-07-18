@@ -5,7 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SCHEMA_VERSION: i64 = 7;
@@ -15,6 +15,8 @@ const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
 
 static TELEMETRY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 static TELEMETRY_DROPPED_WRITES: AtomicU64 = AtomicU64::new(0);
+static TELEMETRY_LAST_WRITE_ERROR: LazyLock<Mutex<Option<(i64, String)>>> =
+    LazyLock::new(|| Mutex::new(None));
 static TELEMETRY_SCHEMA_LOCK: Mutex<()> = Mutex::new(());
 static TELEMETRY_WRITER: Mutex<Option<mpsc::SyncSender<TelemetryWrite>>> = Mutex::new(None);
 
@@ -25,6 +27,8 @@ pub struct TelemetryOverview {
     pub avg_tokens_per_sec_24h: f64,
     pub peak_vram_mb_24h: f64,
     pub dropped_writes: u64,
+    pub last_write_error: Option<String>,
+    pub last_write_error_at: Option<i64>,
     pub latest_samples: Vec<TelemetrySampleSummary>,
 }
 
@@ -35,6 +39,7 @@ pub struct TelemetrySessionSummary {
     pub instance_name: String,
     pub model_name: String,
     pub model_path: String,
+    pub config_hash: String,
     pub engine_id: String,
     pub backend: String,
     pub workload: String,
@@ -830,47 +835,51 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
                         Err(mpsc::TryRecvError::Disconnected) => break,
                     }
                 }
-                let transaction = match conn.transaction() {
-                    Ok(transaction) => transaction,
-                    Err(error) => {
-                        let message =
-                            format!("Telemetry writer failed to begin transaction: {error}");
-                        eprintln!("{message}");
-                        last_write_error = Some(message);
-                        continue;
-                    }
-                };
-                let mut apply_error = None;
                 for write in batch {
-                    if let Err(error) = apply_telemetry_write(&transaction, write) {
-                        apply_error = Some(error);
-                        break;
+                    if let Err(error) = write_telemetry_with_retry(&mut conn, &write, 3) {
+                        eprintln!("{error}");
+                        TELEMETRY_DROPPED_WRITES.fetch_add(1, Ordering::Relaxed);
+                        *TELEMETRY_LAST_WRITE_ERROR.lock().unwrap() =
+                            Some((now_ms(), error.clone()));
+                        last_write_error = Some(error);
                     }
-                }
-                let result = if let Some(error) = apply_error {
-                    transaction
-                        .rollback()
-                        .map_err(|rollback| {
-                            format!("Telemetry write failed: {error}; rollback failed: {rollback}")
-                        })
-                        .and(Err(format!(
-                            "Telemetry write batch was rolled back: {error}"
-                        )))
-                } else {
-                    transaction.commit().map_err(|error| {
-                        format!("Telemetry writer failed to commit transaction: {error}")
-                    })
-                };
-                if let Err(error) = result {
-                    eprintln!("{error}");
-                    last_write_error = Some(error);
                 }
             }
         }
     }
 }
 
-fn apply_telemetry_write(conn: &Connection, write: TelemetryWrite) -> Result<(), String> {
+fn write_telemetry_with_retry(
+    conn: &mut Connection,
+    write: &TelemetryWrite,
+    max_attempts: u32,
+) -> Result<(), String> {
+    let attempts = max_attempts.max(1);
+    let mut last_error = None;
+    for attempt in 0..attempts {
+        let result = (|| {
+            let transaction = conn.transaction().map_err(|error| {
+                format!("Telemetry writer failed to begin transaction: {error}")
+            })?;
+            apply_telemetry_write(&transaction, write)?;
+            transaction
+                .commit()
+                .map_err(|error| format!("Telemetry writer failed to commit transaction: {error}"))
+        })();
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt + 1 < attempts {
+                    std::thread::sleep(Duration::from_millis(25 * (attempt + 1) as u64));
+                }
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "Telemetry writer failed without an error".into()))
+}
+
+fn apply_telemetry_write(conn: &Connection, write: &TelemetryWrite) -> Result<(), String> {
     match write {
         TelemetryWrite::Metric {
             session_id,
@@ -880,31 +889,31 @@ fn apply_telemetry_write(conn: &Connection, write: TelemetryWrite) -> Result<(),
             llama,
         } => insert_metric_sample(
             conn,
-            &session_id,
-            &instance_id,
-            timestamp,
-            &system,
+            session_id,
+            instance_id,
+            *timestamp,
+            system,
             llama.as_ref(),
         ),
         TelemetryWrite::Inference {
             session_id,
             completed_at,
             record,
-        } => insert_inference_request(conn, &session_id, completed_at, &record),
+        } => insert_inference_request(conn, session_id, *completed_at, record),
         TelemetryWrite::Proxy {
             session_id,
             completed_at,
             record,
-        } => insert_proxy_request(conn, &session_id, completed_at, &record),
+        } => insert_proxy_request(conn, session_id, *completed_at, record),
         TelemetryWrite::Vector { session_id, record } => {
-            record_vector_activity_in_connection(conn, &session_id, &record).map(|_| ())
+            record_vector_activity_in_connection(conn, session_id, record).map(|_| ())
         }
         TelemetryWrite::Slots {
             session_id,
             instance_id,
             timestamp,
             slots,
-        } => insert_slot_snapshots(conn, &session_id, &instance_id, timestamp, &slots),
+        } => insert_slot_snapshots(conn, session_id, instance_id, *timestamp, slots),
         TelemetryWrite::Flush(_) | TelemetryWrite::Prune { .. } => {
             Err("telemetry control message reached the data writer".into())
         }
@@ -981,7 +990,7 @@ fn insert_metric_sample(
             tokens_per_sec,
             llama.map(|m| m.prompt_tokens as i64),
             llama.map(|m| m.gen_tokens as i64),
-            llama.map(|m| m.decode_calls_total as i64),
+            None::<i64>,
             llama.map(|m| m.decode_calls_total as i64),
             llama.map(|m| m.max_tokens_observed as i64),
             prompt_tokens_per_sec,
@@ -1273,13 +1282,16 @@ pub async fn get_telemetry_overview() -> Result<TelemetryOverview, String> {
             )
             .unwrap_or(None)
             .unwrap_or(0.0);
-        let latest_samples = latest_samples(&conn, 8)?;
+        let latest_samples = latest_samples(&conn, 512)?;
+        let last_write_error = TELEMETRY_LAST_WRITE_ERROR.lock().unwrap().clone();
         Ok(TelemetryOverview {
             active_sessions,
             sessions_24h,
             avg_tokens_per_sec_24h,
             peak_vram_mb_24h,
             dropped_writes: TELEMETRY_DROPPED_WRITES.load(Ordering::Relaxed),
+            last_write_error: last_write_error.as_ref().map(|(_, error)| error.clone()),
+            last_write_error_at: last_write_error.map(|(timestamp, _)| timestamp),
             latest_samples,
         })
     })
@@ -1318,7 +1330,7 @@ fn query_telemetry_sessions(
                 GROUP BY session_id
              )
              SELECT
-                s.id, s.instance_id, s.instance_name, s.model_name, s.model_path, s.engine_id,
+                s.id, s.instance_id, s.instance_name, s.model_name, s.model_path, s.config_hash, s.engine_id,
                 s.backend, s.workload, s.started_at, s.stopped_at,
                 CASE
                     WHEN COALESCE(s.stopped_at, ?1) <= s.started_at THEN 0
@@ -1342,16 +1354,17 @@ fn query_telemetry_sessions(
                 instance_name: row.get(2)?,
                 model_name: row.get(3)?,
                 model_path: row.get(4)?,
-                engine_id: row.get(5)?,
-                backend: row.get(6)?,
-                workload: row.get(7)?,
-                started_at: row.get(8)?,
-                stopped_at: row.get(9)?,
-                duration_secs: row.get(10)?,
-                avg_tokens_per_sec: row.get(11)?,
-                peak_vram_mb: row.get(12)?,
-                sample_count: row.get::<_, i64>(13)?.max(0) as u32,
-                stop_reason: row.get(14)?,
+                config_hash: row.get(5)?,
+                engine_id: row.get(6)?,
+                backend: row.get(7)?,
+                workload: row.get(8)?,
+                started_at: row.get(9)?,
+                stopped_at: row.get(10)?,
+                duration_secs: row.get(11)?,
+                avg_tokens_per_sec: row.get(12)?,
+                peak_vram_mb: row.get(13)?,
+                sample_count: row.get::<_, i64>(14)?.max(0) as u32,
+                stop_reason: row.get(15)?,
             })
         })
         .map_err(|e| format!("无法查询遥测会话: {e}"))?;
@@ -2158,7 +2171,8 @@ fn fmt_diag_percent(value: f64) -> String {
 
 #[derive(Debug)]
 struct SessionDiagnosticContext {
-    model_name: String,
+    model_path: String,
+    config_hash: String,
     engine_id: String,
     backend: String,
     workload: ModelWorkload,
@@ -2190,15 +2204,16 @@ fn query_session_diagnostics_with_analysis(
 ) -> Result<Vec<DiagnosticFinding>, String> {
     let session = conn
         .query_row(
-            "SELECT model_name, engine_id, backend, workload
+            "SELECT model_path, config_hash, engine_id, backend, workload
                  FROM run_sessions WHERE id = ?1",
             params![session_id],
             |row| {
                 Ok(SessionDiagnosticContext {
-                    model_name: row.get(0)?,
-                    engine_id: row.get(1)?,
-                    backend: row.get(2)?,
-                    workload: ModelWorkload::from_storage(&row.get::<_, String>(3)?),
+                    model_path: row.get(0)?,
+                    config_hash: row.get(1)?,
+                    engine_id: row.get(2)?,
+                    backend: row.get(3)?,
+                    workload: ModelWorkload::from_storage(&row.get::<_, String>(4)?),
                 })
             },
         )
@@ -2215,12 +2230,21 @@ fn query_session_diagnostics_with_analysis(
                     SELECT s.id, AVG(m.tokens_per_sec) AS avg_tps, COUNT(*) AS samples
                     FROM run_sessions s
                     JOIN metric_samples m ON m.session_id = s.id
-                    WHERE s.model_name = ?1 AND s.id != ?2 AND m.tokens_per_sec > 0
+                    WHERE s.config_hash = ?1 AND s.model_path = ?2 AND s.engine_id = ?3
+                      AND s.backend = ?4 AND s.workload = ?5 AND s.id != ?6
+                      AND m.tokens_per_sec > 0
                     GROUP BY s.id
                     HAVING samples >= 3
                  )
                  SELECT COALESCE(AVG(avg_tps), 0), COUNT(*) FROM per_session",
-            params![session.model_name.as_str(), session_id],
+            params![
+                session.config_hash.as_str(),
+                session.model_path.as_str(),
+                session.engine_id.as_str(),
+                session.backend.as_str(),
+                session.workload.as_str(),
+                session_id,
+            ],
             |row| Ok((row.get::<_, f64>(0)?, row.get::<_, i64>(1)?.max(0) as u32)),
         )
         .map_err(|e| format!("无法查询历史基线: {}", e))?;
@@ -3025,6 +3049,60 @@ mod tests {
     }
 
     #[test]
+    fn one_bad_writer_message_does_not_roll_back_the_next_valid_message() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "writer-isolation",
+                instance_id: "instance",
+                instance_name: "Instance",
+                model_path: "model.gguf",
+                engine_id: "engine",
+                backend: "cpu",
+                config_hash: "hash",
+                command_line: "llama-server",
+                workload: ModelWorkload::Inference,
+                started_at: 1,
+            },
+        )
+        .unwrap();
+
+        let (waiter, _) = mpsc::channel();
+        assert!(write_telemetry_with_retry(&mut conn, &TelemetryWrite::Flush(waiter), 1).is_err());
+        let valid = TelemetryWrite::Metric {
+            session_id: "writer-isolation".into(),
+            instance_id: "instance".into(),
+            timestamp: 2,
+            system: SystemMetrics {
+                cpu_percent: 1.0,
+                memory_mb: 2.0,
+                uptime_secs: 3,
+                gpu_percent: None,
+                vram_used_mb: None,
+                vram_total_mb: None,
+                system_cpu_percent: None,
+                system_memory_total_mb: None,
+                system_memory_used_mb: None,
+                gpu_vendor: None,
+                gpu_name: None,
+            },
+            llama: None,
+        };
+        write_telemetry_with_retry(&mut conn, &valid, 1).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM metric_samples WHERE session_id = 'writer-isolation'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
     fn metric_sample_persists_decode_calls_and_max_tokens() {
         let conn = Connection::open_in_memory().unwrap();
         init_schema(&conn).unwrap();
@@ -3079,7 +3157,7 @@ mod tests {
         )
         .unwrap();
 
-        let values: (i64, i64, i64) = conn
+        let values: (Option<i64>, i64, i64) = conn
             .query_row(
                 "SELECT requests_total, decode_calls_total, max_tokens_observed
                  FROM metric_samples WHERE session_id = 'session-metrics'",
@@ -3087,7 +3165,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(values, (17, 17, 4096));
+        assert_eq!(values, (None, 17, 4096));
         let sample = samples_for_session(&conn, "session-metrics", 1).unwrap();
         assert_eq!(sample[0].gpu_vendor.as_deref(), Some("AMD"));
         assert_eq!(

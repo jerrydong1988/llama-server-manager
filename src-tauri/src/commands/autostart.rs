@@ -124,7 +124,7 @@ pub fn enable_autostart() -> Result<(), String> {
 pub fn disable_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        std::process::Command::new("reg")
+        let output = std::process::Command::new("reg")
             .args([
                 "delete",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -134,25 +134,37 @@ pub fn disable_autostart() -> Result<(), String> {
             ])
             .output()
             .map_err(|e| format!("注册表删除失败: {}", e))?;
+        if !output.status.success() {
+            return Err(format!(
+                "注册表删除失败: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
     }
 
     #[cfg(target_os = "macos")]
     {
-        if let Ok(dir) = home_dir() {
-            let _ = std::fs::remove_file(
-                dir.join("Library/LaunchAgents/com.llama-server-manager.plist"),
-            );
+        let path = home_dir()?.join("Library/LaunchAgents/com.llama-server-manager.plist");
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("删除登录启动项失败: {error}")),
         }
     }
 
     #[cfg(target_os = "linux")]
     {
-        if let Ok(dir) = home_dir() {
-            let _ =
-                std::fs::remove_file(dir.join(".config/autostart/llama-server-manager.desktop"));
+        let path = home_dir()?.join(".config/autostart/llama-server-manager.desktop");
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("删除登录启动项失败: {error}")),
         }
     }
 
+    if is_autostart_enabled()? {
+        return Err("系统仍报告登录自启动已启用".into());
+    }
     Ok(())
 }
 
