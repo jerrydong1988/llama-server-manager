@@ -269,6 +269,8 @@ export function getEngineLabels(lang: string) {
     lastProbe: zh ? '最近探测' : 'Last probe', never: zh ? '从未' : 'Never', probeNow: zh ? '探测版本与参数能力' : 'Probe version and parameter capabilities',
     probing: zh ? '正在探测...' : 'Probing...', capabilityDetected: zh ? '已确认' : 'Detected', capabilityUnprobed: zh ? '未探测' : 'Not probed',
     capabilityPartial: zh ? '结果不完整' : 'Partial', capabilityTimeout: zh ? '探测超时' : 'Timed out', capabilityFailed: zh ? '探测失败' : 'Failed',
+    executableChanged: zh ? '引擎可执行文件已变更，需要重新探测兼容性。' : 'The engine executable changed; probe compatibility again.',
+    executableChangedDuringProbe: zh ? '兼容性探测期间引擎可执行文件发生变更，请重新探测。' : 'The engine executable changed during compatibility probing; probe again.',
     probeFailed: zh ? '引擎版本与参数能力探测失败：{error}' : 'Engine version and capability probe failed: {error}',
   }
 }

@@ -4,7 +4,11 @@ import { confirm, message, open } from '@tauri-apps/plugin-dialog'
 import { useAppStore, type EngineInfo } from '../store'
 import { formatMessage, useI18n } from '../i18n'
 import { getEngineLabels } from '../i18n/pageLabels'
-import { normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../engineCapabilities'
+import {
+  localizeEngineCapabilityError,
+  normalizeEngineCapabilityStatus,
+  normalizeEngineVersionStatus,
+} from '../engineCapabilities'
 import { isPathWithinRoot } from '../utils/path'
 import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
@@ -503,7 +507,7 @@ const EngineManager = () => {
 
               {selectedEngine.capabilities?.error && (
                 <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
-                  {selectedEngine.capabilities.error}
+                  {localizeEngineCapabilityError(selectedEngine.capabilities.error, labels)}
                 </div>
               )}
 

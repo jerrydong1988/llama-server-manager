@@ -21,7 +21,13 @@ assert.match(
 
 const entry = `
   import assert from 'node:assert/strict'
-  import { getEngineCompatibilityMode, normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from './src/engineCapabilities'
+  import {
+    getEngineCompatibilityMode,
+    localizeEngineCapabilityError,
+    normalizeEngineCapabilityStatus,
+    normalizeEngineVersionStatus,
+  } from './src/engineCapabilities'
+  import { getEngineLabels } from './src/i18n/pageLabels'
 
   const detected = {
     status: 'detected',
@@ -35,6 +41,28 @@ const entry = `
   assert.equal(getEngineCompatibilityMode(detected), 'full')
   assert.equal(getEngineCompatibilityMode({ ...detected, status: 'partial' }), 'recognized')
   assert.equal(getEngineCompatibilityMode({ ...detected, status: 'failed' }), 'minimal')
+  const zhLabels = getEngineLabels('zh-CN')
+  const enLabels = getEngineLabels('en-US')
+  assert.equal(
+    localizeEngineCapabilityError('engine executable changed; compatibility probe required', zhLabels),
+    zhLabels.executableChanged,
+  )
+  assert.equal(
+    localizeEngineCapabilityError('Engine executable changed; compatibility probe required.', zhLabels),
+    zhLabels.executableChanged,
+  )
+  assert.equal(
+    localizeEngineCapabilityError('engine executable changed; compatibility probe required', enLabels),
+    enLabels.executableChanged,
+  )
+  assert.equal(
+    localizeEngineCapabilityError(
+      'engine executable changed while compatibility probing was in progress; probe again',
+      zhLabels,
+    ),
+    zhLabels.executableChangedDuringProbe,
+  )
+  assert.equal(localizeEngineCapabilityError('access denied', zhLabels), 'access denied')
   console.log('engine capability frontend regression tests passed')
 `
 
