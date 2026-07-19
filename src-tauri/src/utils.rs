@@ -3,6 +3,13 @@ use crate::vector_policy::{classify_model_workload, ModelWorkload};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+const MAX_GGUF_STRING_BYTES: u64 = 10_000_000;
+const MAX_GGUF_ARRAY_ITEMS: u64 = 10_000_000;
+const MAX_GGUF_TAG_ARRAY_ITEMS: u64 = 4_096;
+const MAX_GGUF_STORED_TAGS: u64 = 256;
+const MAX_GGUF_TAG_BYTES: u64 = 4_096;
+const MAX_GGUF_TAG_TOTAL_BYTES: u64 = 65_536;
+
 pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
@@ -252,10 +259,11 @@ fn read_i64(file: &mut std::fs::File) -> Result<i64, String> {
 }
 
 fn read_gguf_string(file: &mut std::fs::File) -> Result<String, String> {
-    let len = read_u64(file)? as usize;
-    if len > 10_000_000 {
+    let len = read_u64(file)?;
+    if len > MAX_GGUF_STRING_BYTES {
         return Err("GGUF string is too large".into());
     }
+    let len = usize::try_from(len).map_err(|_| "GGUF string length is invalid".to_string())?;
     let mut bytes = vec![0u8; len];
     file.read_exact(&mut bytes).map_err(|e| format!("{}", e))?;
     Ok(String::from_utf8_lossy(&bytes).to_string())
@@ -264,27 +272,57 @@ fn read_gguf_string(file: &mut std::fs::File) -> Result<String, String> {
 fn read_gguf_string_array(file: &mut std::fs::File) -> Result<Vec<String>, String> {
     let array_type = read_u32(file)?;
     let array_len = read_u64(file)?;
-    if array_len > 10_000_000 {
-        return Err("GGUF array is too large".into());
+    if array_len > MAX_GGUF_TAG_ARRAY_ITEMS {
+        return Err("GGUF tag array is too large".into());
     }
     if array_type != 8 {
         skip_gguf_array(file, array_type, array_len)?;
         return Ok(Vec::new());
     }
-    let mut values = Vec::with_capacity(array_len.min(256) as usize);
+    let mut values = Vec::with_capacity(array_len.min(MAX_GGUF_STORED_TAGS) as usize);
+    let mut retained_bytes = 0_u64;
     for index in 0..array_len {
-        let value = read_gguf_string(file)?;
-        if index < 256 {
-            values.push(value);
+        let len = read_u64(file)?;
+        if len > MAX_GGUF_STRING_BYTES {
+            return Err("GGUF string is too large".into());
+        }
+        let next_total = retained_bytes.checked_add(len);
+        if index < MAX_GGUF_STORED_TAGS
+            && len <= MAX_GGUF_TAG_BYTES
+            && next_total.is_some_and(|total| total <= MAX_GGUF_TAG_TOTAL_BYTES)
+        {
+            let len = usize::try_from(len).map_err(|_| "GGUF tag length is invalid".to_string())?;
+            let mut bytes = vec![0_u8; len];
+            file.read_exact(&mut bytes).map_err(|e| format!("{}", e))?;
+            retained_bytes = next_total.unwrap_or(retained_bytes);
+            values.push(String::from_utf8_lossy(&bytes).to_string());
+        } else {
+            skip_bytes(file, len)?;
         }
     }
     Ok(values)
 }
 
 fn skip_bytes(file: &mut std::fs::File, bytes: u64) -> Result<(), String> {
-    file.seek(SeekFrom::Current(bytes as i64))
+    let current = file.stream_position().map_err(|e| format!("{}", e))?;
+    let target = current
+        .checked_add(bytes)
+        .ok_or_else(|| "GGUF value offset overflow".to_string())?;
+    let file_len = file.metadata().map_err(|e| format!("{}", e))?.len();
+    if target > file_len {
+        return Err("GGUF value extends beyond the file".into());
+    }
+    file.seek(SeekFrom::Start(target))
         .map_err(|e| format!("{}", e))?;
     Ok(())
+}
+
+fn skip_gguf_string(file: &mut std::fs::File) -> Result<(), String> {
+    let len = read_u64(file)?;
+    if len > MAX_GGUF_STRING_BYTES {
+        return Err("GGUF string is too large".into());
+    }
+    skip_bytes(file, len)
 }
 
 fn skip_gguf_array(
@@ -299,7 +337,7 @@ fn skip_gguf_array(
         10..=12 => skip_bytes(file, array_len.saturating_mul(8)),
         8 => {
             for _ in 0..array_len {
-                let _ = read_gguf_string(file)?;
+                skip_gguf_string(file)?;
             }
             Ok(())
         }
@@ -320,7 +358,7 @@ fn skip_gguf_value(file: &mut std::fs::File, value_type: u32) -> Result<(), Stri
         9 => {
             let array_type = read_u32(file)?;
             let array_len = read_u64(file)?;
-            if array_len > 10_000_000 {
+            if array_len > MAX_GGUF_ARRAY_ITEMS {
                 return Err("GGUF array is too large".into());
             }
             skip_gguf_array(file, array_type, array_len)
@@ -870,6 +908,74 @@ mod tests {
             projector.capabilities.projector_family.as_deref(),
             Some("gemma-vision")
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn gguf_tags_are_bounded_without_losing_following_metadata() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-gguf-tag-count-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bounded-tags.gguf");
+        let tags: Vec<String> = (0..300).map(|index| format!("tag-{index}")).collect();
+        let tag_refs: Vec<&str> = tags.iter().map(String::as_str).collect();
+        write_test_gguf(
+            &path,
+            &[
+                ("general.tags", TestMetadataValue::Strings(&tag_refs)),
+                ("general.architecture", TestMetadataValue::String("qwen3")),
+            ],
+        );
+
+        let metadata = parse_gguf_metadata(&path).unwrap();
+
+        assert_eq!(
+            metadata.capabilities.tags.len(),
+            MAX_GGUF_STORED_TAGS as usize
+        );
+        assert_eq!(metadata.architecture.as_deref(), Some("qwen3"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn oversized_gguf_tags_are_skipped_without_allocating_or_losing_alignment() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-gguf-tag-size-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("oversized-tag.gguf");
+        let oversized = "x".repeat((MAX_GGUF_TAG_BYTES + 1) as usize);
+        let tags = [oversized.as_str(), "vision"];
+        write_test_gguf(
+            &path,
+            &[
+                ("general.tags", TestMetadataValue::Strings(&tags)),
+                ("general.architecture", TestMetadataValue::String("qwen3")),
+            ],
+        );
+
+        let metadata = parse_gguf_metadata(&path).unwrap();
+
+        assert_eq!(metadata.capabilities.tags, vec!["vision"]);
+        assert!(metadata.capabilities.is_vision_model);
+        assert_eq!(metadata.architecture.as_deref(), Some("qwen3"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn excessive_gguf_tag_counts_are_rejected_before_iteration() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-gguf-tag-array-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("too-many-tags.gguf");
+        let tags = vec!["tag"; (MAX_GGUF_TAG_ARRAY_ITEMS + 1) as usize];
+        write_test_gguf(
+            &path,
+            &[("general.tags", TestMetadataValue::Strings(&tags))],
+        );
+
+        let error = parse_gguf_metadata(&path).unwrap_err();
+
+        assert!(error.contains("tag array is too large"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

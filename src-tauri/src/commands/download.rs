@@ -2423,6 +2423,21 @@ fn refresh_paused_entry_for_resume(
     identities
 }
 
+fn prepare_restored_entry(entry: &mut PersistedQueueEntry, auto_resume: bool) {
+    normalize_crash_recovered_entry(entry);
+    if auto_resume && entry.status == "paused" && entry.retries < entry.max_retries {
+        let identities = refresh_paused_entry_for_resume(entry);
+        if identities.is_empty()
+            && entry
+                .files
+                .iter()
+                .any(|file| file.status.as_deref() == Some("queued"))
+        {
+            entry.status = "queued".into();
+        }
+    }
+}
+
 fn retain_cancel_all_terminal_entries(entries: &mut Vec<PersistedQueueEntry>) {
     entries.retain_mut(|entry| {
         entry
@@ -2900,17 +2915,14 @@ pub(crate) fn restore_runtime_queue_from_disk(
     let config_dir = state.config_dir.lock().unwrap().clone();
     let config = crate::commands::config::read_config_from_disk(&config_dir);
     let save_dir_base = config_dir.parent().unwrap_or(Path::new(".")).to_path_buf();
+    let auto_resume = config.download_resume_policy == "auto_on_launch";
 
     for entry in queue.iter_mut() {
+        prepare_restored_entry(entry, auto_resume);
         let repo_dir = save_dir_base
             .join(&entry.save_dir)
             .join(entry.repo_id.replace('/', std::path::MAIN_SEPARATOR_STR));
         for file in entry.files.iter_mut() {
-            if matches!(file.status.as_deref(), Some("active" | "pausing")) {
-                file.status = Some("paused".into());
-            } else if file.status.is_none() {
-                file.status = Some(entry.status.clone());
-            }
             let file_dir =
                 remote_parent_dir(&repo_dir, &file.path).unwrap_or_else(|_| repo_dir.clone());
             let (final_path, temp_path, _) = build_download_paths(&file_dir, &file.name);
@@ -2955,9 +2967,7 @@ pub(crate) fn restore_runtime_queue_from_disk(
         }
     }
 
-    let policy = config.download_resume_policy;
-
-    if policy == "auto_on_launch" {
+    if auto_resume {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             fill_download_queue_slots(app);
@@ -3480,6 +3490,147 @@ mod audit_remediation_tests {
         assert_eq!(entry.status, "paused");
         assert_eq!(entry.files[0].status.as_deref(), Some("paused"));
         assert_eq!(entry.files[0].error, None);
+    }
+
+    #[test]
+    fn manual_restore_pauses_active_entries_and_excludes_them_from_runtime_queue() {
+        let mut entry = PersistedQueueEntry {
+            id: "manual-active".into(),
+            repo_id: "repo/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "active".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "file".into(),
+                downloaded: Some(12),
+                status: None,
+                error: None,
+                task_id: Some("task-manual".into()),
+                run_id: Some("run-manual".into()),
+                version: Some(3),
+            }],
+        };
+
+        prepare_restored_entry(&mut entry, false);
+
+        assert_eq!(entry.status, "paused");
+        assert_eq!(entry.files[0].status.as_deref(), Some("paused"));
+        assert!(!is_restore_runnable(&entry));
+        assert_eq!(entry.files[0].run_id.as_deref(), Some("run-manual"));
+        assert_eq!(entry.files[0].version, Some(3));
+    }
+
+    #[test]
+    fn auto_on_launch_requeues_paused_entries_with_a_fresh_run_identity() {
+        let mut entry = PersistedQueueEntry {
+            id: "auto-paused".into(),
+            repo_id: "repo/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "paused".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "file".into(),
+                downloaded: Some(12),
+                status: Some("paused".into()),
+                error: Some("interrupted".into()),
+                task_id: Some("task-auto".into()),
+                run_id: Some("run-auto".into()),
+                version: Some(3),
+            }],
+        };
+
+        prepare_restored_entry(&mut entry, true);
+
+        assert_eq!(entry.status, "queued");
+        assert_eq!(entry.files[0].status.as_deref(), Some("queued"));
+        assert!(is_restore_runnable(&entry));
+        assert_ne!(entry.files[0].run_id.as_deref(), Some("run-auto"));
+        assert_eq!(entry.files[0].version, Some(4));
+        assert_eq!(entry.files[0].error, None);
+    }
+
+    #[test]
+    fn auto_on_launch_leaves_retry_exhausted_entries_paused() {
+        let mut entry = PersistedQueueEntry {
+            id: "auto-exhausted".into(),
+            repo_id: "repo/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "active".into(),
+            retries: 3,
+            max_retries: 3,
+            last_error: Some("retry limit reached".into()),
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "file".into(),
+                downloaded: Some(12),
+                status: Some("active".into()),
+                error: Some("retry limit reached".into()),
+                task_id: Some("task-exhausted".into()),
+                run_id: Some("run-exhausted".into()),
+                version: Some(3),
+            }],
+        };
+
+        prepare_restored_entry(&mut entry, true);
+
+        assert_eq!(entry.status, "paused");
+        assert_eq!(entry.files[0].status.as_deref(), Some("paused"));
+        assert!(!is_restore_runnable(&entry));
+        assert_eq!(entry.files[0].run_id.as_deref(), Some("run-exhausted"));
+        assert_eq!(entry.files[0].version, Some(3));
+    }
+
+    #[test]
+    fn auto_on_launch_requeues_legacy_active_entry_with_a_queued_file() {
+        let mut entry = PersistedQueueEntry {
+            id: "auto-legacy-queued".into(),
+            repo_id: "repo/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "active".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![MsFileEntry {
+                name: "model.gguf".into(),
+                path: "model.gguf".into(),
+                size: 100,
+                file_type: "file".into(),
+                downloaded: None,
+                status: Some("queued".into()),
+                error: None,
+                task_id: Some("task-legacy".into()),
+                run_id: Some("run-legacy".into()),
+                version: Some(1),
+            }],
+        };
+
+        prepare_restored_entry(&mut entry, true);
+
+        assert_eq!(entry.status, "queued");
+        assert_eq!(entry.files[0].status.as_deref(), Some("queued"));
+        assert!(is_restore_runnable(&entry));
+        assert_eq!(entry.files[0].run_id.as_deref(), Some("run-legacy"));
+        assert_eq!(entry.files[0].version, Some(1));
     }
 
     #[test]

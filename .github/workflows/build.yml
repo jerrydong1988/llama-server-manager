@@ -32,6 +32,8 @@ jobs:
           workspaces: src-tauri
       - name: Install dependencies
         run: npm ci
+      - name: Install browser regression runtime
+        run: npx playwright install chromium
       - name: Validate release
         run: npm run check:release
       - name: Build frontend
