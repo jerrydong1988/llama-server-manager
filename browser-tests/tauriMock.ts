@@ -22,7 +22,15 @@ const model: ModelInfo = {
   architecture: 'qwen3',
   context_length: 131_072,
   quant_type: 'Q8_0',
-  capabilities: { metadata_complete: true },
+  capabilities: {
+    metadata_complete: true,
+    is_vision_model: true,
+    vision_status: 'confirmed',
+    vision_family: 'qwen-vl',
+    model_name: 'Qwen Browser Test',
+    base_model_repo: 'https://huggingface.co/browser-tests/Qwen-Browser-Test',
+    tags: ['image-text-to-text'],
+  },
   file_type: 'model',
 }
 
@@ -39,7 +47,15 @@ const qwenProjector: ModelInfo = {
   name: 'mmproj-Qwen-BF16.gguf',
   path: QWEN_PROJECTOR_PATH,
   size: 536_870_912,
-  capabilities: { metadata_complete: true, is_mmproj: true, projector_family: 'qwen2-vl' },
+  capabilities: {
+    metadata_complete: true,
+    is_mmproj: true,
+    projector_family: 'qwen-vl',
+    projector_type: 'qwen3vl_merger',
+    model_name: 'Qwen Browser Test',
+    base_model_repo: 'https://huggingface.co/browser-tests/Qwen-Browser-Test',
+    tags: ['image-text-to-text'],
+  },
   file_type: 'mmproj',
 }
 
@@ -100,6 +116,20 @@ const state: GlobalConfigShape = {
 
 if (BROWSER_SCENARIO === 'missing-engine') {
   state.instances[INSTANCE_ID].engine_id = 'removed-browser-test-engine'
+}
+if (BROWSER_SCENARIO === 'multimodal-match') {
+  state.instances[INSTANCE_ID].mmproj_path = QWEN_PROJECTOR_PATH
+  state.instances[INSTANCE_ID].explicit_overrides = [
+    ...(state.instances[INSTANCE_ID].explicit_overrides ?? []),
+    'mmproj_path',
+  ]
+}
+if (BROWSER_SCENARIO === 'multimodal-mismatch') {
+  state.instances[INSTANCE_ID].mmproj_path = LLAVA_PROJECTOR_PATH
+  state.instances[INSTANCE_ID].explicit_overrides = [
+    ...(state.instances[INSTANCE_ID].explicit_overrides ?? []),
+    'mmproj_path',
+  ]
 }
 
 type BrowserTestControl = {

@@ -31,7 +31,7 @@ const entry = `
     reconcileInstancesWithModels,
   } from './src/store/bootstrap'
   import { synchronizeInstanceSummary } from './src/store/instanceSummary'
-  import { findMatchingProjector } from './src/modelProjector'
+  import { assessProjectorMatch, findMatchingProjector } from './src/modelProjector'
   import { isConfiguredEngineMissing, resolveEffectiveEngine } from './src/store/engineResolution'
 
   const model = (overrides = {}) => ({
@@ -60,6 +60,77 @@ const entry = `
   assert.equal(findMatchingProjector(visionModel, [
     model({ id: 'unknown-family', path: 'C:/models/mmproj-unknown.gguf', file_type: 'mmproj' }),
   ])?.id, 'unknown-family')
+
+  const qwenVisionModel = model({
+    id: 'qwen-vision', path: 'C:/qwen/model.gguf',
+    capabilities: {
+      metadata_complete: true, is_vision_model: true, vision_status: 'confirmed', vision_family: 'qwen-vl',
+      base_model_repo: 'https://huggingface.co/Qwen/Qwen3.6-35B-A3B', tags: ['image-text-to-text'],
+    },
+  })
+  const qwenProjector = model({
+    id: 'qwen-projector', path: 'C:/qwen/mmproj.gguf', file_type: 'mmproj',
+    capabilities: {
+      is_mmproj: true, projector_family: 'qwen-vl', projector_type: 'qwen3vl_merger',
+      base_model_repo: 'https://huggingface.co/Qwen/Qwen3.6-35B-A3B', tags: ['image-text-to-text'],
+    },
+  })
+  assert.equal(assessProjectorMatch(qwenVisionModel, qwenProjector).confidence, 'exact')
+  assert.equal(findMatchingProjector(qwenVisionModel, [qwenProjector])?.id, 'qwen-projector')
+  assert.equal(findMatchingProjector(qwenVisionModel, [
+    qwenProjector,
+    model({ ...qwenProjector, id: 'qwen-projector-f16', path: 'C:/qwen/mmproj-f16.gguf' }),
+  ]), null, 'equally strong projector variants must require an explicit user choice')
+  const sourceRepoModel = model({
+    id: 'source-repo-model', path: 'C:/models/source-model.gguf',
+    capabilities: { model_repo: 'https://huggingface.co/example/source-model' },
+  })
+  const sourceRepoProjector = model({
+    id: 'source-repo-projector', path: 'D:/projectors/mmproj.gguf', file_type: 'mmproj',
+    capabilities: { is_mmproj: true, model_repo: 'example/source-model.git' },
+  })
+  assert.deepEqual(assessProjectorMatch(sourceRepoModel, sourceRepoProjector), { confidence: 'exact', reason: 'source-repo' })
+  const matchedProjectorWarnings = validateConfig(
+    { ...defaultInstanceConfig(), model_path: qwenVisionModel.path, mmproj_path: qwenProjector.path },
+    qwenVisionModel,
+    null,
+    qwenProjector,
+  ).filter(warning => warning.key.startsWith('warnC1'))
+  assert.deepEqual(matchedProjectorWarnings, [])
+
+  const explicitTextModel = model({
+    ...qwenVisionModel,
+    id: 'explicit-text',
+    capabilities: { ...qwenVisionModel.capabilities, is_vision_model: false, vision_status: 'text-only' },
+  })
+  assert.equal(validateConfig(
+    { ...defaultInstanceConfig(), model_path: explicitTextModel.path, mmproj_path: qwenProjector.path },
+    explicitTextModel,
+    null,
+    qwenProjector,
+  ).find(warning => warning.key.startsWith('warnC1'))?.key, 'warnC1')
+
+  const conflictingProjector = model({
+    ...qwenProjector,
+    id: 'conflicting-projector',
+    capabilities: { ...qwenProjector.capabilities, base_model_repo: 'https://huggingface.co/Other/Unrelated-Vision' },
+  })
+  assert.equal(assessProjectorMatch(qwenVisionModel, conflictingProjector).confidence, 'mismatch')
+  assert.deepEqual(validateConfig(
+    { ...defaultInstanceConfig(), model_path: qwenVisionModel.path, mmproj_path: conflictingProjector.path },
+    qwenVisionModel,
+    null,
+    conflictingProjector,
+  ).filter(warning => warning.key.startsWith('warnC1')).map(warning => [warning.key, warning.severity]), [['warnC1Mismatch', 'medium']])
+
+  const weakProjector = model({ id: 'weak-projector', path: 'C:/qwen/mmproj-unknown.gguf', file_type: 'mmproj' })
+  assert.equal(assessProjectorMatch(model({ path: 'C:/qwen/unknown.gguf' }), weakProjector).confidence, 'weak')
+  assert.equal(validateConfig(
+    { ...defaultInstanceConfig(), model_path: 'C:/qwen/unknown.gguf', mmproj_path: weakProjector.path },
+    model({ path: 'C:/qwen/unknown.gguf' }),
+    null,
+    weakProjector,
+  ).find(warning => warning.key.startsWith('warnC1'))?.key, 'warnC1Weak')
 
   assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true, is_embedding_model: true } })), 'embedding')
   assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true, is_embedding_model: true, is_reranker_model: true } })), 'reranker')
@@ -393,6 +464,8 @@ assert.match(commandFeedbackSource, /role="alertdialog"/, 'command generation er
 assert.match(commandFeedbackSource, /onRecover/, 'missing engine errors must provide a direct recovery action')
 assert.match(browserMockSource, /BROWSER_SCENARIO === 'missing-engine'/, 'browser tests must cover stale engine bindings')
 assert.match(browserMockSource, /BROWSER_SCENARIO === 'command-error'/, 'browser tests must cover backend command failures')
+assert.match(browserMockSource, /BROWSER_SCENARIO === 'multimodal-match'/, 'browser tests must cover a source-confirmed projector match')
+assert.match(browserMockSource, /BROWSER_SCENARIO === 'multimodal-mismatch'/, 'browser tests must cover a conflicting projector source')
 assert.match(createInstanceSource, /normalizeInstanceConfig\(/, 'new instances must use the vector policy')
 assert.match(createInstanceSource, /context:\s*'create'/, 'new instance cleanup must be silent')
 assert.match(createInstanceSource, /config:\s*normalized\.config/, 'new instances must store the normalized config')
@@ -404,6 +477,8 @@ assert.ok(
 
 const configPageSource = readSource('src', 'components', 'ConfigPage.tsx')
 const configWorkspaceSource = readSource('src', 'components', 'ConfigPage', 'configWorkspace.ts')
+const inventorySource = readSource('src-tauri', 'src', 'commands', 'model_inventory.rs')
+const ggufParserSource = readSource('src-tauri', 'src', 'utils.rs')
 const modelAssetPickerSource = readSource('src', 'components', 'ConfigPage', 'ModelAssetPicker.tsx')
 const applyPrimaryModelSource = section(configPageSource, 'const applyPrimaryModelPath', 'const pickModel')
 assert.match(applyPrimaryModelSource, /normalizeConfigForSelectedModel\(/, 'all primary model path commits must use atomic workload selection')
@@ -423,10 +498,14 @@ const configDiffSource = section(configPageSource, 'const savedBaseline', 'const
 assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must be filtered from the ordinary config diff')
 assert.match(configDiffSource, /isEqualValue\(local\[change\.key\],\s*change\.after\)/, 'manual edits after cleanup must remain visible in the ordinary diff')
 assert.match(configWorkspaceSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
+assert.match(inventorySource, /MODEL_INVENTORY_SCHEMA_VERSION: i64 = 4/, 'GGUF capability changes must invalidate cached model metadata')
+assert.match(ggufParserSource, /"general\.tags" =>/, 'GGUF parsing must retain modality tags')
+assert.match(ggufParserSource, /"tokenizer\.chat_template" =>/, 'GGUF parsing must inspect multimodal chat templates')
+assert.match(ggufParserSource, /"clip\.projector_type" \| "clip\.vision\.projector_type"/, 'GGUF parsing must support current projector metadata keys')
 const saveSource = section(configPageSource, 'const save =', 'const sectionProps')
 assert.match(saveSource, /const normalized = manualMode[\s\S]*: modelPathChanged/, 'managed saves must select normalization based on whether the model path changed')
 assert.match(saveSource, /modelPathChanged[\s\S]*normalizeConfigForSelectedModel/, 'save must treat a manually edited model path as an explicit model switch')
-assert.match(saveSource, /validateConfig\(persistedConfig, currentModel, engine\)/, 'save validation must inspect the backend-normalized configuration')
+assert.match(saveSource, /validateConfig\(persistedConfig, persistedModel, engine, persistedProjector\)/, 'save validation must inspect the backend-normalized model and projector configuration')
 assert.match(saveSource, /config:\s*normalized\.config/, 'save must persist the same normalized configuration that was validated')
 assert.ok(
   saveSource.indexOf('await saveConfig()') < saveSource.indexOf('validateConfig(persistedConfig'),

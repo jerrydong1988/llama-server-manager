@@ -20,12 +20,30 @@ pub struct ModelCapabilities {
     pub mtp_layers: Option<u32>,
     #[serde(default)]
     pub is_vision_model: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vision_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vision_evidence: Vec<String>,
     #[serde(default)]
     pub vision_family: Option<String>,
     #[serde(default)]
     pub is_mmproj: bool,
     #[serde(default)]
     pub projector_family: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projector_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_basename: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_model_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_model_repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 #[cfg(test)]
@@ -38,9 +56,15 @@ mod model_capability_tests {
             serde_json::from_str(r#"{"metadata_complete":true}"#).unwrap();
         assert_eq!(cached.is_embedding_model, None);
         assert_eq!(cached.is_reranker_model, None);
+        assert_eq!(cached.vision_status, None);
+        assert!(cached.vision_evidence.is_empty());
+        assert!(cached.tags.is_empty());
         let cached_json = serde_json::to_value(&cached).unwrap();
         assert!(cached_json.get("is_embedding_model").is_none());
         assert!(cached_json.get("is_reranker_model").is_none());
+        assert!(cached_json.get("vision_status").is_none());
+        assert!(cached_json.get("vision_evidence").is_none());
+        assert!(cached_json.get("tags").is_none());
 
         let scanned: ModelCapabilities = serde_json::from_str(
             r#"{"metadata_complete":true,"is_embedding_model":false,"is_reranker_model":false}"#,

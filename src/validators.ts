@@ -1,5 +1,6 @@
 import type { InstanceConfig, ModelInfo, EngineInfo } from './store/types'
 import { defaultInstanceConfig } from './store/defaults'
+import { assessProjectorMatch } from './modelProjector'
 
 export interface Warning {
   field: keyof InstanceConfig
@@ -78,8 +79,9 @@ function hasBuiltinMtp(model: ModelInfo | null | undefined): boolean {
 
 function isVisionModel(model: ModelInfo | null | undefined): boolean | null {
   if (!model) return null
+  if (model.capabilities?.vision_status === 'confirmed') return true
+  if (model.capabilities?.vision_status === 'text-only') return false
   if (model.capabilities?.is_vision_model) return true
-  if (hasMetadata(model)) return false
   return null
 }
 
@@ -98,6 +100,7 @@ export function validateConfig(
   config: InstanceConfig,
   model: ModelInfo | null | undefined,
   engine: EngineInfo | null | undefined,
+  projector?: ModelInfo | null,
 ): Warning[] {
   const w: Warning[] = []
 
@@ -259,14 +262,23 @@ export function validateConfig(
 
   // Group C: environment-aware checks.
 
-  // C1: mmproj is set but model metadata cannot confirm a vision-capable model.
+  // C1: validate model/projector compatibility from positive modality and source evidence.
   if (config.mmproj_path) {
     const vision = isVisionModel(model)
     if (isMmprojArtifact(model)) {
       w.push({ field: 'model_path', severity: 'medium', key: 'warnC5' })
     } else if (vision === false) {
       w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1' })
-    } else if (vision === null) {
+    } else if (model) {
+      const match = assessProjectorMatch(model, projector)
+      if (match.confidence === 'mismatch') {
+        w.push({ field: 'mmproj_path', severity: 'medium', key: 'warnC1Mismatch' })
+      } else if (match.confidence === 'weak') {
+        w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1Weak' })
+      } else if (match.confidence === 'unknown') {
+        w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1Unknown' })
+      }
+    } else {
       w.push({ field: 'mmproj_path', severity: 'low', key: 'warnC1Unknown' })
     }
   }

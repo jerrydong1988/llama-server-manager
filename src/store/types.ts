@@ -5,9 +5,18 @@ export interface ModelCapabilities {
   has_builtin_mtp?: boolean
   mtp_layers?: number
   is_vision_model?: boolean
+  vision_status?: 'confirmed' | 'text-only' | 'unknown'
+  vision_evidence?: string[]
   vision_family?: string
   is_mmproj?: boolean
   projector_family?: string
+  projector_type?: string
+  model_name?: string
+  model_basename?: string
+  model_repo?: string
+  base_model_name?: string
+  base_model_repo?: string
+  tags?: string[]
 }
 
 export interface GgufMetadataSummary {

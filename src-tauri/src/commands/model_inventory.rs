@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 3;
+const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 4;
 static INVENTORY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 static INVENTORY_SCHEMA_LOCK: Mutex<()> = Mutex::new(());
 

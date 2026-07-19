@@ -120,6 +120,12 @@ const ConfigPage = () => {
       ? models.find(model => normalizeModelPath(model.path) === modelPath) ?? null
       : null
   }, [local?.model_path, models])
+  const currentProjector = useMemo(() => {
+    const projectorPath = local?.mmproj_path ? normalizeModelPath(local.mmproj_path) : ''
+    return projectorPath
+      ? models.find(model => normalizeModelPath(model.path) === projectorPath) ?? null
+      : null
+  }, [local?.mmproj_path, models])
 
   const workload = useMemo(() => (
     local ? detectModelWorkload(currentModel, local.model_path, local) : 'inference'
@@ -239,7 +245,11 @@ const ConfigPage = () => {
         committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
         setLocal(persistedConfig)
         setSaved(true)
-        setSaveWarnings(validateConfig(persistedConfig, currentModel, engine))
+        const persistedModelPath = normalizeModelPath(persistedConfig.model_path)
+        const persistedModel = models.find(model => normalizeModelPath(model.path) === persistedModelPath) ?? null
+        const persistedProjectorPath = normalizeModelPath(persistedConfig.mmproj_path)
+        const persistedProjector = models.find(model => normalizeModelPath(model.path) === persistedProjectorPath) ?? null
+        setSaveWarnings(validateConfig(persistedConfig, persistedModel, engine, persistedProjector))
         setVectorCleanupChanges([])
       } else {
         setSaved(false)
@@ -345,7 +355,7 @@ const ConfigPage = () => {
     statusLabels,
     searchQuery,
   }
-  const liveWarnings = manualMode ? [] : validateConfig(local, currentModel, currentEngine)
+  const liveWarnings = manualMode ? [] : validateConfig(local, currentModel, currentEngine, currentProjector)
   const engineCompatibilityMode = getEngineCompatibilityMode(currentEngine?.capabilities)
   const engineVersionStatus = normalizeEngineVersionStatus(currentEngine?.capabilities)
   const visibleWarnings = saved ? saveWarnings : liveWarnings
