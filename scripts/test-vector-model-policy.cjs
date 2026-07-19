@@ -32,7 +32,7 @@ const entry = `
   } from './src/store/bootstrap'
   import { synchronizeInstanceSummary } from './src/store/instanceSummary'
   import { findMatchingProjector } from './src/modelProjector'
-  import { resolveEffectiveEngine } from './src/store/engineResolution'
+  import { isConfiguredEngineMissing, resolveEffectiveEngine } from './src/store/engineResolution'
 
   const model = (overrides = {}) => ({
     id: 'model', name: 'model.gguf', path: 'C:/models/model.gguf', size: 1, file_type: 'gguf',
@@ -43,6 +43,9 @@ const entry = `
   assert.equal(resolveEffectiveEngine({ engine_id: 'missing' }, engines, 'default'), null)
   assert.equal(resolveEffectiveEngine({ engine_id: 'selected' }, engines, 'default')?.id, 'selected')
   assert.equal(resolveEffectiveEngine({ engine_id: '' }, engines, 'default')?.id, 'default')
+  assert.equal(isConfiguredEngineMissing({ engine_id: 'missing' }, engines), true)
+  assert.equal(isConfiguredEngineMissing({ engine_id: 'selected' }, engines), false)
+  assert.equal(isConfiguredEngineMissing({ engine_id: '' }, engines), false)
 
   const visionModel = model({
     path: 'C:/models/vision.gguf',
@@ -375,6 +378,21 @@ assert.doesNotMatch(processConfigSource, /models:\s*\[\]/, 'hydration must retai
 
 const instanceManagerSource = readSource('src', 'components', 'InstanceManager.tsx')
 const createInstanceSource = section(instanceManagerSource, 'const handleCreate', 'const handleDelete')
+const showCommandSource = section(instanceManagerSource, 'const handleShowCommand', 'const handleTestConnection')
+const commandFeedbackSource = readSource('src', 'components', 'InstanceManager', 'CommandFeedbackModal.tsx')
+const browserMockSource = readSource('browser-tests', 'tauriMock.ts')
+assert.match(instanceManagerSource, /resolveEffectiveEngine\(inst\.config, engines, defaultEngineId\)\?\.name/, 'instance rows must display the engine that will actually be used')
+assert.match(instanceManagerSource, /labels\.configuredEngineMissing/, 'missing configured engines must be shown explicitly')
+assert.match(instanceManagerSource, /MissingEngineBanner/, 'missing configured engines must have a proactive recovery banner')
+assert.match(showCommandSource, /setCommandError\(/, 'command generation failures must be visible to the user')
+assert.match(showCommandSource, /labels\.missingEngineCommandError/, 'removed engine bindings must explain why command generation is blocked')
+assert.match(showCommandSource, /labels\.noEngineCommandError/, 'empty engine inventories must explain why command generation is blocked')
+assert.match(showCommandSource, /labels\.commandGenerationFailed/, 'backend command generation errors must be surfaced')
+assert.doesNotMatch(showCommandSource, /if\s*\(!engine\)\s*return/, 'missing engines must not make the generate-command action silently return')
+assert.match(commandFeedbackSource, /role="alertdialog"/, 'command generation errors must use an accessible alert dialog')
+assert.match(commandFeedbackSource, /onRecover/, 'missing engine errors must provide a direct recovery action')
+assert.match(browserMockSource, /BROWSER_SCENARIO === 'missing-engine'/, 'browser tests must cover stale engine bindings')
+assert.match(browserMockSource, /BROWSER_SCENARIO === 'command-error'/, 'browser tests must cover backend command failures')
 assert.match(createInstanceSource, /normalizeInstanceConfig\(/, 'new instances must use the vector policy')
 assert.match(createInstanceSource, /context:\s*'create'/, 'new instance cleanup must be silent')
 assert.match(createInstanceSource, /config:\s*normalized\.config/, 'new instances must store the normalized config')

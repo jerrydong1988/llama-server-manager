@@ -1,5 +1,13 @@
 import type { EngineInfo, InstanceConfig } from './types'
 
+export function isConfiguredEngineMissing(
+  config: Pick<InstanceConfig, 'engine_id'>,
+  engines: EngineInfo[],
+) {
+  const configuredId = config.engine_id.trim()
+  return Boolean(configuredId && !engines.some(engine => engine.id === configuredId))
+}
+
 export function resolveEffectiveEngine(
   config: Pick<InstanceConfig, 'engine_id'>,
   engines: EngineInfo[],

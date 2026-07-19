@@ -4,16 +4,18 @@ import { useAppStore, defaultInstanceConfig } from '../store'
 import { formatStartupCommand, maskStartupCommandSecrets } from '../store'
 import { invokeApp as invoke } from '../lib/ipc'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { useI18n } from '../i18n'
+import { formatMessage, useI18n } from '../i18n'
 import { formatHostPort } from '../utils/network'
 import { normalizeInstanceConfig } from '../modelPolicy'
 import type { Instance } from '../store/types'
 import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
-import { resolveEffectiveEngine } from '../store/engineResolution'
+import { CommandFeedbackModal, MissingEngineBanner } from './InstanceManager/CommandFeedbackModal'
+import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engineResolution'
 import { markExplicitOverride } from '../parameterIntent'
 
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
+type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
 
 const InstanceManager = () => {
   const instances = useAppStore(s => s.instances)
@@ -39,6 +41,7 @@ const InstanceManager = () => {
   const [cmdText, setCmdText] = useState('')
   const [cmdRaw, setCmdRaw] = useState('')
   const [cmdIncludesSecrets, setCmdIncludesSecrets] = useState(false)
+  const [commandError, setCommandError] = useState<CommandErrorState | null>(null)
   const [showCreatePicker, setShowCreatePicker] = useState(false)
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [newInst, setNewInst] = useState({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: 8080, engineId: '' })
@@ -75,11 +78,9 @@ const InstanceManager = () => {
     return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`
   }
 
-  const engineNameFor = useCallback((inst: Instance) =>
-    engines.find(e => e.id === (inst.config.engine_id || defaultEngineId || ''))?.name
-    || engines.find(e => e.id === defaultEngineId)?.name
-    || engines[0]?.name
-    || t.instance.sysPath, [defaultEngineId, engines, t.instance.sysPath])
+  const engineMissingFor = useCallback((inst: Instance) => isConfiguredEngineMissing(inst.config, engines), [engines])
+  const engineNameFor = useCallback((inst: Instance) => resolveEffectiveEngine(inst.config, engines, defaultEngineId)?.name
+    || (engineMissingFor(inst) ? labels.configuredEngineMissing : t.instance.sysPath), [defaultEngineId, engineMissingFor, engines, labels.configuredEngineMissing, t.instance.sysPath])
 
   const statusText = (inst: Instance) =>
     inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error
@@ -118,6 +119,7 @@ const InstanceManager = () => {
   const stoppedCount = instances.filter(inst => inst.status === 'stopped').length
   const erroredCount = instances.filter(inst => inst.status === 'error').length
   const autoStartCount = instances.filter(inst => inst.config.auto_start).length
+  const missingEngineInstances = useMemo(() => instances.filter(engineMissingFor), [engineMissingFor, instances])
   const selectedInstance = filteredInstances.find(inst => inst.id === selectedInstanceId) || filteredInstances[0] || null
   const selectedIndex = selectedInstance ? filteredInstances.findIndex(inst => inst.id === selectedInstance.id) : -1
   useEffect(() => {
@@ -199,7 +201,11 @@ const InstanceManager = () => {
     const inst = instances.find(i => i.id === id)
     if (!inst) return
     const engine = resolveEffectiveEngine(inst.config, engines, defaultEngineId)
-    if (!engine) return
+    if (!engine) {
+      setCommandError({ instanceId: id, message: engineMissingFor(inst) ? labels.missingEngineCommandError : labels.noEngineCommandError, missingEngine: true })
+      return
+    }
+    setCommandError(null)
     try {
       const { command: cmd } = await generateCommand(inst.config, engine.exe)
       const raw = cmd.map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ')
@@ -212,6 +218,8 @@ const InstanceManager = () => {
       setShowCmdModal(id)
     } catch (e) {
       console.error(e)
+      const error = e instanceof Error ? e.message : String(e)
+      setCommandError({ instanceId: id, message: formatMessage(labels.commandGenerationFailed, { error }), missingEngine: false })
     }
   }
 
@@ -286,6 +294,11 @@ const InstanceManager = () => {
           {labels.noEngineSuffix}
         </div>
       )}
+      {missingEngineInstances.length > 0 && <MissingEngineBanner
+        message={formatMessage(labels.missingEngineBanner, { count: missingEngineInstances.length })}
+        actionLabel={labels.reselectEngine}
+        onAction={() => { setSelectedInstanceId(missingEngineInstances[0].id); setEnginePickerForId(missingEngineInstances[0].id) }}
+      />}
 
       <Surface as="section">
         <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-5">
@@ -447,6 +460,7 @@ const InstanceManager = () => {
                     <div className="flex min-w-0 flex-wrap items-center gap-2">
                       <Button
                         onClick={e => { e.stopPropagation(); setEnginePickerForId(inst.id) }}
+                        variant={engineMissingFor(inst) ? 'danger' : 'secondary'}
                         size="sm"
                         className="h-8 max-w-[150px] justify-start px-2"
                         title={engineNameFor(inst)}
@@ -634,7 +648,7 @@ const InstanceManager = () => {
                   <button
                     type="button"
                     onClick={() => setEnginePickerForId(selectedInstance.id)}
-                    className="min-w-0 truncate text-left text-xs font-medium text-blue-600 hover:underline dark:text-blue-300"
+                    className={`min-w-0 truncate text-left text-xs font-medium hover:underline ${engineMissingFor(selectedInstance) ? 'text-red-600 dark:text-red-300' : 'text-blue-600 dark:text-blue-300'}`}
                     title={engineNameFor(selectedInstance)}
                   >
                     {engineNameFor(selectedInstance)}
@@ -821,6 +835,13 @@ const InstanceManager = () => {
           </Surface>
         </div>
       )}
+
+      {commandError && <CommandFeedbackModal
+        title={labels.commandErrorTitle} message={commandError.message} closeLabel={t.appShell.close}
+        recoveryLabel={commandError.missingEngine ? labels.reselectEngine : undefined}
+        onClose={() => setCommandError(null)}
+        onRecover={commandError.missingEngine ? () => { setSelectedInstanceId(commandError.instanceId); setEnginePickerForId(commandError.instanceId); setCommandError(null) } : undefined}
+      />}
 
       {enginePickerForId && (() => {
         const inst = instances.find(i => i.id === enginePickerForId)

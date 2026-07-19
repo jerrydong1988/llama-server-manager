@@ -489,6 +489,12 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     modelPath: 'Model Path', engine: 'Engine', primaryActions: 'Primary Actions', quickActions: 'Quick Actions',
     order: 'Order', autoStartHint: 'Start this instance automatically when the app starts', selected: 'Selected',
     operationTarget: 'Current Operation Target', operationTargetHint: 'Right-side actions apply to this instance',
+    configuredEngineMissing: 'Configured engine is missing',
+    missingEngineBanner: '{count} instance(s) reference an engine that no longer exists. The app will not silently substitute the default engine; select a replacement before starting or generating a command.',
+    commandErrorTitle: 'Unable to generate startup command',
+    missingEngineCommandError: 'The llama-server engine saved by this instance was removed or is no longer available. To avoid backend and parameter capability mismatches, the app will not switch engines automatically. Select an engine first.',
+    noEngineCommandError: 'No available llama-server engine was found. Add or scan an engine, then select it for this instance before generating a command.',
+    commandGenerationFailed: 'Command generation failed: {error}', reselectEngine: 'Select another engine',
   },
 
   modelRepoWorkspace: {

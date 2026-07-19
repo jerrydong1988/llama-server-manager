@@ -4,6 +4,7 @@ import type { GlobalConfigShape } from '../src/store/bootstrap'
 import type { EngineInfo, GeneratedServerCommand, InstanceConfig, ModelInfo, SystemMetrics } from '../src/store/types'
 
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
+const BROWSER_SCENARIO = new URLSearchParams(window.location.search).get('scenario')
 const INSTANCE_ID = 'browser-test-instance'
 const ENGINE_ID = 'browser-test-engine'
 const MODEL_PATH = 'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf'
@@ -95,6 +96,10 @@ const state: GlobalConfigShape = {
   instance_order: [INSTANCE_ID],
   last_tab: 'instances',
   dark_mode: true,
+}
+
+if (BROWSER_SCENARIO === 'missing-engine') {
+  state.instances[INSTANCE_ID].engine_id = 'removed-browser-test-engine'
 }
 
 type BrowserTestControl = {
@@ -216,6 +221,7 @@ mockIPC((command, payload) => {
     case 'get_workers': return []
     case 'is_autostart_enabled': return false
     case 'generate_server_command': {
+      if (BROWSER_SCENARIO === 'command-error') throw new Error('Browser test command generation failed')
       const config = args.config as InstanceConfig
       const generated = generatedCommand(config)
       control.lastGenerated = clone(generated)
