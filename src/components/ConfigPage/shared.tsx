@@ -49,11 +49,52 @@ const EmittedMarker = ({ visible, label }: { visible: boolean; label: string }) 
 ) : null
 
 const FieldStatusMarkers = ({ changed, emitted, changedLabel, emittedLabel }: { changed: boolean; emitted: boolean; changedLabel: string; emittedLabel: string }) => (
-  <span className="inline-flex shrink-0 items-center gap-1">
-    <ChangedMarker visible={changed} label={changedLabel} />
-    <EmittedMarker visible={emitted} label={emittedLabel} />
-  </span>
+  changed || emitted ? (
+    <span className="inline-flex shrink-0 items-center gap-1">
+      <ChangedMarker visible={changed} label={changedLabel} />
+      <EmittedMarker visible={emitted} label={emittedLabel} />
+    </span>
+  ) : null
 )
+
+const FieldFrame = ({
+  label,
+  fieldKey,
+  title,
+  disabled,
+  className = '',
+  showLabel = true,
+  children,
+}: {
+  label: string
+  fieldKey?: FieldKey
+  title?: string
+  disabled?: boolean
+  className?: string
+  showLabel?: boolean
+  children: React.ReactNode
+}) => {
+  const { match, changed, emitted, changedLabel, emittedLabel } = useFieldState(label, fieldKey)
+  return (
+    <div
+      className={`flex h-full min-w-0 flex-col justify-between ${disabled ? 'opacity-50' : ''} ${match ? 'flash-match rounded-lg ring-2 ring-amber-400/70' : ''} ${className}`}
+      title={title}
+      data-config-field={fieldKey}
+      data-config-search-match={match ? 'true' : undefined}
+      data-config-emitted={emitted ? 'true' : undefined}
+    >
+      {showLabel && (
+        <div className="mb-1 flex min-h-8 min-w-0 items-start justify-between gap-2">
+          <label className={`min-w-0 break-words text-xs font-medium leading-4 ${match ? 'text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
+            {label}
+          </label>
+          <FieldStatusMarkers changed={changed} emitted={emitted} changedLabel={changedLabel} emittedLabel={emittedLabel} />
+        </div>
+      )}
+      <div className="min-w-0">{children}</div>
+    </div>
+  )
+}
 
 export const Section = ({
   title,
@@ -120,7 +161,7 @@ export const Section = ({
           changedLabel: changedLabel || '',
           emittedLabel: emittedLabel || '',
         }}>
-          <div className={`space-y-4 px-4 py-4 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>{children}</div>
+          <div className={`config-layout-container space-y-4 px-4 py-4 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>{children}</div>
         </SearchCtx.Provider>
       )}
     </section>
@@ -128,21 +169,17 @@ export const Section = ({
 }
 
 export const Input = ({ label, value, onChange, placeholder, type, title, disabled, fieldKey }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
-  const { match, changed, emitted, changedLabel, emittedLabel } = useFieldState(label, fieldKey)
   return (
-  <div title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined} data-config-emitted={emitted ? 'true' : undefined}>
-    <label className={`mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}><span>{label}</span><FieldStatusMarkers changed={changed} emitted={emitted} changedLabel={changedLabel} emittedLabel={emittedLabel} /></label>
-    <TextInput type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`h-10 ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`} />
-  </div>
+    <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
+      <TextInput type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className="h-10 w-full" />
+    </FieldFrame>
 )}
 
 export const Num = ({ label, value, onChange, min, max, step, title, disabled, fieldKey }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
-  const { match, changed, emitted, changedLabel, emittedLabel } = useFieldState(label, fieldKey)
   return (
-  <div title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined} data-config-emitted={emitted ? 'true' : undefined}>
-    <label className={`mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}><span>{label}</span><FieldStatusMarkers changed={changed} emitted={emitted} changedLabel={changedLabel} emittedLabel={emittedLabel} /></label>
-    <TextInput type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`h-10 ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`} />
-  </div>
+    <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
+      <TextInput type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className="h-10 w-full" />
+    </FieldFrame>
 )}
 
 export const Toggle = ({ label, value, onChange, title, disabled }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean }) => (
@@ -153,42 +190,38 @@ export const Toggle = ({ label, value, onChange, title, disabled }: { label: str
 )
 
 export const Switch = ({ label, value, onChange, title, disabled, fieldKey }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
-  const { match, changed, emitted, changedLabel, emittedLabel } = useFieldState(label, fieldKey)
   return (
-  <label className={`flex flex-wrap items-center gap-2.5 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${match ? 'ring-2 ring-amber-400 rounded-lg p-1 -m-1 flash-match' : ''}`} title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined} data-config-emitted={emitted ? 'true' : undefined}>
-    <button
-      type="button"
-      role="switch"
-      aria-checked={value}
-      onClick={() => onChange(!value)}
-      disabled={disabled}
-      className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${value ? 'bg-blue-600' : 'bg-slate-700'}`}
-    >
-      <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
-    </button>
-    <span className={`text-sm ${match ? 'text-amber-300' : 'text-slate-200'}`}>{label}</span>
-    <FieldStatusMarkers changed={changed} emitted={emitted} changedLabel={changedLabel} emittedLabel={emittedLabel} />
-  </label>
+    <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
+      <button
+        type="button"
+        role="switch"
+        aria-label={label}
+        aria-checked={value}
+        onClick={() => onChange(!value)}
+        disabled={disabled}
+        className="flex h-11 w-full items-center rounded-lg border border-slate-300 bg-white px-3 transition hover:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700"
+      >
+        <span className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${value ? 'bg-blue-600' : 'bg-slate-400 dark:bg-slate-700'}`}>
+          <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
+        </span>
+      </button>
+    </FieldFrame>
 )}
 
 export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, fieldKey }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; fieldKey?: FieldKey }) => {
-  const { match, changed, emitted, changedLabel, emittedLabel } = useFieldState(label, fieldKey)
   return (
-  <div title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined} data-config-emitted={emitted ? 'true' : undefined}>
-    <label className={`mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}><span>{label}</span><FieldStatusMarkers changed={changed} emitted={emitted} changedLabel={changedLabel} emittedLabel={emittedLabel} /></label>
-    <SelectInput value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`h-10 w-full ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`}>
+    <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
+      <SelectInput value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-10 w-full">
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
-    </SelectInput>
-  </div>
+      </SelectInput>
+    </FieldFrame>
 )}
 
 export const SearchTarget = ({ label, fieldKey, title, children, className = '', showLabel = true }: { label: string; fieldKey: FieldKey; title?: string; children: React.ReactNode; className?: string; showLabel?: boolean }) => {
-  const { match, changed, emitted, changedLabel, emittedLabel } = useFieldState(label, fieldKey)
   return (
-    <div className={className} title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined} data-config-emitted={emitted ? 'true' : undefined}>
-      {showLabel && <label className={`mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}><span>{label}</span><FieldStatusMarkers changed={changed} emitted={emitted} changedLabel={changedLabel} emittedLabel={emittedLabel} /></label>}
+    <FieldFrame label={label} fieldKey={fieldKey} title={title} className={className} showLabel={showLabel}>
       {children}
-    </div>
+    </FieldFrame>
   )
 }
 
@@ -197,6 +230,7 @@ export const SearchTarget = ({ label, fieldKey, title, children, className = '',
 // Small reset button (↻ icon), used on sub-groups and container
 export const ResetButton = ({ onClick, title }: { onClick: () => void; title?: string }) => (
   <button
+    type="button"
     onClick={e => { e.stopPropagation(); onClick() }}
     title={title || 'Reset to defaults'}
     className="ml-auto shrink-0 rounded-lg p-1 text-slate-500 transition hover:bg-red-500/10 hover:text-red-300"
@@ -231,14 +265,16 @@ export const CollapsibleGroup = ({
   const hasSearch = !!q
   return (
     <div id={id} className="scroll-mt-6 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/50" data-config-field={fieldKey} data-config-search-match={fieldState.match ? 'true' : undefined} data-config-emitted={fieldState.emitted ? 'true' : undefined}>
-      <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2.5 text-left text-slate-200 transition hover:bg-slate-900">
-        {(hasSearch || open) ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
-        <span className={`text-xs font-medium ${fieldState.match ? 'text-amber-300' : ''}`}>{title}</span>
-        <FieldStatusMarkers changed={fieldState.changed} emitted={fieldState.emitted} changedLabel={fieldState.changedLabel} emittedLabel={fieldState.emittedLabel} />
-        {summary && <span className="ml-auto text-xs text-slate-500">{summary}</span>}
+      <div className="flex items-center border-b border-slate-800 bg-slate-950/80 text-slate-200 transition hover:bg-slate-900">
+        <button type="button" onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left">
+          {(hasSearch || open) ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
+          <span className={`text-xs font-medium ${fieldState.match ? 'text-amber-300' : ''}`}>{title}</span>
+          <FieldStatusMarkers changed={fieldState.changed} emitted={fieldState.emitted} changedLabel={fieldState.changedLabel} emittedLabel={fieldState.emittedLabel} />
+          {summary && <span className="ml-auto text-xs text-slate-500">{summary}</span>}
+        </button>
         {onReset && <ResetButton onClick={onReset} />}
-      </button>
-      {(hasSearch || open) && <div className={`px-3 py-3 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>{children}</div>}
+      </div>
+      {(hasSearch || open) && <div className={`config-layout-container px-3 py-3 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>{children}</div>}
     </div>
   )
 }

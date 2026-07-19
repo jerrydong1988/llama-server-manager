@@ -141,6 +141,8 @@ export function getConfigPageLabels(lang: string) {
     off: zh ? '\u5173' : 'Off',
     pickPrimary: zh ? '\u4e3b\u6a21\u578b' : 'the primary model',
     pickDraft: zh ? '\u8349\u7a3f\u6a21\u578b' : 'the draft model',
+    pickMmproj: zh ? '\u591a\u6a21\u6001\u6295\u5f71\u5668' : 'the multimodal projector',
+    noProjectors: zh ? '\u6a21\u578b\u4ed3\u5e93\u4e2d\u6682\u65e0\u53ef\u9009\u7684\u591a\u6a21\u6001\u6295\u5f71\u5668\uff0c\u8bf7\u5148\u626b\u63cf\u5305\u542b mmproj \u6587\u4ef6\u7684\u6a21\u578b\u76ee\u5f55\u3002' : 'No multimodal projector is available in the model repository. Scan a model directory containing an mmproj file first.',
     pickDesc: zh ? '\u4ece\u8d44\u6e90\u5e93\u4e2d\u9009\u62e9\u6587\u4ef6\uff1a' : 'Choose a repository asset for',
     parameterGroups: zh ? '\u53c2\u6570\u5206\u7ec4' : 'Parameter Groups',
     pickSeparator: zh ? '' : ' ',

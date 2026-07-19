@@ -53,6 +53,10 @@ const entry = `
     model({ id: 'right', path: 'C:/models/mmproj-qwen.gguf', file_type: 'mmproj', capabilities: { projector_family: 'qwen2-vl' } }),
   ]
   assert.equal(findMatchingProjector(visionModel, projectors)?.id, 'right')
+  assert.equal(findMatchingProjector(visionModel, [projectors[0]]), null)
+  assert.equal(findMatchingProjector(visionModel, [
+    model({ id: 'unknown-family', path: 'C:/models/mmproj-unknown.gguf', file_type: 'mmproj' }),
+  ])?.id, 'unknown-family')
 
   assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true, is_embedding_model: true } })), 'embedding')
   assert.equal(detectModelWorkload(model({ capabilities: { metadata_complete: true, is_embedding_model: true, is_reranker_model: true } })), 'reranker')
@@ -382,13 +386,20 @@ assert.ok(
 
 const configPageSource = readSource('src', 'components', 'ConfigPage.tsx')
 const configWorkspaceSource = readSource('src', 'components', 'ConfigPage', 'configWorkspace.ts')
+const modelAssetPickerSource = readSource('src', 'components', 'ConfigPage', 'ModelAssetPicker.tsx')
 const applyPrimaryModelSource = section(configPageSource, 'const applyPrimaryModelPath', 'const pickModel')
 assert.match(applyPrimaryModelSource, /normalizeConfigForSelectedModel\(/, 'all primary model path commits must use atomic workload selection')
 assert.match(applyPrimaryModelSource, /setVectorCleanupChanges\(/, 'manual primary model paths must retain cleanup feedback')
 assert.match(applyPrimaryModelSource, /committedModelPathRef\.current/, 'repeated blur events must not reclassify an unchanged manual model path')
+assert.match(applyPrimaryModelSource, /findMatchingProjector\(selectedModel, models\)/, 'primary model changes must safely auto-match a same-directory projector')
+assert.match(applyPrimaryModelSource, /mmproj\?\.path \?\? ''/, 'failed automatic projector matching must clear the stale projector path')
 const pickModelSource = section(configPageSource, 'const pickModel', 'const save =')
 assert.match(pickModelSource, /applyPrimaryModelPath\(modelPath\)/, 'the model picker must reuse the primary model path commit policy')
 assert.doesNotMatch(pickModelSource, /set\('model_path'/, 'primary model switching must not apply sequential partial updates')
+assert.match(pickModelSource, /set\('mmproj_path', modelPath\)/, 'manual projector selection must update the managed mmproj path')
+assert.match(configPageSource, /setPickerTarget\('mmproj'\)/, 'the parameter page must expose a dedicated projector picker target')
+assert.match(modelAssetPickerSource, /target === 'mmproj'[\s\S]*model\.file_type === 'mmproj'/, 'projector picker mode must filter the inventory to projector files')
+assert.match(modelAssetPickerSource, /target === 'mmproj'[\s\S]*onPick\(model\.path\)/, 'projector rows must be selectable only in projector picker mode')
 
 const configDiffSource = section(configPageSource, 'const savedBaseline', 'const liveWarnings')
 assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must be filtered from the ordinary config diff')
@@ -434,6 +445,8 @@ assert.match(advancedSectionSource, /ADVANCED_CONFIG_KEYS/, 'reset all must cove
 assert.match(advancedSectionSource, /ADVANCED_GROUP_CONFIG_KEYS\[id\]/, 'group reset must cover fields added beyond RESET_MAP')
 assert.match(advancedSectionSource, /getResettableFields/, 'reset handlers must preserve locked workload identity fields')
 assert.match(advancedSectionSource, /direct_io/, 'shared direct I/O configuration must have a visible control')
+assert.match(advancedSectionSource, /onShowMmprojPicker/, 'the mmproj field must expose its independent repository picker')
+assert.match(advancedSectionSource, /mmprojPathBtn/, 'the mmproj picker button must have a localized accessible label')
 
 assert.doesNotMatch(configPageSource, /\[activeConfigInstanceId, inst\?\.config\]/, 'inventory reconciliation must not overwrite an active local draft')
 assert.match(configPageSource, /const \[baseline, setBaseline\]/, 'the editor must retain a stable local baseline')

@@ -7,6 +7,9 @@ const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
 const INSTANCE_ID = 'browser-test-instance'
 const ENGINE_ID = 'browser-test-engine'
 const MODEL_PATH = 'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf'
+const AMBIGUOUS_MODEL_PATH = 'C:\\browser-test\\models\\Vision-Ambiguous-Q8_0.gguf'
+const QWEN_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Qwen-BF16.gguf'
+const LLAVA_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Llava-BF16.gguf'
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
@@ -22,6 +25,33 @@ const model: ModelInfo = {
   file_type: 'model',
 }
 
+const ambiguousModel: ModelInfo = {
+  ...model,
+  id: 'browser-test-ambiguous-model',
+  name: 'Vision Ambiguous Q8_0.gguf',
+  path: AMBIGUOUS_MODEL_PATH,
+  capabilities: { metadata_complete: true, is_vision_model: true, vision_family: 'browser-unknown' },
+}
+
+const qwenProjector: ModelInfo = {
+  id: 'browser-test-qwen-projector',
+  name: 'mmproj-Qwen-BF16.gguf',
+  path: QWEN_PROJECTOR_PATH,
+  size: 536_870_912,
+  capabilities: { metadata_complete: true, is_mmproj: true, projector_family: 'qwen2-vl' },
+  file_type: 'mmproj',
+}
+
+const llavaProjector: ModelInfo = {
+  ...qwenProjector,
+  id: 'browser-test-llava-projector',
+  name: 'mmproj-Llava-BF16.gguf',
+  path: LLAVA_PROJECTOR_PATH,
+  capabilities: { metadata_complete: true, is_mmproj: true, projector_family: 'llava' },
+}
+
+const models = [model, ambiguousModel, qwenProjector, llavaProjector]
+
 const engine: EngineInfo = {
   id: ENGINE_ID,
   name: 'Browser Test Engine',
@@ -32,7 +62,7 @@ const engine: EngineInfo = {
   capabilities: {
     status: 'detected',
     versionStatus: 'detected',
-    supportedFlags: ['--temp', '--top-k', '--top-p', '--kv-unified', '--models-autoload', '--no-models-autoload', '--image-min-tokens'],
+    supportedFlags: ['--temp', '--top-k', '--top-p', '--kv-unified', '--models-autoload', '--no-models-autoload', '--image-min-tokens', '--mmproj'],
     helpHash: 'browser-test-help',
     executableFingerprint: 'browser-test-engine-fingerprint',
     probedAt: 1,
@@ -143,6 +173,7 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
     else if (field === 'kv_unified_mode') command.push(config.kv_unified_mode === 'off' ? '--no-kv-unified' : '--kv-unified')
     else if (field === 'models_autoload') command.push(config.models_autoload ? '--models-autoload' : '--no-models-autoload')
     else if (field === 'image_min_tokens') command.push('--image-min-tokens', String(config.image_min_tokens))
+    else if (field === 'mmproj_path' && config.mmproj_path) command.push('--mmproj', config.mmproj_path)
   }
   return { command, unsupportedFlags: [], emittedOverrideKeys: emitted }
 }
@@ -170,10 +201,10 @@ mockIPC((command, payload) => {
 
   switch (command) {
     case 'get_startup_elapsed': return 1
-    case 'get_cached_scan': return [[clone(model)], [clone(engine)]]
+    case 'get_cached_scan': return [clone(models), [clone(engine)]]
     case 'load_config': return clone(control.state)
     case 'scan_models':
-    case 'get_models': return [clone(model)]
+    case 'get_models': return clone(models)
     case 'scan_engines':
     case 'get_engines': return [clone(engine)]
     case 'probe_engine_capabilities': return clone(engine)

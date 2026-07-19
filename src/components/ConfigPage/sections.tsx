@@ -7,8 +7,8 @@ import WorkerSelector from './WorkerSelector'
 import { Button, TextInput } from '../ui'
 import { getResettableFields, type ModelWorkload } from '../../modelPolicy'
 
-const formGridClassName = 'grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-3'
-const wideGridClassName = 'grid grid-cols-1 gap-3 md:grid-cols-2'
+const formGridClassName = 'config-form-grid'
+const wideGridClassName = 'config-form-grid'
 
 export const BASIC_CONFIG_KEYS: Array<keyof InstanceConfig> = [
   'model_path',
@@ -109,6 +109,7 @@ interface Props {
   onShowPicker?: () => void
   onCommitModelPath?: (modelPath: string) => void
   onShowDraftPicker?: () => void
+  onShowMmprojPicker?: () => void
   emittedParams: Set<keyof InstanceConfig>
   changedParams: Set<keyof InstanceConfig>
   statusLabels: { changedMarker: string; emittedMarker: string }
@@ -195,7 +196,7 @@ export function PerformanceSection({ local, set, t, emittedParams, changedParams
 
 // ━━━━━━━━━━━━━━━━━━━━━━ ADVANCED CONTAINER ━━━━━━━━━━━━━━━━━━━━━━
 
-export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWorkloadLocked, onShowDraftPicker, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
+export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWorkloadLocked, onShowDraftPicker, onShowMmprojPicker, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => k
   const summary = (keys: Array<keyof InstanceConfig>) => countSummary(countActive(emittedParams, keys), countActive(changedParams, keys), statusLabels)
   const resetAll = () => {
@@ -288,7 +289,14 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Input label={`${t.configPage.lora} (--lora)`} value={local.lora_path} onChange={v => set('lora_path', v)} title={t.configPage.loraTip}  fieldKey={a('lora_path')} />
             <Switch label={`${t.configPage.loraInitNoApply} (--lora-init-without-apply)`} value={local.lora_init_without_apply} onChange={v => set('lora_init_without_apply', v)} title={t.configPage.loraInitNoApplyTip}  fieldKey={a('lora_init_without_apply')} />
       <Input label={`${t.configPage.loraScaled} (--lora-scaled)`} value={local.lora_scaled || ''} onChange={v => set('lora_scaled', v)} title={t.configPage.loraScaledTip} disabled={isEmbedding}  fieldKey={a('lora_scaled')} />
-            <Input label={`${t.configPage.mmproj} (--mmproj)`} value={local.mmproj_path} onChange={v => set('mmproj_path', v)} title={t.configPage.mmprojTip} disabled={isEmbedding}  fieldKey={a('mmproj_path')} />
+            <SearchTarget label={`${t.configPage.mmproj} (--mmproj)`} fieldKey={a('mmproj_path')} title={t.configPage.mmprojTip}>
+              <div className="flex gap-1">
+                <TextInput type="text" value={local.mmproj_path} onChange={e => set('mmproj_path', e.target.value)} disabled={isEmbedding} className="h-10 flex-1" />
+                <Button onClick={onShowMmprojPicker} variant="primary" size="icon" title={t.configPage.mmprojPathBtn} aria-label={t.configPage.mmprojPathBtn} disabled={isEmbedding}>
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
+              </div>
+            </SearchTarget>
             <Input label={`${t.configPage.grammarFile} (--grammar-file)`} value={local.grammar_file} onChange={v => set('grammar_file', v)} title={t.configPage.grammarFileTip}  fieldKey={a('grammar_file')} />
             <Input label={`${t.configPage.grammar} (--grammar)`} value={local.grammar} onChange={v => set('grammar', v)} title={t.configPage.grammarTip}  fieldKey={a('grammar')} />
             <Num label={`${t.configPage.embdNormalize} (--embd-normalize)`} value={local.embd_normalize} onChange={v => set('embd_normalize', v)} min={-1} title={t.configPage.embdNormalizeTip}  fieldKey={a('embd_normalize')} />
@@ -487,7 +495,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             </>)}
           </div>
           <div className={`${formGridClassName} mt-3`}>
-            <SearchTarget label={`${t.configPage.rpcServers} (--rpc)`} fieldKey="rpc_servers" className="md:col-span-2 2xl:col-span-3">
+            <SearchTarget label={`${t.configPage.rpcServers} (--rpc)`} fieldKey="rpc_servers" className="config-grid-span-full">
               <WorkerSelector value={local.rpc_servers} onChange={v => set('rpc_servers', v)} t={t} hideLabel />
             </SearchTarget>
             <Num label={`${t.configPage.ssePingInterval} (--sse-ping-interval)`} value={local.sse_ping_interval} onChange={v => set('sse_ping_interval', v)} min={-1} title={t.configPage.ssePingIntervalTip}  fieldKey={a('sse_ping_interval')} />
