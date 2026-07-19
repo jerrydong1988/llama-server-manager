@@ -59,6 +59,7 @@ export interface EngineCapabilities {
 export interface GeneratedServerCommand {
   command: string[]
   unsupportedFlags: string[]
+  emittedOverrideKeys: Array<keyof InstanceConfig>
 }
 
 export interface InstanceConfig {

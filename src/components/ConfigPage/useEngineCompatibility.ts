@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppStore, type EngineInfo, type InstanceConfig } from '../../store'
+import type { GeneratedServerCommand } from '../../store/types'
 import { normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../../engineCapabilities'
 
 type CompatibilityInput = {
@@ -12,6 +13,8 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
   const generateCommand = useAppStore(state => state.generateCommand)
   const probeEngineCapabilities = useAppStore(state => state.probeEngineCapabilities)
   const [unsupportedEngineFlags, setUnsupportedEngineFlags] = useState<string[]>([])
+  const [commandPreview, setCommandPreview] = useState<GeneratedServerCommand | null>(null)
+  const [previewingCommand, setPreviewingCommand] = useState(false)
   const [probingEngineCompatibility, setProbingEngineCompatibility] = useState(false)
   const [autoProbeFailedFor, setAutoProbeFailedFor] = useState<string | null>(null)
   const mountedRef = useRef(true)
@@ -67,18 +70,29 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
   useEffect(() => {
     if (!local || local.launch_mode === 'manual' || !currentEngine || status !== 'detected') {
       setUnsupportedEngineFlags([])
+      setCommandPreview(null)
+      setPreviewingCommand(false)
       return
     }
     let cancelled = false
+    setCommandPreview(null)
+    setPreviewingCommand(true)
     const timer = setTimeout(() => {
       void generateCommand(local, currentEngine.exe)
         .then(result => {
           if (!cancelled) {
             setUnsupportedEngineFlags(result.unsupportedFlags)
+            setCommandPreview(result)
           }
         })
         .catch(() => {
-          if (!cancelled) setUnsupportedEngineFlags([])
+          if (!cancelled) {
+            setUnsupportedEngineFlags([])
+            setCommandPreview(null)
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setPreviewingCommand(false)
         })
     }, 180)
     return () => {
@@ -90,6 +104,8 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
   return {
     unsupportedEngineFlags,
     setUnsupportedEngineFlags,
+    commandPreview,
+    previewingCommand,
     probingEngineCompatibility,
     capabilityProbeRequired,
   }

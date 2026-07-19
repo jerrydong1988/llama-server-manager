@@ -195,3 +195,9 @@ html.dark body {
 .flash-match {
   animation: search-flash 0.8s ease-out;
 }
+
+[data-config-search-current="true"] {
+  border-radius: 0.5rem;
+  outline: 2px solid rgb(59 130 246 / 0.9);
+  outline-offset: 5px;
+}

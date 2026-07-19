@@ -1294,6 +1294,45 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
     cmd
 }
 
+fn canonical_override_key(key: &str) -> &str {
+    match key {
+        "mmproj_auto" | "no_mmproj" => "mmproj_mode",
+        "numa" => "numa_mode",
+        "fit" => "fit_mode",
+        "kv_unified" => "kv_unified_mode",
+        _ => key,
+    }
+}
+
+fn emitted_override_keys(
+    config: &InstanceConfig,
+    engine_path: &str,
+    capabilities: Option<&EngineCapabilities>,
+    projected_command: &[String],
+) -> Vec<String> {
+    let Some(overrides) = config.explicit_overrides.as_ref() else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    overrides
+        .iter()
+        .map(|key| canonical_override_key(key).to_string())
+        .filter(|key| seen.insert(key.clone()))
+        .filter(|key| {
+            let mut reduced = config.clone();
+            reduced.explicit_overrides = Some(
+                overrides
+                    .iter()
+                    .filter(|candidate| canonical_override_key(candidate) != key.as_str())
+                    .cloned()
+                    .collect(),
+            );
+            let reduced_command = generate_normalized_command(&reduced, engine_path);
+            command_for_capabilities(&reduced_command, capabilities) != projected_command
+        })
+        .collect()
+}
+
 fn prepare_launch(
     config: InstanceConfig,
     engine_path: &str,
@@ -1553,6 +1592,7 @@ fn validate_custom_argument_capabilities(
 pub struct GeneratedServerCommand {
     command: Vec<String>,
     unsupported_flags: Vec<String>,
+    emitted_override_keys: Vec<String>,
 }
 
 fn reserve_start_slot(
@@ -1603,6 +1643,7 @@ pub async fn generate_server_command(
         return Ok(GeneratedServerCommand {
             command,
             unsupported_flags: Vec::new(),
+            emitted_override_keys: Vec::new(),
         });
     }
     let capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
@@ -1626,9 +1667,13 @@ pub async fn generate_server_command(
             false,
         ));
     }
+    let command = command_for_capabilities(&command, capabilities.as_ref());
+    let emitted_override_keys =
+        emitted_override_keys(&config, &engine_exe, capabilities.as_ref(), &command);
     Ok(GeneratedServerCommand {
-        command: command_for_capabilities(&command, capabilities.as_ref()),
+        command,
         unsupported_flags,
+        emitted_override_keys,
     })
 }
 
@@ -4011,6 +4056,42 @@ mod perf_parser_tests {
         assert!(validate_custom_argument_capabilities(&config, None).is_err());
         assert!(validate_custom_argument_capabilities(&config, Some(&partial)).is_err());
         assert!(validate_custom_argument_capabilities(&config, Some(&detected)).is_ok());
+    }
+
+    #[test]
+    fn emitted_override_metadata_tracks_only_arguments_that_reach_the_final_command() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            temp: 0.6,
+            metrics: true,
+            spec_type: "none".into(),
+            spec_draft_n_min: 2,
+            kv_unified: true,
+            kv_unified_mode: "on".into(),
+            explicit_overrides: Some(vec![
+                "temp".into(),
+                "metrics".into(),
+                "spec_draft_n_min".into(),
+                "kv_unified".into(),
+                "kv_unified_mode".into(),
+                "temp".into(),
+            ]),
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+        let capabilities = EngineCapabilities {
+            status: "detected".into(),
+            ..EngineCapabilities::default()
+        };
+        let keys = emitted_override_keys(&config, "llama-server", Some(&capabilities), &command);
+
+        assert_eq!(keys, vec!["temp", "kv_unified_mode"]);
+        assert!(command.iter().any(|value| value == "--metrics"));
+        assert!(command.iter().any(|value| value == "--kv-unified"));
+        assert!(!command.iter().any(|value| value == "--spec-draft-n-min"));
+
+        let conservative = command_for_capabilities(&command, None);
+        assert!(emitted_override_keys(&config, "llama-server", None, &conservative).is_empty());
     }
 
     #[test]

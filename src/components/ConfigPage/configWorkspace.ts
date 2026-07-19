@@ -70,6 +70,56 @@ export type ChangeGroup = {
   keys: Array<keyof InstanceConfig>
 }
 
+const REVIEW_FIELD_ALIASES: Partial<Record<keyof InstanceConfig, Array<keyof InstanceConfig>>> = {
+  mmproj_mode: ['mmproj_mode', 'mmproj_auto', 'no_mmproj'],
+  numa_mode: ['numa_mode', 'numa'],
+  fit_mode: ['fit_mode', 'fit'],
+  kv_unified_mode: ['kv_unified_mode', 'kv_unified'],
+}
+
+const REVIEW_FIELD_CANONICAL = new Map<keyof InstanceConfig, keyof InstanceConfig>(
+  Object.entries(REVIEW_FIELD_ALIASES).flatMap(([canonical, keys]) =>
+    (keys ?? []).map(key => [key, canonical as keyof InstanceConfig]),
+  ),
+)
+
+export const canonicalConfigField = (key: keyof InstanceConfig): keyof InstanceConfig =>
+  REVIEW_FIELD_CANONICAL.get(key) ?? key
+
+export const canonicalConfigFields = (keys: Iterable<keyof InstanceConfig>): Array<keyof InstanceConfig> =>
+  [...new Set([...keys].map(canonicalConfigField))]
+
+export const reviewFieldKeys = (key: keyof InstanceConfig): Array<keyof InstanceConfig> =>
+  REVIEW_FIELD_ALIASES[canonicalConfigField(key)] ?? [key]
+
+export const restoreReviewField = (config: InstanceConfig, baseline: InstanceConfig, key: keyof InstanceConfig): InstanceConfig => {
+  const next = { ...config }
+  const currentOverrides = new Set(config.explicit_overrides ?? [])
+  const savedOverrides = new Set(baseline.explicit_overrides ?? [])
+  for (const field of reviewFieldKeys(key)) {
+    next[field] = baseline[field] as never
+    if (savedOverrides.has(field)) currentOverrides.add(field)
+    else currentOverrides.delete(field)
+  }
+  next.explicit_overrides = [...currentOverrides]
+  return next
+}
+
+const reviewFieldValue = (config: InstanceConfig, key: keyof InstanceConfig): unknown => {
+  switch (canonicalConfigField(key)) {
+    case 'mmproj_mode':
+      return config.mmproj_mode || (config.no_mmproj ? 'off' : config.mmproj_auto ? 'on' : '')
+    case 'numa_mode':
+      return config.numa_mode || (config.numa ? 'distribute' : '')
+    case 'fit_mode':
+      return config.fit_mode || (config.fit ? 'on' : '')
+    case 'kv_unified_mode':
+      return config.kv_unified_mode || (config.kv_unified ? 'on' : '')
+    default:
+      return config[key]
+  }
+}
+
 export const isEqualValue = (left: unknown, right: unknown) => {
   if (Array.isArray(left) || Array.isArray(right)) {
     return JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
@@ -136,6 +186,10 @@ export const fieldLabel = (key: keyof InstanceConfig, t: any) => {
     no_mmap: t.configPage.noMmap,
     no_repack: t.configPage.noRepack,
     numa: t.configPage.numa,
+    numa_mode: t.configPage.numa,
+    fit_mode: t.configPage.fit,
+    kv_unified_mode: t.configPage.kvUnified,
+    mmproj_mode: t.configPage.mmprojAuto,
     cache_ram: t.configPage.cacheRam,
     metrics: t.configPage.metrics,
     props: t.configPage.props,
@@ -147,14 +201,14 @@ export const fieldLabel = (key: keyof InstanceConfig, t: any) => {
 }
 
 export const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig, t: any, labels: Record<string, string>): ConfigChange[] =>
-  (Object.keys(local) as Array<keyof InstanceConfig>)
+  canonicalConfigFields(Object.keys(local) as Array<keyof InstanceConfig>)
     .filter(key => key !== 'explicit_overrides')
-    .filter(key => !isEqualValue(local[key], baseline[key]))
+    .filter(key => !isEqualValue(reviewFieldValue(local, key), reviewFieldValue(baseline, key)))
     .map(key => ({
       key,
       label: fieldLabel(key, t),
-      before: formatConfigValue(key, baseline[key], labels, t),
-      after: formatConfigValue(key, local[key], labels, t),
+      before: formatConfigValue(key, reviewFieldValue(baseline, key), labels, t),
+      after: formatConfigValue(key, reviewFieldValue(local, key), labels, t),
     }))
 
 export const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConfig>, t: any, labels: Record<string, string>): ConfigChange[] =>

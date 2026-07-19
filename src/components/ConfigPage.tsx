@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, ListChecks, LoaderCircle, RotateCcw, Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Cpu, File, FolderOpen, Image, ListChecks, LoaderCircle, RotateCcw, Settings, ShieldCheck, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { useAppStore, type InstanceConfig, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { getConfigPageLabels, getConfigTemplates, type ConfigTemplate } from '../i18n/configPageCopy'
@@ -15,17 +15,18 @@ import { formatHostPort } from '../utils/network'
 import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
 import { getEngineCompatibilityMode, normalizeEngineVersionStatus } from '../engineCapabilities'
-import { _matchedElements } from './ConfigPage/shared'
-import { buildPickerTree, countActive, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, type PickerNode, type TemplateSnapshot } from './ConfigPage/configWorkspace'
+import { buildPickerTree, canonicalConfigFields, countActive, fieldLabel, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, restoreReviewField, type PickerNode, type TemplateSnapshot } from './ConfigPage/configWorkspace'
 import { useEngineCompatibility } from './ConfigPage/useEngineCompatibility'
 import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotice'
 import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
 import { resolveEffectiveEngine } from '../store/engineResolution'
 import { findMatchingProjector } from '../modelProjector'
-import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface, TextInput } from './ui'
+import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface } from './ui'
 import { applyExplicitOverrides, explicitOverrideKeys, inheritParameters, markExplicitOverride, migrateParameterIntent } from '../parameterIntent'
 import { LaunchModePanel } from './ConfigPage/LaunchModePanel'
 import { ConfigDirectory } from './ConfigPage/ConfigDirectory'
+import { ParameterSearch } from './ConfigPage/ParameterSearch'
+import { ConfigChangePanel } from './ConfigPage/ConfigChangePanel'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -58,7 +59,6 @@ const ConfigPage = () => {
   const [selectedTemplateId, setSelectedTemplateId] = useState('safe-start')
   const [lastTemplateSnapshot, setLastTemplateSnapshot] = useState<TemplateSnapshot | null>(null)
   const mountedRef = useRef(true)
-  const prevQuery = useRef('')
   const committedModelPathRef = useRef('')
   const editRevisionRef = useRef(0)
   const saveInFlightRef = useRef(false)
@@ -73,26 +73,6 @@ const ConfigPage = () => {
       }
     }
   }, [])
-
-  useEffect(() => {
-    if (searchQuery !== prevQuery.current) {
-      _matchedElements.clear()
-      prevQuery.current = searchQuery
-    }
-  }, [searchQuery])
-
-  useEffect(() => {
-    if (!searchQuery) {
-      return
-    }
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const firstMatch = [..._matchedElements][0]
-        firstMatch?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      })
-    })
-  }, [searchQuery])
 
   useEffect(() => {
     const selected = useAppStore.getState().instances.find(instance => instance.id === configInstanceId)
@@ -121,6 +101,8 @@ const ConfigPage = () => {
     editRevisionRef.current += 1
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
+    setSaved(false)
+    setSaveWarnings([])
     setLocal(current => (current ? markExplicitOverride(current, key, value) : current))
   }
 
@@ -128,6 +110,8 @@ const ConfigPage = () => {
     editRevisionRef.current += 1
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
+    setSaved(false)
+    setSaveWarnings([])
     setLocal(current => (current ? inheritParameters(current, keys) : current))
   }
 
@@ -151,7 +135,7 @@ const ConfigPage = () => {
     return local ? resolveEffectiveEngine(local, engines, defaultEngineId) : null
   }, [defaultEngineId, engines, local])
   const trustedEngineId = local?.engine_id || defaultEngineId || ''
-  const { unsupportedEngineFlags, setUnsupportedEngineFlags, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local, currentEngine, trustedEngineId })
+  const { unsupportedEngineFlags, setUnsupportedEngineFlags, commandPreview, previewingCommand, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local, currentEngine, trustedEngineId })
 
   if (!local) {
     return (
@@ -162,10 +146,14 @@ const ConfigPage = () => {
   }
 
   const overrideKeys = explicitOverrideKeys(local)
+  const reviewOverrideKeys = canonicalConfigFields(overrideKeys)
   const generatedParams = getActiveParams(local, isEmbedding)
-  const activeParams = local.launch_mode === 'manual'
-    ? generatedParams
-    : new Set([...generatedParams].filter(key => overrideKeys.includes(key)))
+  const fallbackEmittedKeys = canonicalConfigFields(generatedParams)
+    .filter(key => reviewOverrideKeys.includes(key))
+  const emittedOverrideKeys = local.launch_mode === 'manual'
+    ? [...generatedParams]
+    : (commandPreview?.emittedOverrideKeys ?? fallbackEmittedKeys)
+  const emittedParams = new Set<keyof InstanceConfig>(emittedOverrideKeys)
   const primaryModelPath = currentModel?.path || local.model_path || ''
   const draftModelPath = local.draft_model_path || ''
   const endpoint = formatHostPort(local.host || '127.0.0.1', local.port)
@@ -183,6 +171,8 @@ const ConfigPage = () => {
     committedModelPathRef.current = normalizedPath
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
+    setSaved(false)
+    setSaveWarnings([])
     setLocal(normalized.config)
     setVectorCleanupChanges(normalized.vectorMode ? normalized.changes : [])
   }
@@ -277,27 +267,6 @@ const ConfigPage = () => {
     }
   }
 
-  const sectionProps = {
-    local,
-    set,
-    inherit,
-    t,
-    isEmbedding,
-    workload,
-    modelWorkloadLocked,
-    onCommitModelPath: applyPrimaryModelPath,
-    onShowPicker: () => {
-      setPickerTarget('model')
-      setShowPicker(true)
-    },
-    onShowDraftPicker: () => {
-      setPickerTarget('draft')
-      setShowPicker(true)
-    },
-    activeParams,
-    searchQuery,
-  }
-
   const pickerTrees = modelDirs.map(dir => buildPickerTree(dir, models))
 
   const vectorCleanupGroups: Array<{ group: VectorCleanupChange['group']; label: string }> = [
@@ -323,6 +292,57 @@ const ConfigPage = () => {
   )
   const configChanges = getConfigChanges(local, savedBaseline, t, labels)
     .filter(change => !vectorCleanupKeys.has(change.key))
+  const changedParams = new Set<keyof InstanceConfig>(configChanges.map(change => change.key))
+  const baselineOverrideKeys = canonicalConfigFields(explicitOverrideKeys(savedBaseline))
+  const statusLabels = {
+    changedShort: labels.changedShort,
+    emittedShort: labels.emittedShort,
+    changedMarker: labels.changedMarker,
+  }
+  const locateParameter = (key: keyof InstanceConfig) => {
+    setSearchQuery(fieldLabel(key, t))
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.querySelectorAll<HTMLElement>('[data-config-search-current="true"]')
+          .forEach(element => element.removeAttribute('data-config-search-current'))
+        const target = document.querySelector<HTMLElement>(`[data-config-field="${String(key)}"]`)
+        if (!target) return
+        target.dataset.configSearchCurrent = 'true'
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        target.querySelector<HTMLElement>('input, select, textarea, button')?.focus({ preventScroll: true })
+      })
+    })
+  }
+  const undoChange = (key: keyof InstanceConfig) => {
+    editRevisionRef.current += 1
+    setAppliedTemplateId(null)
+    setLastTemplateSnapshot(null)
+    setSaved(false)
+    setSaveWarnings([])
+    setLocal(current => current ? restoreReviewField(current, savedBaseline, key) : current)
+  }
+  const sectionProps = {
+    local,
+    set,
+    inherit,
+    t,
+    isEmbedding,
+    workload,
+    modelWorkloadLocked,
+    onCommitModelPath: applyPrimaryModelPath,
+    onShowPicker: () => {
+      setPickerTarget('model')
+      setShowPicker(true)
+    },
+    onShowDraftPicker: () => {
+      setPickerTarget('draft')
+      setShowPicker(true)
+    },
+    emittedParams,
+    changedParams,
+    statusLabels,
+    searchQuery,
+  }
   const liveWarnings = manualMode ? [] : validateConfig(local, currentModel, currentEngine)
   const engineCompatibilityMode = getEngineCompatibilityMode(currentEngine?.capabilities)
   const engineVersionStatus = normalizeEngineVersionStatus(currentEngine?.capabilities)
@@ -374,33 +394,37 @@ const ConfigPage = () => {
     setSaveWarnings([])
   }
 
+  const groupStatus = (keys: Array<keyof InstanceConfig>) => ({
+    changedCount: countActive(changedParams, keys),
+    emittedCount: countActive(emittedParams, keys),
+  })
   const advancedDirectoryGroups = [
     ...(!isEmbedding ? [
-      { id: 'config-advanced-reasoning', title: t.configPage.subAdvReasoning, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedReasoningConfig) },
-      { id: 'config-advanced-model', title: t.configPage.subAdvModelAdapt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt) },
-      { id: 'config-advanced-sampling', title: t.configPage.subAdvSampling, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSampling) },
-      { id: 'config-advanced-sampling-ext', title: t.configPage.subAdvSamplingExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSamplingExt) },
-      { id: 'config-advanced-spec', title: t.configPage.subAdvSpec, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedSpec) },
+      { id: 'config-advanced-reasoning', title: t.configPage.subAdvReasoning, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedReasoningConfig) },
+      { id: 'config-advanced-model', title: t.configPage.subAdvModelAdapt, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt) },
+      { id: 'config-advanced-sampling', title: t.configPage.subAdvSampling, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedSampling) },
+      { id: 'config-advanced-sampling-ext', title: t.configPage.subAdvSamplingExt, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedSamplingExt) },
+      { id: 'config-advanced-spec', title: t.configPage.subAdvSpec, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedSpec) },
     ] : [
-      { id: 'config-advanced-vector', title: t.configPage.subEmbedding, count: countActive(activeParams, ['embd_normalize', 'reranking']) },
+      { id: 'config-advanced-vector', title: t.configPage.subEmbedding, ...groupStatus(['embd_normalize', 'reranking']) },
     ]),
-    { id: 'config-advanced-rope', title: t.configPage.subAdvRope, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedRope) },
-    { id: 'config-advanced-kv', title: t.configPage.subAdvKvCache, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedKvCache) },
-    { id: 'config-advanced-context', title: t.configPage.subAdvContextMgmt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedContextMgmt) },
-    { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedHardware) },
-    { id: 'config-advanced-server', title: t.configPage.subAdvServer, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
-    { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
-    ...(!isEmbedding ? [{ id: 'config-advanced-multi', title: t.configPage.subAdvMulti, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) }] : []),
-    { id: 'config-advanced-custom', title: t.configPage.customArgs, count: countActive(activeParams, ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
+    { id: 'config-advanced-rope', title: t.configPage.subAdvRope, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedRope) },
+    { id: 'config-advanced-kv', title: t.configPage.subAdvKvCache, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedKvCache) },
+    { id: 'config-advanced-context', title: t.configPage.subAdvContextMgmt, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedContextMgmt) },
+    { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedHardware) },
+    { id: 'config-advanced-server', title: t.configPage.subAdvServer, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
+    { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
+    ...(!isEmbedding ? [{ id: 'config-advanced-multi', title: t.configPage.subAdvMulti, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) }] : []),
+    { id: 'config-advanced-custom', title: t.configPage.customArgs, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
   ]
   const directoryGroups = [
-    { id: 'config-basic', title: t.configPage.basic, count: countActive(activeParams, BASIC_CONFIG_KEYS) },
-    ...(!isEmbedding ? [{ id: 'config-reasoning', title: t.configPage.reasoning, count: countActive(activeParams, REASONING_CONFIG_KEYS) }] : []),
-    { id: 'config-performance', title: t.configPage.performance, count: countActive(activeParams, PERFORMANCE_CONFIG_KEYS) },
+    { id: 'config-basic', title: t.configPage.basic, ...groupStatus(BASIC_CONFIG_KEYS) },
+    ...(!isEmbedding ? [{ id: 'config-reasoning', title: t.configPage.reasoning, ...groupStatus(REASONING_CONFIG_KEYS) }] : []),
+    { id: 'config-performance', title: t.configPage.performance, ...groupStatus(PERFORMANCE_CONFIG_KEYS) },
     {
       id: 'config-advanced',
       title: t.configPage.advSectionTitle,
-      count: countActive(activeParams, ADVANCED_CONFIG_KEYS),
+      ...groupStatus(ADVANCED_CONFIG_KEYS),
       children: advancedDirectoryGroups,
     },
   ]
@@ -425,22 +449,27 @@ const ConfigPage = () => {
             </div>
           </div>
 
-          <Button
-            onClick={save}
-            disabled={!inst || saving || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))}
-            variant="primary"
-            data-guide="config-save"
-            icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-            className="shrink-0"
-          >
-            {saving ? t.configPage.saving : saved ? t.configPage.saved : t.configPage.save}
-          </Button>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {!manualMode && <Badge tone="slate">{labels.unsavedChanges} {configChanges.length}</Badge>}
+            {!manualMode && <Badge tone="blue">{labels.emittedParams} {emittedParams.size}</Badge>}
+            <Button
+              onClick={save}
+              disabled={!inst || saving || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))}
+              variant="primary"
+              data-guide="config-save"
+              icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
+              className="shrink-0"
+            >
+              {saving ? t.configPage.saving : saved ? t.configPage.saved : t.configPage.save}
+            </Button>
+          </div>
         </div>
       </Surface>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {[
-          { label: labels.activeParams, value: local.launch_mode === 'manual' ? activeParams.size : overrideKeys.length, icon: SlidersHorizontal, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
+          { label: labels.unsavedChanges, value: configChanges.length, icon: SlidersHorizontal, tone: 'text-slate-300 bg-slate-500/10 border-slate-500/20' },
+          { label: labels.emittedParams, value: emittedParams.size, icon: SlidersHorizontal, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
           { label: labels.warnings, value: liveWarnings.length, icon: AlertTriangle, tone: warningTone === 'red' ? 'text-red-300 bg-red-500/10 border-red-500/20' : warningTone === 'amber' ? 'text-amber-300 bg-amber-500/10 border-amber-500/20' : warningTone === 'sky' ? 'text-sky-300 bg-sky-500/10 border-sky-500/20' : 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
           { label: labels.model, value: currentModel ? pathBasename(currentModel.path) : '--', icon: File, tone: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/20' },
           { label: labels.engine, value: currentEngine?.name || '--', icon: Cpu, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
@@ -450,7 +479,7 @@ const ConfigPage = () => {
       </div>
 
       <div className={manualMode ? 'grid gap-5 2xl:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-5 xl:grid-cols-[220px,minmax(0,1fr)] 2xl:grid-cols-[220px,minmax(0,1fr)_320px]'}>
-        {!manualMode && <ConfigDirectory title={labels.parameterGroups} groups={directoryGroups} />}
+        {!manualMode && <ConfigDirectory title={labels.parameterGroups} groups={directoryGroups} changedLabel={labels.changedShort} emittedLabel={labels.emittedShort} />}
 
         <div className="space-y-4">
           {saved && (
@@ -553,18 +582,7 @@ const ConfigPage = () => {
           )}
 
           {!manualMode && <>
-            <Surface className="p-5">
-              <div className="mb-4">
-                <SectionHeader title={labels.parameterSearch} description={labels.parameterSearchDesc} />
-              </div>
-              <TextInput
-                type="text"
-                value={searchQuery}
-                onChange={event => setSearchQuery(event.target.value)}
-                placeholder={(t.configPage as any).searchParams || t.perfBlock.searchParams}
-                leadingIcon={<Search className="h-4 w-4" />}
-              />
-            </Surface>
+            <ParameterSearch query={searchQuery} onQueryChange={setSearchQuery} labels={labels} />
 
             <BasicSection {...sectionProps} />
             {!isEmbedding && <ReasoningSection {...sectionProps} />}
@@ -668,39 +686,19 @@ const ConfigPage = () => {
               )}
             </InsetSurface>
 
-            <InsetSurface className="p-4">
-              <div className="mb-3">
-                <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.configDiff}</p>
-                <p className="mt-1 text-sm text-slate-500">{labels.configDiffDesc}</p>
-              </div>
-              {configChanges.length === 0 ? (
-                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/40">
-                  {labels.noConfigDiff}
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {configChanges.slice(0, 8).map(change => (
-                    <div key={change.key} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/40">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="min-w-0 truncate text-sm font-medium text-slate-800 dark:text-slate-200" title={change.label}>{change.label}</span>
-                        <Badge tone="blue" className="shrink-0 px-2 py-0.5 text-[11px]">{change.key}</Badge>
-                      </div>
-                      <div className="mt-2 grid min-w-0 grid-cols-[48px_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
-                        <span className="text-slate-500">{labels.before}</span>
-                        <span className="min-w-0 truncate text-slate-500" title={change.before}>{change.before}</span>
-                        <span className="text-slate-500">{labels.after}</span>
-                        <span className="min-w-0 truncate text-emerald-700 dark:text-emerald-200" title={change.after}>{change.after}</span>
-                      </div>
-                    </div>
-                  ))}
-                  {configChanges.length > 8 && (
-                    <div className="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-500 dark:border-slate-800 dark:text-slate-400">
-                      {`${labels.moreChanges} ${configChanges.length - 8} ${labels.moreChangesSuffix}`}
-                    </div>
-                  )}
-                </div>
-              )}
-            </InsetSurface>
+            {!manualMode && (
+              <ConfigChangePanel
+                changes={configChanges}
+                emittedKeys={[...emittedParams]}
+                currentOverrideKeys={reviewOverrideKeys}
+                baselineOverrideKeys={baselineOverrideKeys}
+                previewing={previewingCommand}
+                labels={labels}
+                t={t}
+                onLocate={locateParameter}
+                onUndo={undoChange}
+              />
+            )}
 
             <InsetSurface className="p-4">
               <div className="flex items-start gap-3">

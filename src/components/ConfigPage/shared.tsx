@@ -7,31 +7,30 @@ export const cacheTypes = ['', 'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq
 export const specTypes = ['', 'none', 'draft-mtp', 'draft-simple', 'draft-eagle3', 'draft-dflash', 'ngram-cache', 'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod']
 export const chatTemplates = ['', 'bailing', 'bailing-think', 'bailing2', 'chatglm3', 'chatglm4', 'chatml', 'command-r', 'deepseek', 'deepseek-ocr', 'deepseek2', 'deepseek3', 'exaone-moe', 'exaone3', 'exaone4', 'falcon3', 'gemma', 'gigachat', 'glmedge', 'gpt-oss', 'granite', 'granite-4.0', 'granite-4.1', 'grok-2', 'hunyuan-dense', 'hunyuan-moe', 'hunyuan-vl', 'kimi-k2', 'llama2', 'llama2-sys', 'llama2-sys-bos', 'llama2-sys-strip', 'llama3', 'llama4', 'megrez', 'minicpm', 'mistral-v1', 'mistral-v3', 'mistral-v3-tekken', 'mistral-v7', 'mistral-v7-tekken', 'monarch', 'openchat', 'orion', 'pangu-embedded', 'phi3', 'phi4', 'rwkv-world', 'seed_oss', 'smolvlm', 'solar-open', 'vicuna', 'vicuna-orca', 'yandex', 'zephyr']
 
-// ── Search Context: injects searchQuery to all nested form fields without prop drilling ──
-const SearchCtx = createContext<string>('')
-const useSearchQuery = () => useContext(SearchCtx)
-const useLabelMatch = (label: string) => {
-  const q = useSearchQuery()
-  return !!(q && label.toLowerCase().includes(q.toLowerCase()))
+// Search and draft-change metadata are shared by every field without prop drilling.
+type FieldKey = keyof InstanceConfig
+type SearchContextValue = {
+  query: string
+  changedKeys: ReadonlySet<FieldKey>
+  changedLabel: string
+}
+const EMPTY_CHANGED_KEYS = new Set<FieldKey>()
+const SearchCtx = createContext<SearchContextValue>({ query: '', changedKeys: EMPTY_CHANGED_KEYS, changedLabel: '' })
+const useSearchQuery = () => useContext(SearchCtx).query
+const useFieldState = (label: string, fieldKey?: FieldKey) => {
+  const context = useContext(SearchCtx)
+  return {
+    match: !!(context.query && label.toLowerCase().includes(context.query.toLowerCase())),
+    changed: !!(fieldKey && context.changedKeys.has(fieldKey)),
+    changedLabel: context.changedLabel,
+  }
 }
 
-// Module-level Set of matched DOM elements — ConfigPage triggers scrollIntoView on first match
-export const _matchedElements = new Set<HTMLElement>()
-
-function useSearchScroll(match: boolean) {
-  const ref = useRef<HTMLDivElement>(null)
-  const q = useSearchQuery()
-  useEffect(() => {
-    const element = ref.current
-    if (match && q && element) {
-      _matchedElements.add(element)
-    }
-    return () => {
-      if (element) _matchedElements.delete(element)
-    }
-  }, [match, q])
-  return ref
-}
+const ChangedMarker = ({ visible, label }: { visible: boolean; label: string }) => visible ? (
+  <span className="shrink-0 rounded-md border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+    {label}
+  </span>
+) : null
 
 export const Section = ({
   title,
@@ -43,6 +42,8 @@ export const Section = ({
   searchQuery,
   id,
   summary,
+  changedParams,
+  changedLabel,
 }: {
   title: string
   children: React.ReactNode
@@ -53,6 +54,8 @@ export const Section = ({
   searchQuery?: string
   id?: string
   summary?: React.ReactNode
+  changedParams?: ReadonlySet<FieldKey>
+  changedLabel?: string
 }) => {
   const [open, setOpen] = useState(defaultOpen || false)
   const userToggled = useRef(false)
@@ -83,7 +86,7 @@ export const Section = ({
         )}
       </button>
       {isOpen && (
-        <SearchCtx.Provider value={searchQuery || ''}>
+        <SearchCtx.Provider value={{ query: searchQuery || '', changedKeys: changedParams || EMPTY_CHANGED_KEYS, changedLabel: changedLabel || '' }}>
           <div className={`space-y-4 px-4 py-4 ${disabled ? 'pointer-events-none opacity-50' : ''}`}>{children}</div>
         </SearchCtx.Provider>
       )}
@@ -91,22 +94,20 @@ export const Section = ({
   )
 }
 
-export const Input = ({ label, value, onChange, placeholder, type, title, disabled }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; active?: boolean }) => {
-  const match = useLabelMatch(label)
-  const ref = useSearchScroll(match)
+export const Input = ({ label, value, onChange, placeholder, type, title, disabled, fieldKey }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
+  const { match, changed, changedLabel } = useFieldState(label, fieldKey)
   return (
-  <div title={title} ref={ref}>
-    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}>{label}</label>
+  <div title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined}>
+    <label className={`mb-1 flex items-center gap-2 text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}><span>{label}</span><ChangedMarker visible={changed} label={changedLabel} /></label>
     <TextInput type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className={`h-10 ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`} />
   </div>
 )}
 
-export const Num = ({ label, value, onChange, min, max, step, title, disabled }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; active?: boolean }) => {
-  const match = useLabelMatch(label)
-  const ref = useSearchScroll(match)
+export const Num = ({ label, value, onChange, min, max, step, title, disabled, fieldKey }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
+  const { match, changed, changedLabel } = useFieldState(label, fieldKey)
   return (
-  <div title={title} ref={ref}>
-    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}>{label}</label>
+  <div title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined}>
+    <label className={`mb-1 flex items-center gap-2 text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}><span>{label}</span><ChangedMarker visible={changed} label={changedLabel} /></label>
     <TextInput type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className={`h-10 ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`} />
   </div>
 )}
@@ -118,11 +119,10 @@ export const Toggle = ({ label, value, onChange, title, disabled }: { label: str
   </label>
 )
 
-export const Switch = ({ label, value, onChange, title, disabled }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; active?: boolean }) => {
-  const match = useLabelMatch(label)
-  const ref = useSearchScroll(match)
+export const Switch = ({ label, value, onChange, title, disabled, fieldKey }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
+  const { match, changed, changedLabel } = useFieldState(label, fieldKey)
   return (
-  <label className={`flex items-center gap-2.5 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${match ? 'ring-2 ring-amber-400 rounded-lg p-1 -m-1 flash-match' : ''}`} title={title} ref={ref as any}>
+  <label className={`flex items-center gap-2.5 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'} ${match ? 'ring-2 ring-amber-400 rounded-lg p-1 -m-1 flash-match' : ''}`} title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined}>
     <button
       type="button"
       role="switch"
@@ -134,20 +134,30 @@ export const Switch = ({ label, value, onChange, title, disabled }: { label: str
       <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
     </button>
     <span className={`text-sm ${match ? 'text-amber-300' : 'text-slate-200'}`}>{label}</span>
+    <ChangedMarker visible={changed} label={changedLabel} />
   </label>
 )}
 
-export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; active?: boolean }) => {
-  const match = useLabelMatch(label)
-  const ref = useSearchScroll(match)
+export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, fieldKey }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; fieldKey?: FieldKey }) => {
+  const { match, changed, changedLabel } = useFieldState(label, fieldKey)
   return (
-  <div title={title} ref={ref}>
-    <label className={`mb-1 block text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}>{label}</label>
+  <div title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined}>
+    <label className={`mb-1 flex items-center gap-2 text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}><span>{label}</span><ChangedMarker visible={changed} label={changedLabel} /></label>
     <SelectInput value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className={`h-10 w-full ${match ? 'flash-match border-amber-400 ring-2 ring-amber-400/70' : ''}`}>
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
     </SelectInput>
   </div>
 )}
+
+export const SearchTarget = ({ label, fieldKey, title, children, className = '', showLabel = true }: { label: string; fieldKey: FieldKey; title?: string; children: React.ReactNode; className?: string; showLabel?: boolean }) => {
+  const { match, changed, changedLabel } = useFieldState(label, fieldKey)
+  return (
+    <div className={className} title={title} data-config-field={fieldKey} data-config-search-match={match ? 'true' : undefined}>
+      {showLabel && <label className={`mb-1 flex items-center gap-2 text-xs font-medium ${match ? 'text-amber-300' : 'text-slate-400'}`}><span>{label}</span><ChangedMarker visible={changed} label={changedLabel} /></label>}
+      {children}
+    </div>
+  )
+}
 
 // ━━━━━━━━━━━━━━━━━━━━━━ NEW COMPONENTS ━━━━━━━━━━━━━━━━━━━━━━
 
@@ -171,6 +181,7 @@ export const CollapsibleGroup = ({
   disabled,
   id,
   summary,
+  fieldKey,
 }: {
   title: string
   defaultOpen?: boolean
@@ -179,15 +190,18 @@ export const CollapsibleGroup = ({
   disabled?: boolean
   id?: string
   summary?: React.ReactNode
+  fieldKey?: FieldKey
 }) => {
   const q = useSearchQuery()
+  const fieldState = useFieldState(title, fieldKey)
   const [open, setOpen] = useState(defaultOpen || false)
   const hasSearch = !!q
   return (
-    <div id={id} className="scroll-mt-6 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/50">
+    <div id={id} className="scroll-mt-6 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/50" data-config-field={fieldKey} data-config-search-match={fieldState.match ? 'true' : undefined}>
       <button onClick={() => setOpen(!open)} className="flex w-full items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-3 py-2.5 text-left text-slate-200 transition hover:bg-slate-900">
         {(hasSearch || open) ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
-        <span className="text-xs font-medium">{title}</span>
+        <span className={`text-xs font-medium ${fieldState.match ? 'text-amber-300' : ''}`}>{title}</span>
+        <ChangedMarker visible={fieldState.changed} label={fieldState.changedLabel} />
         {summary && <span className="ml-auto text-xs text-slate-500">{summary}</span>}
         {onReset && <ResetButton onClick={onReset} />}
       </button>

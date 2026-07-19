@@ -7,9 +7,10 @@ interface Props {
   value: string
   onChange: (v: string) => void
   t: any
+  hideLabel?: boolean
 }
 
-export default function WorkerSelector({ value, onChange, t }: Props) {
+export default function WorkerSelector({ value, onChange, t, hideLabel = false }: Props) {
   const workers = useAppStore(state => state.workers)
   const [manualMode, setManualMode] = useState(false)
   const [manualValue, setManualValue] = useState(value)
@@ -67,7 +68,7 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
   if (manualMode) {
     return (
       <div>
-        <label className="mb-1 block text-xs font-medium text-slate-400">{`${t.configPage.rpcServers} (--rpc)`}</label>
+        {!hideLabel && <label className="mb-1 block text-xs font-medium text-slate-400">{`${t.configPage.rpcServers} (--rpc)`}</label>}
         <TextInput
           type="text"
           value={manualValue}
@@ -94,7 +95,7 @@ export default function WorkerSelector({ value, onChange, t }: Props) {
 
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.workerSelector} (--rpc)</label>
+      {!hideLabel && <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.workerSelector} (--rpc)</label>}
 
       {onlineWorkers.length === 0 ? (
         <InsetSurface className="flex items-center justify-between gap-3 px-3 py-2 text-xs text-slate-500">
