@@ -6,8 +6,6 @@ import { getConfigPageLabels, getConfigTemplates, type ConfigTemplate } from '..
 import { validateConfig, type Warning } from '../validators'
 import {
   BasicSection, ReasoningSection, PerformanceSection, AdvancedSection,
-  BASIC_CONFIG_KEYS, REASONING_CONFIG_KEYS, PERFORMANCE_CONFIG_KEYS,
-  ADVANCED_CONFIG_KEYS, ADVANCED_GROUP_CONFIG_KEYS,
 } from './ConfigPage/sections'
 import { getActiveParams } from './ConfigPage/activeParams'
 import { pathBasename } from '../utils/path'
@@ -15,7 +13,7 @@ import { formatHostPort } from '../utils/network'
 import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
 import { getEngineCompatibilityMode, normalizeEngineVersionStatus } from '../engineCapabilities'
-import { buildPickerTree, canonicalConfigFields, countActive, fieldLabel, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, restoreReviewField, type PickerNode, type TemplateSnapshot } from './ConfigPage/configWorkspace'
+import { buildPickerTree, canonicalConfigFields, fieldLabel, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, restoreReviewField, type PickerNode, type TemplateSnapshot } from './ConfigPage/configWorkspace'
 import { useEngineCompatibility } from './ConfigPage/useEngineCompatibility'
 import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotice'
 import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
@@ -295,9 +293,8 @@ const ConfigPage = () => {
   const changedParams = new Set<keyof InstanceConfig>(configChanges.map(change => change.key))
   const baselineOverrideKeys = canonicalConfigFields(explicitOverrideKeys(savedBaseline))
   const statusLabels = {
-    changedShort: labels.changedShort,
-    emittedShort: labels.emittedShort,
     changedMarker: labels.changedMarker,
+    emittedMarker: labels.changeWillEmit,
   }
   const locateParameter = (key: keyof InstanceConfig) => {
     setSearchQuery(fieldLabel(key, t))
@@ -394,37 +391,32 @@ const ConfigPage = () => {
     setSaveWarnings([])
   }
 
-  const groupStatus = (keys: Array<keyof InstanceConfig>) => ({
-    changedCount: countActive(changedParams, keys),
-    emittedCount: countActive(emittedParams, keys),
-  })
   const advancedDirectoryGroups = [
     ...(!isEmbedding ? [
-      { id: 'config-advanced-reasoning', title: t.configPage.subAdvReasoning, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedReasoningConfig) },
-      { id: 'config-advanced-model', title: t.configPage.subAdvModelAdapt, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt) },
-      { id: 'config-advanced-sampling', title: t.configPage.subAdvSampling, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedSampling) },
-      { id: 'config-advanced-sampling-ext', title: t.configPage.subAdvSamplingExt, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedSamplingExt) },
-      { id: 'config-advanced-spec', title: t.configPage.subAdvSpec, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedSpec) },
+      { id: 'config-advanced-reasoning', title: t.configPage.subAdvReasoning },
+      { id: 'config-advanced-model', title: t.configPage.subAdvModelAdapt },
+      { id: 'config-advanced-sampling', title: t.configPage.subAdvSampling },
+      { id: 'config-advanced-sampling-ext', title: t.configPage.subAdvSamplingExt },
+      { id: 'config-advanced-spec', title: t.configPage.subAdvSpec },
     ] : [
-      { id: 'config-advanced-vector', title: t.configPage.subEmbedding, ...groupStatus(['embd_normalize', 'reranking']) },
+      { id: 'config-advanced-vector', title: t.configPage.subEmbedding },
     ]),
-    { id: 'config-advanced-rope', title: t.configPage.subAdvRope, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedRope) },
-    { id: 'config-advanced-kv', title: t.configPage.subAdvKvCache, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedKvCache) },
-    { id: 'config-advanced-context', title: t.configPage.subAdvContextMgmt, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedContextMgmt) },
-    { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedHardware) },
-    { id: 'config-advanced-server', title: t.configPage.subAdvServer, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic) },
-    { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt) },
-    ...(!isEmbedding ? [{ id: 'config-advanced-multi', title: t.configPage.subAdvMulti, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.advancedMulti) }] : []),
-    { id: 'config-advanced-custom', title: t.configPage.customArgs, ...groupStatus(ADVANCED_GROUP_CONFIG_KEYS.customArgs) },
+    { id: 'config-advanced-rope', title: t.configPage.subAdvRope },
+    { id: 'config-advanced-kv', title: t.configPage.subAdvKvCache },
+    { id: 'config-advanced-context', title: t.configPage.subAdvContextMgmt },
+    { id: 'config-advanced-hardware', title: t.configPage.subAdvHardware },
+    { id: 'config-advanced-server', title: t.configPage.subAdvServer },
+    { id: 'config-advanced-server-ext', title: t.configPage.subAdvServerExt },
+    ...(!isEmbedding ? [{ id: 'config-advanced-multi', title: t.configPage.subAdvMulti }] : []),
+    { id: 'config-advanced-custom', title: t.configPage.customArgs },
   ]
   const directoryGroups = [
-    { id: 'config-basic', title: t.configPage.basic, ...groupStatus(BASIC_CONFIG_KEYS) },
-    ...(!isEmbedding ? [{ id: 'config-reasoning', title: t.configPage.reasoning, ...groupStatus(REASONING_CONFIG_KEYS) }] : []),
-    { id: 'config-performance', title: t.configPage.performance, ...groupStatus(PERFORMANCE_CONFIG_KEYS) },
+    { id: 'config-basic', title: t.configPage.basic },
+    ...(!isEmbedding ? [{ id: 'config-reasoning', title: t.configPage.reasoning }] : []),
+    { id: 'config-performance', title: t.configPage.performance },
     {
       id: 'config-advanced',
       title: t.configPage.advSectionTitle,
-      ...groupStatus(ADVANCED_CONFIG_KEYS),
       children: advancedDirectoryGroups,
     },
   ]
@@ -479,7 +471,7 @@ const ConfigPage = () => {
       </div>
 
       <div className={manualMode ? 'grid gap-5 2xl:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-5 xl:grid-cols-[220px,minmax(0,1fr)] 2xl:grid-cols-[220px,minmax(0,1fr)_320px]'}>
-        {!manualMode && <ConfigDirectory title={labels.parameterGroups} groups={directoryGroups} changedLabel={labels.changedShort} emittedLabel={labels.emittedShort} />}
+        {!manualMode && <ConfigDirectory title={labels.parameterGroups} groups={directoryGroups} />}
 
         <div className="space-y-4">
           {saved && (

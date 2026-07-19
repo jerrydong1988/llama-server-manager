@@ -32,7 +32,7 @@ const engine: EngineInfo = {
   capabilities: {
     status: 'detected',
     versionStatus: 'detected',
-    supportedFlags: ['--temp', '--top-k', '--top-p', '--kv-unified'],
+    supportedFlags: ['--temp', '--top-k', '--top-p', '--kv-unified', '--models-autoload', '--no-models-autoload', '--image-min-tokens'],
     helpHash: 'browser-test-help',
     executableFingerprint: 'browser-test-engine-fingerprint',
     probedAt: 1,
@@ -51,7 +51,9 @@ const instanceConfig: InstanceConfig = {
   top_k: 20,
   kv_unified: true,
   kv_unified_mode: 'on',
-  explicit_overrides: ['temp', 'top_k', 'kv_unified', 'kv_unified_mode'],
+  models_autoload: false,
+  image_min_tokens: 1_024,
+  explicit_overrides: ['temp', 'top_k', 'kv_unified', 'kv_unified_mode', 'models_autoload', 'image_min_tokens'],
 }
 
 const state: GlobalConfigShape = {
@@ -139,6 +141,8 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
     else if (field === 'top_k') command.push('--top-k', String(config.top_k))
     else if (field === 'top_p') command.push('--top-p', String(config.top_p))
     else if (field === 'kv_unified_mode') command.push(config.kv_unified_mode === 'off' ? '--no-kv-unified' : '--kv-unified')
+    else if (field === 'models_autoload') command.push(config.models_autoload ? '--models-autoload' : '--no-models-autoload')
+    else if (field === 'image_min_tokens') command.push('--image-min-tokens', String(config.image_min_tokens))
   }
   return { command, unsupportedFlags: [], emittedOverrideKeys: emitted }
 }

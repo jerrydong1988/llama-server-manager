@@ -93,8 +93,8 @@ const countActive = (emittedParams: Set<keyof InstanceConfig>, keys: Array<keyof
 const countSummary = (emitted: number, changed: number, labels: Props['statusLabels']) =>
   emitted > 0 || changed > 0 ? (
     <span className="inline-flex items-center gap-2 text-[11px] text-slate-500">
-      {changed > 0 && <span>{labels.changedShort} {changed}</span>}
-      {emitted > 0 && <span>{labels.emittedShort} {emitted}</span>}
+      {changed > 0 && <span>{labels.changedMarker} {changed}</span>}
+      {emitted > 0 && <span className="text-blue-400">{labels.emittedMarker} {emitted}</span>}
     </span>
   ) : undefined
 
@@ -111,7 +111,7 @@ interface Props {
   onShowDraftPicker?: () => void
   emittedParams: Set<keyof InstanceConfig>
   changedParams: Set<keyof InstanceConfig>
-  statusLabels: { changedShort: string; emittedShort: string; changedMarker: string }
+  statusLabels: { changedMarker: string; emittedMarker: string }
   searchQuery: string
 }
 
@@ -120,7 +120,7 @@ interface Props {
 export function BasicSection({ local, set, t, isEmbedding, workload, modelWorkloadLocked, onShowPicker, onCommitModelPath, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => k
   return (
-    <Section id="config-basic" title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} changedLabel={statusLabels.changedMarker} summary={countSummary(countActive(emittedParams, BASIC_CONFIG_KEYS), countActive(changedParams, BASIC_CONFIG_KEYS), statusLabels)}>
+    <Section id="config-basic" title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={countSummary(countActive(emittedParams, BASIC_CONFIG_KEYS), countActive(changedParams, BASIC_CONFIG_KEYS), statusLabels)}>
       <div className={formGridClassName}>
         <SearchTarget label={`${t.configPage.modelPath} (--model, -m)`} fieldKey="model_path" title={t.configPage.modelPathTip}>
           <div className="flex gap-1">
@@ -152,7 +152,7 @@ export function BasicSection({ local, set, t, isEmbedding, workload, modelWorklo
 export function ReasoningSection({ local, set, t, isEmbedding, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => k
   return (
-    <Section id="config-reasoning" title={t.configPage.reasoning} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} changedLabel={statusLabels.changedMarker} summary={countSummary(countActive(emittedParams, REASONING_CONFIG_KEYS), countActive(changedParams, REASONING_CONFIG_KEYS), statusLabels)}>
+    <Section id="config-reasoning" title={t.configPage.reasoning} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={countSummary(countActive(emittedParams, REASONING_CONFIG_KEYS), countActive(changedParams, REASONING_CONFIG_KEYS), statusLabels)}>
       {(() => { const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding; return (<>
       <div className={formGridClassName}>
         <Select label={`${t.configPage.reasoningSwitch} (--reasoning)`} value={local.reasoning} onChange={v => set('reasoning', v)} options={['', 'on', 'off', 'auto']} title={t.configPage.reasoningTip} disabled={isEmbedding} defaultLabel={t.common.default}  fieldKey={a('reasoning')} />
@@ -175,7 +175,7 @@ export function ReasoningSection({ local, set, t, isEmbedding, emittedParams, ch
 export function PerformanceSection({ local, set, t, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => k
   return (
-    <Section id="config-performance" title={t.configPage.performance} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} changedLabel={statusLabels.changedMarker} summary={countSummary(countActive(emittedParams, PERFORMANCE_CONFIG_KEYS), countActive(changedParams, PERFORMANCE_CONFIG_KEYS), statusLabels)}>
+    <Section id="config-performance" title={t.configPage.performance} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={countSummary(countActive(emittedParams, PERFORMANCE_CONFIG_KEYS), countActive(changedParams, PERFORMANCE_CONFIG_KEYS), statusLabels)}>
       <div className={formGridClassName}>
         <Num label={`${t.configPage.threads} (--threads, -t)`} value={local.threads} onChange={v => set('threads', v)} min={0} title={t.configPage.threadsTip}  fieldKey={a('threads')} />
         <Num label={`${t.configPage.threadsBatch} (--threads-batch)`} value={local.threads_batch} onChange={v => set('threads_batch', v)} min={0} title={t.configPage.threadsBatchTip}  fieldKey={a('threads_batch')} />
@@ -259,7 +259,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
   const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding
 
   return (
-    <Section id="config-advanced" title={t.configPage.advSectionTitle} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} changedLabel={statusLabels.changedMarker} summary={summary(ADVANCED_CONFIG_KEYS)}>
+    <Section id="config-advanced" title={t.configPage.advSectionTitle} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={summary(ADVANCED_CONFIG_KEYS)}>
       <div className="flex items-center justify-end mb-2">
         <span className="mr-2 text-xs text-slate-500">{t.configPage.advSectionReset}</span>
         <ResetButton onClick={resetAll} title={t.configPage.advSectionReset} />
