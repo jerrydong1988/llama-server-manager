@@ -88,7 +88,7 @@ export const enUS = {
     // ── Basic ──
     modelPath: 'Model Path', modelPathTip: 'Path to GGUF model file. This is the primary model that llama-server will load and serve. Required parameter.',
     modelPathBtn: 'Select from model repository',
-    alias: 'Alias', aliasTip: 'Custom name for the model used in API calls. When set, the /v1/models endpoint returns this name. Useful for exposing a friendly name to API consumers.',
+    alias: 'Alias', aliasTip: 'Safe model identifier exposed to API clients. In managed mode, an empty value is filled from the instance name and shown in both the page and startup command so responses never expose the full model path.',
     lora: 'LoRA Path', loraTip: 'Path to a LoRA (Low-Rank Adaptation) adapter file. LoRA adapters modify model behavior without retraining the full model — e.g. style transfer, domain specialization. [Scene] Load a single adapter for fine-tuned behavior. For multiple adapters with custom scales, use --lora-scaled.',
     mmproj: 'Multimodal Projector', mmprojTip: 'Path to a multimodal projector (mmproj) file. Selecting a primary model attempts a safe automatic match; use the button on the right to choose a projector manually.',
     mmprojPathBtn: 'Select a multimodal projector from the model repository',

@@ -1,5 +1,8 @@
 use crate::error::{AppError, AppResult};
-use crate::models::{AppState, GlobalConfig, InstanceConfig, ProxyConfig, WindowState};
+use crate::models::{
+    ensure_managed_public_model_alias, AppState, GlobalConfig, InstanceConfig, ProxyConfig,
+    WindowState,
+};
 use crate::vector_policy::normalize_for_launch;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
@@ -263,10 +266,12 @@ fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> N
     let mut all = HashMap::with_capacity(instances.len());
     let mut changed = HashMap::new();
     for (id, config) in instances {
-        let normalized = if config.launch_mode.eq_ignore_ascii_case("manual") {
-            config.clone()
+        let mut public_config = config.clone();
+        ensure_managed_public_model_alias(&mut public_config);
+        let normalized = if public_config.launch_mode.eq_ignore_ascii_case("manual") {
+            public_config
         } else {
-            normalize_for_launch(config.clone()).into_config()
+            normalize_for_launch(public_config).into_config()
         };
         if normalized != config {
             changed.insert(id.clone(), normalized.clone());

@@ -330,7 +330,13 @@ const entry = `
   }
   const missingInference = normalizeStoredConfig(missingInferenceConfig, [])
   assert.equal(missingInference.workload, 'inference')
-  assert.equal(missingInference.changes.length, 0)
+  assert.deepEqual(
+    missingInference.changes.map(change => [change.key, change.before, change.after]),
+    [['alias', '', 'Inference instance']],
+    'legacy managed instances must migrate to a safe public model id',
+  )
+  assert.equal(missingInference.config.alias, 'Inference instance')
+  assert.equal(missingInference.config.explicit_overrides?.includes('alias'), true)
   assert.equal(missingInference.config.temp, 1.25)
 
   const vectorInstance = {
@@ -346,14 +352,16 @@ const entry = `
   assert.equal(reconciled.changed, true)
   assert.notStrictEqual(reconciled.instances, originalInstances)
   assert.notStrictEqual(reconciled.instances[0], vectorInstance)
-  assert.strictEqual(reconciled.instances[1], inferenceInstance)
+  assert.notStrictEqual(reconciled.instances[1], inferenceInstance)
+  assert.equal(reconciled.instances[1].config.alias, 'Inference instance')
   assert.equal(reconciled.instances[0].status, 'running')
   assert.equal(reconciled.instances[0].healthCheck, 'ok')
   assert.equal(reconciled.instances[0].startTime, 123456)
 
-  const unchanged = reconcileInstancesWithModels([inferenceInstance], [])
+  const publicInferenceInstance = { ...inferenceInstance, config: missingInference.config }
+  const unchanged = reconcileInstancesWithModels([publicInferenceInstance], [])
   assert.equal(unchanged.changed, false)
-  assert.strictEqual(unchanged.instances[0], inferenceInstance)
+  assert.strictEqual(unchanged.instances[0], publicInferenceInstance)
 
   const changedModelConfig = {
     ...missingInferenceConfig,

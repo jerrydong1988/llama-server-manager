@@ -1,6 +1,6 @@
 import { startTransition } from 'react'
 import { invokeApp as invoke } from '../lib/ipc'
-import { normalizeInstanceConfig } from '../modelPolicy'
+import { ensureManagedPublicModelAlias, normalizeInstanceConfig } from '../modelPolicy'
 import { migrateParameterIntent } from '../parameterIntent'
 import { pathBasename } from '../utils/path'
 import { resolveHydratedHealth } from './bootstrapHealth'
@@ -231,7 +231,7 @@ async function processConfig(
   const existingInstances = get().instances
 
   const instances: Instance[] = Object.entries(global.instances).map(([id, config]) => {
-    const migratedConfig = migrateParameterIntent(config)
+    const migratedConfig = ensureManagedPublicModelAlias(migrateParameterIntent(config))
     const startedAt = global.running?.[id]?.start_time ?? 0
     const status: Instance['status'] = runningIds.has(id) ? 'running' : 'stopped'
     return {

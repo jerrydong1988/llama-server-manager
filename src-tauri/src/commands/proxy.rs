@@ -7,13 +7,15 @@ use axum::{
     routing::{any, get},
     Json, Router,
 };
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
+use tokio_util::codec::{FramedRead, LinesCodec};
+use tokio_util::io::StreamReader;
 
 use crate::commands::config::update_and_persist;
 use crate::commands::server::{effective_api_key, effective_server_scheme};
@@ -22,7 +24,9 @@ use crate::commands::telemetry::{
     VectorActivityRecord,
 };
 use crate::commands::vector_metrics::VectorEventSource;
-use crate::models::{AppState, InstanceConfig, ProxyConfig, ProxyStatus, ProxyTarget};
+use crate::models::{
+    public_model_id, AppState, InstanceConfig, ProxyConfig, ProxyStatus, ProxyTarget,
+};
 use crate::vector_policy::ModelWorkload;
 
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -126,6 +130,7 @@ fn stored_target_matches_endpoint(
 
 struct ResolvedProxyTarget {
     public: ProxyTarget,
+    upstream_model_id: String,
     api_key: String,
     api_prefix: String,
     scheme: &'static str,
@@ -422,7 +427,7 @@ fn proxy_target_from_instance(id: &str, config: &InstanceConfig, running: bool) 
     ProxyTarget {
         instance_id: id.to_string(),
         name: config.name.clone(),
-        alias: config.alias.clone(),
+        alias: public_model_id(config),
         host: normalize_host(&config.host),
         port: config.port,
         running,
@@ -441,7 +446,13 @@ fn list_proxy_targets_from(
 ) -> Vec<ProxyTarget> {
     instances
         .iter()
-        .map(|(id, config)| proxy_target_from_instance(id, config, running.contains_key(id)))
+        .map(|(id, stored_config)| {
+            let running_info = running.get(id);
+            let config = running_info
+                .and_then(|info| info.launch_config.as_ref())
+                .unwrap_or(stored_config);
+            proxy_target_from_instance(id, config, running_info.is_some())
+        })
         .collect()
 }
 
@@ -482,10 +493,15 @@ fn resolve_proxy_target_from(
             public: ProxyTarget {
                 instance_id: id.to_string(),
                 name: config.name.clone(),
-                alias: config.alias.clone(),
+                alias: public_model_id(config),
                 host: normalize_host(&running_info.host),
                 port: running_info.port,
                 running: true,
+            },
+            upstream_model_id: if config.alias.trim().is_empty() {
+                config.model_path.trim().to_string()
+            } else {
+                config.alias.trim().to_string()
             },
             api_key: effective_api_key(config),
             api_prefix: config.api_prefix.clone(),
@@ -495,12 +511,15 @@ fn resolve_proxy_target_from(
         })
     };
 
-    if let Some(model) = requested_model {
+    if let Some(model) = requested_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
         let mut routes = proxy_config.routes.iter().collect::<Vec<_>>();
         routes.sort_by_key(|route| route.priority);
         for route in routes {
             if route.enabled
-                && route.model_alias == model
+                && route.model_alias.trim() == model
                 && !route.target_instance_id.is_empty()
                 && running.contains_key(&route.target_instance_id)
             {
@@ -511,10 +530,12 @@ fn resolve_proxy_target_from(
             }
         }
 
-        for (id, config) in instances.iter() {
-            if running.contains_key(id)
-                && (config.alias == model || config.name == model || id == model)
-            {
+        for (id, stored_config) in instances.iter() {
+            let Some(running_info) = running.get(id) else {
+                continue;
+            };
+            let config = running_info.launch_config.as_ref().unwrap_or(stored_config);
+            if public_model_id(config) == model || config.name.trim() == model || id == model {
                 had_candidate = true;
                 if let Some(target) = resolve_id(id) {
                     return Some(target);
@@ -552,6 +573,99 @@ fn requested_model_from_body(body: &[u8]) -> Option<String> {
                 .and_then(|model| model.as_str())
                 .map(|s| s.to_string())
         })
+}
+
+fn rewrite_request_model(body: &Bytes, upstream_model_id: &str) -> Bytes {
+    if upstream_model_id.trim().is_empty() {
+        return body.clone();
+    }
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return body.clone();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return body.clone();
+    };
+    object.insert(
+        "model".to_string(),
+        serde_json::Value::String(upstream_model_id.trim().to_string()),
+    );
+    serde_json::to_vec(&value)
+        .map(Bytes::from)
+        .unwrap_or_else(|_| body.clone())
+}
+
+fn public_response_model(
+    proxy_config: &ProxyConfig,
+    target: &ProxyTarget,
+    requested_model: Option<&str>,
+) -> String {
+    let requested = requested_model
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(requested) = requested {
+        let route_is_public = proxy_config.routes.iter().any(|route| {
+            route.enabled
+                && route.target_instance_id == target.instance_id
+                && route.model_alias.trim() == requested
+        });
+        if route_is_public || requested == target.alias.trim() {
+            return requested.to_string();
+        }
+        if requested == target.name.trim() && !requested.contains('/') && !requested.contains('\\')
+        {
+            return requested.to_string();
+        }
+    }
+    let alias = target.alias.trim();
+    if alias.is_empty() {
+        "model".to_string()
+    } else {
+        alias.to_string()
+    }
+}
+
+fn rewrite_json_response_model(body: Bytes, public_model_id: &str) -> Bytes {
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return body;
+    };
+    let Some(object) = value.as_object_mut() else {
+        return body;
+    };
+    if !object.contains_key("model") {
+        return body;
+    }
+    object.insert(
+        "model".to_string(),
+        serde_json::Value::String(public_model_id.to_string()),
+    );
+    serde_json::to_vec(&value).map(Bytes::from).unwrap_or(body)
+}
+
+fn rewrite_sse_response_line(line: &str, public_model_id: &str) -> String {
+    let Some(payload) = line.strip_prefix("data:") else {
+        return line.to_string();
+    };
+    let payload = payload.trim_start();
+    if payload.is_empty() || payload == "[DONE]" {
+        return line.to_string();
+    }
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(payload.as_bytes()) else {
+        return line.to_string();
+    };
+    let Some(object) = value.as_object_mut() else {
+        return line.to_string();
+    };
+    if !object.contains_key("model") {
+        return line.to_string();
+    }
+    object.insert(
+        "model".to_string(),
+        serde_json::Value::String(public_model_id.to_string()),
+    );
+    let Ok(rewritten) = serde_json::to_string(&value) else {
+        return line.to_string();
+    };
+    format!("data: {rewritten}")
 }
 
 fn is_proxy_authorized(config: &ProxyConfig, headers: &HeaderMap) -> bool {
@@ -689,7 +803,7 @@ fn is_hop_by_hop_header(name: &str, connection_tokens: &HashSet<String>) -> bool
 fn should_forward_request_header(name: &str, connection_tokens: &HashSet<String>) -> bool {
     !matches!(
         name,
-        "host" | "content-length" | "authorization" | "x-api-key"
+        "host" | "content-length" | "accept-encoding" | "authorization" | "x-api-key"
     ) && !is_hop_by_hop_header(name, connection_tokens)
 }
 
@@ -725,22 +839,7 @@ async fn proxy_models(State(router_state): State<ProxyRouterState>) -> Json<serd
     let snapshot = router_state.source.proxy_snapshot();
     let config = snapshot.config;
     let targets = list_proxy_targets_from(&snapshot.instances, &snapshot.running);
-    let mut ids: Vec<String> = config
-        .routes
-        .iter()
-        .filter(|route| route.enabled && !route.model_alias.is_empty())
-        .map(|route| route.model_alias.clone())
-        .collect();
-
-    for target in targets.iter().filter(|target| target.running) {
-        if !target.alias.is_empty() {
-            ids.push(target.alias.clone());
-        }
-        ids.push(target.instance_id.clone());
-        ids.push(target.name.clone());
-    }
-    ids.sort();
-    ids.dedup();
+    let ids = listed_proxy_model_ids(&config, &targets);
 
     Json(json!({
         "object": "list",
@@ -750,6 +849,34 @@ async fn proxy_models(State(router_state): State<ProxyRouterState>) -> Json<serd
             "owned_by": "llama-server-manager"
         })).collect::<Vec<_>>()
     }))
+}
+
+fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<String> {
+    let running_ids = targets
+        .iter()
+        .filter(|target| target.running)
+        .map(|target| target.instance_id.as_str())
+        .collect::<HashSet<_>>();
+    let mut ids = config
+        .routes
+        .iter()
+        .filter(|route| {
+            route.enabled
+                && !route.model_alias.trim().is_empty()
+                && running_ids.contains(route.target_instance_id.as_str())
+        })
+        .map(|route| route.model_alias.trim().to_string())
+        .collect::<Vec<_>>();
+
+    ids.extend(
+        targets
+            .iter()
+            .filter(|target| target.running && !target.alias.trim().is_empty())
+            .map(|target| target.alias.trim().to_string()),
+    );
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 async fn proxy_openai(
@@ -787,6 +914,9 @@ async fn proxy_openai(
             "selected target does not support the requested vector endpoint",
         );
     }
+    let response_model =
+        public_response_model(&snapshot.config, &target.public, requested_model.as_deref());
+    let upstream_body = rewrite_request_model(&body, &target.upstream_model_id);
     let started_at = std::time::Instant::now();
     let started_at_ms = current_time_ms();
     let proxy_task_id = next_proxy_task_id();
@@ -800,7 +930,8 @@ async fn proxy_openai(
 
     let mut request = PROXY_HTTP_CLIENT
         .request(reqwest_method, target_url(&target, &uri))
-        .timeout(Duration::from_millis(proxy_config.timeout_ms.max(1_000)));
+        .timeout(Duration::from_millis(proxy_config.timeout_ms.max(1_000)))
+        .header("accept-encoding", "identity");
     let connection_tokens = connection_header_tokens(&headers);
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_ascii_lowercase();
@@ -813,7 +944,7 @@ async fn proxy_openai(
         request = request.bearer_auth(target.api_key.trim());
     }
 
-    let response = match request.body(body.clone()).send().await {
+    let response = match request.body(upstream_body).send().await {
         Ok(response) => response,
         Err(err) => {
             let _ = record_proxy_telemetry(
@@ -839,6 +970,14 @@ async fn proxy_openai(
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut builder = Response::builder().status(status);
+    let response_content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let response_is_sse = response_content_type.contains("text/event-stream");
+    let response_is_json = response_content_type.contains("json");
     let response_connection_tokens = connection_header_tokens(response.headers());
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
@@ -855,7 +994,7 @@ async fn proxy_openai(
 
     let http_status = status.as_u16();
     let status_success = status.is_success();
-    let telemetry_guard = ProxyTelemetryGuard {
+    let mut telemetry_guard = ProxyTelemetryGuard {
         session_id: target.telemetry_session_id.clone(),
         task_id: proxy_task_id,
         model: requested_model.clone(),
@@ -866,6 +1005,85 @@ async fn proxy_openai(
         vector_metadata,
         recorded: false,
     };
+    if response_is_json && !response_is_sse {
+        let response_body = match response.bytes().await {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let error_text = err.to_string();
+                telemetry_guard.record_once(Some(error_text.clone()));
+                return plain_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("proxy response error: {error_text}"),
+                );
+            }
+        };
+        telemetry_guard.record_once(if status_success {
+            None
+        } else {
+            Some(format!("upstream returned {}", http_status))
+        });
+        let response_body = rewrite_json_response_model(response_body, &response_model);
+        return builder
+            .body(Body::from(response_body))
+            .unwrap_or_else(|err| {
+                plain_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("proxy response error: {}", err),
+                )
+            });
+    }
+
+    if response_is_sse {
+        let upstream_stream = response
+            .bytes_stream()
+            .map_err(|err| std::io::Error::other(err.to_string()));
+        let line_stream = Box::pin(FramedRead::new(
+            StreamReader::new(upstream_stream),
+            LinesCodec::new_with_max_length(16 * 1024 * 1024),
+        ));
+        let stream = futures_util::stream::unfold(
+            (line_stream, false, telemetry_guard, response_model),
+            move |(mut line_stream, finalized, mut telemetry_guard, response_model)| async move {
+                if finalized {
+                    return None;
+                }
+                match line_stream.as_mut().next().await {
+                    Some(Ok(line)) => {
+                        let line = rewrite_sse_response_line(&line, &response_model);
+                        Some((
+                            Ok::<_, std::io::Error>(Bytes::from(format!("{line}\n"))),
+                            (line_stream, false, telemetry_guard, response_model),
+                        ))
+                    }
+                    Some(Err(err)) => {
+                        let error_text = err.to_string();
+                        telemetry_guard.record_once(Some(error_text.clone()));
+                        Some((
+                            Err(std::io::Error::other(error_text)),
+                            (line_stream, true, telemetry_guard, response_model),
+                        ))
+                    }
+                    None => {
+                        telemetry_guard.record_once(if status_success {
+                            None
+                        } else {
+                            Some(format!("upstream returned {}", http_status))
+                        });
+                        None
+                    }
+                }
+            },
+        );
+        return builder
+            .body(Body::from_stream(stream))
+            .unwrap_or_else(|err| {
+                plain_response(
+                    StatusCode::BAD_GATEWAY,
+                    &format!("proxy response error: {}", err),
+                )
+            });
+    }
+
     let upstream_stream = Box::pin(response.bytes_stream());
     let stream = futures_util::stream::unfold(
         (upstream_stream, false, telemetry_guard),
@@ -1320,9 +1538,67 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{InstanceConfig, ProxyConfig, ProxyTarget};
+    use crate::models::{InstanceConfig, ProxyConfig, ProxyRoute, ProxyTarget, RunningInstance};
     use crate::vector_policy::ModelWorkload;
+    use axum::body::Body;
+    use axum::extract::State;
     use axum::http::{HeaderMap, Uri};
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::post;
+    use axum::{Json, Router};
+    use bytes::Bytes;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone)]
+    struct TestProxySource {
+        snapshot: super::ProxyRuntimeSnapshot,
+    }
+
+    impl super::ProxyDataSource for TestProxySource {
+        fn proxy_snapshot(&self) -> super::ProxyRuntimeSnapshot {
+            self.snapshot.clone()
+        }
+    }
+
+    async fn spawn_test_router(
+        router: Router,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (address, task)
+    }
+
+    async fn mock_private_model_upstream(
+        State(received_models): State<Arc<Mutex<Vec<String>>>>,
+        Json(body): Json<serde_json::Value>,
+    ) -> Response {
+        received_models.lock().unwrap().push(
+            body.get("model")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        );
+        if body.get("stream").and_then(serde_json::Value::as_bool) == Some(true) {
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(Body::from(concat!(
+                    "data: {\"id\":\"chatcmpl-test\",\"model\":\"C:\\\\private\\\\model.gguf\",\"choices\":[]}\n\n",
+                    "data: [DONE]\n\n"
+                )))
+                .unwrap();
+        }
+        Json(json!({
+            "id": "chatcmpl-test",
+            "model": r"C:\private\model.gguf",
+            "choices": []
+        }))
+        .into_response()
+    }
 
     #[test]
     fn target_url_brackets_ipv6_and_preserves_prefix_and_query() {
@@ -1335,6 +1611,7 @@ mod tests {
                 port: 8080,
                 running: true,
             },
+            upstream_model_id: "model".into(),
             api_key: String::new(),
             api_prefix: "v1".into(),
             scheme: "https",
@@ -1350,6 +1627,301 @@ mod tests {
     }
 
     #[test]
+    fn model_discovery_exposes_only_public_ids_for_running_targets() {
+        let config = ProxyConfig {
+            routes: vec![
+                ProxyRoute {
+                    model_alias: "route-model".into(),
+                    target_instance_id: "internal-running-uuid".into(),
+                    ..ProxyRoute::default()
+                },
+                ProxyRoute {
+                    model_alias: "stopped-route".into(),
+                    target_instance_id: "internal-stopped-uuid".into(),
+                    ..ProxyRoute::default()
+                },
+            ],
+            ..ProxyConfig::default()
+        };
+        let targets = vec![
+            ProxyTarget {
+                instance_id: "internal-running-uuid".into(),
+                name: "Friendly name".into(),
+                alias: "public-model".into(),
+                host: "127.0.0.1".into(),
+                port: 8080,
+                running: true,
+            },
+            ProxyTarget {
+                instance_id: "internal-stopped-uuid".into(),
+                name: "Stopped name".into(),
+                alias: "stopped-model".into(),
+                host: "127.0.0.1".into(),
+                port: 8081,
+                running: false,
+            },
+        ];
+
+        assert_eq!(
+            super::listed_proxy_model_ids(&config, &targets),
+            vec!["public-model".to_string(), "route-model".to_string()]
+        );
+    }
+
+    #[test]
+    fn proxy_target_derives_a_safe_alias_when_configuration_is_empty() {
+        let config = InstanceConfig {
+            name: String::new(),
+            model_path: r"C:\private\models\Safe-Model-Q8_0.gguf".into(),
+            alias: String::new(),
+            ..InstanceConfig::default()
+        };
+
+        let target = super::proxy_target_from_instance("internal-uuid", &config, true);
+
+        assert_eq!(target.alias, "Safe-Model-Q8_0");
+        assert_ne!(target.alias, target.instance_id);
+        assert!(!target.alias.contains("private"));
+    }
+
+    #[test]
+    fn proxy_translates_model_ids_in_requests_json_and_sse_responses() {
+        let request = Bytes::from_static(br#"{"model":"route-model","messages":[]}"#);
+        let rewritten = super::rewrite_request_model(&request, "backend-model");
+        let rewritten_json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(rewritten_json["model"], "backend-model");
+
+        let response = Bytes::from_static(
+            br#"{"id":"chatcmpl-test","model":"C:\\private\\model.gguf","choices":[]}"#,
+        );
+        let rewritten = super::rewrite_json_response_model(response, "route-model");
+        let rewritten_json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
+        assert_eq!(rewritten_json["model"], "route-model");
+        assert!(!String::from_utf8_lossy(&rewritten).contains("private"));
+
+        let sse = super::rewrite_sse_response_line(
+            r#"data: {"id":"chatcmpl-test","model":"C:\\private\\model.gguf","choices":[]}"#,
+            "route-model",
+        );
+        assert!(sse.contains(r#""model":"route-model""#));
+        assert!(!sse.contains("private"));
+        assert_eq!(
+            super::rewrite_sse_response_line("data: [DONE]", "route-model"),
+            "data: [DONE]"
+        );
+    }
+
+    #[test]
+    fn response_model_uses_route_alias_and_hides_internal_selectors() {
+        let target = ProxyTarget {
+            instance_id: "internal-uuid".into(),
+            name: "Friendly name".into(),
+            alias: "public-model".into(),
+            host: "127.0.0.1".into(),
+            port: 8080,
+            running: true,
+        };
+        let config = ProxyConfig {
+            routes: vec![ProxyRoute {
+                model_alias: "route-model".into(),
+                target_instance_id: target.instance_id.clone(),
+                ..ProxyRoute::default()
+            }],
+            ..ProxyConfig::default()
+        };
+
+        assert_eq!(
+            super::public_response_model(&config, &target, Some("route-model")),
+            "route-model"
+        );
+        assert_eq!(
+            super::public_response_model(&config, &target, Some("internal-uuid")),
+            "public-model"
+        );
+        assert_eq!(
+            super::public_response_model(&config, &target, Some(r"C:\private\model.gguf")),
+            "public-model"
+        );
+    }
+
+    #[test]
+    fn advertised_launch_alias_resolves_to_the_same_running_instance() {
+        let launched_id = "launched-instance".to_string();
+        let fallback_id = "fallback-instance".to_string();
+        let stored_launched = InstanceConfig {
+            id: launched_id.clone(),
+            alias: "edited-after-start".into(),
+            port: 18080,
+            ..InstanceConfig::default()
+        };
+        let launched = InstanceConfig {
+            alias: "launch-public".into(),
+            ..stored_launched.clone()
+        };
+        let fallback = InstanceConfig {
+            id: fallback_id.clone(),
+            alias: "fallback-public".into(),
+            port: 18081,
+            ..InstanceConfig::default()
+        };
+        let instances = HashMap::from([
+            (launched_id.clone(), stored_launched),
+            (fallback_id.clone(), fallback.clone()),
+        ]);
+        let running = HashMap::from([
+            (
+                launched_id.clone(),
+                RunningInstance {
+                    instance_id: launched_id.clone(),
+                    pid: 1,
+                    port: 18080,
+                    host: "127.0.0.1".into(),
+                    start_time: 0,
+                    executable_path: String::new(),
+                    telemetry_session_id: None,
+                    workload: "inference".into(),
+                    launch_config: Some(launched),
+                },
+            ),
+            (
+                fallback_id.clone(),
+                RunningInstance {
+                    instance_id: fallback_id.clone(),
+                    pid: 2,
+                    port: 18081,
+                    host: "127.0.0.1".into(),
+                    start_time: 0,
+                    executable_path: String::new(),
+                    telemetry_session_id: None,
+                    workload: "inference".into(),
+                    launch_config: Some(fallback),
+                },
+            ),
+        ]);
+        let config = ProxyConfig {
+            default_instance_id: fallback_id,
+            ..ProxyConfig::default()
+        };
+
+        let resolved = super::resolve_proxy_target_from(
+            &config,
+            &instances,
+            &running,
+            Some("launch-public"),
+            None,
+        )
+        .expect("advertised launch alias must resolve");
+
+        assert_eq!(resolved.public.instance_id, launched_id);
+        assert_eq!(resolved.public.alias, "launch-public");
+    }
+
+    #[tokio::test]
+    async fn proxy_boundary_hides_private_models_for_json_and_sse() {
+        let received_models = Arc::new(Mutex::new(Vec::new()));
+        let upstream_router = Router::new()
+            .route("/v1/chat/completions", post(mock_private_model_upstream))
+            .with_state(received_models.clone());
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+
+        let instance_id = "internal-instance-uuid".to_string();
+        let instance = InstanceConfig {
+            id: instance_id.clone(),
+            name: "Public fallback".into(),
+            model_path: r"C:\private\model.gguf".into(),
+            alias: String::new(),
+            host: upstream_address.ip().to_string(),
+            port: upstream_address.port(),
+            ..InstanceConfig::default()
+        };
+        let proxy_config = ProxyConfig {
+            enabled: true,
+            default_instance_id: instance_id.clone(),
+            routes: vec![ProxyRoute {
+                model_alias: "route-model".into(),
+                target_instance_id: instance_id.clone(),
+                ..ProxyRoute::default()
+            }],
+            ..ProxyConfig::default()
+        };
+        let snapshot = super::ProxyRuntimeSnapshot {
+            config: proxy_config,
+            instances: HashMap::from([(instance_id.clone(), instance.clone())]),
+            running: HashMap::from([(
+                instance_id.clone(),
+                RunningInstance {
+                    instance_id: instance_id.clone(),
+                    pid: std::process::id(),
+                    port: upstream_address.port(),
+                    host: upstream_address.ip().to_string(),
+                    start_time: 0,
+                    executable_path: String::new(),
+                    telemetry_session_id: None,
+                    workload: "inference".into(),
+                    launch_config: Some(instance),
+                },
+            )]),
+            bound_addr: String::new(),
+            last_error: None,
+        };
+        let proxy_router = super::proxy_router_from_source(Arc::new(TestProxySource { snapshot }));
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+        let client = reqwest::Client::new();
+
+        let models: serde_json::Value = client
+            .get(format!("http://{proxy_address}/v1/models"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let model_ids = models["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(model_ids, vec!["Public fallback", "route-model"]);
+        assert!(!models.to_string().contains(&instance_id));
+        assert!(!models.to_string().contains("private"));
+
+        let json_response: serde_json::Value = client
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .json(&json!({ "model": "route-model", "messages": [], "stream": false }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(json_response["model"], "route-model");
+        assert!(!json_response.to_string().contains("private"));
+
+        let sse_response = client
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .json(&json!({ "model": "route-model", "messages": [], "stream": true }))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(sse_response.contains(r#""model":"route-model""#));
+        assert!(!sse_response.contains("private"));
+
+        assert_eq!(
+            *received_models.lock().unwrap(),
+            vec![
+                r"C:\private\model.gguf".to_string(),
+                r"C:\private\model.gguf".to_string()
+            ]
+        );
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[test]
     fn public_credentials_and_connection_headers_are_never_forwarded() {
         let mut headers = HeaderMap::new();
         headers.insert("connection", "keep-alive, x-private-hop".parse().unwrap());
@@ -1360,6 +1932,10 @@ mod tests {
             &tokens
         ));
         assert!(!super::should_forward_request_header("x-api-key", &tokens));
+        assert!(!super::should_forward_request_header(
+            "accept-encoding",
+            &tokens
+        ));
         assert!(!super::should_forward_request_header("keep-alive", &tokens));
         assert!(!super::should_forward_request_header(
             "x-private-hop",

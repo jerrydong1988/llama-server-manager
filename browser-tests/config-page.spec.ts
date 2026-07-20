@@ -80,3 +80,17 @@ test('backend command generation failure blocks persistence', async ({ page }) =
   ))).toBeGreaterThan(before)
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '0')
 })
+
+test('an empty managed alias becomes a visible safe API identifier', async ({ page }) => {
+  await openConfiguration(page, 'empty-alias')
+
+  const alias = page.locator('[data-config-field="alias"]')
+  await expect(alias.locator('input')).toHaveValue('Browser Parameter Regression')
+  await expect(alias).toHaveAttribute('data-config-emitted', 'true')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .toContain('-a')
+  const generated = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated)
+  const aliasIndex = generated?.command.indexOf('-a') ?? -1
+  expect(aliasIndex).toBeGreaterThanOrEqual(0)
+  expect(generated?.command[aliasIndex + 1]).toBe('Browser Parameter Regression')
+})

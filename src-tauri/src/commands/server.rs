@@ -5,7 +5,10 @@ use crate::commands::engine_capabilities::{
 };
 use crate::commands::nvml;
 use crate::error::{AppError, AppResult};
-use crate::models::{AppState, EngineCapabilities, InstanceConfig, RunningInstance, SystemMetrics};
+use crate::models::{
+    ensure_managed_public_model_alias, AppState, EngineCapabilities, InstanceConfig,
+    RunningInstance, SystemMetrics,
+};
 use crate::vector_policy::{normalize_for_launch, ModelWorkload};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -1382,9 +1385,10 @@ fn emitted_override_keys(
 }
 
 fn prepare_launch(
-    config: InstanceConfig,
+    mut config: InstanceConfig,
     engine_path: &str,
 ) -> (InstanceConfig, ModelWorkload, Vec<String>) {
+    ensure_managed_public_model_alias(&mut config);
     let normalized = normalize_for_launch(config);
     let workload = normalized.workload;
     let config = normalized.into_config();
@@ -4391,6 +4395,28 @@ mod perf_parser_tests {
                 "--slots",
             ]
         );
+    }
+
+    #[test]
+    fn managed_launch_emits_a_safe_alias_when_the_user_left_it_empty() {
+        let config = InstanceConfig {
+            name: "Public model".into(),
+            model_path: r"C:\private\models\model.gguf".into(),
+            explicit_overrides: Some(Vec::new()),
+            ..InstanceConfig::default()
+        };
+
+        let (normalized, _, command) = prepare_launch(config, "llama-server");
+
+        assert_eq!(normalized.alias, "Public model");
+        assert!(normalized
+            .explicit_overrides
+            .as_ref()
+            .is_some_and(|fields| fields.iter().any(|field| field == "alias")));
+        assert!(has_flag_value(&command, "-a", "Public model"));
+        assert!(!command
+            .iter()
+            .any(|argument| argument.contains("private") && argument != &normalized.model_path));
     }
 
     #[test]

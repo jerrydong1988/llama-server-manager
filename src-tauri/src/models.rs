@@ -48,7 +48,9 @@ pub struct ModelCapabilities {
 
 #[cfg(test)]
 mod model_capability_tests {
-    use super::{InstanceConfig, ModelCapabilities};
+    use super::{
+        ensure_managed_public_model_alias, public_model_id, InstanceConfig, ModelCapabilities,
+    };
 
     #[test]
     fn vector_capabilities_distinguish_missing_cache_fields_from_explicit_false() {
@@ -107,6 +109,43 @@ mod model_capability_tests {
         assert_eq!(config.adaptive_decay, expected.adaptive_decay);
         assert_eq!(config.top_n_sigma, expected.top_n_sigma);
         assert_eq!(config.sse_ping_interval, expected.sse_ping_interval);
+    }
+
+    #[test]
+    fn public_model_id_never_falls_back_to_a_filesystem_path() {
+        let mut config = InstanceConfig {
+            model_path: r"C:\Users\Jerry\models\Qwen3.6-27B-Q6_K.gguf".into(),
+            ..InstanceConfig::default()
+        };
+        assert_eq!(public_model_id(&config), "Qwen3.6-27B-Q6_K");
+
+        config.name = "Friendly model".into();
+        assert_eq!(public_model_id(&config), "Friendly model");
+
+        config.alias = "public-alias".into();
+        assert_eq!(public_model_id(&config), "public-alias");
+    }
+
+    #[test]
+    fn managed_alias_is_visible_and_emitted_but_manual_commands_are_untouched() {
+        let mut managed = InstanceConfig {
+            name: "Public model".into(),
+            explicit_overrides: Some(Vec::new()),
+            ..InstanceConfig::default()
+        };
+        assert!(ensure_managed_public_model_alias(&mut managed));
+        assert_eq!(managed.alias, "Public model");
+        assert_eq!(managed.explicit_overrides, Some(vec!["alias".into()]));
+
+        let mut manual = InstanceConfig {
+            launch_mode: "manual".into(),
+            name: "Manual model".into(),
+            explicit_overrides: Some(Vec::new()),
+            ..InstanceConfig::default()
+        };
+        assert!(!ensure_managed_public_model_alias(&mut manual));
+        assert!(manual.alias.is_empty());
+        assert_eq!(manual.explicit_overrides, Some(Vec::new()));
     }
 }
 
@@ -490,6 +529,74 @@ pub struct InstanceConfig {
     pub reuse_port: bool,
     #[serde(default)]
     pub auto_start: bool,
+}
+
+fn model_file_stem(value: &str) -> Option<String> {
+    let file_name = value
+        .trim()
+        .rsplit(['/', '\\'])
+        .find(|component| !component.trim().is_empty())?
+        .trim();
+    if file_name.is_empty() {
+        return None;
+    }
+    let stem = file_name
+        .to_ascii_lowercase()
+        .strip_suffix(".gguf")
+        .map(|_| &file_name[..file_name.len() - ".gguf".len()])
+        .unwrap_or(file_name)
+        .trim();
+    (!stem.is_empty()).then(|| stem.to_string())
+}
+
+/// Stable model identifier exposed to API clients. Internal instance UUIDs and
+/// filesystem paths are deliberately excluded from the fallback chain.
+pub(crate) fn public_model_id(config: &InstanceConfig) -> String {
+    let alias = config.alias.trim();
+    if !alias.is_empty() {
+        return alias.to_string();
+    }
+
+    let name = config.name.trim();
+    if !name.is_empty() {
+        if !name.contains(['/', '\\']) {
+            return name.to_string();
+        }
+        if let Some(stem) = model_file_stem(name) {
+            return stem;
+        }
+    }
+
+    model_file_stem(&config.model_path).unwrap_or_else(|| "model".to_string())
+}
+
+/// Managed instances always receive a visible llama-server alias so upstream
+/// JSON and SSE responses cannot fall back to exposing the model file path.
+pub(crate) fn ensure_managed_public_model_alias(config: &mut InstanceConfig) -> bool {
+    if config.launch_mode.eq_ignore_ascii_case("manual") {
+        return false;
+    }
+
+    if config.alias.trim().is_empty()
+        && config.name.trim().is_empty()
+        && model_file_stem(&config.model_path).is_none()
+    {
+        return false;
+    }
+
+    let mut changed = false;
+    let alias = public_model_id(config);
+    if config.alias != alias {
+        config.alias = alias;
+        changed = true;
+    }
+    if let Some(overrides) = config.explicit_overrides.as_mut() {
+        if !overrides.iter().any(|field| field == "alias") {
+            overrides.push("alias".to_string());
+            changed = true;
+        }
+    }
+    changed
 }
 
 impl Default for InstanceConfig {

@@ -90,7 +90,7 @@
     // Basic
     modelPath: '\u6A21\u578B\u8DEF\u5F84', modelPathTip: 'GGUF 模型文件的路径。llama-server 将加载并提供该模型的 API 服务。必填参数。',
     modelPathBtn: '\u4ECE\u6A21\u578B\u4ED3\u5E93\u4E2D\u9009\u62E9',
-    alias: '\u522B\u540D', aliasTip: 'API 调用时的模型别名。设置后 /v1/models 端点返回此名称。[场景] 向 API 用户暴露友好的模型名。',
+    alias: '\u522B\u540D', aliasTip: '对 API 客户端公开的安全模型标识。留空时托管模式会自动采用实例名称，并在页面和启动命令中明确显示，避免响应泄露模型完整路径。',
     lora: 'LoRA \u8DEF\u5F84', loraTip: 'LoRA（低秩自适应）适配器文件路径。无需重新训练全量模型即可修改模型行为——如风格转移、领域专精。[场景] 加载单个适配器实现微调。多适配器+自定义缩放用 --lora-scaled。',
     mmproj: '\u591A\u6A21\u6001\u6295\u5F71\u5668', mmprojTip: '多模态投影器 (mmproj) 文件路径。视觉模型处理图像必需。选择主模型时会尝试自动匹配；也可使用右侧按钮从模型仓库手动选择。',
     mmprojPathBtn: '\u4ECE\u6A21\u578B\u4ED3\u5E93\u4E2D\u9009\u62E9\u591A\u6A21\u6001\u6295\u5F71\u5668',

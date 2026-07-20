@@ -134,6 +134,12 @@ if (BROWSER_SCENARIO === 'multimodal-mismatch') {
 if (BROWSER_SCENARIO === 'empty-model-roots') {
   state.model_dirs = []
 }
+if (BROWSER_SCENARIO === 'empty-alias') {
+  state.instances[INSTANCE_ID].alias = ''
+  state.instances[INSTANCE_ID].explicit_overrides = (
+    state.instances[INSTANCE_ID].explicit_overrides ?? []
+  ).filter(field => field !== 'alias')
+}
 
 type BrowserTestControl = {
   marker: string
@@ -205,7 +211,8 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
     '--metrics', '--props', '--slots',
   ]
   for (const field of emitted) {
-    if (field === 'temp') command.push('--temp', String(config.temp))
+    if (field === 'alias') command.push('-a', config.alias)
+    else if (field === 'temp') command.push('--temp', String(config.temp))
     else if (field === 'top_k') command.push('--top-k', String(config.top_k))
     else if (field === 'top_p') command.push('--top-p', String(config.top_p))
     else if (field === 'kv_unified_mode') command.push(config.kv_unified_mode === 'off' ? '--no-kv-unified' : '--kv-unified')

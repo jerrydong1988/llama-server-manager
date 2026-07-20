@@ -99,6 +99,35 @@ function modelBasename(value: string | undefined): string {
   return value?.split(/[\\/]/).pop() ?? ''
 }
 
+function safeModelStem(value: string | undefined): string {
+  return modelBasename(value).trim().replace(/\.gguf$/i, '')
+}
+
+export function derivePublicModelId(
+  config: Pick<InstanceConfig, 'alias' | 'name' | 'model_path'>,
+): string {
+  const alias = config.alias.trim()
+  if (alias) return alias
+
+  const name = config.name.trim()
+  if (name) return /[\\/]/.test(name) ? (safeModelStem(name) || 'model') : name
+
+  return safeModelStem(config.model_path) || 'model'
+}
+
+export function ensureManagedPublicModelAlias(config: InstanceConfig): InstanceConfig {
+  if (config.launch_mode.toLowerCase() === 'manual') return config
+  if (!config.alias.trim() && !config.name.trim() && !safeModelStem(config.model_path)) return config
+
+  const alias = derivePublicModelId(config)
+  const overrides = Array.isArray(config.explicit_overrides)
+    && !config.explicit_overrides.includes('alias')
+    ? [...config.explicit_overrides, 'alias']
+    : config.explicit_overrides
+  if (config.alias === alias && overrides === config.explicit_overrides) return config
+  return { ...config, alias, explicit_overrides: overrides }
+}
+
 export function detectModelWorkload(
   model?: ModelInfo | null,
   modelPath = '',
@@ -168,9 +197,10 @@ export function normalizeInstanceConfig(
   model?: ModelInfo | null,
   options: NormalizeInstanceConfigOptions = {},
 ) {
-  const workload = detectModelWorkload(model, config.model_path, config)
+  const publicConfig = ensureManagedPublicModelAlias(config)
+  const workload = detectModelWorkload(model, publicConfig.model_path, publicConfig)
   if (workload === 'inference') {
-    const next: InstanceConfig = { ...config }
+    const next: InstanceConfig = { ...publicConfig }
     return {
       config: next,
       workload,
@@ -180,10 +210,10 @@ export function normalizeInstanceConfig(
   }
 
   const defaults = defaultInstanceConfig()
-  const next: InstanceConfig = { ...config, embedding: true }
+  const next: InstanceConfig = { ...publicConfig, embedding: true }
   for (const key of VECTOR_INCOMPATIBLE_FIELDS) next[key] = defaults[key] as never
-  if (Array.isArray(config.explicit_overrides)) {
-    next.explicit_overrides = config.explicit_overrides.filter(key => VECTOR_ALLOWED_FIELDS.has(key as keyof InstanceConfig))
+  if (Array.isArray(publicConfig.explicit_overrides)) {
+    next.explicit_overrides = publicConfig.explicit_overrides.filter(key => VECTOR_ALLOWED_FIELDS.has(key as keyof InstanceConfig))
   }
 
   if (workload === 'reranker') {
