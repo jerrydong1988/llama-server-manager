@@ -6,7 +6,7 @@ mod transport;
 use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
-    RUNTIME_PROTOCOL_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -155,6 +155,41 @@ pub async fn sync_app_config(
     sync_config(next_config_revision(), proxy_config, instances).await
 }
 
+pub async fn prepare_background_detach(
+    state: &crate::models::AppState,
+) -> Result<RuntimeServiceStatus, String> {
+    let _sync = APP_CONFIG_SYNC_LOCK.lock().await;
+    let current = ensure_runtime_service().await?;
+    let gui_running = state.running.lock().unwrap().clone();
+    let mut gui_ids = gui_running.keys().cloned().collect::<Vec<_>>();
+    let mut runtime_ids = current.running.keys().cloned().collect::<Vec<_>>();
+    gui_ids.sort();
+    runtime_ids.sort();
+    if gui_ids != runtime_ids {
+        return Err(format!(
+            "后台接管前运行状态尚未同步：界面 [{}]，后台 [{}]；请等待状态刷新后重试",
+            gui_ids.join(", "),
+            runtime_ids.join(", ")
+        ));
+    }
+    let proxy_config = state.proxy_config.lock().unwrap().clone();
+    let instances = state.instances.lock().unwrap().clone();
+    let revision = next_config_revision().max(current.config_revision.saturating_add(1));
+    match call(RuntimeCommand::PrepareBackgroundDetach {
+        revision,
+        proxy_config,
+        instances,
+        // The daemon may have been upgraded and restarted by ensure_runtime_service,
+        // so its freshly authenticated process identities are authoritative here.
+        expected_running: current.running,
+    })
+    .await?
+    {
+        RuntimeReply::Status(status) => Ok(*status),
+        _ => Err("runtime service returned an unexpected background detach response".into()),
+    }
+}
+
 pub async fn heartbeat() -> Result<RuntimeServiceStatus, String> {
     match call(RuntimeCommand::Heartbeat {
         gui_pid: std::process::id(),
@@ -192,6 +227,18 @@ pub fn configure_runtime_data_dir_from_args() -> Result<(), String> {
 
 fn is_runtime_autostart_invocation() -> bool {
     std::env::args_os().any(|argument| argument == "--autostart")
+}
+
+fn runtime_registration_enabled() -> bool {
+    // The cross-process smoke test uses an isolated data directory and must not
+    // write a real login item into the developer's OS account.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("LSM_RUNTIME_TEST_LOGIN_REGISTERED").as_deref()
+        == Some(std::ffi::OsStr::new("1"))
+    {
+        return true;
+    }
+    autostart::is_runtime_autostart_enabled().unwrap_or(false)
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -422,7 +469,12 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
     let token = load_or_create_control_token()?;
     if ping_with_token(token.clone()).await {
         let status = runtime_status().await?;
-        if status.service_version == env!("CARGO_PKG_VERSION") {
+        if status.service_version == env!("CARGO_PKG_VERSION")
+            && status
+                .capabilities
+                .iter()
+                .any(|capability| capability == BACKGROUND_DETACH_CAPABILITY)
+        {
             return Ok(status);
         }
         shutdown(false).await?;
@@ -444,7 +496,15 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
     if !ping_with_token(token).await {
         return Err("runtime service rejected the authenticated startup probe".into());
     }
-    runtime_status().await
+    let status = runtime_status().await?;
+    if !status
+        .capabilities
+        .iter()
+        .any(|capability| capability == BACKGROUND_DETACH_CAPABILITY)
+    {
+        return Err("runtime service started without background detach capability".into());
+    }
+    Ok(status)
 }
 
 pub fn run_runtime_service() -> Result<(), String> {
@@ -466,9 +526,8 @@ pub fn run_runtime_service() -> Result<(), String> {
                 if is_runtime_autostart_invocation() && !supervisor.background_enabled() {
                     return Ok(());
                 }
-                let registered_for_login = std::sync::Arc::new(AtomicBool::new(
-                    autostart::is_runtime_autostart_enabled().unwrap_or(false),
-                ));
+                let registered_for_login =
+                    std::sync::Arc::new(AtomicBool::new(runtime_registration_enabled()));
                 let supervisor_for_initialization = supervisor.clone();
                 transport::run_server(
                     runtime_lock,
@@ -503,11 +562,11 @@ pub fn run_runtime_service() -> Result<(), String> {
                             let refresh_registration = matches!(
                                 &request.command,
                                 RuntimeCommand::SyncConfig { .. }
+                                    | RuntimeCommand::PrepareBackgroundDetach { .. }
                                     | RuntimeCommand::SetBackgroundEnabled { .. }
                             );
                             let registered = if refresh_registration {
-                                let registered =
-                                    autostart::is_runtime_autostart_enabled().unwrap_or(false);
+                                let registered = runtime_registration_enabled();
                                 registered_for_login.store(registered, Ordering::Release);
                                 registered
                             } else {
@@ -552,6 +611,7 @@ fn runtime_status_payload(
         "protocolVersion": status.protocol_version,
         "serviceVersion": status.service_version,
         "servicePid": status.service_pid,
+        "capabilities": status.capabilities,
         "configRevision": status.config_revision,
         "backgroundEnabled": status.background_enabled,
         "registeredForLogin": status.registered_for_login,
@@ -565,7 +625,7 @@ fn runtime_status_payload(
     })
 }
 
-fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus) {
+pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus) {
     use tauri::{Emitter, Manager};
 
     let state = app.state::<crate::models::AppState>();
@@ -737,6 +797,7 @@ mod tests {
             protocol_version: RUNTIME_PROTOCOL_VERSION,
             service_version: "test".into(),
             service_pid: 1,
+            capabilities: vec![BACKGROUND_DETACH_CAPABILITY.into()],
             config_revision: 1,
             background_enabled: false,
             registered_for_login: false,

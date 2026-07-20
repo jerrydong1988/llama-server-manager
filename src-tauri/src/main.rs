@@ -55,21 +55,25 @@ use crate::commands::telemetry::{
 };
 use crate::models::{AppState, WindowState};
 use std::collections::HashMap;
-use std::sync::Mutex;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use tauri::{Emitter, Manager};
 
 static NATIVE_START: OnceLock<Instant> = OnceLock::new();
+static EXIT_HANDOFF_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProxyQuitDecision {
     ExitNow,
+    ExitUiKeepRuntime,
     RequestConfirmation,
 }
 
-fn decide_proxy_quit(proxy_running: bool, _background_service_mode: bool) -> ProxyQuitDecision {
-    if !proxy_running {
+fn decide_proxy_quit(workloads_active: bool, runtime_service_enabled: bool) -> ProxyQuitDecision {
+    if runtime_service_enabled {
+        ProxyQuitDecision::ExitUiKeepRuntime
+    } else if !workloads_active {
         ProxyQuitDecision::ExitNow
     } else {
         ProxyQuitDecision::RequestConfirmation
@@ -79,10 +83,8 @@ fn decide_proxy_quit(proxy_running: bool, _background_service_mode: bool) -> Pro
 fn proxy_quit_inputs(app: &tauri::AppHandle) -> (bool, bool) {
     if let Some(state) = app.try_state::<AppState>() {
         let proxy_config = state.proxy_config.lock().unwrap().clone();
-        let runtime_active = proxy_config.runtime_service_enabled
-            || proxy_config.enabled
-            || !state.running.lock().unwrap().is_empty();
-        (runtime_active, proxy_config.runtime_service_enabled)
+        let workloads_active = proxy_config.enabled || !state.running.lock().unwrap().is_empty();
+        (workloads_active, proxy_config.runtime_service_enabled)
     } else {
         (false, false)
     }
@@ -138,6 +140,110 @@ fn request_proxy_exit_confirmation(app: &tauri::AppHandle, background_service_mo
     }
 }
 
+fn report_background_detach_failure(app: &tauri::AppHandle, error: &str) {
+    let payload = serde_json::json!({ "error": error });
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("background-detach-failed", payload);
+    } else {
+        let _ = app.emit("background-detach-failed", payload);
+    }
+}
+
+struct ExitHandoffGuard;
+
+impl ExitHandoffGuard {
+    fn acquire() -> Result<Self, String> {
+        EXIT_HANDOFF_IN_PROGRESS
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| Self)
+            .map_err(|_| "后台接管正在进行，请勿重复操作".to_string())
+    }
+}
+
+impl Drop for ExitHandoffGuard {
+    fn drop(&mut self) {
+        EXIT_HANDOFF_IN_PROGRESS.store(false, Ordering::Release);
+    }
+}
+
+async fn prepare_background_exit(
+    app: &tauri::AppHandle,
+    enable_runtime: bool,
+) -> Result<(), String> {
+    let _handoff = ExitHandoffGuard::acquire()?;
+    let state = app.state::<AppState>();
+    let _transition = state.proxy_lifecycle_lock.lock().await;
+    let previous_config = state.proxy_config.lock().unwrap().clone();
+    if !enable_runtime && !previous_config.runtime_service_enabled {
+        return Err("独立后台运行时尚未启用".into());
+    }
+    let previous_registration = crate::runtime_service::autostart::is_runtime_autostart_enabled()?;
+    let sync_generation = crate::runtime_service::mark_config_sync_pending();
+    let mut next_config = previous_config.clone();
+    next_config.runtime_service_enabled = true;
+
+    let result = async {
+        if next_config.runtime_service_enabled != previous_config.runtime_service_enabled {
+            update_and_persist(&state, |global| {
+                global.proxy_config = next_config.clone();
+            })?;
+            *state.proxy_config.lock().unwrap() = next_config.clone();
+        }
+        crate::runtime_service::autostart::enable_runtime_autostart()?;
+        let status = crate::runtime_service::prepare_background_detach(&state).await?;
+        if status.config_revision == 0 || !status.background_enabled || !status.registered_for_login
+        {
+            return Err("后台接管回执不完整，主程序已取消退出".into());
+        }
+        crate::runtime_service::reconcile_app_runtime(app, &status);
+        crate::runtime_service::mark_config_sync_complete(sync_generation);
+        Ok::<(), String>(())
+    }
+    .await;
+
+    if let Err(error) = result {
+        *state.proxy_config.lock().unwrap() = previous_config.clone();
+        let rollback_generation = crate::runtime_service::mark_config_sync_pending();
+        let mut rollback_errors = Vec::new();
+        if let Err(rollback_error) = update_and_persist(&state, |global| {
+            global.proxy_config = previous_config.clone();
+        }) {
+            rollback_errors.push(rollback_error);
+        }
+        let registration_result = if previous_registration {
+            crate::runtime_service::autostart::enable_runtime_autostart()
+        } else {
+            crate::runtime_service::autostart::disable_runtime_autostart()
+        };
+        if let Err(rollback_error) = registration_result {
+            rollback_errors.push(rollback_error);
+        }
+        if let Err(rollback_error) = crate::runtime_service::sync_app_config(&state).await {
+            rollback_errors.push(rollback_error);
+        }
+        if let Err(rollback_error) =
+            crate::runtime_service::set_background_enabled(previous_config.runtime_service_enabled)
+                .await
+        {
+            rollback_errors.push(rollback_error);
+        }
+        if rollback_errors.is_empty() {
+            crate::runtime_service::mark_config_sync_complete(rollback_generation);
+            return Err(error);
+        }
+        return Err(format!(
+            "{error}; 回滚后台接管状态时又发生错误：{}",
+            rollback_errors.join("; ")
+        ));
+    }
+
+    persist_runtime_state(app);
+    finalize_app_exit(app, true);
+    Ok(())
+}
+
 #[tauri::command]
 fn get_startup_elapsed() -> u64 {
     NATIVE_START
@@ -171,16 +277,70 @@ async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 async fn quit_keep_runtime(app: tauri::AppHandle) -> Result<(), String> {
+    prepare_background_exit(&app, false).await
+}
+
+#[tauri::command]
+async fn enable_background_and_quit(app: tauri::AppHandle) -> Result<(), String> {
+    prepare_background_exit(&app, true).await
+}
+
+#[tauri::command]
+async fn stop_background_runtime(app: tauri::AppHandle) -> Result<(), String> {
     let state = app.state::<AppState>();
-    let runtime_enabled = state.proxy_config.lock().unwrap().runtime_service_enabled;
-    if !runtime_enabled {
-        return Err("独立后台运行时尚未启用".into());
+    let _transition = state.proxy_lifecycle_lock.lock().await;
+    let mut next_config = state.proxy_config.lock().unwrap().clone();
+    next_config.enabled = false;
+    next_config.runtime_service_enabled = false;
+    update_and_persist(&state, |global| {
+        global.proxy_config = next_config.clone();
+    })?;
+    *state.proxy_config.lock().unwrap() = next_config;
+    let sync_generation = crate::runtime_service::mark_config_sync_pending();
+    let mut failures = Vec::new();
+
+    if let Err(error) = crate::runtime_service::sync_app_config(&state).await {
+        failures.push(format!("同步停止配置失败：{error}"));
     }
-    crate::runtime_service::autostart::enable_runtime_autostart()?;
-    crate::runtime_service::set_background_enabled(true).await?;
+    match crate::runtime_service::ensure_runtime_service().await {
+        Ok(status) => {
+            if status.proxy.running {
+                if let Err(error) = crate::runtime_service::stop_proxy().await {
+                    failures.push(format!("停止统一 API 路由失败：{error}"));
+                }
+            }
+            for instance_id in status.running.keys() {
+                if let Err(error) = crate::runtime_service::stop_instance(instance_id.clone()).await
+                {
+                    failures.push(format!("停止实例 {instance_id} 失败：{error}"));
+                }
+            }
+        }
+        Err(error) => failures.push(format!("读取后台运行状态失败：{error}")),
+    }
+    if let Err(error) = crate::runtime_service::autostart::disable_runtime_autostart() {
+        failures.push(format!("移除登录恢复注册失败：{error}"));
+    }
+    // Refreshes the daemon's cached registration state after the login item is
+    // removed, so the returned status cannot briefly claim it is still active.
+    if let Err(error) = crate::runtime_service::set_background_enabled(false).await {
+        failures.push(format!("关闭后台接管标记失败：{error}"));
+    }
+    match crate::runtime_service::runtime_status().await {
+        Ok(status) => crate::runtime_service::reconcile_app_runtime(&app, &status),
+        Err(error) => failures.push(format!("读取停止回执失败：{error}")),
+    }
+
     persist_runtime_state(&app);
-    finalize_app_exit(&app, true);
-    Ok(())
+    if failures.is_empty() {
+        crate::runtime_service::mark_config_sync_complete(sync_generation);
+        Ok(())
+    } else {
+        Err(format!(
+            "后台运行设置已关闭，但部分停止步骤失败：{}",
+            failures.join("; ")
+        ))
+    }
 }
 
 fn main() {
@@ -271,11 +431,21 @@ fn main() {
                             }
                         }
                         "quit" => {
-                            let (proxy_running, background_service_mode) = proxy_quit_inputs(app);
-                            match decide_proxy_quit(proxy_running, background_service_mode) {
+                            let (workloads_active, runtime_service_enabled) =
+                                proxy_quit_inputs(app);
+                            match decide_proxy_quit(workloads_active, runtime_service_enabled) {
                                 ProxyQuitDecision::ExitNow => finalize_app_exit(app, false),
+                                ProxyQuitDecision::ExitUiKeepRuntime => {
+                                    let app = app.clone();
+                                    tauri::async_runtime::spawn(async move {
+                                        if let Err(error) = prepare_background_exit(&app, false).await
+                                        {
+                                            report_background_detach_failure(&app, &error);
+                                        }
+                                    });
+                                }
                                 ProxyQuitDecision::RequestConfirmation => {
-                                    request_proxy_exit_confirmation(app, background_service_mode)
+                                    request_proxy_exit_confirmation(app, runtime_service_enabled)
                                 }
                             }
                         }
@@ -472,6 +642,8 @@ fn main() {
             hide_window,
             quit_app,
             quit_keep_runtime,
+            enable_background_and_quit,
+            stop_background_runtime,
             crate::runtime_service::get_runtime_service_status,
         ])
         .run(tauri::generate_context!())
@@ -856,10 +1028,18 @@ mod tests {
     }
 
     #[test]
-    fn proxy_quit_prompts_even_when_keep_alive_is_enabled() {
+    fn proxy_quit_detaches_ui_when_independent_runtime_is_enabled() {
         assert_eq!(
             super::decide_proxy_quit(true, true),
-            super::ProxyQuitDecision::RequestConfirmation
+            super::ProxyQuitDecision::ExitUiKeepRuntime
+        );
+    }
+
+    #[test]
+    fn proxy_quit_detaches_empty_runtime_when_background_mode_is_enabled() {
+        assert_eq!(
+            super::decide_proxy_quit(false, true),
+            super::ProxyQuitDecision::ExitUiKeepRuntime
         );
     }
 

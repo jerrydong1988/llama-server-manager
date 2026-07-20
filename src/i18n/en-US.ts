@@ -554,10 +554,14 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     runtimeWarnings: 'Runtime warnings', clear: 'Clear', close: 'Close',
     crash: { title: 'Something went wrong', description: 'The current view crashed and can be reloaded.', unknown: 'Unknown error', reload: 'Reload view' },
     proxyRunning: 'Background instances or routing are active',
-    proxyKeepAliveDescription: 'The independent background runtime is enabled. Managed instances and the unified API route will continue after the management UI exits.',
-    proxyExitDescription: 'Independent background mode is disabled. Exiting will stop managed instances and the unified API route; keep the main app in the tray to preserve them temporarily.',
-    keepRouteRunning: 'Exit UI and keep runtime', keepInTray: 'Keep running in tray',
+    proxyExitDescription: 'Independent background mode is disabled. Enable and verify background handoff before exiting, keep the app in the tray temporarily, or explicitly stop all instances and routing.',
+    keepInTray: 'Keep running in tray',
     openProxySettings: 'Open routing settings', stopProxyAndQuit: 'Stop instances, routing, and exit',
+    enableBackgroundAndExit: 'Enable background and exit', backgroundDetachPreparing: 'Verifying background handoff…',
+    backgroundDetachFailed: 'Background handoff failed',
+    backgroundDetachFailureDescription: 'The main app remains open and continues managing current instances and routing. Review the error and retry.',
+    backgroundDetachUnknownError: 'The background runtime returned no recognizable error details.',
+    retryBackgroundDetach: 'Verify again and exit', cancelExit: 'Cancel exit',
   },
 
   commandCenter: {

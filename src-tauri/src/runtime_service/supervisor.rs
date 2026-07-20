@@ -1,6 +1,6 @@
 use super::protocol::{
     PersistedRuntimeState, RuntimeCommand, RuntimeLaunchSpec, RuntimeReply, RuntimeServiceStatus,
-    RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
 use crate::commands::proxy::{proxy_router_from_source, ProxyDataSource, ProxyRuntimeSnapshot};
@@ -19,6 +19,52 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const GUI_HEARTBEAT_TIMEOUT_MS: u64 = 20_000;
+
+fn sorted_ids<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<String> {
+    let mut ids = ids.cloned().collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+fn validate_background_detach_inventory(
+    expected: &HashMap<String, RunningInstance>,
+    actual: &HashMap<String, RunningInstance>,
+    desired: &HashMap<String, RuntimeLaunchSpec>,
+) -> Result<(), String> {
+    let expected_ids = sorted_ids(expected.keys());
+    let actual_ids = sorted_ids(actual.keys());
+    if expected_ids != actual_ids {
+        return Err(format!(
+            "后台接管前实例清单不一致：界面 [{}]，后台 [{}]",
+            expected_ids.join(", "),
+            actual_ids.join(", ")
+        ));
+    }
+    let desired_ids = sorted_ids(desired.keys());
+    if actual_ids != desired_ids {
+        return Err(format!(
+            "后台恢复清单与运行实例不一致：运行 [{}]，恢复 [{}]",
+            actual_ids.join(", "),
+            desired_ids.join(", ")
+        ));
+    }
+    for (instance_id, expected_instance) in expected {
+        let actual_instance = actual
+            .get(instance_id)
+            .ok_or_else(|| format!("后台未接管实例 {instance_id}"))?;
+        if actual_instance.pid != expected_instance.pid
+            || actual_instance.start_time != expected_instance.start_time
+            || actual_instance.executable_path != expected_instance.executable_path
+            || actual_instance.host != expected_instance.host
+            || actual_instance.port != expected_instance.port
+        {
+            return Err(format!(
+                "后台实例 {instance_id} 的进程身份或监听端点已变化，请等待状态刷新后重试"
+            ));
+        }
+    }
+    Ok(())
+}
 
 fn validate_runtime_state(state: PersistedRuntimeState) -> Result<PersistedRuntimeState, String> {
     if state.schema_version != RUNTIME_STATE_SCHEMA_VERSION {
@@ -204,6 +250,7 @@ impl RuntimeSupervisor {
             protocol_version: RUNTIME_PROTOCOL_VERSION,
             service_version: env!("CARGO_PKG_VERSION").to_string(),
             service_pid: std::process::id(),
+            capabilities: vec![BACKGROUND_DETACH_CAPABILITY.to_string()],
             config_revision,
             background_enabled,
             registered_for_login,
@@ -321,6 +368,80 @@ impl RuntimeSupervisor {
             return Err(error);
         }
         Ok(())
+    }
+
+    fn validate_background_detach(
+        &self,
+        expected_running: &HashMap<String, RunningInstance>,
+    ) -> Result<(), String> {
+        let (actual, desired) = {
+            let state = self.state.lock().unwrap();
+            (state.running.clone(), state.desired_instances.clone())
+        };
+        validate_background_detach_inventory(expected_running, &actual, &desired)?;
+        for (instance_id, running) in &actual {
+            if !running_instance_matches_live_process(running) {
+                return Err(format!(
+                    "后台实例 {instance_id} (PID {}) 未通过进程身份校验",
+                    running.pid
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn prepare_background_detach(
+        self: &Arc<Self>,
+        revision: u64,
+        proxy_config: crate::models::ProxyConfig,
+        instances: HashMap<String, crate::models::InstanceConfig>,
+        expected_running: HashMap<String, RunningInstance>,
+        registered_for_login: bool,
+    ) -> Result<RuntimeServiceStatus, String> {
+        if !registered_for_login {
+            return Err("后台运行时尚未注册当前用户登录自启动".into());
+        }
+        let was_background_enabled = self.background_enabled();
+        self.sync_config(revision, proxy_config.clone(), instances)
+            .await?;
+        self.validate_background_detach(&expected_running)?;
+
+        let proxy_status = self.proxy_status.lock().unwrap().clone();
+        if proxy_config.enabled && !proxy_status.running {
+            self.start_proxy().await?;
+        } else if !proxy_config.enabled && proxy_status.running {
+            self.stop_proxy().await?;
+        }
+
+        let expected_addr =
+            crate::utils::format_host_port(proxy_config.host.trim(), proxy_config.port);
+        let proxy_status = self.proxy_status.lock().unwrap().clone();
+        if proxy_status.running != proxy_config.enabled {
+            return Err("统一 API 路由未达到保存配置要求的运行状态".into());
+        }
+        if proxy_config.enabled && proxy_status.bound_addr != expected_addr {
+            return Err(format!(
+                "统一 API 路由监听地址不一致：期望 {expected_addr}，实际 {}",
+                proxy_status.bound_addr
+            ));
+        }
+
+        self.set_background_enabled(true)?;
+        let verification = self.validate_background_detach(&expected_running);
+        if let Err(error) = verification {
+            if !was_background_enabled {
+                let _ = self.set_background_enabled(false);
+            }
+            return Err(error);
+        }
+        let status = self.status(registered_for_login);
+        if !status.background_enabled || !status.registered_for_login {
+            if !was_background_enabled {
+                let _ = self.set_background_enabled(false);
+            }
+            return Err("后台接管回执未确认持久化与登录恢复状态".into());
+        }
+        Ok(status)
     }
 
     fn spawn_instance_monitor(
@@ -1104,6 +1225,22 @@ impl RuntimeSupervisor {
                     self.status(registered_for_login),
                 )))
             }
+            RuntimeCommand::PrepareBackgroundDetach {
+                revision,
+                proxy_config,
+                instances,
+                expected_running,
+            } => self
+                .prepare_background_detach(
+                    revision,
+                    proxy_config,
+                    instances,
+                    expected_running,
+                    registered_for_login,
+                )
+                .await
+                .map(Box::new)
+                .map(RuntimeReply::Status),
             RuntimeCommand::StartInstance { spec } => self
                 .start_instance(*spec)
                 .map(Box::new)
@@ -1199,10 +1336,41 @@ fn should_stop_for_missing_gui(background_enabled: bool, heartbeat_expired: bool
 #[cfg(test)]
 mod tests {
     use super::{
-        gui_owner_is_alive, should_stop_for_missing_gui, validate_runtime_state, GuiOwner,
+        gui_owner_is_alive, should_stop_for_missing_gui, validate_background_detach_inventory,
+        validate_runtime_state, GuiOwner,
     };
     use crate::commands::server::read_process_identity;
-    use crate::runtime_service::protocol::{PersistedRuntimeState, RUNTIME_STATE_SCHEMA_VERSION};
+    use crate::models::{InstanceConfig, RunningInstance};
+    use crate::runtime_service::protocol::{
+        PersistedRuntimeState, RuntimeLaunchSpec, RUNTIME_STATE_SCHEMA_VERSION,
+    };
+    use std::collections::HashMap;
+
+    fn detach_instance(pid: u32) -> RunningInstance {
+        RunningInstance {
+            instance_id: "instance-1".into(),
+            pid,
+            port: 8080,
+            host: "127.0.0.1".into(),
+            start_time: 123,
+            executable_path: "/tmp/llama-server".into(),
+            telemetry_session_id: None,
+            workload: "inference".into(),
+            launch_config: None,
+        }
+    }
+
+    fn detach_spec() -> RuntimeLaunchSpec {
+        RuntimeLaunchSpec {
+            instance_id: "instance-1".into(),
+            config: InstanceConfig::default(),
+            engine_backend: "test".into(),
+            command: vec!["llama-server".into()],
+            command_display: "llama-server".into(),
+            workload: "inference".into(),
+            working_directory: None,
+        }
+    }
 
     #[test]
     fn watchdog_only_stops_gui_bound_runtime_after_heartbeat_expiry() {
@@ -1235,5 +1403,43 @@ mod tests {
         assert!(gui_owner_is_alive(&owner));
         owner.start_time = owner.start_time.saturating_add(1);
         assert!(!gui_owner_is_alive(&owner));
+    }
+
+    #[test]
+    fn detach_inventory_requires_the_same_running_and_recovery_sets() {
+        let expected = [("instance-1".to_string(), detach_instance(42))]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let actual = expected.clone();
+        let desired = [("instance-1".to_string(), detach_spec())]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        validate_background_detach_inventory(&expected, &actual, &desired).unwrap();
+
+        let mut unexpected = actual.clone();
+        unexpected.insert("instance-2".into(), detach_instance(43));
+        assert!(
+            validate_background_detach_inventory(&expected, &unexpected, &desired)
+                .unwrap_err()
+                .contains("实例清单不一致")
+        );
+    }
+
+    #[test]
+    fn detach_inventory_rejects_changed_process_identity() {
+        let expected = [("instance-1".to_string(), detach_instance(42))]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let actual = [("instance-1".to_string(), detach_instance(99))]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let desired = [("instance-1".to_string(), detach_spec())]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        assert!(
+            validate_background_detach_inventory(&expected, &actual, &desired)
+                .unwrap_err()
+                .contains("进程身份")
+        );
     }
 }

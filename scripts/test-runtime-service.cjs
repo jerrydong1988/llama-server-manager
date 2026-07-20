@@ -99,7 +99,11 @@ function spawnRuntime(executable, dataDir) {
   const child = childProcess.spawn(
     executable,
     ['--runtime-service', '--runtime-data-dir', dataDir],
-    { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true },
+    {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      windowsHide: true,
+      env: { ...process.env, LSM_RUNTIME_TEST_LOGIN_REGISTERED: '1' },
+    },
   )
   const stderr = []
   child.stderr.on('data', chunk => stderr.push(chunk))
@@ -260,7 +264,8 @@ async function main() {
     const status = await request(endpoint, token, { command: 'get_status' }, 'status')
     if (status.reply?.result !== 'status'
       || status.reply.payload?.protocol_version !== 1
-      || status.reply.payload?.service_pid <= 0) {
+      || status.reply.payload?.service_pid <= 0
+      || !status.reply.payload?.capabilities?.includes('background_detach_v1')) {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }
     service = contenders.find(candidate => candidate.pid === status.reply.payload.service_pid)
@@ -278,27 +283,30 @@ async function main() {
     }
 
     const launchSpec = testLaunchSpec(dataDir, backendPort)
+    const proxyConfig = {
+      enabled: true,
+      host: '127.0.0.1',
+      port: proxyPort,
+      public_api_key: 'runtime-smoke-proxy-key',
+      default_instance_id: launchSpec.instance_id,
+      routes: [{
+        id: 'runtime-smoke-route',
+        enabled: true,
+        model_alias: 'runtime-smoke-model',
+        target_instance_id: launchSpec.instance_id,
+        priority: 0,
+      }],
+      runtime_service_enabled: true,
+    }
+    const initialRevision = Date.now()
     const synced = await request(
       endpoint,
       token,
       {
         command: 'sync_config',
         payload: {
-          revision: Date.now(),
-          proxy_config: {
-            enabled: true,
-            host: '127.0.0.1',
-            port: proxyPort,
-            public_api_key: 'runtime-smoke-proxy-key',
-            default_instance_id: launchSpec.instance_id,
-            routes: [{
-              id: 'runtime-smoke-route',
-              enabled: true,
-              model_alias: 'runtime-smoke-model',
-              target_instance_id: launchSpec.instance_id,
-              priority: 0,
-            }],
-          },
+          revision: initialRevision,
+          proxy_config: proxyConfig,
           instances: { [launchSpec.instance_id]: launchSpec.config },
         },
       },
@@ -338,6 +346,50 @@ async function main() {
     })
     if (routedBeforeUpgrade.status !== 200 || !routedBeforeUpgrade.body.includes('runtime-smoke-response')) {
       throw new Error(`runtime did not forward the pre-upgrade request: ${JSON.stringify(routedBeforeUpgrade)}`)
+    }
+
+    const detached = await request(
+      endpoint,
+      token,
+      {
+        command: 'prepare_background_detach',
+        payload: {
+          revision: initialRevision + 1,
+          proxy_config: proxyConfig,
+          instances: { [launchSpec.instance_id]: launchSpec.config },
+          expected_running: { [launchSpec.instance_id]: started.reply.payload },
+        },
+      },
+      'prepare-background-detach',
+    )
+    if (detached.reply?.result !== 'status'
+      || detached.reply.payload?.background_enabled !== true
+      || detached.reply.payload?.registered_for_login !== true
+      || detached.reply.payload?.proxy?.running !== true
+      || detached.reply.payload?.running?.[launchSpec.instance_id]?.pid !== firstInstancePid) {
+      throw new Error(`runtime background handoff verification failed: ${JSON.stringify(detached)}`)
+    }
+
+    // No GUI process sends a heartbeat in this test. Surviving a watchdog
+    // interval proves that the verified detach flag, not the tray process,
+    // owns the runtime lifetime.
+    await sleep(21_500)
+    const detachedStatus = await request(endpoint, token, { command: 'get_status' }, 'detached-status')
+    if (!pidIsAlive(service.pid)
+      || detachedStatus.reply?.payload?.running?.[launchSpec.instance_id]?.pid !== firstInstancePid
+      || detachedStatus.reply?.payload?.proxy?.running !== true) {
+      throw new Error(`runtime did not survive GUI heartbeat expiry: ${JSON.stringify(detachedStatus)}`)
+    }
+    const routedWhileDetached = await httpRequest(proxyPort, '/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer runtime-smoke-proxy-key',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ model: 'runtime-smoke-model', messages: [] }),
+    })
+    if (routedWhileDetached.status !== 200 || !routedWhileDetached.body.includes('runtime-smoke-response')) {
+      throw new Error(`detached runtime stopped forwarding requests: ${JSON.stringify(routedWhileDetached)}`)
     }
 
     const upgradeShutdown = await request(
@@ -401,7 +453,7 @@ async function main() {
     if (routedAfterUpgrade.status !== 200 || !routedAfterUpgrade.body.includes('runtime-smoke-response')) {
       throw new Error(`runtime did not forward the post-upgrade request: ${JSON.stringify(routedAfterUpgrade)}`)
     }
-    if (forwardedRequests !== 2) {
+    if (forwardedRequests !== 3) {
       throw new Error(`runtime routed an unexpected number of requests: ${forwardedRequests}`)
     }
     const stopped = await request(

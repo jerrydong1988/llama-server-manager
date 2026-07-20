@@ -1,4 +1,5 @@
 import { mockConvertFileSrc, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
+import { emit } from '@tauri-apps/api/event'
 import { defaultInstanceConfig } from '../src/store/defaults'
 import type { GlobalConfigShape } from '../src/store/bootstrap'
 import type { EngineInfo, GeneratedServerCommand, InstanceConfig, ModelInfo, SystemMetrics } from '../src/store/types'
@@ -114,6 +115,35 @@ const state: GlobalConfigShape = {
   dark_mode: true,
 }
 
+const proxyConfig = {
+  enabled: BROWSER_SCENARIO === 'background-runtime-active',
+  host: '127.0.0.1',
+  port: 11435,
+  public_api_key: '',
+  default_instance_id: '',
+  routing_strategy: 'firstHealthy',
+  timeout_ms: 600_000,
+  background_service_mode: false,
+  runtime_service_enabled: BROWSER_SCENARIO === 'background-runtime-active',
+  routes: [],
+}
+const proxyStatus = {
+  running: BROWSER_SCENARIO === 'background-runtime-active',
+  bound_addr: '127.0.0.1:11435',
+  active_routes: 0,
+  last_error: null,
+}
+const runtimeStatus = {
+  servicePid: 4242,
+  serviceVersion: '2.9.30-browser-test',
+  backgroundEnabled: BROWSER_SCENARIO === 'background-runtime-active',
+  registeredForLogin: BROWSER_SCENARIO === 'background-runtime-active',
+  running: BROWSER_SCENARIO === 'background-runtime-active'
+    ? { 'browser-background-instance': { pid: 4243 } }
+    : {},
+  lastError: null,
+}
+
 if (BROWSER_SCENARIO === 'missing-engine') {
   state.instances[INSTANCE_ID].engine_id = 'removed-browser-test-engine'
 }
@@ -148,6 +178,7 @@ type BrowserTestControl = {
   saveCount: number
   lastGenerated: GeneratedServerCommand | null
   state: GlobalConfigShape
+  emitEvent: (event: string, payload?: unknown) => Promise<void>
 }
 
 declare global {
@@ -163,6 +194,7 @@ const control: BrowserTestControl = {
   saveCount: 0,
   lastGenerated: null,
   state,
+  emitEvent: (event, payload) => emit(event, payload),
 }
 
 const syncAutomationProbe = () => {
@@ -259,6 +291,10 @@ mockIPC((command, payload) => {
     case 'get_monitoring_series': return []
     case 'get_system_health': return clone(systemMetrics)
     case 'get_workers': return []
+    case 'get_proxy_config': return clone(proxyConfig)
+    case 'get_proxy_status': return clone(proxyStatus)
+    case 'list_proxy_targets': return []
+    case 'get_runtime_service_status': return clone(runtimeStatus)
     case 'is_autostart_enabled': return false
     case 'resolve_path': return args.path === 'models' ? 'C:\\browser-test\\models' : String(args.path ?? '')
     case 'generate_server_command': {
@@ -282,6 +318,21 @@ mockIPC((command, payload) => {
     case 'show_window':
     case 'hide_window':
     case 'open_browser': return null
+    case 'enable_background_and_quit':
+    case 'quit_keep_runtime':
+      if (BROWSER_SCENARIO === 'background-detach-error') {
+        throw new Error('Browser test background handoff failed')
+      }
+      return null
+    case 'quit_app': return null
+    case 'stop_background_runtime':
+      proxyConfig.enabled = false
+      proxyConfig.runtime_service_enabled = false
+      proxyStatus.running = false
+      runtimeStatus.backgroundEnabled = false
+      runtimeStatus.registeredForLogin = false
+      runtimeStatus.running = {}
+      return null
     default:
       control.unhandled.push(command)
       syncAutomationProbe()

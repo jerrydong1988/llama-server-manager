@@ -553,10 +553,14 @@
     runtimeWarnings: '\u8FD0\u884C\u8B66\u544A', clear: '\u6E05\u9664', close: '\u5173\u95ED',
     crash: { title: '\u9875\u9762\u53D1\u751F\u9519\u8BEF', description: '\u5F53\u524D\u89C6\u56FE\u5DF2\u5D29\u6E83\uFF0C\u53EF\u91CD\u65B0\u52A0\u8F7D\u3002', unknown: '\u672A\u77E5\u9519\u8BEF', reload: '\u91CD\u65B0\u52A0\u8F7D' },
     proxyRunning: '后台实例或路由仍在运行',
-    proxyKeepAliveDescription: '独立后台运行时已启用。退出管理界面后，当前实例与统一 API 路由会继续运行。',
-    proxyExitDescription: '独立后台运行尚未启用。直接退出会停止当前托管实例与统一 API 路由；如需暂时保留，请让主程序继续在托盘运行。',
-    keepRouteRunning: '退出界面并保持后台运行', keepInTray: '\u4FDD\u6301\u6258\u76D8\u8FD0\u884C',
+    proxyExitDescription: '独立后台运行尚未启用。建议先完成后台接管再退出；也可以暂时保留托盘主程序，或明确停止全部实例与路由。',
+    keepInTray: '\u4FDD\u6301\u6258\u76D8\u8FD0\u884C',
     openProxySettings: '\u6253\u5F00\u8DEF\u7531\u8BBE\u7F6E', stopProxyAndQuit: '停止实例与路由并退出',
+    enableBackgroundAndExit: '启用后台并退出', backgroundDetachPreparing: '正在验证后台接管…',
+    backgroundDetachFailed: '后台接管失败',
+    backgroundDetachFailureDescription: '主程序没有退出，当前实例与路由仍由界面继续管理。请检查错误后重试。',
+    backgroundDetachUnknownError: '后台运行时未返回可识别的错误信息。',
+    retryBackgroundDetach: '重新验证并退出', cancelExit: '取消退出',
   },
 
   commandCenter: {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { invokeApp as invoke } from '../lib/ipc'
-import { Activity, AlertTriangle, Copy, Plus, RefreshCw, Route, Save, Server, Square, Trash2, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, Copy, Plus, PowerOff, RefreshCw, Route, Save, Server, Square, Trash2, Zap } from 'lucide-react'
 import { useAppStore } from '../store'
 import { formatHostPort, httpUrl } from '../utils/network'
 import { useI18n } from '../i18n'
@@ -227,6 +227,8 @@ export default function ProxyPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [commandsReady, setCommandsReady] = useState(true)
+  const [stopRuntimeConfirmOpen, setStopRuntimeConfirmOpen] = useState(false)
+  const [stoppingRuntime, setStoppingRuntime] = useState(false)
 
   const labels = useMemo(() => getProxyLabels(lang), [lang])
 
@@ -393,6 +395,25 @@ export default function ProxyPage() {
       setNotice(labels.copied)
     } catch {
       // ignore clipboard failures
+    }
+  }
+
+  const stopBackgroundRuntime = async () => {
+    setStoppingRuntime(true)
+    setError('')
+    setNotice('')
+    try {
+      await invoke('stop_background_runtime')
+      setStopRuntimeConfirmOpen(false)
+      await loadProxy()
+      setNotice(labels.backgroundStopped)
+    } catch (stopError) {
+      const message = errorMessage(stopError)
+      setStopRuntimeConfirmOpen(false)
+      await loadProxy()
+      setError(message)
+    } finally {
+      setStoppingRuntime(false)
     }
   }
 
@@ -696,9 +717,48 @@ export default function ProxyPage() {
                 {labels.runtimeLastError}: {runtimeService.lastError}
               </p>
             ) : null}
+            {(config.runtimeServiceEnabled
+              || runtimeService.backgroundEnabled
+              || runtimeService.managedInstances > 0
+              || status.running) ? (
+              <div className="mt-4 flex flex-col gap-3 border-t border-slate-200 pt-4 dark:border-slate-800">
+                <div>
+                  <div className="text-sm font-semibold text-slate-900 dark:text-slate-100">{labels.stopRuntimeTitle}</div>
+                  <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.stopRuntimeDesc}</p>
+                </div>
+                <Button
+                  variant="danger"
+                  icon={<PowerOff className="h-4 w-4" />}
+                  disabled={stoppingRuntime}
+                  onClick={() => setStopRuntimeConfirmOpen(true)}
+                >
+                  {labels.stopRuntimeAction}
+                </Button>
+              </div>
+            ) : null}
           </Surface>
         </div>
       </div>
+      {stopRuntimeConfirmOpen ? (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 px-4 backdrop-blur-sm" role="presentation">
+          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-950" role="alertdialog" aria-modal="true" aria-labelledby="stop-background-runtime-title">
+            <h2 id="stop-background-runtime-title" className="text-xl font-semibold text-slate-950 dark:text-slate-50">
+              {labels.stopRuntimeConfirmTitle}
+            </h2>
+            <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
+              {labels.stopRuntimeConfirmDesc}
+            </p>
+            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Button disabled={stoppingRuntime} onClick={() => setStopRuntimeConfirmOpen(false)}>
+                {labels.cancel}
+              </Button>
+              <Button disabled={stoppingRuntime} variant="danger" onClick={() => void stopBackgroundRuntime()}>
+                {stoppingRuntime ? labels.stoppingRuntime : labels.stopRuntimeConfirmAction}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

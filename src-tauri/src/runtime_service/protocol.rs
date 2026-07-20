@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub const RUNTIME_PROTOCOL_VERSION: u32 = 1;
 pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RUNTIME_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLaunchSpec {
@@ -23,6 +24,10 @@ pub struct RuntimeServiceStatus {
     pub protocol_version: u32,
     pub service_version: String,
     pub service_pid: u32,
+    /// Feature markers let a freshly updated GUI detect an older daemon from
+    /// the same package version without breaking the v1 wire protocol.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
     #[serde(default)]
     pub config_revision: u64,
     pub background_enabled: bool,
@@ -51,6 +56,14 @@ pub enum RuntimeCommand {
         revision: u64,
         proxy_config: ProxyConfig,
         instances: HashMap<String, InstanceConfig>,
+    },
+    /// Atomically synchronizes the GUI snapshot, verifies that every managed
+    /// workload is owned by this daemon, and only then enables detached mode.
+    PrepareBackgroundDetach {
+        revision: u64,
+        proxy_config: ProxyConfig,
+        instances: HashMap<String, InstanceConfig>,
+        expected_running: HashMap<String, RunningInstance>,
     },
     StartInstance {
         spec: Box<RuntimeLaunchSpec>,
@@ -186,9 +199,49 @@ mod tests {
         });
         let status: RuntimeServiceStatus = serde_json::from_value(value).unwrap();
         assert_eq!(status.config_revision, 0);
+        assert!(status.capabilities.is_empty());
         assert!(status.last_error.is_none());
         assert!(status.health.is_empty());
         assert!(status.monitoring.is_empty());
         assert!(status.performance.is_empty());
+    }
+
+    #[test]
+    fn background_detach_command_round_trip_preserves_expected_workloads() {
+        let expected = RunningInstance {
+            instance_id: "instance-1".into(),
+            pid: 42,
+            port: 8080,
+            host: "127.0.0.1".into(),
+            start_time: 100,
+            executable_path: "/tmp/llama-server".into(),
+            telemetry_session_id: None,
+            workload: "inference".into(),
+            launch_config: None,
+        };
+        let request = RuntimeRequest {
+            protocol_version: RUNTIME_PROTOCOL_VERSION,
+            request_id: "detach-1".into(),
+            token: "secret".into(),
+            command: RuntimeCommand::PrepareBackgroundDetach {
+                revision: 7,
+                proxy_config: ProxyConfig::default(),
+                instances: HashMap::new(),
+                expected_running: [("instance-1".to_string(), expected)].into_iter().collect(),
+            },
+        };
+        let decoded: RuntimeRequest =
+            serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+        match decoded.command {
+            RuntimeCommand::PrepareBackgroundDetach {
+                revision,
+                expected_running,
+                ..
+            } => {
+                assert_eq!(revision, 7);
+                assert_eq!(expected_running["instance-1"].pid, 42);
+            }
+            _ => panic!("unexpected command variant"),
+        }
     }
 }

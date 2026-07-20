@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense, Component, ReactNode } from 'react'
-import { Activity, BarChart3, BookOpen, Cpu, Database, Download, Monitor, Network, Route, Server, Settings, Terminal, X } from 'lucide-react'
+import { Activity, BarChart3, BookOpen, Cpu, Database, Download, Monitor, Network, Route, Server, Settings, Terminal } from 'lucide-react'
 import { version } from '../package.json'
 import { invokeApp as invoke } from './lib/ipc'
 import { listen } from '@tauri-apps/api/event'
@@ -23,6 +23,7 @@ import { I18nProvider, nextLanguage, useI18n } from './i18n'
 import { Button } from './components/ui'
 import { AppShell, type ShellStatusChip } from './components/shell/AppShell'
 import { CommandCenter } from './components/shell/CommandCenter'
+import { RuntimeExitDialogs } from './components/shell/RuntimeExitDialogs'
 import { useCommandCenterModel } from './components/shell/useCommandCenterModel'
 
 type ErrorBoundaryCopy = { title: string; description: string; unknown: string; reload: string }
@@ -123,7 +124,9 @@ function AppInner() {
   const [autoStarted, setAutoStarted] = useState(false)
   const [commandCenterOpen, setCommandCenterOpen] = useState(false)
   const [proxyExitConfirmOpen, setProxyExitConfirmOpen] = useState(false)
-  const [proxyExitKeepAliveEnabled, setProxyExitKeepAliveEnabled] = useState(false)
+  const [proxyExitBusy, setProxyExitBusy] = useState(false)
+  const [proxyExitError, setProxyExitError] = useState('')
+  const [backgroundDetachError, setBackgroundDetachError] = useState('')
 
   useEffect(() => {
     invoke<boolean>('is_autostart_enabled').then(setAutoStartEnabled).catch(() => {})
@@ -166,24 +169,35 @@ function AppInner() {
 
   useEffect(() => {
     let disposed = false
-    let unlisten: (() => void) | undefined
+    let unlistenConfirmation: (() => void) | undefined
+    let unlistenFailure: (() => void) | undefined
 
-    listen('proxy-exit-confirmation-requested', event => {
-      const payload = event.payload && typeof event.payload === 'object'
-        ? event.payload as Record<string, unknown>
-        : {}
-      setProxyExitKeepAliveEnabled(payload.backgroundServiceMode === true || payload.background_service_mode === true)
+    listen('proxy-exit-confirmation-requested', () => {
+      setProxyExitError('')
       setProxyExitConfirmOpen(true)
     }).then(cleanup => {
       if (disposed) cleanup()
-      else unlisten = cleanup
+      else unlistenConfirmation = cleanup
+    }).catch(() => {})
+
+    listen('background-detach-failed', event => {
+      const payload = event.payload && typeof event.payload === 'object'
+        ? event.payload as Record<string, unknown>
+        : {}
+      setBackgroundDetachError(typeof payload.error === 'string'
+        ? payload.error
+        : shellCopy.backgroundDetachUnknownError)
+    }).then(cleanup => {
+      if (disposed) cleanup()
+      else unlistenFailure = cleanup
     }).catch(() => {})
 
     return () => {
       disposed = true
-      if (unlisten) unlisten()
+      if (unlistenConfirmation) unlistenConfirmation()
+      if (unlistenFailure) unlistenFailure()
     }
-  }, [])
+  }, [shellCopy.backgroundDetachUnknownError])
 
   useEffect(() => {
     if (autoStarted || instances.length === 0) return
@@ -322,24 +336,40 @@ function AppInner() {
     })()
   }
   const handleStopProxyAndQuit = async () => {
+    setProxyExitBusy(true)
+    setProxyExitError('')
     try {
       await invoke('quit_app')
-    } catch {
-      setProxyExitConfirmOpen(false)
-      setProxyExitKeepAliveEnabled(false)
-      setActiveTab('proxy')
+    } catch (error) {
+      setProxyExitError(error instanceof Error ? error.message : String(error))
+      setProxyExitBusy(false)
     }
   }
-  const handleKeepProxyInTray = async () => {
+  const handleEnableBackgroundAndQuit = async () => {
+    setProxyExitBusy(true)
+    setProxyExitError('')
+    try {
+      await invoke('enable_background_and_quit')
+    } catch (error) {
+      setProxyExitError(error instanceof Error ? error.message : String(error))
+      setProxyExitBusy(false)
+    }
+  }
+  const handleKeepInTray = async () => {
     setProxyExitConfirmOpen(false)
-    const keepRuntime = proxyExitKeepAliveEnabled
-    setProxyExitKeepAliveEnabled(false)
-    if (keepRuntime) {
-      await invoke('quit_keep_runtime').catch(() => {
-        setActiveTab('proxy')
-      })
-    } else {
-      await invoke('hide_window').catch(() => {})
+    setProxyExitError('')
+    await invoke('hide_window').catch(error => {
+      setProxyExitError(error instanceof Error ? error.message : String(error))
+      setProxyExitConfirmOpen(true)
+    })
+  }
+  const handleRetryBackgroundDetach = async () => {
+    setProxyExitBusy(true)
+    try {
+      await invoke('quit_keep_runtime')
+    } catch (error) {
+      setBackgroundDetachError(error instanceof Error ? error.message : String(error))
+      setProxyExitBusy(false)
     }
   }
 
@@ -400,52 +430,31 @@ function AppInner() {
         commands={commandActions}
         onClose={() => setCommandCenterOpen(false)}
       />
-      {proxyExitConfirmOpen ? (
-        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 px-4 backdrop-blur-sm">
-          <div className="w-full max-w-lg rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-950">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-semibold text-slate-950 dark:text-slate-50">
-                  {shellCopy.proxyRunning}
-                </h2>
-                <p className="mt-3 text-sm leading-6 text-slate-600 dark:text-slate-300">
-                  {proxyExitKeepAliveEnabled ? shellCopy.proxyKeepAliveDescription : shellCopy.proxyExitDescription}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setProxyExitConfirmOpen(false)
-                  setProxyExitKeepAliveEnabled(false)
-                }}
-                className="rounded-lg border border-slate-200 p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 dark:border-slate-800 dark:text-slate-400 dark:hover:bg-slate-900 dark:hover:text-slate-100"
-                aria-label={shellCopy.close}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <Button onClick={() => void handleKeepProxyInTray()}>
-                {proxyExitKeepAliveEnabled
-                  ? shellCopy.keepRouteRunning
-                  : shellCopy.keepInTray}
-              </Button>
-              <Button
-                onClick={() => {
-                  setActiveTab('proxy')
-                  setProxyExitConfirmOpen(false)
-                  setProxyExitKeepAliveEnabled(false)
-                }}
-              >
-                {shellCopy.openProxySettings}
-              </Button>
-              <Button variant="danger" onClick={() => void handleStopProxyAndQuit()}>
-                {shellCopy.stopProxyAndQuit}
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <RuntimeExitDialogs
+        confirmationOpen={proxyExitConfirmOpen}
+        confirmationError={proxyExitError}
+        detachError={backgroundDetachError}
+        busy={proxyExitBusy}
+        copy={shellCopy}
+        onCloseConfirmation={() => {
+          setProxyExitConfirmOpen(false)
+          setProxyExitError('')
+        }}
+        onKeepInTray={() => void handleKeepInTray()}
+        onOpenSettingsFromConfirmation={() => {
+          setActiveTab('proxy')
+          setProxyExitConfirmOpen(false)
+          setProxyExitError('')
+        }}
+        onStopAndQuit={() => void handleStopProxyAndQuit()}
+        onEnableBackgroundAndQuit={() => void handleEnableBackgroundAndQuit()}
+        onCloseDetachError={() => setBackgroundDetachError('')}
+        onOpenSettingsFromDetachError={() => {
+          setActiveTab('proxy')
+          setBackgroundDetachError('')
+        }}
+        onRetryDetach={() => void handleRetryBackgroundDetach()}
+      />
     </AppShell>
   )
 }
