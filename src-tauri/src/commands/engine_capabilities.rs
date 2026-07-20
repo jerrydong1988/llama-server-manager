@@ -1,6 +1,6 @@
 use crate::commands::model_inventory;
 use crate::models::{AppState, EngineCapabilities, EngineInfo};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::process::{Command, Stdio};
@@ -10,6 +10,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
+const REPORTED_DEFAULTS_VERSION: u8 = 1;
 
 #[derive(Debug)]
 struct CommandOutput {
@@ -230,6 +231,56 @@ pub(crate) fn extract_supported_flags(output: &str) -> Vec<String> {
     flags.into_iter().collect()
 }
 
+fn defaults_from_help_block(flags: &[String], block: &str, defaults: &mut HashMap<String, String>) {
+    let Some(marker) = block.find("(default:") else {
+        return;
+    };
+    let value = &block[marker + "(default:".len()..];
+    let Some(end) = value.find(')') else {
+        return;
+    };
+    let value = value[..end]
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if value.is_empty() {
+        return;
+    }
+    for flag in flags {
+        defaults.insert(flag.clone(), value.clone());
+    }
+}
+
+/// Extract defaults reported by the selected executable for explanation only.
+/// Command generation never relies on this data because upstream help text can
+/// itself contain mistakes (b10068's --perf wording is one known example).
+pub(crate) fn extract_reported_defaults(output: &str) -> HashMap<String, String> {
+    let mut defaults = HashMap::new();
+    let mut current_flags = Vec::new();
+    let mut block = String::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim_start();
+        let indentation = line.len().saturating_sub(trimmed.len());
+        let candidates = if indentation <= 4 && trimmed.starts_with('-') {
+            extract_supported_flags(trimmed)
+        } else {
+            Vec::new()
+        };
+        if !candidates.is_empty() {
+            defaults_from_help_block(&current_flags, &block, &mut defaults);
+            current_flags = candidates;
+            block.clear();
+        }
+        if !block.is_empty() {
+            block.push(' ');
+        }
+        block.push_str(trimmed);
+    }
+    defaults_from_help_block(&current_flags, &block, &mut defaults);
+    defaults
+}
+
 fn help_hash(output: &str) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in output
@@ -391,6 +442,7 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let version_output = run_bounded(&engine.exe, "--version");
     let help_output = run_bounded(&engine.exe, "--help");
     let supported_flags = extract_supported_flags(&help_output.text);
+    let reported_defaults = extract_reported_defaults(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
     let fingerprint = executable_fingerprint(&engine.exe);
     if fingerprint_before.is_empty() || fingerprint_before != fingerprint {
@@ -440,6 +492,8 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         },
         version_probe_detail: first_nonempty_line(&version_output.text),
         supported_flags,
+        reported_defaults,
+        reported_defaults_version: REPORTED_DEFAULTS_VERSION,
         help_hash: if help_output.text.is_empty() {
             String::new()
         } else {
@@ -611,6 +665,7 @@ fn known_flag_value_count(flag: &str) -> Option<usize> {
         | "--mmproj-auto"
         | "--no-mmproj"
         | "--no-mmproj-offload"
+        | "--mmproj-offload"
         | "--skip-chat-parsing"
         | "--reasoning-preserve"
         | "--no-reasoning-preserve"
@@ -626,18 +681,24 @@ fn known_flag_value_count(flag: &str) -> Option<usize> {
         | "--cpu-moe"
         | "--mlock"
         | "--no-mmap"
+        | "--mmap"
         | "--no-repack"
+        | "--repack"
         | "--direct-io"
         | "--check-tensors"
         | "--perf"
+        | "--no-perf"
         | "--kv-unified"
         | "--no-kv-unified"
         | "--no-kv-offload"
+        | "--kv-offload"
         | "--cache-idle-slots"
         | "--no-cache-idle-slots"
         | "--spec-default"
         | "--no-spec-draft-backend-sampling"
+        | "--spec-draft-backend-sampling"
         | "--no-ui"
+        | "--ui"
         | "--offline"
         | "--cors-credentials"
         | "--no-cors-credentials"
@@ -885,6 +946,27 @@ mod tests {
         assert!(flags.contains(&"--model".to_string()));
         assert!(flags.contains(&"--no-warmup".to_string()));
         assert!(!flags.contains(&"-1".to_string()));
+    }
+
+    #[test]
+    fn extracts_reported_defaults_from_single_and_multiline_help_blocks() {
+        let defaults = extract_reported_defaults(
+            r#"  -t, --threads N              number of threads
+                                  (default: -1)
+  --temp N                     sampling temperature (default: 0.8)
+  --models-autoload            load models on demand
+                                  (default: enabled)
+                                  --not-an-option-line (default: ignored)"#,
+        );
+
+        assert_eq!(defaults.get("-t").map(String::as_str), Some("-1"));
+        assert_eq!(defaults.get("--threads").map(String::as_str), Some("-1"));
+        assert_eq!(defaults.get("--temp").map(String::as_str), Some("0.8"));
+        assert_eq!(
+            defaults.get("--models-autoload").map(String::as_str),
+            Some("enabled")
+        );
+        assert!(!defaults.contains_key("--not-an-option-line"));
     }
 
     #[test]

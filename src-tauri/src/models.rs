@@ -188,6 +188,10 @@ pub struct EngineCapabilities {
     #[serde(default)]
     pub supported_flags: Vec<String>,
     #[serde(default)]
+    pub reported_defaults: HashMap<String, String>,
+    #[serde(default)]
+    pub reported_defaults_version: u8,
+    #[serde(default)]
     pub help_hash: String,
     #[serde(default)]
     pub executable_fingerprint: String,
@@ -212,6 +216,8 @@ impl Default for EngineCapabilities {
             version_status: default_engine_version_status(),
             version_probe_detail: None,
             supported_flags: Vec::new(),
+            reported_defaults: HashMap::new(),
+            reported_defaults_version: 0,
             help_hash: String::new(),
             executable_fingerprint: String::new(),
             probed_at: None,

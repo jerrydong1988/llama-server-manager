@@ -418,10 +418,17 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
                 _ => {}
             }
         }
-        if should_emit(config, "no_mmproj_offload", config.no_mmproj_offload)
-            && config.no_mmproj_offload
-        {
-            cmd.push("--no-mmproj-offload".into());
+        let projector_active =
+            !config.mmproj_path.is_empty() || !config.mmproj_url.is_empty() || mmproj_mode != "off";
+        if projector_active && should_emit(config, "no_mmproj_offload", config.no_mmproj_offload) {
+            cmd.push(
+                if config.no_mmproj_offload {
+                    "--no-mmproj-offload"
+                } else {
+                    "--mmproj-offload"
+                }
+                .into(),
+            );
         }
         if should_emit(config, "chat_template", !config.chat_template.is_empty())
             && !config.chat_template.is_empty()
@@ -667,11 +674,25 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     if should_emit(config, "mlock", config.mlock) && config.mlock {
         cmd.push("--mlock".into());
     }
-    if should_emit(config, "no_mmap", config.no_mmap) && config.no_mmap {
-        cmd.push("--no-mmap".into());
+    if should_emit(config, "no_mmap", config.no_mmap) {
+        cmd.push(
+            if config.no_mmap {
+                "--no-mmap"
+            } else {
+                "--mmap"
+            }
+            .into(),
+        );
     }
-    if should_emit(config, "no_repack", config.no_repack) && config.no_repack {
-        cmd.push("--no-repack".into());
+    if should_emit(config, "no_repack", config.no_repack) {
+        cmd.push(
+            if config.no_repack {
+                "--no-repack"
+            } else {
+                "--repack"
+            }
+            .into(),
+        );
     }
     if should_emit(config, "direct_io", config.direct_io) && config.direct_io {
         cmd.push("--direct-io".into());
@@ -689,8 +710,8 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     if should_emit(config, "check_tensors", config.check_tensors) && config.check_tensors {
         cmd.push("--check-tensors".into());
     }
-    if should_emit(config, "perf", config.perf) && config.perf {
-        cmd.push("--perf".into());
+    if should_emit(config, "perf", config.perf) {
+        cmd.push(if config.perf { "--perf" } else { "--no-perf" }.into());
     }
     let fit_mode = if config.fit_mode.is_empty() && config.fit {
         "on"
@@ -763,8 +784,15 @@ fn append_kv_cache_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<St
             _ => {}
         }
     }
-    if should_emit(config, "no_kv_offload", config.no_kv_offload) && config.no_kv_offload {
-        cmd.push("--no-kv-offload".into());
+    if should_emit(config, "no_kv_offload", config.no_kv_offload) {
+        cmd.push(
+            if config.no_kv_offload {
+                "--no-kv-offload"
+            } else {
+                "--kv-offload"
+            }
+            .into(),
+        );
     }
     if should_emit(config, "cache_idle_slots", true) {
         cmd.push(if config.cache_idle_slots {
@@ -874,9 +902,15 @@ fn append_speculative_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec
             config,
             "spec_draft_backend_sampling",
             !config.spec_draft_backend_sampling,
-        ) && !config.spec_draft_backend_sampling
-        {
-            cmd.push("--no-spec-draft-backend-sampling".into());
+        ) {
+            cmd.push(
+                if config.spec_draft_backend_sampling {
+                    "--spec-draft-backend-sampling"
+                } else {
+                    "--no-spec-draft-backend-sampling"
+                }
+                .into(),
+            );
         }
         if should_emit(config, "spec_draft_threads", config.spec_draft_threads > 0)
             && config.spec_draft_threads > 0
@@ -914,8 +948,8 @@ fn append_network_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
     if !config.ssl_cert_file.is_empty() {
         cmd.extend_from_slice(&["--ssl-cert-file".into(), config.ssl_cert_file.clone()]);
     }
-    if should_emit(config, "no_ui", config.no_ui) && config.no_ui {
-        cmd.push("--no-ui".into());
+    if should_emit(config, "no_ui", config.no_ui) {
+        cmd.push(if config.no_ui { "--no-ui" } else { "--ui" }.into());
     }
     if should_emit(config, "offline", config.offline) && config.offline {
         cmd.push("--offline".into());
@@ -1347,6 +1381,8 @@ fn generate_normalized_command(config: &InstanceConfig, engine_path: &str) -> Ve
 
 fn canonical_override_key(key: &str) -> &str {
     match key {
+        "gpu_layers_auto" => "gpu_layers",
+        "ctx_size_auto" => "ctx_size",
         "mmproj_auto" | "no_mmproj" => "mmproj_mode",
         "numa" => "numa_mode",
         "fit" => "fit_mode",
@@ -1542,7 +1578,7 @@ fn prepare_launch_checked(
 }
 
 enum EngineCapabilityResolution {
-    Available(EngineCapabilities),
+    Available(Box<EngineCapabilities>),
     Missing,
     Stale,
 }
@@ -1578,7 +1614,7 @@ fn trusted_engine_capabilities(
         return EngineCapabilityResolution::Missing;
     }
     if capabilities_match_executable(engine_exe, &engine.capabilities) {
-        return EngineCapabilityResolution::Available(engine.capabilities.clone());
+        return EngineCapabilityResolution::Available(Box::new(engine.capabilities.clone()));
     }
     engine.version.clear();
     engine.capabilities = EngineCapabilities {
@@ -1703,12 +1739,12 @@ pub async fn generate_server_command(
         EngineCapabilityResolution::Missing => None,
         EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
     };
-    validate_custom_argument_capabilities(&config, capabilities.as_ref())?;
+    validate_custom_argument_capabilities(&config, capabilities.as_deref())?;
     let unsupported_flags = capabilities
-        .as_ref()
+        .as_deref()
         .map(|value| unsupported_command_flags(&command, value))
         .unwrap_or_default();
-    let blocked = blocked_security_flags(&command, capabilities.as_ref());
+    let blocked = blocked_security_flags(&command, capabilities.as_deref());
     if !blocked.is_empty() {
         return Err(AppError::new(
             "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
@@ -1719,9 +1755,9 @@ pub async fn generate_server_command(
             false,
         ));
     }
-    let command = command_for_capabilities(&command, capabilities.as_ref());
+    let command = command_for_capabilities(&command, capabilities.as_deref());
     let emitted_override_keys =
-        emitted_override_keys(&config, &engine_exe, capabilities.as_ref(), &command);
+        emitted_override_keys(&config, &engine_exe, capabilities.as_deref(), &command);
     Ok(GeneratedServerCommand {
         command,
         unsupported_flags,
@@ -1752,8 +1788,8 @@ pub async fn start_server(
                 EngineCapabilityResolution::Missing => None,
                 EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
             };
-        validate_custom_argument_capabilities(&config, engine_capabilities.as_ref())?;
-        if let Some(capabilities) = engine_capabilities.as_ref() {
+        validate_custom_argument_capabilities(&config, engine_capabilities.as_deref())?;
+        if let Some(capabilities) = engine_capabilities.as_deref() {
             let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
             if !unsupported.is_empty() {
                 return Err(AppError::new(
@@ -1766,7 +1802,7 @@ pub async fn start_server(
                 ));
             }
         }
-        let blocked = blocked_security_flags(&generated_cmd, engine_capabilities.as_ref());
+        let blocked = blocked_security_flags(&generated_cmd, engine_capabilities.as_deref());
         if !blocked.is_empty() {
             return Err(AppError::new(
                 "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
@@ -1777,7 +1813,7 @@ pub async fn start_server(
                 false,
             ));
         }
-        command_for_capabilities(&generated_cmd, engine_capabilities.as_ref())
+        command_for_capabilities(&generated_cmd, engine_capabilities.as_deref())
     };
     let cmd_display = format_command_for_display(&cmd);
 
@@ -4457,6 +4493,96 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn tracked_positive_and_negative_boolean_choices_are_both_explicit() {
+        let override_keys = vec![
+            "no_mmap".into(),
+            "no_repack".into(),
+            "no_kv_offload".into(),
+            "no_mmproj_offload".into(),
+            "no_ui".into(),
+            "perf".into(),
+            "spec_type".into(),
+            "spec_draft_backend_sampling".into(),
+        ];
+        let positive = InstanceConfig {
+            model_path: "model.gguf".into(),
+            spec_type: "draft-mtp".into(),
+            explicit_overrides: Some(override_keys.clone()),
+            ..InstanceConfig::default()
+        };
+        let positive_command = generate_normalized_command(&positive, "llama-server");
+        for flag in [
+            "--mmap",
+            "--repack",
+            "--kv-offload",
+            "--mmproj-offload",
+            "--ui",
+            "--no-perf",
+            "--spec-draft-backend-sampling",
+        ] {
+            assert!(
+                positive_command.iter().any(|argument| argument == flag),
+                "missing positive/default-valued pin {flag}: {positive_command:?}"
+            );
+        }
+
+        let negative = InstanceConfig {
+            no_mmap: true,
+            no_repack: true,
+            no_kv_offload: true,
+            no_mmproj_offload: true,
+            no_ui: true,
+            perf: true,
+            spec_draft_backend_sampling: false,
+            ..positive
+        };
+        let negative_command = generate_normalized_command(&negative, "llama-server");
+        for flag in [
+            "--no-mmap",
+            "--no-repack",
+            "--no-kv-offload",
+            "--no-mmproj-offload",
+            "--no-ui",
+            "--perf",
+            "--no-spec-draft-backend-sampling",
+        ] {
+            assert!(
+                negative_command.iter().any(|argument| argument == flag),
+                "missing inverse pin {flag}: {negative_command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn projector_offload_is_inactive_only_when_no_projector_can_be_used() {
+        let disabled_auto = InstanceConfig {
+            model_path: "model.gguf".into(),
+            mmproj_mode: "off".into(),
+            no_mmproj_offload: true,
+            explicit_overrides: Some(vec!["mmproj_mode".into(), "no_mmproj_offload".into()]),
+            ..InstanceConfig::default()
+        };
+        let without_projector = generate_normalized_command(&disabled_auto, "llama-server");
+        assert!(!without_projector
+            .iter()
+            .any(|argument| argument == "--no-mmproj-offload"));
+
+        let with_projector = InstanceConfig {
+            mmproj_path: "projector.gguf".into(),
+            explicit_overrides: Some(vec![
+                "mmproj_path".into(),
+                "mmproj_mode".into(),
+                "no_mmproj_offload".into(),
+            ]),
+            ..disabled_auto
+        };
+        let with_projector_command = generate_normalized_command(&with_projector, "llama-server");
+        assert!(with_projector_command
+            .iter()
+            .any(|argument| argument == "--no-mmproj-offload"));
+    }
+
+    #[test]
     fn tracked_dependent_parameter_does_not_activate_its_controller() {
         let config = InstanceConfig {
             model_path: "model.gguf".into(),
@@ -4526,6 +4652,34 @@ mod perf_parser_tests {
 
         let conservative = command_for_capabilities(&command, None);
         assert!(emitted_override_keys(&config, "llama-server", None, &conservative).is_empty());
+    }
+
+    #[test]
+    fn emitted_override_metadata_collapses_automatic_value_aliases() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            gpu_layers: 7,
+            gpu_layers_auto: false,
+            ctx_size: 4096,
+            ctx_size_auto: false,
+            explicit_overrides: Some(vec![
+                "gpu_layers".into(),
+                "gpu_layers_auto".into(),
+                "ctx_size".into(),
+                "ctx_size_auto".into(),
+            ]),
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+        let capabilities = EngineCapabilities {
+            status: "detected".into(),
+            ..EngineCapabilities::default()
+        };
+
+        assert_eq!(
+            emitted_override_keys(&config, "llama-server", Some(&capabilities), &command),
+            vec!["gpu_layers", "ctx_size"]
+        );
     }
 
     #[test]

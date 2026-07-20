@@ -71,6 +71,8 @@ export type ChangeGroup = {
 }
 
 const REVIEW_FIELD_ALIASES: Partial<Record<keyof InstanceConfig, Array<keyof InstanceConfig>>> = {
+  gpu_layers: ['gpu_layers', 'gpu_layers_auto'],
+  ctx_size: ['ctx_size', 'ctx_size_auto'],
   mmproj_mode: ['mmproj_mode', 'mmproj_auto', 'no_mmproj'],
   numa_mode: ['numa_mode', 'numa'],
   fit_mode: ['fit_mode', 'fit'],

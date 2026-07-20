@@ -80,7 +80,17 @@ const engine: EngineInfo = {
   capabilities: {
     status: 'detected',
     versionStatus: 'detected',
-    supportedFlags: ['--temp', '--top-k', '--top-p', '--kv-unified', '--models-autoload', '--no-models-autoload', '--image-min-tokens', '--mmproj'],
+    supportedFlags: [
+      '--temp', '--top-k', '--top-p', '--threads', '--kv-unified',
+      '--mmap', '--no-mmap', '--perf', '--no-perf',
+      '--models-autoload', '--no-models-autoload', '--image-min-tokens', '--mmproj',
+    ],
+    reportedDefaults: {
+      '--temp': '0.8',
+      '--threads': 'automatic',
+      '--mmap': 'enabled',
+    },
+    reportedDefaultsVersion: 1,
     helpHash: 'browser-test-help',
     executableFingerprint: 'browser-test-engine-fingerprint',
     probedAt: 1,
@@ -207,6 +217,8 @@ const syncAutomationProbe = () => {
 }
 
 const canonicalField = (field: string) => {
+  if (field === 'gpu_layers_auto') return 'gpu_layers'
+  if (field === 'ctx_size_auto') return 'ctx_size'
   if (field === 'kv_unified') return 'kv_unified_mode'
   if (field === 'fit') return 'fit_mode'
   if (field === 'numa') return 'numa_mode'
@@ -244,9 +256,14 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
   ]
   for (const field of emitted) {
     if (field === 'alias') command.push('-a', config.alias)
+    else if (field === 'gpu_layers' && !config.gpu_layers_auto) command.push('-ngl', String(config.gpu_layers))
+    else if (field === 'ctx_size' && !config.ctx_size_auto) command.push('-c', String(config.ctx_size))
     else if (field === 'temp') command.push('--temp', String(config.temp))
     else if (field === 'top_k') command.push('--top-k', String(config.top_k))
     else if (field === 'top_p') command.push('--top-p', String(config.top_p))
+    else if (field === 'threads') command.push('--threads', String(config.threads))
+    else if (field === 'no_mmap') command.push(config.no_mmap ? '--no-mmap' : '--mmap')
+    else if (field === 'perf') command.push(config.perf ? '--perf' : '--no-perf')
     else if (field === 'kv_unified_mode') command.push(config.kv_unified_mode === 'off' ? '--no-kv-unified' : '--kv-unified')
     else if (field === 'models_autoload') command.push(config.models_autoload ? '--models-autoload' : '--no-models-autoload')
     else if (field === 'image_min_tokens') command.push('--image-min-tokens', String(config.image_min_tokens))

@@ -1,6 +1,15 @@
-import { useState, useRef, useEffect, createContext, useContext } from 'react'
-import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
-import type { InstanceConfig } from '../../store'
+import { useState, useRef, useEffect, createContext, useContext, useId } from 'react'
+import { createPortal } from 'react-dom'
+import { ChevronDown, ChevronRight, CircleHelp, RotateCcw } from 'lucide-react'
+import type { EngineCapabilities, InstanceConfig } from '../../store'
+import {
+  SYSTEM_MANAGED_PARAMETER_KEYS,
+  parameterDependencyActive,
+  parameterEngineDefault,
+  parameterFlags,
+  type ParameterSource,
+} from '../../parameterCatalog'
+import { reviewFieldKeys } from './configWorkspace'
 import { SelectInput, TextInput, surfaceClassName } from '../ui'
 
 export const cacheTypes = ['', 'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq4_nl', 'q5_0', 'q5_1']
@@ -9,6 +18,70 @@ export const chatTemplates = ['', 'bailing', 'bailing-think', 'bailing2', 'chatg
 
 // Search and draft-change metadata are shared by every field without prop drilling.
 type FieldKey = keyof InstanceConfig
+export type FieldRuntimeLabels = {
+  inherited: string
+  explicit: string
+  managed: string
+  inactive: string
+  unsupported: string
+  unsaved: string
+  currentState: string
+  engineDefault: string
+  commandFlags: string
+  restoreInheritance: string
+  help: string
+}
+
+type FieldRuntimeContextValue = {
+  config?: InstanceConfig
+  isEmbedding: boolean
+  explicitKeys: ReadonlySet<FieldKey>
+  emittedKeys: ReadonlySet<FieldKey>
+  unsupportedFlags: ReadonlySet<string>
+  capabilities?: EngineCapabilities
+  engineVersion?: string
+  lang: string
+  labels?: FieldRuntimeLabels
+  onInherit?: (keys: FieldKey[]) => void
+}
+
+const FieldRuntimeCtx = createContext<FieldRuntimeContextValue>({
+  isEmbedding: false,
+  explicitKeys: new Set(),
+  emittedKeys: new Set(),
+  unsupportedFlags: new Set(),
+  lang: 'en-US',
+})
+
+export const FieldRuntimeProvider = ({
+  config,
+  isEmbedding,
+  explicitKeys,
+  emittedKeys,
+  unsupportedFlags,
+  capabilities,
+  engineVersion,
+  lang,
+  labels,
+  onInherit,
+  children,
+}: FieldRuntimeContextValue & { children: React.ReactNode }) => (
+  <FieldRuntimeCtx.Provider value={{
+    config,
+    isEmbedding,
+    explicitKeys,
+    emittedKeys,
+    unsupportedFlags,
+    capabilities,
+    engineVersion,
+    lang,
+    labels,
+    onInherit,
+  }}>
+    {children}
+  </FieldRuntimeCtx.Provider>
+)
+
 type SearchContextValue = {
   query: string
   changedKeys: ReadonlySet<FieldKey>
@@ -36,26 +109,152 @@ const useFieldState = (label: string, fieldKey?: FieldKey) => {
   }
 }
 
-const ChangedMarker = ({ visible, label }: { visible: boolean; label: string }) => visible ? (
-  <span data-config-status="changed" className="shrink-0 rounded-md border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-    {label}
-  </span>
-) : null
+const sourceTone: Record<ParameterSource, string> = {
+  inherited: 'border-slate-300 bg-slate-100 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  explicit: 'border-blue-300/60 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300',
+  managed: 'border-violet-300/60 bg-violet-50 text-violet-700 dark:border-violet-500/30 dark:bg-violet-500/10 dark:text-violet-300',
+  inactive: 'border-amber-300/60 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300',
+  unsupported: 'border-red-300/60 bg-red-50 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300',
+}
 
-const EmittedMarker = ({ visible, label }: { visible: boolean; label: string }) => visible ? (
-  <span data-config-status="emitted" className="shrink-0 rounded-md border border-blue-300/60 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-300">
-    {label}
-  </span>
-) : null
+const sourceText = (source: ParameterSource, labels?: FieldRuntimeLabels) => labels?.[source] ?? source
 
-const FieldStatusMarkers = ({ changed, emitted, changedLabel, emittedLabel }: { changed: boolean; emitted: boolean; changedLabel: string; emittedLabel: string }) => (
-  changed || emitted ? (
-    <span className="inline-flex shrink-0 items-center gap-1">
-      <ChangedMarker visible={changed} label={changedLabel} />
-      <EmittedMarker visible={emitted} label={emittedLabel} />
+const FieldStatusMarker = ({ source, changed, labels }: { source: ParameterSource; changed: boolean; labels?: FieldRuntimeLabels }) => (
+  <span className="inline-flex shrink-0 items-center gap-1.5">
+    {changed && (
+      <span
+        data-config-status="changed"
+        className="h-1.5 w-1.5 rounded-full bg-slate-400"
+        title={labels?.unsaved}
+        aria-label={labels?.unsaved}
+      />
+    )}
+    <span data-config-status="source" data-config-source={source} className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${sourceTone[source]}`}>
+      {sourceText(source, labels)}
     </span>
-  ) : null
+  </span>
 )
+
+const ParameterHelp = ({
+  label,
+  title,
+  fieldKey,
+  source,
+  engineDefault,
+  flags,
+  labels,
+  onInherit,
+  canRestore,
+}: {
+  label: string
+  title: string
+  fieldKey?: FieldKey
+  source: ParameterSource
+  engineDefault?: string
+  flags: string[]
+  labels?: FieldRuntimeLabels
+  onInherit?: (keys: FieldKey[]) => void
+  canRestore: boolean
+}) => {
+  const id = useId()
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [open, setOpen] = useState(false)
+  const [position, setPosition] = useState({ top: 0, left: 0 })
+
+  const cancelClose = () => {
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+    closeTimer.current = null
+  }
+  const show = () => {
+    cancelClose()
+    const rect = buttonRef.current?.getBoundingClientRect()
+    if (rect) {
+      const width = Math.min(360, Math.max(280, window.innerWidth - 24))
+      setPosition({
+        top: Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 240)),
+        left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
+      })
+    }
+    setOpen(true)
+  }
+  const scheduleClose = () => {
+    cancelClose()
+    closeTimer.current = setTimeout(() => setOpen(false), 140)
+  }
+
+  useEffect(() => () => {
+    if (closeTimer.current !== null) clearTimeout(closeTimer.current)
+  }, [])
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label={`${labels?.help ?? 'Help'}: ${label}`}
+        aria-describedby={open ? id : undefined}
+        onMouseEnter={show}
+        onMouseLeave={scheduleClose}
+        onFocus={show}
+        onBlur={scheduleClose}
+        onClick={show}
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            cancelClose()
+            setOpen(false)
+            buttonRef.current?.focus()
+          }
+        }}
+        className="mt-0.5 shrink-0 rounded text-slate-500 transition hover:text-blue-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+      >
+        <CircleHelp className="h-3.5 w-3.5" />
+      </button>
+      {open && createPortal(
+        <div
+          id={id}
+          role="tooltip"
+          onMouseEnter={cancelClose}
+          onMouseLeave={scheduleClose}
+          className="fixed z-[100] max-h-[calc(100vh-24px)] w-[min(360px,calc(100vw-24px))] overflow-y-auto rounded-xl border border-slate-200 bg-white p-3 text-left shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+          style={position}
+        >
+          <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">{label}</p>
+          <p className="mt-2 whitespace-pre-line text-xs leading-5 text-slate-600 dark:text-slate-300">{title}</p>
+          <dl className="mt-3 space-y-1.5 border-t border-slate-200 pt-2 text-[11px] dark:border-slate-700">
+            <div className="flex gap-2">
+              <dt className="shrink-0 text-slate-500">{labels?.currentState}</dt>
+              <dd className="text-slate-800 dark:text-slate-200">{sourceText(source, labels)}</dd>
+            </div>
+            {engineDefault && (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-slate-500">{labels?.engineDefault}</dt>
+                <dd className="text-slate-800 dark:text-slate-200">{engineDefault}</dd>
+              </div>
+            )}
+            {flags.length > 0 && (
+              <div className="flex gap-2">
+                <dt className="shrink-0 text-slate-500">{labels?.commandFlags}</dt>
+                <dd className="break-all font-mono text-blue-700 dark:text-blue-300">{flags.join(' / ')}</dd>
+              </div>
+            )}
+          </dl>
+          {fieldKey && canRestore && onInherit && (
+            <button
+              type="button"
+              onClick={() => { onInherit(reviewFieldKeys(fieldKey)); setOpen(false) }}
+              className="mt-3 inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1 text-[11px] text-slate-600 transition hover:border-blue-400 hover:text-blue-600 dark:border-slate-700 dark:text-slate-300"
+            >
+              <RotateCcw className="h-3 w-3" />
+              {labels?.restoreInheritance}
+            </button>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
+  )
+}
 
 const FieldFrame = ({
   label,
@@ -74,21 +273,45 @@ const FieldFrame = ({
   showLabel?: boolean
   children: React.ReactNode
 }) => {
-  const { match, changed, emitted, changedLabel, emittedLabel } = useFieldState(label, fieldKey)
+  const { match, changed, emitted } = useFieldState(label, fieldKey)
+  const runtime = useContext(FieldRuntimeCtx)
+  const explicit = !!(fieldKey && runtime.explicitKeys.has(fieldKey))
+  const managed = !!(fieldKey && SYSTEM_MANAGED_PARAMETER_KEYS.has(fieldKey))
+  const dependencyActive = !!(!fieldKey || !runtime.config || parameterDependencyActive(fieldKey, runtime.config, runtime.isEmbedding))
+  const catalogFlags = fieldKey ? parameterFlags(fieldKey) : []
+  const flags = catalogFlags.length > 0
+    ? catalogFlags
+    : Array.from(new Set(label.match(/-{1,2}[a-z][a-z0-9-]*/gi) ?? []))
+  const unsupported = flags.some(flag => runtime.unsupportedFlags.has(flag))
+  const source: ParameterSource = unsupported
+    ? 'unsupported'
+    : managed
+      ? 'managed'
+      : explicit && (!dependencyActive || !emitted)
+        ? 'inactive'
+        : explicit
+          ? 'explicit'
+          : 'inherited'
+  const engineDefault = fieldKey
+    ? parameterEngineDefault(fieldKey, runtime.capabilities, runtime.engineVersion, runtime.lang, flags)
+    : undefined
   return (
     <div
       className={`flex h-full min-w-0 flex-col justify-between ${disabled ? 'opacity-50' : ''} ${match ? 'flash-match rounded-lg ring-2 ring-amber-400/70' : ''} ${className}`}
-      title={title}
       data-config-field={fieldKey}
       data-config-search-match={match ? 'true' : undefined}
       data-config-emitted={emitted ? 'true' : undefined}
+      data-config-source={source}
     >
       {showLabel && (
         <div className="mb-1 flex min-h-8 min-w-0 items-start justify-between gap-2">
-          <label className={`min-w-0 break-words text-xs font-medium leading-4 ${match ? 'text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
-            {label}
-          </label>
-          <FieldStatusMarkers changed={changed} emitted={emitted} changedLabel={changedLabel} emittedLabel={emittedLabel} />
+          <span className="flex min-w-0 items-start gap-1">
+            <label className={`min-w-0 break-words text-xs font-medium leading-4 ${match ? 'text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
+              {label}
+            </label>
+            {title && <ParameterHelp label={label} title={title} fieldKey={fieldKey} source={source} engineDefault={engineDefault} flags={flags} labels={runtime.labels} onInherit={runtime.onInherit} canRestore={explicit} />}
+          </span>
+          <FieldStatusMarker source={source} changed={changed} labels={runtime.labels} />
         </div>
       )}
       <div className="min-w-0">{children}</div>
@@ -182,6 +405,85 @@ export const Num = ({ label, value, onChange, min, max, step, title, disabled, f
     </FieldFrame>
 )}
 
+export const IntentNum = ({
+  label,
+  value,
+  onChange,
+  inherited,
+  onInherit,
+  onManual,
+  inheritedLabel,
+  manualLabel,
+  min,
+  max,
+  step,
+  title,
+  disabled,
+  fieldKey,
+}: {
+  label: string
+  value: number
+  onChange: (v: number) => void
+  inherited: boolean
+  onInherit: () => void
+  onManual: () => void
+  inheritedLabel: string
+  manualLabel: string
+  min?: number
+  max?: number
+  step?: number
+  title?: string
+  disabled?: boolean
+  fieldKey: FieldKey
+}) => {
+  const runtime = useContext(FieldRuntimeCtx)
+  const catalogFlags = parameterFlags(fieldKey)
+  const fallbackFlags = label.match(/-{1,2}[a-z][a-z0-9-]*/gi) ?? []
+  const engineDefault = parameterEngineDefault(
+    fieldKey,
+    runtime.capabilities,
+    runtime.engineVersion,
+    runtime.lang,
+    catalogFlags.length > 0 ? catalogFlags : fallbackFlags,
+  )
+  return (
+    <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
+      <div className="grid grid-cols-[minmax(88px,0.9fr)_minmax(0,1.25fr)] gap-2">
+        <SelectInput
+          aria-label={`${label}: ${inherited ? inheritedLabel : manualLabel}`}
+          value={inherited ? 'inherit' : 'manual'}
+          onChange={event => event.target.value === 'inherit' ? onInherit() : onManual()}
+          disabled={disabled}
+          className="h-10 min-w-0 px-2 text-xs"
+        >
+          <option value="inherit">{inheritedLabel}</option>
+          <option value="manual">{manualLabel}</option>
+        </SelectInput>
+        {inherited ? (
+          <div
+            data-config-inherited-value="true"
+            className="flex h-10 min-w-0 items-center truncate rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-400"
+            title={engineDefault ?? inheritedLabel}
+          >
+            {engineDefault ?? inheritedLabel}
+          </div>
+        ) : (
+          <TextInput
+            type="number"
+            value={value}
+            min={min}
+            max={max}
+            step={step || 1}
+            onChange={event => onChange(parseFloat(event.target.value) || 0)}
+            disabled={disabled}
+            className="h-10 min-w-0 w-full"
+          />
+        )}
+      </div>
+    </FieldFrame>
+  )
+}
+
 export const Toggle = ({ label, value, onChange, title, disabled }: { label: string; value: boolean; onChange: (v: boolean) => void; title?: string; disabled?: boolean }) => (
   <label className={`flex items-center gap-2 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`} title={title}>
     <input type="checkbox" checked={value} onChange={e => onChange(e.target.checked)} disabled={disabled} className="w-4 h-4 rounded" />
@@ -269,7 +571,6 @@ export const CollapsibleGroup = ({
         <button type="button" onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left">
           {(hasSearch || open) ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
           <span className={`text-xs font-medium ${fieldState.match ? 'text-amber-300' : ''}`}>{title}</span>
-          <FieldStatusMarkers changed={fieldState.changed} emitted={fieldState.emitted} changedLabel={fieldState.changedLabel} emittedLabel={fieldState.emittedLabel} />
           {summary && <span className="ml-auto text-xs text-slate-500">{summary}</span>}
         </button>
         {onReset && <ResetButton onClick={onReset} />}

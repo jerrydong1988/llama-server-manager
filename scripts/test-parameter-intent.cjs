@@ -13,6 +13,7 @@ const entry = `
   import assert from 'node:assert/strict'
   import { defaultInstanceConfig } from './src/store/defaults'
   import { getActiveParams } from './src/components/ConfigPage/activeParams'
+  import { canonicalConfigFields, reviewFieldKeys } from './src/components/ConfigPage/configWorkspace'
   import { normalizeInstanceConfig } from './src/modelPolicy'
   import { normalizeStoredConfig } from './src/store/bootstrap'
   import {
@@ -38,22 +39,22 @@ const entry = `
   assert.deepEqual(new Set(migrated.explicit_overrides), new Set(['batch_size', 'spec_type']))
 
   const explicitDefault = markExplicitOverride(defaults, 'temp', defaults.temp)
-  assert.deepEqual(explicitDefault.explicit_overrides, [])
+  assert.deepEqual(explicitDefault.explicit_overrides, ['temp'])
   const changedThenRestored = markExplicitOverride(
     markExplicitOverride(defaults, 'temp', 0.6),
     'temp',
     defaults.temp,
   )
-  assert.deepEqual(changedThenRestored.explicit_overrides, [])
+  assert.deepEqual(changedThenRestored.explicit_overrides, ['temp'])
   const disabledAutoload = markExplicitOverride(defaults, 'models_autoload', false)
   assert.deepEqual(disabledAutoload.explicit_overrides, ['models_autoload'])
-  assert.deepEqual(markExplicitOverride(disabledAutoload, 'models_autoload', true).explicit_overrides, [])
+  assert.deepEqual(markExplicitOverride(disabledAutoload, 'models_autoload', true).explicit_overrides, ['models_autoload'])
   const emptyAlias = markExplicitOverride(
     { ...defaults, alias: 'chat', explicit_overrides: ['alias'] },
     'alias',
     '',
   )
-  assert.deepEqual(emptyAlias.explicit_overrides, [])
+  assert.deepEqual(emptyAlias.explicit_overrides, ['alias'])
 
   const inherited = inheritParameters(
     { ...defaults, temp: 0.6, top_k: 20, explicit_overrides: ['temp', 'top_k'] },
@@ -62,13 +63,36 @@ const entry = `
   assert.equal(inherited.temp, defaults.temp)
   assert.deepEqual(inherited.explicit_overrides, ['top_k'])
 
+  const equalValueInherited = inheritParameters(explicitDefault, ['temp'])
+  assert.equal(equalValueInherited.temp, defaults.temp)
+  assert.deepEqual(equalValueInherited.explicit_overrides, [])
+
+  const automaticAliases = canonicalConfigFields([
+    'gpu_layers', 'gpu_layers_auto', 'ctx_size', 'ctx_size_auto',
+  ])
+  assert.deepEqual(automaticAliases, ['gpu_layers', 'ctx_size'])
+  const automaticInheritKeys = [...new Set(automaticAliases.flatMap(reviewFieldKeys))]
+  const automaticInherited = inheritParameters({
+    ...defaults,
+    gpu_layers: 7,
+    gpu_layers_auto: false,
+    ctx_size: 4096,
+    ctx_size_auto: false,
+    explicit_overrides: ['gpu_layers', 'gpu_layers_auto', 'ctx_size', 'ctx_size_auto'],
+  }, automaticInheritKeys)
+  assert.equal(automaticInherited.gpu_layers, defaults.gpu_layers)
+  assert.equal(automaticInherited.gpu_layers_auto, defaults.gpu_layers_auto)
+  assert.equal(automaticInherited.ctx_size, defaults.ctx_size)
+  assert.equal(automaticInherited.ctx_size_auto, defaults.ctx_size_auto)
+  assert.deepEqual(automaticInherited.explicit_overrides, [])
+
   const preset = applyExplicitOverrides(defaults, { temp: defaults.temp, parallel: 1 })
-  assert.deepEqual(preset.explicit_overrides, ['parallel'])
+  assert.deepEqual(preset.explicit_overrides, ['temp', 'parallel'])
   const compactedTracked = migrateParameterIntent({
     ...defaults,
     explicit_overrides: ['temp', 'models_autoload'],
   })
-  assert.deepEqual(compactedTracked.explicit_overrides, [])
+  assert.deepEqual(compactedTracked.explicit_overrides, ['temp', 'models_autoload'])
 
   const systemOnly = getActiveParams(defaults, false)
   assert.deepEqual(

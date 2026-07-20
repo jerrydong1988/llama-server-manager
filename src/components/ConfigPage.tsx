@@ -13,7 +13,7 @@ import { formatHostPort } from '../utils/network'
 import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
 import { getEngineCompatibilityMode, normalizeEngineVersionStatus } from '../engineCapabilities'
-import { canonicalConfigFields, fieldLabel, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, restoreReviewField, type TemplateSnapshot } from './ConfigPage/configWorkspace'
+import { canonicalConfigFields, fieldLabel, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, restoreReviewField, reviewFieldKeys, type TemplateSnapshot } from './ConfigPage/configWorkspace'
 import { useEngineCompatibility } from './ConfigPage/useEngineCompatibility'
 import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotice'
 import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
@@ -26,6 +26,7 @@ import { ConfigDirectory } from './ConfigPage/ConfigDirectory'
 import { ParameterSearch } from './ConfigPage/ParameterSearch'
 import { ConfigChangePanel } from './ConfigPage/ConfigChangePanel'
 import { ModelAssetPicker, type ModelAssetPickerTarget } from './ConfigPage/ModelAssetPicker'
+import { FieldRuntimeProvider } from './ConfigPage/shared'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -152,6 +153,7 @@ const ConfigPage = () => {
 
   const overrideKeys = explicitOverrideKeys(local)
   const reviewOverrideKeys = canonicalConfigFields(overrideKeys)
+  const inheritAllKeys = [...new Set(reviewOverrideKeys.flatMap(reviewFieldKeys))]
   const generatedParams = getActiveParams(local, isEmbedding)
   const fallbackEmittedKeys = canonicalConfigFields(generatedParams)
     .filter(key => reviewOverrideKeys.includes(key))
@@ -159,6 +161,8 @@ const ConfigPage = () => {
     ? [...generatedParams]
     : (commandPreview?.emittedOverrideKeys ?? fallbackEmittedKeys)
   const emittedParams = new Set<keyof InstanceConfig>(emittedOverrideKeys)
+  const explicitParams = new Set<keyof InstanceConfig>(reviewOverrideKeys)
+  const unsupportedFlags = new Set(unsupportedEngineFlags)
   const primaryModelPath = currentModel?.path || local.model_path || ''
   const draftModelPath = local.draft_model_path || ''
   const endpoint = formatHostPort(local.host || '127.0.0.1', local.port)
@@ -306,6 +310,8 @@ const ConfigPage = () => {
   const statusLabels = {
     changedMarker: labels.changedMarker,
     emittedMarker: labels.changeWillEmit,
+    inheritedValue: labels.valueModeInherited,
+    fixedValue: labels.valueModeFixed,
   }
   const locateParameter = (key: keyof InstanceConfig) => {
     setSearchQuery(fieldLabel(key, t))
@@ -512,7 +518,8 @@ const ConfigPage = () => {
             config={local}
             engine={currentEngine}
             labels={labels}
-            overrideKeys={overrideKeys}
+            overrideKeys={reviewOverrideKeys}
+            inheritKeys={inheritAllKeys}
             set={set}
             inherit={inherit}
           />
@@ -588,14 +595,38 @@ const ConfigPage = () => {
           </Surface>
           )}
 
-          {!manualMode && <>
-            <ParameterSearch query={searchQuery} onQueryChange={setSearchQuery} labels={labels} />
-
-            <BasicSection {...sectionProps} />
-            {!isEmbedding && <ReasoningSection {...sectionProps} />}
-            <PerformanceSection {...sectionProps} />
-            <AdvancedSection {...sectionProps} />
-          </>}
+          {!manualMode && (
+            <FieldRuntimeProvider
+              config={local}
+              isEmbedding={isEmbedding}
+              explicitKeys={explicitParams}
+              emittedKeys={emittedParams}
+              unsupportedFlags={unsupportedFlags}
+              capabilities={currentEngine?.capabilities}
+              engineVersion={currentEngine?.version}
+              lang={lang}
+              labels={{
+                inherited: labels.sourceInherited,
+                explicit: labels.sourceExplicit,
+                managed: labels.sourceManaged,
+                inactive: labels.sourceInactive,
+                unsupported: labels.sourceUnsupported,
+                unsaved: labels.sourceUnsaved,
+                currentState: labels.helpCurrentState,
+                engineDefault: labels.helpEngineDefault,
+                commandFlags: labels.helpCommandFlags,
+                restoreInheritance: labels.inheritOne,
+                help: labels.parameterHelp,
+              }}
+              onInherit={inherit}
+            >
+              <ParameterSearch query={searchQuery} onQueryChange={setSearchQuery} labels={labels} />
+              <BasicSection {...sectionProps} />
+              {!isEmbedding && <ReasoningSection {...sectionProps} />}
+              <PerformanceSection {...sectionProps} />
+              <AdvancedSection {...sectionProps} />
+            </FieldRuntimeProvider>
+          )}
         </div>
 
         <Surface as="aside" className="h-fit p-5 xl:col-span-2 2xl:sticky 2xl:top-4 2xl:col-span-1">

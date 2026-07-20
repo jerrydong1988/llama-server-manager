@@ -19,7 +19,9 @@ const focusResult = (element: HTMLElement) => {
   element.dataset.configSearchCurrent = 'true'
   element.scrollIntoView({ behavior: 'smooth', block: 'center' })
   requestAnimationFrame(() => {
-    element.querySelector<HTMLElement>('input, select, textarea, button')?.focus({ preventScroll: true })
+    const primaryControl = element.querySelector<HTMLElement>('input:not([type="hidden"]), select, textarea, button[role="switch"]')
+    const fallbackControl = element.querySelector<HTMLElement>('button')
+    ;(primaryControl ?? fallbackControl)?.focus({ preventScroll: true })
   })
 }
 

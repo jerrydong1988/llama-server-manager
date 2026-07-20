@@ -1,8 +1,9 @@
 import type { InstanceConfig } from '../../store'
 import { useState, useEffect } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
-import { Section, Input, Num, Switch, Select, SearchTarget, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
+import { Section, Input, Num, IntentNum, Switch, Select, SearchTarget, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
 import { KNOWN_FLAGS } from '../../validators'
+import { hasExplicitOverride } from '../../parameterIntent'
 import WorkerSelector from './WorkerSelector'
 import { Button, TextInput } from '../ui'
 import { getResettableFields, type ModelWorkload } from '../../modelPolicy'
@@ -112,13 +113,13 @@ interface Props {
   onShowMmprojPicker?: () => void
   emittedParams: Set<keyof InstanceConfig>
   changedParams: Set<keyof InstanceConfig>
-  statusLabels: { changedMarker: string; emittedMarker: string }
+  statusLabels: { changedMarker: string; emittedMarker: string; inheritedValue: string; fixedValue: string }
   searchQuery: string
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━ COMMON SECTIONS ━━━━━━━━━━━━━━━━━━━━━━
 
-export function BasicSection({ local, set, t, isEmbedding, workload, modelWorkloadLocked, onShowPicker, onCommitModelPath, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
+export function BasicSection({ local, set, inherit, t, isEmbedding, workload, modelWorkloadLocked, onShowPicker, onCommitModelPath, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => k
   return (
     <Section id="config-basic" title={t.configPage.basic} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={countSummary(countActive(emittedParams, BASIC_CONFIG_KEYS), countActive(changedParams, BASIC_CONFIG_KEYS), statusLabels)}>
@@ -133,10 +134,33 @@ export function BasicSection({ local, set, t, isEmbedding, workload, modelWorklo
         {!isEmbedding && <Select label={`${t.configPage.chatTemplate} (--chat-template)`} value={local.chat_template} onChange={v => set('chat_template', v)} options={chatTemplates} title={t.configPage.chatTemplateTip} defaultLabel={t.common.default}  fieldKey={a('chat_template')} />}
         <Input label={`${t.configPage.host} (--host)`} value={local.host} onChange={v => set('host', v)} title={t.configPage.hostTip}  fieldKey={a('host')} />
         <Num label={`${t.configPage.portLabel} (--port)`} value={local.port} onChange={v => set('port', v)} min={1} max={65535} title={t.configPage.portLabelTip}  fieldKey={a('port')} />
-        <Num label={`${t.configPage.gpuLayers} (--n-gpu-layers, -ngl)`} value={local.gpu_layers} onChange={v => set('gpu_layers', v)} min={0} title={t.configPage.gpuLayersTip} disabled={local.gpu_layers_auto}  fieldKey={a('gpu_layers')} />
-        <Switch label={`${t.configPage.gpuLayersAuto}`} value={local.gpu_layers_auto} onChange={v => set('gpu_layers_auto', v)} title={t.configPage.gpuLayersAutoTip}  fieldKey={a('gpu_layers_auto')} />
-        <Num label={`${t.configPage.ctxSize} (--ctx-size, -c)`} value={local.ctx_size} onChange={v => set('ctx_size', v)} min={0} step={1024} title={t.configPage.ctxSizeTip} disabled={local.ctx_size_auto}  fieldKey={a('ctx_size')} />
-        <Switch label={`${t.configPage.ctxAuto}`} value={local.ctx_size_auto} onChange={v => set('ctx_size_auto', v)} title={t.configPage.ctxAutoTip}  fieldKey={a('ctx_size_auto')} />
+        <IntentNum
+          label={`${t.configPage.gpuLayers} (--n-gpu-layers, -ngl)`}
+          value={local.gpu_layers}
+          onChange={v => set('gpu_layers', v)}
+          inherited={!hasExplicitOverride(local, 'gpu_layers') && !hasExplicitOverride(local, 'gpu_layers_auto')}
+          onInherit={() => inherit(['gpu_layers', 'gpu_layers_auto'])}
+          onManual={() => { set('gpu_layers_auto', false); set('gpu_layers', local.gpu_layers) }}
+          inheritedLabel={statusLabels.inheritedValue}
+          manualLabel={statusLabels.fixedValue}
+          min={0}
+          title={`${t.configPage.gpuLayersTip}\n\n${t.configPage.gpuLayersAutoTip}`}
+          fieldKey={a('gpu_layers')}
+        />
+        <IntentNum
+          label={`${t.configPage.ctxSize} (--ctx-size, -c)`}
+          value={local.ctx_size}
+          onChange={v => set('ctx_size', v)}
+          inherited={!hasExplicitOverride(local, 'ctx_size') && !hasExplicitOverride(local, 'ctx_size_auto')}
+          onInherit={() => inherit(['ctx_size', 'ctx_size_auto'])}
+          onManual={() => { set('ctx_size_auto', false); set('ctx_size', local.ctx_size || 4096) }}
+          inheritedLabel={statusLabels.inheritedValue}
+          manualLabel={statusLabels.fixedValue}
+          min={0}
+          step={1024}
+          title={`${t.configPage.ctxSizeTip}\n\n${t.configPage.ctxAutoTip}`}
+          fieldKey={a('ctx_size')}
+        />
         <Switch label={`${t.configPage.embedding} (--embedding)`} value={local.embedding} onChange={v => {
           set('embedding', v)
           if (!v) {
@@ -173,21 +197,57 @@ export function ReasoningSection({ local, set, t, isEmbedding, emittedParams, ch
   )
 }
 
-export function PerformanceSection({ local, set, t, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
+export function PerformanceSection({ local, set, inherit, t, emittedParams, changedParams, statusLabels, searchQuery }: Props) {
   const a = (k: keyof InstanceConfig) => k
   return (
     <Section id="config-performance" title={t.configPage.performance} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={countSummary(countActive(emittedParams, PERFORMANCE_CONFIG_KEYS), countActive(changedParams, PERFORMANCE_CONFIG_KEYS), statusLabels)}>
       <div className={formGridClassName}>
-        <Num label={`${t.configPage.threads} (--threads, -t)`} value={local.threads} onChange={v => set('threads', v)} min={0} title={t.configPage.threadsTip}  fieldKey={a('threads')} />
-        <Num label={`${t.configPage.threadsBatch} (--threads-batch)`} value={local.threads_batch} onChange={v => set('threads_batch', v)} min={0} title={t.configPage.threadsBatchTip}  fieldKey={a('threads_batch')} />
+        <IntentNum
+          label={`${t.configPage.threads} (--threads, -t)`}
+          value={local.threads}
+          onChange={v => set('threads', v)}
+          inherited={!hasExplicitOverride(local, 'threads')}
+          onInherit={() => inherit(['threads'])}
+          onManual={() => set('threads', local.threads > 0 ? local.threads : Math.max(1, typeof navigator === 'undefined' ? 4 : navigator.hardwareConcurrency || 4))}
+          inheritedLabel={statusLabels.inheritedValue}
+          manualLabel={statusLabels.fixedValue}
+          min={1}
+          title={t.configPage.threadsTip}
+          fieldKey={a('threads')}
+        />
+        <IntentNum
+          label={`${t.configPage.threadsBatch} (--threads-batch)`}
+          value={local.threads_batch}
+          onChange={v => set('threads_batch', v)}
+          inherited={!hasExplicitOverride(local, 'threads_batch')}
+          onInherit={() => inherit(['threads_batch'])}
+          onManual={() => set('threads_batch', local.threads_batch > 0 ? local.threads_batch : local.threads > 0 ? local.threads : Math.max(1, typeof navigator === 'undefined' ? 4 : navigator.hardwareConcurrency || 4))}
+          inheritedLabel={statusLabels.inheritedValue}
+          manualLabel={statusLabels.fixedValue}
+          min={1}
+          title={t.configPage.threadsBatchTip}
+          fieldKey={a('threads_batch')}
+        />
         <Num label={`${t.configPage.batchSize} (--batch-size, -b)`} value={local.batch_size} onChange={v => set('batch_size', v)} min={1} title={t.configPage.batchSizeTip}  fieldKey={a('batch_size')} />
         <Num label={`${t.configPage.ubatchSize} (--ubatch-size, -ub)`} value={local.ubatch_size} onChange={v => set('ubatch_size', v)} min={1} title={t.configPage.ubatchSizeTip}  fieldKey={a('ubatch_size')} />
-        <Num label={`${t.configPage.parallel} (--parallel, -np)`} value={local.parallel} onChange={v => set('parallel', v)} min={-1} title={t.configPage.parallelTip}  fieldKey={a('parallel')} />
+        <IntentNum
+          label={`${t.configPage.parallel} (--parallel, -np)`}
+          value={local.parallel}
+          onChange={v => set('parallel', v)}
+          inherited={!hasExplicitOverride(local, 'parallel')}
+          onInherit={() => inherit(['parallel'])}
+          onManual={() => set('parallel', local.parallel > 0 ? local.parallel : 1)}
+          inheritedLabel={statusLabels.inheritedValue}
+          manualLabel={statusLabels.fixedValue}
+          min={1}
+          title={t.configPage.parallelTip}
+          fieldKey={a('parallel')}
+        />
         <Switch label={`${t.configPage.contBatching} (--cont-batching, -cb)`} value={local.cont_batching} onChange={v => set('cont_batching', v)} title={t.configPage.contBatchingTip}  fieldKey={a('cont_batching')} />
         <Select label={`${t.configPage.flashAttn} (--flash-attn, -fa)`} value={local.flash_attn} onChange={v => set('flash_attn', v)} options={['auto', 'on', 'off']} title={t.configPage.flashAttnTip} defaultLabel={t.common.default}  fieldKey={a('flash_attn')} />
         <Switch label={`${t.configPage.mlock} (--mlock)`} value={local.mlock} onChange={v => set('mlock', v)} title={t.configPage.mlockTip}  fieldKey={a('mlock')} />
-        <Switch label={`${t.configPage.noMmap} (--no-mmap)`} value={local.no_mmap} onChange={v => set('no_mmap', v)} title={t.configPage.noMmapTip}  fieldKey={a('no_mmap')} />
-      <Switch label={`${t.configPage.noRepack} (--no-repack)`} value={local.no_repack} onChange={v => set('no_repack', v)} title={t.configPage.noRepackTip}  fieldKey={a('no_repack')} />
+        <Switch label={`${t.configPage.noMmap} (--mmap / --no-mmap)`} value={!local.no_mmap} onChange={v => set('no_mmap', !v)} title={t.configPage.noMmapTip}  fieldKey={a('no_mmap')} />
+      <Switch label={`${t.configPage.noRepack} (--repack / --no-repack)`} value={!local.no_repack} onChange={v => set('no_repack', !v)} title={t.configPage.noRepackTip}  fieldKey={a('no_repack')} />
         <Select label={`${t.configPage.numa} (--numa)`} value={local.numa_mode || (local.numa ? 'distribute' : '')} onChange={v => { set('numa_mode', v); set('numa', v === 'distribute') }} options={['', 'distribute', 'isolate', 'numactl']} title={t.configPage.numaTip} defaultLabel={t.common.default} fieldKey={a('numa_mode')} />
       </div>
     </Section>
@@ -355,7 +415,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Num label={`${t.configPage.repeatLastN} (--repeat-last-n)`} value={local.repeat_last_n} onChange={v => set('repeat_last_n', v)} min={-1} title={t.configPage.repeatLastNTip}  fieldKey={a('repeat_last_n')} />
             <Switch label={`${t.configPage.special} (--special, -sp)`} value={local.special} onChange={v => set('special', v)} title={t.configPage.specialTip}  fieldKey={a('special')} />
             <Switch label={`${t.configPage.spmInfill} (--spm-infill)`} value={local.spm_infill} onChange={v => set('spm_infill', v)} title={t.configPage.spmInfillTip}  fieldKey={a('spm_infill')} />
-            <Switch label={`${t.configPage.backendSampling} (--sampling-backend, -bs)`} value={local.backend_sampling} onChange={v => set('backend_sampling', v)} title={t.configPage.backendSamplingTip}  fieldKey={a('backend_sampling')} />
+            <Switch label={`${t.configPage.backendSampling} (--backend-sampling, -bs)`} value={local.backend_sampling} onChange={v => set('backend_sampling', v)} title={t.configPage.backendSamplingTip}  fieldKey={a('backend_sampling')} />
             <Input label={`${t.configPage.jsonSchema} (--json-schema)`} value={local.json_schema} onChange={v => set('json_schema', v)} title={t.configPage.jsonSchemaTip}  fieldKey={a('json_schema')} />
             <Input label={`${t.configPage.jsonSchemaFile} (--json-schema-file, -jf)`} value={local.json_schema_file} onChange={v => set('json_schema_file', v)} title={t.configPage.jsonSchemaFileTip}  fieldKey={a('json_schema_file')} />
           </div>
@@ -373,18 +433,57 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
                 <Button onClick={onShowDraftPicker} disabled={isEmbedding} variant="primary" size="icon" title={t.configPage.draftModelTip}><FolderOpen className="h-4 w-4" /></Button>
               </div>
             </SearchTarget>
-            <Num label={`${t.configPage.draftGpu} (--draft-n-gpu-layers, -ngld)`} value={local.draft_gpu_layers} onChange={v => set('draft_gpu_layers', v)} min={0} title={t.configPage.draftGpuTip} disabled={isEmbedding}  fieldKey={a('draft_gpu_layers')} />
+            <IntentNum
+              label={`${t.configPage.draftGpu} (--spec-draft-ngl, -ngld)`}
+              value={local.draft_gpu_layers}
+              onChange={v => set('draft_gpu_layers', v)}
+              inherited={!hasExplicitOverride(local, 'draft_gpu_layers')}
+              onInherit={() => inherit(['draft_gpu_layers'])}
+              onManual={() => set('draft_gpu_layers', local.draft_gpu_layers)}
+              inheritedLabel={statusLabels.inheritedValue}
+              manualLabel={statusLabels.fixedValue}
+              min={0}
+              title={t.configPage.draftGpuTip}
+              disabled={!specActive}
+              fieldKey={a('draft_gpu_layers')}
+            />
             <Num label={`${t.configPage.specDraftPMin} (--spec-draft-p-min)`} value={local.spec_draft_p_min} onChange={v => set('spec_draft_p_min', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPMinTip} disabled={isEmbedding}  fieldKey={a('spec_draft_p_min')} />
             <Num label={`${t.configPage.specDraftPSplit} (--spec-draft-p-split)`} value={local.spec_draft_p_split} onChange={v => set('spec_draft_p_split', v)} min={0} max={1} step={0.05} title={t.configPage.specDraftPSplitTip} disabled={isEmbedding}  fieldKey={a('spec_draft_p_split')} />
             <Input label={`${t.configPage.specDraftDevice} (--spec-draft-device)`} value={local.spec_draft_device} onChange={v => set('spec_draft_device', v)} title={t.configPage.specDraftDeviceTip} disabled={isEmbedding}  fieldKey={a('spec_draft_device')} />
             <Input label={`${t.configPage.lookupCacheStatic} (--lookup-cache-static, -lcs)`} value={local.lookup_cache_static} onChange={v => set('lookup_cache_static', v)} title={t.configPage.lookupCacheStaticTip} disabled={isEmbedding}  fieldKey={a('lookup_cache_static')} />
             <Input label={`${t.configPage.lookupCacheDynamic} (--lookup-cache-dynamic, -lcd)`} value={local.lookup_cache_dynamic} onChange={v => set('lookup_cache_dynamic', v)} title={t.configPage.lookupCacheDynamicTip} disabled={isEmbedding}  fieldKey={a('lookup_cache_dynamic')} />
-            <Select label={`${t.configPage.cacheTypeDraftK} (--cache-type-draft-k, -ctkd)`} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default}  fieldKey={a('cache_type_draft_k')} />
-            <Select label={`${t.configPage.cacheTypeDraftV} (--cache-type-draft-v, -ctvd)`} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default}  fieldKey={a('cache_type_draft_v')} />
+            <Select label={`${t.configPage.cacheTypeDraftK} (--spec-draft-type-k, -ctkd)`} value={local.cache_type_draft_k} onChange={v => set('cache_type_draft_k', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftKTip} defaultLabel={t.common.default}  fieldKey={a('cache_type_draft_k')} />
+            <Select label={`${t.configPage.cacheTypeDraftV} (--spec-draft-type-v, -ctvd)`} value={local.cache_type_draft_v} onChange={v => set('cache_type_draft_v', v)} options={cacheTypes} title={t.configPage.cacheTypeDraftVTip} defaultLabel={t.common.default}  fieldKey={a('cache_type_draft_v')} />
             <Switch label={`${t.configPage.specDefault} (--spec-default)`} value={local.spec_default} onChange={v => set('spec_default', v)} title={t.configPage.specDefaultTip} disabled={isEmbedding}  fieldKey={a('spec_default')} />
-            <Switch label={`${t.configPage.specDraftBackendSampling} (--no-spec-draft-backend-sampling)`} value={!local.spec_draft_backend_sampling} onChange={v => set('spec_draft_backend_sampling', !v)} title={t.configPage.specDraftBackendSamplingTip} disabled={isEmbedding} fieldKey={a('spec_draft_backend_sampling')} />
-            <Num label={`${t.configPage.specDraftThreads} (--spec-draft-threads, -td)`} value={local.spec_draft_threads} onChange={v => set('spec_draft_threads', v)} min={0} title={t.configPage.specDraftThreadsTip} disabled={isEmbedding}  fieldKey={a('spec_draft_threads')} />
-            <Num label={`${t.configPage.specDraftThreadsBatch} (--spec-draft-threads-batch, -tbd)`} value={local.spec_draft_threads_batch} onChange={v => set('spec_draft_threads_batch', v)} min={0} title={t.configPage.specDraftThreadsBatchTip} disabled={isEmbedding}  fieldKey={a('spec_draft_threads_batch')} />
+            <Switch label={`${t.configPage.specDraftBackendSampling} (--spec-draft-backend-sampling / --no-spec-draft-backend-sampling)`} value={local.spec_draft_backend_sampling} onChange={v => set('spec_draft_backend_sampling', v)} title={t.configPage.specDraftBackendSamplingTip} disabled={isEmbedding} fieldKey={a('spec_draft_backend_sampling')} />
+            <IntentNum
+              label={`${t.configPage.specDraftThreads} (--spec-draft-threads, -td)`}
+              value={local.spec_draft_threads}
+              onChange={v => set('spec_draft_threads', v)}
+              inherited={!hasExplicitOverride(local, 'spec_draft_threads')}
+              onInherit={() => inherit(['spec_draft_threads'])}
+              onManual={() => set('spec_draft_threads', local.spec_draft_threads > 0 ? local.spec_draft_threads : Math.max(1, typeof navigator === 'undefined' ? 4 : navigator.hardwareConcurrency || 4))}
+              inheritedLabel={statusLabels.inheritedValue}
+              manualLabel={statusLabels.fixedValue}
+              min={1}
+              title={t.configPage.specDraftThreadsTip}
+              disabled={!specActive}
+              fieldKey={a('spec_draft_threads')}
+            />
+            <IntentNum
+              label={`${t.configPage.specDraftThreadsBatch} (--spec-draft-threads-batch, -tbd)`}
+              value={local.spec_draft_threads_batch}
+              onChange={v => set('spec_draft_threads_batch', v)}
+              inherited={!hasExplicitOverride(local, 'spec_draft_threads_batch')}
+              onInherit={() => inherit(['spec_draft_threads_batch'])}
+              onManual={() => set('spec_draft_threads_batch', local.spec_draft_threads_batch > 0 ? local.spec_draft_threads_batch : local.spec_draft_threads > 0 ? local.spec_draft_threads : Math.max(1, typeof navigator === 'undefined' ? 4 : navigator.hardwareConcurrency || 4))}
+              inheritedLabel={statusLabels.inheritedValue}
+              manualLabel={statusLabels.fixedValue}
+              min={1}
+              title={t.configPage.specDraftThreadsBatchTip}
+              disabled={!specActive}
+              fieldKey={a('spec_draft_threads_batch')}
+            />
           </div>
         </CollapsibleGroup>
         )}
@@ -398,7 +497,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Num label={`${t.configPage.ropeFreqScale} (--rope-freq-scale)`} value={local.rope_freq_scale} onChange={v => set('rope_freq_scale', v)} min={0} max={10} step={0.1} title={t.configPage.ropeFreqScaleTip}  fieldKey={a('rope_freq_scale')} />
             <Num label={`${t.configPage.yarnExtFactor} (--yarn-ext-factor)`} value={local.yarn_ext_factor} onChange={v => set('yarn_ext_factor', v)} min={-1} max={10} step={0.1} title={t.configPage.yarnExtFactorTip}  fieldKey={a('yarn_ext_factor')} />
             <Num label={`${t.configPage.yarnAttnFactor} (--yarn-attn-factor)`} value={local.yarn_attn_factor} onChange={v => set('yarn_attn_factor', v)} min={-1} max={10} step={0.1} title={t.configPage.yarnAttnFactorTip}  fieldKey={a('yarn_attn_factor')} />
-            <Num label={`${t.configPage.yarnBetaSlow} (--yarn-beta-slow)`} value={local.yarn_beta_slow} onChange={v => set('yarn_beta_slow', v)} min={0} max={10} step={0.1} title={t.configPage.yarnBetaSlowTip}  fieldKey={a('yarn_beta_slow')} />
+            <Num label={`${t.configPage.yarnBetaSlow} (--yarn-beta-slow)`} value={local.yarn_beta_slow} onChange={v => set('yarn_beta_slow', v)} min={-1} max={10} step={0.1} title={t.configPage.yarnBetaSlowTip}  fieldKey={a('yarn_beta_slow')} />
             <Num label={`${t.configPage.yarnBetaFast} (--yarn-beta-fast)`} value={local.yarn_beta_fast} onChange={v => set('yarn_beta_fast', v)} min={-1} max={128} title={t.configPage.yarnBetaFastTip}  fieldKey={a('yarn_beta_fast')} />
       <Num label={`${t.configPage.yarnOrigCtx} (--yarn-orig-ctx)`} value={local.yarn_orig_ctx || 0} onChange={v => set('yarn_orig_ctx', v)} min={0} max={1048576} title={t.configPage.yarnOrigCtxTip}  fieldKey={a('yarn_orig_ctx')} />
           </div>
@@ -410,14 +509,14 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Select label={`${t.configPage.cacheTypeK} (--cache-type-k, -ctk)`} value={local.cache_type_k} onChange={v => set('cache_type_k', v)} options={cacheTypes} title={t.configPage.cacheTypeKTip} defaultLabel={t.common.default}  fieldKey={a('cache_type_k')} />
             <Select label={`${t.configPage.cacheTypeV} (--cache-type-v, -ctv)`} value={local.cache_type_v} onChange={v => set('cache_type_v', v)} options={cacheTypes} title={t.configPage.cacheTypeVTip} defaultLabel={t.common.default}  fieldKey={a('cache_type_v')} />
             {!isEmbedding && (<>
-            <Switch label={`${t.configPage.cachePrompt} (--no-cache-prompt)`} value={!local.cache_prompt} onChange={v => set('cache_prompt', !v)} title={t.configPage.cachePromptTip} fieldKey={a('cache_prompt')} />
+            <Switch label={`${t.configPage.cachePrompt} (--cache-prompt / --no-cache-prompt)`} value={local.cache_prompt} onChange={v => set('cache_prompt', v)} title={t.configPage.cachePromptTip} fieldKey={a('cache_prompt')} />
             <Num label={`${t.configPage.cacheReuse} (--cache-reuse)`} value={local.cache_reuse} onChange={v => set('cache_reuse', v)} min={0} title={t.configPage.cacheReuseTip}  fieldKey={a('cache_reuse')} />
             <Num label={`${t.configPage.cacheRam} (--cache-ram, -cram)`} value={local.cache_ram} onChange={v => set('cache_ram', v)} min={-1} step={256} title={t.configPage.cacheRamTip}  fieldKey={a('cache_ram')} />
             </>)}
             <Switch label={`${t.configPage.warmup} (--warmup)`} value={local.warmup} onChange={v => set('warmup', v)} title={t.configPage.warmupTip}  fieldKey={a('warmup')} />
-            <Switch label={`${t.configPage.cacheIdleSlots} (--no-cache-idle-slots)`} value={!local.cache_idle_slots} onChange={v => set('cache_idle_slots', !v)} title={t.configPage.cacheIdleSlotsTip} fieldKey={a('cache_idle_slots')} />
+            <Switch label={`${t.configPage.cacheIdleSlots} (--cache-idle-slots / --no-cache-idle-slots)`} value={local.cache_idle_slots} onChange={v => set('cache_idle_slots', v)} title={t.configPage.cacheIdleSlotsTip} fieldKey={a('cache_idle_slots')} />
             <Select label={`${t.configPage.kvUnified} (--kv-unified)`} value={local.kv_unified_mode || (local.kv_unified ? 'on' : '')} onChange={v => { set('kv_unified_mode', v); set('kv_unified', v === 'on') }} options={['', 'on', 'off']} title={t.configPage.kvUnifiedTip} defaultLabel={t.common.default} fieldKey={a('kv_unified_mode')} />
-      <Switch label={`${t.configPage.noKvOffload} (--no-kv-offload)`} value={local.no_kv_offload} onChange={v => set('no_kv_offload', v)} title={t.configPage.noKvOffloadTip}  fieldKey={a('no_kv_offload')} />
+      <Switch label={`${t.configPage.noKvOffload} (--kv-offload / --no-kv-offload)`} value={!local.no_kv_offload} onChange={v => set('no_kv_offload', !v)} title={t.configPage.noKvOffloadTip}  fieldKey={a('no_kv_offload')} />
           </div>
         </CollapsibleGroup>
 
@@ -444,13 +543,25 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Select label={`${t.configPage.splitMode} (--split-mode, -sm)`} value={local.split_mode} onChange={v => set('split_mode', v)} options={['', 'none', 'layer', 'row', 'tensor']} title={t.configPage.splitModeTip} defaultLabel={t.common.default}  fieldKey={a('split_mode')} />
             <Input label={`${t.configPage.tensorSplit} (--tensor-split, -ts)`} value={local.tensor_split} onChange={v => set('tensor_split', v)} title={t.configPage.tensorSplitTip}  fieldKey={a('tensor_split')} />
             <Num label={`${t.configPage.mainGpu} (--main-gpu, -mg)`} value={local.main_gpu} onChange={v => set('main_gpu', v)} min={0} title={t.configPage.mainGpuTip}  fieldKey={a('main_gpu')} />
-            <Switch label={`${t.configPage.perf} (--perf)`} value={local.perf} onChange={v => set('perf', v)} title={t.configPage.perfTip}  fieldKey={a('perf')} />
+            <Switch label={`${t.configPage.perf} (--perf / --no-perf)`} value={hasExplicitOverride(local, 'perf') ? local.perf : true} onChange={v => set('perf', v)} title={t.configPage.perfTip}  fieldKey={a('perf')} />
             <Switch label={`${t.configPage.checkTensors} (--check-tensors)`} value={local.check_tensors} onChange={v => set('check_tensors', v)} title={t.configPage.checkTensorsTip}  fieldKey={a('check_tensors')} />
             <Switch label={`${t.configPage.directIo} (--direct-io)`} value={local.direct_io} onChange={v => set('direct_io', v)} title={t.configPage.directIoTip} fieldKey={a('direct_io')} />
             <Select label={`${t.configPage.fit} (--fit)`} value={local.fit_mode || (local.fit ? 'on' : '')} onChange={v => { set('fit_mode', v); set('fit', v === 'on') }} options={['', 'on', 'off']} title={t.configPage.fitTip} defaultLabel={t.common.default} fieldKey={a('fit_mode')} />
             <Input label={`${t.configPage.fitTarget} (--fit-target, -fitt)`} value={local.fit_target} onChange={v => set('fit_target', v)} title={t.configPage.fitTargetTip} disabled={(local.fit_mode || (local.fit ? 'on' : '')) === 'off'}  fieldKey={a('fit_target')} />
             <Num label={`${t.configPage.fitCtx} (--fit-ctx, -fitc)`} value={local.fit_ctx} onChange={v => set('fit_ctx', v)} min={0} title={t.configPage.fitCtxTip} disabled={(local.fit_mode || (local.fit ? 'on' : '')) === 'off'}  fieldKey={a('fit_ctx')} />
-            <Num label={`${t.configPage.threadsHttp} (--threads-http)`} value={local.threads_http} onChange={v => set('threads_http', v)} min={-1} title={t.configPage.threadsHttpTip}  fieldKey={a('threads_http')} />
+            <IntentNum
+              label={`${t.configPage.threadsHttp} (--threads-http)`}
+              value={local.threads_http}
+              onChange={v => set('threads_http', v)}
+              inherited={!hasExplicitOverride(local, 'threads_http')}
+              onInherit={() => inherit(['threads_http'])}
+              onManual={() => set('threads_http', local.threads_http >= 0 ? Math.max(1, local.threads_http) : Math.max(1, typeof navigator === 'undefined' ? 4 : navigator.hardwareConcurrency || 4))}
+              inheritedLabel={statusLabels.inheritedValue}
+              manualLabel={statusLabels.fixedValue}
+              min={1}
+              title={t.configPage.threadsHttpTip}
+              fieldKey={a('threads_http')}
+            />
           </div>
         </CollapsibleGroup>
 
@@ -459,7 +570,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
           <div className={formGridClassName}>
             <Input label={`${t.configPage.apiKey} (--api-key)`} value={local.api_key} onChange={v => set('api_key', v)} type="password" title={t.configPage.apiKeyTip}  fieldKey={a('api_key')} />
             <Input label={`${t.configPage.apiKeyFile} (--api-key-file)`} value={local.api_key_file} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip}  fieldKey={a('api_key_file')} />
-            <Switch label={`${t.configPage.noUi} (--no-ui)`} value={local.no_ui} onChange={v => set('no_ui', v)} title={t.configPage.noUiTip}  fieldKey={a('no_ui')} />
+            <Switch label={`${t.configPage.noUi} (--ui / --no-ui)`} value={!local.no_ui} onChange={v => set('no_ui', !v)} title={t.configPage.noUiTip}  fieldKey={a('no_ui')} />
       <Switch label={`${t.configPage.offline} (--offline)`} value={local.offline} onChange={v => set('offline', v)} title={t.configPage.offlineTip}  fieldKey={a('offline')} />
             <Input label={`${t.configPage.pathPrefix} (--path)`} value={local.path_prefix} onChange={v => set('path_prefix', v)} title={t.configPage.pathPrefixTip}  fieldKey={a('path_prefix')} />
             <Input label={`${t.configPage.apiPrefix} (--api-prefix)`} value={local.api_prefix} onChange={v => set('api_prefix', v)} title={t.configPage.apiPrefixTip}  fieldKey={a('api_prefix')} />
@@ -480,7 +591,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
         {/* 服务扩展 (7) */}
         <CollapsibleGroup id="config-advanced-server-ext" title={t.configPage.subAdvServerExt} onReset={() => resetGroup('advancedServerExt')} summary={summary(ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt)}>
           <div className={formGridClassName}>
-            <Switch label={`${t.configPage.slotsEnabled} (--no-slots)`} value={!local.slots_enabled} onChange={v => set('slots_enabled', !v)} title={t.configPage.slotsEnabledTip} fieldKey={a('slots_enabled')} />
+            <Switch label={`${t.configPage.slotsEnabled} (--slots / --no-slots)`} value={local.slots_enabled} onChange={v => set('slots_enabled', v)} title={t.configPage.slotsEnabledTip} fieldKey={a('slots_enabled')} />
             <Switch label={`${t.configPage.metrics} (--metrics)`} value={local.metrics} onChange={v => set('metrics', v)} title={t.configPage.metricsTip}  fieldKey={a('metrics')} />
             <Switch label={`${t.configPage.props} (--props)`} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip}  fieldKey={a('props')} />
             {!isEmbedding && (<>
@@ -513,9 +624,35 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Switch label={`${t.configPage.modelsAutoload} (--models-autoload)`} value={local.models_autoload} onChange={v => set('models_autoload', v)} title={t.configPage.modelsAutoloadTip}  fieldKey={a('models_autoload')} />
             <Input label={`${t.configPage.mmprojUrl} (--mmproj-url)`} value={local.mmproj_url} onChange={v => set('mmproj_url', v)} title={t.configPage.mmprojUrlTip} disabled={isEmbedding}  fieldKey={a('mmproj_url')} />
             <Select label={`${t.configPage.mmprojAuto} (--mmproj-auto)`} value={local.mmproj_mode || (local.no_mmproj ? 'off' : local.mmproj_auto ? 'on' : '')} onChange={v => { set('mmproj_mode', v); set('mmproj_auto', v === 'on'); set('no_mmproj', v === 'off') }} options={['', 'on', 'off']} title={t.configPage.mmprojAutoTip} defaultLabel={t.common.default} disabled={isEmbedding} fieldKey={a('mmproj_mode')} />
-      <Switch label={`${t.configPage.noMmprojOffload} (--no-mmproj-offload)`} value={local.no_mmproj_offload} onChange={v => set('no_mmproj_offload', v)} title={t.configPage.noMmprojOffloadTip} disabled={isEmbedding || (local.mmproj_mode || (local.no_mmproj ? 'off' : local.mmproj_auto ? 'on' : '')) === 'off'}  fieldKey={a('no_mmproj_offload')} />
-            <Num label={`${t.configPage.imageMinTokens} (--image-min-tokens)`} value={local.image_min_tokens} onChange={v => set('image_min_tokens', v)} min={0} title={t.configPage.imageMinTokensTip} disabled={isEmbedding}  fieldKey={a('image_min_tokens')} />
-            <Num label={`${t.configPage.imageMaxTokens} (--image-max-tokens)`} value={local.image_max_tokens} onChange={v => set('image_max_tokens', v)} min={0} title={t.configPage.imageMaxTokensTip} disabled={isEmbedding}  fieldKey={a('image_max_tokens')} />
+      <Switch label={`${t.configPage.noMmprojOffload} (--mmproj-offload / --no-mmproj-offload)`} value={!local.no_mmproj_offload} onChange={v => set('no_mmproj_offload', !v)} title={t.configPage.noMmprojOffloadTip} disabled={isEmbedding || (!local.mmproj_path && !local.mmproj_url && (local.mmproj_mode || (local.no_mmproj ? 'off' : local.mmproj_auto ? 'on' : '')) === 'off')}  fieldKey={a('no_mmproj_offload')} />
+            <IntentNum
+              label={`${t.configPage.imageMinTokens} (--image-min-tokens)`}
+              value={local.image_min_tokens}
+              onChange={v => set('image_min_tokens', v)}
+              inherited={!hasExplicitOverride(local, 'image_min_tokens')}
+              onInherit={() => inherit(['image_min_tokens'])}
+              onManual={() => set('image_min_tokens', local.image_min_tokens > 0 ? local.image_min_tokens : 1024)}
+              inheritedLabel={statusLabels.inheritedValue}
+              manualLabel={statusLabels.fixedValue}
+              min={1}
+              title={t.configPage.imageMinTokensTip}
+              disabled={isEmbedding}
+              fieldKey={a('image_min_tokens')}
+            />
+            <IntentNum
+              label={`${t.configPage.imageMaxTokens} (--image-max-tokens)`}
+              value={local.image_max_tokens}
+              onChange={v => set('image_max_tokens', v)}
+              inherited={!hasExplicitOverride(local, 'image_max_tokens')}
+              onInherit={() => inherit(['image_max_tokens'])}
+              onManual={() => set('image_max_tokens', local.image_max_tokens > 0 ? local.image_max_tokens : Math.max(1024, local.image_min_tokens))}
+              inheritedLabel={statusLabels.inheritedValue}
+              manualLabel={statusLabels.fixedValue}
+              min={1}
+              title={t.configPage.imageMaxTokensTip}
+              disabled={isEmbedding}
+              fieldKey={a('image_max_tokens')}
+            />
             <Num label={`${t.configPage.mtmdBatchMaxTokens} (--mtmd-batch-max-tokens)`} value={local.mtmd_batch_max_tokens} onChange={v => set('mtmd_batch_max_tokens', v)} min={256} step={256} title={t.configPage.mtmdBatchMaxTokensTip} disabled={isEmbedding}  fieldKey={a('mtmd_batch_max_tokens')} />
             <Input label={`${t.configPage.mediaPath} (--media-path)`} value={local.media_path} onChange={v => set('media_path', v)} title={t.configPage.mediaPathTip}  fieldKey={a('media_path')} />
             <Input label={`${t.configPage.tags} (--tags)`} value={local.tags} onChange={v => set('tags', v)} title={t.configPage.tagsTip}  fieldKey={a('tags')} />

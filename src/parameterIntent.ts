@@ -41,8 +41,10 @@ export function migrateParameterIntent(config: InstanceConfig): InstanceConfig {
   const defaults = defaultInstanceConfig()
   const merged = { ...defaults, ...config }
   if (Array.isArray(config.explicit_overrides)) {
+    // Once intent metadata exists it is authoritative.  In particular, keep a
+    // user-pinned value even when it currently equals the application display
+    // value: the engine default may change after an upgrade.
     const explicit_overrides = sanitizeExplicitOverrides(config.explicit_overrides)
-      .filter(key => !sameValue(merged[key as keyof InstanceConfig], defaults[key as keyof InstanceConfig]))
     return { ...merged, explicit_overrides }
   }
 
@@ -58,12 +60,7 @@ export function markExplicitOverride(
 ): InstanceConfig {
   if (INTENT_METADATA_FIELDS.has(key)) return { ...config, [key]: value }
   const overrides = new Set(sanitizeExplicitOverrides(config.explicit_overrides))
-  const defaultValue = defaultInstanceConfig()[key]
-  if (sameValue(value, defaultValue)) {
-    overrides.delete(key)
-  } else {
-    overrides.add(key)
-  }
+  overrides.add(key)
   return { ...config, [key]: value, explicit_overrides: [...overrides] }
 }
 
@@ -88,11 +85,9 @@ export function applyExplicitOverrides(
   changes: Partial<InstanceConfig>,
 ): InstanceConfig {
   const overrides = new Set(sanitizeExplicitOverrides(config.explicit_overrides))
-  const defaults = defaultInstanceConfig()
   for (const key of Object.keys(changes) as Array<keyof InstanceConfig>) {
     if (INTENT_METADATA_FIELDS.has(key)) continue
-    if (sameValue(changes[key], defaults[key])) overrides.delete(key)
-    else overrides.add(key)
+    overrides.add(key)
   }
   return { ...config, ...changes, explicit_overrides: [...overrides] }
 }

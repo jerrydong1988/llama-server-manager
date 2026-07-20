@@ -13,7 +13,7 @@ export interface Warning {
 export const KNOWN_FLAGS = new Set([
   // Basic
   '-m', '-a', '--alias', '--lora', '--lora-init-without-apply', '--lora-scaled',
-  '--mmproj', '--mmproj-url', '--mmproj-auto', '--no-mmproj', '--no-mmproj-offload',
+  '--mmproj', '--mmproj-url', '--mmproj-auto', '--no-mmproj', '--mmproj-offload', '--no-mmproj-offload',
   '--chat-template', '--chat-template-file', '--skip-chat-parsing',
   '--reasoning-format', '--reasoning', '--reasoning-budget', '--reasoning-budget-message',
   '--reasoning-preserve', '--no-reasoning-preserve',
@@ -26,17 +26,17 @@ export const KNOWN_FLAGS = new Set([
   '--rope-scaling', '--rope-scale', '--rope-freq-base', '--rope-freq-scale',
   '--yarn-ext-factor', '--yarn-attn-factor', '--yarn-beta-slow', '--yarn-beta-fast', '--yarn-orig-ctx',
   // Flash Attention & Memory
-  '-fa', '--n-cpu-moe', '--cpu-moe', '-cmoe', '--mlock', '--no-mmap', '--no-repack', '--numa',
-  '--check-tensors', '--perf', '--fit', '-fitt', '-fitc', '--direct-io', '-dio',
+  '-fa', '--n-cpu-moe', '--cpu-moe', '-cmoe', '--mlock', '--mmap', '--no-mmap', '--repack', '--no-repack', '--numa',
+  '--check-tensors', '--perf', '--no-perf', '--fit', '-fitt', '-fitc', '--direct-io', '-dio',
   // KV Cache
-  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-unified', '--no-kv-offload', '--cache-idle-slots', '--no-cache-idle-slots',
+  '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-unified', '--kv-offload', '--no-kv-offload', '--cache-idle-slots', '--no-cache-idle-slots',
   // GPU & Device
   '-dev', '-sm', '-ts', '-mg', '--override-kv',
   // Server & Network
   '--host', '--port', '--api-key', '--api-key-file',
   '--ssl-key-file', '--ssl-cert-file', '--path', '--api-prefix',
   '--cors-origins', '--cors-methods', '--cors-headers', '--cors-credentials', '--no-cors-credentials',
-  '--no-ui', '--offline', '--ui-config-file', '--ui-config', '--ui-mcp-proxy', '--agent', '-ag',
+  '--ui', '--no-ui', '--offline', '--ui-config-file', '--ui-config', '--ui-mcp-proxy', '--agent', '-ag',
   // Embedding & Generation
   '--embedding', '--pooling', '--embd-normalize', '--reranking',
   // Server features
@@ -62,7 +62,7 @@ export const KNOWN_FLAGS = new Set([
   // Speculative Decoding
   '--spec-type', '-md', '-ngld', '--spec-draft-n-max', '--spec-draft-n-min',
   '--spec-draft-p-min', '--spec-draft-p-split', '--spec-draft-device',
-  '-lcs', '-lcd', '--spec-default', '--no-spec-draft-backend-sampling', '-td', '-tbd',
+  '-lcs', '-lcd', '--spec-default', '--spec-draft-backend-sampling', '--no-spec-draft-backend-sampling', '-td', '-tbd',
   // Misc
   '-to', '--sleep-idle-seconds', '--context-shift', '-v',
 ])

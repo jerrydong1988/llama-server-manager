@@ -11,11 +11,12 @@ type Props = {
   engine: EngineInfo | null
   labels: Labels
   overrideKeys: Array<keyof InstanceConfig>
+  inheritKeys: Array<keyof InstanceConfig>
   set: (key: keyof InstanceConfig, value: any) => void
   inherit: (keys: Array<keyof InstanceConfig>) => void
 }
 
-export function LaunchModePanel({ config, engine, labels, overrideKeys, set, inherit }: Props) {
+export function LaunchModePanel({ config, engine, labels, overrideKeys, inheritKeys, set, inherit }: Props) {
   const manualMode = config.launch_mode === 'manual'
   const manualRecommended = Boolean(engine && getEngineCompatibilityMode(engine.capabilities) !== 'full')
   return (
@@ -79,7 +80,7 @@ export function LaunchModePanel({ config, engine, labels, overrideKeys, set, inh
             <div className="flex shrink-0 items-center gap-2">
               <Badge tone={overrideKeys.length > 0 ? 'blue' : 'emerald'}>{overrideKeys.length} {labels.activeParams}</Badge>
               {overrideKeys.length > 0 && (
-                <Button onClick={() => inherit(overrideKeys)} variant="secondary" size="sm" icon={<RotateCcw className="h-4 w-4" />}>
+                <Button onClick={() => inherit(inheritKeys)} variant="secondary" size="sm" icon={<RotateCcw className="h-4 w-4" />}>
                   {labels.inheritAll}
                 </Button>
               )}

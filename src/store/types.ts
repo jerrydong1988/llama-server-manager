@@ -59,6 +59,8 @@ export interface EngineCapabilities {
   versionStatus?: EngineVersionStatus | string
   versionProbeDetail?: string
   supportedFlags: string[]
+  reportedDefaults?: Record<string, string>
+  reportedDefaultsVersion?: number
   helpHash: string
   executableFingerprint: string
   probedAt?: number

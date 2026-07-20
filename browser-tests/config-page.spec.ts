@@ -20,6 +20,15 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('opening an instance config keeps React hook order stable (issue #5)', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', error => pageErrors.push(error.message))
+
+  await openConfiguration(page)
+  await expect(page.locator('[data-config-field="temp"]')).toBeVisible()
+  expect(pageErrors).toEqual([])
+})
+
 test('search navigation, change review, emission preview, and save use the mock backend', async ({ page }) => {
   await openConfiguration(page)
 
@@ -49,6 +58,64 @@ test('search navigation, change review, emission preview, and save use the mock 
   expect(generated?.command).toContain('--no-models-autoload')
   expect(generated?.emittedOverrideKeys).toContain('temp')
   expect(generated?.emittedOverrideKeys).toContain('models_autoload')
+})
+
+test('parameter intent remains explicit at a default value and only inheritance removes it', async ({ page }) => {
+  await openConfiguration(page)
+
+  const temperature = page.locator('[data-config-field="temp"]')
+  const input = temperature.locator('input')
+  await input.fill('0.8')
+  await expect(temperature).toHaveAttribute('data-config-source', 'explicit')
+  await expect(temperature).toHaveAttribute('data-config-emitted', 'true')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command.join(' ') ?? ''))
+    .toContain('--temp 0.8')
+
+  await temperature.getByRole('button', { name: /参数说明/ }).click()
+  await expect(page.getByText('0.8', { exact: true }).last()).toBeVisible()
+  await page.getByRole('button', { name: '恢复引擎默认', exact: true }).click()
+
+  await expect(temperature).toHaveAttribute('data-config-source', 'inherited')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .not.toContain('--temp')
+})
+
+test('automatic numeric modes and positive inverse toggles produce unambiguous commands', async ({ page }) => {
+  await openConfiguration(page)
+
+  const threads = page.locator('[data-config-field="threads"]')
+  await expect(threads).toHaveAttribute('data-config-source', 'inherited')
+  await threads.getByRole('combobox').selectOption('manual')
+  await expect(threads).toHaveAttribute('data-config-source', 'explicit')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .toContain('--threads')
+  await threads.getByRole('combobox').selectOption('inherit')
+  await expect(threads).toHaveAttribute('data-config-source', 'inherited')
+
+  const contextSize = page.locator('[data-config-field="ctx_size"]')
+  await contextSize.getByRole('combobox').selectOption('manual')
+  await expect(contextSize).toHaveAttribute('data-config-source', 'explicit')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .toContain('-c')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.emittedOverrideKeys ?? []))
+    .toEqual(expect.arrayContaining(['ctx_size']))
+  await contextSize.getByRole('button', { name: /参数说明/ }).click()
+  await page.getByRole('button', { name: '恢复引擎默认', exact: true }).click()
+  await expect(contextSize).toHaveAttribute('data-config-source', 'inherited')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .not.toContain('-c')
+
+  const mmap = page.locator('[data-config-field="no_mmap"]')
+  const mmapSwitch = mmap.getByRole('switch')
+  await expect(mmapSwitch).toHaveAttribute('aria-checked', 'true')
+  await mmapSwitch.click()
+  await expect(mmap).toHaveAttribute('data-config-source', 'explicit')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .toContain('--no-mmap')
+  await mmapSwitch.click()
+  await expect(mmapSwitch).toHaveAttribute('aria-checked', 'true')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .toContain('--mmap')
 })
 
 test('source-confirmed multimodal projector is emitted without a mismatch warning', async ({ page }) => {

@@ -1,5 +1,6 @@
 import type { InstanceConfig } from '../../store'
 import { VECTOR_ALLOWED_FIELDS } from '../../modelPolicy'
+import { canonicalConfigFields } from './configWorkspace'
 
 /**
  * Mirror of server.rs generate_command() conditions.
@@ -12,7 +13,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   }
 
   if (Array.isArray(config.explicit_overrides)) {
-    const a = new Set<keyof InstanceConfig>(config.explicit_overrides as Array<keyof InstanceConfig>)
+    const a = new Set<keyof InstanceConfig>(canonicalConfigFields(config.explicit_overrides as Array<keyof InstanceConfig>))
     a.add('model_path'); a.add('host'); a.add('port')
     if (config.metrics) a.add('metrics')
     if (config.props) a.add('props')
