@@ -11,6 +11,7 @@ const MAX_GGUF_STORED_TAGS: u64 = 256;
 const MAX_GGUF_TAG_BYTES: u64 = 4_096;
 const MAX_GGUF_TAG_TOTAL_BYTES: u64 = 65_536;
 static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+pub const DEFAULT_MODELS_DIR_NAME: &str = "models";
 
 pub fn set_data_dir_override(path: PathBuf) -> Result<(), String> {
     if !path.is_absolute() {
@@ -750,6 +751,10 @@ pub fn get_data_dir() -> PathBuf {
         }
     }
     get_app_dir()
+}
+
+pub fn get_default_models_dir() -> PathBuf {
+    get_data_dir().join(DEFAULT_MODELS_DIR_NAME)
 }
 
 #[cfg(test)]

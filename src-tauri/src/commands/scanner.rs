@@ -564,7 +564,7 @@ pub async fn scan_models(
 ) -> Result<Vec<ModelInfo>, String> {
     let generation = state.model_scan_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let app_dir = utils::get_data_dir();
-    let default_path = app_dir.join("models");
+    let default_path = utils::get_default_models_dir();
     let default_path_for_check = default_path.clone();
 
     let scan_paths: Vec<PathBuf> = if paths.is_empty() {

@@ -131,6 +131,9 @@ if (BROWSER_SCENARIO === 'multimodal-mismatch') {
     'mmproj_path',
   ]
 }
+if (BROWSER_SCENARIO === 'empty-model-roots') {
+  state.model_dirs = []
+}
 
 type BrowserTestControl = {
   marker: string
@@ -250,6 +253,7 @@ mockIPC((command, payload) => {
     case 'get_system_health': return clone(systemMetrics)
     case 'get_workers': return []
     case 'is_autostart_enabled': return false
+    case 'resolve_path': return args.path === 'models' ? 'C:\\browser-test\\models' : String(args.path ?? '')
     case 'generate_server_command': {
       if (BROWSER_SCENARIO === 'command-error') throw new Error('Browser test command generation failed')
       const config = args.config as InstanceConfig
@@ -261,6 +265,7 @@ mockIPC((command, payload) => {
     case 'save_config': {
       const instances = clone(args.instances as Record<string, InstanceConfig>)
       control.state.instances = instances
+      if (Array.isArray(args.modelDirs)) control.state.model_dirs = clone(args.modelDirs as string[])
       control.saveCount += 1
       syncAutomationProbe()
       return instances

@@ -12,6 +12,8 @@ import {
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'
 
+const DEFAULT_MODEL_DIRECTORY = 'models'
+
 export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   AppState,
   | 'setSysMetrics'
@@ -102,8 +104,23 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       set({ isLoading: true })
       const requestGeneration = beginModelInventoryRequest()
       try {
-        const models = await invoke<ModelInfo[]>('scan_models', { paths })
-        applyModelInventory(models, get, set, { modelDirs: paths, isLoading: false }, requestGeneration)
+        const configuredPaths = paths.filter(path => path.trim().length > 0)
+        const effectivePaths = configuredPaths.length > 0
+          ? configuredPaths
+          : [await invoke<string>('resolve_path', { path: DEFAULT_MODEL_DIRECTORY })]
+        const pathsChanged = effectivePaths.length !== paths.length
+          || effectivePaths.some((path, index) => path !== paths[index])
+        const models = await invoke<ModelInfo[]>('scan_models', { paths: effectivePaths })
+        const applied = applyModelInventory(
+          models,
+          get,
+          set,
+          { modelDirs: effectivePaths, isLoading: false },
+          requestGeneration,
+        )
+        if (applied && pathsChanged) {
+          await get().saveConfig()
+        }
         return null
       } catch (error: any) {
         console.error('scan_models error:', error)

@@ -9,11 +9,19 @@ use tauri::Emitter;
 
 static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+fn normalize_model_dirs(mut model_dirs: Vec<String>) -> Vec<String> {
+    model_dirs.retain(|directory| !directory.trim().is_empty());
+    if model_dirs.is_empty() {
+        model_dirs.push(crate::utils::DEFAULT_MODELS_DIR_NAME.to_string());
+    }
+    model_dirs
+}
+
 fn default_global_config() -> GlobalConfig {
     GlobalConfig {
         config_load_warning: None,
         instances: HashMap::new(),
-        model_dirs: vec![],
+        model_dirs: normalize_model_dirs(Vec::new()),
         engine_dirs: vec![],
         default_engine_id: String::new(),
         running: HashMap::new(),
@@ -88,7 +96,7 @@ where
 fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
     let path = config_dir.join("instances.json");
     let backup_path = config_dir.join("instances.json.bak");
-    match std::fs::read_to_string(&path) {
+    let mut config = match std::fs::read_to_string(&path) {
         Ok(json) => match serde_json::from_str::<GlobalConfig>(&json) {
             Ok(config) => config,
             Err(primary_error) => match std::fs::read_to_string(&backup_path)
@@ -126,7 +134,9 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
             config.config_load_warning = Some(format!("读取主配置失败：{error}"));
             config
         }
-    }
+    };
+    config.model_dirs = normalize_model_dirs(config.model_dirs);
+    config
 }
 
 fn load_global_config_for_update_unlocked(
@@ -136,14 +146,16 @@ fn load_global_config_for_update_unlocked(
     let backup_path = config_dir.join("instances.json.bak");
     let primary = std::fs::read_to_string(&primary_path);
     if let Ok(contents) = &primary {
-        if let Ok(config) = serde_json::from_str::<GlobalConfig>(contents) {
+        if let Ok(mut config) = serde_json::from_str::<GlobalConfig>(contents) {
+            config.model_dirs = normalize_model_dirs(config.model_dirs);
             return Ok(config);
         }
     }
 
     if let Ok(contents) = std::fs::read_to_string(&backup_path) {
-        let config = serde_json::from_str::<GlobalConfig>(&contents)
+        let mut config = serde_json::from_str::<GlobalConfig>(&contents)
             .map_err(|error| format!("解析配置备份失败: {error}"))?;
+        config.model_dirs = normalize_model_dirs(config.model_dirs);
         crate::persistence::atomic_write(&primary_path, contents.as_bytes(), None)
             .map_err(|error| format!("修复主配置失败: {error}"))?;
         return Ok(config);
@@ -232,7 +244,7 @@ fn apply_frontend_config(
     engine_names: HashMap<String, String>,
 ) {
     global.instances = snapshot.instances;
-    global.model_dirs = snapshot.model_dirs;
+    global.model_dirs = normalize_model_dirs(snapshot.model_dirs);
     global.engine_dirs = snapshot.engine_dirs;
     global.default_engine_id = snapshot.default_engine_id;
     global.running = running;
@@ -540,6 +552,43 @@ mod tests {
     }
 
     #[test]
+    fn fresh_config_exposes_the_default_model_scan_root() {
+        let dir = temp_config_dir("fresh-default-model-root");
+
+        let loaded = read_config_from_disk(&dir);
+
+        assert_eq!(
+            loaded.model_dirs,
+            vec![crate::utils::get_default_models_dir()
+                .to_string_lossy()
+                .to_string()]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn legacy_empty_model_roots_migrate_to_the_default_directory() {
+        let dir = temp_config_dir("legacy-empty-model-root");
+        let mut legacy = sample_config();
+        legacy.model_dirs.clear();
+        std::fs::write(
+            dir.join("instances.json"),
+            serde_json::to_string_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = read_config_from_disk(&dir);
+
+        assert_eq!(
+            loaded.model_dirs,
+            vec![crate::utils::get_default_models_dir()
+                .to_string_lossy()
+                .to_string()]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn read_config_falls_back_to_backup_when_primary_json_is_corrupt() {
         let dir = temp_config_dir("backup-fallback");
         let expected = sample_config();
@@ -674,6 +723,27 @@ mod tests {
         assert_eq!(config.proxy_config.public_api_key, "proxy-secret");
         assert_eq!(config.default_engine_id, "engine-new");
         assert_eq!(config.last_tab, "dashboard");
+    }
+
+    #[test]
+    fn frontend_config_cannot_persist_an_implicit_empty_model_root() {
+        let mut config = sample_config();
+        let snapshot = FrontendConfigSnapshot {
+            instances: HashMap::new(),
+            model_dirs: Vec::new(),
+            engine_dirs: vec!["engines-new".into()],
+            default_engine_id: String::new(),
+            instance_order: Vec::new(),
+            last_tab: "model-repo".into(),
+            dark_mode: true,
+        };
+
+        apply_frontend_config(&mut config, snapshot, HashMap::new(), HashMap::new());
+
+        assert_eq!(
+            config.model_dirs,
+            vec![crate::utils::DEFAULT_MODELS_DIR_NAME.to_string()]
+        );
     }
 }
 
