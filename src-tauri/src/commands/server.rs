@@ -15,8 +15,8 @@ use std::sync::{Arc, LazyLock, Mutex};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{Emitter, Manager};
 
-const MAX_SERVER_LOG_BYTES: u64 = 32 * 1024 * 1024;
-const RETAINED_SERVER_LOG_BYTES: u64 = 8 * 1024 * 1024;
+pub(crate) const MAX_SERVER_LOG_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const RETAINED_SERVER_LOG_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TRACKED_PERF_TASKS: usize = 1_024;
 const LOG_REPLAY_LINES: usize = 2_000;
 const LOG_REPLAY_MAX_BYTES: u64 = 4 * 1024 * 1024;
@@ -32,7 +32,7 @@ struct CappedLogState {
     rotation_boundary: u64,
 }
 
-struct CappedLogWriter {
+pub(crate) struct CappedLogWriter {
     state: Mutex<CappedLogState>,
 }
 
@@ -44,11 +44,15 @@ struct LogReadChunk {
 }
 
 const MAX_PENDING_LOG_BYTES: usize = 256 * 1024;
-const INITIAL_HEALTH_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
+pub(crate) const INITIAL_HEALTH_GRACE: std::time::Duration = std::time::Duration::from_secs(120);
 const HEALTH_FAILURE_THRESHOLD: u32 = 3;
 
 impl CappedLogWriter {
-    fn new(path: std::path::PathBuf, max_bytes: u64, retained_bytes: u64) -> std::io::Result<Self> {
+    pub(crate) fn new(
+        path: std::path::PathBuf,
+        max_bytes: u64,
+        retained_bytes: u64,
+    ) -> std::io::Result<Self> {
         if retained_bytes >= max_bytes {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -162,20 +166,64 @@ fn take_complete_log_lines(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
     lines
 }
 
-fn spawn_log_pump<R>(mut source: R, writer: Arc<CappedLogWriter>) -> std::thread::JoinHandle<()>
+pub(crate) fn spawn_log_pump<R>(
+    mut source: R,
+    writer: Arc<CappedLogWriter>,
+) -> std::thread::JoinHandle<()>
 where
     R: Read + Send + 'static,
 {
     std::thread::spawn(move || {
         let mut buffer = [0_u8; 8192];
+        let mut log_write_failed = false;
         loop {
             match source.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(read) => {
-                    if writer.append(&buffer[..read]).is_err() {
-                        break;
+                    if !log_write_failed {
+                        if let Err(error) = writer.append(&buffer[..read]) {
+                            eprintln!("Server log persistence failed; continuing to drain output: {error}");
+                            log_write_failed = true;
+                        }
                     }
                 }
+            }
+        }
+    })
+}
+
+pub(crate) fn spawn_runtime_log_pump<R>(
+    mut source: R,
+    writer: Arc<CappedLogWriter>,
+    tracker: Arc<Mutex<RuntimePerfTracker>>,
+) -> std::thread::JoinHandle<()>
+where
+    R: Read + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let mut buffer = [0_u8; 8192];
+        let mut pending = Vec::new();
+        let mut log_write_failed = false;
+        loop {
+            match source.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if !log_write_failed {
+                        if let Err(error) = writer.append(&buffer[..read]) {
+                            eprintln!("Runtime log persistence failed; continuing to supervise output: {error}");
+                            log_write_failed = true;
+                        }
+                    }
+                    for line in take_complete_log_lines(&mut pending, &buffer[..read]) {
+                        tracker.lock().unwrap().process_line(&line);
+                    }
+                }
+            }
+        }
+        if !pending.is_empty() {
+            let line = String::from_utf8_lossy(&pending).trim().to_string();
+            if !line.is_empty() {
+                tracker.lock().unwrap().process_line(&line);
             }
         }
     })
@@ -276,7 +324,7 @@ fn validate_tls_configuration(config: &InstanceConfig) -> AppResult<()> {
     Ok(())
 }
 
-fn telemetry_config_hash(config: &InstanceConfig) -> String {
+pub(crate) fn telemetry_config_hash(config: &InstanceConfig) -> String {
     let mut hasher = DefaultHasher::new();
     serde_json::to_string(config)
         .unwrap_or_default()
@@ -1729,6 +1777,102 @@ pub async fn start_server(
     };
     let cmd_display = format_command_for_display(&cmd);
 
+    if crate::runtime_service::manages_instances() {
+        let running =
+            crate::runtime_service::start_instance(crate::runtime_service::RuntimeLaunchSpec {
+                instance_id: instance_id.clone(),
+                config: config.clone(),
+                engine_backend: engine_backend.clone(),
+                command: cmd.clone(),
+                command_display: cmd_display.clone(),
+                workload: workload.as_str().to_string(),
+                working_directory: std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().to_string()),
+            })
+            .await
+            .map_err(AppError::from)?;
+
+        let previous_instance = {
+            state
+                .running
+                .lock()
+                .unwrap()
+                .insert(instance_id.clone(), running.clone());
+            let previous = state
+                .instances
+                .lock()
+                .unwrap()
+                .insert(instance_id.clone(), config.clone());
+            state
+                .runtime_managed_instances
+                .lock()
+                .unwrap()
+                .insert(instance_id.clone());
+            previous
+        };
+        let running_snapshot = state.running.lock().unwrap().clone();
+        let persisted_instance_id = instance_id.clone();
+        let persisted_config = config.clone();
+        if let Err(error) = crate::commands::config::update_and_persist(&state, |global| {
+            global.running = running_snapshot;
+            global
+                .instances
+                .insert(persisted_instance_id, persisted_config);
+        }) {
+            let _ = crate::runtime_service::stop_instance(instance_id.clone()).await;
+            state.running.lock().unwrap().remove(&instance_id);
+            state
+                .runtime_managed_instances
+                .lock()
+                .unwrap()
+                .remove(&instance_id);
+            let mut instances = state.instances.lock().unwrap();
+            if let Some(previous) = previous_instance {
+                instances.insert(instance_id.clone(), previous);
+            } else {
+                instances.remove(&instance_id);
+            }
+            return Err(AppError::new(
+                "RUNTIME_STATE_PERSIST_FAILED",
+                format!("后台运行时已回滚实例启动，因为配置持久化失败: {error}"),
+                true,
+            ));
+        }
+
+        app.emit(
+            "server-started",
+            serde_json::json!({
+                "instanceId": instance_id,
+                "pid": running.pid,
+                "port": config.port,
+                "host": config.host,
+                "command": cmd_display,
+                "effectiveConfig": {
+                    "model_path": config.model_path,
+                    "alias": config.alias,
+                    "host": config.host,
+                    "port": config.port,
+                    "api_key": config.api_key,
+                    "api_key_file": config.api_key_file,
+                    "ssl_key_file": config.ssl_key_file,
+                    "ssl_cert_file": config.ssl_cert_file,
+                    "path_prefix": config.path_prefix,
+                    "api_prefix": config.api_prefix,
+                    "embedding": config.embedding,
+                    "reranking": config.reranking,
+                },
+            }),
+        )
+        .ok();
+
+        let config_dir = state.config_dir.lock().unwrap().clone();
+        if register_restored_runtime_instance(&app, &running.instance_id, running.pid) {
+            reconnect_runtime_instance_logs(&running.instance_id, running.pid, &config_dir, app);
+        }
+        return Ok(());
+    }
+
     // Create a log file; llama-server writes here directly without pipe forwarding.
     let config_dir = state.config_dir.lock().unwrap().clone();
     let log_dir = config_dir.join("logs");
@@ -2074,14 +2218,113 @@ struct MonitorLoopConfig {
     workload: ModelWorkload,
 }
 
+pub(crate) struct InstanceMonitorSample {
+    pub ready: bool,
+    pub system: SystemMetrics,
+    pub llama: Option<crate::commands::telemetry::LlamaMetricSample>,
+    pub slots: Option<Vec<crate::commands::telemetry::SlotSnapshotRecord>>,
+}
+
+pub(crate) fn collect_instance_monitor_sample(
+    client: &reqwest::blocking::Client,
+    endpoint_base: &str,
+    api_key: &str,
+    process_system: &mut System,
+    pid: u32,
+    uptime_secs: u64,
+) -> InstanceMonitorSample {
+    let authenticated_get = |url: &str| {
+        let request = client.get(url).timeout(std::time::Duration::from_secs(2));
+        if api_key.is_empty() {
+            request
+        } else {
+            request.header("Authorization", format!("Bearer {api_key}"))
+        }
+    };
+    let probe = |path: &str| {
+        authenticated_get(&format!("{endpoint_base}{path}"))
+            .send()
+            .map(|response| response.status())
+    };
+    let ready = probe_status_is_success(&probe("/health").map_err(|error| error.to_string()))
+        || probe_status_is_success(&probe("/v1/models").map_err(|error| error.to_string()));
+
+    let gpu_system = collect_gpu_and_system();
+    let (process_cpu, process_memory) = get_process_metrics(process_system, pid);
+    let cpu_percent = gpu_system.cpu_percent.unwrap_or(process_cpu);
+    let memory_mb = if gpu_system.cpu_percent.is_some() {
+        gpu_system.memory_mb.unwrap_or(process_memory)
+    } else {
+        (process_memory * 10.0).round() / 10.0
+    };
+    let system = SystemMetrics {
+        cpu_percent,
+        memory_mb,
+        uptime_secs,
+        gpu_percent: gpu_system.gpu_percent,
+        vram_used_mb: gpu_system.vram_used_mb,
+        vram_total_mb: gpu_system.vram_total_mb,
+        system_cpu_percent: gpu_system.system_cpu_percent,
+        system_memory_total_mb: gpu_system.system_memory_total_mb,
+        system_memory_used_mb: gpu_system.system_memory_used_mb,
+        gpu_vendor: gpu_system.gpu_vendor,
+        gpu_name: gpu_system.gpu_name,
+    };
+
+    let llama = authenticated_get(&format!("{endpoint_base}/metrics"))
+        .send()
+        .ok()
+        .filter(|response| response.status().is_success())
+        .and_then(|response| response.text().ok())
+        .and_then(|body| parse_llama_metric_sample(&body).ok());
+    let slots = authenticated_get(&format!("{endpoint_base}/slots"))
+        .send()
+        .ok()
+        .filter(|response| response.status().is_success())
+        .and_then(|response| response.json::<Vec<serde_json::Value>>().ok())
+        .map(|values| {
+            values
+                .iter()
+                .enumerate()
+                .map(
+                    |(index, value)| crate::commands::telemetry::SlotSnapshotRecord {
+                        slot_id: value
+                            .get("id")
+                            .and_then(|item| item.as_u64())
+                            .unwrap_or(index as u64) as u32,
+                        is_processing: value
+                            .get("is_processing")
+                            .and_then(|item| item.as_bool())
+                            .unwrap_or(false),
+                        n_ctx: value
+                            .get("n_ctx")
+                            .and_then(|item| item.as_u64())
+                            .unwrap_or(0) as u32,
+                        n_past: value
+                            .get("n_past")
+                            .and_then(|item| item.as_u64())
+                            .map(|item| item as u32),
+                    },
+                )
+                .collect()
+        });
+
+    InstanceMonitorSample {
+        ready,
+        system,
+        llama,
+        slots,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HealthTransition {
+pub(crate) enum HealthTransition {
     None,
     Ready,
     Failed,
 }
 
-fn advance_health_state(
+pub(crate) fn advance_health_state(
     ready: bool,
     initial_grace_expired: bool,
     health_failures: &mut u32,
@@ -2140,10 +2383,6 @@ fn monitor_loop(
     };
 
     let client = reqwest::blocking::Client::new();
-    let metrics_url = format!("{endpoint_base}/metrics");
-    let slots_url = format!("{endpoint_base}/slots");
-    let health_url = format!("{endpoint_base}/health");
-    let models_url = format!("{endpoint_base}/v1/models");
 
     // Startup timestamp used to compute uptime.
     let start_instant = std::time::Instant::now();
@@ -2163,17 +2402,16 @@ fn monitor_loop(
             break;
         }
 
-        let probe = |url: &str| {
-            let mut request = client.get(url).timeout(std::time::Duration::from_secs(2));
-            if !api_key.is_empty() {
-                request = request.header("Authorization", format!("Bearer {api_key}"));
-            }
-            request.send().map(|response| response.status())
-        };
-        let ready = probe_status_is_success(&probe(&health_url).map_err(|e| e.to_string()))
-            || probe_status_is_success(&probe(&models_url).map_err(|e| e.to_string()));
+        let sample = collect_instance_monitor_sample(
+            &client,
+            &endpoint_base,
+            &api_key,
+            &mut proc_sys,
+            expected_pid,
+            start_instant.elapsed().as_secs(),
+        );
         match advance_health_state(
-            ready,
+            sample.ready,
             start_instant.elapsed() >= INITIAL_HEALTH_GRACE,
             &mut health_failures,
             &mut last_health_ready,
@@ -2193,113 +2431,33 @@ fn monitor_loop(
             HealthTransition::None => {}
         }
 
-        // System-level and GPU metrics using the collect_gpu_and_system singleton cache.
-        let gpu_system = collect_gpu_and_system();
-
-        // Process-level metrics.
-        let (cpu, mem) = get_process_metrics(&mut proc_sys, expected_pid);
-        let cpu_pct = gpu_system.cpu_percent.unwrap_or(cpu);
-        let mem_mb = if gpu_system.cpu_percent.is_some() {
-            gpu_system.memory_mb.unwrap_or(mem)
-        } else {
-            (mem * 10.0).round() / 10.0
-        };
-
-        let sys_metrics = SystemMetrics {
-            cpu_percent: cpu_pct,
-            memory_mb: mem_mb,
-            uptime_secs: start_instant.elapsed().as_secs(),
-            gpu_percent: gpu_system.gpu_percent,
-            vram_used_mb: gpu_system.vram_used_mb,
-            vram_total_mb: gpu_system.vram_total_mb,
-            system_cpu_percent: gpu_system.system_cpu_percent,
-            system_memory_total_mb: gpu_system.system_memory_total_mb,
-            system_memory_used_mb: gpu_system.system_memory_used_mb,
-            gpu_vendor: gpu_system.gpu_vendor,
-            gpu_name: gpu_system.gpu_name,
-        };
-
-        // llama metrics.
-        let mut llama_sample: Option<crate::commands::telemetry::LlamaMetricSample> = None;
-        let mut req = client.get(&metrics_url);
-        if !api_key.is_empty() {
-            req = req.header("Authorization", format!("Bearer {}", api_key));
-        }
-        if let Ok(resp) = req.timeout(std::time::Duration::from_secs(2)).send() {
-            if resp.status().is_success() {
-                if let Ok(body) = resp.text() {
-                    if let Ok(sample) = parse_llama_metric_sample(&body) {
-                        llama_sample = Some(sample);
-                    }
-                }
-            }
-        }
-
-        // Emit events.
         let _ = crate::commands::telemetry::record_metric_sample(
             telemetry_session_id.as_deref(),
             instance_id,
-            &sys_metrics,
-            llama_sample.as_ref(),
+            &sample.system,
+            sample.llama.as_ref(),
         );
         crate::commands::monitoring::update_metrics(
             instance_id,
             telemetry_session_id.as_deref(),
             workload,
-            sys_metrics.clone(),
-            llama_sample.clone(),
+            sample.system,
+            sample.llama,
         );
 
-        let mut slots_req = client.get(&slots_url);
-        if !api_key.is_empty() {
-            slots_req = slots_req.header("Authorization", format!("Bearer {}", api_key));
-        }
-        if let Ok(resp) = slots_req.timeout(std::time::Duration::from_secs(2)).send() {
-            if resp.status().is_success() {
-                if let Ok(values) = resp.json::<Vec<serde_json::Value>>() {
-                    let slots: Vec<crate::commands::telemetry::SlotSnapshotRecord> = values
-                        .iter()
-                        .enumerate()
-                        .map(|(index, value)| {
-                            let slot_id = value
-                                .get("id")
-                                .and_then(|item| item.as_u64())
-                                .unwrap_or(index as u64)
-                                as u32;
-                            let is_processing = value
-                                .get("is_processing")
-                                .and_then(|item| item.as_bool())
-                                .unwrap_or(false);
-                            let n_ctx = value
-                                .get("n_ctx")
-                                .and_then(|item| item.as_u64())
-                                .unwrap_or(0) as u32;
-                            let n_past = value
-                                .get("n_past")
-                                .and_then(|item| item.as_u64())
-                                .map(|item| item as u32);
-                            crate::commands::telemetry::SlotSnapshotRecord {
-                                slot_id,
-                                is_processing,
-                                n_ctx,
-                                n_past,
-                            }
-                        })
-                        .collect();
-                    crate::commands::monitoring::update_slots(
-                        instance_id,
-                        telemetry_session_id.as_deref(),
-                        workload,
-                        slots.len() as u64,
-                        slots.iter().filter(|slot| slot.is_processing).count() as u64,
-                    );
-                    let _ = crate::commands::telemetry::record_slot_snapshots(
-                        telemetry_session_id.as_deref(),
-                        instance_id,
-                        &slots,
-                    );
-                }
-            }
+        if let Some(slots) = sample.slots {
+            crate::commands::monitoring::update_slots(
+                instance_id,
+                telemetry_session_id.as_deref(),
+                workload,
+                slots.len() as u64,
+                slots.iter().filter(|slot| slot.is_processing).count() as u64,
+            );
+            let _ = crate::commands::telemetry::record_slot_snapshots(
+                telemetry_session_id.as_deref(),
+                instance_id,
+                &slots,
+            );
         }
 
         std::thread::sleep(
@@ -2341,7 +2499,7 @@ fn terminate_unix_process(ri: &RunningInstance) -> bool {
     kill_sent && wait_for_recorded_process_exit(ri, std::time::Duration::from_secs(2))
 }
 
-fn terminate_running_instance(ri: &RunningInstance) -> bool {
+pub(crate) fn terminate_running_instance(ri: &RunningInstance) -> bool {
     if !running_instance_matches_live_process(ri) {
         return true;
     }
@@ -2422,6 +2580,49 @@ pub async fn stop_server(
     if ri.is_none() {
         return Ok(());
     }
+    if crate::runtime_service::manages_instances()
+        && crate::runtime_service::is_instance_managed(&instance_id).await?
+    {
+        crate::runtime_service::stop_instance(instance_id.clone()).await?;
+        let removed = state.running.lock().unwrap().remove(&instance_id);
+        state
+            .runtime_managed_instances
+            .lock()
+            .unwrap()
+            .remove(&instance_id);
+        {
+            let mut restored = state.restored_runtime_instances.lock().unwrap();
+            let prefix = format!("{}:", instance_id);
+            restored.retain(|key| !key.starts_with(&prefix));
+        }
+        if let Some(removed) = removed {
+            crate::commands::config::update_and_persist(&state, |global| {
+                if global
+                    .running
+                    .get(&instance_id)
+                    .is_some_and(|current| current.pid == removed.pid)
+                {
+                    global.running.remove(&instance_id);
+                }
+            })?;
+        }
+        app.emit(
+            "server-stopped",
+            serde_json::json!({
+                "instanceId": instance_id,
+                "expected": true,
+                "reason": "manual-stop",
+                "exitCode": null,
+            }),
+        )
+        .ok();
+        return Ok(());
+    }
+    state
+        .runtime_managed_instances
+        .lock()
+        .unwrap()
+        .remove(&instance_id);
     if let Some(ref ri) = ri {
         if !running_instance_matches_live_process(ri) {
             cleanup_running_instance(&app, &instance_id, ri.pid, "identity-mismatch");
@@ -2514,7 +2715,7 @@ fn is_recorded_process_alive(pid: u32) -> bool {
     }
 }
 
-fn read_process_identity(pid: u32) -> Option<(u64, std::path::PathBuf)> {
+pub(crate) fn read_process_identity(pid: u32) -> Option<(u64, std::path::PathBuf)> {
     let pid = Pid::from_u32(pid);
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
@@ -3184,6 +3385,8 @@ pub fn register_restored_runtime_instance(
     let restore_key = format!("{}:{}", instance_id, pid);
     let state = app.state::<AppState>();
     let mut restored = state.restored_runtime_instances.lock().unwrap();
+    let prefix = format!("{}:", instance_id);
+    restored.retain(|key| !key.starts_with(&prefix) || key == &restore_key);
     restored.insert(restore_key)
 }
 
@@ -3194,30 +3397,7 @@ pub fn reconnect_running_instance(
     config_dir: &std::path::Path,
     app: tauri::AppHandle,
 ) {
-    let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
-
-    // Log recovery: replay existing content, then tail new content.
-    {
-        let app_log = app.clone();
-        let id_log = instance_id.to_string();
-        let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log)
-            .ok()
-            .flatten();
-        let workload =
-            crate::commands::telemetry::session_workload(telemetry_session_id.as_deref())
-                .unwrap_or(ModelWorkload::Inference);
-        std::thread::spawn(move || {
-            tail_log_file(
-                &log_path,
-                &id_log,
-                pid,
-                telemetry_session_id,
-                workload,
-                None,
-                app_log,
-            );
-        });
-    }
+    reconnect_instance_logs(instance_id, pid, config_dir, app.clone(), true);
 
     // Metrics recovery: restart monitor_loop and keep recording with the new session.
     {
@@ -3256,6 +3436,48 @@ pub fn reconnect_running_instance(
             );
         });
     }
+}
+
+/// Replays and tails a runtime-service-owned instance log without starting a
+/// second lifecycle or metrics monitor in the GUI process.
+pub fn reconnect_runtime_instance_logs(
+    instance_id: &str,
+    pid: u32,
+    config_dir: &std::path::Path,
+    app: tauri::AppHandle,
+) {
+    reconnect_instance_logs(instance_id, pid, config_dir, app, false);
+}
+
+fn reconnect_instance_logs(
+    instance_id: &str,
+    pid: u32,
+    config_dir: &std::path::Path,
+    app: tauri::AppHandle,
+    parse_performance: bool,
+) {
+    let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
+    let id_log = instance_id.to_string();
+    let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log)
+        .ok()
+        .flatten();
+    let workload = crate::commands::telemetry::session_workload(telemetry_session_id.as_deref())
+        .unwrap_or(ModelWorkload::Inference);
+    std::thread::spawn(move || {
+        if parse_performance {
+            tail_log_file(
+                &log_path,
+                &id_log,
+                pid,
+                telemetry_session_id,
+                workload,
+                None,
+                app,
+            );
+        } else {
+            tail_log_file_read_only(&log_path, &id_log, pid, app);
+        }
+    });
 }
 
 // Performance analysis parser.
@@ -3555,6 +3777,124 @@ fn parse_perf_line(
     false
 }
 
+pub(crate) struct RuntimePerfTracker {
+    instance_id: String,
+    telemetry_session_id: Option<String>,
+    workload: ModelWorkload,
+    parser: PerfParser,
+    tasks: HashMap<u32, TaskPerfState>,
+    last_completed: Option<TaskPerfState>,
+    last_recorded_task_id: Option<u32>,
+}
+
+impl RuntimePerfTracker {
+    pub(crate) fn new(
+        instance_id: String,
+        telemetry_session_id: Option<String>,
+        workload: ModelWorkload,
+    ) -> Self {
+        Self {
+            instance_id,
+            telemetry_session_id,
+            workload,
+            parser: PerfParser::new(workload),
+            tasks: HashMap::new(),
+            last_completed: None,
+            last_recorded_task_id: None,
+        }
+    }
+
+    fn update_live_tasks(&self) {
+        let active = self
+            .tasks
+            .values()
+            .filter(|task| !task.completed)
+            .collect::<Vec<_>>();
+        let throughput = if self.workload == ModelWorkload::Inference {
+            active
+                .iter()
+                .map(|task| task.tg_3s.unwrap_or(task.tg).max(0.0))
+                .sum()
+        } else {
+            active
+                .iter()
+                .filter_map(|task| task.prompt_tps)
+                .map(|value| value.max(0.0))
+                .sum()
+        };
+        crate::commands::monitoring::update_tasks(
+            &self.instance_id,
+            self.telemetry_session_id.as_deref(),
+            self.workload,
+            active.len() as u64,
+            throughput,
+        );
+    }
+
+    pub(crate) fn process_line(&mut self, line: &str) {
+        if !parse_perf_line(
+            &self.parser,
+            line,
+            &mut self.tasks,
+            &mut self.last_completed,
+        ) {
+            return;
+        }
+        if let Some(task) = self.last_completed.as_ref() {
+            if self.last_recorded_task_id != Some(task.task_id) {
+                if let Some(event) = self.parser.vector_event(task) {
+                    crate::commands::monitoring::record_vector_activity(
+                        &self.instance_id,
+                        self.telemetry_session_id.as_deref(),
+                        event.workload,
+                        crate::commands::monitoring::VectorMetricSource::Log,
+                        event.completed_at,
+                        event.item_count,
+                        event.input_tokens,
+                        event.duration_ms,
+                        true,
+                    );
+                }
+                if let Err(error) =
+                    persist_completed_task(self.telemetry_session_id.as_deref(), &self.parser, task)
+                {
+                    eprintln!(
+                        "Runtime telemetry warning for {}: {error}",
+                        self.instance_id
+                    );
+                }
+                self.last_recorded_task_id = Some(task.task_id);
+            }
+        }
+        self.tasks.retain(|_, task| !task.completed);
+        self.update_live_tasks();
+    }
+
+    pub(crate) fn finish(&mut self) {
+        self.tasks.clear();
+        crate::commands::monitoring::update_tasks(
+            &self.instance_id,
+            self.telemetry_session_id.as_deref(),
+            self.workload,
+            0,
+            0.0,
+        );
+    }
+
+    pub(crate) fn snapshot(&self) -> serde_json::Value {
+        let active = self
+            .tasks
+            .values()
+            .filter(|task| !task.completed)
+            .collect::<Vec<_>>();
+        serde_json::json!({
+            "instanceId": self.instance_id,
+            "tasks": active,
+            "lastCompleted": self.last_completed,
+        })
+    }
+}
+
 /// Reads existing content from the log file and tails new lines through server-log events.
 /// Mirrors the behavior of Docker `docker logs -f` or systemd `journalctl -f`.
 fn read_log_tail(path: &std::path::Path, max_lines: usize) -> std::io::Result<(Vec<String>, u64)> {
@@ -3622,6 +3962,74 @@ fn emit_log_batches(app: &tauri::AppHandle, instance_id: &str, lines: &[String])
                 "lines": chunk,
             }),
         );
+    }
+}
+
+fn tail_log_file_read_only(
+    log_path: &std::path::Path,
+    instance_id: &str,
+    expected_pid: u32,
+    app: tauri::AppHandle,
+) {
+    let mut last_size = 0_u64;
+    let mut pending = Vec::new();
+    if log_path.exists() {
+        if let Ok((lines, replay_end)) = read_log_tail(log_path, LOG_REPLAY_LINES) {
+            last_size = replay_end;
+            let replay_lines = lines
+                .into_iter()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| format!("{line}\n"))
+                .collect::<Vec<_>>();
+            emit_log_batches(&app, instance_id, &replay_lines);
+        }
+    }
+
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let current_size = match std::fs::metadata(log_path) {
+            Ok(metadata) => metadata.len(),
+            Err(_) => 0,
+        };
+        if current_size < last_size {
+            pending.clear();
+            last_size = current_size;
+        }
+        if current_size > last_size {
+            let mut bytes = Vec::new();
+            if let Ok(mut file) = std::fs::File::open(log_path) {
+                if file.seek(SeekFrom::Start(last_size)).is_ok() {
+                    let _ = Read::take(&mut file, current_size - last_size).read_to_end(&mut bytes);
+                }
+            }
+            last_size = current_size;
+            let lines = take_complete_log_lines(&mut pending, &bytes)
+                .into_iter()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| format!("{line}\n"))
+                .collect::<Vec<_>>();
+            emit_log_batches(&app, instance_id, &lines);
+        }
+
+        let still_running = {
+            let state = app.state::<AppState>();
+            let running = state
+                .running
+                .lock()
+                .unwrap()
+                .get(instance_id)
+                .is_some_and(|running| running.pid == expected_pid);
+            running
+        };
+        if !still_running {
+            if !pending.is_empty() {
+                let line = String::from_utf8_lossy(&pending).trim().to_string();
+                if !line.is_empty() {
+                    emit_log_batches(&app, instance_id, &[format!("{line}\n")]);
+                }
+            }
+            break;
+        }
     }
 }
 

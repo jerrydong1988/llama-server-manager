@@ -553,11 +553,11 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     languageTitle: '\u5207\u6362\u4E3A\u4E2D\u6587', commandCenter: 'Command Center', attentionCenter: 'Attention Center',
     runtimeWarnings: 'Runtime warnings', clear: 'Clear', close: 'Close',
     crash: { title: 'Something went wrong', description: 'The current view crashed and can be reloaded.', unknown: 'Unknown error', reload: 'Reload view' },
-    proxyRunning: 'Instance routing is running',
-    proxyKeepAliveDescription: 'Background keep-alive is enabled. Keeping the app in the tray will continue serving routes; to truly quit the main process, stop routing and exit.',
-    proxyExitDescription: 'Exiting the main process will interrupt the unified API endpoint. Keep it running in the tray, or stop routing before exiting.',
-    keepRouteRunning: 'Keep route running', keepInTray: 'Keep running in tray',
-    openProxySettings: 'Open routing settings', stopProxyAndQuit: 'Stop routing and exit',
+    proxyRunning: 'Background instances or routing are active',
+    proxyKeepAliveDescription: 'The independent background runtime is enabled. Managed instances and the unified API route will continue after the management UI exits.',
+    proxyExitDescription: 'Independent background mode is disabled. Exiting will stop managed instances and the unified API route; keep the main app in the tray to preserve them temporarily.',
+    keepRouteRunning: 'Exit UI and keep runtime', keepInTray: 'Keep running in tray',
+    openProxySettings: 'Open routing settings', stopProxyAndQuit: 'Stop instances, routing, and exit',
   },
 
   commandCenter: {

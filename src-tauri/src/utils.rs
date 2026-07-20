@@ -2,6 +2,7 @@ use crate::models::{GgufMetadataSummary, ModelCapabilities};
 use crate::vector_policy::{classify_model_workload, ModelWorkload};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 const MAX_GGUF_STRING_BYTES: u64 = 10_000_000;
 const MAX_GGUF_ARRAY_ITEMS: u64 = 10_000_000;
@@ -9,6 +10,16 @@ const MAX_GGUF_TAG_ARRAY_ITEMS: u64 = 4_096;
 const MAX_GGUF_STORED_TAGS: u64 = 256;
 const MAX_GGUF_TAG_BYTES: u64 = 4_096;
 const MAX_GGUF_TAG_TOTAL_BYTES: u64 = 65_536;
+static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_data_dir_override(path: PathBuf) -> Result<(), String> {
+    if !path.is_absolute() {
+        return Err("runtime data directory override must be absolute".into());
+    }
+    DATA_DIR_OVERRIDE
+        .set(path)
+        .map_err(|_| "runtime data directory override was already configured".to_string())
+}
 
 pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
     let mut file = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
@@ -714,6 +725,9 @@ pub fn connect_tcp(host: &str, port: u16, timeout: std::time::Duration) -> Resul
 }
 
 pub fn get_data_dir() -> PathBuf {
+    if let Some(path) = DATA_DIR_OVERRIDE.get() {
+        return path.clone();
+    }
     #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("LOCALAPPDATA") {

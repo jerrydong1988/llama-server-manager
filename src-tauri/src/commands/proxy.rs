@@ -9,9 +9,9 @@ use axum::{
 };
 use futures_util::StreamExt;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 
@@ -131,6 +131,52 @@ struct ResolvedProxyTarget {
     scheme: &'static str,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
+}
+
+#[derive(Clone)]
+pub(crate) struct ProxyRuntimeSnapshot {
+    pub config: ProxyConfig,
+    pub instances: HashMap<String, InstanceConfig>,
+    pub running: HashMap<String, crate::models::RunningInstance>,
+    pub bound_addr: String,
+    pub last_error: Option<String>,
+}
+
+pub(crate) trait ProxyDataSource: Send + Sync {
+    fn proxy_snapshot(&self) -> ProxyRuntimeSnapshot;
+}
+
+#[derive(Clone)]
+struct ProxyRouterState {
+    source: Arc<dyn ProxyDataSource>,
+}
+
+#[derive(Clone)]
+struct TauriProxyDataSource {
+    app: tauri::AppHandle,
+}
+
+impl ProxyDataSource for TauriProxyDataSource {
+    fn proxy_snapshot(&self) -> ProxyRuntimeSnapshot {
+        let state = self.app.state::<AppState>();
+        let config = state.proxy_config.lock().unwrap().clone();
+        let bound_addr = state
+            .proxy_bound_addr
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| proxy_bound_addr(&config));
+        let last_error = state.proxy_last_error.lock().unwrap().clone();
+        let instances = state.instances.lock().unwrap().clone();
+        let running = state.running.lock().unwrap().clone();
+        ProxyRuntimeSnapshot {
+            bound_addr,
+            last_error,
+            instances,
+            running,
+            config,
+        }
+    }
 }
 
 struct ProxyTelemetryGuard {
@@ -350,6 +396,20 @@ fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
     }
 }
 
+fn proxy_status_from_snapshot(snapshot: &ProxyRuntimeSnapshot) -> ProxyStatus {
+    ProxyStatus {
+        running: true,
+        bound_addr: snapshot.bound_addr.clone(),
+        active_routes: snapshot
+            .config
+            .routes
+            .iter()
+            .filter(|route| route.enabled)
+            .count(),
+        last_error: snapshot.last_error.clone(),
+    }
+}
+
 fn normalize_host(host: &str) -> String {
     if host == "0.0.0.0" {
         "127.0.0.1".into()
@@ -372,6 +432,13 @@ fn proxy_target_from_instance(id: &str, config: &InstanceConfig, running: bool) 
 fn list_proxy_targets_inner(state: &AppState) -> Vec<ProxyTarget> {
     let instances = state.instances.lock().unwrap().clone();
     let running = state.running.lock().unwrap().clone();
+    list_proxy_targets_from(&instances, &running)
+}
+
+fn list_proxy_targets_from(
+    instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, crate::models::RunningInstance>,
+) -> Vec<ProxyTarget> {
     instances
         .iter()
         .map(|(id, config)| proxy_target_from_instance(id, config, running.contains_key(id)))
@@ -386,6 +453,22 @@ fn resolve_proxy_target(
     let proxy_config = state.proxy_config.lock().unwrap().clone();
     let running = state.running.lock().unwrap().clone();
     let instances = state.instances.lock().unwrap();
+    resolve_proxy_target_from(
+        &proxy_config,
+        &instances,
+        &running,
+        requested_model,
+        endpoint_workload,
+    )
+}
+
+fn resolve_proxy_target_from(
+    proxy_config: &ProxyConfig,
+    instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, crate::models::RunningInstance>,
+    requested_model: Option<&str>,
+    endpoint_workload: Option<ModelWorkload>,
+) -> Option<ResolvedProxyTarget> {
     let mut had_candidate = false;
     let resolve_id = |id: &str| {
         let stored_config = instances.get(id)?;
@@ -517,13 +600,12 @@ fn authorize_and_strip_proxy_credentials(config: &ProxyConfig, headers: &mut Hea
 }
 
 async fn proxy_auth_middleware(
-    State(app): State<tauri::AppHandle>,
+    State(router_state): State<ProxyRouterState>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let state = app.state::<AppState>();
-    let config = state.proxy_config.lock().unwrap().clone();
-    if !authorize_and_strip_proxy_credentials(&config, request.headers_mut()) {
+    let snapshot = router_state.source.proxy_snapshot();
+    if !authorize_and_strip_proxy_credentials(&snapshot.config, request.headers_mut()) {
         return plain_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     next.run(request).await
@@ -615,14 +697,14 @@ fn plain_response(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
-async fn proxy_health(State(app): State<tauri::AppHandle>) -> Json<ProxyStatus> {
-    let state = app.state::<AppState>();
-    Json(proxy_status_from_state(&state))
+async fn proxy_health(State(router_state): State<ProxyRouterState>) -> Json<ProxyStatus> {
+    Json(proxy_status_from_snapshot(
+        &router_state.source.proxy_snapshot(),
+    ))
 }
 
-async fn proxy_index(State(app): State<tauri::AppHandle>) -> Json<serde_json::Value> {
-    let state = app.state::<AppState>();
-    let status = proxy_status_from_state(&state);
+async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
+    let status = proxy_status_from_snapshot(&router_state.source.proxy_snapshot());
     Json(json!({
         "service": "llama-server-manager routing proxy",
         "status": if status.running { "running" } else { "stopped" },
@@ -639,10 +721,10 @@ async fn proxy_index(State(app): State<tauri::AppHandle>) -> Json<serde_json::Va
     }))
 }
 
-async fn proxy_models(State(app): State<tauri::AppHandle>) -> Json<serde_json::Value> {
-    let state = app.state::<AppState>();
-    let config = state.proxy_config.lock().unwrap().clone();
-    let targets = list_proxy_targets_inner(&state);
+async fn proxy_models(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
+    let snapshot = router_state.source.proxy_snapshot();
+    let config = snapshot.config;
+    let targets = list_proxy_targets_from(&snapshot.instances, &snapshot.running);
     let mut ids: Vec<String> = config
         .routes
         .iter()
@@ -671,18 +753,20 @@ async fn proxy_models(State(app): State<tauri::AppHandle>) -> Json<serde_json::V
 }
 
 async fn proxy_openai(
-    State(app): State<tauri::AppHandle>,
+    State(router_state): State<ProxyRouterState>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let state = app.state::<AppState>();
-    let proxy_config = state.proxy_config.lock().unwrap().clone();
+    let snapshot = router_state.source.proxy_snapshot();
+    let proxy_config = snapshot.config.clone();
     let requested_model = requested_model_from_body(&body);
     let vector_metadata = vector_request_metadata(uri.path(), &body);
-    let target = match resolve_proxy_target(
-        &state,
+    let target = match resolve_proxy_target_from(
+        &snapshot.config,
+        &snapshot.instances,
+        &snapshot.running,
         requested_model.as_deref(),
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     ) {
@@ -820,8 +904,9 @@ async fn proxy_openai(
         })
 }
 
-fn proxy_router(app: tauri::AppHandle) -> Router {
-    let auth_layer = middleware::from_fn_with_state(app.clone(), proxy_auth_middleware);
+pub(crate) fn proxy_router_from_source(source: Arc<dyn ProxyDataSource>) -> Router {
+    let router_state = ProxyRouterState { source };
+    let auth_layer = middleware::from_fn_with_state(router_state.clone(), proxy_auth_middleware);
     Router::new()
         .route("/", get(proxy_index))
         .route("/health", get(proxy_health))
@@ -836,7 +921,11 @@ fn proxy_router(app: tauri::AppHandle) -> Router {
         .route("/v1/rerank", any(proxy_openai))
         .route("/v1/reranking", any(proxy_openai))
         .route_layer(auth_layer)
-        .with_state(app)
+        .with_state(router_state)
+}
+
+fn proxy_router(app: tauri::AppHandle) -> Router {
+    proxy_router_from_source(Arc::new(TauriProxyDataSource { app }))
 }
 
 pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<ProxyConfig, String> {
@@ -849,23 +938,130 @@ pub async fn save_proxy_config(
 ) -> Result<ProxyConfig, String> {
     let _transition = state.proxy_lifecycle_lock.lock().await;
     let current = state.proxy_config.lock().unwrap().clone();
-    let running = state.proxy_shutdown.lock().unwrap().is_some();
-    let bound_addr = state.proxy_bound_addr.lock().unwrap().clone();
+    let runtime_status = if crate::runtime_service::manages_instances() {
+        Some(crate::runtime_service::ensure_runtime_service().await?)
+    } else {
+        None
+    };
+    let running = runtime_status
+        .as_ref()
+        .map(|status| status.proxy.running)
+        .unwrap_or_else(|| state.proxy_shutdown.lock().unwrap().is_some());
+    let bound_addr = runtime_status
+        .as_ref()
+        .map(|status| status.proxy.bound_addr.clone())
+        .or_else(|| state.proxy_bound_addr.lock().unwrap().clone());
     validate_proxy_config_update(&current, &config, running, bound_addr.as_deref())?;
-    update_and_persist(&state, |global| {
-        global.proxy_config = config.clone();
-    })?;
-    *state.proxy_config.lock().unwrap() = config.clone();
+    let runtime_mode_changed = config.runtime_service_enabled != current.runtime_service_enabled;
+    if runtime_mode_changed && config.runtime_service_enabled {
+        let local_running = state.running.lock().unwrap().clone();
+        let managed_running = runtime_status
+            .as_ref()
+            .map(|status| &status.running)
+            .ok_or_else(|| "后台运行时状态不可用".to_string())?;
+        let unmanaged = local_running
+            .keys()
+            .filter(|instance_id| !managed_running.contains_key(*instance_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unmanaged.is_empty() {
+            return Err(format!(
+                "启用独立后台运行时前，请先停止并重新启动这些旧进程实例：{}",
+                unmanaged.join(", ")
+            ));
+        }
+    }
+
+    let sync_generation = crate::runtime_service::mark_config_sync_pending();
+    let apply_result = async {
+        update_and_persist(&state, |global| {
+            global.proxy_config = config.clone();
+        })?;
+        *state.proxy_config.lock().unwrap() = config.clone();
+        if crate::runtime_service::manages_instances() {
+            crate::runtime_service::sync_app_config(&state).await?;
+        }
+        if runtime_mode_changed {
+            if config.runtime_service_enabled {
+                crate::runtime_service::autostart::enable_runtime_autostart()?;
+                crate::runtime_service::set_background_enabled(true).await?;
+            } else {
+                crate::runtime_service::set_background_enabled(false).await?;
+                crate::runtime_service::autostart::disable_runtime_autostart()?;
+                // Refresh the status after registration removal. The command is
+                // idempotent and keeps the runtime's cached registration view honest.
+                crate::runtime_service::set_background_enabled(false).await?;
+            }
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    if let Err(error) = apply_result {
+        *state.proxy_config.lock().unwrap() = current.clone();
+        let rollback_generation = crate::runtime_service::mark_config_sync_pending();
+        let mut rollback_errors = Vec::new();
+        if let Err(rollback_error) = update_and_persist(&state, |global| {
+            global.proxy_config = current.clone();
+        }) {
+            rollback_errors.push(rollback_error);
+        }
+        if crate::runtime_service::manages_instances() {
+            if let Err(rollback_error) = crate::runtime_service::sync_app_config(&state).await {
+                rollback_errors.push(rollback_error);
+            }
+        }
+        if runtime_mode_changed {
+            let autostart_rollback = if current.runtime_service_enabled {
+                crate::runtime_service::autostart::enable_runtime_autostart()
+            } else {
+                crate::runtime_service::autostart::disable_runtime_autostart()
+            };
+            if let Err(rollback_error) = autostart_rollback {
+                rollback_errors.push(rollback_error);
+            }
+        }
+        if crate::runtime_service::manages_instances() {
+            if let Err(rollback_error) =
+                crate::runtime_service::set_background_enabled(current.runtime_service_enabled)
+                    .await
+            {
+                rollback_errors.push(rollback_error);
+            }
+        }
+        if rollback_errors.is_empty() {
+            crate::runtime_service::mark_config_sync_complete(rollback_generation);
+        }
+        return if rollback_errors.is_empty() {
+            Err(error)
+        } else {
+            Err(format!(
+                "{error}; 回滚后台运行时设置时又发生错误：{}",
+                rollback_errors.join("; ")
+            ))
+        };
+    }
+    crate::runtime_service::mark_config_sync_complete(sync_generation);
     Ok(config)
 }
 
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
+    if crate::runtime_service::manages_instances() {
+        return crate::runtime_service::ensure_runtime_service()
+            .await
+            .map(|status| status.proxy);
+    }
     Ok(proxy_status_from_state(&state))
 }
 
 pub async fn list_proxy_targets(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ProxyTarget>, String> {
+    if crate::runtime_service::manages_instances() {
+        let status = crate::runtime_service::ensure_runtime_service().await?;
+        let instances = state.instances.lock().unwrap().clone();
+        return Ok(list_proxy_targets_from(&instances, &status.running));
+    }
     Ok(list_proxy_targets_inner(&state))
 }
 
@@ -873,6 +1069,20 @@ pub async fn test_proxy_route(
     model: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyTarget, String> {
+    if crate::runtime_service::manages_instances() {
+        let status = crate::runtime_service::ensure_runtime_service().await?;
+        let proxy_config = state.proxy_config.lock().unwrap().clone();
+        let instances = state.instances.lock().unwrap().clone();
+        return resolve_proxy_target_from(
+            &proxy_config,
+            &instances,
+            &status.running,
+            model.as_deref(),
+            None,
+        )
+        .map(|target| target.public)
+        .ok_or_else(|| "no running instance matches the requested model".to_string());
+    }
     resolve_proxy_target(&state, model.as_deref(), None)
         .map(|target| target.public)
         .ok_or_else(|| "no running instance matches the requested model".to_string())
@@ -937,9 +1147,62 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
 }
 
 pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
-    let app_for_start = app.clone();
     let state = app.state::<AppState>();
     let _transition = state.proxy_lifecycle_lock.lock().await;
+    if crate::runtime_service::manages_instances() {
+        let previous = state.proxy_config.lock().unwrap().clone();
+        let was_running = crate::runtime_service::ensure_runtime_service()
+            .await?
+            .proxy
+            .running;
+        let mut config = state.proxy_config.lock().unwrap().clone();
+        config.enabled = true;
+        update_and_persist(&state, |global| global.proxy_config = config.clone())?;
+        *state.proxy_config.lock().unwrap() = config.clone();
+        let sync_generation = crate::runtime_service::mark_config_sync_pending();
+        let start_result = async {
+            crate::runtime_service::sync_app_config(&state).await?;
+            crate::runtime_service::start_proxy().await
+        }
+        .await;
+        match start_result {
+            Ok(status) => {
+                crate::runtime_service::mark_config_sync_complete(sync_generation);
+                return Ok(status);
+            }
+            Err(error) => {
+                *state.proxy_config.lock().unwrap() = previous.clone();
+                let rollback_generation = crate::runtime_service::mark_config_sync_pending();
+                let mut rollback_errors = Vec::new();
+                if let Err(rollback_error) = update_and_persist(&state, |global| {
+                    global.proxy_config = previous.clone();
+                }) {
+                    rollback_errors.push(rollback_error);
+                }
+                if let Err(rollback_error) = crate::runtime_service::sync_app_config(&state).await {
+                    rollback_errors.push(rollback_error);
+                } else {
+                    let lifecycle_result = if was_running {
+                        crate::runtime_service::start_proxy().await.map(|_| ())
+                    } else {
+                        crate::runtime_service::stop_proxy().await.map(|_| ())
+                    };
+                    if let Err(rollback_error) = lifecycle_result {
+                        rollback_errors.push(rollback_error);
+                    }
+                }
+                if rollback_errors.is_empty() {
+                    crate::runtime_service::mark_config_sync_complete(rollback_generation);
+                    return Err(error);
+                }
+                return Err(format!(
+                    "{error}; 回滚路由启动状态时又发生错误：{}",
+                    rollback_errors.join("; ")
+                ));
+            }
+        }
+    }
+    let app_for_start = app.clone();
     start_proxy_locked(app_for_start).await
 }
 
@@ -949,6 +1212,59 @@ pub async fn start_proxy(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
 
 pub async fn stop_proxy(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
     let _transition = state.proxy_lifecycle_lock.lock().await;
+    if crate::runtime_service::manages_instances() {
+        let previous = state.proxy_config.lock().unwrap().clone();
+        let was_running = crate::runtime_service::ensure_runtime_service()
+            .await?
+            .proxy
+            .running;
+        let mut config = previous.clone();
+        config.enabled = false;
+        update_and_persist(&state, |global| global.proxy_config = config.clone())?;
+        *state.proxy_config.lock().unwrap() = config.clone();
+        let sync_generation = crate::runtime_service::mark_config_sync_pending();
+        let stop_result = async {
+            crate::runtime_service::sync_app_config(&state).await?;
+            crate::runtime_service::stop_proxy().await
+        }
+        .await;
+        match stop_result {
+            Ok(status) => {
+                crate::runtime_service::mark_config_sync_complete(sync_generation);
+                return Ok(status);
+            }
+            Err(error) => {
+                *state.proxy_config.lock().unwrap() = previous.clone();
+                let rollback_generation = crate::runtime_service::mark_config_sync_pending();
+                let mut rollback_errors = Vec::new();
+                if let Err(rollback_error) = update_and_persist(&state, |global| {
+                    global.proxy_config = previous.clone();
+                }) {
+                    rollback_errors.push(rollback_error);
+                }
+                if let Err(rollback_error) = crate::runtime_service::sync_app_config(&state).await {
+                    rollback_errors.push(rollback_error);
+                } else {
+                    let lifecycle_result = if was_running {
+                        crate::runtime_service::start_proxy().await.map(|_| ())
+                    } else {
+                        crate::runtime_service::stop_proxy().await.map(|_| ())
+                    };
+                    if let Err(rollback_error) = lifecycle_result {
+                        rollback_errors.push(rollback_error);
+                    }
+                }
+                if rollback_errors.is_empty() {
+                    crate::runtime_service::mark_config_sync_complete(rollback_generation);
+                    return Err(error);
+                }
+                return Err(format!(
+                    "{error}; 回滚路由停止状态时又发生错误：{}",
+                    rollback_errors.join("; ")
+                ));
+            }
+        }
+    }
     shutdown_proxy_runtime(state.inner()).await?;
     {
         let mut config = state.proxy_config.lock().unwrap();
@@ -965,6 +1281,18 @@ pub async fn restart_proxy(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<ProxyStatus, String> {
+    if crate::runtime_service::manages_instances() {
+        let _transition = state.proxy_lifecycle_lock.lock().await;
+        if !state.proxy_config.lock().unwrap().enabled {
+            return Err("路由服务尚未启用".into());
+        }
+        crate::runtime_service::stop_proxy().await?;
+        let sync_generation = crate::runtime_service::mark_config_sync_pending();
+        crate::runtime_service::sync_app_config(&state).await?;
+        let status = crate::runtime_service::start_proxy().await?;
+        crate::runtime_service::mark_config_sync_complete(sync_generation);
+        return Ok(status);
+    }
     let _transition = state.proxy_lifecycle_lock.lock().await;
     shutdown_proxy_runtime(state.inner()).await?;
     start_proxy_locked(app).await
@@ -973,6 +1301,17 @@ pub async fn restart_proxy(
 pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String> {
     if let Some(state) = app.try_state::<AppState>() {
         let _transition = state.proxy_lifecycle_lock.lock().await;
+        if crate::runtime_service::manages_instances() {
+            let mut config = state.proxy_config.lock().unwrap().clone();
+            config.enabled = false;
+            update_and_persist(&state, |global| global.proxy_config = config.clone())?;
+            *state.proxy_config.lock().unwrap() = config;
+            let sync_generation = crate::runtime_service::mark_config_sync_pending();
+            crate::runtime_service::sync_app_config(&state).await?;
+            crate::runtime_service::stop_proxy().await?;
+            crate::runtime_service::mark_config_sync_complete(sync_generation);
+            return Ok(());
+        }
         shutdown_proxy_runtime(state.inner()).await
     } else {
         Ok(())

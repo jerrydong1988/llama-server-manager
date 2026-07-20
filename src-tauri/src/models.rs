@@ -702,7 +702,7 @@ pub struct RunningInstance {
     pub launch_config: Option<InstanceConfig>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SystemMetrics {
     pub cpu_percent: f32,
     pub memory_mb: f64,
@@ -798,7 +798,10 @@ pub struct ProxyConfig {
     pub routes: Vec<ProxyRoute>,
     pub routing_strategy: String,
     pub timeout_ms: u64,
+    /// Legacy tray keep-alive preference retained for config compatibility.
     pub background_service_mode: bool,
+    /// Runs routing and managed instances in the independent per-user runtime.
+    pub runtime_service_enabled: bool,
 }
 
 impl Default for ProxyConfig {
@@ -813,11 +816,12 @@ impl Default for ProxyConfig {
             routing_strategy: "firstHealthy".into(),
             timeout_ms: 600_000,
             background_service_mode: false,
+            runtime_service_enabled: false,
         }
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProxyStatus {
     pub running: bool,
     pub bound_addr: String,
@@ -825,7 +829,7 @@ pub struct ProxyStatus {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProxyTarget {
     pub instance_id: String,
     pub name: String,
@@ -871,6 +875,7 @@ pub struct AppState {
     pub proxy_bound_addr: Mutex<Option<String>>,
     pub proxy_last_error: Mutex<Option<String>>,
     pub proxy_lifecycle_lock: tokio::sync::Mutex<()>,
+    pub runtime_managed_instances: Mutex<std::collections::HashSet<String>>,
     pub restored_runtime_instances: Mutex<std::collections::HashSet<String>>,
 }
 

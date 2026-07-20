@@ -20,6 +20,7 @@
     "check:cross-platform-release": "node scripts/check-cross-platform-release.cjs",
     "check:browser-test": "tsc -p tsconfig.browser-test.json --noEmit && tsc -p tsconfig.browser-test.node.json --noEmit && node scripts/check-browser-test-isolation.cjs",
     "test:browser": "playwright test --config playwright.config.ts",
+    "test:runtime-service": "node scripts/test-runtime-service.cjs",
     "check:llama-upstream": "node scripts/check-llama-upstream.cjs",
     "test:cross-platform": "node scripts/test-cross-platform-paths.cjs",
     "test:regressions": "node scripts/test-bootstrap-health.cjs && node scripts/test-download-restore-merge.cjs && node scripts/test-redownload-sequencing.cjs && node scripts/test-config-save-sequencing.cjs && node scripts/test-instance-lifecycle-coordinator.cjs && node scripts/test-vector-model-policy.cjs && node scripts/test-parameter-intent.cjs && node scripts/test-config-parameter-review.cjs && node scripts/test-vector-performance.cjs && node scripts/test-live-throughput.cjs && node scripts/test-speculative-decoding.cjs && node scripts/test-engine-capabilities.cjs && node scripts/test-llama-parameter-alignment.cjs && node scripts/test-audit-remediations.cjs && node scripts/test-release-tag-version.cjs && npm run test:cross-platform",

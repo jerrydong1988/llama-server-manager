@@ -40,6 +40,7 @@ const lastProgressUpdate: Record<string, number> = {}
 let scanModelDebounce: ReturnType<typeof setTimeout> | null = null
 let sysMetricsTimer: ReturnType<typeof setTimeout> | null = null
 let sysMetricsInFlight = false
+let runtimeManagedIds = new Set<string>()
 
 const runMatches = (payload: { runId?: string }, task: DownloadProgress) => (
   payload.runId ? task.runId === payload.runId : !task.runId
@@ -194,6 +195,47 @@ export function registerGlobalStoreListeners(
     startupTimings.push({ name: event.payload.name, ms: event.payload.ms })
   })
 
+  registerListener<{
+    running: Record<string, { pid: number; host: string; port: number; startTime: number }>
+    previouslyManaged?: string[]
+    lastError?: string | null
+  }>(store, 'runtime-service-status', (event) => {
+    const running = event.payload.running || {}
+    const nextManagedIds = new Set(Object.keys(running))
+    const previousManagedIds = new Set([
+      ...runtimeManagedIds,
+      ...(event.payload.previouslyManaged || []),
+    ])
+    runtimeManagedIds = nextManagedIds
+    store.setState(state => ({
+      instances: state.instances.map(instance => {
+        const runtime = running[instance.id]
+        if (runtime) {
+          return {
+            ...instance,
+            status: 'running',
+            startTime: runtime.startTime > 0 ? runtime.startTime * 1000 : instance.startTime,
+          }
+        }
+        if (previousManagedIds.has(instance.id)) {
+          return {
+            ...instance,
+            status: 'stopped',
+            healthCheck: 'pending',
+          }
+        }
+        return instance
+      }),
+    }))
+    if (event.payload.lastError) {
+      store.getState().addRuntimeWarning(`background runtime: ${event.payload.lastError}`)
+    }
+  })
+
+  registerListener<{ error: string }>(store, 'runtime-service-error', (event) => {
+    store.getState().addRuntimeWarning(`background runtime: ${event.payload.error}`)
+  })
+
   registerListener<{ instanceId: string; text: string }>(store, 'server-log', (event) => {
     store.getState().addLog({
       instanceId: event.payload.instanceId,
@@ -276,7 +318,11 @@ export function registerGlobalStoreListeners(
 
   registerListener<{ instanceId: string; status: string }>(store, 'health-status', (event) => {
     store.getState().updateInstance(event.payload.instanceId, {
-      healthCheck: event.payload.status === 'ok' ? 'ok' : 'fail',
+      healthCheck: event.payload.status === 'ok'
+        ? 'ok'
+        : event.payload.status === 'fail'
+          ? 'fail'
+          : 'pending',
     })
   })
 

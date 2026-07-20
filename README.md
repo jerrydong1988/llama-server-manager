@@ -54,9 +54,9 @@ Choose model, engine, and port per instance, then tune about 159 llama.cpp optio
 
 ### 实例路由 / Instance Routing
 
-把多个运行实例聚合为统一 OpenAI 兼容入口，按模型名或别名分发，并支持鉴权与后台保活。
+把多个运行实例聚合为统一 OpenAI 兼容入口，按模型名或别名分发，并支持鉴权与跨平台的当前用户级独立后台运行。
 
-Expose running instances through one OpenAI-compatible endpoint with aliases, authentication, and background keep-alive.
+Expose running instances through one OpenAI-compatible endpoint with aliases, authentication, and a cross-platform per-user background runtime.
 
 ![实例路由 / Instance Routing](public/docs/guide/08-instance-routing.png)
 

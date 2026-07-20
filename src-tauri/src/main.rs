@@ -4,6 +4,7 @@ mod commands;
 mod error;
 mod models;
 mod persistence;
+mod runtime_service;
 mod utils;
 mod vector_policy;
 
@@ -77,9 +78,11 @@ fn decide_proxy_quit(proxy_running: bool, _background_service_mode: bool) -> Pro
 
 fn proxy_quit_inputs(app: &tauri::AppHandle) -> (bool, bool) {
     if let Some(state) = app.try_state::<AppState>() {
-        let proxy_running = state.proxy_shutdown.lock().unwrap().is_some();
-        let background_service_mode = state.proxy_config.lock().unwrap().background_service_mode;
-        (proxy_running, background_service_mode)
+        let proxy_config = state.proxy_config.lock().unwrap().clone();
+        let runtime_active = proxy_config.runtime_service_enabled
+            || proxy_config.enabled
+            || !state.running.lock().unwrap().is_empty();
+        (runtime_active, proxy_config.runtime_service_enabled)
     } else {
         (false, false)
     }
@@ -98,9 +101,13 @@ fn persist_runtime_state(app: &tauri::AppHandle) {
     }
 }
 
-fn finalize_app_exit(app: &tauri::AppHandle) {
+fn finalize_app_exit(app: &tauri::AppHandle, keep_runtime: bool) {
     flush_download_manager_state(app);
-    let failures = crate::commands::server::terminate_all_servers_for_exit(app);
+    let failures = if keep_runtime {
+        Vec::new()
+    } else {
+        crate::commands::server::terminate_all_servers_for_exit(app)
+    };
     if !failures.is_empty() {
         eprintln!(
             "Failed to terminate server processes during shutdown: {}",
@@ -155,12 +162,40 @@ fn hide_window(app: tauri::AppHandle) {
 }
 
 #[tauri::command]
-async fn quit_app(app: tauri::AppHandle) {
-    let _ = crate::commands::proxy::shutdown_proxy_for_app(&app).await;
-    finalize_app_exit(&app);
+async fn quit_app(app: tauri::AppHandle) -> Result<(), String> {
+    crate::commands::proxy::shutdown_proxy_for_app(&app).await?;
+    crate::runtime_service::shutdown(true).await?;
+    finalize_app_exit(&app, false);
+    Ok(())
+}
+
+#[tauri::command]
+async fn quit_keep_runtime(app: tauri::AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let runtime_enabled = state.proxy_config.lock().unwrap().runtime_service_enabled;
+    if !runtime_enabled {
+        return Err("独立后台运行时尚未启用".into());
+    }
+    crate::runtime_service::autostart::enable_runtime_autostart()?;
+    crate::runtime_service::set_background_enabled(true).await?;
+    persist_runtime_state(&app);
+    finalize_app_exit(&app, true);
+    Ok(())
 }
 
 fn main() {
+    if crate::runtime_service::is_runtime_service_invocation() {
+        if let Err(error) = crate::runtime_service::configure_runtime_data_dir_from_args() {
+            eprintln!("Runtime service configuration failed: {error}");
+            std::process::exit(1);
+        }
+        if let Err(error) = crate::runtime_service::run_runtime_service() {
+            eprintln!("Runtime service failed: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let native_start = std::time::Instant::now();
     NATIVE_START.set(native_start).ok();
     let default_models: Vec<models::ModelInfo> = vec![];
@@ -238,7 +273,7 @@ fn main() {
                         "quit" => {
                             let (proxy_running, background_service_mode) = proxy_quit_inputs(app);
                             match decide_proxy_quit(proxy_running, background_service_mode) {
-                                ProxyQuitDecision::ExitNow => finalize_app_exit(app),
+                                ProxyQuitDecision::ExitNow => finalize_app_exit(app, false),
                                 ProxyQuitDecision::RequestConfirmation => {
                                     request_proxy_exit_confirmation(app, background_service_mode)
                                 }
@@ -304,6 +339,7 @@ fn main() {
             }
 
             // Restore log capture, metrics, and the single authoritative health monitor.
+            let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
             for (id, ri) in &config.running {
                 if !crate::commands::server::register_restored_runtime_instance(app.handle(), id, ri.pid) {
                     continue;
@@ -316,7 +352,19 @@ fn main() {
                     .launch_config
                     .as_ref()
                     .or_else(|| config.instances.get(id));
-                if let Some(launch_config) = launch_config {
+                if runtime_managed.contains(id) {
+                    app.state::<AppState>()
+                        .runtime_managed_instances
+                        .lock()
+                        .unwrap()
+                        .insert(id.clone());
+                    crate::commands::server::reconnect_runtime_instance_logs(
+                        id,
+                        pid,
+                        &config_dir_clone,
+                        app_reconnect,
+                    );
+                } else if let Some(launch_config) = launch_config {
                     crate::commands::server::reconnect_running_instance(
                         id,
                         pid,
@@ -327,7 +375,9 @@ fn main() {
                 }
             }
 
-            if config.proxy_config.enabled {
+            crate::runtime_service::start_app_bridge(app.handle().clone());
+
+            if !crate::runtime_service::manages_instances() && config.proxy_config.enabled {
                 let app_handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let _ = crate::commands::proxy::start_proxy_for_app(app_handle).await;
@@ -382,6 +432,7 @@ fn main() {
             proxy_bound_addr: Mutex::new(None),
             proxy_last_error: Mutex::new(None),
             proxy_lifecycle_lock: tokio::sync::Mutex::new(()),
+            runtime_managed_instances: Mutex::new(std::collections::HashSet::new()),
             restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
         })
         .invoke_handler(tauri::generate_handler![
@@ -420,6 +471,8 @@ fn main() {
             show_window,
             hide_window,
             quit_app,
+            quit_keep_runtime,
+            crate::runtime_service::get_runtime_service_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,7 +1,7 @@
 use crate::commands::telemetry::LlamaMetricSample;
 use crate::models::{AppState, SystemMetrics};
 use crate::vector_policy::ModelWorkload;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
@@ -15,7 +15,7 @@ const METRIC_FRESHNESS_MS: i64 = 8_000;
 const SYSTEM_FRESHNESS_MS: i64 = 15_000;
 const VECTOR_WINDOW_MS: i64 = 3_000;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitoringFrame {
     pub instance_id: String,
@@ -484,6 +484,47 @@ fn sample_frame(instance_id: &str, now: i64) -> Option<MonitoringFrame> {
     let frame = state.build_frame(now);
     state.push_frame(frame.clone());
     Some(frame)
+}
+
+pub(crate) fn capture_frame(instance_id: &str) -> Option<MonitoringFrame> {
+    sample_frame(instance_id, current_time_ms())
+}
+
+pub(crate) fn ingest_external_frame(frame: MonitoringFrame) -> bool {
+    let mut registry = MONITORING.lock().unwrap();
+    let workload = ModelWorkload::from_storage(&frame.workload);
+    let state = registry
+        .entry(frame.instance_id.clone())
+        .or_insert_with(|| {
+            InstanceMonitoringState::new(
+                &frame.instance_id,
+                frame.session_id.as_deref(),
+                workload,
+                frame.session_started_at,
+            )
+        });
+    if state.session_id != frame.session_id {
+        state.reset_session(
+            frame.session_id.as_deref(),
+            workload,
+            frame.session_started_at,
+            true,
+        );
+    }
+    if state
+        .timeline
+        .back()
+        .map_or(true, |latest| latest.ts < frame.ts)
+    {
+        state.push_frame(frame);
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn remove_instance(instance_id: &str) {
+    MONITORING.lock().unwrap().remove(instance_id);
 }
 
 pub fn start_frame_loop(

@@ -357,15 +357,23 @@ Instance Routing exposes one OpenAI-compatible endpoint and forwards requests to
 - 监听非本机地址时必须设置代理 API Key，否则不允许启动。
 - 配置代理 API Key 后，服务首页、健康检查、模型列表和推理接口统一鉴权。
 - 路由只选择当前有效目标；目标实例停止后，对应请求会失败或没有可用目标。
-- 开启后台保活后，关闭窗口可继续在托盘提供统一端点。
-- 当路由运行时退出应用会出现确认：可以保持托盘运行，或停止路由后真正退出。
+- 未开启独立后台运行时，实例与路由仍由隔离的运行时进程托管，但主程序退出后会自动停止；仅关闭窗口则仍可继续在托盘运行。
+- 开启“独立后台运行时”后，退出管理界面不会中断已托管实例或统一端点，并会注册当前用户登录后的自动恢复。Windows 使用当前用户启动项，macOS 使用用户 LaunchAgent，Linux 优先使用 systemd 用户服务并在不可用时回退到 XDG Autostart；第一阶段不安装需要管理员权限的系统级服务。
+- 退出应用时会明确提供“退出界面并保持后台运行”与“停止实例、路由并退出”两种选择；运行时升级会保留运行意图，受控重启实例后恢复路由、日志和监控监督链。
+- 登录恢复使用当前图形用户会话的标准环境，不会保存临时 Shell 环境变量；依赖自定义环境变量的引擎应改用稳定的系统/用户环境设置。
+- 移动便携版程序或卸载前，请先关闭“独立后台运行时”，让程序清理当前用户的登录启动项。
+- 第一阶段保证正常退出管理界面后持续运行，并在当前用户再次登录时恢复；它不是机器级高可用服务。管理界面打开时会自动拉起异常退出的运行时；界面已退出后若本次运行时自身崩溃，需要重新打开管理器或重新登录。macOS/Linux 在登录启动器接管后可继续使用其失败重启策略，Windows 登录项只负责登录恢复。
 - 修改未保存的路由草稿后直接启动时，应用会先保存有效配置，避免界面与后台状态不一致。
 
 - A proxy API key is mandatory for non-local listeners.
 - Once configured, the proxy key protects the index, health, model-list, and inference endpoints.
 - Routing resolves active targets; requests fail when the selected backend is unavailable.
-- Background keep-alive can continue serving from the system tray.
-- Exiting while routing is active prompts to keep it in the tray or stop routing and exit.
+- Without the independent runtime option, an isolated runtime still supervises instances and routing while the app is open, but stops them after the main process exits; closing only the window keeps the tray session alive.
+- Enabling the independent background runtime preserves managed instances and the unified endpoint after the management UI exits and registers per-user login recovery. Windows uses the current-user startup entry, macOS a user LaunchAgent, and Linux a systemd user service with XDG Autostart fallback. Phase one does not install an administrator-managed system service.
+- Exit confirmation distinguishes keeping the runtime from stopping instances and routing. Runtime upgrades retain desired state and restore each instance under a fresh logging and monitoring supervisor.
+- Login recovery uses the standard graphical user-session environment and does not capture temporary shell variables. Engines that depend on custom variables should use stable system or user environment settings.
+- Before moving a portable installation or uninstalling, disable the independent runtime so the app can remove its per-user login entry.
+- Phase one guarantees continuity after a normal UI exit and recovery at the next user login; it is not a machine-level high-availability service. The open UI relaunches a failed runtime. If a directly spawned runtime itself crashes after the UI has exited, reopen the manager or sign in again. A login-started macOS/Linux runtime can then use its launcher restart policy; the Windows login entry provides login recovery only.
 - Starting with a valid unsaved draft persists it before launch.
 
 ---

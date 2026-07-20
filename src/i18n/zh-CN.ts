@@ -552,11 +552,11 @@
     languageTitle: 'Switch to English', commandCenter: '\u4EFB\u52A1\u4E2D\u5FC3', attentionCenter: '\u5173\u6CE8\u4E2D\u5FC3',
     runtimeWarnings: '\u8FD0\u884C\u8B66\u544A', clear: '\u6E05\u9664', close: '\u5173\u95ED',
     crash: { title: '\u9875\u9762\u53D1\u751F\u9519\u8BEF', description: '\u5F53\u524D\u89C6\u56FE\u5DF2\u5D29\u6E83\uFF0C\u53EF\u91CD\u65B0\u52A0\u8F7D\u3002', unknown: '\u672A\u77E5\u9519\u8BEF', reload: '\u91CD\u65B0\u52A0\u8F7D' },
-    proxyRunning: '\u5B9E\u4F8B\u8DEF\u7531\u6B63\u5728\u8FD0\u884C',
-    proxyKeepAliveDescription: '\u540E\u53F0\u4FDD\u6D3B\u6A21\u5F0F\u5DF2\u5F00\u542F\u3002\u9009\u62E9\u4FDD\u6301\u6258\u76D8\u8FD0\u884C\u4F1A\u7EE7\u7EED\u63D0\u4F9B\u8DEF\u7531\uFF1B\u5982\u679C\u8981\u771F\u6B63\u9000\u51FA\u4E3B\u7A0B\u5E8F\uFF0C\u8BF7\u9009\u62E9\u505C\u6B62\u8DEF\u7531\u5E76\u9000\u51FA\u3002',
-    proxyExitDescription: '\u76F4\u63A5\u9000\u51FA\u4E3B\u7A0B\u5E8F\u4F1A\u4E2D\u65AD\u7EDF\u4E00 API \u5165\u53E3\u3002\u5EFA\u8BAE\u4FDD\u6301\u6258\u76D8\u8FD0\u884C\uFF0C\u6216\u8005\u5148\u505C\u6B62\u8DEF\u7531\u518D\u9000\u51FA\u3002',
-    keepRouteRunning: '\u4FDD\u6301\u540E\u53F0\u8DEF\u7531\u8FD0\u884C', keepInTray: '\u4FDD\u6301\u6258\u76D8\u8FD0\u884C',
-    openProxySettings: '\u6253\u5F00\u8DEF\u7531\u8BBE\u7F6E', stopProxyAndQuit: '\u505C\u6B62\u8DEF\u7531\u5E76\u9000\u51FA',
+    proxyRunning: '后台实例或路由仍在运行',
+    proxyKeepAliveDescription: '独立后台运行时已启用。退出管理界面后，当前实例与统一 API 路由会继续运行。',
+    proxyExitDescription: '独立后台运行尚未启用。直接退出会停止当前托管实例与统一 API 路由；如需暂时保留，请让主程序继续在托盘运行。',
+    keepRouteRunning: '退出界面并保持后台运行', keepInTray: '\u4FDD\u6301\u6258\u76D8\u8FD0\u884C',
+    openProxySettings: '\u6253\u5F00\u8DEF\u7531\u8BBE\u7F6E', stopProxyAndQuit: '停止实例与路由并退出',
   },
 
   commandCenter: {

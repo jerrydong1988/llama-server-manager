@@ -24,6 +24,7 @@ type ProxyConfig = {
   routingStrategy: string
   timeoutMs: number
   backgroundServiceMode: boolean
+  runtimeServiceEnabled: boolean
   routes: ProxyRoute[]
 }
 
@@ -32,6 +33,15 @@ type ProxyStatus = {
   boundAddr: string
   activeRoutes: number
   lastError: string | null
+}
+
+type RuntimeServiceView = {
+  servicePid: number
+  serviceVersion: string
+  backgroundEnabled: boolean
+  registeredForLogin: boolean
+  managedInstances: number
+  lastError: string
 }
 
 type ProxyTarget = {
@@ -52,7 +62,17 @@ const defaultConfig: ProxyConfig = {
   routingStrategy: 'firstHealthy',
   timeoutMs: 600000,
   backgroundServiceMode: false,
+  runtimeServiceEnabled: false,
   routes: [],
+}
+
+const defaultRuntimeService: RuntimeServiceView = {
+  servicePid: 0,
+  serviceVersion: '',
+  backgroundEnabled: false,
+  registeredForLogin: false,
+  managedInstances: 0,
+  lastError: '',
 }
 
 function getString(record: Record<string, unknown>, keys: string[], fallback = '') {
@@ -111,6 +131,7 @@ function normalizeConfig(value: unknown): ProxyConfig {
     routingStrategy: getString(record, ['routing_strategy', 'routingStrategy'], defaultConfig.routingStrategy),
     timeoutMs: getNumber(record, ['timeout_ms', 'timeoutMs'], defaultConfig.timeoutMs),
     backgroundServiceMode: getBoolean(record, ['background_service_mode', 'backgroundServiceMode'], defaultConfig.backgroundServiceMode),
+    runtimeServiceEnabled: getBoolean(record, ['runtime_service_enabled', 'runtimeServiceEnabled'], defaultConfig.runtimeServiceEnabled),
     routes: routesValue.map(normalizeRoute),
   }
 }
@@ -122,6 +143,19 @@ function normalizeStatus(value: unknown, config: ProxyConfig): ProxyStatus {
     boundAddr: getString(record, ['bound_addr', 'boundAddr', 'endpoint', 'url'], formatHostPort(config.host, config.port)),
     activeRoutes: getNumber(record, ['active_routes', 'activeRoutes'], config.routes.filter(route => route.enabled).length),
     lastError: getString(record, ['last_error', 'lastError', 'error']) || null,
+  }
+}
+
+function normalizeRuntimeService(value: unknown): RuntimeServiceView {
+  const record = asRecord(value)
+  const running = asRecord(record.running)
+  return {
+    servicePid: getNumber(record, ['servicePid', 'service_pid']),
+    serviceVersion: getString(record, ['serviceVersion', 'service_version']),
+    backgroundEnabled: getBoolean(record, ['backgroundEnabled', 'background_enabled']),
+    registeredForLogin: getBoolean(record, ['registeredForLogin', 'registered_for_login']),
+    managedInstances: Object.keys(running).length,
+    lastError: getString(record, ['lastError', 'last_error']),
   }
 }
 
@@ -157,6 +191,7 @@ function toCommandConfig(config: ProxyConfig) {
     routing_strategy: config.routingStrategy,
     timeout_ms: config.timeoutMs,
     background_service_mode: config.backgroundServiceMode,
+    runtime_service_enabled: config.runtimeServiceEnabled,
     routes: config.routes.map(route => ({
       id: route.id,
       enabled: route.enabled,
@@ -184,6 +219,7 @@ export default function ProxyPage() {
   const [config, setConfig] = useState<ProxyConfig>(defaultConfig)
   const [draft, setDraft] = useState<ProxyConfig>(defaultConfig)
   const [status, setStatus] = useState<ProxyStatus>(normalizeStatus(null, defaultConfig))
+  const [runtimeService, setRuntimeService] = useState<RuntimeServiceView>(defaultRuntimeService)
   const [targets, setTargets] = useState<ProxyTarget[]>([])
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -222,9 +258,10 @@ export default function ProxyPage() {
       setDraft(nextConfig)
       setCommandsReady(true)
 
-      const [statusResult, targetsResult] = await Promise.allSettled([
+      const [statusResult, targetsResult, runtimeResult] = await Promise.allSettled([
         invoke<unknown>('get_proxy_status'),
         invoke<unknown[]>('list_proxy_targets'),
+        invoke<unknown>('get_runtime_service_status'),
       ])
 
       if (statusResult.status === 'fulfilled') {
@@ -237,6 +274,11 @@ export default function ProxyPage() {
         setTargets(targetsResult.value.map(normalizeTarget))
       } else {
         setTargets([])
+      }
+      if (runtimeResult.status === 'fulfilled') {
+        setRuntimeService(normalizeRuntimeService(runtimeResult.value))
+      } else {
+        setRuntimeService(defaultRuntimeService)
       }
     } catch (loadError) {
       setCommandsReady(false)
@@ -252,6 +294,15 @@ export default function ProxyPage() {
 
   useEffect(() => {
     void loadProxy()
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      invoke<unknown>('get_runtime_service_status')
+        .then(value => setRuntimeService(normalizeRuntimeService(value)))
+        .catch(() => setRuntimeService(defaultRuntimeService))
+    }, 5000)
+    return () => window.clearInterval(timer)
   }, [])
 
   const updateDraft = (patch: Partial<ProxyConfig>) => {
@@ -324,6 +375,9 @@ export default function ProxyPage() {
       await invoke(action === 'start' ? 'start_proxy' : 'stop_proxy')
       const nextStatus = await invoke<unknown>('get_proxy_status').catch(() => null)
       setStatus(normalizeStatus(nextStatus, draft))
+      const enabled = action === 'start'
+      setConfig(current => ({ ...current, enabled }))
+      setDraft(current => ({ ...current, enabled }))
       setCommandsReady(true)
     } catch (actionError) {
       setCommandsReady(true)
@@ -597,24 +651,51 @@ export default function ProxyPage() {
               </div>
               <button
                 type="button"
-                onClick={() => updateDraft({ backgroundServiceMode: !draft.backgroundServiceMode })}
+                onClick={() => updateDraft({ runtimeServiceEnabled: !draft.runtimeServiceEnabled })}
                 className={`relative mt-1 inline-flex h-7 w-12 shrink-0 items-center rounded-full border transition ${
-                  draft.backgroundServiceMode
+                  draft.runtimeServiceEnabled
                     ? 'border-blue-500 bg-blue-600'
                     : 'border-slate-300 bg-slate-200 dark:border-slate-700 dark:bg-slate-800'
                 }`}
-                aria-pressed={draft.backgroundServiceMode}
+                aria-pressed={draft.runtimeServiceEnabled}
               >
                 <span
                   className={`inline-block h-5 w-5 rounded-full bg-white shadow transition ${
-                    draft.backgroundServiceMode ? 'translate-x-6' : 'translate-x-1'
+                    draft.runtimeServiceEnabled ? 'translate-x-6' : 'translate-x-1'
                   }`}
                 />
               </button>
             </div>
             <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-600 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-300">
-              {draft.backgroundServiceMode ? labels.enabled : labels.disabled}
+              {draft.runtimeServiceEnabled ? labels.enabled : labels.disabled}
             </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-3">
+              <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">{labels.runtimeProcess}</div>
+                <div className="mt-1 truncate text-xs font-semibold text-slate-800 dark:text-slate-200" title={runtimeService.serviceVersion}>
+                  {runtimeService.servicePid > 0 ? `PID ${runtimeService.servicePid}` : labels.unavailable}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">{labels.loginRecovery}</div>
+                <div className="mt-1 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                  {runtimeService.registeredForLogin ? labels.registered : labels.notRegistered}
+                </div>
+              </div>
+              <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800">
+                <div className="text-[11px] text-slate-500 dark:text-slate-400">{labels.managedInstances}</div>
+                <div className="mt-1 text-xs font-semibold text-slate-800 dark:text-slate-200">{runtimeService.managedInstances}</div>
+              </div>
+            </div>
+            {draft.runtimeServiceEnabled !== config.runtimeServiceEnabled
+              || config.runtimeServiceEnabled !== runtimeService.backgroundEnabled ? (
+              <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">{labels.runtimeSyncPending}</p>
+            ) : null}
+            {runtimeService.lastError ? (
+              <p className="mt-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700 dark:border-rose-900/60 dark:bg-rose-950/30 dark:text-rose-300">
+                {labels.runtimeLastError}: {runtimeService.lastError}
+              </p>
+            ) : null}
           </Surface>
         </div>
       </div>

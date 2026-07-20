@@ -323,7 +323,6 @@ function AppInner() {
   }
   const handleStopProxyAndQuit = async () => {
     try {
-      await invoke('stop_proxy')
       await invoke('quit_app')
     } catch {
       setProxyExitConfirmOpen(false)
@@ -331,10 +330,17 @@ function AppInner() {
       setActiveTab('proxy')
     }
   }
-  const handleKeepProxyInTray = () => {
+  const handleKeepProxyInTray = async () => {
     setProxyExitConfirmOpen(false)
+    const keepRuntime = proxyExitKeepAliveEnabled
     setProxyExitKeepAliveEnabled(false)
-    invoke('hide_window').catch(() => {})
+    if (keepRuntime) {
+      await invoke('quit_keep_runtime').catch(() => {
+        setActiveTab('proxy')
+      })
+    } else {
+      await invoke('hide_window').catch(() => {})
+    }
   }
 
   return (
@@ -419,7 +425,7 @@ function AppInner() {
               </button>
             </div>
             <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-              <Button onClick={handleKeepProxyInTray}>
+              <Button onClick={() => void handleKeepProxyInTray()}>
                 {proxyExitKeepAliveEnabled
                   ? shellCopy.keepRouteRunning
                   : shellCopy.keepInTray}

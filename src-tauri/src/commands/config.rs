@@ -312,8 +312,17 @@ pub async fn save_config(
             )
         })?;
     }
-    let mut stored = state.instances.lock().unwrap();
-    *stored = instances.clone();
+    {
+        let mut stored = state.instances.lock().unwrap();
+        *stored = instances.clone();
+    }
+    if crate::runtime_service::manages_instances() {
+        let sync_generation = crate::runtime_service::mark_config_sync_pending();
+        crate::runtime_service::sync_app_config(&state)
+            .await
+            .map_err(|error| AppError::new("RUNTIME_CONFIG_SYNC_FAILED", error, true))?;
+        crate::runtime_service::mark_config_sync_complete(sync_generation);
+    }
     Ok(normalized.changed)
 }
 
@@ -341,6 +350,7 @@ pub async fn load_config(
     *state.proxy_config.lock().unwrap() = global.proxy_config.clone();
 
     // Restore log capture, metrics, and the single authoritative health monitor.
+    let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
     for (id, ri) in &global.running {
         if !crate::commands::server::register_restored_runtime_instance(&app, id, ri.pid) {
             continue;
@@ -358,13 +368,27 @@ pub async fn load_config(
                 port: ri.port,
                 ..InstanceConfig::default()
             });
-        crate::commands::server::reconnect_running_instance(
-            id,
-            pid,
-            &launch_config,
-            &config_dir,
-            app_reconnect,
-        );
+        if runtime_managed.contains(id) {
+            state
+                .runtime_managed_instances
+                .lock()
+                .unwrap()
+                .insert(id.clone());
+            crate::commands::server::reconnect_runtime_instance_logs(
+                id,
+                pid,
+                &config_dir,
+                app_reconnect,
+            );
+        } else {
+            crate::commands::server::reconnect_running_instance(
+                id,
+                pid,
+                &launch_config,
+                &config_dir,
+                app_reconnect,
+            );
+        }
     }
 
     let t_total = t0.elapsed().as_millis();
