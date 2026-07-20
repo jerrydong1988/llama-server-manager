@@ -497,7 +497,23 @@ pub fn is_runtime_autostart_enabled() -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[cfg(target_os = "macos")]
+    use super::xml_escape;
+    #[cfg(target_os = "linux")]
+    use super::{desktop_exec_quote, systemd_quote};
+    #[cfg(target_os = "windows")]
+    use super::{windows_command, windows_quote_argument};
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    use std::path::Path;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launch_agent_values_are_xml_escaped() {
+        assert_eq!(
+            xml_escape("Llama & <GPU> \"A\" 'B'"),
+            "Llama &amp; &lt;GPU&gt; &quot;A&quot; &apos;B&apos;"
+        );
+    }
 
     #[cfg(target_os = "windows")]
     #[test]
