@@ -891,7 +891,7 @@ pub struct ProxyRoute {
 impl Default for ProxyRoute {
     fn default() -> Self {
         Self {
-            id: String::new(),
+            id: uuid::Uuid::new_v4().to_string(),
             enabled: true,
             model_alias: String::new(),
             target_instance_id: String::new(),
