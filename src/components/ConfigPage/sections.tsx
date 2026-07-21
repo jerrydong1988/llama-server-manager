@@ -1,4 +1,5 @@
 import type { InstanceConfig } from '../../store'
+import type { Translations } from '../../i18n'
 import { useState, useEffect } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
 import { Section, Input, Num, IntentNum, Switch, Select, SearchTarget, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
@@ -101,9 +102,9 @@ const countSummary = (emitted: number, changed: number, labels: Props['statusLab
 
 interface Props {
   local: InstanceConfig
-  set: (k: keyof InstanceConfig, v: any) => void
+  set: <K extends keyof InstanceConfig>(key: K, value: InstanceConfig[K]) => void
   inherit: (keys: Array<keyof InstanceConfig>) => void
-  t: any
+  t: Translations
   isEmbedding: boolean
   workload: ModelWorkload
   modelWorkloadLocked: boolean

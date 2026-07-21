@@ -397,13 +397,27 @@ fn load_artifact_state(temp_path: &Path) -> Option<DownloadArtifactState> {
         .and_then(|s| serde_json::from_str::<DownloadArtifactState>(&s).ok())
 }
 
-fn save_artifact_state(state: &DownloadArtifactState, temp_path: &Path) {
+async fn load_artifact_state_async(temp_path: &Path) -> Option<DownloadArtifactState> {
     let metadata_path = artifact_state_path(temp_path);
-    let result = serde_json::to_string(state)
-        .map_err(|error| format!("failed to serialize download artifact state: {error}"))
-        .and_then(|json| write_string_atomic(&metadata_path, &json));
-    if let Err(error) = result {
-        eprintln!("Failed to persist download artifact state: {error}");
+    tokio::fs::read_to_string(&metadata_path)
+        .await
+        .ok()
+        .and_then(|contents| serde_json::from_str::<DownloadArtifactState>(&contents).ok())
+}
+
+async fn save_artifact_state(state: &DownloadArtifactState, temp_path: &Path) {
+    let metadata_path = artifact_state_path(temp_path);
+    let json = match serde_json::to_string(state) {
+        Ok(json) => json,
+        Err(error) => {
+            eprintln!("Failed to serialize download artifact state: {error}");
+            return;
+        }
+    };
+    match tokio::task::spawn_blocking(move || write_string_atomic(&metadata_path, &json)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => eprintln!("Failed to persist download artifact state: {error}"),
+        Err(error) => eprintln!("Download artifact state writer failed: {error}"),
     }
 }
 
@@ -794,7 +808,7 @@ async fn download_single_file(
     let source = ctx.source.clone();
     let remote_path = ctx.remote_path.clone();
 
-    let artifact = load_artifact_state(&temp_path);
+    let artifact = load_artifact_state_async(&temp_path).await;
     let mut save_etag = artifact.as_ref().and_then(|a| a.etag.clone());
     let mut save_lm = artifact.as_ref().and_then(|a| a.last_modified.clone());
     let resume_from = artifact
@@ -835,7 +849,8 @@ async fn download_single_file(
                     updated_at: now_secs(),
                 },
                 &temp_path,
-            );
+            )
+            .await;
             cleanup_artifact_state(&temp_path);
             update_manager_file_state(
                 &shared,
@@ -906,7 +921,8 @@ async fn download_single_file(
                     updated_at: now_secs(),
                 },
                 &temp_path,
-            );
+            )
+            .await;
             has_error.store(true, Ordering::SeqCst);
             update_manager_file_state(
                 &shared,
@@ -978,7 +994,8 @@ async fn download_single_file(
             updated_at: now_secs(),
         },
         &temp_path,
-    );
+    )
+    .await;
 
     // A 416 is only a completion signal when local and remote sizes agree exactly.
     if resp.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE {
@@ -1073,7 +1090,8 @@ async fn download_single_file(
                 updated_at: now_secs(),
             },
             &temp_path,
-        );
+        )
+        .await;
         has_error.store(true, Ordering::SeqCst);
         update_manager_file_state(
             &shared,
@@ -1125,7 +1143,8 @@ async fn download_single_file(
                 updated_at: now_secs(),
             },
             &temp_path,
-        );
+        )
+        .await;
         has_error.store(true, Ordering::SeqCst);
         update_manager_file_state(
             &shared,
@@ -1271,7 +1290,8 @@ async fn download_single_file(
                     updated_at: now_secs(),
                 },
                 &temp_path,
-            );
+            )
+            .await;
             update_manager_file_state(
                 &shared,
                 &task_id,
@@ -1347,7 +1367,8 @@ async fn download_single_file(
                         updated_at: now_secs(),
                     },
                     &temp_path,
-                );
+                )
+                .await;
                 update_manager_file_state(
                     &shared,
                     &task_id,
@@ -1420,7 +1441,8 @@ async fn download_single_file(
                             updated_at: now_secs(),
                         },
                         &temp_path,
-                    );
+                    )
+                    .await;
                     update_manager_file_state(
                         &shared,
                         &task_id,
@@ -1491,7 +1513,8 @@ async fn download_single_file(
                                 updated_at: now_secs(),
                             },
                             &temp_path,
-                        );
+                        )
+                        .await;
                     }
                 }
             }
@@ -1512,7 +1535,8 @@ async fn download_single_file(
                         updated_at: now_secs(),
                     },
                     &temp_path,
-                );
+                )
+                .await;
                 update_manager_file_state(
                     &shared,
                     &task_id,
@@ -1584,7 +1608,8 @@ async fn download_single_file(
                 updated_at: now_secs(),
             },
             &temp_path,
-        );
+        )
+        .await;
         update_manager_file_state(
             &shared,
             &task_id,
@@ -1622,7 +1647,8 @@ async fn download_single_file(
                 updated_at: now_secs(),
             },
             &temp_path,
-        );
+        )
+        .await;
         has_error.store(true, Ordering::SeqCst);
         update_manager_file_state(
             &shared,
@@ -1736,7 +1762,7 @@ pub async fn download_modelscope_files(
     let repo_id = sanitize_repo_id(&repo_id)?;
     let save_path = resolve_repo_save_path(&app, &save_dir, &repo_id)?;
 
-    let mut handles = Vec::new();
+    let mut handles = Vec::with_capacity(files.len());
     let has_error = Arc::new(AtomicBool::new(false));
     let has_non_retryable_error = Arc::new(AtomicBool::new(false));
 
@@ -1747,7 +1773,8 @@ pub async fn download_modelscope_files(
             repo_id, encoded_path
         );
         let dest_dir = remote_parent_dir(&save_path, &file.path)?;
-        std::fs::create_dir_all(&dest_dir)
+        tokio::fs::create_dir_all(&dest_dir)
+            .await
             .map_err(|error| format!("Failed to create remote file directory: {error}"))?;
         let ctx = build_task_context(&file, &repo_id, "modelscope");
         let has_error = Arc::clone(&has_error);
@@ -1962,7 +1989,7 @@ pub async fn download_huggingface_files(
 
     let has_error = Arc::new(AtomicBool::new(false));
     let has_non_retryable_error = Arc::new(AtomicBool::new(false));
-    let mut handles = Vec::new();
+    let mut handles = Vec::with_capacity(files.len());
 
     for file in files {
         let encoded_path = percent_encode_path(&file.path)?;
@@ -1971,7 +1998,8 @@ pub async fn download_huggingface_files(
             repo_id, encoded_path
         );
         let dest_dir = remote_parent_dir(&save_path, &file.path)?;
-        std::fs::create_dir_all(&dest_dir)
+        tokio::fs::create_dir_all(&dest_dir)
+            .await
             .map_err(|error| format!("Failed to create remote file directory: {error}"))?;
         let ctx = build_task_context(&file, &repo_id, "huggingface");
         let has_error = Arc::clone(&has_error);

@@ -1,4 +1,5 @@
 import type { InstanceConfig, ModelInfo } from '../../store'
+import type { Translations } from '../../i18n'
 import { isPathWithinRoot, normalizePath, pathJoin } from '../../utils/path'
 
 export interface PickerNode {
@@ -142,13 +143,13 @@ export const formatValue = (value: unknown, labels: Record<string, string>) => {
   return String(value)
 }
 
-export const formatConfigValue = (key: keyof InstanceConfig, value: unknown, labels: Record<string, string>, t: any) => (
+export const formatConfigValue = (key: keyof InstanceConfig, value: unknown, labels: Record<string, string>, t: Translations) => (
   key === 'custom_args'
     ? `${Array.isArray(value) ? value.length : 0} ${t.configPage.vectorCleanupItems}`
     : formatValue(value, labels)
 )
 
-export const fieldLabel = (key: keyof InstanceConfig, t: any) => {
+export const fieldLabel = (key: keyof InstanceConfig, t: Translations) => {
   const labelMap: Partial<Record<keyof InstanceConfig, string>> = {
     model_path: t.configPage.modelPath,
     alias: t.configPage.alias,
@@ -202,7 +203,7 @@ export const fieldLabel = (key: keyof InstanceConfig, t: any) => {
   return labelMap[key] || String(key).replace(/_/g, ' ')
 }
 
-export const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig, t: any, labels: Record<string, string>): ConfigChange[] =>
+export const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig, t: Translations, labels: Record<string, string>): ConfigChange[] =>
   canonicalConfigFields(Object.keys(local) as Array<keyof InstanceConfig>)
     .filter(key => key !== 'explicit_overrides')
     .filter(key => !isEqualValue(reviewFieldValue(local, key), reviewFieldValue(baseline, key)))
@@ -213,7 +214,7 @@ export const getConfigChanges = (local: InstanceConfig, baseline: InstanceConfig
       after: formatConfigValue(key, reviewFieldValue(local, key), labels, t),
     }))
 
-export const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConfig>, t: any, labels: Record<string, string>): ConfigChange[] =>
+export const getTemplateChanges = (local: InstanceConfig, changes: Partial<InstanceConfig>, t: Translations, labels: Record<string, string>): ConfigChange[] =>
   (Object.keys(changes) as Array<keyof InstanceConfig>)
     .filter(key => !isEqualValue(local[key], changes[key]))
     .map(key => ({

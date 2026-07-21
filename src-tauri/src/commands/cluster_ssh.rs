@@ -1,5 +1,12 @@
 use std::process::Command;
 
+fn append_ssh_destination(command: &mut Command, ssh_user: &str, host: &str) {
+    // OpenSSH keeps parsing option-looking arguments until `--`, even when each
+    // argument is passed without a shell. Keep the user-controlled destination
+    // behind the option terminator so it can never become an SSH option.
+    command.arg("--").arg(format!("{}@{}", ssh_user, host));
+}
+
 fn detect_remote_os(
     host: &str,
     ssh_user: &str,
@@ -21,8 +28,8 @@ fn detect_remote_os(
         c.arg("-i").arg(k);
     }
 
-    c.arg(format!("{}@{}", ssh_user, host))
-        .arg("uname -s 2>/dev/null || ver 2>NUL");
+    append_ssh_destination(&mut c, ssh_user, host);
+    c.arg("uname -s 2>/dev/null || ver 2>NUL");
 
     c.output().ok().and_then(|o| {
         let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
@@ -123,7 +130,8 @@ pub async fn ssh_launch_rpc(
         ssh_cmd.arg("-i").arg(key_path);
         ssh_cmd.arg("-o").arg("BatchMode=yes");
 
-        ssh_cmd.arg(format!("{}@{}", ssh_user, host)).arg(&cmd);
+        append_ssh_destination(&mut ssh_cmd, &ssh_user, &host);
+        ssh_cmd.arg(&cmd);
 
         let output = ssh_cmd
             .output()
@@ -166,6 +174,37 @@ pub async fn ssh_launch_rpc(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ssh_args_for_destination(ssh_user: &str, host: &str) -> Vec<String> {
+        let mut command = Command::new("ssh");
+        command.arg("-p").arg("22");
+        append_ssh_destination(&mut command, ssh_user, host);
+        command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn ssh_destination_is_separated_from_options() {
+        assert_eq!(
+            ssh_args_for_destination("alice", "example.com"),
+            ["-p", "22", "--", "alice@example.com"]
+        );
+    }
+
+    #[test]
+    fn option_looking_ssh_user_stays_in_the_destination_operand() {
+        assert_eq!(
+            ssh_args_for_destination("-oProxyCommand=echo-option-smuggled", "target"),
+            [
+                "-p",
+                "22",
+                "--",
+                "-oProxyCommand=echo-option-smuggled@target"
+            ]
+        );
+    }
 
     #[test]
     fn linux_remote_command_uses_linux_socket_tools() {

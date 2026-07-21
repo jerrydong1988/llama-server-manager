@@ -11,6 +11,8 @@ type ResumeDownloadTaskResult = {
 
 const taskRemotePath = (file: MsFileEntry) => file.path || file.name
 
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
+
 const findTaskForFile = (
   tasks: Record<string, DownloadProgress>,
   source: 'modelscope' | 'huggingface',
@@ -190,6 +192,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         await invoke('cancel_file_download', { taskId, runId })
       } catch (error) {
         console.error(error)
+        get().addRuntimeWarning(`download cancellation failed: ${errorMessage(error)}`)
       }
     },
     pauseFileDownload: async (taskId, runId) => {
@@ -197,6 +200,17 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         await invoke('pause_file_download', { taskId, runId })
       } catch (error) {
         console.error(error)
+        get().addRuntimeWarning(`download pause failed: ${errorMessage(error)}`)
+        set((state) => {
+          const task = state.downloadTasks[taskId]
+          if (!task || task.status !== 'pausing') return {}
+          return {
+            downloadTasks: {
+              ...state.downloadTasks,
+              [taskId]: { ...task, status: 'active' },
+            },
+          }
+        })
       }
     },
     cancelAndCleanupDownload: async (taskId, fileName, filePath, runId, version) => {
@@ -230,6 +244,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         })
       } catch (error) {
         console.error(error)
+        get().addRuntimeWarning(`download resume failed: ${errorMessage(error)}`)
       }
     },
     restoreDownloadQueue: (entries) => {
@@ -319,6 +334,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         identities = await invoke<Array<{ taskId: string; runId: string; version: number }>>('resume_all_downloads')
       } catch (error) {
         console.error(error)
+        get().addRuntimeWarning(`resume all downloads failed: ${errorMessage(error)}`)
         return
       }
 
@@ -346,6 +362,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         affected = await invoke<string[]>('pause_all_downloads')
       } catch (error) {
         console.error(error)
+        get().addRuntimeWarning(`pause all downloads failed: ${errorMessage(error)}`)
         return
       }
 
@@ -362,6 +379,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         await invoke('cancel_all_downloads')
       } catch (error) {
         console.error(error)
+        get().addRuntimeWarning(`cancel all downloads failed: ${errorMessage(error)}`)
         return
       }
 

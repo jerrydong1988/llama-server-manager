@@ -70,6 +70,8 @@ const bigScreenSource = fs.readFileSync(path.join(root, 'src', 'components', 'Bi
 const mainSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'main.rs'), 'utf8')
 const downloadSliceSource = fs.readFileSync(path.join(root, 'src', 'store', 'downloadSlice.ts'), 'utf8')
 const runtimeEventsSource = fs.readFileSync(path.join(root, 'src', 'store', 'runtimeEvents.ts'), 'utf8')
+const clusterPageSource = fs.readFileSync(path.join(root, 'src', 'components', 'ClusterPage', 'ClusterPage.tsx'), 'utf8')
+const instanceManagerSource = fs.readFileSync(path.join(root, 'src', 'components', 'InstanceManager.tsx'), 'utf8')
 
 assert.match(downloadSource, /fn verified_managed_cleanup_path/, 'cleanup must canonicalize managed download paths')
 assert.match(downloadSource, /download_shutting_down\.load\(Ordering::SeqCst\)/, 'the scheduler must stop admitting work during shutdown')
@@ -83,6 +85,28 @@ assert.doesNotMatch(serverSource, /"metrics-update"/, 'the backend must not emit
 assert.match(mainSource, /terminate_all_servers_for_exit/, 'application exit must terminate managed server processes')
 assert.match(telemetrySource, /TELEMETRY_DROPPED_WRITES\.fetch_add/, 'telemetry queue pressure must be observable')
 assert.match(downloadSliceSource, /resumeAllDownloads:[\s\S]*error: undefined[\s\S]*completedAt: undefined/, 'bulk resume must clear stale terminal state')
+for (const operation of [
+  'download cancellation failed',
+  'download pause failed',
+  'download resume failed',
+  'resume all downloads failed',
+  'pause all downloads failed',
+  'cancel all downloads failed',
+]) {
+  assert.match(downloadSliceSource, new RegExp(operation), `${operation} must be visible to the user`)
+}
+assert.match(
+  downloadSliceSource,
+  /task\.status !== 'pausing'[\s\S]*status: 'active'/,
+  'a rejected pause request must roll an optimistic pausing state back to active',
+)
+assert.match(clusterPageSource, /labels\.workerLoadFailed/, 'worker load failures must be visible to the user')
+assert.match(clusterPageSource, /labels\.workerScanFailed/, 'worker scan failures must be visible to the user')
+assert.match(
+  instanceManagerSource,
+  /catch \(error\) \{[\s\S]*setPortStatus\(labels\.portCheckFailed\)[\s\S]*addRuntimeWarning[\s\S]*return/,
+  'instance creation must stop and warn when port validation cannot run',
+)
 assert.match(runtimeEventsSource, /delete lastProgressUpdate\[taskId\]/, 'terminal download events must clear progress throttling state')
 const removeManagerFileSource = downloadSource.slice(
   downloadSource.indexOf('fn remove_manager_file'),

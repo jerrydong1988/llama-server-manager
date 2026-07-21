@@ -1,12 +1,13 @@
 import { useState, useMemo } from 'react'
 import { useAppStore } from '../../store'
+import type { Translations } from '../../i18n'
 import { Button, TextInput, InsetSurface } from '../ui'
 import { formatHostPort, parseHostPort } from '../../utils/network'
 
 interface Props {
   value: string
   onChange: (v: string) => void
-  t: any
+  t: Translations
   hideLabel?: boolean
 }
 

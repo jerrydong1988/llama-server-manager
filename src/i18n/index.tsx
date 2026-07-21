@@ -3,7 +3,7 @@ import { zhCN } from './zh-CN'
 import { enUS } from './en-US'
 
 export type Lang = 'zh-CN' | 'en-US'
-type Translations = typeof enUS
+export type Translations = typeof enUS
 
 const translations: Record<Lang, Translations> = { 'zh-CN': zhCN as Translations, 'en-US': enUS }
 

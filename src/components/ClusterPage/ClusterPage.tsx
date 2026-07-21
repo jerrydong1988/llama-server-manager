@@ -7,6 +7,10 @@ import { useI18n } from '../../i18n'
 import { getClusterLabels } from '../../i18n/pageLabels'
 import { Badge, Button, InsetSurface, MetricCard, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
 
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
+type RpcLaunchResult = { ok: boolean; error?: string }
+type WorkerTestResult = { ok: boolean }
+
 export default function ClusterPage() {
   const { t, lang } = useI18n()
   const labels = useMemo(() => getClusterLabels(lang), [lang])
@@ -16,6 +20,7 @@ export default function ClusterPage() {
   const removeWorker = useAppStore(state => state.removeWorker)
   const setClusterScanning = useAppStore(state => state.setClusterScanning)
   const updateWorker = useAppStore(state => state.updateWorker)
+  const addRuntimeWarning = useAppStore(state => state.addRuntimeWarning)
   const engines = useAppStore(state => state.engines)
   const defaultEngineId = useAppStore(state => state.defaultEngineId)
 
@@ -115,8 +120,11 @@ export default function ClusterPage() {
   useEffect(() => {
     void invoke<WorkerInfo[]>('get_workers')
       .then(setWorkers)
-      .catch(error => console.error('Failed to load workers:', error))
-  }, [setWorkers])
+      .catch(error => {
+        console.error('Failed to load workers:', error)
+        addRuntimeWarning(`${labels.workerLoadFailed}: ${errorMessage(error)}`)
+      })
+  }, [addRuntimeWarning, labels.workerLoadFailed, setWorkers])
 
   const handleScan = async () => {
     scanCancelled.current = false
@@ -129,6 +137,7 @@ export default function ClusterPage() {
     } catch (error) {
       if (!scanCancelled.current) {
         console.error('Scan failed:', error)
+        addRuntimeWarning(`${labels.workerScanFailed}: ${errorMessage(error)}`)
       }
     } finally {
       setClusterScanning(false)
@@ -178,7 +187,7 @@ export default function ClusterPage() {
     setLaunchError('')
     try {
       const engineDir = localEngine || engines.find(engine => engine.id === defaultEngineId)?.dir || ''
-      const result: any = await invoke('start_local_rpc', { engineDir: engineDir || null, port: localPort })
+      const result = await invoke<RpcLaunchResult>('start_local_rpc', { engineDir: engineDir || null, port: localPort })
       if (result?.ok) {
         const localHost: string = await invoke('get_local_host')
         await invoke('add_worker', { host: localHost, port: localPort, name: `Local-${localPort}` })
@@ -186,8 +195,8 @@ export default function ClusterPage() {
         setWorkers(all)
         setShowLocalLaunch(false)
       }
-    } catch (error: any) {
-      setLaunchError(typeof error === 'string' ? error : (error?.message || String(error)))
+    } catch (error) {
+      setLaunchError(errorMessage(error))
     } finally {
       setLaunching(false)
     }
@@ -212,7 +221,7 @@ export default function ClusterPage() {
     setLaunching(true)
     setLaunchError('')
     try {
-      const result: any = await invoke('ssh_launch_rpc', {
+      const result = await invoke<RpcLaunchResult>('ssh_launch_rpc', {
         host: launchForm.host,
         sshUser: launchForm.user,
         sshKeyPath: launchForm.keyPath || null,
@@ -230,8 +239,8 @@ export default function ClusterPage() {
       } else {
         setLaunchError(result?.error || t.clusterPage.launchErrorDefault)
       }
-    } catch (error: any) {
-      setLaunchError(typeof error === 'string' ? error : (error?.message || String(error)))
+    } catch (error) {
+      setLaunchError(errorMessage(error))
     } finally {
       setLaunching(false)
     }
@@ -244,7 +253,7 @@ export default function ClusterPage() {
     }
     updateWorker(worker.id, { status: 'Testing' })
     try {
-      const result: any = await invoke('test_worker', { host, port })
+      const result = await invoke<WorkerTestResult>('test_worker', { host, port })
       updateWorker(worker.id, { status: result.ok ? 'Online' : 'Offline' })
     } catch {
       updateWorker(worker.id, { status: 'Offline' })

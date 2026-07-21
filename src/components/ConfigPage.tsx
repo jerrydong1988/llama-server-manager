@@ -97,7 +97,7 @@ const ConfigPage = () => {
     setVectorCleanupChanges([])
   }, [activeConfigInstanceId])
 
-  const set = (key: keyof InstanceConfig, value: any) => {
+  const set = <K extends keyof InstanceConfig,>(key: K, value: InstanceConfig[K]) => {
     editRevisionRef.current += 1
     setAppliedTemplateId(null)
     setLastTemplateSnapshot(null)
@@ -717,7 +717,7 @@ const ConfigPage = () => {
                             : 'bg-sky-500/10 text-sky-200'
                       }`}
                     >
-                      {(t.configPage as any)[warning.key] || warning.key}
+                      {t.configPage[warning.key] || warning.key}
                     </div>
                   ))}
                 </div>

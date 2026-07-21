@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Crosshair, LoaderCircle, Undo2 } from 'lucide-react'
 import type { InstanceConfig } from '../../store'
+import type { Translations } from '../../i18n'
 import type { getConfigPageLabels } from '../../i18n/configPageCopy'
 import { Badge, Button, InsetSurface } from '../ui'
 import { fieldLabel, type ConfigChange } from './configWorkspace'
@@ -30,7 +31,7 @@ export function ConfigChangePanel({
   baselineOverrideKeys: Array<keyof InstanceConfig>
   previewing: boolean
   labels: Labels
-  t: any
+  t: Translations
   onLocate: (key: keyof InstanceConfig) => void
   onUndo: (key: keyof InstanceConfig) => void
 }) {

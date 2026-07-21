@@ -53,10 +53,10 @@ export function migrateParameterIntent(config: InstanceConfig): InstanceConfig {
   return { ...merged, explicit_overrides }
 }
 
-export function markExplicitOverride(
+export function markExplicitOverride<K extends keyof InstanceConfig>(
   config: InstanceConfig,
-  key: keyof InstanceConfig,
-  value: InstanceConfig[keyof InstanceConfig],
+  key: K,
+  value: InstanceConfig[K],
 ): InstanceConfig {
   if (INTENT_METADATA_FIELDS.has(key)) return { ...config, [key]: value }
   const overrides = new Set(sanitizeExplicitOverrides(config.explicit_overrides))

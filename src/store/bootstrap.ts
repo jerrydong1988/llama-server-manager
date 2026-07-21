@@ -17,6 +17,8 @@ import type {
   PersistedQueueEntry,
 } from './types'
 
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
+
 export type GlobalConfigShape = {
   config_load_warning?: string | null
   instances: Record<string, InstanceConfig>
@@ -274,7 +276,7 @@ async function processConfig(
       }
     })
     .catch((error) => {
-      get().addRuntimeWarning(`download snapshot failed: ${error?.message || String(error)}`)
+      get().addRuntimeWarning(`download snapshot failed: ${errorMessage(error)}`)
     })
 
   invoke<PersistedQueueEntry[]>('restore_download_queue', {})
@@ -286,7 +288,7 @@ async function processConfig(
       }
     })
     .catch((error) => {
-      get().addRuntimeWarning(`download queue restore failed: ${error?.message || String(error)}`)
+      get().addRuntimeWarning(`download queue restore failed: ${errorMessage(error)}`)
     })
 
   invoke<ModelInfo[]>('scan_models', { paths: global.model_dirs || [] })
@@ -296,7 +298,7 @@ async function processConfig(
       })
     })
     .catch((error) => {
-      get().addRuntimeWarning(`model scan failed: ${error?.message || String(error)}`)
+      get().addRuntimeWarning(`model scan failed: ${errorMessage(error)}`)
     })
 
   invoke<EngineInfo[]>('scan_engines', { paths: global.engine_dirs || [] })
@@ -306,7 +308,7 @@ async function processConfig(
       })
     })
     .catch((error) => {
-      get().addRuntimeWarning(`engine scan failed: ${error?.message || String(error)}`)
+      get().addRuntimeWarning(`engine scan failed: ${errorMessage(error)}`)
     })
 }
 
@@ -324,7 +326,7 @@ export async function loadAppBootstrap(
         startupTimings.push({ name: 'native-init', ms })
       })
       .catch((error) => {
-        get().addRuntimeWarning(`startup timing failed: ${error?.message || String(error)}`)
+        get().addRuntimeWarning(`startup timing failed: ${errorMessage(error)}`)
       })
 
     const cachedModelScanRequest = beginModelInventoryRequest()
@@ -339,7 +341,7 @@ export async function loadAppBootstrap(
         }
       })
       .catch((error) => {
-        get().addRuntimeWarning(`cached scan failed: ${error?.message || String(error)}`)
+        get().addRuntimeWarning(`cached scan failed: ${errorMessage(error)}`)
       })
 
     const injected = window.__INITIAL_CONFIG__
@@ -355,7 +357,7 @@ export async function loadAppBootstrap(
     }
   } catch (error) {
     console.error('load_config error:', error)
-    get().addRuntimeWarning(`bootstrap failed: ${(error as any)?.message || String(error)}`)
+    get().addRuntimeWarning(`bootstrap failed: ${errorMessage(error)}`)
   }
 
   set({ isLoading: false })

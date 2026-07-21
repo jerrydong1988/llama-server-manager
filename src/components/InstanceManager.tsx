@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal } from 'lucide-react'
-import { useAppStore, defaultInstanceConfig } from '../store'
-import { formatStartupCommand, maskStartupCommandSecrets } from '../store'
+import { useAppStore, defaultInstanceConfig, formatStartupCommand, maskStartupCommandSecrets } from '../store'
 import { invokeApp as invoke } from '../lib/ipc'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { formatMessage, useI18n } from '../i18n'
@@ -16,7 +15,6 @@ import { markExplicitOverride } from '../parameterIntent'
 
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
-
 const InstanceManager = () => {
   const instances = useAppStore(s => s.instances)
   const addInstance = useAppStore(s => s.addInstance)
@@ -133,7 +131,7 @@ const InstanceManager = () => {
     portCheckTimerRef.current = setTimeout(() => {
       invoke<boolean>('check_port', { port, host: '127.0.0.1' })
         .then(free => setPortStatus(free ? labels.portAvailable : labels.portInUse))
-        .catch(() => setPortStatus(''))
+        .catch(error => { setPortStatus(labels.portCheckFailed); useAppStore.getState().addRuntimeWarning(`${labels.portCheckFailed}: ${String(error)}`) })
     }, 300)
   }
 
@@ -147,8 +145,10 @@ const InstanceManager = () => {
         setPortStatus(labels.portInUse)
         return
       }
-    } catch {
-      // proceed
+    } catch (error) {
+      setPortStatus(labels.portCheckFailed)
+      useAppStore.getState().addRuntimeWarning(`${labels.portCheckFailed}: ${String(error)}`)
+      return
     }
 
     const id = crypto.randomUUID()

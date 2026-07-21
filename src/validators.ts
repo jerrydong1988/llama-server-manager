@@ -1,11 +1,14 @@
 import type { InstanceConfig, ModelInfo, EngineInfo } from './store/types'
+import type { Translations } from './i18n'
 import { defaultInstanceConfig } from './store/defaults'
 import { assessProjectorMatch } from './modelProjector'
+
+type WarningKey = Extract<keyof Translations['configPage'], `warn${string}`>
 
 export interface Warning {
   field: keyof InstanceConfig
   severity: 'high' | 'medium' | 'low'
-  key: string
+  key: WarningKey
 }
 
 // Known CLI flags collected from server.rs generate_command().
@@ -119,7 +122,7 @@ export function validateConfig(
   // A2: generation/sampling parameters are still set in embedding mode.
   if (config.embedding) {
     const defaults = defaultInstanceConfig()
-    const genDefaults: Record<string, string | number | boolean> = {
+    const genDefaults = {
       n_predict: defaults.n_predict, temp: defaults.temp, top_k: defaults.top_k,
       top_p: defaults.top_p, repeat_penalty: defaults.repeat_penalty,
       seed: defaults.seed, min_p: defaults.min_p,
@@ -129,13 +132,14 @@ export function validateConfig(
       special: defaults.special, spm_infill: defaults.spm_infill, backend_sampling: defaults.backend_sampling,
     }
     let hasGenParam = false
-    for (const [k, defVal] of Object.entries(genDefaults)) {
-      const val = (config as any)[k]
+    for (const key of Object.keys(genDefaults) as Array<keyof typeof genDefaults>) {
+      const defVal = genDefaults[key]
+      const val = config[key]
       if (typeof defVal === 'number' && typeof val === 'number' && Math.abs(val - defVal) > 0.001) {
         hasGenParam = true; break
       }
-      if (k === 'json_schema' && val !== '') { hasGenParam = true; break }
-      if (k === 'reverse_prompt' && val !== '') { hasGenParam = true; break }
+      if (key === 'json_schema' && val !== '') { hasGenParam = true; break }
+      if (key === 'reverse_prompt' && val !== '') { hasGenParam = true; break }
       if (typeof defVal === 'boolean' && val !== defVal) { hasGenParam = true; break }
     }
     if (config.mirostat !== 0 || Math.abs(config.mirostat_lr - 0.1) > 0.001 || Math.abs(config.mirostat_ent - 5.0) > 0.001 ||

@@ -304,6 +304,8 @@ export function getClusterLabels(lang: string) {
     auto: zh ? '自动' : 'auto', devices: zh ? '设备' : 'devices', host: zh ? '主机 (IP)' : 'Host (IP)',
     port: zh ? '端口' : 'Port', workerHost: zh ? 'Worker IP / 主机' : 'Worker IP / Host',
     sshKeyNotice: zh ? '仅支持 SSH 密钥认证，密钥不会离开本机。' : 'SSH key authentication is required; the key remains on this device.',
+    workerLoadFailed: zh ? '加载集群节点失败' : 'Failed to load cluster workers',
+    workerScanFailed: zh ? '扫描集群节点失败' : 'Failed to scan cluster workers',
   }
 }
 

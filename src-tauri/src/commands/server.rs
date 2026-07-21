@@ -3076,13 +3076,12 @@ fn classify_test_connection_result(
 }
 
 pub async fn check_port(port: u16, host: Option<String>) -> Result<bool, String> {
-    use std::net::TcpListener;
     let bind_host = host
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("127.0.0.1");
-    match TcpListener::bind((bind_host, port)) {
+    match tokio::net::TcpListener::bind((bind_host, port)).await {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
     }

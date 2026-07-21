@@ -12,7 +12,7 @@ type Props = {
   labels: Labels
   overrideKeys: Array<keyof InstanceConfig>
   inheritKeys: Array<keyof InstanceConfig>
-  set: (key: keyof InstanceConfig, value: any) => void
+  set: <K extends keyof InstanceConfig>(key: K, value: InstanceConfig[K]) => void
   inherit: (keys: Array<keyof InstanceConfig>) => void
 }
 

@@ -484,6 +484,7 @@
     instances: '\u5B9E\u4F8B', running: '\u8FD0\u884C\u4E2D', runningTitle: '\u8FD0\u884C\u4E2D', stoppedTitle: '\u5DF2\u505C\u6B62',
     errored: '\u5F02\u5E38', autoStart: '\u81EA\u52A8\u542F\u52A8', all: '\u5168\u90E8', offline: '\u79BB\u7EBF', healthy: '\u6B63\u5E38',
     pending: '\u68C0\u67E5\u4E2D', checkingPort: '\u68C0\u67E5\u7AEF\u53E3\u4E2D...', portAvailable: '\u7AEF\u53E3\u53EF\u7528', portInUse: '\u7AEF\u53E3\u5DF2\u88AB\u5360\u7528',
+    portCheckFailed: '\u7AEF\u53E3\u68C0\u67E5\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5',
     noEnginePrefix: '\u5C1A\u672A\u68C0\u6D4B\u5230\u5F15\u64CE\uFF0C\u8BF7\u5148\u524D\u5F80', noEngineSuffix: '\u5E76\u6DFB\u52A0 llama-server\u3002',
     searchPlaceholder: '\u641C\u7D22\u5B9E\u4F8B\u3001\u6A21\u578B\u3001\u5F15\u64CE\u3001\u7AEF\u53E3...', allEngines: '\u6240\u6709\u5F15\u64CE', name: '\u540D\u79F0', status: '\u72B6\u6001',
     health: '\u5065\u5EB7', uptime: '\u8FD0\u884C\u65F6\u957F', actions: '\u64CD\u4F5C', rename: '\u91CD\u547D\u540D', moveUp: '\u4E0A\u79FB', moveDown: '\u4E0B\u79FB',
