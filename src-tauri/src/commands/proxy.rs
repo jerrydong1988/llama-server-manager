@@ -425,19 +425,37 @@ fn preferred_public_route<'a>(
     config: &'a ProxyConfig,
     target_instance_id: &str,
 ) -> Option<&'a ProxyRoute> {
+    let target_instance_id = target_instance_id.trim();
     config
         .routes
         .iter()
         .filter(|route| {
-            route_is_configured(route) && route.target_instance_id == target_instance_id
+            route_is_configured(route) && route.target_instance_id.trim() == target_instance_id
         })
         .min_by_key(|route| route.priority)
 }
 
-fn validate_proxy_routes(
-    config: &ProxyConfig,
+pub(crate) fn normalize_and_validate_proxy_config(
+    mut config: ProxyConfig,
     instances: &HashMap<String, InstanceConfig>,
-) -> Result<(), String> {
+) -> Result<ProxyConfig, String> {
+    config.default_instance_id = config.default_instance_id.trim().to_string();
+    let mut route_ids = HashSet::new();
+    for route in &mut config.routes {
+        route.id = route.id.trim().to_string();
+        route.model_alias = route.model_alias.trim().to_string();
+        route.target_instance_id = route.target_instance_id.trim().to_string();
+        if route.id.is_empty() || !route_ids.insert(route.id.clone()) {
+            loop {
+                let replacement = uuid::Uuid::new_v4().to_string();
+                if route_ids.insert(replacement.clone()) {
+                    route.id = replacement;
+                    break;
+                }
+            }
+        }
+    }
+
     for (index, route) in config.routes.iter().enumerate() {
         if !route.enabled {
             continue;
@@ -452,7 +470,23 @@ fn validate_proxy_routes(
             return Err(format!("第 {} 条已启用路由的目标实例不存在", index + 1));
         }
     }
-    Ok(())
+    Ok(config)
+}
+
+#[cfg(test)]
+fn validate_proxy_routes(
+    config: &ProxyConfig,
+    instances: &HashMap<String, InstanceConfig>,
+) -> Result<(), String> {
+    normalize_and_validate_proxy_config(config.clone(), instances).map(|_| ())
+}
+
+fn normalize_proxy_config_for_state(
+    state: &AppState,
+    config: ProxyConfig,
+) -> Result<ProxyConfig, String> {
+    let instances = state.instances.lock().unwrap();
+    normalize_and_validate_proxy_config(config, &instances)
 }
 
 fn normalize_host(host: &str) -> String {
@@ -525,7 +559,7 @@ fn resolve_proxy_target_from(
         .routes
         .iter()
         .filter(|route| route_is_configured(route))
-        .map(|route| route.target_instance_id.as_str())
+        .map(|route| route.target_instance_id.trim())
         .collect::<HashSet<_>>();
     let requested_model = requested_model
         .map(str::trim)
@@ -566,10 +600,9 @@ fn resolve_proxy_target_from(
         for route in routes {
             if route.enabled && route.model_alias.trim() == model {
                 had_candidate = true;
-                if !route.target_instance_id.is_empty()
-                    && running.contains_key(&route.target_instance_id)
-                {
-                    if let Some(target) = resolve_id(&route.target_instance_id) {
+                let target_instance_id = route.target_instance_id.trim();
+                if !target_instance_id.is_empty() && running.contains_key(target_instance_id) {
+                    if let Some(target) = resolve_id(target_instance_id) {
                         return Some(target);
                     }
                 }
@@ -604,11 +637,10 @@ fn resolve_proxy_target_from(
         }
     }
 
-    if !proxy_config.default_instance_id.is_empty()
-        && running.contains_key(&proxy_config.default_instance_id)
-    {
+    let default_instance_id = proxy_config.default_instance_id.trim();
+    if !default_instance_id.is_empty() && running.contains_key(default_instance_id) {
         had_candidate = true;
-        if let Some(target) = resolve_id(&proxy_config.default_instance_id) {
+        if let Some(target) = resolve_id(default_instance_id) {
             return Some(target);
         }
     }
@@ -668,7 +700,7 @@ fn public_response_model(
     if let Some(requested) = requested {
         let route_is_public = proxy_config.routes.iter().any(|route| {
             route.enabled
-                && route.target_instance_id == target.instance_id
+                && route.target_instance_id.trim() == target.instance_id.trim()
                 && route.model_alias.trim() == requested
         });
         if route_is_public {
@@ -933,7 +965,7 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
         .routes
         .iter()
         .filter(|route| route_is_configured(route))
-        .map(|route| route.target_instance_id.as_str())
+        .map(|route| route.target_instance_id.trim())
         .collect::<HashSet<_>>();
     let mut ids = config
         .routes
@@ -941,7 +973,7 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
         .filter(|route| {
             route.enabled
                 && !route.model_alias.trim().is_empty()
-                && running_ids.contains(route.target_instance_id.as_str())
+                && running_ids.contains(route.target_instance_id.trim())
         })
         .map(|route| route.model_alias.trim().to_string())
         .collect::<Vec<_>>();
@@ -1236,10 +1268,10 @@ pub async fn save_proxy_config(
     config: ProxyConfig,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyConfig, String> {
-    {
+    let config = {
         let instances = state.instances.lock().unwrap();
-        validate_proxy_routes(&config, &instances)?;
-    }
+        normalize_and_validate_proxy_config(config, &instances)?
+    };
     let _transition = state.proxy_lifecycle_lock.lock().await;
     let current = state.proxy_config.lock().unwrap().clone();
     let runtime_status = if crate::runtime_service::manages_instances() {
@@ -1399,7 +1431,16 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
         return Ok(proxy_status_from_state(&state));
     }
 
-    let mut config = state.proxy_config.lock().unwrap().clone();
+    let mut config = match normalize_proxy_config_for_state(
+        state.inner(),
+        state.proxy_config.lock().unwrap().clone(),
+    ) {
+        Ok(config) => config,
+        Err(error) => {
+            *state.proxy_last_error.lock().unwrap() = Some(error.clone());
+            return Err(error);
+        }
+    };
     config.enabled = true;
     if !is_local_bind_host(&config.host) && config.public_api_key.trim().is_empty() {
         let msg = "代理监听非本机地址时必须设置公开 API Key".to_string();
@@ -1455,11 +1496,17 @@ pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, S
     let _transition = state.proxy_lifecycle_lock.lock().await;
     if crate::runtime_service::manages_instances() {
         let previous = state.proxy_config.lock().unwrap().clone();
+        let mut config = match normalize_proxy_config_for_state(state.inner(), previous.clone()) {
+            Ok(config) => config,
+            Err(error) => {
+                *state.proxy_last_error.lock().unwrap() = Some(error.clone());
+                return Err(error);
+            }
+        };
         let was_running = crate::runtime_service::ensure_runtime_service()
             .await?
             .proxy
             .running;
-        let mut config = state.proxy_config.lock().unwrap().clone();
         config.enabled = true;
         update_and_persist(&state, |global| global.proxy_config = config.clone())?;
         *state.proxy_config.lock().unwrap() = config.clone();
@@ -1587,9 +1634,19 @@ pub async fn restart_proxy(
 ) -> Result<ProxyStatus, String> {
     if crate::runtime_service::manages_instances() {
         let _transition = state.proxy_lifecycle_lock.lock().await;
-        if !state.proxy_config.lock().unwrap().enabled {
+        let current = state.proxy_config.lock().unwrap().clone();
+        if !current.enabled {
             return Err("路由服务尚未启用".into());
         }
+        let config = match normalize_proxy_config_for_state(state.inner(), current) {
+            Ok(config) => config,
+            Err(error) => {
+                *state.proxy_last_error.lock().unwrap() = Some(error.clone());
+                return Err(error);
+            }
+        };
+        update_and_persist(&state, |global| global.proxy_config = config.clone())?;
+        *state.proxy_config.lock().unwrap() = config;
         crate::runtime_service::stop_proxy().await?;
         let sync_generation = crate::runtime_service::mark_config_sync_pending();
         crate::runtime_service::sync_app_config(&state).await?;
@@ -1598,6 +1655,18 @@ pub async fn restart_proxy(
         return Ok(status);
     }
     let _transition = state.proxy_lifecycle_lock.lock().await;
+    let config = match normalize_proxy_config_for_state(
+        state.inner(),
+        state.proxy_config.lock().unwrap().clone(),
+    ) {
+        Ok(config) => config,
+        Err(error) => {
+            *state.proxy_last_error.lock().unwrap() = Some(error.clone());
+            return Err(error);
+        }
+    };
+    update_and_persist(&state, |global| global.proxy_config = config.clone())?;
+    *state.proxy_config.lock().unwrap() = config;
     shutdown_proxy_runtime(state.inner()).await?;
     start_proxy_locked(app).await
 }
@@ -2035,6 +2104,99 @@ mod tests {
             ..ProxyConfig::default()
         };
         assert!(super::validate_proxy_routes(&disabled_draft, &instances).is_ok());
+    }
+
+    #[test]
+    fn route_normalization_trims_fields_and_repairs_empty_or_duplicate_ids() {
+        let instances = HashMap::from([("target".into(), InstanceConfig::default())]);
+        let config = ProxyConfig {
+            default_instance_id: " target ".into(),
+            routes: vec![
+                ProxyRoute {
+                    id: " duplicate ".into(),
+                    model_alias: " public-model ".into(),
+                    target_instance_id: " target ".into(),
+                    ..ProxyRoute::default()
+                },
+                ProxyRoute {
+                    id: "duplicate".into(),
+                    model_alias: " backup-model ".into(),
+                    target_instance_id: " target ".into(),
+                    ..ProxyRoute::default()
+                },
+                ProxyRoute {
+                    id: "   ".into(),
+                    model_alias: " third-model ".into(),
+                    target_instance_id: " target ".into(),
+                    ..ProxyRoute::default()
+                },
+            ],
+            ..ProxyConfig::default()
+        };
+
+        let normalized = super::normalize_and_validate_proxy_config(config, &instances).unwrap();
+        assert_eq!(normalized.default_instance_id, "target");
+        assert_eq!(normalized.routes[0].id, "duplicate");
+        assert_eq!(normalized.routes[0].model_alias, "public-model");
+        assert_eq!(normalized.routes[0].target_instance_id, "target");
+        assert!(normalized.routes.iter().all(|route| !route.id.is_empty()));
+        assert_eq!(
+            normalized
+                .routes
+                .iter()
+                .map(|route| route.id.as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            normalized.routes.len()
+        );
+    }
+
+    #[test]
+    fn route_resolution_defensively_accepts_legacy_whitespace_target_ids() {
+        let instance_id = "target".to_string();
+        let instance = InstanceConfig {
+            id: instance_id.clone(),
+            alias: "upstream-model".into(),
+            port: 18080,
+            ..InstanceConfig::default()
+        };
+        let instances = HashMap::from([(instance_id.clone(), instance.clone())]);
+        let running = HashMap::from([(
+            instance_id.clone(),
+            RunningInstance {
+                instance_id: instance_id.clone(),
+                pid: 1,
+                port: 18080,
+                host: "127.0.0.1".into(),
+                start_time: 0,
+                executable_path: String::new(),
+                telemetry_session_id: None,
+                workload: "inference".into(),
+                launch_config: Some(instance),
+            },
+        )]);
+        let config = ProxyConfig {
+            routes: vec![ProxyRoute {
+                model_alias: " public-model ".into(),
+                target_instance_id: " target ".into(),
+                ..ProxyRoute::default()
+            }],
+            ..ProxyConfig::default()
+        };
+
+        let resolved = super::resolve_proxy_target_from(
+            &config,
+            &instances,
+            &running,
+            Some("public-model"),
+            None,
+        )
+        .expect("legacy whitespace must not make a saved route unreachable");
+        assert_eq!(resolved.public.instance_id, instance_id);
+        assert_eq!(
+            super::listed_proxy_model_ids(&config, &[resolved.public]),
+            vec!["public-model".to_string()]
+        );
     }
 
     #[test]

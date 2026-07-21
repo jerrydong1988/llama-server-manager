@@ -148,7 +148,7 @@ type BrowserProxyConfig = {
 }
 
 const proxyConfig: BrowserProxyConfig = {
-  enabled: ['background-runtime-active', 'proxy-routing', 'proxy-route-health'].includes(BROWSER_SCENARIO ?? ''),
+  enabled: ['background-runtime-active', 'proxy-routing', 'proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? ''),
   host: '127.0.0.1',
   port: 11435,
   public_api_key: '',
@@ -174,12 +174,29 @@ const proxyConfig: BrowserProxyConfig = {
           target_instance_id: INSTANCE_ID,
         },
       ]
+    : BROWSER_SCENARIO === 'proxy-route-legacy-ids'
+      ? [
+          {
+            id: '',
+            enabled: true,
+            priority: 1,
+            model_alias: 'legacy-primary-model',
+            target_instance_id: STOPPED_INSTANCE_ID,
+          },
+          {
+            id: '',
+            enabled: true,
+            priority: 2,
+            model_alias: 'legacy-backup-model',
+            target_instance_id: INSTANCE_ID,
+          },
+        ]
     : [],
 }
 const proxyStatus = {
-  running: ['background-runtime-active', 'proxy-routing', 'proxy-route-health'].includes(BROWSER_SCENARIO ?? ''),
+  running: ['background-runtime-active', 'proxy-routing', 'proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? ''),
   bound_addr: '127.0.0.1:11435',
-  active_routes: BROWSER_SCENARIO === 'proxy-route-health' ? 2 : 0,
+  active_routes: ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : 0,
   last_error: null,
 }
 const runningProxyTarget = {
@@ -192,7 +209,7 @@ const runningProxyTarget = {
 }
 const proxyTargets = BROWSER_SCENARIO === 'proxy-routing'
   ? [runningProxyTarget]
-  : BROWSER_SCENARIO === 'proxy-route-health'
+  : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '')
   ? [{
       instance_id: STOPPED_INSTANCE_ID,
       name: 'Stopped Primary',
@@ -246,6 +263,9 @@ type BrowserTestControl = {
   unhandled: string[]
   saveCount: number
   lastGenerated: GeneratedServerCommand | null
+  failProxyStatus: boolean
+  failProxyTargets: boolean
+  failRuntimeStatus: boolean
   state: GlobalConfigShape
   emitEvent: (event: string, payload?: unknown) => Promise<void>
 }
@@ -262,6 +282,9 @@ const control: BrowserTestControl = {
   unhandled: [],
   saveCount: 0,
   lastGenerated: null,
+  failProxyStatus: false,
+  failProxyTargets: false,
+  failRuntimeStatus: false,
   state,
   emitEvent: (event, payload) => emit(event, payload),
 }
@@ -368,8 +391,12 @@ mockIPC((command, payload) => {
     case 'get_system_health': return clone(systemMetrics)
     case 'get_workers': return []
     case 'get_proxy_config': return clone(proxyConfig)
-    case 'get_proxy_status': return clone(proxyStatus)
-    case 'list_proxy_targets': return clone(proxyTargets)
+    case 'get_proxy_status':
+      if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')
+      return clone(proxyStatus)
+    case 'list_proxy_targets':
+      if (control.failProxyTargets) throw new Error('browser test proxy target status unavailable')
+      return clone(proxyTargets)
     case 'test_proxy_route': {
       const modelAlias = String(args.model ?? '').trim()
       const candidates = proxyConfig.routes
@@ -396,7 +423,9 @@ mockIPC((command, payload) => {
       proxyConfig.enabled = false
       proxyStatus.running = false
       return clone(proxyStatus)
-    case 'get_runtime_service_status': return clone(runtimeStatus)
+    case 'get_runtime_service_status':
+      if (control.failRuntimeStatus) throw new Error('browser test runtime status unavailable')
+      return clone(runtimeStatus)
     case 'is_autostart_enabled': return false
     case 'resolve_path': return args.path === 'models' ? 'C:\\browser-test\\models' : String(args.path ?? '')
     case 'generate_server_command': {

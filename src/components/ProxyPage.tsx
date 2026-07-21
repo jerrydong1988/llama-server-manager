@@ -138,6 +138,21 @@ function normalizeRoute(value: unknown, index: number): ProxyRoute {
 function normalizeConfig(value: unknown): ProxyConfig {
   const record = asRecord(value)
   const routesValue = Array.isArray(record.routes) ? record.routes : []
+  const routeIds = new Set<string>()
+  const routes = routesValue.map(normalizeRoute).map((route, index) => {
+    let id = route.id.trim()
+    if (!id || routeIds.has(id)) {
+      const base = `route-${index + 1}`
+      id = base
+      let suffix = 2
+      while (routeIds.has(id)) {
+        id = `${base}-${suffix}`
+        suffix += 1
+      }
+    }
+    routeIds.add(id)
+    return { ...route, id }
+  })
   return {
     enabled: getBoolean(record, ['enabled'], defaultConfig.enabled),
     host: getString(record, ['host', 'listen_host', 'listenHost'], defaultConfig.host),
@@ -148,7 +163,7 @@ function normalizeConfig(value: unknown): ProxyConfig {
     timeoutMs: getNumber(record, ['timeout_ms', 'timeoutMs'], defaultConfig.timeoutMs),
     backgroundServiceMode: getBoolean(record, ['background_service_mode', 'backgroundServiceMode'], defaultConfig.backgroundServiceMode),
     runtimeServiceEnabled: getBoolean(record, ['runtime_service_enabled', 'runtimeServiceEnabled'], defaultConfig.runtimeServiceEnabled),
-    routes: routesValue.map(normalizeRoute),
+    routes,
   }
 }
 
@@ -259,8 +274,11 @@ export default function ProxyPage() {
   const [config, setConfig] = useState<ProxyConfig>(defaultConfig)
   const [draft, setDraft] = useState<ProxyConfig>(defaultConfig)
   const [status, setStatus] = useState<ProxyStatus>(normalizeStatus(null, defaultConfig))
+  const [statusFresh, setStatusFresh] = useState(false)
   const [runtimeService, setRuntimeService] = useState<RuntimeServiceView>(defaultRuntimeService)
+  const [runtimeFresh, setRuntimeFresh] = useState(false)
   const [targets, setTargets] = useState<ProxyTarget[]>([])
+  const [targetsFresh, setTargetsFresh] = useState(false)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [busyAction, setBusyAction] = useState<'start' | 'stop' | null>(null)
@@ -286,7 +304,10 @@ export default function ProxyPage() {
     source: 'instances',
   })), [instances])
 
-  const effectiveTargets = targets.length > 0 ? targets : fallbackTargets
+  const displayedTargets = targetsFresh ? targets : targets.length > 0 ? targets : fallbackTargets
+  const effectiveTargets = targetsFresh
+    ? displayedTargets
+    : displayedTargets.map(target => ({ ...target, status: 'unknown' as const }))
   const selectedTarget = effectiveTargets.find(target => target.instanceId === draft.defaultInstanceId)
   const endpoint = endpointUrl(status.boundAddr, draft)
   const routeIssues = useMemo(() => {
@@ -379,26 +400,35 @@ export default function ProxyPage() {
 
       if (statusResult.status === 'fulfilled') {
         setStatus(normalizeStatus(statusResult.value, nextConfig))
+        setStatusFresh(true)
       } else {
         setStatus(normalizeStatus(null, nextConfig))
+        setStatusFresh(false)
       }
 
       if (targetsResult.status === 'fulfilled' && Array.isArray(targetsResult.value)) {
         setTargets(targetsResult.value.map(normalizeTarget))
+        setTargetsFresh(true)
       } else {
         setTargets([])
+        setTargetsFresh(false)
       }
       if (runtimeResult.status === 'fulfilled') {
         setRuntimeService(normalizeRuntimeService(runtimeResult.value))
+        setRuntimeFresh(true)
       } else {
         setRuntimeService(defaultRuntimeService)
+        setRuntimeFresh(false)
       }
     } catch (loadError) {
       setCommandsReady(false)
       setTargets([])
+      setTargetsFresh(false)
       setConfig(defaultConfig)
       setDraft(defaultConfig)
       setStatus(normalizeStatus(null, defaultConfig))
+      setStatusFresh(false)
+      setRuntimeFresh(false)
       setError(errorMessage(loadError))
     } finally {
       setLoading(false)
@@ -420,12 +450,21 @@ export default function ProxyPage() {
       if (cancelled) return
       if (statusResult.status === 'fulfilled') {
         setStatus(normalizeStatus(statusResult.value, config))
+        setStatusFresh(true)
+      } else {
+        setStatusFresh(false)
       }
       if (targetsResult.status === 'fulfilled' && Array.isArray(targetsResult.value)) {
         setTargets(targetsResult.value.map(normalizeTarget))
+        setTargetsFresh(true)
+      } else {
+        setTargetsFresh(false)
       }
       if (runtimeResult.status === 'fulfilled') {
         setRuntimeService(normalizeRuntimeService(runtimeResult.value))
+        setRuntimeFresh(true)
+      } else {
+        setRuntimeFresh(false)
       }
     }
     const timer = window.setInterval(() => {
@@ -537,6 +576,7 @@ export default function ProxyPage() {
       setStatus(nextStatusValue == null
         ? { ...status, activeRoutes: nextConfig.routes.filter(route => route.enabled).length }
         : normalizeStatus(nextStatusValue, nextConfig))
+      setStatusFresh(nextStatusValue != null)
       setNotice(labels.saved)
       setCommandsReady(true)
     } catch (saveError) {
@@ -567,9 +607,10 @@ export default function ProxyPage() {
       if (action === 'start' && dirty) {
         effectiveConfig = await persistDraftConfig()
       }
-      await invoke(action === 'start' ? 'start_proxy' : 'stop_proxy')
-      const nextStatus = await invoke<unknown>('get_proxy_status').catch(() => null)
+      const actionStatus = await invoke<unknown>(action === 'start' ? 'start_proxy' : 'stop_proxy')
+      const nextStatus = await invoke<unknown>('get_proxy_status').catch(() => actionStatus)
       setStatus(normalizeStatus(nextStatus, effectiveConfig))
+      setStatusFresh(nextStatus != null)
       const enabled = action === 'start'
       setConfig(current => ({ ...current, enabled }))
       setDraft(current => ({ ...current, enabled }))
@@ -619,8 +660,8 @@ export default function ProxyPage() {
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <h2 className="text-2xl font-semibold text-slate-950 dark:text-slate-50">{labels.title}</h2>
-              <StatusBadge tone={status.running ? 'emerald' : 'slate'}>
-                {status.running ? labels.running : labels.stopped}
+              <StatusBadge tone={!statusFresh ? 'amber' : status.running ? 'emerald' : 'slate'}>
+                {!statusFresh ? labels.unknown : status.running ? labels.running : labels.stopped}
               </StatusBadge>
               {!commandsReady ? <Badge tone="amber">{labels.unavailable}</Badge> : null}
               {dirty ? <Badge tone="blue">{labels.unsaved}</Badge> : null}
@@ -634,12 +675,12 @@ export default function ProxyPage() {
             <Button onClick={saveConfig} disabled={saving || hasRouteIssues} variant="primary" icon={<Save className="h-4 w-4" />}>
               {labels.save}
             </Button>
-            {status.running ? (
+            {statusFresh && status.running ? (
               <Button onClick={() => setProxyRunning('stop')} disabled={busyAction !== null} variant="danger" icon={<Square className="h-4 w-4" />}>
                 {labels.stop}
               </Button>
             ) : (
-              <Button onClick={() => setProxyRunning('start')} disabled={busyAction !== null || requiresPublicKey || hasRouteIssues} variant="success" icon={<Zap className="h-4 w-4" />}>
+              <Button onClick={() => setProxyRunning('start')} disabled={!statusFresh || busyAction !== null || requiresPublicKey || hasRouteIssues} variant="success" icon={<Zap className="h-4 w-4" />}>
                 {labels.start}
               </Button>
             )}
@@ -670,8 +711,8 @@ export default function ProxyPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
         <MetricCard label={labels.endpoint} value={endpoint} valueClassName="text-base" icon={<Activity className="h-5 w-5" />} />
         <MetricCard label={labels.defaultTarget} value={selectedTarget?.name || labels.noDefault} valueClassName="text-base" icon={<Server className="h-5 w-5" />} />
-        <MetricCard label={labels.connections} value={effectiveTargets.length} icon={<Zap className="h-5 w-5" />} />
-        <MetricCard label={labels.requests} value={status.activeRoutes} icon={<Route className="h-5 w-5" />} />
+        <MetricCard label={labels.connections} value={targetsFresh ? effectiveTargets.length : '—'} icon={<Zap className="h-5 w-5" />} />
+        <MetricCard label={labels.requests} value={config.routes.filter(route => route.enabled).length} icon={<Route className="h-5 w-5" />} />
         <MetricCard label={labels.healthyRoutes} value={routeAvailability.healthyRoutes} icon={<HeartPulse className="h-5 w-5" />} />
       </div>
 
@@ -922,10 +963,10 @@ export default function ProxyPage() {
               <div>
                 <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.targetList}</h3>
                 <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                  {targets.length > 0 ? `${targets.length}` : labels.targetFallback}
+                  {targetsFresh ? `${targets.length}` : labels.unavailable}
                 </p>
               </div>
-              {targets.length === 0 ? <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" /> : null}
+              {!targetsFresh ? <AlertTriangle className="h-5 w-5 shrink-0 text-amber-500" /> : null}
             </div>
 
             <div className="space-y-2">
@@ -979,18 +1020,18 @@ export default function ProxyPage() {
               <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">{labels.runtimeProcess}</div>
                 <div className="mt-1 truncate text-xs font-semibold text-slate-800 dark:text-slate-200" title={runtimeService.serviceVersion}>
-                  {runtimeService.servicePid > 0 ? `PID ${runtimeService.servicePid}` : labels.unavailable}
+                  {runtimeFresh && runtimeService.servicePid > 0 ? `PID ${runtimeService.servicePid}` : labels.unavailable}
                 </div>
               </div>
               <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">{labels.loginRecovery}</div>
                 <div className="mt-1 text-xs font-semibold text-slate-800 dark:text-slate-200">
-                  {runtimeService.registeredForLogin ? labels.registered : labels.notRegistered}
+                  {!runtimeFresh ? labels.unknown : runtimeService.registeredForLogin ? labels.registered : labels.notRegistered}
                 </div>
               </div>
               <div className="rounded-lg border border-slate-200 px-3 py-2 dark:border-slate-800">
                 <div className="text-[11px] text-slate-500 dark:text-slate-400">{labels.managedInstances}</div>
-                <div className="mt-1 text-xs font-semibold text-slate-800 dark:text-slate-200">{runtimeService.managedInstances}</div>
+                <div className="mt-1 text-xs font-semibold text-slate-800 dark:text-slate-200">{runtimeFresh ? runtimeService.managedInstances : '—'}</div>
               </div>
             </div>
             {draft.runtimeServiceEnabled !== config.runtimeServiceEnabled

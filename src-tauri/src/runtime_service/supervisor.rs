@@ -3,7 +3,10 @@ use super::protocol::{
     BACKGROUND_DETACH_CAPABILITY, RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
-use crate::commands::proxy::{proxy_router_from_source, ProxyDataSource, ProxyRuntimeSnapshot};
+use crate::commands::proxy::{
+    normalize_and_validate_proxy_config, proxy_router_from_source, ProxyDataSource,
+    ProxyRuntimeSnapshot,
+};
 use crate::commands::server::{
     advance_health_state, collect_instance_monitor_sample, effective_api_key,
     effective_server_scheme, read_process_identity, running_instance_matches_live_process,
@@ -299,6 +302,7 @@ impl RuntimeSupervisor {
         proxy_config: crate::models::ProxyConfig,
         instances: HashMap<String, crate::models::InstanceConfig>,
     ) -> Result<(), String> {
+        let proxy_config = normalize_and_validate_proxy_config(proxy_config, &instances)?;
         let _proxy_transition = self.proxy_runtime.lock().await;
         let _instance_transition = self.instance_lifecycle.lock().unwrap();
         let requested_addr =
@@ -930,7 +934,15 @@ impl RuntimeSupervisor {
         }
     }
 
+    fn proxy_configuration_is_valid(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        normalize_and_validate_proxy_config(state.proxy_config.clone(), &state.instances).is_ok()
+    }
+
     fn schedule_proxy_restart(self: &Arc<Self>) {
+        if !self.proxy_configuration_is_valid() {
+            return;
+        }
         let supervisor = self.clone();
         tokio::spawn(async move {
             let mut retry_delay = std::time::Duration::from_secs(2);
@@ -967,7 +979,23 @@ impl RuntimeSupervisor {
             let _ = finished.task.await;
         }
 
-        let config = self.state.lock().unwrap().proxy_config.clone();
+        let (persisted_config, instances) = {
+            let state = self.state.lock().unwrap();
+            (state.proxy_config.clone(), state.instances.clone())
+        };
+        let config = match normalize_and_validate_proxy_config(persisted_config.clone(), &instances)
+        {
+            Ok(config) => config,
+            Err(error) => {
+                self.record_proxy_runtime_error(error.clone());
+                return Err(error);
+            }
+        };
+        self.state.lock().unwrap().proxy_config = config.clone();
+        if let Err(error) = self.persist() {
+            self.state.lock().unwrap().proxy_config = persisted_config;
+            return Err(error);
+        }
         let host = config.host.trim();
         let local = matches!(host, "" | "localhost" | "127.0.0.1" | "::1" | "[::1]");
         if !local && config.public_api_key.trim().is_empty() {

@@ -77,4 +77,54 @@ test('route health separates enabled rules from currently healthy failover targe
 
   await rows.nth(1).getByRole('button', { name: '测试路由' }).click()
   await expect(rows.nth(1)).toContainText('测试通过，命中: Browser Parameter Regression')
+
+  await page.evaluate(() => {
+    window.__TAURI_BROWSER_TEST__.failProxyStatus = true
+    window.__TAURI_BROWSER_TEST__.failProxyTargets = true
+    window.__TAURI_BROWSER_TEST__.failRuntimeStatus = true
+  })
+  await expect(healthyMetric.locator('p').nth(1)).toHaveText('0', { timeout: 7_000 })
+  await expect(rows.nth(0)).toContainText('目标状态未知')
+  await expect(rows.nth(1)).toContainText('目标状态未知')
+  const overview = page.getByRole('heading', { name: '实例路由' }).locator('xpath=ancestor::section[1]')
+  await expect(overview.getByText('未知', { exact: true })).toBeVisible()
+
+  await page.evaluate(() => {
+    window.__TAURI_BROWSER_TEST__.failProxyStatus = false
+    window.__TAURI_BROWSER_TEST__.failProxyTargets = false
+    window.__TAURI_BROWSER_TEST__.failRuntimeStatus = false
+  })
+  await expect(healthyMetric.locator('p').nth(1)).toHaveText('1', { timeout: 7_000 })
+  await expect(rows.nth(1)).toContainText('当前命中')
+  await expect(overview.getByText('运行中', { exact: true })).toBeVisible()
+})
+
+test('legacy empty route ids are repaired before row operations and save', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'proxy')
+  })
+  await page.goto('/?scenario=proxy-route-legacy-ids')
+
+  const routeSection = page.getByRole('heading', { name: '路由表' }).locator('xpath=ancestor::section[1]')
+  const rows = routeSection.locator('tbody tr')
+  await expect(rows).toHaveCount(2)
+  const switches = routeSection.getByRole('switch', { name: '路由启用状态' })
+  await expect(switches).toHaveCount(2)
+  await expect(switches.nth(0)).toBeChecked()
+  await expect(switches.nth(1)).toBeChecked()
+
+  await switches.nth(0).click()
+  await expect(switches.nth(0)).not.toBeChecked()
+  await expect(switches.nth(1)).toBeChecked()
+  await page.getByRole('button', { name: '保存' }).click()
+
+  const ids = await page.evaluate(() => {
+    const call = [...window.__TAURI_BROWSER_TEST__.calls].reverse().find(item => item.command === 'save_proxy_config')
+    const payload = call?.payload as { config?: { routes?: Array<{ id?: string }> } } | undefined
+    return payload?.config?.routes?.map(route => route.id) ?? []
+  })
+  expect(ids).toHaveLength(2)
+  expect(ids.every(Boolean)).toBe(true)
+  expect(new Set(ids).size).toBe(2)
 })
