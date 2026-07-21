@@ -7,6 +7,7 @@ import type { EngineInfo, GeneratedServerCommand, InstanceConfig, ModelInfo, Sys
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
 const BROWSER_SCENARIO = new URLSearchParams(window.location.search).get('scenario')
 const INSTANCE_ID = 'browser-test-instance'
+const STOPPED_INSTANCE_ID = 'browser-stopped-instance'
 const ENGINE_ID = 'browser-test-engine'
 const MODEL_PATH = 'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf'
 const AMBIGUOUS_MODEL_PATH = 'C:\\browser-test\\models\\Vision-Ambiguous-Q8_0.gguf'
@@ -125,8 +126,29 @@ const state: GlobalConfigShape = {
   dark_mode: true,
 }
 
-const proxyConfig = {
-  enabled: BROWSER_SCENARIO === 'background-runtime-active',
+type BrowserProxyRoute = {
+  id: string
+  enabled: boolean
+  priority: number
+  model_alias: string
+  target_instance_id: string
+}
+
+type BrowserProxyConfig = {
+  enabled: boolean
+  host: string
+  port: number
+  public_api_key: string
+  default_instance_id: string
+  routing_strategy: string
+  timeout_ms: number
+  background_service_mode: boolean
+  runtime_service_enabled: boolean
+  routes: BrowserProxyRoute[]
+}
+
+const proxyConfig: BrowserProxyConfig = {
+  enabled: ['background-runtime-active', 'proxy-routing', 'proxy-route-health'].includes(BROWSER_SCENARIO ?? ''),
   host: '127.0.0.1',
   port: 11435,
   public_api_key: '',
@@ -135,14 +157,51 @@ const proxyConfig = {
   timeout_ms: 600_000,
   background_service_mode: false,
   runtime_service_enabled: BROWSER_SCENARIO === 'background-runtime-active',
-  routes: [],
+  routes: BROWSER_SCENARIO === 'proxy-route-health'
+    ? [
+        {
+          id: 'primary-stopped-route',
+          enabled: true,
+          priority: 1,
+          model_alias: 'public-browser-model',
+          target_instance_id: STOPPED_INSTANCE_ID,
+        },
+        {
+          id: 'backup-running-route',
+          enabled: true,
+          priority: 2,
+          model_alias: 'public-browser-model',
+          target_instance_id: INSTANCE_ID,
+        },
+      ]
+    : [],
 }
 const proxyStatus = {
-  running: BROWSER_SCENARIO === 'background-runtime-active',
+  running: ['background-runtime-active', 'proxy-routing', 'proxy-route-health'].includes(BROWSER_SCENARIO ?? ''),
   bound_addr: '127.0.0.1:11435',
-  active_routes: 0,
+  active_routes: BROWSER_SCENARIO === 'proxy-route-health' ? 2 : 0,
   last_error: null,
 }
+const runningProxyTarget = {
+  instance_id: INSTANCE_ID,
+  name: 'Browser Parameter Regression',
+  alias: 'browser-parameter-regression',
+  host: '127.0.0.1',
+  port: 18081,
+  running: true,
+}
+const proxyTargets = BROWSER_SCENARIO === 'proxy-routing'
+  ? [runningProxyTarget]
+  : BROWSER_SCENARIO === 'proxy-route-health'
+  ? [{
+      instance_id: STOPPED_INSTANCE_ID,
+      name: 'Stopped Primary',
+      alias: 'stopped-primary',
+      host: '127.0.0.1',
+      port: 18082,
+      running: false,
+    }, runningProxyTarget]
+    : []
 const runtimeStatus = {
   servicePid: 4242,
   serviceVersion: '2.9.30-browser-test',
@@ -310,7 +369,33 @@ mockIPC((command, payload) => {
     case 'get_workers': return []
     case 'get_proxy_config': return clone(proxyConfig)
     case 'get_proxy_status': return clone(proxyStatus)
-    case 'list_proxy_targets': return []
+    case 'list_proxy_targets': return clone(proxyTargets)
+    case 'test_proxy_route': {
+      const modelAlias = String(args.model ?? '').trim()
+      const candidates = proxyConfig.routes
+        .filter(route => route.enabled && route.model_alias.trim() === modelAlias)
+        .sort((left, right) => left.priority - right.priority)
+      for (const route of candidates) {
+        const target = proxyTargets.find(candidate => candidate.instance_id === route.target_instance_id)
+        if (target?.running) return clone(target)
+      }
+      throw new Error('no running instance matches the requested model')
+    }
+    case 'save_proxy_config': {
+      const next = clone(args.config as BrowserProxyConfig)
+      Object.assign(proxyConfig, next)
+      proxyConfig.routes = next.routes
+      proxyStatus.active_routes = next.routes.filter(route => route.enabled).length
+      return clone(proxyConfig)
+    }
+    case 'start_proxy':
+      proxyConfig.enabled = true
+      proxyStatus.running = true
+      return clone(proxyStatus)
+    case 'stop_proxy':
+      proxyConfig.enabled = false
+      proxyStatus.running = false
+      return clone(proxyStatus)
     case 'get_runtime_service_status': return clone(runtimeStatus)
     case 'is_autostart_enabled': return false
     case 'resolve_path': return args.path === 'models' ? 'C:\\browser-test\\models' : String(args.path ?? '')
