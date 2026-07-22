@@ -131,6 +131,32 @@ function testLaunchSpec(dataDir, backendPort) {
   }
 }
 
+function crashingLaunchSpec(dataDir, backendPort) {
+  const command = process.platform === 'win32'
+    ? [process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', '/D', '/S', '/C', 'ping -n 2 127.0.0.1 >NUL & exit /B 1']
+    : ['/bin/sh', '-c', 'sleep 0.2; exit 1']
+  return {
+    ...testLaunchSpec(dataDir, backendPort),
+    command,
+    command_display: command.join(' '),
+  }
+}
+
+async function waitForRuntimeError(endpoint, token, expectedError, requestPrefix) {
+  let status
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    status = await request(
+      endpoint,
+      token,
+      { command: 'get_status' },
+      `${requestPrefix}-${attempt}`,
+    )
+    if (status.reply?.payload?.last_error === expectedError) return status
+    await sleep(50)
+  }
+  throw new Error(`runtime did not report ${expectedError}: ${JSON.stringify(status)}`)
+}
+
 function listen(server, port = 0) {
   return new Promise((resolve, reject) => {
     server.once('error', reject)
@@ -265,7 +291,8 @@ async function main() {
     if (status.reply?.result !== 'status'
       || status.reply.payload?.protocol_version !== 1
       || status.reply.payload?.service_pid <= 0
-      || !status.reply.payload?.capabilities?.includes('background_detach_v1')) {
+      || !status.reply.payload?.capabilities?.includes('background_detach_v1')
+      || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')) {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }
     service = contenders.find(candidate => candidate.pid === status.reply.payload.service_pid)
@@ -466,6 +493,82 @@ async function main() {
       throw new Error(`runtime instance stop failed: ${JSON.stringify(stopped)}`)
     }
     launchedPids.delete(restoredInstance.pid)
+
+    const expectedExitError = `instance ${launchSpec.instance_id} exited unexpectedly (code 1)`
+    const firstCrash = await request(
+      endpoint,
+      token,
+      { command: 'start_instance', payload: { spec: crashingLaunchSpec(dataDir, backendPort) } },
+      'start-first-crash',
+    )
+    if (firstCrash.reply?.result !== 'instance' || firstCrash.reply.payload?.pid <= 0) {
+      throw new Error(`runtime crash fixture did not start: ${JSON.stringify(firstCrash)}`)
+    }
+    launchedPids.add(firstCrash.reply.payload.pid)
+    await waitForRuntimeError(endpoint, token, expectedExitError, 'first-crash-status')
+    launchedPids.delete(firstCrash.reply.payload.pid)
+
+    const restarted = await request(
+      endpoint,
+      token,
+      { command: 'start_instance', payload: { spec: launchSpec } },
+      'restart-after-crash',
+    )
+    if (restarted.reply?.result !== 'instance' || restarted.reply.payload?.pid <= 0) {
+      throw new Error(`runtime instance retry failed: ${JSON.stringify(restarted)}`)
+    }
+    launchedPids.add(restarted.reply.payload.pid)
+    const restartedStatus = await request(
+      endpoint,
+      token,
+      { command: 'get_status' },
+      'status-after-successful-retry',
+    )
+    if (restartedStatus.reply?.payload?.last_error) {
+      throw new Error(`runtime retained a stale instance exit error after retry: ${JSON.stringify(restartedStatus)}`)
+    }
+    const restopped = await request(
+      endpoint,
+      token,
+      { command: 'stop_instance', payload: { instance_id: launchSpec.instance_id } },
+      'stop-retried-instance',
+    )
+    if (restopped.reply?.result !== 'ack') {
+      throw new Error(`retried runtime instance stop failed: ${JSON.stringify(restopped)}`)
+    }
+    launchedPids.delete(restarted.reply.payload.pid)
+
+    const secondCrash = await request(
+      endpoint,
+      token,
+      { command: 'start_instance', payload: { spec: crashingLaunchSpec(dataDir, backendPort) } },
+      'start-second-crash',
+    )
+    if (secondCrash.reply?.result !== 'instance' || secondCrash.reply.payload?.pid <= 0) {
+      throw new Error(`second runtime crash fixture did not start: ${JSON.stringify(secondCrash)}`)
+    }
+    launchedPids.add(secondCrash.reply.payload.pid)
+    await waitForRuntimeError(endpoint, token, expectedExitError, 'second-crash-status')
+    launchedPids.delete(secondCrash.reply.payload.pid)
+
+    const cleared = await request(
+      endpoint,
+      token,
+      { command: 'clear_last_error' },
+      'clear-last-error',
+    )
+    if (cleared.reply?.result !== 'ack') {
+      throw new Error(`runtime error acknowledgement failed: ${JSON.stringify(cleared)}`)
+    }
+    const clearedStatus = await request(
+      endpoint,
+      token,
+      { command: 'get_status' },
+      'status-after-error-clear',
+    )
+    if (clearedStatus.reply?.payload?.last_error) {
+      throw new Error(`runtime retained an acknowledged error: ${JSON.stringify(clearedStatus)}`)
+    }
 
     const enabled = await request(
       endpoint,

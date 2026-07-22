@@ -4,6 +4,46 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('cleared runtime exit warnings stay dismissed until a new failure occurs', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+  })
+  await page.goto('/')
+
+  const instanceId = 'runtime-warning-instance'
+  const runtimeError = `instance ${instanceId} exited unexpectedly (code 1)`
+  const warningText = `background runtime: ${runtimeError}`
+  await page.evaluate(({ runtimeError }) => window.__TAURI_BROWSER_TEST__.emitEvent(
+    'runtime-service-status',
+    { running: {}, lastError: runtimeError },
+  ), { runtimeError })
+
+  const warning = page.getByText(warningText, { exact: true })
+  await expect(warning).toBeVisible()
+  const banner = page.getByText('运行警告', { exact: true }).locator('../..')
+  await banner.getByRole('button', { name: '清除', exact: true }).click()
+  await expect(warning).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.some(call => call.command === 'clear_runtime_service_error')
+  ))).toBe(true)
+
+  await page.evaluate(({ runtimeError }) => window.__TAURI_BROWSER_TEST__.emitEvent(
+    'runtime-service-status',
+    { running: {}, lastError: runtimeError },
+  ), { runtimeError })
+  await expect(warning).toHaveCount(0)
+
+  await page.evaluate(({ instanceId }) => window.__TAURI_BROWSER_TEST__.emitEvent(
+    'server-started',
+    { instanceId, pid: 4244, port: 18080, host: '127.0.0.1', command: 'llama-server' },
+  ), { instanceId })
+  await page.evaluate(({ runtimeError }) => window.__TAURI_BROWSER_TEST__.emitEvent(
+    'runtime-service-status',
+    { running: {}, lastError: runtimeError },
+  ), { runtimeError })
+  await expect(warning).toBeVisible()
+})
+
 test('active workloads offer verified background handoff as the primary exit action', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')

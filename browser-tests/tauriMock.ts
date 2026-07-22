@@ -426,6 +426,9 @@ mockIPC((command, payload) => {
     case 'get_runtime_service_status':
       if (control.failRuntimeStatus) throw new Error('browser test runtime status unavailable')
       return clone(runtimeStatus)
+    case 'clear_runtime_service_error':
+      runtimeStatus.lastError = null
+      return null
     case 'is_autostart_enabled': return false
     case 'resolve_path': return args.path === 'models' ? 'C:\\browser-test\\models' : String(args.path ?? '')
     case 'generate_server_command': {

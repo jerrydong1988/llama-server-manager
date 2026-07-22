@@ -645,6 +645,7 @@ fn main() {
             enable_background_and_quit,
             stop_background_runtime,
             crate::runtime_service::get_runtime_service_status,
+            crate::runtime_service::clear_runtime_service_error,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

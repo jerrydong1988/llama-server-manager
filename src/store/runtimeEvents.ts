@@ -41,6 +41,7 @@ let scanModelDebounce: ReturnType<typeof setTimeout> | null = null
 let sysMetricsTimer: ReturnType<typeof setTimeout> | null = null
 let sysMetricsInFlight = false
 let runtimeManagedIds = new Set<string>()
+let lastReportedRuntimeStatusError: string | null = null
 
 const runMatches = (payload: { runId?: string }, task: DownloadProgress) => (
   payload.runId ? task.runId === payload.runId : !task.runId
@@ -227,9 +228,11 @@ export function registerGlobalStoreListeners(
         return instance
       }),
     }))
-    if (event.payload.lastError) {
-      store.getState().addRuntimeWarning(`background runtime: ${event.payload.lastError}`)
+    const nextRuntimeError = event.payload.lastError?.trim() || null
+    if (nextRuntimeError && nextRuntimeError !== lastReportedRuntimeStatusError) {
+      store.getState().addRuntimeWarning(`background runtime: ${nextRuntimeError}`)
     }
+    lastReportedRuntimeStatusError = nextRuntimeError
   })
 
   registerListener<{ error: string }>(store, 'runtime-service-error', (event) => {
@@ -263,6 +266,7 @@ export function registerGlobalStoreListeners(
     command: string
     effectiveConfig?: Partial<InstanceConfig>
   }>(store, 'server-started', (event) => {
+    lastReportedRuntimeStatusError = null
     const state = store.getState()
     const instance = state.instances.find(item => item.id === event.payload.instanceId)
     store.setState(current => ({

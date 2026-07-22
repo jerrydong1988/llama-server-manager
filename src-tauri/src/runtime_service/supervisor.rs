@@ -1,6 +1,7 @@
 use super::protocol::{
     PersistedRuntimeState, RuntimeCommand, RuntimeLaunchSpec, RuntimeReply, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
+    RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
 use crate::commands::proxy::{
@@ -27,6 +28,12 @@ fn sorted_ids<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<String> {
     let mut ids = ids.cloned().collect::<Vec<_>>();
     ids.sort();
     ids
+}
+
+fn is_instance_exit_error(error: &str, instance_id: &str) -> bool {
+    error.starts_with(&format!(
+        "instance {instance_id} exited unexpectedly (code "
+    ))
 }
 
 fn validate_background_detach_inventory(
@@ -253,7 +260,10 @@ impl RuntimeSupervisor {
             protocol_version: RUNTIME_PROTOCOL_VERSION,
             service_version: env!("CARGO_PKG_VERSION").to_string(),
             service_pid: std::process::id(),
-            capabilities: vec![BACKGROUND_DETACH_CAPABILITY.to_string()],
+            capabilities: vec![
+                BACKGROUND_DETACH_CAPABILITY.to_string(),
+                RUNTIME_ERROR_ACK_CAPABILITY.to_string(),
+            ],
             config_revision,
             background_enabled,
             registered_for_login,
@@ -598,6 +608,7 @@ impl RuntimeSupervisor {
                 return Err("该实例已在运行中".into());
             }
         }
+        self.clear_retried_instance_error(&spec.instance_id);
 
         let log_dir = crate::utils::get_data_dir().join("configs").join("logs");
         std::fs::create_dir_all(&log_dir).map_err(|error| format!("无法创建日志目录: {error}"))?;
@@ -921,6 +932,20 @@ impl RuntimeSupervisor {
     fn record_proxy_runtime_error(&self, message: String) {
         self.proxy_status.lock().unwrap().last_error = Some(message.clone());
         *self.last_error.lock().unwrap() = Some(message);
+    }
+
+    pub fn clear_last_error(&self) {
+        *self.last_error.lock().unwrap() = None;
+    }
+
+    fn clear_retried_instance_error(&self, instance_id: &str) {
+        let mut last_error = self.last_error.lock().unwrap();
+        if last_error
+            .as_deref()
+            .is_some_and(|error| is_instance_exit_error(error, instance_id))
+        {
+            *last_error = None;
+        }
     }
 
     fn clear_recovered_proxy_error(&self) {
@@ -1277,6 +1302,10 @@ impl RuntimeSupervisor {
                 self.stop_instance(&instance_id)?;
                 Ok(RuntimeReply::Ack)
             }
+            RuntimeCommand::ClearLastError => {
+                self.clear_last_error();
+                Ok(RuntimeReply::Ack)
+            }
             RuntimeCommand::SetBackgroundEnabled { enabled } => {
                 self.set_background_enabled(enabled)?;
                 Ok(RuntimeReply::Status(Box::new(
@@ -1364,8 +1393,8 @@ fn should_stop_for_missing_gui(background_enabled: bool, heartbeat_expired: bool
 #[cfg(test)]
 mod tests {
     use super::{
-        gui_owner_is_alive, should_stop_for_missing_gui, validate_background_detach_inventory,
-        validate_runtime_state, GuiOwner,
+        gui_owner_is_alive, is_instance_exit_error, should_stop_for_missing_gui,
+        validate_background_detach_inventory, validate_runtime_state, GuiOwner,
     };
     use crate::commands::server::read_process_identity;
     use crate::models::{InstanceConfig, RunningInstance};
@@ -1406,6 +1435,17 @@ mod tests {
         assert!(should_stop_for_missing_gui(false, true));
         assert!(!should_stop_for_missing_gui(true, false));
         assert!(!should_stop_for_missing_gui(true, true));
+    }
+
+    #[test]
+    fn retry_only_recognizes_the_same_instances_exit_error() {
+        let error = "instance instance-1 exited unexpectedly (code 1)";
+        assert!(is_instance_exit_error(error, "instance-1"));
+        assert!(!is_instance_exit_error(error, "instance-2"));
+        assert!(!is_instance_exit_error(
+            "failed to persist exit of instance instance-1",
+            "instance-1"
+        ));
     }
 
     #[test]

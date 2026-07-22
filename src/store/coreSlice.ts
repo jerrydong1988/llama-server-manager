@@ -13,6 +13,7 @@ import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'
 
 const DEFAULT_MODEL_DIRECTORY = 'models'
+const BACKGROUND_RUNTIME_WARNING_PREFIX = 'background runtime:'
 
 export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   AppState,
@@ -47,7 +48,17 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         runtimeWarnings: [trimmed, ...state.runtimeWarnings.filter(item => item !== trimmed)].slice(0, 8),
       }))
     },
-    clearRuntimeWarnings: () => set({ runtimeWarnings: [] }),
+    clearRuntimeWarnings: () => {
+      const acknowledgeRuntimeError = get().runtimeWarnings.some(warning => (
+        warning.startsWith(BACKGROUND_RUNTIME_WARNING_PREFIX)
+      ))
+      set({ runtimeWarnings: [] })
+      if (acknowledgeRuntimeError) {
+        void invoke('clear_runtime_service_error').catch(error => {
+          console.warn('Failed to acknowledge the background runtime error:', error)
+        })
+      }
+    },
     setModels: (models) => {
       const requestGeneration = beginModelInventoryRequest()
       applyModelInventory(models, get, set, { isLoading: false }, requestGeneration)

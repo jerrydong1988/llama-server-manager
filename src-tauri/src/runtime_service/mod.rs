@@ -6,7 +6,7 @@ mod transport;
 use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -23,6 +23,17 @@ static CONFIG_SYNCED_GENERATION: AtomicU64 = AtomicU64::new(0);
 static RUNTIME_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static APP_CONFIG_SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const MAX_RUNTIME_SERVICE_LOG_BYTES: u64 = 4 * 1024 * 1024;
+
+fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
+    [BACKGROUND_DETACH_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY]
+        .iter()
+        .all(|required| {
+            status
+                .capabilities
+                .iter()
+                .any(|capability| capability.as_str() == *required)
+        })
+}
 
 pub fn next_config_revision() -> u64 {
     let wall_clock = std::time::SystemTime::now()
@@ -94,6 +105,14 @@ pub async fn stop_instance(instance_id: String) -> Result<(), String> {
     match call(RuntimeCommand::StopInstance { instance_id }).await? {
         RuntimeReply::Ack => Ok(()),
         _ => Err("runtime service returned an unexpected stop response".into()),
+    }
+}
+
+pub async fn clear_last_error() -> Result<(), String> {
+    ensure_runtime_service().await?;
+    match call(RuntimeCommand::ClearLastError).await? {
+        RuntimeReply::Ack => Ok(()),
+        _ => Err("runtime service returned an unexpected error acknowledgement response".into()),
     }
 }
 
@@ -375,6 +394,11 @@ pub async fn get_runtime_service_status() -> Result<serde_json::Value, String> {
         .map(|status| runtime_status_payload(&status, None))
 }
 
+#[tauri::command]
+pub async fn clear_runtime_service_error() -> Result<(), String> {
+    clear_last_error().await
+}
+
 async fn ping_with_token(token: String) -> bool {
     matches!(
         call_with_token(token, RuntimeCommand::Ping).await,
@@ -470,10 +494,7 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
     if ping_with_token(token.clone()).await {
         let status = runtime_status().await?;
         if status.service_version == env!("CARGO_PKG_VERSION")
-            && status
-                .capabilities
-                .iter()
-                .any(|capability| capability == BACKGROUND_DETACH_CAPABILITY)
+            && has_required_runtime_capabilities(&status)
         {
             return Ok(status);
         }
@@ -497,12 +518,8 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
         return Err("runtime service rejected the authenticated startup probe".into());
     }
     let status = runtime_status().await?;
-    if !status
-        .capabilities
-        .iter()
-        .any(|capability| capability == BACKGROUND_DETACH_CAPABILITY)
-    {
-        return Err("runtime service started without background detach capability".into());
+    if !has_required_runtime_capabilities(&status) {
+        return Err("runtime service started without required capabilities".into());
     }
     Ok(status)
 }
@@ -797,7 +814,10 @@ mod tests {
             protocol_version: RUNTIME_PROTOCOL_VERSION,
             service_version: "test".into(),
             service_pid: 1,
-            capabilities: vec![BACKGROUND_DETACH_CAPABILITY.into()],
+            capabilities: vec![
+                BACKGROUND_DETACH_CAPABILITY.into(),
+                RUNTIME_ERROR_ACK_CAPABILITY.into(),
+            ],
             config_revision: 1,
             background_enabled: false,
             registered_for_login: false,
@@ -816,5 +836,12 @@ mod tests {
         let previously_managed = ["stale-instance".to_string()].into_iter().collect();
         let payload = runtime_status_payload(&status, Some(&previously_managed));
         assert_eq!(payload["previouslyManaged"][0], "stale-instance");
+        assert!(has_required_runtime_capabilities(&status));
+
+        let mut legacy_status = status;
+        legacy_status
+            .capabilities
+            .retain(|capability| capability != RUNTIME_ERROR_ACK_CAPABILITY);
+        assert!(!has_required_runtime_capabilities(&legacy_status));
     }
 }
