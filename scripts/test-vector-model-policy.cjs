@@ -530,6 +530,7 @@ assert.match(configPageSource, /showPresetAssistant && !isEmbedding/, 'preset as
 
 const sectionsSource = readSource('src', 'components', 'ConfigPage', 'sections.tsx')
 const basicSectionSource = section(sectionsSource, 'export function BasicSection', 'export function ReasoningSection')
+const performanceSectionSource = section(sectionsSource, 'export function PerformanceSection', 'export function AdvancedSection')
 assert.match(basicSectionSource, /onBlur=\{e => onCommitModelPath\?\.\(e\.target\.value\)\}/, 'manual model path edits must commit through the model policy')
 assert.match(basicSectionSource, /disabled=\{modelWorkloadLocked\}/, 'classified model workloads must lock the embedding switch')
 const advancedSectionSource = section(sectionsSource, 'export function AdvancedSection', '\n}\n')
@@ -549,7 +550,9 @@ assert.match(vectorGroupSource, /set\('pooling', v \? 'rank' : ''\)/, 'manual re
 assert.match(advancedSectionSource, /ADVANCED_CONFIG_KEYS/, 'reset all must cover every advanced field exposed by the UI')
 assert.match(advancedSectionSource, /ADVANCED_GROUP_CONFIG_KEYS\[id\]/, 'group reset must cover fields added beyond RESET_MAP')
 assert.match(advancedSectionSource, /getResettableFields/, 'reset handlers must preserve locked workload identity fields')
-assert.match(advancedSectionSource, /direct_io/, 'shared direct I/O configuration must have a visible control')
+assert.match(performanceSectionSource, /load_mode/, 'unified model loading mode must have a visible control')
+assert.doesNotMatch(performanceSectionSource, /fieldKey=\{a\('(mlock|no_mmap)'\)\}/, 'legacy loading controls must be removed')
+assert.doesNotMatch(advancedSectionSource, /fieldKey=\{a\('direct_io'\)\}/, 'legacy direct I/O control must be removed')
 assert.match(advancedSectionSource, /onShowMmprojPicker/, 'the mmproj field must expose its independent repository picker')
 assert.match(advancedSectionSource, /mmprojPathBtn/, 'the mmproj picker button must have a localized accessible label')
 

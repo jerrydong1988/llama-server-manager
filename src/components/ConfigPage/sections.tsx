@@ -48,8 +48,7 @@ export const PERFORMANCE_CONFIG_KEYS: Array<keyof InstanceConfig> = [
   'parallel',
   'cont_batching',
   'flash_attn',
-  'mlock',
-  'no_mmap',
+  'load_mode',
   'no_repack',
   'numa_mode',
 ]
@@ -246,8 +245,7 @@ export function PerformanceSection({ local, set, inherit, t, emittedParams, chan
         />
         <Switch label={`${t.configPage.contBatching} (--cont-batching, -cb)`} value={local.cont_batching} onChange={v => set('cont_batching', v)} title={t.configPage.contBatchingTip}  fieldKey={a('cont_batching')} />
         <Select label={`${t.configPage.flashAttn} (--flash-attn, -fa)`} value={local.flash_attn} onChange={v => set('flash_attn', v)} options={['auto', 'on', 'off']} title={t.configPage.flashAttnTip} defaultLabel={t.common.default}  fieldKey={a('flash_attn')} />
-        <Switch label={`${t.configPage.mlock} (--mlock)`} value={local.mlock} onChange={v => set('mlock', v)} title={t.configPage.mlockTip}  fieldKey={a('mlock')} />
-        <Switch label={`${t.configPage.noMmap} (--mmap / --no-mmap)`} value={!local.no_mmap} onChange={v => set('no_mmap', !v)} title={t.configPage.noMmapTip}  fieldKey={a('no_mmap')} />
+        <Select label={`${t.configPage.loadMode} (--load-mode)`} value={local.load_mode} onChange={v => set('load_mode', v)} options={['', 'none', 'mmap', 'mlock', 'dio']} title={t.configPage.loadModeTip} defaultLabel={t.common.default} fieldKey={a('load_mode')} />
       <Switch label={`${t.configPage.noRepack} (--repack / --no-repack)`} value={!local.no_repack} onChange={v => set('no_repack', !v)} title={t.configPage.noRepackTip}  fieldKey={a('no_repack')} />
         <Select label={`${t.configPage.numa} (--numa)`} value={local.numa_mode || (local.numa ? 'distribute' : '')} onChange={v => { set('numa_mode', v); set('numa', v === 'distribute') }} options={['', 'distribute', 'isolate', 'numactl']} title={t.configPage.numaTip} defaultLabel={t.common.default} fieldKey={a('numa_mode')} />
       </div>
@@ -546,7 +544,6 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Num label={`${t.configPage.mainGpu} (--main-gpu, -mg)`} value={local.main_gpu} onChange={v => set('main_gpu', v)} min={0} title={t.configPage.mainGpuTip}  fieldKey={a('main_gpu')} />
             <Switch label={`${t.configPage.perf} (--perf / --no-perf)`} value={hasExplicitOverride(local, 'perf') ? local.perf : true} onChange={v => set('perf', v)} title={t.configPage.perfTip}  fieldKey={a('perf')} />
             <Switch label={`${t.configPage.checkTensors} (--check-tensors)`} value={local.check_tensors} onChange={v => set('check_tensors', v)} title={t.configPage.checkTensorsTip}  fieldKey={a('check_tensors')} />
-            <Switch label={`${t.configPage.directIo} (--direct-io)`} value={local.direct_io} onChange={v => set('direct_io', v)} title={t.configPage.directIoTip} fieldKey={a('direct_io')} />
             <Select label={`${t.configPage.fit} (--fit)`} value={local.fit_mode || (local.fit ? 'on' : '')} onChange={v => { set('fit_mode', v); set('fit', v === 'on') }} options={['', 'on', 'off']} title={t.configPage.fitTip} defaultLabel={t.common.default} fieldKey={a('fit_mode')} />
             <Input label={`${t.configPage.fitTarget} (--fit-target, -fitt)`} value={local.fit_target} onChange={v => set('fit_target', v)} title={t.configPage.fitTargetTip} disabled={(local.fit_mode || (local.fit ? 'on' : '')) === 'off'}  fieldKey={a('fit_target')} />
             <Num label={`${t.configPage.fitCtx} (--fit-ctx, -fitc)`} value={local.fit_ctx} onChange={v => set('fit_ctx', v)} min={0} title={t.configPage.fitCtxTip} disabled={(local.fit_mode || (local.fit ? 'on' : '')) === 'off'}  fieldKey={a('fit_ctx')} />

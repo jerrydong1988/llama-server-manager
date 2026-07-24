@@ -57,30 +57,16 @@ fn escape_shell_single_quote(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
-fn build_unix_remote_cmd(binary: &str, port: u16, port_check: &str) -> String {
+fn build_unix_remote_cmd(binary: &str, port: u16) -> String {
     let safe_binary = escape_shell_single_quote(binary);
-    format!(
-        "nohup '{}' --host 127.0.0.1 --port {} >/dev/null 2>&1 & rpc_pid=$!; attempt=0; while [ $attempt -lt 25 ]; do if {}; then echo 'PORT-OK'; exit 0; fi; if ! kill -0 \"$rpc_pid\" 2>/dev/null; then break; fi; attempt=$((attempt + 1)); sleep 0.2; done; echo 'PORT-NOT-FOUND'",
-        safe_binary, port, port_check
-    )
+    format!("exec '{}' --host 127.0.0.1 --port {}", safe_binary, port)
 }
 
 fn build_windows_remote_script(binary: &str, port: u16) -> String {
     let binary = binary.replace('\'', "''");
     format!(
-        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; \
-         $tn='rpc-'+[System.Guid]::NewGuid().ToString('N').Substring(0,8); \
-         $a=New-ScheduledTaskAction -Execute '{binary}' -Argument '--host 127.0.0.1 --port {port}'; \
-         $t=New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(2); \
-         Register-ScheduledTask -TaskName $tn -Action $a -Trigger $t -Force|Out-Null; \
-         Start-ScheduledTask -TaskName $tn|Out-Null; \
-         $ok=$false; \
-         for($i=0;$i -lt 25 -and -not $ok;$i++){{\
-           $ok=[bool](Get-NetTCPConnection -State Listen -LocalAddress 127.0.0.1 -LocalPort {port} -ErrorAction SilentlyContinue); \
-           if(-not $ok){{Start-Sleep -Milliseconds 200}}\
-         }}; \
-         if($ok){{Write-Output 'PORT-OK'}}else{{Write-Output 'PORT-NOT-FOUND'}}; \
-         Unregister-ScheduledTask -TaskName $tn -Confirm:$false -ErrorAction SilentlyContinue"
+        "$ErrorActionPreference='Stop'; & '{binary}' --host 127.0.0.1 --port {port}; \
+         if($LASTEXITCODE -ne 0){{exit $LASTEXITCODE}}"
     )
 }
 
@@ -94,34 +80,11 @@ fn encode_powershell_command(script: &str) -> String {
 
 fn build_remote_cmd(binary: &str, port: u16, remote_os: &str) -> String {
     match remote_os {
-        "linux" => build_unix_remote_cmd(
-            binary,
-            port,
-            &format!(
-                "ss -tlnH 2>/dev/null | awk -v port='{}' '$4 ~ (\":\" port \"$\") {{ found=1 }} END {{ exit !found }}' || netstat -tln 2>/dev/null | awk -v port='{}' '$4 ~ (\":\" port \"$\") {{ found=1 }} END {{ exit !found }}'",
-                port, port
-            ),
-        ),
-        "macos" => build_unix_remote_cmd(
-            binary,
-            port,
-            &format!(
-                "lsof -nP -iTCP:{} -sTCP:LISTEN >/dev/null 2>&1",
-                port
-            ),
-        ),
         "windows" => format!(
             "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
             encode_powershell_command(&build_windows_remote_script(binary, port))
         ),
-        _ => build_unix_remote_cmd(
-            binary,
-            port,
-            &format!(
-                "ss -tlnH 2>/dev/null | awk -v port='{}' '$4 ~ (\":\" port \"$\") {{ found=1 }} END {{ exit !found }}' || netstat -tln 2>/dev/null | awk -v port='{}' '$4 ~ (\":\" port \"$\") {{ found=1 }} END {{ exit !found }}'",
-                port, port
-            ),
-        ),
+        _ => build_unix_remote_cmd(binary, port),
     }
 }
 
@@ -178,6 +141,10 @@ pub fn stop_all_ssh_tunnels() {
     }
 }
 
+pub fn has_active_ssh_tunnels() -> bool {
+    !SSH_TUNNELS.lock().unwrap().is_empty()
+}
+
 pub async fn stop_ssh_tunnel(port: u16) -> Result<bool, String> {
     let child = SSH_TUNNELS.lock().unwrap().remove(&port);
     if let Some(child) = child {
@@ -210,57 +177,15 @@ pub async fn ssh_launch_rpc(
         .or_else(|| detect_remote_os(&host, &ssh_user, ssh_key_path.as_deref(), ssh_port))
         .unwrap_or_else(|| "linux".to_string());
 
-    let cmd = build_remote_cmd(&rpc_binary, rpc_port, &os);
-
     let result = tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
-        let mut ssh_cmd = Command::new("ssh");
-
-        ssh_cmd
-            .arg("-o")
-            .arg("StrictHostKeyChecking=accept-new")
-            .arg("-o")
-            .arg("ConnectTimeout=5")
-            .arg("-p")
-            .arg(ssh_port.to_string());
-
         let key_path = ssh_key_path
             .as_deref()
             .filter(|path| !path.trim().is_empty())
             .ok_or_else(|| "SSH key file is required.\n必须提供 SSH 密钥文件。".to_string())?;
-        ssh_cmd.arg("-i").arg(key_path);
-        ssh_cmd.arg("-o").arg("BatchMode=yes");
-
-        append_ssh_destination(&mut ssh_cmd, &ssh_user, &host);
-        ssh_cmd.arg(&cmd);
-
-        let output = ssh_cmd
-            .output()
-            .map_err(|e| format!("无法启动 SSH: {}", e))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        if !output.status.success() {
-            let msg = if !stderr.trim().is_empty() {
-                stderr.to_string()
-            } else {
-                stdout.to_string()
-            };
-            return Err(format!("SSH 执行失败: {}", msg.trim()));
-        }
-
-        // Check whether the remote loopback port is listening.
-        let combined = format!("{}{}", stdout, stderr);
-        if !combined.contains("PORT-OK") || combined.contains("PORT-NOT-FOUND") {
-            return Err(
-                "rpc-server 未在 5 秒内就绪，请检查远程程序路径、执行权限和运行依赖".to_string(),
-            );
-        }
-
         let local_port = available_loopback_port()?;
+        let remote_command = build_remote_cmd(&rpc_binary, rpc_port, &os);
         let mut tunnel = Command::new("ssh");
         tunnel
-            .arg("-N")
             .arg("-T")
             .arg("-o")
             .arg("StrictHostKeyChecking=accept-new")
@@ -284,6 +209,7 @@ pub async fn ssh_launch_rpc(
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         append_ssh_destination(&mut tunnel, &ssh_user, &host);
+        tunnel.arg(remote_command);
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -295,6 +221,13 @@ pub async fn ssh_launch_rpc(
         if let Err(error) = wait_for_tunnel(&mut tunnel, local_port, Duration::from_secs(5)) {
             stop_tunnel_child(tunnel);
             return Err(error);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        if let Some(status) = tunnel
+            .try_wait()
+            .map_err(|error| format!("无法检查远程 rpc-server 状态: {error}"))?
+        {
+            return Err(format!("远程 rpc-server 提前退出: {status}"));
         }
         SSH_TUNNELS.lock().unwrap().insert(local_port, tunnel);
         Ok(serde_json::json!({
@@ -347,26 +280,21 @@ mod tests {
     }
 
     #[test]
-    fn linux_remote_command_uses_linux_socket_tools() {
+    fn unix_remote_command_execs_rpc_in_the_ssh_session() {
         let command = build_remote_cmd("/opt/llama/rpc-server", 50052, "linux");
-        assert!(command.contains("ss -tlnH"));
-        assert!(command.contains("port \"$\""));
-        assert!(!command.contains("grep -q ':50052'"));
-        assert!(command.contains("PORT-OK"));
+        assert!(command.starts_with("exec '/opt/llama/rpc-server'"));
         assert!(command.contains("--host 127.0.0.1"));
         assert!(!command.contains("--host 0.0.0.0"));
-        assert!(!command.contains("/tmp/rpc-server"));
+        assert!(!command.contains("nohup"));
+        assert!(!command.contains(" &"));
     }
 
     #[test]
-    fn macos_remote_command_uses_lsof_instead_of_linux_netstat_flags() {
+    fn macos_remote_command_quotes_paths_and_stays_foreground() {
         let command = build_remote_cmd("/Applications/llama rpc/rpc-server", 50052, "macos");
-        assert!(command.contains("lsof -nP -iTCP:50052 -sTCP:LISTEN"));
-        assert!(!command.contains("ss -tlnH"));
-        assert!(!command.contains("netstat -tlnp"));
-        assert!(command.contains("PORT-OK"));
+        assert!(command.starts_with("exec '/Applications/llama rpc/rpc-server'"));
         assert!(command.contains("--host 127.0.0.1"));
-        assert!(!command.contains("/tmp/rpc-server"));
+        assert!(!command.contains("nohup"));
     }
 
     #[test]
@@ -383,6 +311,7 @@ mod tests {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')));
         assert!(!command.contains("Start-Process"));
+        assert!(!command.contains("ScheduledTask"));
         assert!(!command.contains("-Command \""));
     }
 }

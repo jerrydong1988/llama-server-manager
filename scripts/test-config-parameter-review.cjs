@@ -69,7 +69,7 @@ assert.match(configPage, /emittedMarker: labels\.changeWillEmit/, 'field markers
 assert.match(configPage, /<FieldRuntimeProvider/, 'parameter source and help metadata must be provided once for the full form')
 assert.match(shared, /onInherit\(reviewFieldKeys\(fieldKey\)\)/, 'field help restore must clear every compatibility alias')
 assert.match(sections, /inherited=\{!hasExplicitOverride\(local, 'threads'\)\}/, 'zero-valued automatic fields must use explicit intent instead of magic-number styling')
-assert.match(sections, /--mmap \/ --no-mmap/, 'inverse command flags must be presented as a positive capability toggle')
+assert.match(sections, /--load-mode/, 'mutually exclusive loading flags must be presented as one loading-mode selector')
 assert.match(panel, /'changes' \| 'emitted'/, 'review panel must separate draft changes from emitted parameters')
 assert.match(panel, /onLocate/, 'review rows must support locating their field')
 assert.match(panel, /onUndo/, 'change rows must support a single-field undo')

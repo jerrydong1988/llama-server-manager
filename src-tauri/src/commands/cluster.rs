@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use tauri::State;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::time::timeout as tokio_timeout;
 
-use crate::models::{AppState, WorkerDevice, WorkerInfo, WorkerStatus};
+use crate::models::{AppState, WorkerDevice, WorkerInfo, WorkerOrigin, WorkerStatus};
 use crate::utils;
 
 #[cfg(target_os = "windows")]
@@ -49,6 +49,9 @@ const VIRTUAL_KEYWORDS: &[&str] = &[
     "nebula",
 ];
 
+static LOCAL_RPC_WORKERS: LazyLock<Mutex<HashMap<u16, Child>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
 static WORKERS_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 pub(crate) const MAX_AUTO_DISCOVERED_WORKERS: usize = 128;
 
@@ -78,26 +81,24 @@ fn load_workers_from(path: &std::path::Path) -> Vec<WorkerInfo> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<Vec<WorkerInfo>>(&s).ok())
-        .map(|workers| {
-            workers
-                .into_iter()
-                .filter(|worker| !worker.auto_discovered)
-                .collect()
-        })
+        .map(|workers| workers.into_iter().filter(is_persistable_worker).collect())
         .unwrap_or_default()
 }
 
+fn is_persistable_worker(worker: &WorkerInfo) -> bool {
+    !worker.auto_discovered && worker.origin != WorkerOrigin::Ssh
+}
+
 pub(crate) fn save_workers(workers: &[WorkerInfo]) -> Result<(), String> {
-    let trusted = workers
-        .iter()
-        .filter(|worker| !worker.auto_discovered)
-        .cloned()
-        .collect::<Vec<_>>();
-    save_workers_to(&workers_path(), &trusted)
+    save_workers_to(&workers_path(), workers)
 }
 
 fn save_workers_to(path: &std::path::Path, workers: &[WorkerInfo]) -> Result<(), String> {
-    let json = serde_json::to_vec_pretty(workers)
+    let workers = workers
+        .iter()
+        .filter(|worker| is_persistable_worker(worker))
+        .collect::<Vec<_>>();
+    let json = serde_json::to_vec_pretty(&workers)
         .map_err(|error| format!("failed to serialize workers: {error}"))?;
     crate::persistence::atomic_write(path, &json, None)
 }
@@ -120,12 +121,12 @@ where
     };
     let trusted_snapshot = snapshot
         .iter()
-        .filter(|worker| !worker.auto_discovered)
+        .filter(|worker| is_persistable_worker(worker))
         .cloned()
         .collect::<Vec<_>>();
     let trusted_previous = previous
         .iter()
-        .filter(|worker| !worker.auto_discovered)
+        .filter(|worker| is_persistable_worker(worker))
         .cloned()
         .collect::<Vec<_>>();
     if serde_json::to_vec(&trusted_previous).ok() == serde_json::to_vec(&trusted_snapshot).ok() {
@@ -330,6 +331,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                                     host,
                                     port,
                                     name: worker_name,
+                                    origin: WorkerOrigin::Manual,
                                     devices: Vec::new(),
                                     status: WorkerStatus::Unknown,
                                     last_seen: Some(chrono::Utc::now().to_rfc3339()),
@@ -550,10 +552,12 @@ pub async fn add_worker(
     host: String,
     port: u16,
     name: String,
+    origin: Option<WorkerOrigin>,
     state: State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<WorkerInfo, String> {
     confirm_worker_enrollment(&app, &host, port).await?;
+    let origin = origin.unwrap_or_default();
     update_workers(&state, |workers| {
         if let Some(existing) = workers
             .iter_mut()
@@ -562,6 +566,7 @@ pub async fn add_worker(
             if !name.is_empty() {
                 existing.name = name.clone();
             }
+            existing.origin = origin;
             existing.auto_discovered = false;
             existing.status = WorkerStatus::Unknown;
             return existing.clone();
@@ -572,6 +577,7 @@ pub async fn add_worker(
             host: host.clone(),
             port,
             name: if name.is_empty() { host.clone() } else { name },
+            origin,
             devices: Vec::new(),
             status: WorkerStatus::Unknown,
             last_seen: None,
@@ -645,6 +651,24 @@ pub async fn approve_worker(
 }
 
 pub async fn remove_worker(id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let worker = state
+        .workers
+        .lock()
+        .map_err(|_| "worker state lock is poisoned".to_string())?
+        .iter()
+        .find(|worker| worker.id == id)
+        .cloned();
+    if let Some(worker) = worker {
+        match worker.origin {
+            WorkerOrigin::Local => {
+                let _ = stop_local_worker(worker.port).await?;
+            }
+            WorkerOrigin::Ssh => {
+                let _ = crate::commands::cluster_ssh::stop_ssh_tunnel(worker.port).await?;
+            }
+            WorkerOrigin::Manual => {}
+        }
+    }
     update_workers(&state, |workers| workers.retain(|worker| worker.id != id))
 }
 
@@ -687,9 +711,59 @@ fn quote_launch_binary(binary: &str) -> String {
 }
 
 pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
-    tokio::task::spawn_blocking(move || stop_verified_rpc_server(port))
-        .await
-        .map_err(|e| format!("停止 Worker 失败: {}", e))?
+    tokio::task::spawn_blocking(move || {
+        if let Some(mut child) = LOCAL_RPC_WORKERS.lock().unwrap().remove(&port) {
+            terminate_rpc_child(&mut child)?;
+            return Ok(true);
+        }
+        stop_verified_rpc_server(port)
+    })
+    .await
+    .map_err(|e| format!("停止 Worker 失败: {}", e))?
+}
+
+pub async fn stop_worker(id: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let worker = state
+        .workers
+        .lock()
+        .map_err(|_| "worker state lock is poisoned".to_string())?
+        .iter()
+        .find(|worker| worker.id == id)
+        .cloned()
+        .ok_or_else(|| "Worker not found".to_string())?;
+    let stopped = match worker.origin {
+        WorkerOrigin::Local => stop_local_worker(worker.port).await?,
+        WorkerOrigin::Ssh => crate::commands::cluster_ssh::stop_ssh_tunnel(worker.port).await?,
+        WorkerOrigin::Manual => {
+            return Err("Only manager-owned local or SSH workers can be stopped".to_string())
+        }
+    };
+    update_workers(&state, |workers| {
+        if let Some(worker) = workers.iter_mut().find(|candidate| candidate.id == id) {
+            worker.status = WorkerStatus::Offline;
+        }
+    })?;
+    Ok(stopped)
+}
+
+pub fn stop_all_local_rpc_workers(managed_ports: &[u16]) {
+    let workers = {
+        let mut workers = LOCAL_RPC_WORKERS.lock().unwrap();
+        std::mem::take(&mut *workers)
+    };
+    let tracked_ports = workers.keys().copied().collect::<HashSet<_>>();
+    for (port, mut child) in workers {
+        if let Err(error) = terminate_rpc_child(&mut child) {
+            eprintln!("Failed to terminate local Worker on port {port}: {error}");
+        }
+    }
+    for port in managed_ports {
+        if !tracked_ports.contains(port) {
+            if let Err(error) = stop_verified_rpc_server(*port) {
+                eprintln!("Failed to terminate restored local Worker on port {port}: {error}");
+            }
+        }
+    }
 }
 
 fn is_rpc_server_executable(path: &std::path::Path) -> bool {
@@ -903,6 +977,12 @@ pub async fn start_local_rpc(
     engine_dir: Option<String>,
     port: u16,
 ) -> Result<serde_json::Value, String> {
+    if port == 0 {
+        return Err("RPC port must be between 1 and 65535".to_string());
+    }
+    if LOCAL_RPC_WORKERS.lock().unwrap().contains_key(&port) {
+        return Err(format!("本地 Worker 端口 {port} 已由管理器占用"));
+    }
     let engine_dir = engine_dir
         .map(|dir| {
             crate::security::require_authorized_engine_root(std::path::Path::new(&dir))
@@ -910,6 +990,9 @@ pub async fn start_local_rpc(
         })
         .transpose()?;
     tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
+        let availability_probe = std::net::TcpListener::bind(("127.0.0.1", port))
+            .map_err(|error| format!("本地 Worker 端口 {port} 不可用: {error}"))?;
+        drop(availability_probe);
         let binary = if let Some(ref dir) = engine_dir {
             let path = std::path::Path::new(dir);
             #[cfg(target_os = "windows")]
@@ -959,7 +1042,23 @@ pub async fn start_local_rpc(
             .parse::<std::net::SocketAddr>()
             .map_err(|e| format!("地址解析失败 ({}): {}", addr, e))?;
         match wait_for_tcp_ready(sock_addr, Duration::from_secs(5)) {
-            Ok(_) => Ok(serde_json::json!({ "ok": true, "port": port })),
+            Ok(_) => {
+                if let Some(status) = child
+                    .try_wait()
+                    .map_err(|error| format!("无法检查 rpc-server 状态: {error}"))?
+                {
+                    return Err(format!("rpc-server 提前退出: {status}"));
+                }
+                let pid = child.id();
+                let mut workers = LOCAL_RPC_WORKERS.lock().unwrap();
+                if workers.contains_key(&port) {
+                    drop(workers);
+                    terminate_rpc_child(&mut child)?;
+                    return Err(format!("本地 Worker 端口 {port} 已由管理器占用"));
+                }
+                workers.insert(port, child);
+                Ok(serde_json::json!({ "ok": true, "port": port, "pid": pid }))
+            }
             Err(error) => {
                 let message = format!("rpc-server 启动后无法连接: {error}");
                 match terminate_rpc_child(&mut child) {
@@ -988,6 +1087,7 @@ mod tests {
             host: "192.168.1.11".into(),
             port: 50052,
             name: "Discovered Worker".into(),
+            origin: WorkerOrigin::Manual,
             devices: Vec::new(),
             status: WorkerStatus::Unknown,
             last_seen: Some("2024-01-01T00:00:00Z".into()),
@@ -999,9 +1099,32 @@ mod tests {
                 host: "192.168.1.10".into(),
                 port: 50052,
                 name: "Test Worker".into(),
+                origin: WorkerOrigin::Manual,
                 devices: Vec::new(),
                 status: WorkerStatus::Online,
                 last_seen: Some("2024-01-01T00:00:00Z".into()),
+                auto_discovered: false,
+            },
+            WorkerInfo {
+                id: "local-1".into(),
+                host: "127.0.0.1".into(),
+                port: 50053,
+                name: "Local Worker".into(),
+                origin: WorkerOrigin::Local,
+                devices: Vec::new(),
+                status: WorkerStatus::Online,
+                last_seen: None,
+                auto_discovered: false,
+            },
+            WorkerInfo {
+                id: "ssh-1".into(),
+                host: "127.0.0.1".into(),
+                port: 50054,
+                name: "SSH Worker".into(),
+                origin: WorkerOrigin::Ssh,
+                devices: Vec::new(),
+                status: WorkerStatus::Online,
+                last_seen: None,
                 auto_discovered: false,
             },
             discovered.clone(),
@@ -1009,8 +1132,12 @@ mod tests {
 
         save_workers_to(&test_path, &test_workers).unwrap();
         let loaded = load_workers_from(&test_path);
-        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].host, "192.168.1.10");
+        assert_eq!(loaded[1].origin, WorkerOrigin::Local);
+        assert!(loaded
+            .iter()
+            .all(|worker| worker.origin != WorkerOrigin::Ssh));
         assert_ne!(loaded[0].id, discovered.id);
 
         // Clean up temporary files.
@@ -1147,10 +1274,11 @@ pub mod ipc {
         host: String,
         port: u16,
         name: String,
+        origin: Option<WorkerOrigin>,
         state: State<'_, AppState>,
         app: tauri::AppHandle,
     ) -> crate::error::AppResult<WorkerInfo> {
-        super::add_worker(host, port, name, state, app)
+        super::add_worker(host, port, name, origin, state, app)
             .await
             .map_err(crate::error::AppError::from)
     }
@@ -1204,6 +1332,16 @@ pub mod ipc {
     #[tauri::command]
     pub async fn stop_local_worker(port: u16) -> crate::error::AppResult<bool> {
         super::stop_local_worker(port)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn stop_worker(
+        id: String,
+        state: State<'_, AppState>,
+    ) -> crate::error::AppResult<bool> {
+        super::stop_worker(id, state)
             .await
             .map_err(crate::error::AppError::from)
     }

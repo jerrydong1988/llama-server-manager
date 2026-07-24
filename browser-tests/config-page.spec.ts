@@ -80,7 +80,7 @@ test('parameter intent remains explicit at a default value and only inheritance 
     .not.toContain('--temp')
 })
 
-test('automatic numeric modes and positive inverse toggles produce unambiguous commands', async ({ page }) => {
+test('automatic numeric modes and the unified loading mode produce unambiguous commands', async ({ page }) => {
   await openConfiguration(page)
 
   const threads = page.locator('[data-config-field="threads"]')
@@ -105,17 +105,21 @@ test('automatic numeric modes and positive inverse toggles produce unambiguous c
   await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
     .not.toContain('-c')
 
-  const mmap = page.locator('[data-config-field="no_mmap"]')
-  const mmapSwitch = mmap.getByRole('switch')
-  await expect(mmapSwitch).toHaveAttribute('aria-checked', 'true')
-  await mmapSwitch.click()
-  await expect(mmap).toHaveAttribute('data-config-source', 'explicit')
+  const loadMode = page.locator('[data-config-field="load_mode"]')
+  const loadModeSelect = loadMode.getByRole('combobox')
+  await expect(loadModeSelect).toHaveValue('')
+  await loadModeSelect.selectOption('none')
+  await expect(loadMode).toHaveAttribute('data-config-source', 'explicit')
   await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
-    .toContain('--no-mmap')
-  await mmapSwitch.click()
-  await expect(mmapSwitch).toHaveAttribute('aria-checked', 'true')
+    .toEqual(expect.arrayContaining(['--load-mode', 'none']))
+  await loadModeSelect.selectOption('mmap')
+  await expect(loadModeSelect).toHaveValue('mmap')
   await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
-    .toContain('--mmap')
+    .toEqual(expect.arrayContaining(['--load-mode', 'mmap']))
+  await expect.poll(() => page.evaluate(() => {
+    const command = window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []
+    return command.filter(argument => ['--mlock', '--no-mmap', '--direct-io'].includes(argument))
+  })).toEqual([])
 })
 
 test('source-confirmed multimodal projector is emitted without a mismatch warning', async ({ page }) => {

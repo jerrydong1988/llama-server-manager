@@ -29,7 +29,7 @@ export const KNOWN_FLAGS = new Set([
   '--rope-scaling', '--rope-scale', '--rope-freq-base', '--rope-freq-scale',
   '--yarn-ext-factor', '--yarn-attn-factor', '--yarn-beta-slow', '--yarn-beta-fast', '--yarn-orig-ctx',
   // Flash Attention & Memory
-  '-fa', '--n-cpu-moe', '--cpu-moe', '-cmoe', '--mlock', '--mmap', '--no-mmap', '--repack', '--no-repack', '--numa',
+  '-fa', '--n-cpu-moe', '--cpu-moe', '-cmoe', '--load-mode', '-lm', '--mlock', '--mmap', '--no-mmap', '--repack', '--no-repack', '--numa',
   '--check-tensors', '--perf', '--no-perf', '--fit', '-fitt', '-fitc', '--direct-io', '-dio',
   // KV Cache
   '-ctk', '-ctv', '-ctkd', '-ctvd', '--kv-unified', '--no-kv-unified', '--kv-offload', '--no-kv-offload', '--cache-idle-slots', '--no-cache-idle-slots',

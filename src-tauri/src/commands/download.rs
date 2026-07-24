@@ -410,6 +410,10 @@ fn write_string_atomic(path: &Path, contents: &str) -> Result<(), String> {
     crate::persistence::atomic_write(path, contents.as_bytes(), None)
 }
 
+fn write_artifact_state_atomic(path: &Path, contents: &str) -> Result<(), String> {
+    crate::persistence::atomic_write_artifact_state(path, contents.as_bytes())
+}
+
 fn load_artifact_state(temp_path: &Path) -> Option<DownloadArtifactState> {
     let metadata_path = artifact_state_path(temp_path);
     std::fs::read_to_string(&metadata_path)
@@ -434,7 +438,9 @@ async fn save_artifact_state(state: &DownloadArtifactState, temp_path: &Path) {
             return;
         }
     };
-    match tokio::task::spawn_blocking(move || write_string_atomic(&metadata_path, &json)).await {
+    match tokio::task::spawn_blocking(move || write_artifact_state_atomic(&metadata_path, &json))
+        .await
+    {
         Ok(Ok(())) => {}
         Ok(Err(error)) => eprintln!("Failed to persist download artifact state: {error}"),
         Err(error) => eprintln!("Download artifact state writer failed: {error}"),
@@ -1036,7 +1042,7 @@ async fn download_single_file(
         let remote_size = response_content_range(resp.headers()).and_then(|range| range.total);
         let exact_size = unsatisfied_range_is_complete(part_size, file_size, remote_size);
         if exact_size {
-            if let Err(error) = crate::persistence::replace_file(&temp_path, &final_path, None) {
+            if let Err(error) = crate::persistence::replace_artifact_file(&temp_path, &final_path) {
                 has_error.store(true, Ordering::SeqCst);
                 update_manager_file_state(
                     &shared,
@@ -1663,7 +1669,7 @@ async fn download_single_file(
         return;
     }
 
-    if let Err(e) = crate::persistence::replace_file(&temp_path, &final_path, None) {
+    if let Err(e) = crate::persistence::replace_artifact_file(&temp_path, &final_path) {
         save_artifact_state(
             &DownloadArtifactState {
                 task_id: task_id.clone(),

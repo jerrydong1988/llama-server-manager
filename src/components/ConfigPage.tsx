@@ -380,7 +380,7 @@ const ConfigPage = () => {
   const selectedTemplateGroups = groupTemplateChanges(selectedTemplateChanges, [
     { id: 'performance', title: labels.templateGroupsPerformance, keys: ['batch_size', 'ubatch_size', 'parallel', 'cont_batching', 'threads', 'threads_batch', 'threads_http'] },
     { id: 'context', title: labels.templateGroupsContext, keys: ['ctx_size_auto', 'ctx_size', 'cache_prompt', 'cache_ram', 'cache_reuse', 'ctx_checkpoints', 'checkpoint_min_step', 'context_shift'] },
-    { id: 'hardware', title: labels.templateGroupsHardware, keys: ['gpu_layers_auto', 'gpu_layers', 'flash_attn', 'mlock', 'no_mmap', 'no_kv_offload', 'kv_unified', 'device', 'split_mode', 'tensor_split', 'main_gpu'] },
+    { id: 'hardware', title: labels.templateGroupsHardware, keys: ['gpu_layers_auto', 'gpu_layers', 'flash_attn', 'load_mode', 'no_kv_offload', 'kv_unified', 'device', 'split_mode', 'tensor_split', 'main_gpu'] },
     { id: 'observability', title: labels.templateGroupsObservability, keys: ['metrics', 'props', 'slots_enabled', 'perf', 'verbose'] },
     { id: 'speculative', title: labels.templateGroupsSpeculative, keys: ['spec_type', 'draft_model_path', 'draft_tokens', 'spec_draft_n_min', 'spec_draft_p_min', 'spec_draft_p_split', 'draft_gpu_layers', 'spec_default'] },
     { id: 'generation', title: labels.templateGroupsGeneration, keys: ['n_predict', 'temp', 'top_k', 'top_p', 'repeat_penalty', 'min_p', 'ignore_eos'] },

@@ -1,7 +1,7 @@
 use crate::commands::cluster::{
     stable_discovered_worker_id, update_workers, MAX_AUTO_DISCOVERED_WORKERS,
 };
-use crate::models::{AppState, WorkerInfo, WorkerStatus};
+use crate::models::{AppState, WorkerInfo, WorkerOrigin, WorkerStatus};
 use tauri::Manager;
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -116,6 +116,7 @@ async fn run_mdns_discovery(
                                 host,
                                 port,
                                 name: service_name,
+                                origin: WorkerOrigin::Manual,
                                 devices: Vec::new(),
                                 status: WorkerStatus::Unknown,
                                 last_seen: Some(chrono::Utc::now().to_rfc3339()),
@@ -163,6 +164,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 50052,
             name: "rpc-worker".into(),
+            origin: WorkerOrigin::Manual,
             devices: Vec::new(),
             status: WorkerStatus::Online,
             last_seen: None,

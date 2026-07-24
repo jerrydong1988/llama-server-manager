@@ -34,7 +34,7 @@ for (const flag of catalogFlags) {
 
 for (const key of [
   'gpu_layers', 'ctx_size', 'threads', 'threads_batch', 'threads_http', 'parallel', 'draft_gpu_layers',
-  'image_min_tokens', 'image_max_tokens', 'no_mmap', 'no_repack',
+  'image_min_tokens', 'image_max_tokens', 'load_mode', 'no_mmap', 'no_repack',
   'no_kv_offload', 'no_mmproj_offload', 'no_ui', 'perf',
 ]) {
   assert.match(catalog, new RegExp(`\\b${key}:\\s*\\{`), `missing parameter-catalog entry for ${key}`)

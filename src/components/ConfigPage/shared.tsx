@@ -634,7 +634,6 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     moe_cpu_layers: 0, cpu_moe: false, device: '', split_mode: '', tensor_split: '', main_gpu: 0,
     perf: false, check_tensors: false, fit: false, fit_mode: '', fit_target: '', fit_ctx: 4096,
     numa_mode: '',
-    direct_io: false,
     threads_http: -1,
   },
   advancedServerBasic: {

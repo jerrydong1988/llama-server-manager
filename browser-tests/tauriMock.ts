@@ -304,6 +304,7 @@ const canonicalField = (field: string) => {
   if (field === 'kv_unified') return 'kv_unified_mode'
   if (field === 'fit') return 'fit_mode'
   if (field === 'numa') return 'numa_mode'
+  if (field === 'mlock' || field === 'no_mmap' || field === 'direct_io') return 'load_mode'
   if (field === 'mmproj_auto' || field === 'no_mmproj') return 'mmproj_mode'
   return field
 }
@@ -344,7 +345,7 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
     else if (field === 'top_k') command.push('--top-k', String(config.top_k))
     else if (field === 'top_p') command.push('--top-p', String(config.top_p))
     else if (field === 'threads') command.push('--threads', String(config.threads))
-    else if (field === 'no_mmap') command.push(config.no_mmap ? '--no-mmap' : '--mmap')
+    else if (field === 'load_mode' && config.load_mode) command.push('--load-mode', config.load_mode)
     else if (field === 'perf') command.push(config.perf ? '--perf' : '--no-perf')
     else if (field === 'kv_unified_mode') command.push(config.kv_unified_mode === 'off' ? '--no-kv-unified' : '--kv-unified')
     else if (field === 'models_autoload') command.push(config.models_autoload ? '--models-autoload' : '--no-models-autoload')

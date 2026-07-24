@@ -199,6 +199,24 @@ pub fn replace_file(
     sync_parent(destination)
 }
 
+pub fn replace_artifact_file(source: &Path, destination: &Path) -> Result<(), String> {
+    if !source.is_file() {
+        return Err(format!(
+            "replacement source is not a file: {}",
+            source.display()
+        ));
+    }
+    std::fs::create_dir_all(parent_dir(destination)).map_err(|error| {
+        format!(
+            "failed to create directory {}: {error}",
+            parent_dir(destination).display()
+        )
+    })?;
+    sync_file(source)?;
+    replace_path_raw(source, destination)?;
+    sync_parent(destination)
+}
+
 pub fn atomic_write(path: &Path, contents: &[u8], backup: Option<&Path>) -> Result<(), String> {
     std::fs::create_dir_all(parent_dir(path)).map_err(|error| {
         format!(
@@ -243,6 +261,56 @@ pub fn atomic_write(path: &Path, contents: &[u8], backup: Option<&Path>) -> Resu
         drop(file);
         protect_file(&temporary)?;
         replace_file(&temporary, path, backup)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+pub fn atomic_write_artifact_state(path: &Path, contents: &[u8]) -> Result<(), String> {
+    std::fs::create_dir_all(parent_dir(path)).map_err(|error| {
+        format!(
+            "failed to create directory {}: {error}",
+            parent_dir(path).display()
+        )
+    })?;
+    let temporary = temporary_path(path);
+    let result = (|| {
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary).map_err(|error| {
+            format!(
+                "failed to create temporary file {}: {error}",
+                temporary.display()
+            )
+        })?;
+        file.write_all(contents).map_err(|error| {
+            format!(
+                "failed to write temporary file {}: {error}",
+                temporary.display()
+            )
+        })?;
+        file.flush().map_err(|error| {
+            format!(
+                "failed to flush temporary file {}: {error}",
+                temporary.display()
+            )
+        })?;
+        file.sync_all().map_err(|error| {
+            format!(
+                "failed to sync temporary file {}: {error}",
+                temporary.display()
+            )
+        })?;
+        drop(file);
+        protect_file(&temporary)?;
+        replace_artifact_file(&temporary, path)
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temporary);
@@ -304,6 +372,46 @@ mod tests {
         );
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_writes_preserve_shared_directory_and_download_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = test_dir("artifact-permissions");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o750)).unwrap();
+        let source = directory.join("model.gguf.part");
+        let destination = directory.join("model.gguf");
+        let artifact_state = directory.join("model.gguf.part.json");
+        std::fs::write(&source, b"model").unwrap();
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+        replace_artifact_file(&source, &destination).unwrap();
+        atomic_write_artifact_state(&artifact_state, b"{}").unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
+        assert_eq!(
+            std::fs::metadata(&destination)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+        assert_eq!(
+            std::fs::metadata(&artifact_state)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
             0o600
         );
         let _ = std::fs::remove_dir_all(directory);

@@ -13,7 +13,7 @@ use crate::commands::autostart::{disable_autostart, enable_autostart, is_autosta
 use crate::commands::cluster::{
     add_worker, approve_worker, find_rpc_server_binary, generate_rpc_launch_cmd,
     get_cluster_metrics, get_local_host, get_worker_info, get_workers, is_local_host, load_workers,
-    remove_worker, scan_workers_tcp, start_local_rpc, stop_local_worker, test_worker,
+    remove_worker, scan_workers_tcp, start_local_rpc, stop_local_worker, stop_worker, test_worker,
 };
 use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
@@ -54,7 +54,7 @@ use crate::commands::telemetry::{
     get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
     list_telemetry_sessions, prune_telemetry,
 };
-use crate::models::{AppState, WindowState};
+use crate::models::{AppState, WindowState, WorkerOrigin};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -106,10 +106,23 @@ fn persist_runtime_state(app: &tauri::AppHandle) {
 
 fn finalize_app_exit(app: &tauri::AppHandle, keep_runtime: bool) {
     flush_download_manager_state(app);
-    crate::commands::cluster_ssh::stop_all_ssh_tunnels();
     let failures = if keep_runtime {
         Vec::new()
     } else {
+        crate::commands::cluster_ssh::stop_all_ssh_tunnels();
+        let local_worker_ports = app
+            .try_state::<AppState>()
+            .and_then(|state| {
+                state.workers.lock().ok().map(|workers| {
+                    workers
+                        .iter()
+                        .filter(|worker| worker.origin == WorkerOrigin::Local)
+                        .map(|worker| worker.port)
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+        crate::commands::cluster::stop_all_local_rpc_workers(&local_worker_ports);
         crate::commands::server::terminate_all_servers_for_exit(app)
     };
     if !failures.is_empty() {
@@ -175,6 +188,12 @@ async fn prepare_background_exit(
     enable_runtime: bool,
 ) -> Result<(), String> {
     let _handoff = ExitHandoffGuard::acquire()?;
+    if crate::commands::cluster_ssh::has_active_ssh_tunnels() {
+        return Err(
+            "仍有由主程序托管的 SSH Worker；请先停止这些 Worker，再退出并保留后台运行时"
+                .to_string(),
+        );
+    }
     let state = app.state::<AppState>();
     let _transition = state.proxy_lifecycle_lock.lock().await;
     let previous_config = state.proxy_config.lock().unwrap().clone();
@@ -366,7 +385,10 @@ fn main() {
     let data_dir = crate::utils::get_data_dir();
     let config_dir = data_dir.join("configs");
     let initial_config = crate::commands::config::read_config_from_disk(&config_dir);
-    if let Err(error) = crate::security::initialize_path_authority(&initial_config.engine_dirs) {
+    if let Err(error) = crate::security::initialize_path_authority(
+        &initial_config.engine_dirs,
+        &initial_config.model_dirs,
+    ) {
         eprintln!("Path authority initialization failed: {error}");
     }
     let initial_workers = load_workers();
@@ -637,7 +659,7 @@ fn main() {
             scan_workers_tcp, test_worker, get_worker_info,
             add_worker, approve_worker, remove_worker, get_workers,
             find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics,
-            stop_local_worker, is_local_host, start_local_rpc, get_local_host,
+            stop_local_worker, stop_worker, is_local_host, start_local_rpc, get_local_host,
             detect_usb4_adapters, get_usb4_adapters,
             start_mdns_discovery, stop_mdns_discovery,
             ssh_launch_rpc,

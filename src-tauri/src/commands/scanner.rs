@@ -582,6 +582,16 @@ pub async fn scan_models(
             })
             .collect()
     };
+    let scan_paths = scan_paths
+        .into_iter()
+        .map(|path| {
+            if path == default_path_for_check && !path.exists() {
+                Ok(path)
+            } else {
+                crate::security::require_authorized_model_root(&path)
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<ModelInfo>, Vec<String>> {
         let (inventory, directory_inventory) =
@@ -818,7 +828,7 @@ pub async fn delete_model_file(
     {
         return Err("只能删除 .gguf 文件".to_string());
     }
-    let canonical = std::fs::canonicalize(p).map_err(|e| format!("路径无效: {}", e))?;
+    let canonical = crate::security::require_authorized_model_path(p)?;
     let state_models = state.models.lock().unwrap();
     let is_known = state_models
         .iter()
@@ -842,7 +852,8 @@ pub async fn delete_model_file(
 }
 
 pub async fn open_model_folder(path: String) -> Result<(), String> {
-    let parent = Path::new(&path).parent().unwrap_or(Path::new("."));
+    let canonical = crate::security::require_authorized_model_path(Path::new(&path))?;
+    let parent = canonical.parent().unwrap_or(Path::new("."));
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
@@ -870,7 +881,8 @@ pub async fn open_model_folder(path: String) -> Result<(), String> {
 pub async fn read_gguf_metadata(
     path: String,
 ) -> Result<crate::models::GgufMetadataSummary, String> {
-    utils::parse_gguf_metadata(Path::new(&path))
+    let canonical = crate::security::require_authorized_model_path(Path::new(&path))?;
+    utils::parse_gguf_metadata(&canonical)
 }
 
 // Engine scanning.

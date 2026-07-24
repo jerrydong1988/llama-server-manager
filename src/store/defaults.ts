@@ -17,7 +17,7 @@ export function defaultInstanceConfig(): InstanceConfig {
     swa_full: false,
     rope_scaling: '', rope_scale: 0, rope_freq_base: 0, rope_freq_scale: 0,
     yarn_ext_factor: -1, yarn_attn_factor: -1, yarn_beta_slow: -1, yarn_beta_fast: -1, yarn_orig_ctx: 0,
-    flash_attn: 'auto', moe_cpu_layers: 0, cpu_moe: false, mlock: false,
+    flash_attn: 'auto', moe_cpu_layers: 0, cpu_moe: false, load_mode: '', mlock: false,
     no_mmap: false, no_repack: false, direct_io: false, numa: false, numa_mode: '', context_shift: false,
     perf: false, check_tensors: false, fit: false, fit_mode: '', fit_target: '', fit_ctx: 4096,
     kv_unified: false, kv_unified_mode: '', cache_idle_slots: true, no_kv_offload: false,

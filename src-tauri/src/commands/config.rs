@@ -1,7 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    ensure_managed_public_model_alias, AppState, GlobalConfig, InstanceConfig, ProxyConfig,
-    WindowState,
+    ensure_managed_public_model_alias, migrate_legacy_load_mode, AppState, GlobalConfig,
+    InstanceConfig, ProxyConfig, WindowState,
 };
 use crate::vector_policy::normalize_for_launch;
 use std::collections::HashMap;
@@ -18,6 +18,19 @@ fn normalize_model_dirs(mut model_dirs: Vec<String>) -> Vec<String> {
         model_dirs.push(crate::utils::DEFAULT_MODELS_DIR_NAME.to_string());
     }
     model_dirs
+}
+
+fn migrate_global_load_modes(global: &mut GlobalConfig) -> bool {
+    let mut changed = false;
+    for config in global.instances.values_mut() {
+        changed |= migrate_legacy_load_mode(config);
+    }
+    for running in global.running.values_mut() {
+        if let Some(config) = running.launch_config.as_mut() {
+            changed |= migrate_legacy_load_mode(config);
+        }
+    }
+    changed
 }
 
 fn default_global_config() -> GlobalConfig {
@@ -146,6 +159,7 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
         }
     };
     config.model_dirs = normalize_model_dirs(config.model_dirs);
+    migrate_global_load_modes(&mut config);
     config
 }
 
@@ -158,6 +172,7 @@ fn load_global_config_for_update_unlocked(
     if let Ok(contents) = &primary {
         if let Ok(mut config) = serde_json::from_str::<GlobalConfig>(contents) {
             config.model_dirs = normalize_model_dirs(config.model_dirs);
+            migrate_global_load_modes(&mut config);
             return Ok(config);
         }
     }
@@ -166,6 +181,7 @@ fn load_global_config_for_update_unlocked(
         let mut config = serde_json::from_str::<GlobalConfig>(&contents)
             .map_err(|error| format!("解析配置备份失败: {error}"))?;
         config.model_dirs = normalize_model_dirs(config.model_dirs);
+        migrate_global_load_modes(&mut config);
         crate::persistence::atomic_write(&primary_path, contents.as_bytes(), None)
             .map_err(|error| format!("修复主配置失败: {error}"))?;
         return Ok(config);
@@ -272,7 +288,8 @@ struct NormalizedInstances {
 fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> NormalizedInstances {
     let mut all = HashMap::with_capacity(instances.len());
     let mut changed = HashMap::new();
-    for (id, config) in instances {
+    for (id, mut config) in instances {
+        migrate_legacy_load_mode(&mut config);
         let mut public_config = config.clone();
         ensure_managed_public_model_alias(&mut public_config);
         let normalized = if public_config.launch_mode.eq_ignore_ascii_case("manual") {

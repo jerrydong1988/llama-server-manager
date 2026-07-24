@@ -27,6 +27,7 @@ const multimodalEnabled = (config: InstanceConfig, isEmbedding: boolean) => (
 )
 
 const b10068 = (zh: string, en: string) => ({ 10068: text(zh, en) })
+const b10105 = (zh: string, en: string) => ({ 10105: text(zh, en) })
 
 /**
  * Behavioural metadata that cannot be inferred safely from a displayed value.
@@ -69,6 +70,7 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
   context_shift: { flags: ['--context-shift', '--no-context-shift'], verifiedDefaults: b10068('关闭', 'disabled') },
   perf: { flags: ['--perf', '--no-perf'], verifiedDefaults: b10068('开启（已按源码核验）', 'enabled (source-verified)') },
 
+  load_mode: { flags: ['--load-mode', '-lm'], verifiedDefaults: b10105('mmap', 'mmap') },
   no_mmap: { flags: ['--mmap', '--no-mmap'], verifiedDefaults: b10068('内存映射开启', 'memory mapping enabled') },
   no_repack: { flags: ['--repack', '--no-repack'], verifiedDefaults: b10068('权重重打包开启', 'weight repacking enabled') },
   no_kv_offload: { flags: ['--kv-offload', '--no-kv-offload'], verifiedDefaults: b10068('GPU 卸载开启', 'GPU offload enabled') },

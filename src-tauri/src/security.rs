@@ -11,6 +11,8 @@ struct PathAuthority {
     #[serde(default)]
     engine_roots: BTreeSet<String>,
     #[serde(default)]
+    model_roots: BTreeSet<String>,
+    #[serde(default)]
     download_roots: BTreeSet<String>,
 }
 
@@ -82,6 +84,13 @@ fn path_is_within(candidate: &Path, root: &Path) -> bool {
     }
 }
 
+fn is_authorized_by_roots(candidate: &Path, roots: &BTreeSet<String>) -> bool {
+    roots
+        .iter()
+        .map(PathBuf::from)
+        .any(|root| path_is_within(candidate, &root))
+}
+
 fn validate_download_root_boundary(root: &Path, app_data_root: &Path) -> Result<(), String> {
     let managed_models = app_data_root.join("models");
     if path_is_within(app_data_root, root)
@@ -100,6 +109,9 @@ fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
         "engine" => {
             authority.engine_roots.insert(key);
         }
+        "model" => {
+            authority.model_roots.insert(key);
+        }
         "download" => {
             let app_data_root = canonical_directory(&crate::utils::get_data_dir())
                 .unwrap_or_else(|_| crate::utils::get_data_dir());
@@ -111,19 +123,30 @@ fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
     persist_authority(&authority)
 }
 
-pub fn initialize_path_authority(legacy_engine_roots: &[String]) -> Result<(), String> {
-    let authority_path = path_authority_path();
-    if authority_path.exists() {
-        let _ = &*PATH_AUTHORITY;
-        return Ok(());
-    }
-
+pub fn initialize_path_authority(
+    legacy_engine_roots: &[String],
+    legacy_model_roots: &[String],
+) -> Result<(), String> {
+    let app_data_root = crate::utils::get_data_dir();
     let mut authority = PATH_AUTHORITY.lock().unwrap();
     for root in legacy_engine_roots {
         let root = PathBuf::from(root);
         if let Ok(canonical) = canonical_directory(&root) {
             authority
                 .engine_roots
+                .insert(normalized_authority_key(&canonical));
+        }
+    }
+    for root in legacy_model_roots {
+        let root = PathBuf::from(root);
+        let root = if root.is_relative() {
+            app_data_root.join(root)
+        } else {
+            root
+        };
+        if let Ok(canonical) = canonical_directory(&root) {
+            authority
+                .model_roots
                 .insert(normalized_authority_key(&canonical));
         }
     }
@@ -138,15 +161,51 @@ pub fn require_authorized_engine_root(path: &Path) -> Result<PathBuf, String> {
     }
 
     let authority = PATH_AUTHORITY.lock().unwrap();
-    if authority
-        .engine_roots
-        .iter()
-        .map(PathBuf::from)
-        .any(|root| path_is_within(&canonical, &root))
-    {
+    if is_authorized_by_roots(&canonical, &authority.engine_roots) {
         Ok(canonical)
     } else {
         Err("引擎目录未获授权；请使用应用内的目录选择按钮重新选择。".to_string())
+    }
+}
+
+pub fn require_authorized_model_root(path: &Path) -> Result<PathBuf, String> {
+    let canonical = canonical_directory(path)?;
+    let managed_root = crate::utils::get_default_models_dir();
+    let managed_root =
+        canonical_directory(&managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
+    if path_is_within(&canonical, &managed_root) {
+        return Ok(canonical);
+    }
+
+    let authority = PATH_AUTHORITY.lock().unwrap();
+    if is_authorized_by_roots(&canonical, &authority.model_roots) {
+        Ok(canonical)
+    } else {
+        Err("模型目录未获授权；请使用应用内的目录选择按钮重新选择。".to_string())
+    }
+}
+
+pub fn require_authorized_model_path(path: &Path) -> Result<PathBuf, String> {
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|error| format!("无法解析模型路径 {}: {error}", path.display()))?;
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|error| format!("无法访问模型路径 {}: {error}", canonical.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("模型路径不是文件: {}", canonical.display()));
+    }
+
+    let managed_root = crate::utils::get_default_models_dir();
+    let managed_root =
+        canonical_directory(&managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
+    if path_is_within(&canonical, &managed_root) {
+        return Ok(canonical);
+    }
+
+    let authority = PATH_AUTHORITY.lock().unwrap();
+    if is_authorized_by_roots(&canonical, &authority.model_roots) {
+        Ok(canonical)
+    } else {
+        Err("模型文件不在已授权目录中；请使用应用内的目录选择按钮重新选择。".to_string())
     }
 }
 
@@ -218,13 +277,13 @@ pub async fn pick_authorized_directory(
     purpose: String,
     app: tauri::AppHandle,
 ) -> Result<Option<String>, String> {
-    if purpose != "engine" && purpose != "download" {
+    if purpose != "engine" && purpose != "model" && purpose != "download" {
         return Err("未知的目录授权用途".to_string());
     }
-    let title = if purpose == "engine" {
-        "选择 llama-server 引擎目录"
-    } else {
-        "选择下载保存目录"
+    let title = match purpose.as_str() {
+        "engine" => "选择 llama-server 引擎目录",
+        "model" => "选择模型扫描目录",
+        _ => "选择下载保存目录",
     };
     let Some(selection) = app.dialog().file().set_title(title).blocking_pick_folder() else {
         return Ok(None);
@@ -283,5 +342,19 @@ mod tests {
         assert!(require_path_within_root(&inside_file, &root).is_ok());
         assert!(require_path_within_root(&outside_file, &root).is_err());
         let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn model_authority_does_not_cover_a_sibling_directory() {
+        let root = Path::new("authorized-models");
+        let roots = BTreeSet::from([normalized_authority_key(root)]);
+        assert!(is_authorized_by_roots(
+            &root.join("repo").join("model.gguf"),
+            &roots
+        ));
+        assert!(!is_authorized_by_roots(
+            &Path::new("authorized-models-sibling").join("model.gguf"),
+            &roots
+        ));
     }
 }

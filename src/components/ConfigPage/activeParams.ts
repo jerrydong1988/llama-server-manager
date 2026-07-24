@@ -115,10 +115,8 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   // ── Memory & Loading ──
   if (config.moe_cpu_layers > 0) a.add('moe_cpu_layers')
   if (config.cpu_moe) a.add('cpu_moe')
-  if (config.mlock) a.add('mlock')
-  if (config.no_mmap) a.add('no_mmap')
+  if (config.load_mode) a.add('load_mode')
   if (config.no_repack) a.add('no_repack')
-  if (config.direct_io) a.add('direct_io')
   if (config.numa_mode || config.numa) a.add('numa_mode')
   if (config.perf) a.add('perf')
   if (config.check_tensors) a.add('check_tensors')

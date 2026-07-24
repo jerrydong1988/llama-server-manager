@@ -6,8 +6,8 @@ use crate::commands::engine_capabilities::{
 use crate::commands::nvml;
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    ensure_managed_public_model_alias, AppState, EngineCapabilities, InstanceConfig,
-    RunningInstance, SystemMetrics,
+    ensure_managed_public_model_alias, migrate_legacy_load_mode, AppState, EngineCapabilities,
+    InstanceConfig, RunningInstance, SystemMetrics,
 };
 use crate::vector_policy::{normalize_for_launch, ModelWorkload};
 use std::collections::hash_map::DefaultHasher;
@@ -671,18 +671,11 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     if should_emit(config, "cpu_moe", config.cpu_moe) && config.cpu_moe {
         cmd.push("--cpu-moe".into());
     }
-    if should_emit(config, "mlock", config.mlock) && config.mlock {
-        cmd.push("--mlock".into());
-    }
-    if should_emit(config, "no_mmap", config.no_mmap) {
-        cmd.push(
-            if config.no_mmap {
-                "--no-mmap"
-            } else {
-                "--mmap"
-            }
-            .into(),
-        );
+    let load_mode = config.load_mode.trim().to_ascii_lowercase();
+    if should_emit(config, "load_mode", !load_mode.is_empty())
+        && matches!(load_mode.as_str(), "none" | "mmap" | "mlock" | "dio")
+    {
+        cmd.extend_from_slice(&["--load-mode".into(), load_mode]);
     }
     if should_emit(config, "no_repack", config.no_repack) {
         cmd.push(
@@ -693,9 +686,6 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
             }
             .into(),
         );
-    }
-    if should_emit(config, "direct_io", config.direct_io) && config.direct_io {
-        cmd.push("--direct-io".into());
     }
     let numa_mode = if config.numa_mode.is_empty() && config.numa {
         "distribute"
@@ -1387,8 +1377,81 @@ fn canonical_override_key(key: &str) -> &str {
         "numa" => "numa_mode",
         "fit" => "fit_mode",
         "kv_unified" => "kv_unified_mode",
+        "mlock" | "no_mmap" | "direct_io" => "load_mode",
         _ => key,
     }
+}
+
+fn adapt_load_mode_for_capabilities(
+    command: &[String],
+    capabilities: Option<&EngineCapabilities>,
+) -> Vec<String> {
+    let Some(capabilities) = capabilities else {
+        return command.to_vec();
+    };
+    let native_flag = capabilities
+        .supported_flags
+        .iter()
+        .find(|flag| matches!(flag.as_str(), "--load-mode" | "-lm"))
+        .map(String::as_str);
+    if let Some(native_flag) = native_flag {
+        if native_flag == "--load-mode" {
+            return command.to_vec();
+        }
+        return command
+            .iter()
+            .map(|argument| {
+                if argument == "--load-mode" {
+                    native_flag.to_string()
+                } else {
+                    argument.clone()
+                }
+            })
+            .collect();
+    }
+
+    let supported = capabilities
+        .supported_flags
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let mut adapted = Vec::with_capacity(command.len());
+    let mut index = 0;
+    while index < command.len() {
+        if command[index] == "--load-mode" {
+            let Some(mode) = command.get(index + 1) else {
+                adapted.push(command[index].clone());
+                index += 1;
+                continue;
+            };
+            let legacy = match mode.as_str() {
+                "none" => "--no-mmap",
+                "mmap" => "--mmap",
+                "mlock" => "--mlock",
+                "dio" => "--direct-io",
+                _ => "",
+            };
+            if !legacy.is_empty() && supported.contains(legacy) {
+                adapted.push(legacy.to_string());
+            } else {
+                adapted.push(command[index].clone());
+                adapted.push(mode.clone());
+            }
+            index += 2;
+            continue;
+        }
+        adapted.push(command[index].clone());
+        index += 1;
+    }
+    adapted
+}
+
+fn command_for_engine_capabilities(
+    command: &[String],
+    capabilities: Option<&EngineCapabilities>,
+) -> Vec<String> {
+    let adapted = adapt_load_mode_for_capabilities(command, capabilities);
+    command_for_capabilities(&adapted, capabilities)
 }
 
 fn emitted_override_keys(
@@ -1415,7 +1478,7 @@ fn emitted_override_keys(
                     .collect(),
             );
             let reduced_command = generate_normalized_command(&reduced, engine_path);
-            command_for_capabilities(&reduced_command, capabilities) != projected_command
+            command_for_engine_capabilities(&reduced_command, capabilities) != projected_command
         })
         .collect()
 }
@@ -1424,6 +1487,7 @@ fn prepare_launch(
     mut config: InstanceConfig,
     engine_path: &str,
 ) -> (InstanceConfig, ModelWorkload, Vec<String>) {
+    migrate_legacy_load_mode(&mut config);
     ensure_managed_public_model_alias(&mut config);
     let normalized = normalize_for_launch(config);
     let workload = normalized.workload;
@@ -1784,6 +1848,7 @@ pub async fn generate_server_command(
         EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
     };
     validate_custom_argument_capabilities(&config, capabilities.as_deref())?;
+    let command = adapt_load_mode_for_capabilities(&command, capabilities.as_deref());
     let unsupported_flags = capabilities
         .as_deref()
         .map(|value| unsupported_command_flags(&command, value))
@@ -1835,6 +1900,8 @@ pub async fn start_server(
                 EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
             };
         validate_custom_argument_capabilities(&config, engine_capabilities.as_deref())?;
+        let generated_cmd =
+            adapt_load_mode_for_capabilities(&generated_cmd, engine_capabilities.as_deref());
         if let Some(capabilities) = engine_capabilities.as_deref() {
             let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
             if !unsupported.is_empty() {
@@ -4493,7 +4560,7 @@ mod perf_parser_tests {
     #[test]
     fn tracked_positive_and_negative_boolean_choices_are_both_explicit() {
         let override_keys = vec![
-            "no_mmap".into(),
+            "load_mode".into(),
             "no_repack".into(),
             "no_kv_offload".into(),
             "no_mmproj_offload".into(),
@@ -4504,13 +4571,14 @@ mod perf_parser_tests {
         ];
         let positive = InstanceConfig {
             model_path: "model.gguf".into(),
+            load_mode: "mmap".into(),
             spec_type: "draft-mtp".into(),
             explicit_overrides: Some(override_keys.clone()),
             ..InstanceConfig::default()
         };
         let positive_command = generate_normalized_command(&positive, "llama-server");
+        assert!(has_flag_value(&positive_command, "--load-mode", "mmap"));
         for flag in [
-            "--mmap",
             "--repack",
             "--kv-offload",
             "--mmproj-offload",
@@ -4525,7 +4593,7 @@ mod perf_parser_tests {
         }
 
         let negative = InstanceConfig {
-            no_mmap: true,
+            load_mode: "none".into(),
             no_repack: true,
             no_kv_offload: true,
             no_mmproj_offload: true,
@@ -4535,8 +4603,8 @@ mod perf_parser_tests {
             ..positive
         };
         let negative_command = generate_normalized_command(&negative, "llama-server");
+        assert!(has_flag_value(&negative_command, "--load-mode", "none"));
         for flag in [
-            "--no-mmap",
             "--no-repack",
             "--no-kv-offload",
             "--no-mmproj-offload",
@@ -4547,6 +4615,64 @@ mod perf_parser_tests {
             assert!(
                 negative_command.iter().any(|argument| argument == flag),
                 "missing inverse pin {flag}: {negative_command:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn load_mode_uses_the_native_flag_or_one_legacy_equivalent() {
+        let command = vec![
+            "llama-server".to_string(),
+            "--load-mode".to_string(),
+            "mlock".to_string(),
+        ];
+        let modern = EngineCapabilities {
+            status: "detected".into(),
+            supported_flags: vec!["--load-mode".into(), "--mlock".into()],
+            ..EngineCapabilities::default()
+        };
+        assert_eq!(
+            adapt_load_mode_for_capabilities(&command, Some(&modern)),
+            command
+        );
+        let short_only = EngineCapabilities {
+            status: "detected".into(),
+            supported_flags: vec!["-lm".into()],
+            ..EngineCapabilities::default()
+        };
+        assert_eq!(
+            adapt_load_mode_for_capabilities(&command, Some(&short_only)),
+            vec![
+                "llama-server".to_string(),
+                "-lm".to_string(),
+                "mlock".to_string()
+            ]
+        );
+
+        let legacy = EngineCapabilities {
+            status: "detected".into(),
+            supported_flags: vec![
+                "--mmap".into(),
+                "--no-mmap".into(),
+                "--mlock".into(),
+                "--direct-io".into(),
+            ],
+            ..EngineCapabilities::default()
+        };
+        for (mode, flag) in [
+            ("none", "--no-mmap"),
+            ("mmap", "--mmap"),
+            ("mlock", "--mlock"),
+            ("dio", "--direct-io"),
+        ] {
+            let command = vec![
+                "llama-server".to_string(),
+                "--load-mode".to_string(),
+                mode.to_string(),
+            ];
+            assert_eq!(
+                adapt_load_mode_for_capabilities(&command, Some(&legacy)),
+                vec!["llama-server".to_string(), flag.to_string()]
             );
         }
     }

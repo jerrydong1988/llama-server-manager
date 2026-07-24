@@ -49,7 +49,8 @@ pub struct ModelCapabilities {
 #[cfg(test)]
 mod model_capability_tests {
     use super::{
-        ensure_managed_public_model_alias, public_model_id, InstanceConfig, ModelCapabilities,
+        ensure_managed_public_model_alias, migrate_legacy_load_mode, public_model_id,
+        InstanceConfig, ModelCapabilities,
     };
 
     #[test]
@@ -146,6 +147,30 @@ mod model_capability_tests {
         assert!(!ensure_managed_public_model_alias(&mut manual));
         assert!(manual.alias.is_empty());
         assert_eq!(manual.explicit_overrides, Some(Vec::new()));
+    }
+
+    #[test]
+    fn legacy_loading_flags_migrate_to_their_historical_effective_mode() {
+        let mut config = InstanceConfig {
+            mlock: true,
+            no_mmap: true,
+            direct_io: true,
+            explicit_overrides: Some(vec!["mlock".into(), "no_mmap".into(), "direct_io".into()]),
+            ..InstanceConfig::default()
+        };
+
+        assert!(migrate_legacy_load_mode(&mut config));
+        assert_eq!(config.load_mode, "dio");
+        assert!(!config.mlock && !config.no_mmap && !config.direct_io);
+        assert_eq!(config.explicit_overrides, Some(vec!["load_mode".into()]));
+
+        let mut explicit_mmap = InstanceConfig {
+            no_mmap: false,
+            explicit_overrides: Some(vec!["no_mmap".into()]),
+            ..InstanceConfig::default()
+        };
+        assert!(migrate_legacy_load_mode(&mut explicit_mmap));
+        assert_eq!(explicit_mmap.load_mode, "mmap");
     }
 }
 
@@ -335,7 +360,13 @@ pub struct InstanceConfig {
     pub moe_cpu_layers: u32,
     #[serde(default)]
     pub cpu_moe: bool,
+    /// Unified llama.cpp model loading mode. Empty means inherit the engine default.
+    #[serde(default)]
+    pub load_mode: String,
+    /// Legacy loading fields retained only for configuration migration.
+    #[serde(default)]
     pub mlock: bool,
+    #[serde(default)]
     pub no_mmap: bool,
     #[serde(default)]
     pub no_repack: bool,
@@ -605,6 +636,50 @@ pub(crate) fn ensure_managed_public_model_alias(config: &mut InstanceConfig) -> 
     changed
 }
 
+pub(crate) fn migrate_legacy_load_mode(config: &mut InstanceConfig) -> bool {
+    const LEGACY_FIELDS: [&str; 3] = ["mlock", "no_mmap", "direct_io"];
+    let legacy_is_explicit = |field: &str, fallback: bool| {
+        config
+            .explicit_overrides
+            .as_ref()
+            .map_or(fallback, |overrides| {
+                overrides.iter().any(|candidate| candidate == field)
+            })
+    };
+
+    let mut mode = config.load_mode.trim().to_ascii_lowercase();
+    if mode.is_empty() {
+        // Preserve the effective result of the historical command order:
+        // --mlock, then --mmap/--no-mmap, then --direct-io.
+        if config.direct_io && legacy_is_explicit("direct_io", config.direct_io) {
+            mode = "dio".to_string();
+        } else if legacy_is_explicit("no_mmap", config.no_mmap) {
+            mode = if config.no_mmap { "none" } else { "mmap" }.to_string();
+        } else if config.mlock && legacy_is_explicit("mlock", config.mlock) {
+            mode = "mlock".to_string();
+        }
+    }
+
+    let had_legacy_values = config.mlock || config.no_mmap || config.direct_io;
+    let mut changed = config.load_mode != mode;
+    config.load_mode = mode;
+    if !config.load_mode.is_empty() {
+        changed |= had_legacy_values;
+        config.mlock = false;
+        config.no_mmap = false;
+        config.direct_io = false;
+        if let Some(overrides) = config.explicit_overrides.as_mut() {
+            let before = overrides.clone();
+            overrides.retain(|field| !LEGACY_FIELDS.contains(&field.as_str()));
+            if !overrides.iter().any(|field| field == "load_mode") {
+                overrides.push("load_mode".to_string());
+            }
+            changed |= *overrides != before;
+        }
+    }
+    changed
+}
+
 impl Default for InstanceConfig {
     fn default() -> Self {
         Self {
@@ -663,6 +738,7 @@ impl Default for InstanceConfig {
             flash_attn: "auto".into(),
             moe_cpu_layers: 0,
             cpu_moe: false,
+            load_mode: String::new(),
             mlock: false,
             no_mmap: false,
             no_repack: false,
@@ -853,12 +929,23 @@ pub enum WorkerStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerOrigin {
+    #[default]
+    Manual,
+    Local,
+    Ssh,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WorkerInfo {
     pub id: String,
     pub host: String,
     pub port: u16,
     pub name: String,
+    #[serde(default)]
+    pub origin: WorkerOrigin,
     #[serde(default)]
     pub devices: Vec<WorkerDevice>,
     #[serde(default)]

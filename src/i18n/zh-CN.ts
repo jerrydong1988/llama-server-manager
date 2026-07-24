@@ -181,6 +181,7 @@
     moeCpu: 'MoE CPU \u5C42\u6570', moeCpuTip: '指定保留在 CPU 的 MoE 层数，用 CPU RAM 换取较低的 GPU 显存占用。速度影响取决于模型活跃专家、内存带宽、其余 GPU 卸载和后端；仅对 MoE 模型有意义，调整后应查看加载日志并实测。',
     cpuMoe: '\u5168 MoE CPU', cpuMoeTip: '把全部 MoE 专家权重保留在 CPU，而不是只指定前 N 个 MoE 层。它通常进一步降低专家权重的 GPU 显存需求，但可能显著增加 CPU/内存带宽压力；非 MoE 模型不会由此受益。',
     mlock: '\u5185\u5B58\u9501\u5B9A', mlockTip: '请求操作系统尽量将模型映射页锁在物理内存，减少换页造成的延迟波动。它会限制系统回收内存，只有在 RAM 充足且系统允许锁页时才适合开启；内存不足时反而可能影响整机稳定性。',
+    loadMode: '\u6a21\u578b\u52a0\u8f7d\u6a21\u5f0f', loadModeTip: '\u9009\u62e9\u552f\u4e00\u7684\u6a21\u578b\u52a0\u8f7d\u7b56\u7565\uff1anone \u4f7f\u7528\u666e\u901a\u8bfb\u53d6\uff0cmmap \u4f7f\u7528\u5185\u5b58\u6620\u5c04\uff0cmlock \u6620\u5c04\u5e76\u5c1d\u8bd5\u9501\u5b9a\u5185\u5b58\uff0cdio \u4f7f\u7528\u76f4\u63a5 I/O\u3002\u7a7a\u503c\u8868\u793a\u7ee7\u627f\u5f15\u64ce\u9ed8\u8ba4\u503c\u3002',
     noMmap: '\u5185\u5B58\u6620\u5C04 (mmap)', noMmapTip: '开启时允许 llama.cpp 使用内存映射加载模型，由操作系统按需调页，通常有利于启动和共享文件页；关闭时发射 --no-mmap，改为常规读取路径，可能增加加载时 RAM 与 I/O。仅在文件系统、驱动或映射访问出现兼容问题时考虑关闭。',
   noRepack: '\u6743\u91CD\u91CD\u6253\u5305', noRepackTip: '开启时允许 llama.cpp 在适用后端上把部分权重转换为更适合计算的内存布局，可能提高推理效率但增加加载时间和额外内存；关闭时发射 --no-repack。实际收益依模型、量化和后端而异。',
     directIo: '直接 I/O', directIoTip: '绕过操作系统文件页缓存直接读取模型。[场景] 专用高速存储或需要避免模型文件挤占系统缓存时启用。[权衡] 效果取决于操作系统和存储设备，普通环境建议保持关闭。',

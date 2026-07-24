@@ -577,6 +577,8 @@ fn known_flag_value_count(flag: &str) -> Option<usize> {
         | "--fit"
         | "-fitt"
         | "-fitc"
+        | "--load-mode"
+        | "-lm"
         | "-ctk"
         | "-ctv"
         | "-ctkd"

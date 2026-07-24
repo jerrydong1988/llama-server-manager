@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Database, File, FolderOpen, FolderTree, HardDrive, Image, RefreshCw, Search, Trash2 } from 'lucide-react'
-import { confirm, open } from '@tauri-apps/plugin-dialog'
+import { confirm } from '@tauri-apps/plugin-dialog'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAppStore, type ModelInfo } from '../store'
+import { invokeApp as invoke } from '../lib/ipc'
 import { formatMessage, useI18n } from '../i18n'
 import { isPathWithinRoot, normalizePath, pathJoin } from '../utils/path'
 import { formatSize } from '../utils/format'
@@ -230,12 +231,12 @@ const ModelRepo = () => {
 
   const handleAddDirectory = async () => {
     try {
-      const dir = await open({ directory: true, title: t.modelRepo.addDir })
+      const dir = await invoke<string | null>('pick_authorized_directory', { purpose: 'model' })
       if (!dir) {
         return
       }
 
-      const nextDirs = [...new Set([...modelDirs, dir as string])]
+      const nextDirs = [...new Set([...modelDirs, dir])]
       setModelDirs(nextDirs)
       const error = await scanModels(nextDirs)
       setScanError(error ?? '')

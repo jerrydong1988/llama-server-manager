@@ -217,7 +217,7 @@ export function getConfigTemplates(lang: string): ConfigTemplate[] {
       bestFor: zh ? ['显存接近上限', '模型较大', '先启动后调优'] : ['VRAM near limit', 'Large models', 'Start before tuning'],
       highlights: zh ? ['保留自动 GPU 层数', '缩小 batch / ubatch', '限制 4K 上下文'] : ['Keep automatic GPU layers', 'Shrink batch / ubatch', 'Limit context to 4K'],
       tone: 'border-amber-500/25 bg-amber-500/10 text-amber-200',
-      changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: true, batch_size: 512, ubatch_size: 128, parallel: 1, cache_ram: 2048, mlock: false, flash_attn: 'auto', no_kv_offload: false, metrics: true, props: true, slots_enabled: true },
+      changes: { ctx_size_auto: false, ctx_size: 4096, gpu_layers_auto: true, batch_size: 512, ubatch_size: 128, parallel: 1, cache_ram: 2048, flash_attn: 'auto', no_kv_offload: false, metrics: true, props: true, slots_enabled: true },
       risks: zh ? ['长输入和高并发性能会明显受限。', '如果仍然 OOM，需要再手动降低 GPU 层数或上下文。'] : ['Long prompts and high concurrency will be limited.', 'If OOM persists, manually lower GPU layers or context size.'],
     },
     {

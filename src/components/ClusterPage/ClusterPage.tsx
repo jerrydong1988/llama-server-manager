@@ -175,7 +175,7 @@ export default function ClusterPage() {
 
   const handleStopWorker = async (worker: WorkerInfo) => {
     try {
-      await invoke('stop_local_worker', { port: worker.port })
+      await invoke('stop_worker', { id: worker.id })
       updateWorker(worker.id, { status: 'Offline' })
     } catch (error) {
       console.error('Failed to stop worker:', error)
@@ -191,7 +191,7 @@ export default function ClusterPage() {
       if (result?.ok) {
         const localHost = '127.0.0.1'
         try {
-          await invoke('add_worker', { host: localHost, port: localPort, name: `Local-${localPort}` })
+          await invoke('add_worker', { host: localHost, port: localPort, name: `Local-${localPort}`, origin: 'local' })
         } catch (error) {
           await invoke('stop_local_worker', { port: localPort }).catch(() => {})
           throw error
@@ -242,7 +242,7 @@ export default function ClusterPage() {
           throw new Error('SSH tunnel did not return a local port')
         }
         try {
-          await invoke('add_worker', { host: tunnelHost, port: tunnelPort, name: launchForm.host })
+          await invoke('add_worker', { host: tunnelHost, port: tunnelPort, name: launchForm.host, origin: 'ssh' })
         } catch (error) {
           await invoke('stop_ssh_tunnel', { port: tunnelPort }).catch(() => {})
           throw error
@@ -280,7 +280,7 @@ export default function ClusterPage() {
       return
     }
     try {
-      await invoke('add_worker', { host: formData.host, port: formData.port, name: formData.name })
+      await invoke('add_worker', { host: formData.host, port: formData.port, name: formData.name, origin: 'manual' })
       const all: WorkerInfo[] = await invoke('get_workers')
       setWorkers(all)
       setShowAddDialog(false)
@@ -306,9 +306,6 @@ export default function ClusterPage() {
       return
     }
     try {
-      if (worker.host === '127.0.0.1' || worker.host === 'localhost' || worker.host === '::1') {
-        await invoke('stop_ssh_tunnel', { port: worker.port })
-      }
       await invoke('remove_worker', { id: worker.id })
       removeWorker(worker.id)
     } catch (error) {
@@ -542,7 +539,7 @@ export default function ClusterPage() {
                           {expanded.has(worker.id) ? labels.hideDetails : labels.showDetails}
                         </Button>
                         <div className="flex w-[88px] shrink-0 items-center justify-end gap-2">
-                          {isLocalWorker(worker.host) && worker.status === 'Online' ? (
+                          {worker.origin === 'local' || worker.origin === 'ssh' ? (
                             <Button
                               onClick={() => void handleStopWorker(worker)}
                               variant="danger"
