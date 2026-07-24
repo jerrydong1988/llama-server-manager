@@ -1,4 +1,6 @@
-use crate::commands::cluster::{stable_discovered_worker_id, update_workers};
+use crate::commands::cluster::{
+    stable_discovered_worker_id, update_workers, MAX_AUTO_DISCOVERED_WORKERS,
+};
 use crate::models::{AppState, WorkerInfo, WorkerStatus};
 use tauri::Manager;
 use tokio::sync::{oneshot, Mutex};
@@ -15,17 +17,10 @@ fn service_name_from_fullname(fullname: &str) -> String {
     fullname.trim_end_matches("._rpc._tcp.local.").to_string()
 }
 
-fn mark_removed_service_offline(workers: &mut [WorkerInfo], service_name: &str) -> bool {
-    let mut changed = false;
-    for worker in workers.iter_mut().filter(|worker| {
-        worker.auto_discovered
-            && worker.name == service_name
-            && worker.status != WorkerStatus::Offline
-    }) {
-        worker.status = WorkerStatus::Offline;
-        changed = true;
-    }
-    changed
+fn remove_discovered_service(workers: &mut Vec<WorkerInfo>, service_name: &str) -> bool {
+    let previous = workers.len();
+    workers.retain(|worker| !(worker.auto_discovered && worker.name == service_name));
+    workers.len() != previous
 }
 
 pub async fn start_mdns_discovery(app: tauri::AppHandle) -> Result<String, String> {
@@ -93,14 +88,27 @@ async fn run_mdns_discovery(
                             .unwrap_or_else(|| info.get_hostname().to_string());
                         let port = info.get_port();
                         let service_name = service_name_from_fullname(info.get_fullname());
+                        if port == 0 || host.len() > 255 || service_name.len() > 255 {
+                            continue;
+                        }
                         let state = app.state::<AppState>();
                         update_workers(&state, |workers| {
                             if let Some(worker) = workers
                                 .iter_mut()
                                 .find(|worker| worker.host == host && worker.port == port)
                             {
-                                worker.status = WorkerStatus::Online;
+                                if worker.auto_discovered {
+                                    worker.status = WorkerStatus::Unknown;
+                                }
                                 worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
+                                return;
+                            }
+                            if workers
+                                .iter()
+                                .filter(|worker| worker.auto_discovered)
+                                .count()
+                                >= MAX_AUTO_DISCOVERED_WORKERS
+                            {
                                 return;
                             }
                             workers.push(WorkerInfo {
@@ -109,7 +117,7 @@ async fn run_mdns_discovery(
                                 port,
                                 name: service_name,
                                 devices: Vec::new(),
-                                status: WorkerStatus::Online,
+                                status: WorkerStatus::Unknown,
                                 last_seen: Some(chrono::Utc::now().to_rfc3339()),
                                 auto_discovered: true,
                             });
@@ -120,14 +128,12 @@ async fn run_mdns_discovery(
                         let state = app.state::<AppState>();
                         let should_update = state.workers.lock().is_ok_and(|workers| {
                             workers.iter().any(|worker| {
-                                worker.auto_discovered
-                                    && worker.name == service_name
-                                    && worker.status != WorkerStatus::Offline
+                                worker.auto_discovered && worker.name == service_name
                             })
                         });
                         if should_update {
                             update_workers(&state, |workers| {
-                                mark_removed_service_offline(workers, &service_name);
+                                remove_discovered_service(workers, &service_name);
                             })?;
                         }
                     }
@@ -166,9 +172,9 @@ mod tests {
         manual.id = "manual".into();
         manual.auto_discovered = false;
         let mut workers = vec![discovered, manual];
-        assert!(mark_removed_service_offline(&mut workers, "rpc-worker"));
-        assert_eq!(workers[0].status, WorkerStatus::Offline);
-        assert_eq!(workers[1].status, WorkerStatus::Online);
+        assert!(remove_discovered_service(&mut workers, "rpc-worker"));
+        assert_eq!(workers.len(), 1);
+        assert_eq!(workers[0].id, "manual");
     }
 }
 

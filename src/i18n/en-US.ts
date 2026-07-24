@@ -372,6 +372,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     totalVRAM: 'Total Available VRAM',
     selectedWorkers: 'Selected Workers',
     testConnection: 'Test Connection',
+    approveWorker: 'Trust Worker',
     refreshDevices: 'Refresh Devices',
     deviceType: 'Device Type',
     deviceName: 'Device Name',

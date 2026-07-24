@@ -595,6 +595,10 @@ impl RuntimeSupervisor {
         self: &Arc<Self>,
         spec: RuntimeLaunchSpec,
     ) -> Result<RunningInstance, String> {
+        crate::commands::server::validate_instance_id(&spec.instance_id)
+            .map_err(|error| error.to_string())?;
+        crate::commands::server::validate_public_bind_auth(&spec.config)
+            .map_err(|error| error.to_string())?;
         if spec.command.is_empty() || spec.command[0].trim().is_empty() {
             return Err("runtime launch command is empty".into());
         }

@@ -875,6 +875,9 @@ pub async fn probe_engine_capabilities(
         .find(|engine| engine.id == engine_id)
         .cloned()
         .ok_or_else(|| "engine not found".to_string())?;
+    let authorized_root =
+        crate::security::require_authorized_engine_root(std::path::Path::new(&engine.dir))?;
+    crate::security::require_path_within_root(std::path::Path::new(&engine.exe), &authorized_root)?;
     let mut probed = tokio::task::spawn_blocking(move || probe_engine(engine))
         .await
         .map_err(|error| format!("engine capability probe task failed: {error}"))?;

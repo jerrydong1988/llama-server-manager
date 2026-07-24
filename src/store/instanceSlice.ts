@@ -144,6 +144,10 @@ export function createInstanceSlice(
     })),
     generateCommand: async (config: InstanceConfig, engineExe: string) => {
       const normalized = normalizeStoredConfig(config, get().models)
+      const matchingEngine = get().engines.find(engine => engine.exe === engineExe)
+      if (!normalized.config.engine_id && matchingEngine) {
+        normalized.config = { ...normalized.config, engine_id: matchingEngine.id }
+      }
       try {
         return await invoke<GeneratedServerCommand>('generate_server_command', { config: normalized.config, engineExe })
       } catch (error) {
@@ -161,16 +165,6 @@ export function createInstanceSlice(
         }
 
         const normalized = normalizeStoredConfig(instance.config, models)
-        if (normalized.changes.length > 0) {
-          set((state) => ({
-            instances: state.instances.map((item) => (
-              item.id === id ? { ...item, config: normalized.config } : item
-            )),
-          }))
-          await get().saveConfig()
-        }
-        await configSaveCoordinator.waitForIdle()
-
         const engine = resolveEffectiveEngine(normalized.config, engines, defaultEngineId)
 
         if (!engine) {
@@ -179,6 +173,18 @@ export function createInstanceSlice(
             : 'No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' })
           return
         }
+        if (!normalized.config.engine_id) {
+          normalized.config = { ...normalized.config, engine_id: engine.id }
+        }
+        if (normalized.changes.length > 0 || normalized.config.engine_id !== instance.config.engine_id) {
+          set((state) => ({
+            instances: state.instances.map((item) => (
+              item.id === id ? { ...item, config: normalized.config } : item
+            )),
+          }))
+          await get().saveConfig()
+        }
+        await configSaveCoordinator.waitForIdle()
 
         await invoke('start_server', {
           instanceId: id,

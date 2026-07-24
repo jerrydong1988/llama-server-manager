@@ -1587,6 +1587,46 @@ fn normalized_engine_path(path: &str) -> std::path::PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path))
 }
 
+pub(crate) fn validate_instance_id(instance_id: &str) -> AppResult<()> {
+    let instance_id = instance_id.trim();
+    if instance_id.is_empty()
+        || instance_id.len() > 128
+        || !instance_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(AppError::new(
+            "INVALID_INSTANCE_ID",
+            "实例 ID 只能包含字母、数字、连字符和下划线，且长度不能超过 128 个字符。",
+            false,
+        ));
+    }
+    Ok(())
+}
+
+fn is_loopback_bind_host(host: &str) -> bool {
+    let trimmed = host.trim();
+    let host = trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(trimmed);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+pub(crate) fn validate_public_bind_auth(config: &InstanceConfig) -> AppResult<()> {
+    if !is_loopback_bind_host(&config.host) && effective_api_key(config).is_empty() {
+        return Err(AppError::new(
+            "PUBLIC_SERVER_REQUIRES_API_KEY",
+            "llama-server 监听非本机地址时必须配置 --api-key 或 --api-key-file。",
+            false,
+        ));
+    }
+    Ok(())
+}
+
 fn trusted_engine_capabilities(
     state: &AppState,
     config: &InstanceConfig,
@@ -1594,15 +1634,9 @@ fn trusted_engine_capabilities(
 ) -> EngineCapabilityResolution {
     let requested_path = normalized_engine_path(engine_exe);
     let mut engines = state.engines.lock().unwrap();
-    let selected_index = if config.engine_id.trim().is_empty() {
-        engines
-            .iter()
-            .position(|engine| normalized_engine_path(&engine.exe) == requested_path)
-    } else {
-        engines
-            .iter()
-            .position(|engine| engine.id == config.engine_id)
-    };
+    let selected_index = engines
+        .iter()
+        .position(|engine| engine.id == config.engine_id);
     let Some(selected_index) = selected_index else {
         return EngineCapabilityResolution::Missing;
     };
@@ -1631,7 +1665,11 @@ fn validate_configured_engine(
     engine_exe: &str,
 ) -> AppResult<()> {
     if config.engine_id.trim().is_empty() {
-        return Ok(());
+        return Err(AppError::new(
+            "CONFIGURED_ENGINE_REQUIRED",
+            "实例必须引用已扫描并确认的 llama-server 引擎。",
+            false,
+        ));
     }
     let requested_path = normalized_engine_path(engine_exe);
     let engines = state.engines.lock().unwrap();
@@ -1649,6 +1687,11 @@ fn validate_configured_engine(
             false,
         ));
     }
+    let authorized_root =
+        crate::security::require_authorized_engine_root(std::path::Path::new(&engine.dir))
+            .map_err(|message| AppError::new("CONFIGURED_ENGINE_UNAUTHORIZED", message, false))?;
+    crate::security::require_path_within_root(std::path::Path::new(engine_exe), &authorized_root)
+        .map_err(|message| AppError::new("CONFIGURED_ENGINE_UNAUTHORIZED", message, false))?;
     Ok(())
 }
 
@@ -1727,6 +1770,7 @@ pub async fn generate_server_command(
     let manual = uses_manual_command(&config);
     let (config, _, command) = prepare_launch_checked(config, &engine_exe)?;
     validate_tls_configuration(&config)?;
+    validate_public_bind_auth(&config)?;
     if manual {
         return Ok(GeneratedServerCommand {
             command,
@@ -1775,10 +1819,12 @@ pub async fn start_server(
     app: tauri::AppHandle,
 ) -> AppResult<()> {
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
+    validate_instance_id(&instance_id)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let manual = uses_manual_command(&config);
     let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
     validate_tls_configuration(&config)?;
+    validate_public_bind_auth(&config)?;
     let cmd = if manual {
         generated_cmd
     } else {
@@ -2946,88 +2992,30 @@ pub async fn open_browser(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)] // Tauri expands the endpoint snapshot into IPC fields.
 pub async fn test_connection(
-    host: String,
-    port: u16,
-    api_key: Option<String>,
-    api_key_file: Option<String>,
-    use_tls: Option<bool>,
-    api_prefix: Option<String>,
-    instance_id: Option<String>,
+    instance_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    let launch_config = instance_id.as_deref().and_then(|instance_id| {
-        state
-            .running
-            .lock()
-            .unwrap()
-            .get(instance_id)
-            .and_then(|running| running.launch_config.clone())
-    });
-    let effective_api_key = launch_config.as_ref().map(effective_api_key).or_else(|| {
-        api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-            .and_then(|keys| {
-                keys.split(',').find_map(|key| {
-                    let key = key.trim();
-                    (!key.is_empty()).then(|| key.to_string())
-                })
-            })
-            .or_else(|| {
-                api_key_file
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|path| !path.is_empty())
-                    .and_then(|path| {
-                        std::fs::read_to_string(path).ok().and_then(|content| {
-                            content.lines().find_map(|line| {
-                                let key = line.trim().trim_start_matches('\u{feff}');
-                                if key.is_empty() || key.starts_with('#') {
-                                    None
-                                } else {
-                                    Some(key.to_string())
-                                }
-                            })
-                        })
-                    })
-            })
-    });
-    let endpoint_host = launch_config
-        .as_ref()
-        .map(|config| config.host.as_str())
-        .unwrap_or(&host);
-    let endpoint_port = launch_config
-        .as_ref()
-        .map(|config| config.port)
-        .unwrap_or(port);
+    let launch_config = running_launch_config(state.inner(), &instance_id)?;
+    let api_key = effective_api_key(&launch_config);
+    let endpoint_host = launch_config.host.as_str();
+    let endpoint_port = launch_config.port;
     let connect_host = if endpoint_host == "0.0.0.0" || endpoint_host == "::" {
         "localhost"
     } else {
         endpoint_host
     };
-    let scheme = launch_config
-        .as_ref()
-        .map(effective_server_scheme)
-        .unwrap_or_else(|| {
-            if use_tls.unwrap_or(false) {
-                "https"
-            } else {
-                "http"
-            }
-        });
-    let prefix = launch_config
-        .as_ref()
-        .map(|config| config.api_prefix.as_str())
-        .unwrap_or_else(|| api_prefix.as_deref().unwrap_or(""));
+    let scheme = effective_server_scheme(&launch_config);
+    let prefix = launch_config.api_prefix.as_str();
     let health_url =
         crate::utils::service_url(scheme, connect_host, endpoint_port, prefix, "/health");
-    let health_status = match http_get(&health_url, effective_api_key.as_deref())
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-        .await
+    let health_status = match http_get(
+        &health_url,
+        (!api_key.is_empty()).then_some(api_key.as_str()),
+    )
+    .timeout(std::time::Duration::from_secs(3))
+    .send()
+    .await
     {
         Ok(resp) if resp.status().is_success() => Ok(resp.status()),
         Ok(resp) => Err(format!("HTTP {}", resp.status())),
@@ -3040,10 +3028,13 @@ pub async fn test_connection(
 
     let models_url =
         crate::utils::service_url(scheme, connect_host, endpoint_port, prefix, "/v1/models");
-    let models_status = match http_get(&models_url, effective_api_key.as_deref())
-        .timeout(std::time::Duration::from_secs(3))
-        .send()
-        .await
+    let models_status = match http_get(
+        &models_url,
+        (!api_key.is_empty()).then_some(api_key.as_str()),
+    )
+    .timeout(std::time::Duration::from_secs(3))
+    .send()
+    .await
     {
         Ok(resp) if resp.status().is_success() => Ok(resp.status()),
         Ok(resp) => Err(format!("HTTP {}", resp.status())),
@@ -3284,6 +3275,17 @@ fn http_get(url: &str, api_key: Option<&str>) -> reqwest::RequestBuilder {
     }
 }
 
+fn running_launch_config(state: &AppState, instance_id: &str) -> Result<InstanceConfig, String> {
+    validate_instance_id(instance_id).map_err(|error| error.to_string())?;
+    state
+        .running
+        .lock()
+        .unwrap()
+        .get(instance_id)
+        .and_then(|running| running.launch_config.clone())
+        .ok_or_else(|| "只能诊断由本应用启动且当前正在运行的实例".to_string())
+}
+
 fn probe_status_is_success(status: &Result<reqwest::StatusCode, String>) -> bool {
     status
         .as_ref()
@@ -3292,29 +3294,24 @@ fn probe_status_is_success(status: &Result<reqwest::StatusCode, String>) -> bool
 }
 
 pub async fn get_slots(
-    host: String,
-    port: u16,
-    api_key: Option<String>,
-    use_tls: Option<bool>,
-    api_prefix: Option<String>,
+    instance_id: String,
+    state: tauri::State<'_, AppState>,
 ) -> Result<Vec<SlotInfo>, String> {
-    let h = if host == "0.0.0.0" {
+    let config = running_launch_config(state.inner(), &instance_id)?;
+    let h = if config.host == "0.0.0.0" || config.host == "::" {
         "localhost"
     } else {
-        &host
+        &config.host
     };
     let url = crate::utils::service_url(
-        if use_tls.unwrap_or(false) {
-            "https"
-        } else {
-            "http"
-        },
+        effective_server_scheme(&config),
         h,
-        port,
-        api_prefix.as_deref().unwrap_or(""),
+        config.port,
+        &config.api_prefix,
         "/slots",
     );
-    let resp = http_get(&url, api_key.as_deref())
+    let api_key = effective_api_key(&config);
+    let resp = http_get(&url, (!api_key.is_empty()).then_some(api_key.as_str()))
         .send()
         .await
         .map_err(|e| format!("请求失败: {}", e))?;
@@ -3347,29 +3344,27 @@ pub struct MetricsInfo {
 }
 
 pub async fn get_metrics(
-    host: String,
-    port: u16,
-    api_key: Option<String>,
-    use_tls: Option<bool>,
-    api_prefix: Option<String>,
+    instance_id: String,
+    state: tauri::State<'_, AppState>,
 ) -> Result<Option<MetricsInfo>, String> {
-    let h = if host == "0.0.0.0" {
+    let config = running_launch_config(state.inner(), &instance_id)?;
+    let h = if config.host == "0.0.0.0" || config.host == "::" {
         "localhost"
     } else {
-        &host
+        &config.host
     };
     let url = crate::utils::service_url(
-        if use_tls.unwrap_or(false) {
-            "https"
-        } else {
-            "http"
-        },
+        effective_server_scheme(&config),
         h,
-        port,
-        api_prefix.as_deref().unwrap_or(""),
+        config.port,
+        &config.api_prefix,
         "/metrics",
     );
-    let resp = match http_get(&url, api_key.as_deref()).send().await {
+    let api_key = effective_api_key(&config);
+    let resp = match http_get(&url, (!api_key.is_empty()).then_some(api_key.as_str()))
+        .send()
+        .await
+    {
         Ok(r) if r.status().is_success() => r,
         Ok(r) if r.status().as_u16() == 404 => return Ok(None),
         _ => return Ok(None),
@@ -3495,6 +3490,10 @@ fn reconnect_instance_logs(
     app: tauri::AppHandle,
     parse_performance: bool,
 ) {
+    if let Err(error) = validate_instance_id(instance_id) {
+        eprintln!("Refusing to reconnect an invalid instance log path: {error}");
+        return;
+    }
     let log_path = config_dir.join("logs").join(format!("{}.log", instance_id));
     let id_log = instance_id.to_string();
     let telemetry_session_id = crate::commands::telemetry::latest_open_session_id(&id_log)
@@ -5315,6 +5314,48 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn non_loopback_server_bind_requires_an_api_key() {
+        let public = InstanceConfig {
+            host: "0.0.0.0".into(),
+            ..InstanceConfig::default()
+        };
+        assert!(validate_public_bind_auth(&public).is_err());
+
+        let authenticated = InstanceConfig {
+            api_key: "secret".into(),
+            ..public
+        };
+        assert!(validate_public_bind_auth(&authenticated).is_ok());
+
+        let key_file = std::env::temp_dir().join(format!(
+            "llama-server-manager-exposure-key-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&key_file, b"file-secret\n").unwrap();
+        let file_authenticated = InstanceConfig {
+            host: "::".into(),
+            api_key_file: key_file.to_string_lossy().to_string(),
+            ..InstanceConfig::default()
+        };
+        assert!(validate_public_bind_auth(&file_authenticated).is_ok());
+        let _ = std::fs::remove_file(key_file);
+
+        let loopback = InstanceConfig {
+            host: "127.0.0.1".into(),
+            ..InstanceConfig::default()
+        };
+        assert!(validate_public_bind_auth(&loopback).is_ok());
+    }
+
+    #[test]
+    fn instance_ids_cannot_escape_the_log_directory() {
+        assert!(validate_instance_id("instance-1234").is_ok());
+        assert!(validate_instance_id("../instances").is_err());
+        assert!(validate_instance_id("nested/instance").is_err());
+        assert!(validate_instance_id("").is_err());
+    }
+
+    #[test]
     fn recorded_process_identity_rejects_pid_reuse() {
         let running = RunningInstance {
             instance_id: "instance-1".into(),
@@ -5351,11 +5392,15 @@ mod perf_parser_tests {
         #[cfg(not(target_os = "windows"))]
         let mut child = Command::new("sleep").arg("3").spawn().unwrap();
 
-        let (_, memory_mb) = get_process_metrics(&mut system, child.id());
+        let child_pid = Pid::from_u32(child.id());
+        let (cpu_percent, memory_mb) = get_process_metrics(&mut system, child.id());
+        let process_was_discovered = system.process(child_pid).is_some();
         let _ = child.kill();
         let _ = child.wait();
 
-        assert!(memory_mb > 0.0);
+        assert!(process_was_discovered);
+        assert!(cpu_percent.is_finite());
+        assert!(memory_mb.is_finite() && memory_mb >= 0.0);
     }
 
     #[test]
@@ -5482,29 +5527,13 @@ pub mod ipc {
     }
 
     #[tauri::command]
-    #[allow(clippy::too_many_arguments)] // IPC compatibility wrapper mirrors the command fields.
     pub async fn test_connection(
-        host: String,
-        port: u16,
-        api_key: Option<String>,
-        api_key_file: Option<String>,
-        use_tls: Option<bool>,
-        api_prefix: Option<String>,
-        instance_id: Option<String>,
+        instance_id: String,
         state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<String> {
-        super::test_connection(
-            host,
-            port,
-            api_key,
-            api_key_file,
-            use_tls,
-            api_prefix,
-            instance_id,
-            state,
-        )
-        .await
-        .map_err(crate::error::AppError::from)
+        super::test_connection(instance_id, state)
+            .await
+            .map_err(crate::error::AppError::from)
     }
 
     #[tauri::command]
@@ -5533,26 +5562,20 @@ pub mod ipc {
 
     #[tauri::command]
     pub async fn get_slots(
-        host: String,
-        port: u16,
-        api_key: Option<String>,
-        use_tls: Option<bool>,
-        api_prefix: Option<String>,
+        instance_id: String,
+        state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<Vec<SlotInfo>> {
-        super::get_slots(host, port, api_key, use_tls, api_prefix)
+        super::get_slots(instance_id, state)
             .await
             .map_err(crate::error::AppError::from)
     }
 
     #[tauri::command]
     pub async fn get_metrics(
-        host: String,
-        port: u16,
-        api_key: Option<String>,
-        use_tls: Option<bool>,
-        api_prefix: Option<String>,
+        instance_id: String,
+        state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<Option<MetricsInfo>> {
-        super::get_metrics(host, port, api_key, use_tls, api_prefix)
+        super::get_metrics(instance_id, state)
             .await
             .map_err(crate::error::AppError::from)
     }

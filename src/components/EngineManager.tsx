@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Cpu, FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Search, ShieldCheck, Star, Trash2 } from 'lucide-react'
-import { confirm, message, open } from '@tauri-apps/plugin-dialog'
+import { confirm, message } from '@tauri-apps/plugin-dialog'
+import { invokeApp as invoke } from '../lib/ipc'
 import { useAppStore, type EngineInfo } from '../store'
 import { formatMessage, useI18n } from '../i18n'
 import { getEngineLabels } from '../i18n/pageLabels'
@@ -105,10 +106,10 @@ const EngineManager = () => {
 
   const handleAddDirectory = async () => {
     try {
-      const dir = await open({ directory: true, title: t.engineMgr.addDirTitle })
+      const dir = await invoke<string | null>('pick_authorized_directory', { purpose: 'engine' })
       if (!dir) return
 
-      const nextDirs = [...new Set([...engineDirs, dir as string])]
+      const nextDirs = [...new Set([...engineDirs, dir])]
       setEngineDirs(nextDirs)
       await scanEngines(nextDirs)
     } catch {

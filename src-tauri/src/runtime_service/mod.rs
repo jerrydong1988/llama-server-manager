@@ -360,6 +360,13 @@ fn load_control_token() -> Result<String, String> {
     Ok(token.to_string())
 }
 
+fn rotate_control_token() -> Result<String, String> {
+    let token = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    crate::persistence::atomic_write(&transport::control_token_path(), token.as_bytes(), None)
+        .map_err(|error| format!("failed to rotate runtime control token: {error}"))?;
+    Ok(token)
+}
+
 async fn call_with_token(token: String, command: RuntimeCommand) -> Result<RuntimeReply, String> {
     let request = RuntimeRequest {
         protocol_version: RUNTIME_PROTOCOL_VERSION,
@@ -490,8 +497,22 @@ fn append_runtime_startup_failure(error: &str) {
 
 pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
     let _transition = RUNTIME_START_LOCK.lock().await;
-    let token = load_or_create_control_token()?;
-    if ping_with_token(token.clone()).await {
+    let mut token = load_or_create_control_token()?;
+    let runtime_lock_probe = transport::acquire_runtime_lock()?;
+    if runtime_lock_probe.is_none() {
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        loop {
+            if ping_with_token(token.clone()).await {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err(
+                    "runtime lock is held but the authenticated service is unavailable".into(),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            token = load_control_token()?;
+        }
         let status = runtime_status().await?;
         if status.service_version == env!("CARGO_PKG_VERSION")
             && has_required_runtime_capabilities(&status)
@@ -499,16 +520,19 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
             return Ok(status);
         }
         shutdown(false).await?;
-        if !transport::wait_until_stopped(Duration::from_secs(6)).await {
+        if !transport::wait_until_stopped(&token, Duration::from_secs(6)).await {
             return Err(format!(
                 "runtime service {} did not stop for upgrade to {}",
                 status.service_version,
                 env!("CARGO_PKG_VERSION")
             ));
         }
+    } else {
+        drop(runtime_lock_probe);
     }
+    token = rotate_control_token()?;
     spawn_runtime_process()?;
-    if !transport::wait_until_ready(Duration::from_secs(8)).await {
+    if !transport::wait_until_ready(&token, Duration::from_secs(8)).await {
         return Err(format!(
             "runtime service did not become ready; inspect {}",
             transport::service_log_path().display()
@@ -532,10 +556,7 @@ pub fn run_runtime_service() -> Result<(), String> {
         .map_err(|error| format!("failed to create runtime service executor: {error}"))
         .and_then(|runtime| {
             runtime.block_on(async {
-                let token = load_or_create_control_token()?;
-                if ping_with_token(token.clone()).await {
-                    return Ok(());
-                }
+                let mut token = load_or_create_control_token()?;
                 let Some(runtime_lock) = transport::acquire_runtime_lock()? else {
                     return Ok(());
                 };
@@ -543,11 +564,15 @@ pub fn run_runtime_service() -> Result<(), String> {
                 if is_runtime_autostart_invocation() && !supervisor.background_enabled() {
                     return Ok(());
                 }
+                if is_runtime_autostart_invocation() {
+                    token = rotate_control_token()?;
+                }
                 let registered_for_login =
                     std::sync::Arc::new(AtomicBool::new(runtime_registration_enabled()));
                 let supervisor_for_initialization = supervisor.clone();
                 transport::run_server(
                     runtime_lock,
+                    token.clone(),
                     move || {
                         let supervisor = supervisor_for_initialization.clone();
                         async move {

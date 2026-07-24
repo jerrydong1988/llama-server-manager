@@ -29,7 +29,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
   }, [value])
 
   const onlineWorkers = useMemo(() =>
-    workers.filter(w => w.status === 'Online' || w.status === 'Unknown'),
+    workers.filter(w => !w.auto_discovered && (w.status === 'Online' || w.status === 'Unknown')),
     [workers]
   )
 
@@ -53,7 +53,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
 
   const syncFromCluster = () => {
     // Select all online workers
-    const online = workers.filter(w => w.status === 'Online').map(w => formatHostPort(w.host, w.port))
+    const online = workers.filter(w => !w.auto_discovered && w.status === 'Online').map(w => formatHostPort(w.host, w.port))
     onChange(online.join(','))
   }
 

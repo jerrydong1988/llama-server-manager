@@ -34,6 +34,8 @@ socket2 = "0.5"
 mdns-sd = "0.20"
 rusqlite = { version = "0.40.1", default-features = false, features = ["bundled"] }
 axum = "0.7"
+base64 = "0.22"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_System_Threading"] }

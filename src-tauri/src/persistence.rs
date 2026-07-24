@@ -18,6 +18,53 @@ fn temporary_path(path: &Path) -> PathBuf {
     parent_dir(path).join(format!(".{name}.{}.tmp", uuid::Uuid::new_v4()))
 }
 
+#[cfg(unix)]
+fn protect_directory(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    if path == Path::new(".") {
+        return Ok(());
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("failed to protect directory {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn protect_directory(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn protect_file(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("failed to protect file {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn protect_file(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+pub fn enforce_private_file(path: &Path) -> Result<(), String> {
+    protect_directory(parent_dir(path))?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "private state file cannot be a symlink: {}",
+            path.display()
+        )),
+        Ok(metadata) if metadata.is_file() => protect_file(path),
+        Ok(_) => Err(format!(
+            "private state path is not a file: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to inspect private state file {}: {error}",
+            path.display()
+        )),
+    }
+}
+
 fn sync_file(path: &Path) -> Result<(), String> {
     OpenOptions::new()
         .read(true)
@@ -115,6 +162,8 @@ pub fn replace_file(
             parent_dir(destination).display()
         )
     })?;
+    protect_directory(parent_dir(destination))?;
+    protect_file(source)?;
     sync_file(source)?;
 
     if let Some(backup_path) = backup.filter(|_| destination.is_file()) {
@@ -124,6 +173,7 @@ pub fn replace_file(
                 parent_dir(backup_path).display()
             )
         })?;
+        protect_directory(parent_dir(backup_path))?;
         let backup_temp = temporary_path(backup_path);
         let backup_result = (|| {
             std::fs::copy(destination, &backup_temp).map_err(|error| {
@@ -132,8 +182,10 @@ pub fn replace_file(
                     backup_path.display()
                 )
             })?;
+            protect_file(&backup_temp)?;
             sync_file(&backup_temp)?;
             replace_path_raw(&backup_temp, backup_path)?;
+            protect_file(backup_path)?;
             sync_parent(backup_path)
         })();
         if backup_result.is_err() {
@@ -143,6 +195,7 @@ pub fn replace_file(
     }
 
     replace_path_raw(source, destination)?;
+    protect_file(destination)?;
     sync_parent(destination)
 }
 
@@ -153,18 +206,22 @@ pub fn atomic_write(path: &Path, contents: &[u8], backup: Option<&Path>) -> Resu
             parent_dir(path).display()
         )
     })?;
+    protect_directory(parent_dir(path))?;
     let temporary = temporary_path(path);
     let result = (|| {
-        let mut file = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&temporary)
-            .map_err(|error| {
-                format!(
-                    "failed to create temporary file {}: {error}",
-                    temporary.display()
-                )
-            })?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary).map_err(|error| {
+            format!(
+                "failed to create temporary file {}: {error}",
+                temporary.display()
+            )
+        })?;
         file.write_all(contents).map_err(|error| {
             format!(
                 "failed to write temporary file {}: {error}",
@@ -184,6 +241,7 @@ pub fn atomic_write(path: &Path, contents: &[u8], backup: Option<&Path>) -> Resu
             )
         })?;
         drop(file);
+        protect_file(&temporary)?;
         replace_file(&temporary, path, backup)
     })();
     if result.is_err() {
@@ -225,6 +283,29 @@ mod tests {
 
         assert!(replace_file(&missing, &path, None).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"old");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_forces_private_directory_and_file_modes() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = test_dir("permissions");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = directory.join("state.json");
+
+        atomic_write(&path, b"private", None).unwrap();
+
+        assert_eq!(
+            std::fs::metadata(&directory).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 }

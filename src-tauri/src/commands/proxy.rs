@@ -39,6 +39,8 @@ static PROXY_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 });
 const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_PROXY_JSON_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VectorRequestMetadata {
@@ -381,10 +383,15 @@ fn next_proxy_task_id() -> u32 {
 }
 
 fn is_local_bind_host(host: &str) -> bool {
-    matches!(
-        host.trim(),
-        "" | "localhost" | "127.0.0.1" | "::1" | "[::1]"
-    )
+    let trimmed = host.trim();
+    let host = trimmed
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(trimmed);
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
 fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
@@ -439,6 +446,16 @@ pub(crate) fn normalize_and_validate_proxy_config(
     mut config: ProxyConfig,
     instances: &HashMap<String, InstanceConfig>,
 ) -> Result<ProxyConfig, String> {
+    config.host = config.host.trim().to_string();
+    if config.host.is_empty() {
+        config.host = "127.0.0.1".to_string();
+    }
+    if !is_local_bind_host(&config.host) {
+        return Err(
+            "内置代理仅允许监听本机回环地址；远程访问请使用提供 TLS 的反向代理或 SSH 隧道。"
+                .to_string(),
+        );
+    }
     config.default_instance_id = config.default_instance_id.trim().to_string();
     let mut route_ids = HashSet::new();
     for route in &mut config.routes {
@@ -659,15 +676,20 @@ fn resolve_proxy_target_from(
     None
 }
 
-fn requested_model_from_body(body: &[u8]) -> Option<String> {
-    serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("model")
-                .and_then(|model| model.as_str())
-                .map(|s| s.to_string())
-        })
+fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Ok(None);
+    };
+    let Some(model) = value.get("model").and_then(|model| model.as_str()) else {
+        return Ok(None);
+    };
+    if model.len() > MAX_PROXY_MODEL_SELECTOR_BYTES {
+        return Err(format!(
+            "model selector exceeds {} bytes",
+            MAX_PROXY_MODEL_SELECTOR_BYTES
+        ));
+    }
+    Ok(Some(model.to_string()))
 }
 
 fn rewrite_request_model(body: &Bytes, upstream_model_id: &str) -> Bytes {
@@ -872,8 +894,8 @@ fn validate_proxy_config_update(
         .and_then(|value| value.split_once(']').map(|(host, _)| host))
         .or_else(|| bound_addr.rsplit_once(':').map(|(host, _)| host))
         .unwrap_or(bound_addr);
-    if !is_local_bind_host(bound_host) && next.public_api_key.trim().is_empty() {
-        return Err("代理正在监听非本机地址，公开 API Key 不能为空".to_string());
+    if !is_local_bind_host(bound_host) {
+        return Err("代理运行期间检测到非本机监听地址；请停止代理并改为回环地址".to_string());
     }
     Ok(())
 }
@@ -913,6 +935,37 @@ fn should_forward_request_header(name: &str, connection_tokens: &HashSet<String>
 
 fn plain_response(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+fn append_bounded_response_chunk(
+    body: &mut Vec<u8>,
+    chunk: &[u8],
+    limit: usize,
+) -> Result<(), String> {
+    if body.len().saturating_add(chunk.len()) > limit {
+        return Err(format!("upstream JSON response exceeds {limit} bytes"));
+    }
+    body.extend_from_slice(chunk);
+    Ok(())
+}
+
+async fn collect_bounded_response_body(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<Bytes, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(format!("upstream JSON response exceeds {limit} bytes"));
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| error.to_string())?;
+        append_bounded_response_chunk(&mut body, &chunk, limit)?;
+    }
+    Ok(Bytes::from(body))
 }
 
 async fn proxy_health(State(router_state): State<ProxyRouterState>) -> Json<ProxyStatus> {
@@ -1002,7 +1055,10 @@ async fn proxy_openai(
 ) -> Response {
     let snapshot = router_state.source.proxy_snapshot();
     let proxy_config = snapshot.config.clone();
-    let requested_model = requested_model_from_body(&body);
+    let requested_model = match requested_model_from_body(&body) {
+        Ok(model) => model,
+        Err(error) => return plain_response(StatusCode::BAD_REQUEST, &error),
+    };
     let vector_metadata = vector_request_metadata(uri.path(), &body);
     let target = match resolve_proxy_target_from(
         &snapshot.config,
@@ -1120,17 +1176,17 @@ async fn proxy_openai(
         recorded: false,
     };
     if response_is_json && !response_is_sse {
-        let response_body = match response.bytes().await {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                let error_text = err.to_string();
-                telemetry_guard.record_once(Some(error_text.clone()));
-                return plain_response(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("proxy response error: {error_text}"),
-                );
-            }
-        };
+        let response_body =
+            match collect_bounded_response_body(response, MAX_PROXY_JSON_RESPONSE_BYTES).await {
+                Ok(bytes) => bytes,
+                Err(error_text) => {
+                    telemetry_guard.record_once(Some(error_text.clone()));
+                    return plain_response(
+                        StatusCode::BAD_GATEWAY,
+                        &format!("proxy response error: {error_text}"),
+                    );
+                }
+            };
         telemetry_guard.record_once(if status_success {
             None
         } else {
@@ -1442,8 +1498,8 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
         }
     };
     config.enabled = true;
-    if !is_local_bind_host(&config.host) && config.public_api_key.trim().is_empty() {
-        let msg = "代理监听非本机地址时必须设置公开 API Key".to_string();
+    if !is_local_bind_host(&config.host) {
+        let msg = "内置代理仅允许监听本机回环地址".to_string();
         *state.proxy_last_error.lock().unwrap() = Some(msg.clone());
         return Err(msg);
     }
@@ -1753,6 +1809,45 @@ mod tests {
             "choices": []
         }))
         .into_response()
+    }
+
+    #[test]
+    fn proxy_listener_defaults_to_loopback_and_rejects_cleartext_public_bindings() {
+        let instances = HashMap::new();
+        let local = ProxyConfig {
+            host: "   ".into(),
+            ..ProxyConfig::default()
+        };
+        let normalized = super::normalize_and_validate_proxy_config(local, &instances).unwrap();
+        assert_eq!(normalized.host, "127.0.0.1");
+
+        let public = ProxyConfig {
+            host: "0.0.0.0".into(),
+            public_api_key: "still-cleartext".into(),
+            ..ProxyConfig::default()
+        };
+        assert!(super::normalize_and_validate_proxy_config(public, &instances).is_err());
+    }
+
+    #[test]
+    fn model_selector_and_buffered_json_response_are_bounded() {
+        let accepted = serde_json::to_vec(&json!({ "model": "public-model" })).unwrap();
+        assert_eq!(
+            super::requested_model_from_body(&accepted)
+                .unwrap()
+                .as_deref(),
+            Some("public-model")
+        );
+        let oversized = serde_json::to_vec(&json!({
+            "model": "x".repeat(super::MAX_PROXY_MODEL_SELECTOR_BYTES + 1)
+        }))
+        .unwrap();
+        assert!(super::requested_model_from_body(&oversized).is_err());
+
+        let mut body = Vec::new();
+        super::append_bounded_response_chunk(&mut body, b"1234", 5).unwrap();
+        assert!(super::append_bounded_response_chunk(&mut body, b"67", 5).is_err());
+        assert_eq!(body, b"1234");
     }
 
     #[test]

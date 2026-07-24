@@ -444,9 +444,6 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       try {
         await invoke('reset_download_for_redownload', {
           taskId,
-          fileName: task.fileName,
-          repoId: task.repoId,
-          saveDir: task.saveDir,
         })
       } catch (error) {
         get().addRuntimeWarning(`重新下载准备失败：${String(error)}`)

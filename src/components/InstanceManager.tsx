@@ -227,12 +227,6 @@ const InstanceManager = () => {
     setTestResults(state => ({ ...state, [inst.id]: 'checking' }))
     try {
       const result = await invoke('test_connection', {
-        host: inst.config.host,
-        port: inst.config.port,
-        apiKey: inst.config.api_key || null,
-        apiKeyFile: inst.config.api_key_file || null,
-        useTls: Boolean(inst.config.ssl_key_file && inst.config.ssl_cert_file),
-        apiPrefix: inst.config.api_prefix || null,
         instanceId: inst.id,
       })
       if (!mountedRef.current) return
@@ -872,21 +866,6 @@ const InstanceManager = () => {
                     {engine.name} <span className="text-xs text-slate-400">({engine.backend})</span>
                   </button>
                 ))}
-                <button
-                  onClick={() => {
-                    const state = useAppStore.getState()
-                    const idx = state.instances.findIndex(i => i.id === enginePickerForId)
-                    if (idx < 0) { setEnginePickerForId(''); return }
-                    const next = [...state.instances]
-                    next[idx] = { ...next[idx], config: { ...next[idx].config, engine_id: '' } }
-                    useAppStore.setState({ instances: next })
-                    void useAppStore.getState().saveConfig().catch(() => {})
-                    setEnginePickerForId('')
-                  }}
-                  className={`w-full border-t border-slate-200 px-4 py-2 text-left text-sm hover:bg-slate-100 dark:border-slate-800 dark:hover:bg-slate-800 ${!inst.config.engine_id ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300' : ''}`}
-                >
-                  {t.instance.sysPath}
-                </button>
               </div>
             </Surface>
           </div>

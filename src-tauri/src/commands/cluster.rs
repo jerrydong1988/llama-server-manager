@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::State;
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::time::timeout as tokio_timeout;
 
 use crate::models::{AppState, WorkerDevice, WorkerInfo, WorkerStatus};
@@ -49,6 +50,7 @@ const VIRTUAL_KEYWORDS: &[&str] = &[
 ];
 
 static WORKERS_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+pub(crate) const MAX_AUTO_DISCOVERED_WORKERS: usize = 128;
 
 // -------------------------------------------------------------------
 // Persistence.
@@ -76,11 +78,22 @@ fn load_workers_from(path: &std::path::Path) -> Vec<WorkerInfo> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<Vec<WorkerInfo>>(&s).ok())
+        .map(|workers| {
+            workers
+                .into_iter()
+                .filter(|worker| !worker.auto_discovered)
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 pub(crate) fn save_workers(workers: &[WorkerInfo]) -> Result<(), String> {
-    save_workers_to(&workers_path(), workers)
+    let trusted = workers
+        .iter()
+        .filter(|worker| !worker.auto_discovered)
+        .cloned()
+        .collect::<Vec<_>>();
+    save_workers_to(&workers_path(), &trusted)
 }
 
 fn save_workers_to(path: &std::path::Path, workers: &[WorkerInfo]) -> Result<(), String> {
@@ -105,7 +118,20 @@ where
         let result = update(&mut workers);
         (result, previous, workers.clone())
     };
-    if let Err(error) = save_workers(&snapshot) {
+    let trusted_snapshot = snapshot
+        .iter()
+        .filter(|worker| !worker.auto_discovered)
+        .cloned()
+        .collect::<Vec<_>>();
+    let trusted_previous = previous
+        .iter()
+        .filter(|worker| !worker.auto_discovered)
+        .cloned()
+        .collect::<Vec<_>>();
+    if serde_json::to_vec(&trusted_previous).ok() == serde_json::to_vec(&trusted_snapshot).ok() {
+        return Ok(result);
+    }
+    if let Err(error) = save_workers(&trusted_snapshot) {
         if let Ok(mut workers) = state.workers.lock() {
             *workers = previous;
         }
@@ -298,16 +324,18 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                                 format!("Worker-{}", host.split('.').next_back().unwrap_or("?"));
                             // Use lock().await instead of try_lock() so high concurrency cannot silently drop discovered workers.
                             let mut list = discovered.lock().await;
-                            list.push(WorkerInfo {
-                                id: stable_discovered_worker_id(&host, port, &worker_name),
-                                host,
-                                port,
-                                name: worker_name,
-                                devices: Vec::new(),
-                                status: WorkerStatus::Online,
-                                last_seen: Some(chrono::Utc::now().to_rfc3339()),
-                                auto_discovered: true,
-                            });
+                            if list.len() < MAX_AUTO_DISCOVERED_WORKERS {
+                                list.push(WorkerInfo {
+                                    id: stable_discovered_worker_id(&host, port, &worker_name),
+                                    host,
+                                    port,
+                                    name: worker_name,
+                                    devices: Vec::new(),
+                                    status: WorkerStatus::Unknown,
+                                    last_seen: Some(chrono::Utc::now().to_rfc3339()),
+                                    auto_discovered: true,
+                                });
+                            }
                         }
                     }
                 }
@@ -328,9 +356,16 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                     if let Some(worker) = existing.iter_mut().find(|worker| {
                         worker.host == discovered.host && worker.port == discovered.port
                     }) {
-                        worker.status = WorkerStatus::Online;
+                        if worker.auto_discovered {
+                            worker.status = WorkerStatus::Unknown;
+                        }
                         worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
-                    } else {
+                    } else if existing
+                        .iter()
+                        .filter(|worker| worker.auto_discovered)
+                        .count()
+                        < MAX_AUTO_DISCOVERED_WORKERS
+                    {
                         existing.push(discovered.clone());
                     }
                 }
@@ -345,9 +380,16 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                     if let Some(worker) = existing.iter_mut().find(|worker| {
                         worker.host == discovered.host && worker.port == discovered.port
                     }) {
-                        worker.status = WorkerStatus::Online;
+                        if worker.auto_discovered {
+                            worker.status = WorkerStatus::Unknown;
+                        }
                         worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
-                    } else {
+                    } else if existing
+                        .iter()
+                        .filter(|worker| worker.auto_discovered)
+                        .count()
+                        < MAX_AUTO_DISCOVERED_WORKERS
+                    {
                         existing.push(discovered.clone());
                     }
                 }
@@ -371,7 +413,11 @@ pub async fn test_worker(
                     .iter_mut()
                     .find(|worker| worker.host == host && worker.port == port)
                 {
-                    worker.status = WorkerStatus::Online;
+                    worker.status = if worker.auto_discovered {
+                        WorkerStatus::Unknown
+                    } else {
+                        WorkerStatus::Online
+                    };
                     worker.last_seen = Some(chrono::Utc::now().to_rfc3339());
                 }
             })?;
@@ -505,7 +551,9 @@ pub async fn add_worker(
     port: u16,
     name: String,
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> Result<WorkerInfo, String> {
+    confirm_worker_enrollment(&app, &host, port).await?;
     update_workers(&state, |workers| {
         if let Some(existing) = workers
             .iter_mut()
@@ -514,6 +562,8 @@ pub async fn add_worker(
             if !name.is_empty() {
                 existing.name = name.clone();
             }
+            existing.auto_discovered = false;
+            existing.status = WorkerStatus::Unknown;
             return existing.clone();
         }
 
@@ -530,6 +580,68 @@ pub async fn add_worker(
         workers.push(worker.clone());
         worker
     })
+}
+
+async fn confirm_worker_enrollment(
+    app: &tauri::AppHandle,
+    host: &str,
+    port: u16,
+) -> Result<(), String> {
+    let host = host.trim();
+    if host.is_empty()
+        || host.len() > 255
+        || port == 0
+        || host.chars().any(|character| character.is_control())
+    {
+        return Err("Worker endpoint is invalid".to_string());
+    }
+    let message = format!(
+        "是否信任 RPC 节点 {host}:{port}？\n\nRPC 节点没有可验证的身份，可能影响推理结果的完整性与可用性。请只批准你控制的节点。"
+    );
+    let app = app.clone();
+    let approved = tokio::task::spawn_blocking(move || {
+        app.dialog()
+            .message(message)
+            .title("确认信任 RPC 节点")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "信任".to_string(),
+                "取消".to_string(),
+            ))
+            .blocking_show()
+    })
+    .await
+    .map_err(|error| format!("Worker approval dialog failed: {error}"))?;
+    if approved {
+        Ok(())
+    } else {
+        Err("Worker enrollment was not approved".to_string())
+    }
+}
+
+pub async fn approve_worker(
+    id: String,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<WorkerInfo, String> {
+    let candidate = state
+        .workers
+        .lock()
+        .map_err(|_| "worker state lock is poisoned".to_string())?
+        .iter()
+        .find(|worker| worker.id == id && worker.auto_discovered)
+        .cloned()
+        .ok_or_else(|| "Discovered worker not found".to_string())?;
+    confirm_worker_enrollment(&app, &candidate.host, candidate.port).await?;
+    update_workers(&state, |workers| {
+        let worker = workers
+            .iter_mut()
+            .find(|worker| worker.id == id && worker.auto_discovered)
+            .ok_or_else(|| "Discovered worker not found".to_string())?;
+        worker.auto_discovered = false;
+        worker.status = WorkerStatus::Unknown;
+        Ok(worker.clone())
+    })?
 }
 
 pub async fn remove_worker(id: String, state: State<'_, AppState>) -> Result<(), String> {
@@ -735,14 +847,6 @@ pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {
             return Some(candidate.to_string_lossy().to_string());
         }
     }
-    if let Ok(paths) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let candidate = dir.join(RPC_SERVER_NAME);
-            if candidate.exists() {
-                return Some(candidate.to_string_lossy().to_string());
-            }
-        }
-    }
     None
 }
 
@@ -799,6 +903,12 @@ pub async fn start_local_rpc(
     engine_dir: Option<String>,
     port: u16,
 ) -> Result<serde_json::Value, String> {
+    let engine_dir = engine_dir
+        .map(|dir| {
+            crate::security::require_authorized_engine_root(std::path::Path::new(&dir))
+                .map(|path| path.to_string_lossy().to_string())
+        })
+        .transpose()?;
     tokio::task::spawn_blocking(move || -> Result<serde_json::Value, String> {
         let binary = if let Some(ref dir) = engine_dir {
             let path = std::path::Path::new(dir);
@@ -807,7 +917,9 @@ pub async fn start_local_rpc(
             #[cfg(not(target_os = "windows"))]
             let exe = path.join("rpc-server");
             if exe.exists() {
-                exe.to_string_lossy().to_string()
+                crate::security::require_path_within_root(&exe, path)?
+                    .to_string_lossy()
+                    .to_string()
             } else {
                 return Err(format!("引擎目录下未找到 rpc-server: {}", dir));
             }
@@ -871,21 +983,35 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let test_path = dir.join("workers.json");
 
-        let test_workers = vec![WorkerInfo {
-            id: "test-1".into(),
-            host: "192.168.1.10".into(),
+        let discovered = WorkerInfo {
+            id: "auto-1".into(),
+            host: "192.168.1.11".into(),
             port: 50052,
-            name: "Test Worker".into(),
+            name: "Discovered Worker".into(),
             devices: Vec::new(),
-            status: WorkerStatus::Online,
+            status: WorkerStatus::Unknown,
             last_seen: Some("2024-01-01T00:00:00Z".into()),
-            auto_discovered: false,
-        }];
+            auto_discovered: true,
+        };
+        let test_workers = vec![
+            WorkerInfo {
+                id: "test-1".into(),
+                host: "192.168.1.10".into(),
+                port: 50052,
+                name: "Test Worker".into(),
+                devices: Vec::new(),
+                status: WorkerStatus::Online,
+                last_seen: Some("2024-01-01T00:00:00Z".into()),
+                auto_discovered: false,
+            },
+            discovered.clone(),
+        ];
 
         save_workers_to(&test_path, &test_workers).unwrap();
         let loaded = load_workers_from(&test_path);
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].host, "192.168.1.10");
+        assert_ne!(loaded[0].id, discovered.id);
 
         // Clean up temporary files.
         let _ = std::fs::remove_file(&test_path);
@@ -1022,8 +1148,20 @@ pub mod ipc {
         port: u16,
         name: String,
         state: State<'_, AppState>,
+        app: tauri::AppHandle,
     ) -> crate::error::AppResult<WorkerInfo> {
-        super::add_worker(host, port, name, state)
+        super::add_worker(host, port, name, state, app)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn approve_worker(
+        id: String,
+        state: State<'_, AppState>,
+        app: tauri::AppHandle,
+    ) -> crate::error::AppResult<WorkerInfo> {
+        super::approve_worker(id, state, app)
             .await
             .map_err(crate::error::AppError::from)
     }

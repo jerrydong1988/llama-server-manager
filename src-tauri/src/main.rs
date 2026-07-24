@@ -5,18 +5,19 @@ mod error;
 mod models;
 mod persistence;
 mod runtime_service;
+mod security;
 mod utils;
 mod vector_policy;
 
 use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
 use crate::commands::cluster::{
-    add_worker, find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics,
-    get_local_host, get_worker_info, get_workers, is_local_host, load_workers, remove_worker,
-    scan_workers_tcp, start_local_rpc, stop_local_worker, test_worker,
+    add_worker, approve_worker, find_rpc_server_binary, generate_rpc_launch_cmd,
+    get_cluster_metrics, get_local_host, get_worker_info, get_workers, is_local_host, load_workers,
+    remove_worker, scan_workers_tcp, start_local_rpc, stop_local_worker, test_worker,
 };
 use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
-use crate::commands::cluster_ssh::ipc::ssh_launch_rpc;
+use crate::commands::cluster_ssh::ipc::{ssh_launch_rpc, stop_ssh_tunnel};
 use crate::commands::config::{
     load_config, load_window_state, resolve_path, save_config, save_window_state,
     update_and_persist,
@@ -105,6 +106,7 @@ fn persist_runtime_state(app: &tauri::AppHandle) {
 
 fn finalize_app_exit(app: &tauri::AppHandle, keep_runtime: bool) {
     flush_download_manager_state(app);
+    crate::commands::cluster_ssh::stop_all_ssh_tunnels();
     let failures = if keep_runtime {
         Vec::new()
     } else {
@@ -364,6 +366,9 @@ fn main() {
     let data_dir = crate::utils::get_data_dir();
     let config_dir = data_dir.join("configs");
     let initial_config = crate::commands::config::read_config_from_disk(&config_dir);
+    if let Err(error) = crate::security::initialize_path_authority(&initial_config.engine_dirs) {
+        eprintln!("Path authority initialization failed: {error}");
+    }
     let initial_workers = load_workers();
 
     tauri::Builder::default()
@@ -630,12 +635,13 @@ fn main() {
             save_window_state, load_window_state,
             resolve_path,
             scan_workers_tcp, test_worker, get_worker_info,
-            add_worker, remove_worker, get_workers,
+            add_worker, approve_worker, remove_worker, get_workers,
             find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics,
             stop_local_worker, is_local_host, start_local_rpc, get_local_host,
             detect_usb4_adapters, get_usb4_adapters,
             start_mdns_discovery, stop_mdns_discovery,
             ssh_launch_rpc,
+            stop_ssh_tunnel,
             enable_autostart, disable_autostart, is_autostart_enabled,
             get_startup_elapsed,
             show_window,
@@ -646,6 +652,7 @@ fn main() {
             stop_background_runtime,
             crate::runtime_service::get_runtime_service_status,
             crate::runtime_service::clear_runtime_service_error,
+            crate::security::pick_authorized_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

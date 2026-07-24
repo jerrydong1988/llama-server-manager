@@ -55,7 +55,9 @@ fn persist_global_config_unlocked(
     if std::fs::read_to_string(&path).is_ok_and(|current| current == json) {
         let backup = config_dir.join("instances.json.bak");
         if !backup.exists() {
-            let _ = std::fs::copy(&path, backup);
+            if let Ok(contents) = std::fs::read(&path) {
+                crate::persistence::atomic_write(&backup, &contents, None)?;
+            }
         }
         return Ok(false);
     }
@@ -99,6 +101,11 @@ where
 fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
     let path = config_dir.join("instances.json");
     let backup_path = config_dir.join("instances.json.bak");
+    for private_path in [&path, &backup_path] {
+        if let Err(error) = crate::persistence::enforce_private_file(private_path) {
+            eprintln!("Failed to enforce private config permissions: {error}");
+        }
+    }
     let mut config = match std::fs::read_to_string(&path) {
         Ok(json) => match serde_json::from_str::<GlobalConfig>(&json) {
             Ok(config) => config,

@@ -4,7 +4,6 @@ import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
 import { formatMessage, useI18n } from '../i18n'
 import { invokeApp as invoke } from '../lib/ipc'
-import { open } from '@tauri-apps/plugin-dialog'
 import { pathJoin } from '../utils/path'
 import { forEachConcurrent } from '../utils/async'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
@@ -328,8 +327,8 @@ export default function DownloadManager() {
 
   const handleBrowseSaveDir = async () => {
     try {
-      const dir = await open({ directory: true, title: t.modelRepo.saveDir })
-      if (dir) saveDirPersist(dir as string)
+      const dir = await invoke<string | null>('pick_authorized_directory', { purpose: 'download' })
+      if (dir) saveDirPersist(dir)
     } catch {
       // ignore
     }
@@ -371,10 +370,7 @@ export default function DownloadManager() {
   const handleDeleteCompleted = async (task: DownloadProgress) => {
     try {
       await invoke('delete_managed_local_file', {
-        filePath: task.path!,
-        saveDir: task.saveDir,
-        repoId: task.repoId,
-        remotePath: task.remotePath || task.fileName,
+        taskId: task.id,
       })
       useAppStore.setState(state => {
         const tasks = { ...state.downloadTasks }

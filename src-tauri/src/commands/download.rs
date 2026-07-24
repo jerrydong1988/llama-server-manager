@@ -206,20 +206,40 @@ fn sanitize_file_name(name: &str) -> Result<String, String> {
 }
 
 fn remote_parent_dir(root: &Path, remote_path: &str) -> Result<PathBuf, String> {
-    if remote_path.is_empty() || remote_path.starts_with('/') || remote_path.contains('\\') {
+    if remote_path.is_empty()
+        || remote_path.starts_with('/')
+        || remote_path.contains('\\')
+        || Path::new(remote_path).is_absolute()
+        || Path::new(remote_path).has_root()
+    {
         return Err("Remote file path is invalid".into());
     }
     let mut destination = root.to_path_buf();
     let mut segments = remote_path.split('/').peekable();
     while let Some(segment) = segments.next() {
-        if segment.is_empty() || segment == "." || segment == ".." {
+        if segment.is_empty() || segment == "." || segment == ".." || segment.contains(':') {
             return Err("Remote file path contains an unsafe segment".into());
         }
         if segments.peek().is_some() {
             destination.push(segment);
         }
     }
+    crate::security::ensure_download_path_within_root(&destination, root)?;
     Ok(destination)
+}
+
+fn validate_managed_file(file: &MsFileEntry) -> Result<(), String> {
+    let name = sanitize_file_name(&file.name)?;
+    let remote_name = file
+        .path
+        .split('/')
+        .next_back()
+        .ok_or_else(|| "Remote file path has no file name".to_string())?;
+    if remote_name != name {
+        return Err("Download file name does not match its remote path".to_string());
+    }
+    let _ = remote_parent_dir(Path::new("."), &file.path)?;
+    Ok(())
 }
 
 fn percent_encode_path(remote_path: &str) -> Result<String, String> {
@@ -461,18 +481,23 @@ fn queue_entry_managed_root(
     base_dir: &Path,
     entry: &PersistedQueueEntry,
 ) -> Result<PathBuf, String> {
-    let save_dir = Path::new(&entry.save_dir);
-    if save_dir
-        .components()
-        .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        return Err("Download save directory cannot contain parent traversal".into());
+    crate::security::resolve_authorized_download_root(base_dir, &entry.save_dir)
+}
+
+fn validate_queue_entry(base_dir: &Path, entry: &PersistedQueueEntry) -> Result<(), String> {
+    let _ = sanitize_repo_id(&entry.repo_id)?;
+    let managed_root = queue_entry_managed_root(base_dir, entry)?;
+    let repo_dir = queue_entry_download_dir(base_dir, entry)?;
+    crate::security::ensure_download_path_within_root(&repo_dir, &managed_root)?;
+    if entry.files.is_empty() {
+        return Err("Download queue entry has no files".to_string());
     }
-    Ok(if save_dir.is_absolute() {
-        save_dir.to_path_buf()
-    } else {
-        base_dir.join(save_dir)
-    })
+    for file in &entry.files {
+        validate_managed_file(file)?;
+        let destination = remote_parent_dir(&repo_dir, &file.path)?;
+        crate::security::ensure_download_path_within_root(&destination, &managed_root)?;
+    }
+    Ok(())
 }
 
 fn verified_managed_cleanup_path(root: &Path, path: &Path) -> Result<PathBuf, String> {
@@ -614,6 +639,34 @@ fn trusted_download_cleanup_paths(
     Ok((managed_root, final_path, temp_path, metadata_path))
 }
 
+fn registered_download_paths_for_task(
+    entries: &[PersistedQueueEntry],
+    base_dir: &Path,
+    task_id: &str,
+) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
+    let mut trusted = None;
+    for entry in entries {
+        validate_queue_entry(base_dir, entry)?;
+        for file in &entry.files {
+            if file.task_id.as_deref() != Some(task_id) {
+                continue;
+            }
+            let managed_root = queue_entry_managed_root(base_dir, entry)?;
+            let dir = remote_parent_dir(&queue_entry_download_dir(base_dir, entry)?, &file.path)?;
+            let paths = build_download_paths(&dir, &file.name);
+            let candidate = (managed_root, paths.0, paths.1, paths.2);
+            if trusted
+                .as_ref()
+                .is_some_and(|current| current != &candidate)
+            {
+                return Err("Download task maps to more than one managed artifact".to_string());
+            }
+            trusted = Some(candidate);
+        }
+    }
+    trusted.ok_or_else(|| "Download task not found".to_string())
+}
+
 #[derive(Clone)]
 struct DownloadTaskContext {
     task_id: String,
@@ -696,35 +749,15 @@ fn resolve_repo_save_path(
     save_dir: &str,
     repo_id: &str,
 ) -> Result<PathBuf, String> {
-    let base_path = if Path::new(save_dir).is_absolute() {
-        PathBuf::from(save_dir)
-    } else {
-        let managed = app.state::<AppState>();
-        let config_dir = managed.config_dir.lock().unwrap();
-        config_dir
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf()
-            .join(save_dir)
-    };
+    let managed = app.state::<AppState>();
+    let config_dir = managed.config_dir.lock().unwrap();
+    let app_data_root = config_dir.parent().unwrap_or(Path::new("."));
+    let base_path = crate::security::resolve_authorized_download_root(app_data_root, save_dir)?;
     let save_path = base_path.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR));
+    crate::security::ensure_download_path_within_root(&save_path, &base_path)?;
     std::fs::create_dir_all(&save_path)
         .map_err(|e| format!("Failed to create download directory: {}", e))?;
     Ok(save_path)
-}
-
-fn resolve_redownload_save_path(
-    config_dir: &Path,
-    save_dir: &str,
-    repo_id: &str,
-) -> Result<PathBuf, String> {
-    let repo_id = sanitize_repo_id(repo_id)?;
-    let base_path = if Path::new(save_dir).is_absolute() {
-        PathBuf::from(save_dir)
-    } else {
-        config_dir.parent().unwrap_or(Path::new(".")).join(save_dir)
-    };
-    Ok(base_path.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR)))
 }
 
 fn clear_control_flags_for_files(state: &AppState, files: &[MsFileEntry]) {
@@ -1767,6 +1800,7 @@ pub async fn download_modelscope_files(
     let has_non_retryable_error = Arc::new(AtomicBool::new(false));
 
     for file in files {
+        validate_managed_file(&file)?;
         let encoded_path = percent_encode_path(&file.path)?;
         let url = format!(
             "https://modelscope.cn/models/{}/resolve/master/{}",
@@ -1992,6 +2026,7 @@ pub async fn download_huggingface_files(
     let mut handles = Vec::with_capacity(files.len());
 
     for file in files {
+        validate_managed_file(&file)?;
         let encoded_path = percent_encode_path(&file.path)?;
         let url = format!(
             "https://huggingface.co/{}/resolve/main/{}",
@@ -2046,13 +2081,19 @@ pub async fn check_local_file(path: String) -> Result<Option<u64>, String> {
 }
 
 pub async fn delete_managed_local_file(
-    file_path: String,
-    save_dir: String,
-    repo_id: String,
-    remote_path: String,
+    task_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let repo_id = sanitize_repo_id(&repo_id)?;
+    let mut entries = load_download_state(&state)?;
+    entries.extend(state.download_queue.lock().unwrap().clone());
+    entries.extend(
+        state
+            .download_active_entries
+            .lock()
+            .unwrap()
+            .values()
+            .cloned(),
+    );
     let base_dir = state
         .config_dir
         .lock()
@@ -2060,32 +2101,16 @@ pub async fn delete_managed_local_file(
         .parent()
         .unwrap_or(Path::new("."))
         .to_path_buf();
-    let root = if Path::new(&save_dir).is_absolute() {
-        PathBuf::from(&save_dir)
-    } else {
-        base_dir.join(&save_dir)
-    };
-    let repo_root = root.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR));
-    let parent = remote_parent_dir(&repo_root, &remote_path)?;
-    let name = remote_path
-        .split('/')
-        .next_back()
-        .ok_or_else(|| "Remote file path has no file name".to_string())?;
-    let expected = parent.join(sanitize_file_name(name)?);
-    let provided = if Path::new(&file_path).is_absolute() {
-        PathBuf::from(&file_path)
-    } else {
-        base_dir.join(&file_path)
-    };
-    if normalize_path_for_compare(&expected) != normalize_path_for_compare(&provided) {
-        return Err("Local file path does not match the managed repository artifact".into());
-    }
-    let verified = verified_managed_cleanup_path(&root, &expected)?;
+    let (root, final_path, _, _) =
+        registered_download_paths_for_task(&entries, &base_dir, &task_id)?;
+    let verified = verified_managed_cleanup_path(&root, &final_path)?;
     match std::fs::remove_file(&verified) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("Failed to remove {}: {error}", verified.display())),
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("Failed to remove {}: {error}", verified.display())),
     }
+    remove_manager_file(&state, &task_id)?;
+    Ok(())
 }
 
 // Download queue persistence.
@@ -2944,6 +2969,16 @@ pub(crate) fn restore_runtime_queue_from_disk(
     let config = crate::commands::config::read_config_from_disk(&config_dir);
     let save_dir_base = config_dir.parent().unwrap_or(Path::new(".")).to_path_buf();
     let auto_resume = config.download_resume_policy == "auto_on_launch";
+    queue.retain(|entry| match validate_queue_entry(&save_dir_base, entry) {
+        Ok(()) => true,
+        Err(error) => {
+            eprintln!(
+                "Discarding unsafe persisted download entry {}: {error}",
+                entry.id
+            );
+            false
+        }
+    });
 
     for entry in queue.iter_mut() {
         prepare_restored_entry(entry, auto_resume);
@@ -3009,6 +3044,16 @@ pub async fn persist_download_queue(
     queue: Vec<PersistedQueueEntry>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
+    let base_dir = state
+        .config_dir
+        .lock()
+        .unwrap()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    for entry in &queue {
+        validate_queue_entry(&base_dir, entry)?;
+    }
     let _scheduler = state
         .download_scheduler_lock
         .lock()
@@ -3078,6 +3123,14 @@ pub async fn enqueue_download_queue(
         file.status = Some("queued".into());
         file.error = None;
     }
+    let base_dir = state
+        .config_dir
+        .lock()
+        .unwrap()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    validate_queue_entry(&base_dir, &entry)?;
     let scheduler = state
         .download_scheduler_lock
         .lock()
@@ -3729,18 +3782,10 @@ mod audit_remediation_tests {
     }
 
     #[test]
-    fn redownload_cleanup_path_includes_repository_directory() {
-        let config_dir = Path::new("/app-data/configs");
-
-        let path = resolve_redownload_save_path(config_dir, "models", "org/model").unwrap();
-
-        assert_eq!(
-            path,
-            Path::new("/app-data")
-                .join("models")
-                .join("org")
-                .join("model")
-        );
+    fn remote_paths_reject_windows_drive_prefixes_on_every_platform() {
+        let root = Path::new("/managed/org/model");
+        assert!(remote_parent_dir(root, "C:/outside/model.gguf").is_err());
+        assert!(remote_parent_dir(root, "nested/D:/outside/model.gguf").is_err());
     }
 
     #[test]
@@ -3833,7 +3878,7 @@ mod audit_remediation_tests {
     }
 
     #[test]
-    fn absolute_save_directory_is_its_own_managed_cleanup_root() {
+    fn absolute_save_directory_requires_an_explicit_native_grant() {
         let root = std::env::temp_dir().join(format!(
             "lsm-absolute-download-root-test-{}",
             std::process::id()
@@ -3864,19 +3909,17 @@ mod audit_remediation_tests {
             }],
         };
 
-        let (managed_root, final_path, _, _) = trusted_download_cleanup_paths(
+        let result = trusted_download_cleanup_paths(
             &[entry],
             Path::new("/ignored-base"),
             "task-absolute",
             "model.gguf",
             Some("run-absolute"),
             None,
-        )
-        .unwrap();
+        );
 
-        assert_eq!(managed_root, root);
-        assert!(verified_managed_cleanup_path(&managed_root, &final_path).is_ok());
-        let _ = std::fs::remove_dir_all(managed_root);
+        assert!(result.unwrap_err().contains("绝对下载目录未获授权"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -4410,6 +4453,13 @@ pub async fn cancel_all_downloads(
         .unwrap_or(Path::new("."))
         .to_path_buf();
     for entry in &affected_entries {
+        if validate_queue_entry(&base_dir, entry).is_err() {
+            continue;
+        }
+        let managed_root = match queue_entry_managed_root(&base_dir, entry) {
+            Ok(root) => root,
+            Err(_) => continue,
+        };
         let repo_dir = match queue_entry_download_dir(&base_dir, entry) {
             Ok(path) => path,
             Err(_) => continue,
@@ -4421,12 +4471,23 @@ pub async fn cancel_all_downloads(
             let Ok(dir) = remote_parent_dir(&repo_dir, &file.path) else {
                 continue;
             };
+            let Ok(_) = sanitize_file_name(&file.name) else {
+                continue;
+            };
             let (_, temp_path, metadata_path) = build_download_paths(&dir, &file.name);
             if !file
                 .run_id
                 .as_ref()
                 .is_some_and(|run_id| active_run_ids.contains(run_id))
             {
+                let Ok(temp_path) = verified_managed_cleanup_path(&managed_root, &temp_path) else {
+                    continue;
+                };
+                let Ok(metadata_path) =
+                    verified_managed_cleanup_path(&managed_root, &metadata_path)
+                else {
+                    continue;
+                };
                 for path in [&temp_path, &metadata_path] {
                     match std::fs::remove_file(path) {
                         Ok(()) => {}
@@ -4537,17 +4598,37 @@ pub async fn get_download_low_priority_throttle(
 }
 
 pub async fn reset_download_for_redownload(
-    _task_id: String,
-    file_name: String,
-    repo_id: String,
-    save_dir: String,
+    task_id: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let _ = sanitize_file_name(&file_name)?;
-    let config_dir = state.config_dir.lock().unwrap().clone();
-    let save_path = resolve_redownload_save_path(&config_dir, &save_dir, &repo_id)?;
-    let (_final_path, temp_path, _meta_path) = build_download_paths(&save_path, &file_name);
-    cleanup_artifact_state(&temp_path);
+    let mut entries = load_download_state(&state)?;
+    entries.extend(state.download_queue.lock().unwrap().clone());
+    entries.extend(
+        state
+            .download_active_entries
+            .lock()
+            .unwrap()
+            .values()
+            .cloned(),
+    );
+    let base_dir = state
+        .config_dir
+        .lock()
+        .unwrap()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let (root, _, temp_path, metadata_path) =
+        registered_download_paths_for_task(&entries, &base_dir, &task_id)?;
+    let temp_path = verified_managed_cleanup_path(&root, &temp_path)?;
+    let metadata_path = verified_managed_cleanup_path(&root, &metadata_path)?;
+    for path in [&temp_path, &metadata_path] {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Failed to remove {}: {error}", path.display())),
+        }
+    }
     Ok(())
 }
 
@@ -4850,13 +4931,10 @@ pub mod ipc {
 
     #[tauri::command]
     pub async fn reset_download_for_redownload(
-        _task_id: String,
-        file_name: String,
-        repo_id: String,
-        save_dir: String,
+        task_id: String,
         state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<()> {
-        super::reset_download_for_redownload(_task_id, file_name, repo_id, save_dir, state)
+        super::reset_download_for_redownload(task_id, state)
             .await
             .map_err(crate::error::AppError::from)
     }
@@ -4872,13 +4950,10 @@ pub mod ipc {
 
     #[tauri::command]
     pub async fn delete_managed_local_file(
-        file_path: String,
-        save_dir: String,
-        repo_id: String,
-        remote_path: String,
+        task_id: String,
         state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<()> {
-        super::delete_managed_local_file(file_path, save_dir, repo_id, remote_path, state)
+        super::delete_managed_local_file(task_id, state)
             .await
             .map_err(crate::error::AppError::from)
     }

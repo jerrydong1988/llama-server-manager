@@ -375,6 +375,7 @@
     totalVRAM: '\u603B\u53EF\u7528\u663E\u5B58',
     selectedWorkers: '\u5DF2\u9009 Worker',
     testConnection: '\u6D4B\u8BD5\u8FDE\u63A5',
+    approveWorker: '\u4FE1\u4EFB Worker',
     refreshDevices: '\u5237\u65B0\u8BBE\u5907\u4FE1\u606F',
     deviceType: '\u8BBE\u5907\u7C7B\u578B',
     deviceName: '\u8BBE\u5907\u540D\u79F0',

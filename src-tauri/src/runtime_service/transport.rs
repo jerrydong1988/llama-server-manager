@@ -12,6 +12,7 @@ const RUNTIME_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const RUNTIME_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
 
+#[cfg(unix)]
 fn stable_path_hash(value: &str) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in value.as_bytes() {
@@ -68,22 +69,111 @@ pub(super) fn acquire_runtime_lock() -> Result<Option<File>, String> {
     }
 }
 
+fn endpoint_suffix(control_token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+
+    let digest = Sha256::digest(control_token.as_bytes());
+    let mut suffix = String::with_capacity(32);
+    for byte in &digest[..16] {
+        write!(&mut suffix, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    suffix
+}
+
 #[cfg(unix)]
-pub fn control_socket_path() -> PathBuf {
-    let preferred = runtime_dir().join("control.sock");
+pub fn control_socket_path(control_token: &str) -> PathBuf {
+    let suffix = endpoint_suffix(control_token);
+    let preferred = runtime_dir().join(format!("control-{suffix}.sock"));
     if preferred.to_string_lossy().len() <= 90 {
         return preferred;
     }
-    let suffix = stable_path_hash(&crate::utils::get_data_dir().to_string_lossy());
+    let data_suffix = stable_path_hash(&crate::utils::get_data_dir().to_string_lossy());
     std::env::temp_dir()
-        .join(format!("llama-server-manager-{suffix:016x}"))
-        .join("control.sock")
+        .join(format!("llama-server-manager-{data_suffix:016x}"))
+        .join(format!("control-{suffix}.sock"))
 }
 
 #[cfg(windows)]
-pub fn control_pipe_name() -> String {
-    let suffix = stable_path_hash(&crate::utils::get_data_dir().to_string_lossy());
-    format!(r"\\.\pipe\llama-server-manager-runtime-{suffix:016x}")
+pub fn control_pipe_name(control_token: &str) -> String {
+    let suffix = endpoint_suffix(control_token);
+    format!(r"\\.\pipe\llama-server-manager-runtime-{suffix}")
+}
+
+#[cfg(unix)]
+fn protect_and_validate_socket_parent(parent: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    if let Ok(metadata) = std::fs::symlink_metadata(parent) {
+        if metadata.file_type().is_symlink() {
+            return Err("runtime socket directory cannot be a symlink".to_string());
+        }
+        if metadata.uid() != unsafe { libc::geteuid() } {
+            return Err("runtime socket directory is owned by another user".to_string());
+        }
+    } else {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("failed to create runtime socket directory: {error}"))?;
+    }
+    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| format!("failed to protect runtime socket directory: {error}"))?;
+    let metadata = std::fs::symlink_metadata(parent)
+        .map_err(|error| format!("failed to inspect runtime socket directory: {error}"))?;
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+        return Err("runtime socket directory is not private to the current user".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_control_socket(path: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let parent = path
+        .parent()
+        .ok_or_else(|| "runtime control socket has no parent directory".to_string())?;
+    protect_and_validate_socket_parent(parent)?;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect runtime control socket: {error}"))?;
+    if !metadata.file_type().is_socket() {
+        return Err("runtime control endpoint is not a Unix socket".to_string());
+    }
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+        return Err("runtime control socket is not private to the current user".to_string());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn cleanup_stale_control_sockets(parent: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    for entry in std::fs::read_dir(parent)
+        .map_err(|error| format!("failed to inspect runtime socket directory: {error}"))?
+    {
+        let entry =
+            entry.map_err(|error| format!("failed to inspect runtime socket entry: {error}"))?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name != "control.sock" && !(name.starts_with("control-") && name.ends_with(".sock")) {
+            continue;
+        }
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect stale runtime endpoint: {error}"))?;
+        if metadata.file_type().is_symlink()
+            || (metadata.file_type().is_socket() && metadata.uid() == unsafe { libc::geteuid() })
+        {
+            std::fs::remove_file(&path)
+                .map_err(|error| format!("failed to remove stale runtime endpoint: {error}"))?;
+        } else {
+            return Err(format!(
+                "refusing to replace unexpected runtime endpoint {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 async fn read_frame<S>(stream: &mut S) -> Result<Vec<u8>, String>
@@ -159,6 +249,7 @@ where
 #[cfg(unix)]
 pub async fn run_server<I, IF, H, F>(
     _runtime_lock: File,
+    control_token: String,
     initializer: I,
     handler: H,
 ) -> Result<(), String>
@@ -169,24 +260,14 @@ where
     F: Future<Output = RuntimeResponse> + Send + 'static,
 {
     use std::os::unix::fs::PermissionsExt;
-    use tokio::net::{UnixListener, UnixStream};
+    use tokio::net::UnixListener;
 
-    let socket_path = control_socket_path();
+    let socket_path = control_socket_path(&control_token);
     let parent = socket_path
         .parent()
         .ok_or_else(|| "runtime control socket has no parent directory".to_string())?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("failed to create runtime socket directory: {error}"))?;
-    std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
-        .map_err(|error| format!("failed to protect runtime socket directory: {error}"))?;
-
-    if socket_path.exists() {
-        if UnixStream::connect(&socket_path).await.is_ok() {
-            return Err("runtime service is already running".into());
-        }
-        std::fs::remove_file(&socket_path)
-            .map_err(|error| format!("failed to remove stale runtime socket: {error}"))?;
-    }
+    protect_and_validate_socket_parent(parent)?;
+    cleanup_stale_control_sockets(parent)?;
 
     let listener = UnixListener::bind(&socket_path)
         .map_err(|error| format!("failed to bind runtime control socket: {error}"))?;
@@ -207,6 +288,7 @@ where
 #[cfg(windows)]
 pub async fn run_server<I, IF, H, F>(
     _runtime_lock: File,
+    control_token: String,
     initializer: I,
     handler: H,
 ) -> Result<(), String>
@@ -218,11 +300,12 @@ where
 {
     use tokio::net::windows::named_pipe::ServerOptions;
 
-    let pipe_name = control_pipe_name();
+    let pipe_name = control_pipe_name(&control_token);
     let mut first_instance = true;
     let mut initializer = Some(initializer);
     loop {
         let mut options = ServerOptions::new();
+        options.reject_remote_clients(true);
         if first_instance {
             options.first_pipe_instance(true);
         }
@@ -243,17 +326,21 @@ where
 }
 
 #[cfg(unix)]
-async fn connect() -> Result<tokio::net::UnixStream, String> {
-    tokio::net::UnixStream::connect(control_socket_path())
+async fn connect(control_token: &str) -> Result<tokio::net::UnixStream, String> {
+    let socket_path = control_socket_path(control_token);
+    validate_control_socket(&socket_path)?;
+    tokio::net::UnixStream::connect(socket_path)
         .await
         .map_err(|error| format!("failed to connect to runtime service: {error}"))
 }
 
 #[cfg(windows)]
-async fn connect() -> Result<tokio::net::windows::named_pipe::NamedPipeClient, String> {
+async fn connect(
+    control_token: &str,
+) -> Result<tokio::net::windows::named_pipe::NamedPipeClient, String> {
     use tokio::net::windows::named_pipe::ClientOptions;
 
-    let pipe_name = control_pipe_name();
+    let pipe_name = control_pipe_name(control_token);
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
         match ClientOptions::new().open(&pipe_name) {
@@ -275,7 +362,7 @@ pub async fn send_request(request: &RuntimeRequest) -> Result<RuntimeResponse, S
     }
     let payload = serde_json::to_vec(request)
         .map_err(|error| format!("failed to serialize runtime request: {error}"))?;
-    let mut stream = tokio::time::timeout(RUNTIME_CONNECT_TIMEOUT, connect())
+    let mut stream = tokio::time::timeout(RUNTIME_CONNECT_TIMEOUT, connect(&request.token))
         .await
         .map_err(|_| "timed out connecting to runtime service".to_string())??;
     tokio::time::timeout(RUNTIME_IO_TIMEOUT, write_frame(&mut stream, &payload))
@@ -298,10 +385,10 @@ pub async fn send_request(request: &RuntimeRequest) -> Result<RuntimeResponse, S
     Ok(response)
 }
 
-pub async fn wait_until_ready(timeout: Duration) -> bool {
+pub async fn wait_until_ready(control_token: &str, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if connect().await.is_ok() {
+        if connect(control_token).await.is_ok() {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -309,10 +396,10 @@ pub async fn wait_until_ready(timeout: Duration) -> bool {
     false
 }
 
-pub async fn wait_until_stopped(timeout: Duration) -> bool {
+pub async fn wait_until_stopped(control_token: &str, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if connect().await.is_err() {
+        if connect(control_token).await.is_err() {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -324,6 +411,7 @@ pub async fn wait_until_stopped(timeout: Duration) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn stable_hash_is_repeatable_and_path_specific() {
         assert_eq!(stable_path_hash("alpha"), stable_path_hash("alpha"));
@@ -336,6 +424,19 @@ mod tests {
         assert!(control_token_path().ends_with("control-token"));
         assert!(service_log_path().ends_with("runtime-service.log"));
         assert!(runtime_lock_path().ends_with("runtime-service.lock"));
+    }
+
+    #[test]
+    fn control_endpoint_is_derived_from_the_secret_token() {
+        assert_ne!(endpoint_suffix("token-a"), endpoint_suffix("token-b"));
+        assert_eq!(endpoint_suffix("token-a").len(), 32);
+        #[cfg(windows)]
+        assert_ne!(control_pipe_name("token-a"), control_pipe_name("token-b"));
+        #[cfg(unix)]
+        assert_ne!(
+            control_socket_path("token-a"),
+            control_socket_path("token-b")
+        );
     }
 
     #[tokio::test]

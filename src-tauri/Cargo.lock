@@ -2195,6 +2195,7 @@ name = "llama-server-manager"
 version = "2.9.33"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "bytes",
  "chrono",
  "fs2",
@@ -2208,6 +2209,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "socket2 0.5.10",
  "sysinfo",
  "tauri",

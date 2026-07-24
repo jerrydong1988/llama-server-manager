@@ -879,6 +879,13 @@ pub async fn scan_engines(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<EngineInfo>, String> {
     let generation = state.engine_scan_generation.fetch_add(1, Ordering::AcqRel) + 1;
+    let paths = paths
+        .into_iter()
+        .map(|path| {
+            crate::security::require_authorized_engine_root(Path::new(&path))
+                .map(|canonical| canonical.to_string_lossy().to_string())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut engines = tokio::task::spawn_blocking(move || -> Result<Vec<EngineInfo>, String> {
         let (inventory, directory_inventory) = model_inventory::load_engine_scan_indexes()?;
         let mut engines: Vec<EngineInfo> = Vec::new();
@@ -1160,8 +1167,9 @@ mod incremental_scan_tests {
         std::fs::write(&model, b"first-model-payload").unwrap();
         let initial = read_directory_tree_signature(&dir, MAX_MODEL_SCAN_DEPTH).unwrap();
 
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        std::fs::write(&model, b"other-model-payload").unwrap();
+        // Use a different size so the assertion stays valid on filesystems whose
+        // modification timestamps are coarser than the test's execution time.
+        std::fs::write(&model, b"other-longer-model-payload").unwrap();
 
         let updated = read_directory_tree_signature(&dir, MAX_MODEL_SCAN_DEPTH).unwrap();
         assert_ne!(initial, updated);

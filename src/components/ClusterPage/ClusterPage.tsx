@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { ask, open } from '@tauri-apps/plugin-dialog'
+import { ask } from '@tauri-apps/plugin-dialog'
 import { invokeApp as invoke } from '../../lib/ipc'
 import { Check, Copy, Network, Play, Plus, Radio, RefreshCw, Server, Square, StopCircle, Trash2, X, Zap } from 'lucide-react'
 import { useAppStore, type WorkerInfo } from '../../store'
@@ -8,7 +8,7 @@ import { getClusterLabels } from '../../i18n/pageLabels'
 import { Badge, Button, InsetSurface, MetricCard, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
-type RpcLaunchResult = { ok: boolean; error?: string }
+type RpcLaunchResult = { ok: boolean; host?: string; port?: number; error?: string }
 type WorkerTestResult = { ok: boolean }
 
 export default function ClusterPage() {
@@ -189,8 +189,13 @@ export default function ClusterPage() {
       const engineDir = localEngine || engines.find(engine => engine.id === defaultEngineId)?.dir || ''
       const result = await invoke<RpcLaunchResult>('start_local_rpc', { engineDir: engineDir || null, port: localPort })
       if (result?.ok) {
-        const localHost: string = await invoke('get_local_host')
-        await invoke('add_worker', { host: localHost, port: localPort, name: `Local-${localPort}` })
+        const localHost = '127.0.0.1'
+        try {
+          await invoke('add_worker', { host: localHost, port: localPort, name: `Local-${localPort}` })
+        } catch (error) {
+          await invoke('stop_local_worker', { port: localPort }).catch(() => {})
+          throw error
+        }
         const all: WorkerInfo[] = await invoke('get_workers')
         setWorkers(all)
         setShowLocalLaunch(false)
@@ -231,7 +236,17 @@ export default function ClusterPage() {
         remoteOs: launchForm.remoteOs || null,
       })
       if (result?.ok) {
-        await invoke('add_worker', { host: launchForm.host, port: launchForm.port, name: launchForm.host })
+        const tunnelHost = result.host || '127.0.0.1'
+        const tunnelPort = result.port
+        if (!tunnelPort) {
+          throw new Error('SSH tunnel did not return a local port')
+        }
+        try {
+          await invoke('add_worker', { host: tunnelHost, port: tunnelPort, name: launchForm.host })
+        } catch (error) {
+          await invoke('stop_ssh_tunnel', { port: tunnelPort }).catch(() => {})
+          throw error
+        }
         const all: WorkerInfo[] = await invoke('get_workers')
         setWorkers(all)
         setShowLaunchWizard(false)
@@ -275,12 +290,25 @@ export default function ClusterPage() {
     }
   }
 
+  const handleApprove = async (worker: WorkerInfo) => {
+    try {
+      await invoke('approve_worker', { id: worker.id })
+      const all: WorkerInfo[] = await invoke('get_workers')
+      setWorkers(all)
+    } catch (error) {
+      addRuntimeWarning(`worker approval failed: ${errorMessage(error)}`)
+    }
+  }
+
   const handleDelete = async (worker: WorkerInfo) => {
     const confirmed = await ask(t.clusterPage.confirmDelete, { kind: 'warning' })
     if (!confirmed) {
       return
     }
     try {
+      if (worker.host === '127.0.0.1' || worker.host === 'localhost' || worker.host === '::1') {
+        await invoke('stop_ssh_tunnel', { port: worker.port })
+      }
       await invoke('remove_worker', { id: worker.id })
       removeWorker(worker.id)
     } catch (error) {
@@ -488,6 +516,16 @@ export default function ClusterPage() {
                       </div>
 
                       <div className="flex w-full shrink-0 items-center justify-end gap-2 overflow-x-auto pb-1 xl:w-[420px] xl:overflow-visible xl:pb-0">
+                        {worker.auto_discovered && (
+                          <Button
+                            onClick={() => void handleApprove(worker)}
+                            variant="violet"
+                            size="sm"
+                            className="w-[108px] shrink-0 whitespace-nowrap"
+                          >
+                            {t.clusterPage.approveWorker}
+                          </Button>
+                        )}
                         <Button
                           onClick={() => void handleTest(worker.host, worker.port)}
                           variant="primary"
@@ -706,7 +744,7 @@ export default function ClusterPage() {
                   <div className="flex justify-between"><span className="text-slate-500">Worker</span><span className="text-slate-200">{launchForm.host}:{launchForm.port}</span></div>
                   <div className="flex justify-between"><span className="text-slate-500">SSH</span><span className="text-slate-200">{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
                   <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-blue-200">
-                    {t.clusterPage.cmdPreview}: {(launchForm.rpcPath || 'rpc-server')} --host 0.0.0.0 --port {launchForm.port}
+                    {t.clusterPage.cmdPreview}: {(launchForm.rpcPath || 'rpc-server')} --host 127.0.0.1 --port {launchForm.port}
                   </div>
                   {launchError && (
                     <div className="whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">
@@ -778,8 +816,8 @@ export default function ClusterPage() {
                     <Button
                       onClick={async () => {
                         try {
-                          const selected = await open({ directory: true, multiple: false })
-                          if (selected && typeof selected === 'string') {
+                          const selected = await invoke<string | null>('pick_authorized_directory', { purpose: 'engine' })
+                          if (selected) {
                             setLocalEngine(selected)
                           }
                         } catch {
