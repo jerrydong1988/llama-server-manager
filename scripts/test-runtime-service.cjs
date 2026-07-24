@@ -21,6 +21,10 @@ function endpointSuffix(token) {
   return crypto.createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 32)
 }
 
+function unixSocketPathFits(endpoint) {
+  return Buffer.byteLength(endpoint, 'utf8') <= 90
+}
+
 function runtimeEndpoint(dataDir, token) {
   const suffix = endpointSuffix(token)
   if (process.platform === 'win32') {
@@ -28,9 +32,15 @@ function runtimeEndpoint(dataDir, token) {
   }
   const preferred = path.join(dataDir, 'runtime', `control-${suffix}.sock`)
   const dataHash = stablePathHash(dataDir)
-  return preferred.length <= 90
-    ? preferred
-    : path.join(os.tmpdir(), `llama-server-manager-${dataHash}`, `control-${suffix}.sock`)
+  if (unixSocketPathFits(preferred)) return preferred
+  const fallback = path.join(
+    os.tmpdir(),
+    `llama-server-manager-${dataHash}`,
+    `control-${suffix}.sock`,
+  )
+  return unixSocketPathFits(fallback)
+    ? fallback
+    : path.join('/tmp', `llama-server-manager-${dataHash}`, `control-${suffix}.sock`)
 }
 
 function debugExecutable() {

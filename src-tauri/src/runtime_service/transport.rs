@@ -11,8 +11,12 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 const RUNTIME_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const RUNTIME_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
+#[cfg(any(unix, test))]
+const MAX_RUNTIME_SOCKET_PATH_BYTES: usize = 90;
+#[cfg(any(unix, test))]
+const SHORT_RUNTIME_SOCKET_ROOT: &str = "/tmp";
 
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 fn stable_path_hash(value: &str) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     for byte in value.as_bytes() {
@@ -81,17 +85,45 @@ fn endpoint_suffix(control_token: &str) -> String {
     suffix
 }
 
-#[cfg(unix)]
-pub fn control_socket_path(control_token: &str) -> PathBuf {
+#[cfg(any(unix, test))]
+fn socket_path_fits(path: &std::path::Path) -> bool {
+    path.to_string_lossy().len() <= MAX_RUNTIME_SOCKET_PATH_BYTES
+}
+
+#[cfg(any(unix, test))]
+fn control_socket_path_for(
+    data_dir: &std::path::Path,
+    temp_dir: &std::path::Path,
+    control_token: &str,
+) -> PathBuf {
     let suffix = endpoint_suffix(control_token);
-    let preferred = runtime_dir().join(format!("control-{suffix}.sock"));
-    if preferred.to_string_lossy().len() <= 90 {
+    let preferred = data_dir
+        .join("runtime")
+        .join(format!("control-{suffix}.sock"));
+    if socket_path_fits(&preferred) {
         return preferred;
     }
-    let data_suffix = stable_path_hash(&crate::utils::get_data_dir().to_string_lossy());
-    std::env::temp_dir()
+    let data_suffix = stable_path_hash(&data_dir.to_string_lossy());
+    let fallback = temp_dir
+        .join(format!("llama-server-manager-{data_suffix:016x}"))
+        .join(format!("control-{suffix}.sock"));
+    if socket_path_fits(&fallback) {
+        return fallback;
+    }
+    // macOS per-user temp directories can be too long for sockaddr_un. The
+    // child directory below is still ownership-checked and restricted to 0700.
+    std::path::Path::new(SHORT_RUNTIME_SOCKET_ROOT)
         .join(format!("llama-server-manager-{data_suffix:016x}"))
         .join(format!("control-{suffix}.sock"))
+}
+
+#[cfg(unix)]
+pub fn control_socket_path(control_token: &str) -> PathBuf {
+    control_socket_path_for(
+        &crate::utils::get_data_dir(),
+        &std::env::temp_dir(),
+        control_token,
+    )
 }
 
 #[cfg(windows)]
@@ -411,11 +443,23 @@ pub async fn wait_until_stopped(control_token: &str, timeout: Duration) -> bool 
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     #[test]
     fn stable_hash_is_repeatable_and_path_specific() {
         assert_eq!(stable_path_hash("alpha"), stable_path_hash("alpha"));
         assert_ne!(stable_path_hash("alpha"), stable_path_hash("beta"));
+    }
+
+    #[test]
+    fn long_system_temp_path_uses_bounded_short_socket_fallback() {
+        let system_temp = std::path::Path::new("/var/folders/pd/2_nlvl1s4k121pdk4d5_2c8m0000gn/T");
+        let data_dir = system_temp.join("lsm-runtime-smoke-123456");
+        let endpoint = control_socket_path_for(&data_dir, system_temp, "test-control-token");
+
+        assert!(endpoint.starts_with(SHORT_RUNTIME_SOCKET_ROOT));
+        assert!(socket_path_fits(&endpoint));
+        assert!(endpoint
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().starts_with("control-")));
     }
 
     #[test]
