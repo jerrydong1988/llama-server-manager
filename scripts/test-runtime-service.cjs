@@ -1,4 +1,5 @@
 const childProcess = require('node:child_process')
+const crypto = require('node:crypto')
 const fs = require('node:fs')
 const http = require('node:http')
 const net = require('node:net')
@@ -16,15 +17,20 @@ function stablePathHash(value) {
   return hash.toString(16).padStart(16, '0')
 }
 
-function runtimeEndpoint(dataDir) {
-  const hash = stablePathHash(dataDir)
+function endpointSuffix(token) {
+  return crypto.createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 32)
+}
+
+function runtimeEndpoint(dataDir, token) {
+  const suffix = endpointSuffix(token)
   if (process.platform === 'win32') {
-    return `\\\\.\\pipe\\llama-server-manager-runtime-${hash}`
+    return `\\\\.\\pipe\\llama-server-manager-runtime-${suffix}`
   }
-  const preferred = path.join(dataDir, 'runtime', 'control.sock')
+  const preferred = path.join(dataDir, 'runtime', `control-${suffix}.sock`)
+  const dataHash = stablePathHash(dataDir)
   return preferred.length <= 90
     ? preferred
-    : path.join(os.tmpdir(), `llama-server-manager-${hash}`, 'control.sock')
+    : path.join(os.tmpdir(), `llama-server-manager-${dataHash}`, `control-${suffix}.sock`)
 }
 
 function debugExecutable() {
@@ -242,7 +248,6 @@ async function main() {
     throw new Error(`debug runtime executable is missing: ${executable}; run cargo build first`)
   }
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-runtime-smoke-'))
-  const endpoint = runtimeEndpoint(dataDir)
   let forwardedRequests = 0
   const backend = http.createServer((request, response) => {
     const chunks = []
@@ -277,6 +282,7 @@ async function main() {
 
   try {
     const token = await readToken(dataDir)
+    const endpoint = runtimeEndpoint(dataDir, token)
     const unauthorized = await request(
       endpoint,
       'invalid-runtime-token-value',
