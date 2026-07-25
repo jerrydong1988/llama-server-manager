@@ -598,10 +598,9 @@ fn trusted_download_cleanup_paths(
     task_id: &str,
     file_name: &str,
     run_id: Option<&str>,
-    frontend_path: Option<&Path>,
 ) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
     let sanitized = sanitize_file_name(file_name)?;
-    let mut candidates = Vec::new();
+    let mut trusted = None;
     for entry in entries {
         for file in &entry.files {
             if file.task_id.as_deref() != Some(task_id) {
@@ -618,31 +617,18 @@ fn trusted_download_cleanup_paths(
             let managed_root = queue_entry_managed_root(base_dir, entry)?;
             let dir = remote_parent_dir(&queue_entry_download_dir(base_dir, entry)?, &file.path)?;
             let (final_path, temp_path, metadata_path) = build_download_paths(&dir, &file.name);
-            candidates.push((managed_root, final_path, temp_path, metadata_path));
-        }
-    }
-
-    let (managed_root, final_path, temp_path, metadata_path) = candidates
-        .into_iter()
-        .next()
-        .ok_or_else(|| "Download task not found".to_string())?;
-
-    if let Some(frontend_path) = frontend_path {
-        let expected = normalize_path_for_compare(&final_path);
-        let provided = normalize_path_for_compare(
-            if frontend_path.is_absolute() {
-                frontend_path.to_path_buf()
-            } else {
-                base_dir.join(frontend_path)
+            let candidate = (managed_root, final_path, temp_path, metadata_path);
+            if trusted
+                .as_ref()
+                .is_some_and(|current| current != &candidate)
+            {
+                return Err("Download task maps to more than one managed artifact".to_string());
             }
-            .as_path(),
-        );
-        if provided != expected {
-            return Err("Frontend file path does not match registered download task".into());
+            trusted = Some(candidate);
         }
     }
 
-    Ok((managed_root, final_path, temp_path, metadata_path))
+    trusted.ok_or_else(|| "Download task not found".to_string())
 }
 
 fn registered_download_paths_for_task(
@@ -1878,7 +1864,6 @@ pub async fn pause_file_download(
 pub async fn cancel_and_cleanup_download(
     task_id: String,
     file_name: String,
-    file_path: String,
     run_id: Option<String>,
     version: Option<u32>,
     state: tauri::State<'_, AppState>,
@@ -1914,7 +1899,6 @@ pub async fn cancel_and_cleanup_download(
             &task_id,
             &file_name,
             run_id_for_match,
-            Some(Path::new(&file_path)),
         )?;
     // Resolve the parent directory so symlinks and traversal cannot escape the managed root.
     let cpath = verified_managed_cleanup_path(&root, &trusted_final_path)?;
@@ -3747,7 +3731,7 @@ mod audit_remediation_tests {
     }
 
     #[test]
-    fn trusted_download_cleanup_path_rejects_frontend_path_outside_entry_directory() {
+    fn trusted_download_cleanup_path_is_derived_from_registered_task() {
         let entry = PersistedQueueEntry {
             id: "entry-1".into(),
             repo_id: "repo/model".into(),
@@ -3772,19 +3756,23 @@ mod audit_remediation_tests {
             }],
         };
         let base = Path::new("/app-data");
-        let forged = Path::new("/app-data/configs/instances.json");
 
-        let err = trusted_download_cleanup_paths(
-            &[entry],
-            base,
-            "task-1",
-            "model.gguf",
-            Some("run-1"),
-            Some(forged),
-        )
-        .unwrap_err();
+        let (_, final_path, temp_path, metadata_path) =
+            trusted_download_cleanup_paths(&[entry], base, "task-1", "model.gguf", Some("run-1"))
+                .unwrap();
 
-        assert!(err.contains("does not match"));
+        assert_eq!(
+            normalize_path_for_compare(&final_path),
+            normalize_path_for_compare(Path::new("/app-data/models/repo/model/model.gguf"))
+        );
+        assert_eq!(
+            temp_path,
+            Path::new("/app-data/models/repo/model/model.gguf.part")
+        );
+        assert_eq!(
+            metadata_path,
+            Path::new("/app-data/models/repo/model/model.gguf.part.json")
+        );
     }
 
     #[test]
@@ -3824,7 +3812,7 @@ mod audit_remediation_tests {
     }
 
     #[test]
-    fn relative_frontend_cleanup_path_is_resolved_from_the_managed_base() {
+    fn relative_registered_cleanup_path_is_resolved_from_the_managed_base() {
         let entry = PersistedQueueEntry {
             id: "entry-relative".into(),
             repo_id: "org/model".into(),
@@ -3855,7 +3843,6 @@ mod audit_remediation_tests {
             "relative-task",
             "model.gguf",
             Some("relative-run"),
-            Some(Path::new("models/org/model/weights/model.gguf")),
         )
         .unwrap();
 
@@ -3921,7 +3908,6 @@ mod audit_remediation_tests {
             "task-absolute",
             "model.gguf",
             Some("run-absolute"),
-            None,
         );
 
         assert!(result.unwrap_err().contains("绝对下载目录未获授权"));
@@ -4723,17 +4709,14 @@ pub mod ipc {
     pub async fn cancel_and_cleanup_download(
         task_id: String,
         file_name: String,
-        file_path: String,
         run_id: Option<String>,
         version: Option<u32>,
         state: tauri::State<'_, AppState>,
         app: tauri::AppHandle,
     ) -> crate::error::AppResult<()> {
-        super::cancel_and_cleanup_download(
-            task_id, file_name, file_path, run_id, version, state, app,
-        )
-        .await
-        .map_err(crate::error::AppError::from)
+        super::cancel_and_cleanup_download(task_id, file_name, run_id, version, state, app)
+            .await
+            .map_err(crate::error::AppError::from)
     }
 
     #[tauri::command]

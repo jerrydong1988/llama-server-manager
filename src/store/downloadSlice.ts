@@ -213,9 +213,9 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         })
       }
     },
-    cancelAndCleanupDownload: async (taskId, fileName, filePath, runId, version) => {
+    cancelAndCleanupDownload: async (taskId, fileName, runId, version) => {
       try {
-        await invoke('cancel_and_cleanup_download', { taskId, fileName, filePath, runId, version })
+        await invoke('cancel_and_cleanup_download', { taskId, fileName, runId, version })
       } catch (error) {
         console.error(error)
         get().addRuntimeWarning(`download cancellation persistence failed: ${String(error)}`)

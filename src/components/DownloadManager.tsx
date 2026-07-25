@@ -356,7 +356,7 @@ export default function DownloadManager() {
   const handleCancel = (file: MsFileEntry) => {
     const task = taskForFile(file)
     if (!task) return
-    cancelAndCleanupDownload(task.id, file.name, pathJoin(task.saveDir, browsedRepoId, file.path || file.name), task.runId, task.version)
+    cancelAndCleanupDownload(task.id, file.name, task.runId, task.version)
   }
 
   const handleResumePersisted = (task: DownloadProgress) => {
@@ -364,7 +364,7 @@ export default function DownloadManager() {
   }
 
   const handleCancelPersisted = (task: DownloadProgress) => {
-    void cancelAndCleanupDownload(task.id, task.fileName, pathJoin(task.saveDir, task.repoId, task.remotePath || task.fileName), task.runId, task.version)
+    void cancelAndCleanupDownload(task.id, task.fileName, task.runId, task.version)
   }
 
   const handleDeleteCompleted = async (task: DownloadProgress) => {

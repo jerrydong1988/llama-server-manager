@@ -119,6 +119,20 @@ assert.match(
   /remove_manager_file\(&state, &task_id\)\?;[\s\S]*emit\("download-removed"/,
   'the backend must emit removal only after durable task cleanup succeeds',
 )
+const cancelCleanupSource = downloadSource.slice(
+  downloadSource.indexOf('pub async fn cancel_and_cleanup_download'),
+  downloadSource.indexOf('// HuggingFace data structures and browse.'),
+)
+assert.doesNotMatch(
+  cancelCleanupSource,
+  /file_path|frontend_path/,
+  'paused task cancellation must derive cleanup paths from registered backend state',
+)
+assert.doesNotMatch(
+  downloadSliceSource,
+  /cancel_and_cleanup_download'[^]*filePath/,
+  'the frontend must not submit a locally reconstructed path for paused task cancellation',
+)
 const cancelPersistedSource = downloadManagerSource.slice(
   downloadManagerSource.indexOf('const handleCancelPersisted'),
   downloadManagerSource.indexOf('const taskLocalPath'),
