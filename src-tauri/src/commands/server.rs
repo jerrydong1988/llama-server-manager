@@ -3176,7 +3176,7 @@ struct GpuSystemSnapshot {
 fn collect_gpu_and_system() -> GpuSystemSnapshot {
     let mut guard = SYSINFO_CACHE.lock().unwrap();
     if let Some((sampled_at, snapshot)) = &guard.snapshot {
-        if sampled_at.elapsed() < std::time::Duration::from_secs(4) {
+        if sampled_at.elapsed() < std::time::Duration::from_secs(1) {
             return snapshot.clone();
         }
     }
@@ -3248,14 +3248,7 @@ fn get_process_metrics(sys: &mut System, pid: u32) -> (f32, f64) {
 }
 
 fn get_system_level_metrics(sys: &System) -> (Option<f32>, Option<f64>, Option<f64>) {
-    let cpu = {
-        let usage = sys.global_cpu_usage();
-        if usage > 0.0 {
-            Some(usage)
-        } else {
-            None
-        }
-    };
+    let cpu = Some(sys.global_cpu_usage().clamp(0.0, 100.0));
     let total_mb = Some(sys.total_memory() as f64 / (1024.0 * 1024.0));
     let used_mb = Some(sys.used_memory() as f64 / (1024.0 * 1024.0));
     (cpu, total_mb, used_mb)
@@ -3299,7 +3292,8 @@ pub async fn get_system_metrics(
     Ok(result)
 }
 
-/// System health without requiring an instance. Used by Dashboard for the system resource bar.
+/// Global system health without requiring an instance. Shared by Dashboard,
+/// Performance Monitoring, and Big Screen resource cards.
 pub async fn get_system_health() -> Result<SystemMetrics, String> {
     let result = tokio::task::spawn_blocking(|| {
         let gpu_system = collect_gpu_and_system();

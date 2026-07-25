@@ -286,28 +286,79 @@ const entry = `
     'Processing 2 · Queued 1',
   )
 
-  const gpuSignal = buildResourceSignals({
-    system: null,
-    latest: {
+  const globalSignals = buildResourceSignals({
+    system: {
+      cpu_percent: 8,
+      memory_mb: 14 * 1024,
+      uptime_secs: 0,
       gpu_percent: 12,
+      vram_used_mb: 24 * 1024,
+      vram_total_mb: 32 * 1024,
+      system_cpu_percent: 9,
+      system_memory_used_mb: 14 * 1024,
+      system_memory_total_mb: 32 * 1024,
       gpu_vendor: 'AMD',
       gpu_name: 'AMD Radeon(TM) 8060S Graphics',
     },
-    samples: [],
+    history: [
+      {
+        ts: 1,
+        cpu_percent: 7,
+        memory_mb: 13 * 1024,
+        uptime_secs: 0,
+        gpu_percent: 10,
+        vram_used_mb: 20 * 1024,
+        vram_total_mb: 32 * 1024,
+        system_cpu_percent: 8,
+        system_memory_used_mb: 13 * 1024,
+        system_memory_total_mb: 32 * 1024,
+        gpu_vendor: 'AMD',
+        gpu_name: 'AMD Radeon(TM) 8060S Graphics',
+      },
+    ],
     labels: {
-      process: '进程',
       system: '系统',
       memory: '内存',
       vram: '显存',
       gpuUnavailable: '未检测到 GPU',
     },
-  })[1]
-  assert.equal(gpuSignal.value, 12)
+  })
+  assert.equal(globalSignals[0].value, 9)
+  assert.equal(globalSignals[0].detail, '系统 9%')
+  assert.deepEqual(globalSignals[0].sparkline, [8])
+  assert.equal(globalSignals[1].value, 12)
   assert.equal(
-    gpuSignal.detail,
+    globalSignals[1].detail,
     'AMD Radeon(TM) 8060S Graphics',
-    'historical sessions must display the persisted GPU model name',
+    'global resources must display the live GPU model name',
   )
+  assert.equal(globalSignals[2].value, 43.75)
+  assert.equal(globalSignals[3].value, 75)
+
+  const unavailableGpu = buildResourceSignals({
+    system: {
+      cpu_percent: 0,
+      memory_mb: 1024,
+      uptime_secs: 0,
+      gpu_percent: null,
+      vram_used_mb: null,
+      vram_total_mb: null,
+      system_cpu_percent: 0,
+      system_memory_used_mb: 1024,
+      system_memory_total_mb: 2048,
+      gpu_vendor: null,
+      gpu_name: null,
+    },
+    history: [],
+    labels: {
+      system: 'System',
+      memory: 'Memory',
+      vram: 'VRAM',
+      gpuUnavailable: 'GPU unavailable',
+    },
+  })[1]
+  assert.equal(unavailableGpu.value, null, 'missing GPU telemetry must not be rendered as zero utilization')
+  assert.equal(unavailableGpu.detail, 'GPU unavailable')
 
   const boundedFleet = buildFleetThroughputSeries(
     { a: [frame({ ts: 1000, throughput: 99 }), frame({ ts: 5000, throughput: 10 })] },
@@ -375,9 +426,11 @@ const root = path.join(__dirname, '..')
 const rustSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'commands', 'server.rs'), 'utf8')
 const performanceSource = fs.readFileSync(path.join(root, 'src', 'components', 'PerformancePage', 'PerformancePage.tsx'), 'utf8')
 const bigScreenSource = fs.readFileSync(path.join(root, 'src', 'components', 'BigScreenPage.tsx'), 'utf8')
+const dashboardSource = fs.readFileSync(path.join(root, 'src', 'components', 'Dashboard', 'Dashboard.tsx'), 'utf8')
 const primitiveSource = fs.readFileSync(path.join(root, 'src', 'components', 'monitoring', 'MonitoringPrimitives.tsx'), 'utf8')
 const monitoringSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'commands', 'monitoring.rs'), 'utf8')
 const runtimeEventsSource = fs.readFileSync(path.join(root, 'src', 'store', 'runtimeEvents.ts'), 'utf8')
+const coreSliceSource = fs.readFileSync(path.join(root, 'src', 'store', 'coreSlice.ts'), 'utf8')
 
 assert.match(rustSource, /tg_3s: Option<f64>/, 'task events must expose llama-server rolling throughput')
 assert.match(rustSource, /re_tg_3s/, 'the log parser must parse rolling throughput')
@@ -388,13 +441,22 @@ for (const source of [performanceSource, bigScreenSource]) {
   assert.doesNotMatch(source, /listen<PerfUpdateEvent>/, 'views must not register page-local task listeners')
 }
 assert.match(performanceSource, /monitoringFramePoints/, 'performance view must project selected-instance frames')
+assert.match(performanceSource, /system: sysMetrics,[\s\S]*history: systemMetricsHistory/, 'performance resources must use the global realtime sampler')
+assert.doesNotMatch(performanceSource, /system: currentFrame\?\.system/, 'performance resource cards must not follow the selected session')
 assert.match(performanceSource, /const detailReady = Boolean\(selectedSessionId\) && detailSessionId === selectedSessionId/, 'telemetry detail state must be bound to the selected session before rendering')
 assert.match(performanceSource, /sample\.session_id === selectedSession\.id/, 'historical fallback samples must belong to the selected session')
 assert.match(bigScreenSource, /buildFleetThroughputSeries/, 'wallboard must use workload-aware fleet aggregation')
+assert.match(bigScreenSource, /system: sysMetrics,[\s\S]*history: systemMetricsHistory/, 'wallboard resources must use the same global realtime sampler')
+assert.doesNotMatch(bigScreenSource, /latest: latestSample/, 'wallboard resource trends must not mix unrelated session samples')
 assert.match(bigScreenSource, /const pressureFrames = inferenceFrames\.length > 0 \? inferenceFrames : currentFrames/, 'mixed workload pressure must use one consistent numerator and capacity population')
+assert.match(dashboardSource, /label: labels\.vram/, 'dashboard must expose VRAM as its own global resource')
+assert.match(dashboardSource, /xl:grid-cols-4/, 'dashboard must give CPU, GPU, memory, and VRAM equal resource cards')
 assert.match(runtimeEventsSource, /registerListener<MonitoringFrame>\(store, 'monitoring-frame'/, 'monitoring frames must be registered once at application scope')
 assert.match(runtimeEventsSource, /get_monitoring_series/, 'the global store must hydrate the backend timeline')
+assert.match(runtimeEventsSource, /hidden' \? 10_000 : 2_000/, 'visible global resource polling must stay realtime')
+assert.match(coreSliceSource, /systemMetricsHistory/, 'global resource history must be retained independently of telemetry sessions')
 assert.match(monitoringSource, /FRAME_INTERVAL_MS: i64 = 1_000/, 'backend monitoring must use one-second canonical buckets')
+assert.match(monitoringSource, /TASK_FRESHNESS_MS: i64 = 5_000/, 'task throughput must survive the detached runtime bridge cadence')
 assert.match(monitoringSource, /items_per_second/, 'backend frames must expose vector item throughput')
 assert.match(monitoringSource, /input_tokens_per_second/, 'backend frames must expose vector input throughput')
 assert.match(primitiveSource, /buildChartAxis/, 'trend charts must render a numeric axis')

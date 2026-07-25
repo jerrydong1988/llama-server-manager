@@ -95,7 +95,7 @@ export function getPerformanceLabels(lang: string) {
   const zh = lang === 'zh-CN'
   return {
     title: zh ? '性能监控' : 'Performance Monitoring',
-    description: zh ? '实例性能、请求吞吐与诊断分析' : 'Instance performance, request throughput, and diagnostics.',
+    description: zh ? '会话性能、请求吞吐、全局系统资源与诊断分析' : 'Session performance, request throughput, global system resources, and diagnostics.',
     sqliteBacked: zh ? 'SQLite 遥测' : 'SQLite Telemetry',
     refresh: zh ? '刷新' : 'Refresh',
     telemetryError: zh ? '遥测数据读取异常' : 'Telemetry query failed',
@@ -106,6 +106,8 @@ export function getPerformanceLabels(lang: string) {
     monitoringObject: zh ? '监控对象' : 'Monitoring Target',
     runningInstance: zh ? '运行中实例' : 'Running Instance',
     noRunning: zh ? '暂无运行中实例' : 'No running instance',
+    monitoringInstance: zh ? '监控实例' : 'Monitoring Instance',
+    noInstances: zh ? '暂无实例' : 'No instances',
     sessionHistory: zh ? '会话历史' : 'Session History',
     noHistory: zh ? '暂无历史会话' : 'No Session History',
     noHistoryDesc: zh ? '启动实例并产生采样后会显示在这里。' : 'Sessions appear after an instance starts and emits samples.',
@@ -133,6 +135,8 @@ export function getPerformanceLabels(lang: string) {
     memory: zh ? '内存' : 'Memory',
     vram: zh ? '显存' : 'VRAM',
     gpuUnavailable: zh ? '未检测到 GPU' : 'GPU unavailable',
+    systemResources: zh ? '全局系统资源' : 'Global System Resources',
+    realtime: zh ? '实时' : 'Live',
     throughputTrend: zh ? '吞吐趋势' : 'Throughput Trend',
     noSamplesYet: zh ? '暂无足够遥测采样' : 'Not enough telemetry samples yet',
     ranges: {

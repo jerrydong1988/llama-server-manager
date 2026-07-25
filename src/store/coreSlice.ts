@@ -14,6 +14,8 @@ import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './typ
 
 const DEFAULT_MODEL_DIRECTORY = 'models'
 const BACKGROUND_RUNTIME_WARNING_PREFIX = 'background runtime:'
+const SYSTEM_METRICS_HISTORY_MAX_AGE_MS = 60 * 60 * 1000
+const MAX_SYSTEM_METRICS_HISTORY = 1_800
 
 export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   AppState,
@@ -40,7 +42,18 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   | 'openEngineFolder'
 > {
   return {
-    setSysMetrics: (metrics) => set({ sysMetrics: metrics }),
+    setSysMetrics: (metrics) => set((state) => {
+      if (!metrics) return { sysMetrics: null }
+      const ts = Date.now()
+      const cutoff = ts - SYSTEM_METRICS_HISTORY_MAX_AGE_MS
+      const systemMetricsHistory = state.systemMetricsHistory
+        .filter(sample => sample.ts >= cutoff && sample.ts !== ts)
+      systemMetricsHistory.push({ ...metrics, ts })
+      return {
+        sysMetrics: metrics,
+        systemMetricsHistory: systemMetricsHistory.slice(-MAX_SYSTEM_METRICS_HISTORY),
+      }
+    }),
     addRuntimeWarning: (message) => {
       const trimmed = String(message || '').trim()
       if (!trimmed) return

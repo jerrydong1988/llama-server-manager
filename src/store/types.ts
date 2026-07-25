@@ -274,6 +274,10 @@ export interface SystemMetrics {
   gpu_name: string | null
 }
 
+export interface SystemMetricsSample extends SystemMetrics {
+  ts: number
+}
+
 export type ModelWorkload = 'inference' | 'embedding' | 'reranker'
 
 export interface TelemetrySampleSummary {
@@ -504,6 +508,7 @@ export interface AppState {
   downloadTasks: Record<string, DownloadProgress>
   downloadQueue: DownloadQueueEntry[]
   sysMetrics: SystemMetrics | null
+  systemMetricsHistory: SystemMetricsSample[]
   monitoringFramesByInstance: Record<string, MonitoringFrame[]>
   monitoringCurrentByInstance: Record<string, MonitoringFrame>
   runningTasksByInstance: Record<string, RunningInferenceTask[]>
