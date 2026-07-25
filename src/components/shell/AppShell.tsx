@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ComponentType, type ReactNode } from 'react'
 import { AlertTriangle, ArrowUpRight, Languages, Moon, Search, Sun, Zap } from 'lucide-react'
+import appIconUrl from '../../../src-tauri/icons/128x128.png'
 import { Badge, Button, IconButton, joinClassNames } from '../ui'
 
 type NavIcon = ComponentType<{ className?: string }>
@@ -88,8 +89,8 @@ export function AppShell({
       <div className="app-shell flex h-screen flex-col overflow-hidden bg-[var(--color-app-bg)] text-slate-900 dark:bg-[var(--color-app-bg-dark)] dark:text-slate-100 lg:flex-row">
         <aside className="app-sidebar flex shrink-0 flex-col border-b border-slate-200 bg-white/95 px-3 py-3 shadow-sm shadow-slate-950/5 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95 lg:h-screen lg:w-[264px] lg:border-b-0 lg:border-r">
           <div className="mb-3 flex items-center gap-3 px-2 lg:mb-5">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-slate-950 text-white shadow-sm dark:bg-slate-100 dark:text-slate-950">
-              <Zap className="h-5 w-5" />
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg shadow-sm">
+              <img aria-hidden="true" src={appIconUrl} alt="" className="h-10 w-10 max-w-none scale-[1.28]" />
             </div>
             <div className="min-w-0">
               <div className="truncate text-sm font-semibold leading-5">{appTitle}</div>
