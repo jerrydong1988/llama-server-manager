@@ -10,7 +10,11 @@ use tauri::{Emitter, Manager};
 const FRAME_INTERVAL_MS: i64 = 1_000;
 const FRAME_RETENTION: usize = 3_600;
 const MAX_VECTOR_EVENTS: usize = 10_000;
-const TASK_FRESHNESS_MS: i64 = 2_500;
+// llama-server emits rolling task timings roughly every three seconds, while the
+// detached runtime bridge also reports on a three-second cadence. Keep the last
+// task sample alive across both schedules so an unlucky phase offset cannot make
+// an active request fall back to the zero-valued /metrics gauge.
+const TASK_FRESHNESS_MS: i64 = 5_000;
 const METRIC_FRESHNESS_MS: i64 = 8_000;
 const SYSTEM_FRESHNESS_MS: i64 = 15_000;
 const VECTOR_WINDOW_MS: i64 = 3_000;
@@ -655,6 +659,34 @@ mod tests {
         assert_eq!(frame.throughput, Some(60.0));
         assert_eq!(frame.source, "task");
         assert_eq!(frame.throughput_unit, "tok/s");
+    }
+
+    #[test]
+    fn inference_task_sample_survives_runtime_bridge_phase_offset() {
+        let now = 20_000;
+        let mut state = InstanceMonitoringState::new(
+            "instance",
+            Some("session"),
+            ModelWorkload::Inference,
+            now,
+        );
+        state.llama = Some(Timed {
+            value: llama(1, 0.0, 0.0),
+            ts: now,
+        });
+        state.tasks = Some(Timed {
+            value: TaskSnapshot {
+                active: 1,
+                throughput: 25.8,
+            },
+            ts: now.saturating_sub(3_500),
+        });
+
+        let frame = state.build_frame(now);
+
+        assert_eq!(frame.active_requests, 1);
+        assert_eq!(frame.throughput, Some(25.8));
+        assert_eq!(frame.source, "task");
     }
 
     #[test]

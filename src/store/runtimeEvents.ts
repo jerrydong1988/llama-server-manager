@@ -128,7 +128,7 @@ function startSysMetricsPolling(store: StoreLike) {
       store.getState().addRuntimeWarning(`system metrics polling failed: ${message}`)
     } finally {
       sysMetricsInFlight = false
-      const delay = document.visibilityState === 'hidden' ? 15_000 : 5_000
+      const delay = document.visibilityState === 'hidden' ? 10_000 : 2_000
       sysMetricsTimer = setTimeout(fetchSysMetrics, delay)
     }
   }

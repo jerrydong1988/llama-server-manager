@@ -69,6 +69,7 @@ export default function BigScreenPage() {
   const engines = useAppStore(state => state.engines)
   const logs = useAppStore(state => state.logs)
   const sysMetrics = useAppStore(state => state.sysMetrics)
+  const systemMetricsHistory = useAppStore(state => state.systemMetricsHistory)
   const downloadTasks = useAppStore(state => state.downloadTasks)
   const downloadQueue = useAppStore(state => state.downloadQueue)
   const monitoringFramesByInstance = useAppStore(state => state.monitoringFramesByInstance)
@@ -97,16 +98,11 @@ export default function BigScreenPage() {
       setOverview(nextOverview)
       setSessions(nextSessions)
 
-      const sessionId = nextSessions[0]?.id
       const inferenceSessionId = nextSessions.find(session => session.workload === 'inference')?.id
       const speculativeRequestsPromise = inferenceSessionId
         ? invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId: inferenceSessionId, limit: 32 })
         : Promise.resolve([])
-      const recentRequestsPromise = sessionId === inferenceSessionId
-        ? speculativeRequestsPromise.then(items => items.slice(0, 8))
-        : sessionId
-          ? invoke<InferenceRequestSummary[]>('list_inference_requests', { sessionId, limit: 8 })
-          : Promise.resolve([])
+      const recentRequestsPromise = speculativeRequestsPromise.then(items => items.slice(0, 8))
       const [nextRequests, nextSpeculativeRequests] = await Promise.all([
         recentRequestsPromise,
         speculativeRequestsPromise,
@@ -133,11 +129,6 @@ export default function BigScreenPage() {
   const runningInstances = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
   const stoppedCount = instances.filter(instance => instance.status === 'stopped').length
   const errorCount = instances.filter(instance => instance.status === 'error').length
-  const latestSample = overview.latest_samples[0] || null
-  const trendSamples = useMemo(
-    () => [...overview.latest_samples].sort((left, right) => left.ts - right.ts),
-    [overview.latest_samples],
-  )
   const runningInstanceIds = useMemo(
     () => runningInstances.map(instance => instance.id),
     [runningInstances],
@@ -192,10 +183,12 @@ export default function BigScreenPage() {
   )
   const activeRequestCount = currentFrames.reduce((total, frame) => total + frame.activeRequests, 0)
   const latestMonitoringTs = Math.max(0, ...currentFrames.map(frame => frame.ts))
+  const latestSystemMetricsTs = systemMetricsHistory[systemMetricsHistory.length - 1]?.ts || 0
 
   useEffect(() => {
-    if (latestMonitoringTs > 0) setLastUpdatedAt(latestMonitoringTs)
-  }, [latestMonitoringTs])
+    const latestRealtimeTs = Math.max(latestMonitoringTs, latestSystemMetricsTs)
+    if (latestRealtimeTs > 0) setLastUpdatedAt(latestRealtimeTs)
+  }, [latestMonitoringTs, latestSystemMetricsTs])
 
   const flatLogs = useMemo(
     () => Object.entries(logs)
@@ -304,11 +297,10 @@ export default function BigScreenPage() {
   const resourceSignals = useMemo(
     () => buildResourceSignals({
       system: sysMetrics,
-      latest: latestSample,
-      samples: trendSamples,
+      history: systemMetricsHistory,
       labels,
     }),
-    [sysMetrics, latestSample, trendSamples, labels],
+    [sysMetrics, systemMetricsHistory, labels],
   )
 
   const activityFeed = useMemo(
@@ -518,8 +510,9 @@ function WallKpi({ label, value, detail, tone, icon }: { label: string; value: R
   )
 }
 
-function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { label: string; value: number; detail: string; tone: SignalTone; sparkline: number[]; icon: ReactNode }) {
-  const safe = Math.max(0, Math.min(100, Math.round(Number.isFinite(value) ? value : 0)))
+function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { label: string; value: number | null; detail: string; tone: SignalTone; sparkline: number[]; icon: ReactNode }) {
+  const available = value != null && Number.isFinite(value)
+  const safe = Math.max(0, Math.min(100, Math.round(available ? value : 0)))
   const toneClass = wallTone(tone)
   return (
     <div className="grid min-w-0 grid-cols-[40px_minmax(0,1fr)_64px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 2xl:grid-cols-[48px_minmax(160px,0.8fr)_78px_minmax(80px,1fr)_110px] dark:border-slate-700 dark:bg-slate-950/50">
@@ -528,7 +521,7 @@ function ResourcePressureRow({ label, value, detail, tone, sparkline, icon }: { 
         <div className="truncate text-base font-semibold text-slate-900 dark:text-slate-100">{label}</div>
         <div className="break-words text-xs leading-4 text-slate-500" title={detail}>{detail}</div>
       </div>
-      <div className="text-3xl font-semibold text-slate-950 dark:text-white">{safe}%</div>
+      <div className="text-3xl font-semibold text-slate-950 dark:text-white">{available ? `${safe}%` : '--'}</div>
       <div className="hidden h-2 overflow-hidden rounded-full bg-slate-200 2xl:block dark:bg-slate-800">
         <div className={joinClassNames('h-full rounded-full', toneClass.bar)} style={{ width: `${safe}%` }} />
       </div>

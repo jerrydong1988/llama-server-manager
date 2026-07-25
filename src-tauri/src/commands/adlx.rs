@@ -136,8 +136,7 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
         // TotalSystemRAM (index 10)
         type TotalRAM = unsafe extern "system" fn(*mut c_void, *mut u32) -> AdlxResult;
         let mut ram: u32 = 0;
-        vtbl::<TotalRAM>(vt, 10)(sys, &mut ram);
-        if ram > 0 {
+        if vtbl::<TotalRAM>(vt, 10)(sys, &mut ram) == ADLX_OK && ram > 0 {
             m.memory_mb = Some(ram as f64);
         }
 
@@ -159,8 +158,7 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
             // GPU::TotalVRAM (index 11)
             type TotalVRAM = unsafe extern "system" fn(*mut c_void, *mut u32) -> AdlxResult;
             let mut vram: u32 = 0;
-            vtbl::<TotalVRAM>(vt_gpu, 11)(gpu, &mut vram);
-            if vram > 0 {
+            if vtbl::<TotalVRAM>(vt_gpu, 11)(gpu, &mut vram) == ADLX_OK && vram > 0 {
                 m.vram_total_mb = Some(vram as f64);
             }
         }
@@ -186,16 +184,14 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
         // SM::CPUUsage (index 4)
         type CPUUsage = unsafe extern "system" fn(*mut c_void, *mut f64) -> AdlxResult;
         let mut cpu: f64 = 0.0;
-        vtbl::<CPUUsage>(vt_sm, 4)(sm, &mut cpu);
-        if cpu > 0.0 {
-            m.cpu_percent = Some(cpu as f32);
+        if vtbl::<CPUUsage>(vt_sm, 4)(sm, &mut cpu) == ADLX_OK && cpu.is_finite() && cpu >= 0.0 {
+            m.cpu_percent = Some(cpu.clamp(0.0, 100.0) as f32);
         }
 
         // SM::SystemRAM (index 5)
         type SysRAM = unsafe extern "system" fn(*mut c_void, *mut i32) -> AdlxResult;
         let mut sram: i32 = 0;
-        vtbl::<SysRAM>(vt_sm, 5)(sm, &mut sram);
-        if sram > 0 {
+        if vtbl::<SysRAM>(vt_sm, 5)(sm, &mut sram) == ADLX_OK && sram >= 0 {
             m.memory_mb = Some(sram as f64);
         }
     }
@@ -211,16 +207,17 @@ unsafe fn try_collect() -> Option<AdlxMetrics> {
             // GM::GPUUsage (index 4)
             type GPUUsage = unsafe extern "system" fn(*mut c_void, *mut f64) -> AdlxResult;
             let mut gpu_pct: f64 = 0.0;
-            vtbl::<GPUUsage>(vt_gm, 4)(gm, &mut gpu_pct);
-            if gpu_pct > 0.0 {
-                m.gpu_percent = Some(gpu_pct as f32);
+            if vtbl::<GPUUsage>(vt_gm, 4)(gm, &mut gpu_pct) == ADLX_OK
+                && gpu_pct.is_finite()
+                && gpu_pct >= 0.0
+            {
+                m.gpu_percent = Some(gpu_pct.clamp(0.0, 100.0) as f32);
             }
 
             // GM::GPUVRAM (index 12)
             type GPUVram = unsafe extern "system" fn(*mut c_void, *mut i32) -> AdlxResult;
             let mut gv_mb: i32 = 0;
-            vtbl::<GPUVram>(vt_gm, 12)(gm, &mut gv_mb);
-            if gv_mb > 0 {
+            if vtbl::<GPUVram>(vt_gm, 12)(gm, &mut gv_mb) == ADLX_OK && gv_mb >= 0 {
                 m.vram_used_mb = Some(gv_mb as f64);
             }
         }

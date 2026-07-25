@@ -54,6 +54,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   downloadTasks: {},
   downloadQueue: [],
   sysMetrics: null as SystemMetrics | null,
+  systemMetricsHistory: [],
   monitoringFramesByInstance: {},
   monitoringCurrentByInstance: {},
   runningTasksByInstance: {},

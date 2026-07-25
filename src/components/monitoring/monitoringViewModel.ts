@@ -7,6 +7,7 @@ import type {
   MonitoringFrame,
   RunningInferenceTask,
   SystemMetrics,
+  SystemMetricsSample,
   TelemetrySampleSummary,
   TelemetrySessionSummary,
 } from '../../store/types'
@@ -53,7 +54,7 @@ export type ActivityFeedItem = {
 export type ResourceSignal = {
   id: 'cpu' | 'gpu' | 'memory' | 'vram'
   label: string
-  value: number
+  value: number | null
   detail: string
   tone: SignalTone
   sparkline: number[]
@@ -366,61 +367,79 @@ export function buildServiceStatus(options: {
 
 export function buildResourceSignals(options: {
   system: SystemMetrics | null
-  latest: TelemetrySampleSummary | null
-  samples: TelemetrySampleSummary[]
-  labels: { memory: string; vram: string; process: string; system: string; gpuUnavailable: string }
+  history: SystemMetricsSample[]
+  labels: { memory: string; vram: string; system: string; gpuUnavailable: string }
 }): ResourceSignal[] {
-  const cpuValue = options.system?.system_cpu_percent ?? options.system?.cpu_percent ?? options.latest?.system_cpu_percent ?? options.latest?.cpu_percent ?? 0
-  const gpuValue = options.system?.gpu_percent ?? options.latest?.gpu_percent ?? 0
-  const memoryUsed = options.system?.system_memory_used_mb ?? options.latest?.system_memory_used_mb ?? options.latest?.memory_mb ?? 0
-  const memoryTotal = options.system?.system_memory_total_mb ?? options.latest?.system_memory_total_mb ?? 0
-  const memoryValue = memoryTotal > 0 ? (memoryUsed / memoryTotal) * 100 : 0
-  const vramUsed = options.system?.vram_used_mb ?? options.latest?.vram_used_mb ?? 0
-  const vramTotal = options.system?.vram_total_mb ?? options.latest?.vram_total_mb ?? 0
-  const vramValue = vramTotal > 0 ? (vramUsed / vramTotal) * 100 : 0
+  const validNumber = (value?: number | null) => (
+    value != null && Number.isFinite(value) ? value : null
+  )
+  const latestHistoryTs = options.history[options.history.length - 1]?.ts ?? Date.now()
+  const resourceHistory = options.history
+    .filter(sample => sample.ts >= latestHistoryTs - 5 * 60 * 1000)
+    .slice(-150)
+  const percentHistory = (selector: (sample: SystemMetricsSample) => number | null) => (
+    resourceHistory
+      .map(selector)
+      .filter((value): value is number => value != null && Number.isFinite(value))
+  )
+  const cpuValue = validNumber(options.system?.system_cpu_percent ?? options.system?.cpu_percent)
+  const gpuValue = validNumber(options.system?.gpu_percent)
+  const memoryUsed = validNumber(options.system?.system_memory_used_mb ?? options.system?.memory_mb)
+  const memoryTotal = validNumber(options.system?.system_memory_total_mb)
+  const memoryValue = memoryUsed != null && memoryTotal != null && memoryTotal > 0
+    ? (memoryUsed / memoryTotal) * 100
+    : null
+  const vramUsed = validNumber(options.system?.vram_used_mb)
+  const vramTotal = validNumber(options.system?.vram_total_mb)
+  const vramValue = vramUsed != null && vramTotal != null && vramTotal > 0
+    ? (vramUsed / vramTotal) * 100
+    : null
 
   return [
     {
       id: 'cpu',
       label: 'CPU',
       value: cpuValue,
-      detail: `${options.labels.process} ${Math.round(options.system?.cpu_percent ?? options.latest?.cpu_percent ?? 0)}% / ${options.labels.system} ${Math.round(cpuValue)}%`,
-      tone: cpuValue >= 85 ? 'amber' : 'blue',
-      sparkline: options.samples.map(sample => sample.system_cpu_percent ?? sample.cpu_percent ?? 0),
+      detail: cpuValue == null ? '--' : `${options.labels.system} ${Math.round(cpuValue)}%`,
+      tone: cpuValue != null && cpuValue >= 85 ? 'amber' : 'blue',
+      sparkline: percentHistory(sample => validNumber(sample.system_cpu_percent ?? sample.cpu_percent)),
     },
     {
       id: 'gpu',
       label: 'GPU',
       value: gpuValue,
       detail: options.system?.gpu_name
-        || options.latest?.gpu_name
         || options.system?.gpu_vendor
-        || options.latest?.gpu_vendor
         || options.labels.gpuUnavailable,
-      tone: gpuValue >= 85 ? 'amber' : 'emerald',
-      sparkline: options.samples.map(sample => sample.gpu_percent ?? 0),
+      tone: gpuValue != null && gpuValue >= 85 ? 'amber' : 'emerald',
+      sparkline: percentHistory(sample => validNumber(sample.gpu_percent)),
     },
     {
       id: 'memory',
       label: options.labels.memory,
       value: memoryValue,
-      detail: memoryTotal > 0 ? `${(memoryUsed / 1024).toFixed(1)} / ${(memoryTotal / 1024).toFixed(1)} GB` : '--',
-      tone: memoryValue >= 90 ? 'red' : 'violet',
-      sparkline: options.samples.map(sample => {
-        const used = sample.system_memory_used_mb ?? sample.memory_mb ?? 0
-        const total = sample.system_memory_total_mb ?? memoryTotal
-        return total > 0 ? (used / total) * 100 : 0
+      detail: memoryUsed != null && memoryTotal != null && memoryTotal > 0
+        ? `${(memoryUsed / 1024).toFixed(1)} / ${(memoryTotal / 1024).toFixed(1)} GB`
+        : '--',
+      tone: memoryValue != null && memoryValue >= 90 ? 'red' : 'violet',
+      sparkline: percentHistory(sample => {
+        const used = validNumber(sample.system_memory_used_mb ?? sample.memory_mb)
+        const total = validNumber(sample.system_memory_total_mb)
+        return used != null && total != null && total > 0 ? (used / total) * 100 : null
       }),
     },
     {
       id: 'vram',
       label: options.labels.vram,
       value: vramValue,
-      detail: vramTotal > 0 ? `${(vramUsed / 1024).toFixed(1)} / ${(vramTotal / 1024).toFixed(1)} GB` : '--',
-      tone: vramValue >= 90 ? 'red' : 'amber',
-      sparkline: options.samples.map(sample => {
-        const total = sample.vram_total_mb ?? vramTotal
-        return total > 0 ? ((sample.vram_used_mb ?? 0) / total) * 100 : 0
+      detail: vramUsed != null && vramTotal != null && vramTotal > 0
+        ? `${(vramUsed / 1024).toFixed(1)} / ${(vramTotal / 1024).toFixed(1)} GB`
+        : '--',
+      tone: vramValue != null && vramValue >= 90 ? 'red' : 'amber',
+      sparkline: percentHistory(sample => {
+        const used = validNumber(sample.vram_used_mb)
+        const total = validNumber(sample.vram_total_mb)
+        return used != null && total != null && total > 0 ? (used / total) * 100 : null
       }),
     },
   ]

@@ -6,6 +6,7 @@ import {
   BarChart3,
   CheckCircle2,
   Cpu,
+  Database,
   Download,
   Gauge,
   HardDrive,
@@ -28,7 +29,7 @@ import { Badge, Button, InsetSurface, SectionHeader, SelectInput, Surface, TextI
 
 type StatusScope = 'running' | 'stopped' | 'all'
 type SortMode = 'name' | 'port' | 'uptime'
-type MeterTone = 'cpu' | 'gpu' | 'memory'
+type MeterTone = 'cpu' | 'gpu' | 'memory' | 'vram'
 
 function clampPercent(value?: number | null) {
   return Math.max(0, Math.min(100, Math.round(value ?? 0)))
@@ -74,6 +75,7 @@ function formatRate(value?: number | null) {
 
 function meterColor(tone: MeterTone) {
   if (tone === 'gpu') return 'bg-emerald-500'
+  if (tone === 'vram') return 'bg-amber-500'
   if (tone === 'memory') return 'bg-violet-500'
   return 'bg-blue-500'
 }
@@ -126,13 +128,14 @@ function ResourceMeter({
   icon,
 }: {
   label: string
-  percent: number
+  percent: number | null | undefined
   primary: string
   secondary: string
   tone: MeterTone
   icon: React.ReactNode
 }) {
-  const safePercent = clampPercent(percent)
+  const available = percent != null && Number.isFinite(percent)
+  const safePercent = clampPercent(available ? percent : 0)
 
   return (
     <div className="min-w-0 border-b border-slate-200 px-4 py-3 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0 dark:border-slate-800">
@@ -146,7 +149,7 @@ function ResourceMeter({
             <div className="truncate text-xs text-slate-500 dark:text-slate-500" title={secondary}>{secondary}</div>
           </div>
         </div>
-        <div className="shrink-0 text-xl font-semibold text-slate-950 dark:text-slate-50">{safePercent}%</div>
+        <div className="shrink-0 text-xl font-semibold text-slate-950 dark:text-slate-50">{available ? `${safePercent}%` : '--'}</div>
       </div>
       <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
         <div className={`h-full rounded-full ${meterColor(tone)}`} style={{ width: `${safePercent}%` }} />
@@ -278,23 +281,24 @@ export default function Dashboard() {
 
   const memoryPercent = sysMetrics?.system_memory_total_mb
     ? ((sysMetrics.system_memory_used_mb ?? sysMetrics.memory_mb ?? 0) / sysMetrics.system_memory_total_mb) * 100
-    : 0
+    : null
+  const vramPercent = sysMetrics?.vram_total_mb && sysMetrics.vram_used_mb != null
+    ? (sysMetrics.vram_used_mb / sysMetrics.vram_total_mb) * 100
+    : null
 
   const resourceMeters = [
     {
       label: 'CPU',
-      percent: sysMetrics?.system_cpu_percent ?? sysMetrics?.cpu_percent ?? 0,
-      primary: `${labels.process} ${percentText(sysMetrics?.cpu_percent)} / ${labels.system} ${percentText(sysMetrics?.system_cpu_percent)}`,
+      percent: sysMetrics?.system_cpu_percent ?? sysMetrics?.cpu_percent,
+      primary: `${labels.system} ${percentText(sysMetrics?.system_cpu_percent ?? sysMetrics?.cpu_percent)}`,
       secondary: labels.system,
       tone: 'cpu' as const,
       icon: <Cpu className="h-4 w-4" />,
     },
     {
       label: 'GPU',
-      percent: sysMetrics?.gpu_percent ?? 0,
-      primary: sysMetrics?.vram_total_mb
-        ? `${labels.vram} ${formatMb(sysMetrics.vram_used_mb)} / ${formatMb(sysMetrics.vram_total_mb)}`
-        : `${labels.vram} --`,
+      percent: sysMetrics?.gpu_percent,
+      primary: `${labels.system} ${percentText(sysMetrics?.gpu_percent)}`,
       secondary: sysMetrics?.gpu_name || sysMetrics?.gpu_vendor || 'N/A',
       tone: 'gpu' as const,
       icon: <Gauge className="h-4 w-4" />,
@@ -308,6 +312,16 @@ export default function Dashboard() {
       secondary: sysMetrics?.system_memory_total_mb ? labels.system : labels.noMetrics,
       tone: 'memory' as const,
       icon: <HardDrive className="h-4 w-4" />,
+    },
+    {
+      label: labels.vram,
+      percent: vramPercent,
+      primary: sysMetrics?.vram_total_mb && sysMetrics.vram_used_mb != null
+        ? `${formatMb(sysMetrics.vram_used_mb)} / ${formatMb(sysMetrics.vram_total_mb)}`
+        : '--',
+      secondary: sysMetrics?.gpu_name || sysMetrics?.gpu_vendor || labels.noMetrics,
+      tone: 'vram' as const,
+      icon: <Database className="h-4 w-4" />,
     },
   ]
 
@@ -472,7 +486,7 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-        <div className="grid md:grid-cols-3">
+        <div className="grid md:grid-cols-2 xl:grid-cols-4">
           {resourceMeters.map(meter => (
             <ResourceMeter key={meter.label} {...meter} />
           ))}
