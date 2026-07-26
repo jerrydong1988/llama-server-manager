@@ -364,6 +364,19 @@ async fn stop_background_runtime(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+#[cfg(any(test, not(target_os = "macos")))]
+const TRAY_ICON_COLOR_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
+#[cfg(any(test, target_os = "macos"))]
+const TRAY_ICON_TEMPLATE_BYTES: &[u8] = include_bytes!("../icons/tray-icon-template.png");
+#[cfg(target_os = "macos")]
+const TRAY_ICON_BYTES: &[u8] = TRAY_ICON_TEMPLATE_BYTES;
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON_BYTES: &[u8] = TRAY_ICON_COLOR_BYTES;
+
+fn tray_icon_image() -> Result<tauri::image::Image<'static>, tauri::Error> {
+    tauri::image::Image::from_bytes(TRAY_ICON_BYTES)
+}
+
 fn main() {
     if crate::runtime_service::is_runtime_service_invocation() {
         if let Err(error) = crate::runtime_service::configure_runtime_data_dir_from_args() {
@@ -445,11 +458,10 @@ fn main() {
             let menu = MenuBuilder::new(app.handle())
                 .item(&show).item(&quit).build()?;
 
-            if let Some(icon) = app.default_window_icon().cloned() {
-                TrayIconBuilder::new()
-                    .icon(icon)
-                    .menu(&menu)
-                    .on_menu_event(|app, event| {
+            let tray_builder = TrayIconBuilder::new()
+                .icon(tray_icon_image()?)
+                .menu(&menu)
+                .on_menu_event(|app, event| {
                     match event.id().as_ref() {
                         "show" => {
                             if let Some(window) = app.get_webview_window("main") {
@@ -487,9 +499,10 @@ fn main() {
                             let _ = window.set_focus();
                         }
                     }
-                })
-                .build(app.handle())?;
-            }
+                });
+            #[cfg(target_os = "macos")]
+            let tray_builder = tray_builder.icon_as_template(true);
+            tray_builder.build(app.handle())?;
             timings.push(("setup-tray-done".into(), now()));
 
             // Read config early and inject it into the frontend through initialization_script.
@@ -682,10 +695,57 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use super::{tray_icon_image, TRAY_ICON_COLOR_BYTES, TRAY_ICON_TEMPLATE_BYTES};
     use crate::commands::server::generate_command;
     use crate::models::{InstanceConfig, ProxyConfig};
     use crate::vector_policy::{classify_model_workload, ModelWorkload};
     use std::path::Path;
+
+    #[test]
+    fn tray_icon_asset_has_compact_small_size_footprint() {
+        let platform_icon = tray_icon_image().expect("dedicated tray icon should decode");
+        assert_eq!((platform_icon.width(), platform_icon.height()), (64, 64));
+        assert_compact_tray_icon(TRAY_ICON_COLOR_BYTES, "color");
+        assert_compact_tray_icon(TRAY_ICON_TEMPLATE_BYTES, "template");
+    }
+
+    fn assert_compact_tray_icon(bytes: &'static [u8], label: &str) {
+        let icon = tauri::image::Image::from_bytes(bytes)
+            .unwrap_or_else(|error| panic!("{label} tray icon should decode: {error}"));
+        assert_eq!((icon.width(), icon.height()), (64, 64));
+
+        let mut min_x = icon.width();
+        let mut min_y = icon.height();
+        let mut max_x = 0;
+        let mut max_y = 0;
+        let mut found = false;
+        for (index, pixel) in icon.rgba().chunks_exact(4).enumerate() {
+            if pixel[3] <= 128 {
+                continue;
+            }
+            let x = index as u32 % icon.width();
+            let y = index as u32 / icon.width();
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+            found = true;
+        }
+
+        assert!(found, "{label} tray icon should contain opaque pixels");
+        let content_width = max_x - min_x + 1;
+        let content_height = max_y - min_y + 1;
+        assert!(
+            content_width * 100 >= icon.width() * 88,
+            "{label} tray icon is too narrow: {content_width}/{}",
+            icon.width()
+        );
+        assert!(
+            content_height * 100 >= icon.height() * 88,
+            "{label} tray icon is too short: {content_height}/{}",
+            icon.height()
+        );
+    }
 
     fn cfg() -> InstanceConfig {
         InstanceConfig {
