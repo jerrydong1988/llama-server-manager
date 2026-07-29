@@ -7,12 +7,12 @@
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10178",
-  "upstreamCommit": "992c325323f925cb82c86778e5e91a63de199063",
+  "upstreamRelease": "b10179",
+  "upstreamCommit": "e2f59ed71dacdbd665f406eabc43e8da51b30a90",
   "upstreamMasterChecked": "caa596ab3f0f8768ee326d6e3d5d39782194676c",
   "releaseSnapshot": {
-    "ref": "b10178",
-    "commit": "992c325323f925cb82c86778e5e91a63de199063",
+    "ref": "b10179",
+    "commit": "e2f59ed71dacdbd665f406eabc43e8da51b30a90",
     "parameterCount": 248,
     "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
     "parameters": [
