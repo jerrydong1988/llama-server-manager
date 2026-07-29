@@ -197,20 +197,23 @@ async function main() {
 
   const releaseDiff = compareSnapshots(baseline.releaseSnapshot, releaseSnapshot)
   const masterDiff = compareSnapshots(baseline.masterSnapshot, masterSnapshot)
-  const releaseDrift = baseline.upstreamRelease !== latestRelease.tag_name || hasChanges(releaseDiff)
+  const releaseAdvanced = baseline.upstreamRelease !== latestRelease.tag_name
+  const releaseDrift = hasChanges(releaseDiff)
   const masterDrift = hasChanges(masterDiff)
   const report = [
     '# llama.cpp Parameter Drift Report',
     '',
     `Generated: ${new Date().toISOString()}`,
+    `Stable release advanced: ${releaseAdvanced ? `Yes (${baseline.upstreamRelease} -> ${latestRelease.tag_name})` : 'No'}`,
     '',
     snapshotReport('Latest stable release (authoritative)', baseline.releaseSnapshot, releaseSnapshot, releaseDiff),
     snapshotReport('Master branch (canary)', baseline.masterSnapshot, masterSnapshot, masterDiff),
-    'Stable-release drift blocks the compatibility gate. Master-only drift opens a tracking issue but remains a canary warning.',
+    'Stable-release parameter drift blocks the compatibility gate. A release-tag advance with an unchanged parameter snapshot is informational. Master-only drift opens a tracking issue but remains a canary warning.',
     '',
   ].join('\n')
   if (reportPath) fs.writeFileSync(reportPath, report, 'utf8')
   console.log(report)
+  writeOutput('release_advanced', releaseAdvanced)
   writeOutput('release_drift', releaseDrift)
   writeOutput('master_drift', masterDrift)
   writeOutput('error', false)

@@ -43,7 +43,7 @@ jobs:
                 gh issue create --title "$title" --body-file "$REPORT_PATH"
             fi
           elif [[ -n "$issue_number" ]]; then
-            gh issue comment "$issue_number" --body 'The current stable and master parameter snapshots match the repository baseline. Closing automatically.'
+            gh issue comment "$issue_number" --body 'The current stable and master parameter contracts match the repository baseline. Closing automatically.'
             gh issue close "$issue_number"
           fi
       - name: Enforce stable compatibility gate

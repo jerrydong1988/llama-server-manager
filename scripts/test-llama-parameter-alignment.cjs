@@ -62,6 +62,16 @@ assert.match(
   /raw\.githubusercontent\.com\/\$\{repository\}\/\$\{encodeURIComponent\(commit\)\}/,
   'upstream README snapshots must be fetched by the resolved immutable commit',
 )
+assert.match(
+  upstreamWatcher,
+  /const releaseDrift = hasChanges\(releaseDiff\)/,
+  'a stable tag advance must only block when the parameter contract changes',
+)
+assert.match(
+  upstreamWatcher,
+  /writeOutput\('release_advanced', releaseAdvanced\)/,
+  'tag-only stable advances must remain visible as informational workflow output',
+)
 assert.doesNotMatch(shared, /['"]mistral['"]/, 'removed built-in template must not remain selectable')
 assert.doesNotMatch(english, /apply_diff/, 'removed upstream built-in tool must not be advertised')
 assert.match(server, /ENGINE_PARAMETER_UNSUPPORTED/, 'server launch must enforce detected engine capabilities')
