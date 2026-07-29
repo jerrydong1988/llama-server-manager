@@ -154,7 +154,7 @@ export function validateConfig(
   // A3: external draft requirements depend on the speculative decoding mode.
   if (config.spec_type && config.spec_type !== '' && config.spec_type !== 'none') {
     const isDraftMtp = config.spec_type.includes('draft-mtp')
-    const needsExternalDraft = ['draft-simple', 'draft-eagle3', 'draft-dflash'].some(t => config.spec_type.includes(t))
+    const needsExternalDraft = ['draft-simple', 'draft-eagle3', 'draft-dflash', 'draft-dspark'].some(t => config.spec_type.includes(t))
     if (needsExternalDraft && !config.draft_model_path) {
       w.push({ field: 'draft_model_path', severity: 'medium', key: 'warnA3' })
     } else if (isDraftMtp && !config.draft_model_path && !hasBuiltinMtp(model)) {

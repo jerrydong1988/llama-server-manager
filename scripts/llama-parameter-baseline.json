@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-07-25",
+  "verifiedAt": "2026-07-29",
   "source": "https://github.com/ggerganov/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10107",
-  "upstreamCommit": "c0bc8591e8815c63cb01dd3f051a8b0df02501c9",
-  "upstreamMasterChecked": "555881ebc8b0fc0402b30e09258a32a7bfd13c52",
+  "upstreamRelease": "b10178",
+  "upstreamCommit": "992c325323f925cb82c86778e5e91a63de199063",
+  "upstreamMasterChecked": "caa596ab3f0f8768ee326d6e3d5d39782194676c",
   "releaseSnapshot": {
-    "ref": "b10107",
-    "commit": "c0bc8591e8815c63cb01dd3f051a8b0df02501c9",
+    "ref": "b10178",
+    "commit": "992c325323f925cb82c86778e5e91a63de199063",
     "parameterCount": 248,
-    "snapshotHash": "33ab61e0f5ab3a988b6e69c46669f86f05cc625f30c4f486eda934da6bc60976",
+    "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -805,7 +805,7 @@
           "-lm"
         ],
         "synopsisHash": "c8e1f920d7ad098034fbccc303ff69d74e3e4ea5610ddef6bd5efcfc22a5f0d3",
-        "descriptionHash": "63fa58d402d8a81acbbcdb6f1764b496f3679b86c1bfe290edf7f7adda27bc22"
+        "descriptionHash": "75da85e2e2318df841273bc3a56f50523bd2d6d01156c76aebac49e2986ef70d"
       },
       {
         "canonical": "--log-colors",
@@ -971,7 +971,7 @@
           "--mlock"
         ],
         "synopsisHash": "4331297dd654fe9774e73e091ad69141b0c2cb7e9c26fe3ec1fbb7f823712f9c",
-        "descriptionHash": "3c4f49f17f3ade9647cabe568836e1147ef7907926963e388b3df56f01903a3a"
+        "descriptionHash": "b128e2b9379cbd85e97485ed9bc516e12531bad77d5c5719f1c9f358a7f330f7"
       },
       {
         "canonical": "--mmap",
@@ -1831,7 +1831,7 @@
         "aliases": [
           "--spec-type"
         ],
-        "synopsisHash": "937ca1f30515e137b5896eb4ae5b6b631adb8095fd78aa6e6a9ddd88e7e935e4",
+        "synopsisHash": "53b5acced798ead0c3483da7f20eaf635377be456ff1e284421fe1bad245f5bd",
         "descriptionHash": "bcc3ec824ed1b813315bba4919fd3fc034467140aa4567f06d32d38614ca7b1f"
       },
       {
@@ -2165,9 +2165,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "555881ebc8b0fc0402b30e09258a32a7bfd13c52",
+    "commit": "caa596ab3f0f8768ee326d6e3d5d39782194676c",
     "parameterCount": 248,
-    "snapshotHash": "33ab61e0f5ab3a988b6e69c46669f86f05cc625f30c4f486eda934da6bc60976",
+    "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2958,7 +2958,7 @@
           "-lm"
         ],
         "synopsisHash": "c8e1f920d7ad098034fbccc303ff69d74e3e4ea5610ddef6bd5efcfc22a5f0d3",
-        "descriptionHash": "63fa58d402d8a81acbbcdb6f1764b496f3679b86c1bfe290edf7f7adda27bc22"
+        "descriptionHash": "75da85e2e2318df841273bc3a56f50523bd2d6d01156c76aebac49e2986ef70d"
       },
       {
         "canonical": "--log-colors",
@@ -3124,7 +3124,7 @@
           "--mlock"
         ],
         "synopsisHash": "4331297dd654fe9774e73e091ad69141b0c2cb7e9c26fe3ec1fbb7f823712f9c",
-        "descriptionHash": "3c4f49f17f3ade9647cabe568836e1147ef7907926963e388b3df56f01903a3a"
+        "descriptionHash": "b128e2b9379cbd85e97485ed9bc516e12531bad77d5c5719f1c9f358a7f330f7"
       },
       {
         "canonical": "--mmap",
@@ -3984,7 +3984,7 @@
         "aliases": [
           "--spec-type"
         ],
-        "synopsisHash": "937ca1f30515e137b5896eb4ae5b6b631adb8095fd78aa6e6a9ddd88e7e935e4",
+        "synopsisHash": "53b5acced798ead0c3483da7f20eaf635377be456ff1e284421fe1bad245f5bd",
         "descriptionHash": "bcc3ec824ed1b813315bba4919fd3fc034467140aa4567f06d32d38614ca7b1f"
       },
       {

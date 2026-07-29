@@ -173,6 +173,14 @@ const entry = `
     null,
   )
   assert.deepEqual(cleanVectorWarnings, [])
+  assert.equal(
+    validateConfig(
+      { ...defaultInstanceConfig(), spec_type: 'draft-dspark' },
+      model(),
+      null,
+    ).find(warning => warning.key === 'warnA3')?.field,
+    'draft_model_path',
+  )
 
   const pooled = normalizeInstanceConfig({ ...defaultInstanceConfig(), embedding: true, pooling: 'cls' }, null)
   assert.equal(pooled.config.pooling, 'cls')
