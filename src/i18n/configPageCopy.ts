@@ -21,6 +21,8 @@ export function getConfigPageLabels(lang: string) {
     activeParams: zh ? '已调整参数' : 'Adjusted Params',
     unsavedChanges: zh ? '本次改动' : 'Unsaved Changes',
     emittedParams: zh ? '将发射参数' : 'Emitted Parameters',
+    floatingSave: zh ? '保存当前配置' : 'Save current config',
+    backToTop: zh ? '回到顶部' : 'Back to top',
     changedShort: zh ? '改' : 'Changed',
     emittedShort: zh ? '传' : 'Emit',
     changedMarker: zh ? '已改' : 'Changed',

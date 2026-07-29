@@ -60,6 +60,22 @@ test('search navigation, change review, emission preview, and save use the mock 
   expect(generated?.emittedOverrideKeys).toContain('models_autoload')
 })
 
+test('floating config actions save without a long scroll and return to the top', async ({ page }) => {
+  await openConfiguration(page)
+
+  await page.locator('[data-config-field="temp"] input').fill('0.7')
+  await page.locator('[data-config-field="custom_args"]').scrollIntoViewIfNeeded()
+
+  const floatingActions = page.locator('[data-config-floating-actions]')
+  await expect(floatingActions).toBeVisible()
+  await floatingActions.locator('[data-config-floating-save]').click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+
+  await floatingActions.locator('[data-config-back-to-top]').click()
+  await expect(page.locator('#config-page-actions')).toBeInViewport()
+  await expect(floatingActions).toBeHidden()
+})
+
 test('parameter intent remains explicit at a default value and only inheritance removes it', async ({ page }) => {
   await openConfiguration(page)
 

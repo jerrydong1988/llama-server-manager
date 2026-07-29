@@ -25,6 +25,7 @@ import { LaunchModePanel } from './ConfigPage/LaunchModePanel'
 import { ConfigDirectory } from './ConfigPage/ConfigDirectory'
 import { ParameterSearch } from './ConfigPage/ParameterSearch'
 import { ConfigChangePanel } from './ConfigPage/ConfigChangePanel'
+import { ConfigFloatingActions } from './ConfigPage/ConfigFloatingActions'
 import { ModelAssetPicker, type ModelAssetPickerTarget } from './ConfigPage/ModelAssetPicker'
 import { FieldRuntimeProvider } from './ConfigPage/shared'
 
@@ -441,10 +442,11 @@ const ConfigPage = () => {
       children: advancedDirectoryGroups,
     },
   ]
+  const saveDisabled = !inst || saving || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))
 
   return (
     <div className="space-y-5">
-      <Surface as="section">
+      <Surface as="section" id="config-page-actions">
         <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-300">
@@ -467,7 +469,7 @@ const ConfigPage = () => {
             {!manualMode && <Badge tone="blue">{labels.emittedParams} {emittedParams.size}</Badge>}
             <Button
               onClick={save}
-              disabled={!inst || saving || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))}
+              disabled={saveDisabled}
               variant="primary"
               data-guide="config-save"
               icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
@@ -755,6 +757,19 @@ const ConfigPage = () => {
           </div>
         </Surface>
       </div>
+
+      <ConfigFloatingActions
+        topTargetId="config-page-actions"
+        saveLabel={t.configPage.save}
+        floatingSaveLabel={labels.floatingSave}
+        savingLabel={t.configPage.saving}
+        savedLabel={t.configPage.saved}
+        backToTopLabel={labels.backToTop}
+        saving={saving}
+        saved={saved}
+        disabled={saveDisabled}
+        onSave={save}
+      />
 
       {showPresetAssistant && !isEmbedding && selectedTemplate && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm">
