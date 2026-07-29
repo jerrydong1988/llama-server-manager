@@ -42,10 +42,24 @@ assert.match(
   /const targetIsActive = \(\) => mountedRef\.current[\s\S]*if \(!targetIsActive\(\)\) return[\s\S]*setSaved\(true\)/,
   'a completed save must not update feedback for another instance',
 )
-assert.match(
-  configPageSource,
-  /disabled=\{!inst \|\| saving \|\| \(!manualMode && \([^}]*unsupportedEngineFlags\.length > 0\)\)\}/,
-  'managed mode must block unsupported flags while manual mode remains available to legacy engines',
+const saveDisabledLine = configPageSource
+  .split(/\r?\n/)
+  .find(line => line.includes('const saveDisabled ='))
+assert.ok(saveDisabledLine, 'the parameter page must define one shared save-disabled state')
+for (const guard of [
+  '!inst',
+  'saving',
+  '!manualMode',
+  'probingEngineCompatibility',
+  'capabilityProbeRequired',
+  'unsupportedEngineFlags.length > 0',
+]) {
+  assert.ok(saveDisabledLine.includes(guard), `the shared save-disabled state must retain ${guard}`)
+}
+assert.equal(
+  (configPageSource.match(/disabled=\{saveDisabled\}/g) ?? []).length,
+  2,
+  'the top and floating save actions must share the same disabled state',
 )
 assert.match(configPageSource, /saving \? t\.configPage\.saving :/)
 assert.match(configPageSource, /const editRevisionRef = useRef\(0\)/)
