@@ -2,7 +2,14 @@ import { mockConvertFileSrc, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 import { emit } from '@tauri-apps/api/event'
 import { defaultInstanceConfig } from '../src/store/defaults'
 import type { GlobalConfigShape } from '../src/store/bootstrap'
-import type { EngineInfo, GeneratedServerCommand, InstanceConfig, ModelInfo, SystemMetrics } from '../src/store/types'
+import type {
+  EngineInfo,
+  GeneratedServerCommand,
+  InstanceConfig,
+  ModelInfo,
+  MonitoringFrame,
+  SystemMetrics,
+} from '../src/store/types'
 
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
 const BROWSER_SCENARIO = new URLSearchParams(window.location.search).get('scenario')
@@ -256,6 +263,23 @@ if (BROWSER_SCENARIO === 'empty-alias') {
     state.instances[INSTANCE_ID].explicit_overrides ?? []
   ).filter(field => field !== 'alias')
 }
+if (BROWSER_SCENARIO === 'monitoring') {
+  state.instances[STOPPED_INSTANCE_ID] = {
+    ...clone(instanceConfig),
+    id: STOPPED_INSTANCE_ID,
+    name: 'Stopped Monitoring Instance',
+    alias: 'stopped-monitoring-instance',
+    port: 18082,
+  }
+  state.instance_order = [INSTANCE_ID, STOPPED_INSTANCE_ID]
+  state.running[INSTANCE_ID] = {
+    instance_id: INSTANCE_ID,
+    pid: 4243,
+    port: instanceConfig.port,
+    host: instanceConfig.host,
+    start_time: Math.floor(Date.now() / 1000) - 120,
+  }
+}
 
 type BrowserTestControl = {
   marker: string
@@ -356,17 +380,144 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
 }
 
 const systemMetrics: SystemMetrics = {
-  cpu_percent: 0,
-  memory_mb: 128,
+  cpu_percent: BROWSER_SCENARIO === 'monitoring' ? 8 : 0,
+  memory_mb: BROWSER_SCENARIO === 'monitoring' ? 14 * 1024 : 128,
   uptime_secs: 30,
-  gpu_percent: 0,
-  vram_used_mb: 256,
-  vram_total_mb: 8_192,
-  system_cpu_percent: 0,
+  gpu_percent: BROWSER_SCENARIO === 'monitoring' ? 12 : 0,
+  vram_used_mb: BROWSER_SCENARIO === 'monitoring' ? 24 * 1024 : 256,
+  vram_total_mb: BROWSER_SCENARIO === 'monitoring' ? 32 * 1024 : 8_192,
+  system_cpu_percent: BROWSER_SCENARIO === 'monitoring' ? 9 : 0,
   system_memory_total_mb: 32_768,
-  system_memory_used_mb: 8_192,
+  system_memory_used_mb: BROWSER_SCENARIO === 'monitoring' ? 14 * 1024 : 8_192,
   gpu_vendor: 'Mock',
   gpu_name: 'Browser Test GPU',
+}
+
+const monitoringNow = Date.now()
+const monitoringSessionId = 'browser-monitoring-session'
+const stoppedMonitoringSessionId = 'browser-stopped-monitoring-session'
+const monitoringFrame: MonitoringFrame = {
+  instanceId: INSTANCE_ID,
+  sessionId: monitoringSessionId,
+  sessionStartedAt: monitoringNow - 120_000,
+  ts: monitoringNow,
+  workload: 'inference',
+  state: 'active',
+  throughput: 25.8,
+  throughputUnit: 'tok/s',
+  outputTokensPerSecond: 25.8,
+  inputTokensPerSecond: 0,
+  itemsPerSecond: null,
+  activeRequests: 1,
+  queuedRequests: 0,
+  slotCapacity: 1,
+  busySlots: 1,
+  averageLatencyMs: null,
+  successRate: null,
+  source: 'task',
+  dataAgeMs: 0,
+  system: {
+    ...systemMetrics,
+    system_cpu_percent: 99,
+    gpu_percent: 98,
+    system_memory_used_mb: 31 * 1024,
+    vram_used_mb: 31 * 1024,
+  },
+}
+const monitoringSessions = [
+  {
+    id: monitoringSessionId,
+    instance_id: INSTANCE_ID,
+    instance_name: 'Browser Parameter Regression',
+    model_name: 'Qwen Browser Test Q8_0.gguf',
+    model_path: MODEL_PATH,
+    config_hash: 'browser-active-config',
+    engine_id: ENGINE_ID,
+    backend: 'Vulkan',
+    workload: 'inference',
+    started_at: monitoringNow - 120_000,
+    stopped_at: null,
+    duration_secs: null,
+    avg_tokens_per_second: 25.8,
+    avg_tokens_per_sec: 25.8,
+    peak_vram_mb: 31 * 1024,
+    sample_count: 2,
+    stop_reason: null,
+  },
+  {
+    id: stoppedMonitoringSessionId,
+    instance_id: STOPPED_INSTANCE_ID,
+    instance_name: 'Stopped Monitoring Instance',
+    model_name: 'Historical Browser Model',
+    model_path: MODEL_PATH,
+    config_hash: 'browser-stopped-config',
+    engine_id: ENGINE_ID,
+    backend: 'Vulkan',
+    workload: 'inference',
+    started_at: monitoringNow - 600_000,
+    stopped_at: monitoringNow - 300_000,
+    duration_secs: 300,
+    avg_tokens_per_second: 18,
+    avg_tokens_per_sec: 18,
+    peak_vram_mb: 31 * 1024,
+    sample_count: 1,
+    stop_reason: 'stopped',
+  },
+]
+const monitoringSamples = [
+  {
+    session_id: monitoringSessionId,
+    instance_id: INSTANCE_ID,
+    ts: monitoringNow - 5_000,
+    cpu_percent: 99,
+    memory_mb: 31 * 1024,
+    gpu_percent: 98,
+    vram_used_mb: 31 * 1024,
+    vram_total_mb: 32 * 1024,
+    system_cpu_percent: 99,
+    system_memory_used_mb: 31 * 1024,
+    system_memory_total_mb: 32 * 1024,
+    gpu_vendor: 'Session Mock',
+    gpu_name: 'Session-bound GPU',
+    tokens_per_sec: 0,
+    prompt_tokens_per_sec: 0,
+    prompt_tokens_total: 0,
+    generated_tokens_total: 0,
+    requests_total: 0,
+    decode_calls_total: 100,
+    max_tokens_observed: 100,
+    requests_processing: 1,
+    requests_deferred: 0,
+    busy_slots_per_decode: 1,
+  },
+]
+const monitoringOverview = {
+  active_sessions: 1,
+  sessions_24h: 2,
+  avg_tokens_per_sec_24h: 21.9,
+  peak_vram_mb_24h: 31 * 1024,
+  dropped_writes: 0,
+  last_write_error: null,
+  last_write_error_at: null,
+  latest_samples: monitoringSamples,
+}
+const emptyMonitoringAnalysis = {
+  request_count: 0,
+  avg_prompt_tokens: 0,
+  avg_generated_tokens: 0,
+  avg_total_tokens: 0,
+  avg_prompt_tps: 0,
+  avg_generation_tps: 0,
+  avg_total_time_ms: 0,
+  max_total_tokens: 0,
+  avg_busy_slots: 0,
+  max_busy_slots: 0,
+  avg_cached_slots: 0,
+  max_context_tokens: 0,
+  slot_sample_count: 0,
+  speculative_analysis: null,
+  vector_analysis: null,
+  vector_baseline: null,
 }
 
 mockWindows('main')
@@ -388,8 +539,32 @@ mockIPC((command, payload) => {
     case 'get_download_manager_snapshot':
       return { queue: [], active_count: 0, max_concurrent: 3, resume_policy: 'manual', bandwidth_limit_bytes_per_sec: 0, low_priority_throttle: false }
     case 'restore_download_queue': return []
-    case 'get_monitoring_series': return []
+    case 'get_monitoring_series':
+      return BROWSER_SCENARIO === 'monitoring' ? [clone(monitoringFrame)] : []
     case 'get_system_health': return clone(systemMetrics)
+    case 'get_telemetry_overview':
+      return BROWSER_SCENARIO === 'monitoring'
+        ? clone(monitoringOverview)
+        : {
+            active_sessions: 0,
+            sessions_24h: 0,
+            avg_tokens_per_sec_24h: 0,
+            peak_vram_mb_24h: 0,
+            dropped_writes: 0,
+            last_write_error: null,
+            last_write_error_at: null,
+            latest_samples: [],
+          }
+    case 'list_telemetry_sessions':
+      return BROWSER_SCENARIO === 'monitoring' ? clone(monitoringSessions) : []
+    case 'get_telemetry_session_detail':
+      return {
+        samples: BROWSER_SCENARIO === 'monitoring' ? clone(monitoringSamples) : [],
+        requests: [],
+        analysis: clone(emptyMonitoringAnalysis),
+        diagnostics: [],
+      }
+    case 'list_inference_requests': return []
     case 'get_workers': return []
     case 'get_proxy_config': return clone(proxyConfig)
     case 'get_proxy_status':

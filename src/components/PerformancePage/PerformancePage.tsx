@@ -66,6 +66,8 @@ export default function PerformancePage() {
   const labels = useMemo(() => getPerformanceLabels(lang), [lang])
   const speculativeLabels = useMemo(() => getSpeculativeDecodingLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
+  const sysMetrics = useAppStore(state => state.sysMetrics)
+  const systemMetricsHistory = useAppStore(state => state.systemMetricsHistory)
   const running = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
   const [selectedInstanceId, setSelectedInstanceId] = useState('')
   const [selectedSessionId, setSelectedSessionId] = useState('')
@@ -94,9 +96,9 @@ export default function PerformancePage() {
   const diagnostics = detailReady ? loadedDiagnostics : []
 
   const selectedSession = sessions.find(session => session.id === selectedSessionId)
-  const selectedInstance = running.find(instance => instance.id === selectedInstanceId)
-    || instances.find(instance => instance.id === selectedSession?.instance_id)
-    || null
+  const selectedInstance = selectedSession
+    ? instances.find(instance => instance.id === selectedSession.instance_id) || null
+    : instances.find(instance => instance.id === selectedInstanceId) || null
   const liveTargetInstance = selectedSession
     ? selectedSession.stopped_at
       ? null
@@ -132,7 +134,7 @@ export default function PerformancePage() {
         if (current && nextSessions.some(session => session.id === current)) {
           nextSessionId = current
         } else if (!sessionSelectionInitializedRef.current && nextSessions.length > 0) {
-          nextSessionId = nextSessions[0].id
+          nextSessionId = (nextSessions.find(session => !session.stopped_at) || nextSessions[0]).id
           sessionSelectionInitializedRef.current = true
         }
         selectedSessionIdRef.current = nextSessionId
@@ -179,14 +181,14 @@ export default function PerformancePage() {
   }, [refreshTelemetry])
 
   useEffect(() => {
-    if (running.length === 0) {
+    if (instances.length === 0) {
       if (selectedInstanceId) setSelectedInstanceId('')
       return
     }
-    if (running.length > 0 && (!selectedInstanceId || !running.some(instance => instance.id === selectedInstanceId))) {
-      setSelectedInstanceId(running[0].id)
+    if (!selectedInstanceId || !instances.some(instance => instance.id === selectedInstanceId)) {
+      setSelectedInstanceId(running[0]?.id || instances[0].id)
     }
-  }, [running, selectedInstanceId])
+  }, [instances, running, selectedInstanceId])
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId
@@ -233,12 +235,11 @@ export default function PerformancePage() {
     || null
   const resourceSignals = useMemo(
     () => buildResourceSignals({
-      system: currentFrame?.system || null,
-      latest: latestSample,
-      samples: trendSamples,
+      system: sysMetrics,
+      history: systemMetricsHistory,
       labels,
     }),
-    [currentFrame?.system, latestSample, trendSamples, labels],
+    [sysMetrics, systemMetricsHistory, labels],
   )
   const fallbackWorkload: ModelWorkload = selectedInstance?.config.reranking
     ? 'reranker'
@@ -396,7 +397,7 @@ export default function PerformancePage() {
             <MonitorPanel title={labels.monitoringObject} icon={<Server className="h-5 w-5" />} action={<Badge tone="emerald">{running.length}</Badge>}>
               <div className="space-y-4">
                 <div data-guide="perf-select">
-                  <label className="mb-2 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.runningInstance}</label>
+                  <label className="mb-2 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.monitoringInstance}</label>
                   <select
                     value={selectedInstanceId}
                     onChange={event => {
@@ -408,9 +409,11 @@ export default function PerformancePage() {
                     }}
                     className="select-custom h-11 w-full rounded-lg border border-slate-300 bg-white pl-3 pr-8 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
                   >
-                    {running.length === 0 ? <option value="">{labels.noRunning}</option> : null}
-                    {running.map(instance => (
-                      <option key={instance.id} value={instance.id}>{instance.name}</option>
+                    {instances.length === 0 ? <option value="">{labels.noInstances}</option> : null}
+                    {instances.map(instance => (
+                      <option key={instance.id} value={instance.id}>
+                        {instance.name} · {instance.status === 'running' ? labels.running : labels.finished}
+                      </option>
                     ))}
                   </select>
                 </div>
@@ -496,20 +499,28 @@ export default function PerformancePage() {
               </div>
             </section>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              {resourceSignals.map(signal => (
-                <SignalMeter
-                  key={signal.id}
-                  label={signal.label}
-                  value={signal.value}
-                  detail={signal.detail}
-                  tone={signal.tone}
-                  icon={signal.id === 'cpu' ? <Cpu className="h-4 w-4" /> : signal.id === 'gpu' ? <Gauge className="h-4 w-4" /> : <HardDrive className="h-4 w-4" />}
-                  sparkline={signal.sparkline}
-                  compact
-                />
-              ))}
-            </div>
+            <section className="space-y-2" aria-label={labels.systemResources}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                  {labels.systemResources}
+                </div>
+                <Badge tone="emerald">{labels.realtime}</Badge>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {resourceSignals.map(signal => (
+                  <SignalMeter
+                    key={signal.id}
+                    label={signal.label}
+                    value={signal.value}
+                    detail={signal.detail}
+                    tone={signal.tone}
+                    icon={signal.id === 'cpu' ? <Cpu className="h-4 w-4" /> : signal.id === 'gpu' ? <Gauge className="h-4 w-4" /> : <HardDrive className="h-4 w-4" />}
+                    sparkline={signal.sparkline}
+                    compact
+                  />
+                ))}
+              </div>
+            </section>
 
             <MonitorPanel
               title={labels.throughputTrend}
