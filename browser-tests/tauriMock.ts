@@ -528,6 +528,8 @@ mockIPC((command, payload) => {
   const args = (payload ?? {}) as Record<string, unknown>
 
   switch (command) {
+    case 'plugin:app|bundle_type': return 'nsis'
+    case 'plugin:updater|check': return null
     case 'get_startup_elapsed': return 1
     case 'get_cached_scan': return [clone(models), [clone(engine)]]
     case 'load_config': return clone(control.state)

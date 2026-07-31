@@ -93,7 +93,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - 实例 API Key 与 API Key 文件支持，统一路由可独立鉴权并保护全部代理端点。
 - 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
 - 端口冲突、路径、配置规则和启动健康检查。
-- 系统托盘、实例自动启动、路由后台保活和更新检查。
+- 系统托盘、实例自动启动、路由后台保活，以及由 Cloudflare R2 分发、Tauri 签名校验的应用内更新。
 
 - Tauri 2, React 18, and TypeScript desktop application.
 - Full Chinese and English UI, light and dark themes, persisted window state.
@@ -101,7 +101,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - Inline or file-based instance keys plus routing authentication across every proxy endpoint.
 - Atomic configuration saves, backup fallback, persistent downloads and logs.
 - Port, path, configuration, startup, and health validation.
-- System tray, instance auto-start, routing keep-alive, and update checks.
+- System tray, instance auto-start, routing keep-alive, and Tauri-signed in-app updates distributed through Cloudflare R2.
 
 ## 系统要求 / Requirements
 
@@ -145,7 +145,7 @@ sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchel
 xattr -cr /Applications/LlamaServerManager.app
 ```
 
-正式 `v*` 标签不会因缺少商业证书而停止发布。配置 SignPath 后 Windows 安装包会自动提交签名；配置 Apple Developer 凭据后 macOS 安装包会自动签名并公证。未配置时，CI 会明确标记相应产物为未签名或 ad-hoc 签名，配置方法见[发布签名配置](docs/RELEASE_SIGNING.md)。
+正式 `v*` 标签不会因缺少商业证书而停止发布。配置 SignPath 后 Windows 安装包会自动提交签名；配置 Apple Developer 凭据后 macOS 安装包会自动签名并公证。未配置时，CI 会明确标记相应产物为未签名或 ad-hoc 签名。无论操作系统证书是否配置，应用内更新都必须通过独立的 Tauri Updater 签名校验，并在发布产物固定后才上传到 R2；配置方法见[发布签名配置](docs/RELEASE_SIGNING.md)。
 
 ## 使用说明与问题反馈 / Guide and Support
 

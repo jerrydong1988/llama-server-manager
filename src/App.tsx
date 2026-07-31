@@ -25,6 +25,7 @@ import { AppShell, type ShellStatusChip } from './components/shell/AppShell'
 import { CommandCenter } from './components/shell/CommandCenter'
 import { RuntimeExitDialogs } from './components/shell/RuntimeExitDialogs'
 import { useCommandCenterModel } from './components/shell/useCommandCenterModel'
+import { useAppUpdater } from './hooks/useAppUpdater'
 
 type ErrorBoundaryCopy = { title: string; description: string; unknown: string; reload: string }
 
@@ -119,7 +120,6 @@ function AppInner() {
   const clearRuntimeWarnings = useAppStore(s => s.clearRuntimeWarnings)
   const { t, lang, setLang } = useI18n()
   const shellCopy = t.appShell
-  const [updateInfo, setUpdateInfo] = useState<{ latest_version: string; url: string } | null>(null)
   const [autoStartEnabled, setAutoStartEnabled] = useState(false)
   const [autoStarted, setAutoStarted] = useState(false)
   const [commandCenterOpen, setCommandCenterOpen] = useState(false)
@@ -245,37 +245,10 @@ function AppInner() {
     return () => { cancelled = true }
   }, [instances, engines, autoStarted, startInstance])
 
-  useEffect(() => {
-    const controller = new AbortController()
-    fetch('https://api.github.com/repos/jerrydong1988/llama-server-manager/releases/latest', {
-      headers: { Accept: 'application/vnd.github+json' },
-      signal: controller.signal,
-    })
-      .then(r => r.json())
-      .then(json => {
-        const latest = (json.tag_name || '').replace(/^v/, '')
-        const current = version
-        const l = latest.split('.').map(Number)
-        const c = current.split('.').map(Number)
-        const maxLen = Math.max(l.length, c.length)
-        let has = false
-        for (let i = 0; i < maxLen; i++) {
-          const lv = l[i] || 0
-          const cv = c[i] || 0
-          if (lv > cv) {
-            has = true
-            break
-          }
-          if (lv < cv) {
-            has = false
-            break
-          }
-        }
-        if (has) setUpdateInfo({ latest_version: latest, url: json.html_url || '' })
-      })
-      .catch(() => {})
-    return () => controller.abort()
-  }, [])
+  const { updateInfo, installUpdate } = useAppUpdater(
+    instances.some(instance => instance.status === 'running'),
+    shellCopy,
+  )
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -383,6 +356,8 @@ function AppInner() {
       pageDescription={pageContext[activeTab] || shellCopy.pageDescriptions.fallback}
       statusChips={statusChips}
       updateInfo={updateInfo}
+      updateButtonTitle={updateInfo?.busy ? shellCopy.updateInstalling : shellCopy.updateAvailable}
+      onInstallUpdate={() => void installUpdate()}
       autoStartLabel={t.common.autoStart || 'Auto Start'}
       autoStartEnabled={autoStartEnabled}
       onAutoStartChange={handleAutoStartChange}

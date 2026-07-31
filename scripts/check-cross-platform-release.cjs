@@ -2,6 +2,7 @@ const fs = require('node:fs')
 
 const workflow = fs.readFileSync('.github/workflows/build.yml', 'utf8')
 const tauriConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
+const updaterBuildConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.updater.conf.json', 'utf8'))
 const readme = fs.readFileSync('README.md', 'utf8')
 const signingPolicy = fs.readFileSync('CODE_SIGNING_POLICY.md', 'utf8')
 const privacyPolicy = fs.readFileSync('PRIVACY.md', 'utf8')
@@ -105,6 +106,38 @@ for (const command of [
     failures.push(`release finalizer must select the repository explicitly: ${command}`)
   }
 }
+if (!finalizeJob.includes('needs: [build-windows, build-macos, build-linux, build-linux-arm64, publish-updater]')) {
+  failures.push('release finalizer does not wait for the protected updater publication job')
+}
+
+const updaterJob = jobBody('publish-updater')
+for (const token of [
+  'environment: release-r2',
+  'Validate protected updater secrets',
+  'TAURI_SIGNING_PRIVATE_KEY',
+  'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
+  'R2_ACCESS_KEY_ID',
+  'R2_SECRET_ACCESS_KEY',
+  'R2_ENDPOINT',
+  'R2_BUCKET',
+  'R2_PUBLIC_BASE_URL',
+  'Ensure release notes are present before manifest generation',
+  'Sign exact updater payloads',
+  'prepare-updater-release.mjs --manifest',
+  'Publish immutable updater payloads to R2',
+  'Publish updater manifest to R2 last',
+  "cache-control 'public,max-age=31536000,immutable'",
+  "cache-control 'no-cache, max-age=0, must-revalidate'",
+  'cmp updater-publish/latest.json "$remote_manifest"',
+]) {
+  if (!updaterJob.includes(token)) failures.push(`protected updater publication is missing ${token}`)
+}
+if (
+  updaterJob.indexOf('Ensure release notes are present before manifest generation')
+  > updaterJob.indexOf('Create signed updater manifest')
+) {
+  failures.push('release notes must exist before the updater manifest is generated')
+}
 
 const windowsJob = jobBody('build-windows')
 if (!windowsJob.includes('actions: read')) failures.push('Windows SignPath job cannot read GitHub Actions build metadata')
@@ -120,6 +153,9 @@ for (const token of [
   'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG',
   'Prepare clearly labeled unsigned Windows release assets',
   '-unsigned$extension',
+  'Generate ephemeral updater packaging key',
+  'Prepare exact Windows updater payload',
+  'updater-windows',
 ]) {
   if (!windowsJob.includes(token)) failures.push(`Windows optional SignPath flow is missing ${token}`)
 }
@@ -146,6 +182,9 @@ for (const token of [
   'APPLE_PASSWORD',
   'APPLE_TEAM_ID',
   '-adhoc',
+  'Generate ephemeral updater packaging key',
+  'Prepare exact macOS updater payload',
+  'updater-macos',
 ]) {
   if (!macJob.includes(token)) failures.push(`macOS optional signing flow is missing ${token}`)
 }
@@ -162,7 +201,7 @@ for (const link of ['PRIVACY.md', 'CODE_SIGNING_POLICY.md', 'docs/RELEASE_SIGNIN
 if (!signingPolicy.includes('Free code signing provided by SignPath.io, certificate by SignPath Foundation')) {
   failures.push('code signing policy is missing the SignPath Foundation attribution')
 }
-for (const service of ['GitHub', 'ModelScope', 'Hugging Face']) {
+for (const service of ['Cloudflare', 'GitHub', 'ModelScope', 'Hugging Face']) {
   if (!privacyPolicy.includes(service)) failures.push(`privacy policy does not disclose ${service} network access`)
 }
 for (const obsoleteToken of ['WINDOWS_CERTIFICATE', 'Import-PfxCertificate']) {
@@ -171,6 +210,25 @@ for (const obsoleteToken of ['WINDOWS_CERTIFICATE', 'Import-PfxCertificate']) {
 
 if (tauriConfig.bundle?.macOS?.signingIdentity !== '-') {
   failures.push('macOS non-release artifacts do not use an ad-hoc signing identity')
+}
+if (tauriConfig.bundle?.createUpdaterArtifacts !== false) {
+  failures.push('ordinary builds must not require access to the protected updater signing key')
+}
+if (updaterBuildConfig.bundle?.createUpdaterArtifacts !== true) {
+  failures.push('release builds must enable Tauri updater artifact generation')
+}
+if (!workflow.includes('npm run tauri build -- --config src-tauri/tauri.updater.conf.json')) {
+  failures.push('tag builds do not use the shell-safe updater build config')
+}
+const updaterConfig = tauriConfig.plugins?.updater
+if (!updaterConfig?.pubkey || !Array.isArray(updaterConfig.endpoints) || updaterConfig.endpoints.length !== 1) {
+  failures.push('Tauri updater must use one signed production endpoint')
+}
+if (updaterConfig?.windows?.installMode !== 'passive') {
+  failures.push('Windows updater install mode must remain passive')
+}
+if (tauriConfig.app?.security?.csp?.includes('api.github.com')) {
+  failures.push('runtime CSP still permits the retired GitHub release-check endpoint')
 }
 
 for (const localConfig of ['configs/instances.json', 'src-tauri/configs/instances.json']) {
