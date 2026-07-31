@@ -274,7 +274,6 @@ jobs:
             printf '### macOS signing\n\nDeveloper ID signing and notarization are enabled.\n' >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Generate ephemeral updater packaging key
-        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           key_path="$RUNNER_TEMP/updater-packaging.key"
           npm run tauri signer generate -- --ci --force --password ephemeral-updater-packaging-key --write-keys "$key_path" >/dev/null
@@ -298,9 +297,9 @@ jobs:
           security list-keychain -d user -s "$keychain_path" login.keychain-db
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$keychain_path"
           security find-identity -v -p codesigning "$keychain_path" | grep -F "$APPLE_SIGNING_IDENTITY"
-      - name: Build ad-hoc signed Tauri package
+      - name: Build ad-hoc signed Tauri package and updater smoke payload
         if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        run: npm run tauri build
+        run: npm run tauri build -- --config src-tauri/tauri.updater.conf.json
       - name: Build ad-hoc signed Tauri release and updater payload
         if: startsWith(github.ref, 'refs/tags/v') && steps.apple-signing.outputs.enabled != 'true'
         run: npm run tauri build -- --config src-tauri/tauri.updater.conf.json
@@ -313,16 +312,16 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --config src-tauri/tauri.updater.conf.json
       - name: Prepare exact macOS updater payload
-        if: startsWith(github.ref, 'refs/tags/v')
         run: |
           destination="$RUNNER_TEMP/updater-macos"
           mkdir -p "$destination"
-          mapfile -t payloads < <(find src-tauri/target/release/bundle/macos -maxdepth 1 -type f -name '*.app.tar.gz')
-          if [ "${#payloads[@]}" -ne 1 ]; then
-            echo "Expected exactly one macOS updater payload, found ${#payloads[@]}" >&2
+          payload_count="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -type f -name '*.app.tar.gz' | wc -l | tr -d '[:space:]')"
+          if [ "$payload_count" -ne 1 ]; then
+            echo "Expected exactly one macOS updater payload, found $payload_count" >&2
             exit 1
           fi
-          cp "${payloads[0]}" "$destination/"
+          payload="$(find src-tauri/target/release/bundle/macos -maxdepth 1 -type f -name '*.app.tar.gz' | head -n 1)"
+          cp "$payload" "$destination/"
           case "$(uname -m)" in
             arm64) printf 'darwin-aarch64\n' > "$destination/platform.txt" ;;
             x86_64) printf 'darwin-x86_64\n' > "$destination/platform.txt" ;;
