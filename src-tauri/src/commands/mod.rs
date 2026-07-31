@@ -11,6 +11,7 @@ pub mod model_inventory;
 pub mod monitoring;
 pub mod nvml;
 pub mod proxy;
+mod proxy_protocol;
 pub mod scanner;
 pub mod server;
 pub mod telemetry;

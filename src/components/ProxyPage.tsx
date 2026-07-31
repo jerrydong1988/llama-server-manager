@@ -310,6 +310,12 @@ export default function ProxyPage() {
     : displayedTargets.map(target => ({ ...target, status: 'unknown' as const }))
   const selectedTarget = effectiveTargets.find(target => target.instanceId === draft.defaultInstanceId)
   const endpoint = endpointUrl(status.boundAddr, draft)
+  const apiEndpoints = {
+    openAi: `${endpoint}/v1/chat/completions`,
+    anthropic: `${endpoint}/v1/messages`,
+    countTokens: `${endpoint}/v1/messages/count_tokens`,
+    models: `${endpoint}/v1/models`,
+  }
   const routeIssues = useMemo(() => {
     const knownTargetIds = new Set(effectiveTargets.map(target => target.instanceId))
     const issues = new Map<string, RouteIssue>()
@@ -726,6 +732,36 @@ export default function ProxyPage() {
 
       <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-5">
+          <Surface as="section" className="p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.apiCompatibility}</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{labels.apiCompatibilityDesc}</p>
+              </div>
+              <div className="flex gap-2">
+                <Badge tone="emerald">OpenAI</Badge>
+                <Badge tone="blue">Anthropic</Badge>
+              </div>
+            </div>
+            <div className="mt-4 space-y-2">
+              {[
+                [labels.openAiEndpoint, apiEndpoints.openAi],
+                [labels.anthropicEndpoint, apiEndpoints.anthropic],
+                [labels.tokenCountEndpoint, apiEndpoints.countTokens],
+                [labels.modelDiscoveryEndpoint, apiEndpoints.models],
+              ].map(([label, value]) => (
+                <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/70">
+                  <div className="text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">{label}</div>
+                  <div className="mt-1 break-all font-mono text-xs text-slate-800 dark:text-slate-200">{value}</div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 space-y-2 text-xs leading-5 text-slate-500 dark:text-slate-400">
+              <p>{labels.anthropicToolsHint}</p>
+              <p>{labels.anthropicScopeHint}</p>
+            </div>
+          </Surface>
+
           <Surface as="section" className="p-5">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>

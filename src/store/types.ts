@@ -343,6 +343,7 @@ export interface InferenceRequestSummary {
   slot_id: number
   completed_at: number
   source: string
+  api_format: string | null
   model: string | null
   target_instance_id: string | null
   http_status: number | null

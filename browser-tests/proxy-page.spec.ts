@@ -4,6 +4,24 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('routing page documents OpenAI and Anthropic endpoints and compatibility boundaries', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'proxy')
+  })
+  await page.goto('/?scenario=proxy-routing')
+
+  const compatibility = page.getByRole('heading', { name: 'API 兼容入口' }).locator('xpath=ancestor::section[1]')
+  await expect(compatibility).toContainText('OpenAI')
+  await expect(compatibility).toContainText('Anthropic')
+  await expect(compatibility).toContainText('/v1/chat/completions')
+  await expect(compatibility).toContainText('/v1/messages')
+  await expect(compatibility).toContainText('/v1/messages/count_tokens')
+  await expect(compatibility).toContainText('/v1/models')
+  await expect(compatibility).toContainText('--jinja')
+  await expect(compatibility).toContainText('32 MiB')
+})
+
 test('route switches expose current state and saving refreshes the enabled-rule count', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
