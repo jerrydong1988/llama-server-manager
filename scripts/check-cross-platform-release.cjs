@@ -217,8 +217,27 @@ if (tauriConfig.bundle?.createUpdaterArtifacts !== false) {
 if (updaterBuildConfig.bundle?.createUpdaterArtifacts !== true) {
   failures.push('release builds must enable Tauri updater artifact generation')
 }
+const updaterTargets = updaterBuildConfig.bundle?.targets
+if (!Array.isArray(updaterTargets) || !updaterTargets.includes('app')) {
+  failures.push('release builds must include the macOS app target required for updater artifacts')
+}
 if (!workflow.includes('npm run tauri build -- --config src-tauri/tauri.updater.conf.json')) {
   failures.push('tag builds do not use the shell-safe updater build config')
+}
+if (jobBody('build-macos').includes('mapfile')) {
+  failures.push('macOS release preparation uses mapfile, which is unavailable in the runner Bash 3.2')
+}
+if (!macJob.includes('Build ad-hoc signed Tauri package and updater smoke payload')) {
+  failures.push('macOS pull-request builds do not exercise updater artifact generation')
+}
+if ((macJob.match(/npm run tauri build -- --config src-tauri\/tauri\.updater\.conf\.json/g) || []).length < 3) {
+  failures.push('macOS updater build config is not used by pull-request and both release signing paths')
+}
+if (!/- name: Generate ephemeral updater packaging key\r?\n\s+run: \|/.test(macJob)) {
+  failures.push('macOS pull-request builds do not generate an isolated updater smoke-test key')
+}
+if (!/- name: Prepare exact macOS updater payload\r?\n\s+run: \|/.test(macJob)) {
+  failures.push('macOS pull-request builds do not exercise updater payload preparation')
 }
 const updaterConfig = tauriConfig.plugins?.updater
 if (!updaterConfig?.pubkey || !Array.isArray(updaterConfig.endpoints) || updaterConfig.endpoints.length !== 1) {
