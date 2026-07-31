@@ -835,39 +835,63 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
                         Err(mpsc::TryRecvError::Disconnected) => break,
                     }
                 }
-                for write in batch {
-                    if let Err(error) = write_telemetry_with_retry(&mut conn, &write, 3) {
-                        eprintln!("{error}");
-                        TELEMETRY_DROPPED_WRITES.fetch_add(1, Ordering::Relaxed);
-                        *TELEMETRY_LAST_WRITE_ERROR.lock().unwrap() =
-                            Some((now_ms(), error.clone()));
-                        last_write_error = Some(error);
-                    }
+                for error in write_telemetry_batch_with_retry(&mut conn, &batch, 3) {
+                    eprintln!("{error}");
+                    TELEMETRY_DROPPED_WRITES.fetch_add(1, Ordering::Relaxed);
+                    *TELEMETRY_LAST_WRITE_ERROR.lock().unwrap() = Some((now_ms(), error.clone()));
+                    last_write_error = Some(error);
                 }
             }
         }
     }
 }
 
-fn write_telemetry_with_retry(
+fn write_telemetry_batch_with_retry(
     conn: &mut Connection,
-    write: &TelemetryWrite,
+    writes: &[TelemetryWrite],
     max_attempts: u32,
-) -> Result<(), String> {
+) -> Vec<String> {
+    if writes.is_empty() {
+        return Vec::new();
+    }
     let attempts = max_attempts.max(1);
     let mut last_error = None;
     for attempt in 0..attempts {
         let result = (|| {
-            let transaction = conn.transaction().map_err(|error| {
+            let mut transaction = conn.transaction().map_err(|error| {
                 format!("Telemetry writer failed to begin transaction: {error}")
             })?;
-            apply_telemetry_write(&transaction, write)?;
-            transaction
-                .commit()
-                .map_err(|error| format!("Telemetry writer failed to commit transaction: {error}"))
+            let mut write_errors = Vec::new();
+            for write in writes {
+                let mut savepoint = transaction.savepoint().map_err(|error| {
+                    format!("Telemetry writer failed to create savepoint: {error}")
+                })?;
+                match apply_telemetry_write(&savepoint, write) {
+                    Ok(()) => savepoint.commit().map_err(|error| {
+                        format!("Telemetry writer failed to release savepoint: {error}")
+                    })?,
+                    Err(error) => {
+                        savepoint.rollback().map_err(|rollback_error| {
+                            format!(
+                                "{error}; telemetry writer also failed to roll back savepoint: {rollback_error}"
+                            )
+                        })?;
+                        savepoint.commit().map_err(|release_error| {
+                            format!(
+                                "{error}; telemetry writer also failed to release rolled-back savepoint: {release_error}"
+                            )
+                        })?;
+                        write_errors.push(error);
+                    }
+                }
+            }
+            transaction.commit().map_err(|error| {
+                format!("Telemetry writer failed to commit transaction: {error}")
+            })?;
+            Ok::<_, String>(write_errors)
         })();
         match result {
-            Ok(()) => return Ok(()),
+            Ok(write_errors) => return write_errors,
             Err(error) => {
                 last_error = Some(error);
                 if attempt + 1 < attempts {
@@ -876,7 +900,8 @@ fn write_telemetry_with_retry(
             }
         }
     }
-    Err(last_error.unwrap_or_else(|| "Telemetry writer failed without an error".into()))
+    let error = last_error.unwrap_or_else(|| "Telemetry writer failed without an error".into());
+    writes.iter().map(|_| error.clone()).collect::<Vec<_>>()
 }
 
 fn apply_telemetry_write(conn: &Connection, write: &TelemetryWrite) -> Result<(), String> {
@@ -1396,7 +1421,6 @@ pub async fn get_telemetry_session_detail(
     let sample_limit = sample_limit.unwrap_or(220).clamp(1, 1_000);
     let request_limit = request_limit.unwrap_or(18).clamp(1, 200);
     tokio::task::spawn_blocking(move || {
-        flush_telemetry_writer()?;
         let conn = open_connection()?;
         let samples = samples_for_session(&conn, &session_id, sample_limit)?;
         let requests = inference_requests_for_session(&conn, &session_id, request_limit)?;
@@ -3070,7 +3094,7 @@ mod tests {
         .unwrap();
 
         let (waiter, _) = mpsc::channel();
-        assert!(write_telemetry_with_retry(&mut conn, &TelemetryWrite::Flush(waiter), 1).is_err());
+        let invalid = TelemetryWrite::Flush(waiter);
         let valid = TelemetryWrite::Metric {
             session_id: "writer-isolation".into(),
             instance_id: "instance".into(),
@@ -3090,7 +3114,9 @@ mod tests {
             },
             llama: None,
         };
-        write_telemetry_with_retry(&mut conn, &valid, 1).unwrap();
+        let errors = write_telemetry_batch_with_retry(&mut conn, &[invalid, valid], 1);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("control message"));
 
         let count: i64 = conn
             .query_row(

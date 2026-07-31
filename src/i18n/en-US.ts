@@ -573,6 +573,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     updateInstalling: 'Downloading and installing update',
     updateFailedTitle: 'Update failed',
     updateFailedDescription: 'The signed update could not be downloaded or installed. Your current version remains unchanged.',
+    updateCheck: 'Check for updates', updateChecking: 'Checking for updates',
   },
 
   commandCenter: {

@@ -572,6 +572,7 @@
     updateInstalling: '\u6B63\u5728\u4E0B\u8F7D\u5E76\u5B89\u88C5\u66F4\u65B0',
     updateFailedTitle: '\u66F4\u65B0\u5931\u8D25',
     updateFailedDescription: '\u65E0\u6CD5\u4E0B\u8F7D\u6216\u5B89\u88C5\u7B7E\u540D\u66F4\u65B0\uFF0C\u5F53\u524D\u7248\u672C\u4FDD\u6301\u4E0D\u53D8\u3002',
+    updateCheck: '\u68C0\u67E5\u66F4\u65B0', updateChecking: '\u6B63\u5728\u68C0\u67E5\u66F4\u65B0',
   },
 
   commandCenter: {

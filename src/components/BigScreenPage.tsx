@@ -67,7 +67,7 @@ export default function BigScreenPage() {
   const instances = useAppStore(state => state.instances)
   const models = useAppStore(state => state.models)
   const engines = useAppStore(state => state.engines)
-  const logs = useAppStore(state => state.logs)
+  const recentLogs = useAppStore(state => state.recentLogs)
   const sysMetrics = useAppStore(state => state.sysMetrics)
   const systemMetricsHistory = useAppStore(state => state.systemMetricsHistory)
   const downloadTasks = useAppStore(state => state.downloadTasks)
@@ -133,7 +133,13 @@ export default function BigScreenPage() {
     () => runningInstances.map(instance => instance.id),
     [runningInstances],
   )
-  const trendEnd = Math.max(Date.now(), ...runningInstanceIds.map(instanceId => monitoringCurrentByInstance[instanceId]?.ts || 0))
+  const trendEnd = useMemo(
+    () => Math.max(
+      Date.now(),
+      ...runningInstanceIds.map(instanceId => monitoringCurrentByInstance[instanceId]?.ts || 0),
+    ),
+    [monitoringCurrentByInstance, runningInstanceIds],
+  )
   const trendStart = trendEnd - 5 * 60 * 1000
   const fleetThroughput = useMemo(
     () => buildFleetThroughputSeries(
@@ -191,13 +197,17 @@ export default function BigScreenPage() {
   }, [latestMonitoringTs, latestSystemMetricsTs])
 
   const flatLogs = useMemo(
-    () => Object.entries(logs)
-      .flatMap(([instanceId, entries]) => {
-        const instanceName = instances.find(instance => instance.id === instanceId)?.name || instanceId
-        return entries.map(entry => ({ ...entry, instanceName }))
-      })
-      .sort((left, right) => right.timestamp - left.timestamp),
-    [instances, logs],
+    () => {
+      const instanceNames = new Map(instances.map(instance => [instance.id, instance.name]))
+      return recentLogs
+        .slice()
+        .reverse()
+        .map(entry => ({
+          ...entry,
+          instanceName: instanceNames.get(entry.instanceId) || entry.instanceId,
+        }))
+    },
+    [instances, recentLogs],
   )
 
   const serviceStatus = useMemo(

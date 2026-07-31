@@ -263,6 +263,19 @@ if (BROWSER_SCENARIO === 'empty-alias') {
     state.instances[INSTANCE_ID].explicit_overrides ?? []
   ).filter(field => field !== 'alias')
 }
+if (BROWSER_SCENARIO === 'auto-start-stagger') {
+  const secondInstanceId = 'browser-auto-start-second'
+  state.instances[INSTANCE_ID].auto_start = true
+  state.instances[secondInstanceId] = {
+    ...clone(instanceConfig),
+    id: secondInstanceId,
+    name: 'Browser Auto Start Second',
+    alias: 'browser-auto-start-second',
+    port: 18083,
+    auto_start: true,
+  }
+  state.instance_order = [INSTANCE_ID, secondInstanceId]
+}
 if (BROWSER_SCENARIO === 'monitoring') {
   state.instances[STOPPED_INSTANCE_ID] = {
     ...clone(instanceConfig),
@@ -283,13 +296,14 @@ if (BROWSER_SCENARIO === 'monitoring') {
 
 type BrowserTestControl = {
   marker: string
-  calls: Array<{ command: string; payload: unknown }>
+  calls: Array<{ command: string; payload: unknown; at: number }>
   unhandled: string[]
   saveCount: number
   lastGenerated: GeneratedServerCommand | null
   failProxyStatus: boolean
   failProxyTargets: boolean
   failRuntimeStatus: boolean
+  updaterCheckCount: number
   state: GlobalConfigShape
   emitEvent: (event: string, payload?: unknown) => Promise<void>
 }
@@ -309,6 +323,7 @@ const control: BrowserTestControl = {
   failProxyStatus: false,
   failProxyTargets: false,
   failRuntimeStatus: false,
+  updaterCheckCount: 0,
   state,
   emitEvent: (event, payload) => emit(event, payload),
 }
@@ -523,13 +538,42 @@ const emptyMonitoringAnalysis = {
 mockWindows('main')
 mockConvertFileSrc('windows')
 mockIPC((command, payload) => {
-  control.calls.push({ command, payload: clone(payload ?? null) })
+  control.calls.push({ command, payload: clone(payload ?? null), at: Date.now() })
   syncAutomationProbe()
   const args = (payload ?? {}) as Record<string, unknown>
 
   switch (command) {
     case 'plugin:app|bundle_type': return 'nsis'
-    case 'plugin:updater|check': return null
+    case 'plugin:updater|check':
+      control.updaterCheckCount += 1
+      if (BROWSER_SCENARIO === 'updater-retry' && control.updaterCheckCount === 1) {
+        throw new Error('browser test updater endpoint temporarily unavailable')
+      }
+      if (['updater-retry', 'updater-install', 'updater-install-failure'].includes(BROWSER_SCENARIO ?? '')) {
+        return {
+          rid: 42,
+          currentVersion: '2.9.36',
+          version: '2.9.37',
+          date: '2026-07-31T00:00:00Z',
+          body: 'Browser updater test',
+          rawJson: {},
+        }
+      }
+      return null
+    case 'plugin:updater|download_and_install':
+      if (BROWSER_SCENARIO === 'updater-install-failure') {
+        throw new Error('browser test updater download failed')
+      }
+      return null
+    case 'plugin:resources|close': return null
+    case 'plugin:process|restart': return null
+    case 'plugin:dialog|message': {
+      const buttons = args.buttons as {
+        OkCancelCustom?: [string, string]
+        OkCustom?: string
+      } | undefined
+      return buttons?.OkCancelCustom?.[0] ?? buttons?.OkCustom ?? 'Ok'
+    }
     case 'get_startup_elapsed': return 1
     case 'get_cached_scan': return [clone(models), [clone(engine)]]
     case 'load_config': return clone(control.state)
@@ -539,6 +583,34 @@ mockIPC((command, payload) => {
     case 'get_engines': return [clone(engine)]
     case 'probe_engine_capabilities': return clone(engine)
     case 'get_download_manager_snapshot':
+      if (BROWSER_SCENARIO === 'download-resume') {
+        return {
+          queue: [{
+            id: 'browser-download-entry',
+            repo_id: 'browser/model',
+            source: 'huggingface',
+            files: [{
+              name: 'browser-model.gguf',
+              path: 'browser-model.gguf',
+              size: 1_024,
+              file_type: 'model',
+              task_id: 'browser-download-task',
+              run_id: 'browser-download-run',
+              downloaded: 512,
+              version: 1,
+              status: 'paused',
+            }],
+            save_dir: 'C:\\browser-test\\downloads',
+            added_at: Date.now(),
+            status: 'paused',
+          }],
+          active_count: 0,
+          max_concurrent: 3,
+          resume_policy: 'manual',
+          bandwidth_limit_bytes_per_sec: 0,
+          low_priority_throttle: false,
+        }
+      }
       return { queue: [], active_count: 0, max_concurrent: 3, resume_policy: 'manual', bandwidth_limit_bytes_per_sec: 0, low_priority_throttle: false }
     case 'restore_download_queue': return []
     case 'get_monitoring_series':
@@ -567,7 +639,21 @@ mockIPC((command, payload) => {
         diagnostics: [],
       }
     case 'list_inference_requests': return []
-    case 'get_workers': return []
+    case 'get_workers':
+      return BROWSER_SCENARIO === 'cluster-worker'
+        ? [{
+            id: 'browser-cluster-worker',
+            host: '192.168.50.10',
+            port: 50052,
+            name: 'Browser Cluster Worker',
+            origin: 'manual',
+            devices: [{ device_type: 'Vulkan', name: 'Browser GPU', vram_mb: 16_384, free_mb: 12_288 }],
+            status: 'Offline',
+            auto_discovered: false,
+          }]
+        : []
+    case 'is_local_host': return false
+    case 'test_worker': return { ok: true, latency_ms: 12, devices: [] }
     case 'get_proxy_config': return clone(proxyConfig)
     case 'get_proxy_status':
       if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')
@@ -624,6 +710,27 @@ mockIPC((command, payload) => {
       control.saveCount += 1
       syncAutomationProbe()
       return instances
+    }
+    case 'start_server': {
+      const instanceId = String(args.instanceId ?? '')
+      const config = args.config as InstanceConfig
+      control.state.running[instanceId] = {
+        instance_id: instanceId,
+        pid: 5000 + Object.keys(control.state.running).length,
+        port: config.port,
+        host: config.host,
+        start_time: Math.floor(Date.now() / 1000),
+      }
+      return null
+    }
+    case 'get_download_resume_policy': return 'manual'
+    case 'get_download_concurrency': return 3
+    case 'get_download_bandwidth_limit': return 0
+    case 'get_download_low_priority_throttle': return false
+    case 'resume_download_task': return {
+      taskId: String(args.taskId ?? ''),
+      runId: 'browser-download-resumed-run',
+      version: 2,
     }
     case 'enable_autostart':
     case 'disable_autostart':

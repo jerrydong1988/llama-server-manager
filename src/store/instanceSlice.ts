@@ -13,6 +13,25 @@ import type { AppState, GeneratedServerCommand, InstanceConfig, LogEntry } from 
 import { resolveEffectiveEngine } from './engineResolution'
 
 const MAX_LOG_ENTRIES = 1000
+const MAX_RECENT_LOG_ENTRIES = 2000
+
+const mergeRecentLogs = (existing: LogEntry[], incoming: LogEntry[]) => {
+  const sortedIncoming = incoming.length > 1
+    ? [...incoming].sort((left, right) => left.timestamp - right.timestamp)
+    : incoming
+  const merged: LogEntry[] = []
+  let existingIndex = 0
+  let incomingIndex = 0
+  while (existingIndex < existing.length && incomingIndex < sortedIncoming.length) {
+    if (existing[existingIndex].timestamp <= sortedIncoming[incomingIndex].timestamp) {
+      merged.push(existing[existingIndex++])
+    } else {
+      merged.push(sortedIncoming[incomingIndex++])
+    }
+  }
+  merged.push(...existing.slice(existingIndex), ...sortedIncoming.slice(incomingIndex))
+  return merged.slice(-MAX_RECENT_LOG_ENTRIES)
+}
 
 const isStaleEngineCapabilityError = (error: unknown) => (
   Boolean(error && typeof error === 'object' && (error as { code?: string }).code === 'ENGINE_CAPABILITIES_STALE')
@@ -126,10 +145,14 @@ export function createInstanceSlice(
     addLog: (entry: LogEntry) => get().addLogs([entry]),
     addLogs: (entries: LogEntry[]) => set((state) => {
       if (entries.length === 0) return state
+      const normalizedEntries = entries.map(entry => ({
+        ...entry,
+        timestamp: entry.timestamp || Date.now(),
+      }))
       const grouped = new Map<string, LogEntry[]>()
-      for (const entry of entries) {
+      for (const entry of normalizedEntries) {
         const group = grouped.get(entry.instanceId) || []
-        group.push({ ...entry, timestamp: entry.timestamp || Date.now() })
+        group.push(entry)
         grouped.set(entry.instanceId, group)
       }
       const logs = { ...state.logs }
@@ -137,10 +160,14 @@ export function createInstanceSlice(
         const existing = logs[instanceId] || []
         logs[instanceId] = [...existing, ...group].slice(-MAX_LOG_ENTRIES)
       }
-      return { logs }
+      return {
+        logs,
+        recentLogs: mergeRecentLogs(state.recentLogs, normalizedEntries),
+      }
     }),
     clearLogs: (instanceId) => set((state) => ({
       logs: { ...state.logs, [instanceId]: [] },
+      recentLogs: state.recentLogs.filter(entry => entry.instanceId !== instanceId),
     })),
     generateCommand: async (config: InstanceConfig, engineExe: string) => {
       const normalized = normalizeStoredConfig(config, get().models)

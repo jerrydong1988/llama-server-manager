@@ -3,21 +3,20 @@ import { Activity, BarChart3, BookOpen, Cpu, Database, Download, Monitor, Networ
 import { version } from '../package.json'
 import { invokeApp as invoke } from './lib/ipc'
 import { listen } from '@tauri-apps/api/event'
-import ModelRepo from './components/ModelRepo'
-import EngineManager from './components/EngineManager'
-import InstanceManager from './components/InstanceManager'
+const ModelRepo = lazy(() => import('./components/ModelRepo'))
+const EngineManager = lazy(() => import('./components/EngineManager'))
+const InstanceManager = lazy(() => import('./components/InstanceManager'))
 const LogsViewer = lazy(() => import('./components/LogsViewer'))
-import ConfigPage from './components/ConfigPage'
+const ConfigPage = lazy(() => import('./components/ConfigPage'))
 const PerformancePage = lazy(() => import('./components/PerformancePage/PerformancePage'))
 const ClusterPage = lazy(() => import('./components/ClusterPage/ClusterPage'))
 const DownloadManager = lazy(() => import('./components/DownloadManager'))
 const ProxyPage = lazy(() => import('./components/ProxyPage'))
 const BigScreenPage = lazy(() => import('./components/BigScreenPage'))
-import Dashboard from './components/Dashboard/Dashboard'
+const Dashboard = lazy(() => import('./components/Dashboard/Dashboard'))
 const GuidePage = lazy(() => import('./components/GuidePage'))
 import { _startupTimings } from './store'
 import { useAppStore } from './store'
-import { parseHostPort } from './utils/network'
 import type { WorkerInfo } from './store'
 import { I18nProvider, nextLanguage, useI18n } from './i18n'
 import { Button } from './components/ui'
@@ -26,6 +25,7 @@ import { CommandCenter } from './components/shell/CommandCenter'
 import { RuntimeExitDialogs } from './components/shell/RuntimeExitDialogs'
 import { useCommandCenterModel } from './components/shell/useCommandCenterModel'
 import { useAppUpdater } from './hooks/useAppUpdater'
+import { runAutoStartSequence } from './autoStartCoordinator'
 
 type ErrorBoundaryCopy = { title: string; description: string; unknown: string; reload: string }
 
@@ -121,7 +121,8 @@ function AppInner() {
   const { t, lang, setLang } = useI18n()
   const shellCopy = t.appShell
   const [autoStartEnabled, setAutoStartEnabled] = useState(false)
-  const [autoStarted, setAutoStarted] = useState(false)
+  const autoStartSequenceStartedRef = useRef(false)
+  const appDisposedRef = useRef(false)
   const [commandCenterOpen, setCommandCenterOpen] = useState(false)
   const [proxyExitConfirmOpen, setProxyExitConfirmOpen] = useState(false)
   const [proxyExitBusy, setProxyExitBusy] = useState(false)
@@ -200,52 +201,41 @@ function AppInner() {
   }, [shellCopy.backgroundDetachUnknownError])
 
   useEffect(() => {
-    if (autoStarted || instances.length === 0) return
+    appDisposedRef.current = false
+    return () => {
+      appDisposedRef.current = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!configLoaded || autoStartSequenceStartedRef.current) return
+    if (instances.length === 0) return
     const toBoot = instances.filter(i => i.config.auto_start && i.status !== 'running')
     if (toBoot.length === 0) {
-      setAutoStarted(true)
+      autoStartSequenceStartedRef.current = true
       return
     }
     if (engines.length === 0) return
 
-    let cancelled = false
-    const boot = async () => {
-      const currentWorkers = useAppStore.getState().workers.length > 0
-        ? useAppStore.getState().workers
-        : await invoke<WorkerInfo[]>('get_workers').catch(() => [])
+    autoStartSequenceStartedRef.current = true
+    void runAutoStartSequence({
+      instanceIds: toBoot.map(instance => instance.id),
+      getInstance: id => useAppStore.getState().instances.find(instance => instance.id === id),
+      getWorkers: async () => {
+        const currentWorkers = useAppStore.getState().workers
+        return currentWorkers.length > 0
+          ? currentWorkers
+          : invoke<WorkerInfo[]>('get_workers').catch(() => [])
+      },
+      startInstance,
+      shouldCancel: () => appDisposedRef.current,
+      onMissingWorker: instance => {
+        console.warn(`Instance "${instance.name}" requires a cluster worker but no matching worker is available; skipping auto-start`)
+      },
+    })
+  }, [configLoaded, engines, instances, startInstance])
 
-      for (const inst of toBoot) {
-        if (cancelled) return
-        if (inst.config.rpc_servers) {
-          const configuredServers = inst.config.rpc_servers.split(/[, ]+/).filter(Boolean)
-          const hasMatchingWorker = currentWorkers.some(w =>
-            w.status === 'Online' &&
-            configuredServers.some(s => {
-              const endpoint = parseHostPort(s, 50052)
-              return w.host === endpoint.host && w.port === endpoint.port
-            }),
-          )
-          if (!hasMatchingWorker) {
-            console.warn(`Instance "${inst.name}" requires a cluster worker but no matching worker is available; skipping auto-start`)
-            continue
-          }
-        }
-
-        try {
-          await startInstance(inst.id)
-        } catch {
-          // ignore failed auto-start
-        }
-        await new Promise(resolve => setTimeout(resolve, 3000))
-      }
-      setAutoStarted(true)
-    }
-
-    boot()
-    return () => { cancelled = true }
-  }, [instances, engines, autoStarted, startInstance])
-
-  const { updateInfo, installUpdate } = useAppUpdater(
+  const { updateInfo, installUpdate, checkForUpdate, checking: updateChecking, checkError: updateCheckError } = useAppUpdater(
     instances.some(instance => instance.status === 'running'),
     shellCopy,
   )
@@ -358,6 +348,10 @@ function AppInner() {
       updateInfo={updateInfo}
       updateButtonTitle={updateInfo?.busy ? shellCopy.updateInstalling : shellCopy.updateAvailable}
       onInstallUpdate={() => void installUpdate()}
+      updateChecking={updateChecking}
+      updateCheckError={updateCheckError}
+      updateCheckButtonTitle={updateChecking ? shellCopy.updateChecking : shellCopy.updateCheck}
+      onCheckUpdate={() => void checkForUpdate()}
       autoStartLabel={t.common.autoStart || 'Auto Start'}
       autoStartEnabled={autoStartEnabled}
       onAutoStartChange={handleAutoStartChange}

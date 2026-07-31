@@ -3,7 +3,7 @@ use crate::models::{AppState, SystemMetrics};
 use crate::vector_policy::ModelWorkload;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
@@ -18,6 +18,7 @@ const TASK_FRESHNESS_MS: i64 = 5_000;
 const METRIC_FRESHNESS_MS: i64 = 8_000;
 const SYSTEM_FRESHNESS_MS: i64 = 15_000;
 const VECTOR_WINDOW_MS: i64 = 3_000;
+const VECTOR_MATCH_TIME_BUCKET_MS: i64 = 500;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +99,69 @@ fn aggregate_completed_input_tps(events: &[&VectorLiveEvent]) -> Option<f64> {
     let observed_ms = latest_end.saturating_sub(earliest_start);
     (input_tokens > 0 && observed_ms > 0)
         .then_some(input_tokens as f64 / (observed_ms as f64 / 1_000.0))
+}
+
+fn vector_duration_bucket(duration_ms: f64) -> i32 {
+    let normalized = if duration_ms.is_finite() {
+        duration_ms.max(0.0) + 200.0
+    } else {
+        200.0
+    };
+    (normalized.ln() / 1.25_f64.ln()).floor() as i32
+}
+
+fn deduplicated_vector_rate_events<'a>(
+    proxy_events: &[&'a VectorLiveEvent],
+    log_events: &[&'a VectorLiveEvent],
+) -> Vec<&'a VectorLiveEvent> {
+    let mut candidates = HashMap::<(u64, i64, i32), Vec<usize>>::new();
+    for (index, event) in proxy_events.iter().enumerate() {
+        candidates
+            .entry((
+                event.item_count,
+                event.completed_at.div_euclid(VECTOR_MATCH_TIME_BUCKET_MS),
+                vector_duration_bucket(event.duration_ms),
+            ))
+            .or_default()
+            .push(index);
+    }
+
+    let mut rate_events = proxy_events.to_vec();
+    for log_event in log_events {
+        let time_bucket = log_event
+            .completed_at
+            .div_euclid(VECTOR_MATCH_TIME_BUCKET_MS);
+        let duration_bucket = vector_duration_bucket(log_event.duration_ms);
+        let mut duplicate: Option<((u64, i64, i32), usize, usize)> = None;
+        for candidate_time in (time_bucket - 4)..=(time_bucket + 4) {
+            for candidate_duration in (duration_bucket - 2)..=(duration_bucket + 2) {
+                let key = (log_event.item_count, candidate_time, candidate_duration);
+                let Some(indices) = candidates.get(&key) else {
+                    continue;
+                };
+                for (position, index) in indices.iter().copied().enumerate() {
+                    let proxy_event = proxy_events[index];
+                    let matches = proxy_event.completed_at.abs_diff(log_event.completed_at)
+                        <= 2_000
+                        && (proxy_event.duration_ms - log_event.duration_ms).abs()
+                            <= proxy_event.duration_ms.abs().max(1.0) * 0.25 + 50.0;
+                    let is_earlier = match duplicate.as_ref() {
+                        Some((_, _, best_index)) => index < *best_index,
+                        None => true,
+                    };
+                    if matches && is_earlier {
+                        duplicate = Some((key, position, index));
+                    }
+                }
+            }
+        }
+        if let Some((key, position, _)) = duplicate {
+            candidates.get_mut(&key).unwrap().remove(position);
+        } else {
+            rate_events.push(*log_event);
+        }
+    }
+    rate_events
 }
 
 struct InstanceMonitoringState {
@@ -219,25 +283,7 @@ impl InstanceMonitoringState {
             .copied()
             .filter(|event| event.source == VectorMetricSource::Log)
             .collect::<Vec<_>>();
-        let mut matched_proxy = vec![false; proxy_events.len()];
-        let mut rate_events = proxy_events.clone();
-        for log_event in &log_events {
-            let duplicate = proxy_events
-                .iter()
-                .enumerate()
-                .position(|(index, proxy_event)| {
-                    !matched_proxy[index]
-                        && proxy_event.item_count == log_event.item_count
-                        && proxy_event.completed_at.abs_diff(log_event.completed_at) <= 2_000
-                        && (proxy_event.duration_ms - log_event.duration_ms).abs()
-                            <= proxy_event.duration_ms.abs().max(1.0) * 0.25 + 50.0
-                });
-            if let Some(index) = duplicate {
-                matched_proxy[index] = true;
-            } else {
-                rate_events.push(*log_event);
-            }
-        }
+        let rate_events = deduplicated_vector_rate_events(&proxy_events, &log_events);
 
         let items_per_second = self.workload.is_vector().then(|| {
             rate_events
@@ -361,7 +407,9 @@ impl InstanceMonitoringState {
     }
 }
 
-static MONITORING: LazyLock<Mutex<HashMap<String, InstanceMonitoringState>>> =
+type SharedMonitoringState = Arc<Mutex<InstanceMonitoringState>>;
+
+static MONITORING: LazyLock<Mutex<HashMap<String, SharedMonitoringState>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn is_fresh(timestamp: i64, now: i64, maximum_age: i64) -> bool {
@@ -386,17 +434,28 @@ fn with_state(
     update: impl FnOnce(&mut InstanceMonitoringState),
 ) {
     let now = current_time_ms();
-    let mut registry = MONITORING.lock().unwrap();
-    let state = registry
-        .entry(instance_id.to_string())
-        .or_insert_with(|| InstanceMonitoringState::new(instance_id, session_id, workload, now));
+    let shared = {
+        let mut registry = MONITORING.lock().unwrap();
+        registry
+            .entry(instance_id.to_string())
+            .or_insert_with(|| {
+                Arc::new(Mutex::new(InstanceMonitoringState::new(
+                    instance_id,
+                    session_id,
+                    workload,
+                    now,
+                )))
+            })
+            .clone()
+    };
+    let mut state = shared.lock().unwrap();
     if session_id.is_some() || state.session_id.is_none() {
         state.reset_session(session_id, workload, now, false);
     } else if state.workload != workload {
         let existing_session = state.session_id.clone();
         state.reset_session(existing_session.as_deref(), workload, now, false);
     }
-    update(state);
+    update(&mut state);
 }
 
 pub fn update_metrics(
@@ -483,8 +542,8 @@ pub fn record_vector_activity(
 }
 
 fn sample_frame(instance_id: &str, now: i64) -> Option<MonitoringFrame> {
-    let mut registry = MONITORING.lock().unwrap();
-    let state = registry.get_mut(instance_id)?;
+    let shared = MONITORING.lock().unwrap().get(instance_id).cloned()?;
+    let mut state = shared.lock().unwrap();
     let frame = state.build_frame(now);
     state.push_frame(frame.clone());
     Some(frame)
@@ -495,18 +554,22 @@ pub(crate) fn capture_frame(instance_id: &str) -> Option<MonitoringFrame> {
 }
 
 pub(crate) fn ingest_external_frame(frame: MonitoringFrame) -> bool {
-    let mut registry = MONITORING.lock().unwrap();
     let workload = ModelWorkload::from_storage(&frame.workload);
-    let state = registry
-        .entry(frame.instance_id.clone())
-        .or_insert_with(|| {
-            InstanceMonitoringState::new(
-                &frame.instance_id,
-                frame.session_id.as_deref(),
-                workload,
-                frame.session_started_at,
-            )
-        });
+    let shared = {
+        let mut registry = MONITORING.lock().unwrap();
+        registry
+            .entry(frame.instance_id.clone())
+            .or_insert_with(|| {
+                Arc::new(Mutex::new(InstanceMonitoringState::new(
+                    &frame.instance_id,
+                    frame.session_id.as_deref(),
+                    workload,
+                    frame.session_started_at,
+                )))
+            })
+            .clone()
+    };
+    let mut state = shared.lock().unwrap();
     if state.session_id != frame.session_id {
         state.reset_session(
             frame.session_id.as_deref(),
@@ -540,10 +603,21 @@ pub fn start_frame_loop(
 ) {
     let should_start = {
         let now = current_time_ms();
-        let mut registry = MONITORING.lock().unwrap();
-        let state = registry.entry(instance_id.clone()).or_insert_with(|| {
-            InstanceMonitoringState::new(&instance_id, session_id.as_deref(), workload, now)
-        });
+        let shared = {
+            let mut registry = MONITORING.lock().unwrap();
+            registry
+                .entry(instance_id.clone())
+                .or_insert_with(|| {
+                    Arc::new(Mutex::new(InstanceMonitoringState::new(
+                        &instance_id,
+                        session_id.as_deref(),
+                        workload,
+                        now,
+                    )))
+                })
+                .clone()
+        };
+        let mut state = shared.lock().unwrap();
         let same_process = state.frame_loop_pid == Some(expected_pid);
         state.reset_session(session_id.as_deref(), workload, now, !same_process);
         if same_process {
@@ -570,7 +644,7 @@ pub fn start_frame_loop(
             let mut registry = MONITORING.lock().unwrap();
             let owns_state = registry
                 .get(&instance_id)
-                .is_some_and(|state| state.frame_loop_pid == Some(expected_pid));
+                .is_some_and(|state| state.lock().unwrap().frame_loop_pid == Some(expected_pid));
             if owns_state {
                 registry.remove(&instance_id);
             }
@@ -595,18 +669,29 @@ pub fn get_monitoring_series(
     let now = current_time_ms();
     let range = range_ms.unwrap_or(3_600_000).clamp(1_000, 3_600_000) as i64;
     let start = now.saturating_sub(range);
-    let registry = MONITORING.lock().unwrap();
-    let mut frames = registry
+    let states = MONITORING
+        .lock()
+        .unwrap()
         .values()
-        .filter(|state| {
-            instance_id
-                .as_deref()
-                .map_or(true, |expected| state.instance_id == expected)
-        })
-        .flat_map(|state| state.timeline.iter())
-        .filter(|frame| frame.ts >= start)
         .cloned()
         .collect::<Vec<_>>();
+    let mut frames = Vec::new();
+    for shared in states {
+        let state = shared.lock().unwrap();
+        if instance_id
+            .as_deref()
+            .is_some_and(|expected| state.instance_id != expected)
+        {
+            continue;
+        }
+        frames.extend(
+            state
+                .timeline
+                .iter()
+                .filter(|frame| frame.ts >= start)
+                .cloned(),
+        );
+    }
     frames.sort_by(|left, right| {
         left.ts
             .cmp(&right.ts)
@@ -811,6 +896,35 @@ mod tests {
         assert_eq!(frame.items_per_second, Some(1.0));
         assert_eq!(frame.average_latency_ms, Some(150.0));
         assert_eq!(frame.success_rate, Some(50.0));
+    }
+
+    #[test]
+    fn vector_deduplication_scales_across_dense_event_windows() {
+        let proxy_events = (0..5_000)
+            .map(|index| VectorLiveEvent {
+                source: VectorMetricSource::Proxy,
+                completed_at: 20_000 + (index % 3_000) as i64,
+                item_count: (index % 64 + 1) as u64,
+                input_tokens: Some(100),
+                duration_ms: 75.0 + (index % 20) as f64,
+                succeeded: true,
+            })
+            .collect::<Vec<_>>();
+        let log_events = proxy_events
+            .iter()
+            .cloned()
+            .map(|mut event| {
+                event.source = VectorMetricSource::Log;
+                event.completed_at += 10;
+                event
+            })
+            .collect::<Vec<_>>();
+        let proxy_refs = proxy_events.iter().collect::<Vec<_>>();
+        let log_refs = log_events.iter().collect::<Vec<_>>();
+
+        let deduplicated = deduplicated_vector_rate_events(&proxy_refs, &log_refs);
+
+        assert_eq!(deduplicated.len(), proxy_events.len());
     }
 
     #[test]
