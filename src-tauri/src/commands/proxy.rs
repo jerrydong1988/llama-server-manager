@@ -1,6 +1,6 @@
 use axum::{
     body::{Body, Bytes},
-    extract::{Request, State},
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -39,6 +39,7 @@ static PROXY_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 });
 const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_PROXY_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PROXY_JSON_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
 
@@ -140,6 +141,11 @@ struct ResolvedProxyTarget {
     workload: ModelWorkload,
 }
 
+pub(crate) struct ProxyRequestResolution {
+    config: ProxyConfig,
+    target: Option<ResolvedProxyTarget>,
+}
+
 #[derive(Clone)]
 pub(crate) struct ProxyRuntimeSnapshot {
     pub config: ProxyConfig,
@@ -150,7 +156,23 @@ pub(crate) struct ProxyRuntimeSnapshot {
 }
 
 pub(crate) trait ProxyDataSource: Send + Sync {
+    fn proxy_auth_key(&self) -> String;
     fn proxy_snapshot(&self) -> ProxyRuntimeSnapshot;
+
+    fn resolve_proxy_request(
+        &self,
+        requested_model: Option<&str>,
+        endpoint_workload: Option<ModelWorkload>,
+    ) -> ProxyRequestResolution {
+        let snapshot = self.proxy_snapshot();
+        proxy_request_resolution_from(
+            snapshot.config,
+            &snapshot.instances,
+            &snapshot.running,
+            requested_model,
+            endpoint_workload,
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -164,6 +186,16 @@ struct TauriProxyDataSource {
 }
 
 impl ProxyDataSource for TauriProxyDataSource {
+    fn proxy_auth_key(&self) -> String {
+        self.app
+            .state::<AppState>()
+            .proxy_config
+            .lock()
+            .unwrap()
+            .public_api_key
+            .clone()
+    }
+
     fn proxy_snapshot(&self) -> ProxyRuntimeSnapshot {
         let state = self.app.state::<AppState>();
         let config = state.proxy_config.lock().unwrap().clone();
@@ -183,6 +215,26 @@ impl ProxyDataSource for TauriProxyDataSource {
             running,
             config,
         }
+    }
+
+    fn resolve_proxy_request(
+        &self,
+        requested_model: Option<&str>,
+        endpoint_workload: Option<ModelWorkload>,
+    ) -> ProxyRequestResolution {
+        let state = self.app.state::<AppState>();
+        let config = state.proxy_config.lock().unwrap().clone();
+        // Keep a single, documented lock order for the two runtime maps. The
+        // request path only clones the selected target instead of both maps.
+        let instances = state.instances.lock().unwrap();
+        let running = state.running.lock().unwrap();
+        proxy_request_resolution_from(
+            config,
+            &instances,
+            &running,
+            requested_model,
+            endpoint_workload,
+        )
     }
 }
 
@@ -572,12 +624,7 @@ fn resolve_proxy_target_from(
     endpoint_workload: Option<ModelWorkload>,
 ) -> Option<ResolvedProxyTarget> {
     let mut had_candidate = false;
-    let routed_target_ids = proxy_config
-        .routes
-        .iter()
-        .filter(|route| route_is_configured(route))
-        .map(|route| route.target_instance_id.trim())
-        .collect::<HashSet<_>>();
+    let mut routed_target_ids = None;
     let requested_model = requested_model
         .map(str::trim)
         .filter(|model| !model.is_empty());
@@ -612,18 +659,27 @@ fn resolve_proxy_target_from(
     };
 
     if let Some(model) = requested_model {
-        let mut routes = proxy_config.routes.iter().collect::<Vec<_>>();
-        routes.sort_by_key(|route| route.priority);
-        for route in routes {
+        let mut best_match: Option<(i32, usize, ResolvedProxyTarget)> = None;
+        for (index, route) in proxy_config.routes.iter().enumerate() {
             if route.enabled && route.model_alias.trim() == model {
                 had_candidate = true;
                 let target_instance_id = route.target_instance_id.trim();
-                if !target_instance_id.is_empty() && running.contains_key(target_instance_id) {
+                let candidate_order = (route.priority, index);
+                let is_better = match best_match.as_ref() {
+                    Some((priority, existing_index, _)) => {
+                        candidate_order < (*priority, *existing_index)
+                    }
+                    None => true,
+                };
+                if !target_instance_id.is_empty() && is_better {
                     if let Some(target) = resolve_id(target_instance_id) {
-                        return Some(target);
+                        best_match = Some((route.priority, index, target));
                     }
                 }
             }
+        }
+        if let Some((_, _, target)) = best_match {
+            return Some(target);
         }
 
         // A matching public route is authoritative. If all of its configured
@@ -633,6 +689,12 @@ fn resolve_proxy_target_from(
             return None;
         }
 
+        let routed_ids = proxy_config
+            .routes
+            .iter()
+            .filter(|route| route_is_configured(route))
+            .map(|route| route.target_instance_id.trim())
+            .collect::<HashSet<_>>();
         for (id, stored_config) in instances.iter() {
             let config = running
                 .get(id)
@@ -640,7 +702,7 @@ fn resolve_proxy_target_from(
                 .unwrap_or(stored_config);
             if public_model_id(config) == model || config.name.trim() == model || id == model {
                 had_candidate = true;
-                if routed_target_ids.contains(id.as_str()) {
+                if routed_ids.contains(id.as_str()) {
                     continue;
                 }
                 if let Some(target) = resolve_id(id) {
@@ -652,6 +714,7 @@ fn resolve_proxy_target_from(
         if had_candidate {
             return None;
         }
+        routed_target_ids = Some(routed_ids);
     }
 
     let default_instance_id = proxy_config.default_instance_id.trim();
@@ -664,7 +727,10 @@ fn resolve_proxy_target_from(
 
     if proxy_config.routing_strategy == "firstHealthy" || !had_candidate {
         for id in running.keys() {
-            if requested_model.is_some() && routed_target_ids.contains(id.as_str()) {
+            if routed_target_ids
+                .as_ref()
+                .is_some_and(|routed_ids| routed_ids.contains(id.as_str()))
+            {
                 continue;
             }
             if let Some(target) = resolve_id(id) {
@@ -674,6 +740,23 @@ fn resolve_proxy_target_from(
     }
 
     None
+}
+
+pub(crate) fn proxy_request_resolution_from(
+    config: ProxyConfig,
+    instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, crate::models::RunningInstance>,
+    requested_model: Option<&str>,
+    endpoint_workload: Option<ModelWorkload>,
+) -> ProxyRequestResolution {
+    let target = resolve_proxy_target_from(
+        &config,
+        instances,
+        running,
+        requested_model,
+        endpoint_workload,
+    );
+    ProxyRequestResolution { config, target }
 }
 
 fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
@@ -794,11 +877,11 @@ fn rewrite_sse_response_line(line: &str, public_model_id: &str) -> String {
     format!("data: {rewritten}")
 }
 
-fn is_proxy_authorized(config: &ProxyConfig, headers: &HeaderMap) -> bool {
-    if config.public_api_key.trim().is_empty() {
+fn is_proxy_authorized(public_api_key: &str, headers: &HeaderMap) -> bool {
+    if public_api_key.trim().is_empty() {
         return true;
     }
-    let expected = config.public_api_key.trim();
+    let expected = public_api_key.trim();
     let bearer = format!("Bearer {}", expected);
     let auth_ok = headers
         .get("authorization")
@@ -826,12 +909,13 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
+#[cfg(test)]
 fn proxy_request_is_authorized(config: &ProxyConfig, _path: &str, headers: &HeaderMap) -> bool {
-    is_proxy_authorized(config, headers)
+    is_proxy_authorized(&config.public_api_key, headers)
 }
 
-fn authorize_and_strip_proxy_credentials(config: &ProxyConfig, headers: &mut HeaderMap) -> bool {
-    if !proxy_request_is_authorized(config, "", headers) {
+fn authorize_and_strip_proxy_credentials(public_api_key: &str, headers: &mut HeaderMap) -> bool {
+    if !is_proxy_authorized(public_api_key, headers) {
         return false;
     }
     headers.remove("authorization");
@@ -844,8 +928,8 @@ async fn proxy_auth_middleware(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let snapshot = router_state.source.proxy_snapshot();
-    if !authorize_and_strip_proxy_credentials(&snapshot.config, request.headers_mut()) {
+    let public_api_key = router_state.source.proxy_auth_key();
+    if !authorize_and_strip_proxy_credentials(&public_api_key, request.headers_mut()) {
         return plain_response(StatusCode::UNAUTHORIZED, "unauthorized");
     }
     next.run(request).await
@@ -1053,20 +1137,17 @@ async fn proxy_openai(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let snapshot = router_state.source.proxy_snapshot();
-    let proxy_config = snapshot.config.clone();
     let requested_model = match requested_model_from_body(&body) {
         Ok(model) => model,
         Err(error) => return plain_response(StatusCode::BAD_REQUEST, &error),
     };
     let vector_metadata = vector_request_metadata(uri.path(), &body);
-    let target = match resolve_proxy_target_from(
-        &snapshot.config,
-        &snapshot.instances,
-        &snapshot.running,
+    let resolution = router_state.source.resolve_proxy_request(
         requested_model.as_deref(),
         vector_metadata.as_ref().map(|metadata| metadata.workload),
-    ) {
+    );
+    let proxy_config = resolution.config;
+    let target = match resolution.target {
         Some(target) => target,
         None => {
             return plain_response(
@@ -1085,7 +1166,7 @@ async fn proxy_openai(
         );
     }
     let response_model =
-        public_response_model(&snapshot.config, &target.public, requested_model.as_deref());
+        public_response_model(&proxy_config, &target.public, requested_model.as_deref());
     let upstream_body = rewrite_request_model(&body, &target.upstream_model_id);
     let started_at = std::time::Instant::now();
     let started_at_ms = current_time_ms();
@@ -1292,7 +1373,10 @@ async fn proxy_openai(
         })
 }
 
-pub(crate) fn proxy_router_from_source(source: Arc<dyn ProxyDataSource>) -> Router {
+fn proxy_router_from_source_with_limit(
+    source: Arc<dyn ProxyDataSource>,
+    request_body_limit: usize,
+) -> Router {
     let router_state = ProxyRouterState { source };
     let auth_layer = middleware::from_fn_with_state(router_state.clone(), proxy_auth_middleware);
     Router::new()
@@ -1309,7 +1393,12 @@ pub(crate) fn proxy_router_from_source(source: Arc<dyn ProxyDataSource>) -> Rout
         .route("/v1/rerank", any(proxy_openai))
         .route("/v1/reranking", any(proxy_openai))
         .route_layer(auth_layer)
+        .layer(DefaultBodyLimit::max(request_body_limit))
         .with_state(router_state)
+}
+
+pub(crate) fn proxy_router_from_source(source: Arc<dyn ProxyDataSource>) -> Router {
+    proxy_router_from_source_with_limit(source, MAX_PROXY_REQUEST_BODY_BYTES)
 }
 
 fn proxy_router(app: tauri::AppHandle) -> Router {
@@ -1753,7 +1842,7 @@ mod tests {
     use crate::vector_policy::ModelWorkload;
     use axum::body::Body;
     use axum::extract::State;
-    use axum::http::{HeaderMap, Uri};
+    use axum::http::{HeaderMap, StatusCode, Uri};
     use axum::response::{IntoResponse, Response};
     use axum::routing::post;
     use axum::{Json, Router};
@@ -1768,6 +1857,10 @@ mod tests {
     }
 
     impl super::ProxyDataSource for TestProxySource {
+        fn proxy_auth_key(&self) -> String {
+            self.snapshot.config.public_api_key.clone()
+        }
+
         fn proxy_snapshot(&self) -> super::ProxyRuntimeSnapshot {
             self.snapshot.clone()
         }
@@ -1848,6 +1941,59 @@ mod tests {
         super::append_bounded_response_chunk(&mut body, b"1234", 5).unwrap();
         assert!(super::append_bounded_response_chunk(&mut body, b"67", 5).is_err());
         assert_eq!(body, b"1234");
+    }
+
+    #[tokio::test]
+    async fn proxy_router_applies_an_explicit_request_body_limit() {
+        let configured_limit = std::hint::black_box(super::MAX_PROXY_REQUEST_BODY_BYTES);
+        assert!(configured_limit > 2 * 1024 * 1024);
+        let snapshot = super::ProxyRuntimeSnapshot {
+            config: ProxyConfig::default(),
+            instances: HashMap::new(),
+            running: HashMap::new(),
+            bound_addr: String::new(),
+            last_error: None,
+        };
+        let router = super::proxy_router_from_source_with_limit(
+            Arc::new(TestProxySource { snapshot }),
+            1_024,
+        );
+        let (address, task) = spawn_test_router(router).await;
+        let client = reqwest::Client::new();
+
+        let accepted = serde_json::to_vec(&json!({
+            "model": "public-model",
+            "input": "x".repeat(800),
+        }))
+        .unwrap();
+        assert!(accepted.len() < 1_024);
+        let accepted_status = client
+            .post(format!("http://{address}/v1/embeddings"))
+            .header("content-type", "application/json")
+            .body(accepted)
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_ne!(accepted_status, StatusCode::PAYLOAD_TOO_LARGE);
+
+        let rejected = serde_json::to_vec(&json!({
+            "model": "public-model",
+            "input": "x".repeat(1_024),
+        }))
+        .unwrap();
+        assert!(rejected.len() > 1_024);
+        let rejected_status = client
+            .post(format!("http://{address}/v1/embeddings"))
+            .header("content-type", "application/json")
+            .body(rejected)
+            .send()
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(rejected_status, StatusCode::PAYLOAD_TOO_LARGE);
+
+        task.abort();
     }
 
     #[test]
@@ -2569,7 +2715,7 @@ mod tests {
         headers.insert("content-type", "application/json".parse().unwrap());
 
         assert!(super::authorize_and_strip_proxy_credentials(
-            &config,
+            &config.public_api_key,
             &mut headers
         ));
         assert!(!headers.contains_key("authorization"));
@@ -2586,14 +2732,17 @@ mod tests {
         for value in ["Bearer secre", "Bearer secret!", "secret!", ""] {
             let mut headers = HeaderMap::new();
             headers.insert("authorization", value.parse().unwrap());
-            assert!(!super::is_proxy_authorized(&config, &headers));
+            assert!(!super::is_proxy_authorized(
+                &config.public_api_key,
+                &headers
+            ));
         }
         let mut bearer = HeaderMap::new();
         bearer.insert("authorization", "Bearer secret".parse().unwrap());
-        assert!(super::is_proxy_authorized(&config, &bearer));
+        assert!(super::is_proxy_authorized(&config.public_api_key, &bearer));
         let mut api_key = HeaderMap::new();
         api_key.insert("x-api-key", "secret".parse().unwrap());
-        assert!(super::is_proxy_authorized(&config, &api_key));
+        assert!(super::is_proxy_authorized(&config.public_api_key, &api_key));
     }
 
     #[test]

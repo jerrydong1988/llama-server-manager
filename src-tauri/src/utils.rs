@@ -999,16 +999,72 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LLAMA_MULTIMODAL_TEST_ROOT"]
     fn multimodal_metadata_parses_external_corpus() {
+        struct GeneratedCorpus(std::path::PathBuf);
+
+        impl Drop for GeneratedCorpus {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let mut generated_root = None;
         let root = std::env::var("LLAMA_MULTIMODAL_TEST_ROOT")
-            .expect("LLAMA_MULTIMODAL_TEST_ROOT must point to a GGUF model directory");
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| {
+                let nonce = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos();
+                let dir = std::env::temp_dir().join(format!(
+                    "lsm-multimodal-corpus-smoke-test-{}-{nonce}",
+                    std::process::id(),
+                ));
+                std::fs::create_dir_all(&dir).unwrap();
+                let source = "https://huggingface.co/Qwen/Qwen3.6-35B-A3B";
+                write_test_gguf(
+                    &dir.join("Qwen3.6-35B-A3B-Q8_0.gguf"),
+                    &[
+                        (
+                            "general.architecture",
+                            TestMetadataValue::String("qwen35moe"),
+                        ),
+                        ("general.type", TestMetadataValue::String("model")),
+                        (
+                            "general.base_model.0.repo_url",
+                            TestMetadataValue::String(source),
+                        ),
+                        (
+                            "general.tags",
+                            TestMetadataValue::Strings(&["image-text-to-text"]),
+                        ),
+                    ],
+                );
+                write_test_gguf(
+                    &dir.join("mmproj-Qwen3.6-BF16.gguf"),
+                    &[
+                        ("general.architecture", TestMetadataValue::String("clip")),
+                        ("general.type", TestMetadataValue::String("mmproj")),
+                        (
+                            "general.base_model.0.repo_url",
+                            TestMetadataValue::String(source),
+                        ),
+                        ("clip.has_vision_encoder", TestMetadataValue::Bool(true)),
+                        (
+                            "clip.projector_type",
+                            TestMetadataValue::String("qwen3vl_merger"),
+                        ),
+                    ],
+                );
+                generated_root = Some(GeneratedCorpus(dir.clone()));
+                dir
+            });
         let mut parsed = 0_u32;
         let mut vision_models = 0_u32;
         let mut projectors = 0_u32;
         let mut vision_sources = std::collections::HashSet::new();
         let mut projector_sources = std::collections::HashSet::new();
-        for entry in walkdir::WalkDir::new(root)
+        for entry in walkdir::WalkDir::new(&root)
             .into_iter()
             .filter_map(Result::ok)
         {
@@ -1051,6 +1107,7 @@ mod tests {
                 .any(|source| projector_sources.contains(source)),
             "the external corpus contains no source-confirmed model/projector pair"
         );
+        drop(generated_root);
     }
 
     #[test]

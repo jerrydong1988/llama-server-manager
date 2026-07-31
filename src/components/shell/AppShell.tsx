@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ComponentType, type ReactNode } from 'react'
-import { AlertTriangle, Download, Languages, LoaderCircle, Moon, Search, Sun, Zap } from 'lucide-react'
+import { AlertTriangle, Download, Languages, LoaderCircle, Moon, RefreshCw, Search, Sun, Zap } from 'lucide-react'
 import appIconUrl from '../../../src-tauri/icons/128x128.png'
 import { Badge, Button, IconButton, joinClassNames } from '../ui'
 
@@ -30,6 +30,10 @@ export function AppShell({
   updateInfo,
   updateButtonTitle,
   onInstallUpdate,
+  updateChecking,
+  updateCheckError,
+  updateCheckButtonTitle,
+  onCheckUpdate,
   autoStartLabel,
   autoStartEnabled,
   onAutoStartChange,
@@ -58,6 +62,10 @@ export function AppShell({
   updateInfo?: { latest_version: string; progress: number | null; busy: boolean } | null
   updateButtonTitle: string
   onInstallUpdate: () => void
+  updateChecking: boolean
+  updateCheckError?: string | null
+  updateCheckButtonTitle: string
+  onCheckUpdate: () => void
   autoStartLabel: string
   autoStartEnabled: boolean
   onAutoStartChange: (enabled: boolean) => void
@@ -202,16 +210,28 @@ export function AppShell({
                 </div>
 
                 <div className="flex items-center gap-2">
+                  <IconButton
+                    label={updateCheckButtonTitle}
+                    title={updateCheckError ? `${updateCheckButtonTitle}: ${updateCheckError}` : updateCheckButtonTitle}
+                    onClick={onCheckUpdate}
+                    disabled={updateChecking || updateInfo?.busy}
+                    icon={<RefreshCw className={joinClassNames('h-4 w-4', updateChecking ? 'animate-spin' : '')} />}
+                    className={joinClassNames(
+                      'w-9',
+                      topControlClassName,
+                      updateCheckError ? 'border-amber-400 text-amber-700 dark:border-amber-500/50 dark:text-amber-200' : '',
+                    )}
+                  />
                   {updateInfo ? (
                     <button
                       type="button"
                       onClick={onInstallUpdate}
-                      disabled={updateInfo.busy}
+                      disabled={updateInfo.busy || updateChecking}
                       title={updateButtonTitle}
                       aria-label={updateButtonTitle}
                       className={joinClassNames(
                         'inline-flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/10 px-3 text-sm font-medium text-emerald-700 transition hover:bg-emerald-500/15 dark:text-emerald-200',
-                        updateInfo.busy ? 'cursor-wait opacity-80' : '',
+                        updateInfo.busy || updateChecking ? 'cursor-wait opacity-80' : '',
                         topControlClassName,
                       )}
                     >

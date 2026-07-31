@@ -9,13 +9,19 @@ import { Button, InsetSurface, MetricCard, SelectInput, Surface, TextInput } fro
 
 const ERROR_LOG_PATTERN = /error|fail|panic|fatal|\u9519\u8bef|\u5931\u8d25|\u5f02\u5e38|\u81f4\u547d/i
 const WARNING_LOG_PATTERN = /warn|warning|\u8b66\u544a|\u8b66\u793a/i
+const EMPTY_LOGS: never[] = []
 
 const LogsViewer = () => {
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string>('')
   const instances = useAppStore(state => state.instances)
-  const logs = useAppStore(state => state.logs)
+  const instanceLogs = useAppStore(state => (
+    selectedInstanceId ? (state.logs[selectedInstanceId] || EMPTY_LOGS) : EMPTY_LOGS
+  ))
+  const allLogs = useAppStore(state => (
+    selectedInstanceId ? EMPTY_LOGS : state.recentLogs
+  ))
   const clearLogs = useAppStore(state => state.clearLogs)
   const { t, lang } = useI18n()
-  const [selectedInstanceId, setSelectedInstanceId] = useState<string>('')
   const [autoScroll, setAutoScroll] = useState(true)
   const [filterText, setFilterText] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -23,11 +29,6 @@ const LogsViewer = () => {
   const lastLogTimestampRef = useRef(0)
   const labels = useMemo(() => getLogsLabels(lang), [lang])
 
-  const instanceLogs = selectedInstanceId ? (logs[selectedInstanceId] || []) : []
-  const allLogs = useMemo(
-    () => Object.values(logs).flat().sort((left, right) => left.timestamp - right.timestamp),
-    [logs],
-  )
   const sourceLogs = selectedInstanceId ? instanceLogs : allLogs
   const instanceNames = useMemo(
     () => new Map(instances.map(instance => [instance.id, instance.name])),
@@ -141,7 +142,7 @@ const LogsViewer = () => {
       if (!confirmed) {
         return
       }
-      for (const id of Object.keys(logs)) {
+      for (const id of Object.keys(useAppStore.getState().logs)) {
         clearLogs(id)
       }
     }

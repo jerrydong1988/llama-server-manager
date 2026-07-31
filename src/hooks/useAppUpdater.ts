@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BundleType, getBundleType } from '@tauri-apps/api/app'
 import { confirm, message } from '@tauri-apps/plugin-dialog'
 import { relaunch } from '@tauri-apps/plugin-process'
@@ -21,15 +21,26 @@ interface AppUpdaterCopy {
   updateFailedDescription: string
 }
 
+const UPDATE_RETRY_DELAYS_MS = [5_000, 30_000, 120_000]
+const UPDATE_PERIODIC_CHECK_MS = 6 * 60 * 60_000
+
 export function useAppUpdater(hasRunningInstances: boolean, copy: AppUpdaterCopy) {
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [checkError, setCheckError] = useState<string | null>(null)
   const updateRef = useRef<Update | null>(null)
+  const checkInFlightRef = useRef(false)
+  const installingRef = useRef(false)
+  const disposedRef = useRef(false)
 
-  useEffect(() => {
-    let disposed = false
-
-    getBundleType()
-      .then(bundleType => {
+  const checkForUpdate = useCallback(async () => {
+    if (checkInFlightRef.current || installingRef.current) return true
+    checkInFlightRef.current = true
+    setChecking(true)
+    setCheckError(null)
+    try {
+      const bundleType = await getBundleType()
+      const update = await (async () => {
         if (bundleType === BundleType.Deb || bundleType === BundleType.Rpm) return null
         const target = bundleType === BundleType.Nsis
           ? 'windows-x86_64-nsis'
@@ -37,71 +48,106 @@ export function useAppUpdater(hasRunningInstances: boolean, copy: AppUpdaterCopy
             ? 'windows-x86_64-msi'
             : undefined
         return check({ timeout: 15_000, target })
-      })
-      .then(update => {
-        if (disposed) {
-          if (update) void update.close().catch(() => {})
-          return
-        }
-        updateRef.current = update
-        if (update) {
-          setUpdateInfo({ latest_version: update.version, progress: null, busy: false })
-        }
-      })
-      .catch(() => {})
+      })()
+
+      if (disposedRef.current) {
+        if (update) void update.close().catch(() => {})
+        return true
+      }
+      const previous = updateRef.current
+      updateRef.current = update
+      if (previous && previous !== update) void previous.close().catch(() => {})
+      setUpdateInfo(update
+        ? { latest_version: update.version, progress: null, busy: false }
+        : null)
+      return true
+    } catch (error) {
+      if (!disposedRef.current) setCheckError(String(error))
+      return false
+    } finally {
+      checkInFlightRef.current = false
+      if (!disposedRef.current) setChecking(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    disposedRef.current = false
+    let retryTimer: number | undefined
+    const runWithRetry = async (attempt: number) => {
+      const succeeded = await checkForUpdate()
+      if (disposedRef.current || succeeded || attempt >= UPDATE_RETRY_DELAYS_MS.length) return
+      retryTimer = window.setTimeout(
+        () => void runWithRetry(attempt + 1),
+        UPDATE_RETRY_DELAYS_MS[attempt],
+      )
+    }
+
+    void runWithRetry(0)
+    const periodicTimer = window.setInterval(
+      () => void runWithRetry(0),
+      UPDATE_PERIODIC_CHECK_MS,
+    )
 
     return () => {
-      disposed = true
+      disposedRef.current = true
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      window.clearInterval(periodicTimer)
       const update = updateRef.current
       updateRef.current = null
       if (update) void update.close().catch(() => {})
     }
-  }, [])
+  }, [checkForUpdate])
 
   const installUpdate = async () => {
     const update = updateRef.current
-    if (!update || updateInfo?.busy) return
-
-    const proxyStatus = await invoke<{ running: boolean }>('get_proxy_status').catch(() => null)
-    const hasActiveWorkloads = hasRunningInstances || proxyStatus?.running === true
-    const accepted = await confirm(
-      hasActiveWorkloads
-        ? copy.updateActiveWorkloadsDescription
-        : copy.updateInstallDescription,
-      {
-        title: copy.updateReadyTitle,
-        kind: hasActiveWorkloads ? 'warning' : 'info',
-        okLabel: copy.updateInstallNow,
-        cancelLabel: copy.updateLater,
-      },
-    )
-    if (!accepted) return
-
-    let downloaded = 0
-    let contentLength = 0
-    const onDownloadEvent = (event: DownloadEvent) => {
-      if (event.event === 'Started') {
-        downloaded = 0
-        contentLength = event.data.contentLength ?? 0
-        setUpdateInfo(current => current
-          ? { ...current, progress: contentLength > 0 ? 0 : null, busy: true }
-          : current)
-      } else if (event.event === 'Progress') {
-        downloaded += event.data.chunkLength
-        const progress = contentLength > 0
-          ? Math.min(99, Math.round((downloaded / contentLength) * 100))
-          : null
-        setUpdateInfo(current => current ? { ...current, progress, busy: true } : current)
-      } else if (event.event === 'Finished') {
-        setUpdateInfo(current => current ? { ...current, progress: 100, busy: true } : current)
-      }
-    }
-
-    setUpdateInfo(current => current ? { ...current, progress: 0, busy: true } : current)
+    if (!update || updateInfo?.busy || installingRef.current || checkInFlightRef.current) return
+    installingRef.current = true
+    setUpdateInfo(current => current ? { ...current, busy: true } : current)
     try {
+      const proxyStatus = await invoke<{ running: boolean }>('get_proxy_status').catch(() => null)
+      const hasActiveWorkloads = hasRunningInstances || proxyStatus?.running === true
+      const accepted = await confirm(
+        hasActiveWorkloads
+          ? copy.updateActiveWorkloadsDescription
+          : copy.updateInstallDescription,
+        {
+          title: copy.updateReadyTitle,
+          kind: hasActiveWorkloads ? 'warning' : 'info',
+          okLabel: copy.updateInstallNow,
+          cancelLabel: copy.updateLater,
+        },
+      )
+      if (!accepted) {
+        installingRef.current = false
+        setUpdateInfo(current => current ? { ...current, progress: null, busy: false } : current)
+        return
+      }
+
+      let downloaded = 0
+      let contentLength = 0
+      const onDownloadEvent = (event: DownloadEvent) => {
+        if (event.event === 'Started') {
+          downloaded = 0
+          contentLength = event.data.contentLength ?? 0
+          setUpdateInfo(current => current
+            ? { ...current, progress: contentLength > 0 ? 0 : null, busy: true }
+            : current)
+        } else if (event.event === 'Progress') {
+          downloaded += event.data.chunkLength
+          const progress = contentLength > 0
+            ? Math.min(99, Math.round((downloaded / contentLength) * 100))
+            : null
+          setUpdateInfo(current => current ? { ...current, progress, busy: true } : current)
+        } else if (event.event === 'Finished') {
+          setUpdateInfo(current => current ? { ...current, progress: 100, busy: true } : current)
+        }
+      }
+
+      setUpdateInfo(current => current ? { ...current, progress: 0, busy: true } : current)
       await update.downloadAndInstall(onDownloadEvent, { timeout: 15 * 60_000 })
       await relaunch()
     } catch (error) {
+      installingRef.current = false
       setUpdateInfo(current => current ? { ...current, progress: null, busy: false } : current)
       await message(`${copy.updateFailedDescription}\n\n${String(error)}`, {
         title: copy.updateFailedTitle,
@@ -110,5 +156,5 @@ export function useAppUpdater(hasRunningInstances: boolean, copy: AppUpdaterCopy
     }
   }
 
-  return { updateInfo, installUpdate }
+  return { updateInfo, installUpdate, checkForUpdate, checking, checkError }
 }

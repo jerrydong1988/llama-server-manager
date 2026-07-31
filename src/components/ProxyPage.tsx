@@ -441,13 +441,19 @@ export default function ProxyPage() {
 
   useEffect(() => {
     let cancelled = false
+    let inFlight = false
     const refreshLiveState = async () => {
+      if (inFlight) return
+      inFlight = true
       const [statusResult, targetsResult, runtimeResult] = await Promise.allSettled([
         invoke<unknown>('get_proxy_status'),
         invoke<unknown[]>('list_proxy_targets'),
         invoke<unknown>('get_runtime_service_status'),
       ])
-      if (cancelled) return
+      if (cancelled) {
+        inFlight = false
+        return
+      }
       if (statusResult.status === 'fulfilled') {
         setStatus(normalizeStatus(statusResult.value, config))
         setStatusFresh(true)
@@ -466,7 +472,9 @@ export default function ProxyPage() {
       } else {
         setRuntimeFresh(false)
       }
+      inFlight = false
     }
+    void refreshLiveState()
     const timer = window.setInterval(() => {
       void refreshLiveState()
     }, 5000)

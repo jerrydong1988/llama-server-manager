@@ -882,7 +882,9 @@ pub async fn read_gguf_metadata(
     path: String,
 ) -> Result<crate::models::GgufMetadataSummary, String> {
     let canonical = crate::security::require_authorized_model_path(Path::new(&path))?;
-    utils::parse_gguf_metadata(&canonical)
+    tokio::task::spawn_blocking(move || utils::parse_gguf_metadata(&canonical))
+        .await
+        .map_err(|error| format!("GGUF metadata worker failed: {error}"))?
 }
 
 // Engine scanning.

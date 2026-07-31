@@ -5,8 +5,8 @@ use super::protocol::{
 };
 use super::transport::runtime_state_path;
 use crate::commands::proxy::{
-    normalize_and_validate_proxy_config, proxy_router_from_source, ProxyDataSource,
-    ProxyRuntimeSnapshot,
+    normalize_and_validate_proxy_config, proxy_request_resolution_from, proxy_router_from_source,
+    ProxyDataSource, ProxyRequestResolution, ProxyRuntimeSnapshot,
 };
 use crate::commands::server::{
     advance_health_state, collect_instance_monitor_sample, effective_api_key,
@@ -1357,6 +1357,15 @@ impl RuntimeSupervisor {
 }
 
 impl ProxyDataSource for RuntimeSupervisor {
+    fn proxy_auth_key(&self) -> String {
+        self.state
+            .lock()
+            .unwrap()
+            .proxy_config
+            .public_api_key
+            .clone()
+    }
+
     fn proxy_snapshot(&self) -> ProxyRuntimeSnapshot {
         let state = self.state.lock().unwrap();
         let proxy_status = self.proxy_status.lock().unwrap();
@@ -1367,6 +1376,21 @@ impl ProxyDataSource for RuntimeSupervisor {
             bound_addr: proxy_status.bound_addr.clone(),
             last_error: proxy_status.last_error.clone(),
         }
+    }
+
+    fn resolve_proxy_request(
+        &self,
+        requested_model: Option<&str>,
+        endpoint_workload: Option<ModelWorkload>,
+    ) -> ProxyRequestResolution {
+        let state = self.state.lock().unwrap();
+        proxy_request_resolution_from(
+            state.proxy_config.clone(),
+            &state.instances,
+            &state.running,
+            requested_model,
+            endpoint_workload,
+        )
     }
 }
 

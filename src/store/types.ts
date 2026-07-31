@@ -495,6 +495,7 @@ export interface AppState {
   engines: EngineInfo[]
   instances: Instance[]
   logs: Record<string, LogEntry[]>
+  recentLogs: LogEntry[]
   isLoading: boolean
   runtimeWarnings: string[]
   defaultEngineId: string | null
