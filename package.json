@@ -1,7 +1,7 @@
 {
   "name": "llama-server-manager",
   "private": true,
-  "version": "2.9.35",
+  "version": "2.9.36",
   "type": "module",
   "scripts": {
     "dev": "vite",
