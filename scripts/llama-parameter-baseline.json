@@ -7,12 +7,12 @@
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10199",
-  "upstreamCommit": "b4ca032ae3729516943884786de4ae39fba0bbca",
-  "upstreamMasterChecked": "1e22599522269c9d31f4ec3c4b0b75d01f07f9a7",
+  "upstreamRelease": "b10214",
+  "upstreamCommit": "db7d8b24b5197ca39435cf47b3c1ba039b53605b",
+  "upstreamMasterChecked": "876a4321163249c43ca4e986818fab5ab081f282",
   "releaseSnapshot": {
-    "ref": "b10199",
-    "commit": "b4ca032ae3729516943884786de4ae39fba0bbca",
+    "ref": "b10214",
+    "commit": "db7d8b24b5197ca39435cf47b3c1ba039b53605b",
     "parameterCount": 248,
     "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
     "parameters": [
@@ -2165,7 +2165,7 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "1e22599522269c9d31f4ec3c4b0b75d01f07f9a7",
+    "commit": "876a4321163249c43ca4e986818fab5ab081f282",
     "parameterCount": 248,
     "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
     "parameters": [
