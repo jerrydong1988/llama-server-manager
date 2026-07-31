@@ -44,6 +44,16 @@ Linux AppImage 的“开机自启动”会记录 AppImage 原始文件位置；�
 
 AppImage autostart records the original AppImage location; do not move or delete that file after enabling it. Tagged builds use formal Windows signing and macOS signing or notarization only when credentials are configured; otherwise the release publishes clearly labeled `-unsigned` Windows installers and `-adhoc` macOS DMGs. Regular CI artifacts are for testing only.
 
+### 应用更新 / Application Updates
+
+应用启动后会通过项目的 Cloudflare R2 更新服务检查新版本。发现更新时，顶部会显示版本按钮；点击后需要再次确认，应用才会下载经过 Tauri 签名校验的更新包、安装并重启。若实例或统一路由仍在运行，确认框会明确提示可能中断当前任务。
+
+The app checks the project's Cloudflare R2 update service at startup. When an update is available, a version button appears in the header. The signed package is downloaded, installed, and followed by a restart only after confirmation. If instances or routing are active, the confirmation warns that current work may be interrupted.
+
+`v2.9.35` 及更早版本没有内置 Tauri Updater，因此必须先手动安装第一个启用 Updater 的版本；之后才能使用应用内更新。Linux 自动更新仅支持 AppImage，DEB 用户继续从 GitHub Releases 手动安装。
+
+`v2.9.35` and earlier do not contain Tauri Updater, so the first updater-enabled release must be installed manually. In-app updates work for later releases. Linux in-app updates are available for AppImage; DEB users continue to install updates manually from GitHub Releases.
+
 ### 首次运行的五个步骤 / Five First-Run Steps
 
 1. 在“模型仓库”添加 GGUF 模型目录并完成扫描。

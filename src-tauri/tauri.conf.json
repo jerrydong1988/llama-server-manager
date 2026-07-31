@@ -12,11 +12,12 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; connect-src 'self' https://modelscope.cn https://www.modelscope.cn https://huggingface.co https://api.github.com; frame-src 'none'; object-src 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; font-src 'self' data:; connect-src 'self' https://modelscope.cn https://www.modelscope.cn https://huggingface.co; frame-src 'none'; object-src 'none'"
     }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": false,
     "targets": ["nsis", "msi", "dmg", "deb", "appimage"],
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
@@ -31,6 +32,17 @@
     "linux": {
       "deb": {},
       "appimage": {}
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFBNjI2Nzc2REVGNDJBRTgKUldUb0t2VGVkbWRpR3NpVC9PazJjUCsyVXVnL3htSFI2VHZBcHRDbm90YWRvTmgxcVlCYUJENEMK",
+      "endpoints": [
+        "https://updates.cnzone.net/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

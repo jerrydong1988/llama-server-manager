@@ -31,8 +31,8 @@ const workflow = fs.readFileSync(
 assert.match(workflow, /finalize-release:/, 'release workflow must have a final notes check')
 assert.match(
   workflow,
-  /needs:\s*\[build-windows, build-macos, build-linux, build-linux-arm64\]/,
-  'release notes must be finalized only after every package job succeeds',
+  /needs:\s*\[build-windows, build-macos, build-linux, build-linux-arm64, publish-updater\]/,
+  'release notes must be finalized only after every package job and updater publication succeeds',
 )
 assert.match(
   workflow,

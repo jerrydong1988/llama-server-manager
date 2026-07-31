@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ComponentType, type ReactNode } from 'react'
-import { AlertTriangle, ArrowUpRight, Languages, Moon, Search, Sun, Zap } from 'lucide-react'
+import { AlertTriangle, Download, Languages, LoaderCircle, Moon, Search, Sun, Zap } from 'lucide-react'
 import appIconUrl from '../../../src-tauri/icons/128x128.png'
 import { Badge, Button, IconButton, joinClassNames } from '../ui'
 
@@ -28,6 +28,8 @@ export function AppShell({
   pageDescription,
   statusChips,
   updateInfo,
+  updateButtonTitle,
+  onInstallUpdate,
   autoStartLabel,
   autoStartEnabled,
   onAutoStartChange,
@@ -53,7 +55,9 @@ export function AppShell({
   onNavigate: (id: string) => void
   pageDescription: string
   statusChips: ShellStatusChip[]
-  updateInfo?: { latest_version: string; url: string } | null
+  updateInfo?: { latest_version: string; progress: number | null; busy: boolean } | null
+  updateButtonTitle: string
+  onInstallUpdate: () => void
   autoStartLabel: string
   autoStartEnabled: boolean
   onAutoStartChange: (enabled: boolean) => void
@@ -199,18 +203,27 @@ export function AppShell({
 
                 <div className="flex items-center gap-2">
                   {updateInfo ? (
-                    <a
-                      href={updateInfo.url}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      type="button"
+                      onClick={onInstallUpdate}
+                      disabled={updateInfo.busy}
+                      title={updateButtonTitle}
+                      aria-label={updateButtonTitle}
                       className={joinClassNames(
                         'inline-flex items-center gap-2 border border-emerald-500/20 bg-emerald-500/10 px-3 text-sm font-medium text-emerald-700 transition hover:bg-emerald-500/15 dark:text-emerald-200',
+                        updateInfo.busy ? 'cursor-wait opacity-80' : '',
                         topControlClassName,
                       )}
                     >
-                      <span className="max-w-[150px] truncate">v{updateInfo.latest_version}</span>
-                      <ArrowUpRight className="h-4 w-4 shrink-0" />
-                    </a>
+                      <span className="max-w-[150px] truncate">
+                        {updateInfo.busy && updateInfo.progress != null
+                          ? `${updateInfo.progress}%`
+                          : `v${updateInfo.latest_version}`}
+                      </span>
+                      {updateInfo.busy
+                        ? <LoaderCircle className="h-4 w-4 shrink-0 animate-spin" />
+                        : <Download className="h-4 w-4 shrink-0" />}
+                    </button>
                   ) : null}
                   <IconButton
                     label={commandLabel}

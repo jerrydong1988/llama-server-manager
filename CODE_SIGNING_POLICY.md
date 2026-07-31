@@ -4,7 +4,7 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 ## Scope
 
-This policy applies to Windows installers published by the Llama Server Manager project. Signed artifacts must be built from the public source repository by the project's GitHub Actions workflow. Locally supplied or externally rebuilt binaries are not eligible for project signing.
+This policy applies to Windows installers and to cross-platform Tauri Updater artifacts published by the Llama Server Manager project. Signed artifacts must be built from the public source repository by the project's GitHub Actions workflow. Locally supplied or externally rebuilt binaries are not eligible for project signing.
 
 ## Roles
 
@@ -20,9 +20,12 @@ The project is currently maintained by one individual. GitHub and SignPath accou
 3. GitHub-hosted runners build the Windows MSI and NSIS installers from that tagged source.
 4. The workflow uploads the unsigned installers as a GitHub Actions artifact and submits that artifact to SignPath.
 5. The signing approver reviews and approves the request in SignPath.
-6. Only the signed artifact returned by SignPath is attached to the GitHub Release when SignPath is configured.
+6. The workflow selects the exact Windows artifact returned by SignPath, or the clearly labeled unsigned fallback, before generating its Tauri Updater signature.
+7. After all platform artifacts are fixed, a protected GitHub environment signs the exact updater payloads with the Tauri private key, uploads immutable versioned objects to Cloudflare R2, and publishes `latest.json` last.
 
 When SignPath is not configured, the workflow may publish installers with an `-unsigned` filename suffix. Those artifacts are not represented as SignPath-signed releases.
+
+Tauri Updater signatures are independent of Windows Authenticode, Apple Developer ID signing, and notarization. Every updater payload is cryptographically verified by the public key embedded in the application, including payloads whose operating-system signing uses an explicit fallback. The updater private key is restricted to the protected release environment and is not available to pull-request builds.
 
 ## Security Reports
 

@@ -565,6 +565,14 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     backgroundDetachFailureDescription: 'The main app remains open and continues managing current instances and routing. Review the error and retry.',
     backgroundDetachUnknownError: 'The background runtime returned no recognizable error details.',
     retryBackgroundDetach: 'Verify again and exit', cancelExit: 'Cancel exit',
+    updateAvailable: 'Install available update',
+    updateReadyTitle: 'Application update available',
+    updateInstallDescription: 'The signed update will be downloaded from the project update service. The application will restart after installation.',
+    updateActiveWorkloadsDescription: 'Instances or routing are still active. Installing the update will restart the application and may interrupt current work. Continue only when it is safe to stop those workloads.',
+    updateInstallNow: 'Download and install', updateLater: 'Later',
+    updateInstalling: 'Downloading and installing update',
+    updateFailedTitle: 'Update failed',
+    updateFailedDescription: 'The signed update could not be downloaded or installed. Your current version remains unchanged.',
   },
 
   commandCenter: {
