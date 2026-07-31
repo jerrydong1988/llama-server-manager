@@ -1,6 +1,6 @@
 use axum::{
     body::{Body, Bytes},
-    extract::{DefaultBodyLimit, Request, State},
+    extract::{rejection::BytesRejection, DefaultBodyLimit, Path, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -18,6 +18,10 @@ use tokio_util::codec::{FramedRead, LinesCodec};
 use tokio_util::io::StreamReader;
 
 use crate::commands::config::update_and_persist;
+use crate::commands::proxy_protocol::{
+    add_format_header, error_response, request_format, response_request_id, rewrite_json_response,
+    rewrite_sse_line, ProxyApiFormat,
+};
 use crate::commands::server::{effective_api_key, effective_server_scheme};
 use crate::commands::telemetry::{
     current_time_ms, record_proxy_request, record_vector_activity, ProxyRequestRecord,
@@ -42,6 +46,7 @@ const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_PROXY_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PROXY_JSON_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
+const MAX_ANTHROPIC_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VectorRequestMetadata {
@@ -247,6 +252,7 @@ struct ProxyTelemetryGuard {
     started_at: std::time::Instant,
     started_at_ms: i64,
     vector_metadata: Option<VectorRequestMetadata>,
+    api_format: ProxyApiFormat,
     recorded: bool,
 }
 
@@ -258,6 +264,7 @@ struct ProxyTelemetryRecord {
     started_at_ms: i64,
     duration_ms: f64,
     error_text: Option<String>,
+    api_format: ProxyApiFormat,
 }
 
 impl ProxyTelemetryGuard {
@@ -276,6 +283,7 @@ impl ProxyTelemetryGuard {
                 started_at_ms: self.started_at_ms,
                 duration_ms: self.started_at.elapsed().as_secs_f64() * 1000.0,
                 error_text,
+                api_format: self.api_format,
             },
             self.vector_metadata.as_ref(),
         );
@@ -338,6 +346,7 @@ fn record_proxy_telemetry(
             http_status: record.http_status,
             duration_ms: record.duration_ms,
             error_text: record.error_text.clone(),
+            api_format: record.api_format.as_str().to_string(),
         },
     )
 }
@@ -833,50 +842,6 @@ fn public_response_model(
     }
 }
 
-fn rewrite_json_response_model(body: Bytes, public_model_id: &str) -> Bytes {
-    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&body) else {
-        return body;
-    };
-    let Some(object) = value.as_object_mut() else {
-        return body;
-    };
-    if !object.contains_key("model") {
-        return body;
-    }
-    object.insert(
-        "model".to_string(),
-        serde_json::Value::String(public_model_id.to_string()),
-    );
-    serde_json::to_vec(&value).map(Bytes::from).unwrap_or(body)
-}
-
-fn rewrite_sse_response_line(line: &str, public_model_id: &str) -> String {
-    let Some(payload) = line.strip_prefix("data:") else {
-        return line.to_string();
-    };
-    let payload = payload.trim_start();
-    if payload.is_empty() || payload == "[DONE]" {
-        return line.to_string();
-    }
-    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(payload.as_bytes()) else {
-        return line.to_string();
-    };
-    let Some(object) = value.as_object_mut() else {
-        return line.to_string();
-    };
-    if !object.contains_key("model") {
-        return line.to_string();
-    }
-    object.insert(
-        "model".to_string(),
-        serde_json::Value::String(public_model_id.to_string()),
-    );
-    let Ok(rewritten) = serde_json::to_string(&value) else {
-        return line.to_string();
-    };
-    format!("data: {rewritten}")
-}
-
 fn is_proxy_authorized(public_api_key: &str, headers: &HeaderMap) -> bool {
     if public_api_key.trim().is_empty() {
         return true;
@@ -930,7 +895,11 @@ async fn proxy_auth_middleware(
 ) -> Response {
     let public_api_key = router_state.source.proxy_auth_key();
     if !authorize_and_strip_proxy_credentials(&public_api_key, request.headers_mut()) {
-        return plain_response(StatusCode::UNAUTHORIZED, "unauthorized");
+        let format = request_format(
+            request.uri().path(),
+            request.headers().contains_key("anthropic-version"),
+        );
+        return error_response(format, StatusCode::UNAUTHORIZED, "unauthorized");
     }
     next.run(request).await
 }
@@ -1017,10 +986,6 @@ fn should_forward_request_header(name: &str, connection_tokens: &HashSet<String>
     ) && !is_hop_by_hop_header(name, connection_tokens)
 }
 
-fn plain_response(status: StatusCode, message: &str) -> Response {
-    (status, Json(json!({ "error": message }))).into_response()
-}
-
 fn append_bounded_response_chunk(
     body: &mut Vec<u8>,
     chunk: &[u8],
@@ -1070,9 +1035,20 @@ async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde
             "models": "/v1/models",
             "chat_completions": "/v1/chat/completions",
             "completions": "/v1/completions",
-            "embeddings": "/v1/embeddings"
+            "embeddings": "/v1/embeddings",
+            "anthropic_messages": "/v1/messages",
+            "anthropic_count_tokens": "/v1/messages/count_tokens"
         },
-        "message": "Use OpenAI-compatible clients against the /v1 endpoints."
+        "api_formats": ["openai", "anthropic"],
+        "anthropic_compatibility": {
+            "transport": "llama.cpp native Messages API",
+            "minimum_supported_baseline": "b10199",
+            "request_limit_bytes": MAX_ANTHROPIC_REQUEST_BODY_BYTES,
+            "tools_require": "--jinja",
+            "supported": ["messages", "streaming", "usage", "tool_use", "tool_result", "image_blocks", "count_tokens", "model_discovery"],
+            "cloud_only_features": "passed through without manager-side emulation"
+        },
+        "message": "Use OpenAI or Anthropic-compatible clients against the /v1 endpoints."
     }))
 }
 
@@ -1082,14 +1058,46 @@ async fn proxy_models(State(router_state): State<ProxyRouterState>) -> Json<serd
     let targets = list_proxy_targets_from(&snapshot.instances, &snapshot.running);
     let ids = listed_proxy_model_ids(&config, &targets);
 
+    let first_id = ids.first().cloned();
+    let last_id = ids.last().cloned();
     Json(json!({
         "object": "list",
-        "data": ids.into_iter().map(|id| json!({
-            "id": id,
-            "object": "model",
-            "owned_by": "llama-server-manager"
-        })).collect::<Vec<_>>()
+        "data": ids.into_iter().map(proxy_model_descriptor).collect::<Vec<_>>(),
+        "first_id": first_id,
+        "last_id": last_id,
+        "has_more": false
     }))
+}
+
+fn proxy_model_descriptor(id: String) -> serde_json::Value {
+    json!({
+        "id": id,
+        "object": "model",
+        "owned_by": "llama-server-manager",
+        "type": "model",
+        "display_name": id,
+        "created_at": "1970-01-01T00:00:00Z"
+    })
+}
+
+async fn proxy_model(
+    State(router_state): State<ProxyRouterState>,
+    Path(model_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let snapshot = router_state.source.proxy_snapshot();
+    let targets = list_proxy_targets_from(&snapshot.instances, &snapshot.running);
+    let format = request_format("/v1/models", headers.contains_key("anthropic-version"));
+    if listed_proxy_model_ids(&snapshot.config, &targets)
+        .into_iter()
+        .any(|id| id == model_id)
+    {
+        let mut response = Json(proxy_model_descriptor(model_id)).into_response();
+        add_format_header(&mut response, format);
+        response
+    } else {
+        error_response(format, StatusCode::NOT_FOUND, "model not found")
+    }
 }
 
 fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<String> {
@@ -1130,16 +1138,39 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
     ids
 }
 
-async fn proxy_openai(
+async fn proxy_upstream(
     State(router_state): State<ProxyRouterState>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
+    let api_format = ProxyApiFormat::from_path(uri.path());
+    if api_format.is_anthropic() && method != Method::POST {
+        return error_response(
+            api_format,
+            StatusCode::METHOD_NOT_ALLOWED,
+            "Anthropic Messages endpoints require POST",
+        );
+    }
+    let body = match body {
+        Ok(body) => body,
+        Err(rejection) => {
+            let status = rejection.into_response().status();
+            let message = if status == StatusCode::PAYLOAD_TOO_LARGE {
+                format!(
+                    "request body exceeds the {} byte limit",
+                    MAX_ANTHROPIC_REQUEST_BODY_BYTES
+                )
+            } else {
+                "failed to read request body".to_string()
+            };
+            return error_response(api_format, status, &message);
+        }
+    };
     let requested_model = match requested_model_from_body(&body) {
         Ok(model) => model,
-        Err(error) => return plain_response(StatusCode::BAD_REQUEST, &error),
+        Err(error) => return error_response(api_format, StatusCode::BAD_REQUEST, &error),
     };
     let vector_metadata = vector_request_metadata(uri.path(), &body);
     let resolution = router_state.source.resolve_proxy_request(
@@ -1150,7 +1181,8 @@ async fn proxy_openai(
     let target = match resolution.target {
         Some(target) => target,
         None => {
-            return plain_response(
+            return error_response(
+                api_format,
                 StatusCode::BAD_GATEWAY,
                 "no running instance matches the requested model",
             )
@@ -1160,7 +1192,8 @@ async fn proxy_openai(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
         target.workload,
     ) {
-        return plain_response(
+        return error_response(
+            api_format,
             StatusCode::BAD_REQUEST,
             "selected target does not support the requested vector endpoint",
         );
@@ -1175,7 +1208,11 @@ async fn proxy_openai(
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
         Ok(method) => method,
         Err(err) => {
-            return plain_response(StatusCode::BAD_REQUEST, &format!("invalid method: {}", err))
+            return error_response(
+                api_format,
+                StatusCode::BAD_REQUEST,
+                &format!("invalid method: {}", err),
+            )
         }
     };
 
@@ -1208,10 +1245,12 @@ async fn proxy_openai(
                     started_at_ms,
                     duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
                     error_text: Some(err.to_string()),
+                    api_format,
                 },
                 vector_metadata.as_ref(),
             );
-            return plain_response(
+            return error_response(
+                api_format,
                 StatusCode::BAD_GATEWAY,
                 &format!("upstream request failed: {}", err),
             );
@@ -1229,10 +1268,15 @@ async fn proxy_openai(
         .to_ascii_lowercase();
     let response_is_sse = response_content_type.contains("text/event-stream");
     let response_is_json = response_content_type.contains("json");
+    let status_success = status.is_success();
     let response_connection_tokens = connection_header_tokens(response.headers());
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
-        if lower == "content-length" || is_hop_by_hop_header(&lower, &response_connection_tokens) {
+        if lower == "content-length"
+            || (api_format.is_anthropic() && !status_success && lower == "content-type")
+            || (api_format.is_anthropic() && !status_success && lower == "request-id")
+            || is_hop_by_hop_header(&lower, &response_connection_tokens)
+        {
             continue;
         }
         if let (Ok(header_name), Ok(header_value)) = (
@@ -1242,9 +1286,11 @@ async fn proxy_openai(
             builder = builder.header(header_name, header_value);
         }
     }
+    if api_format.is_anthropic() && !status_success {
+        builder = builder.header("content-type", "application/json");
+    }
 
     let http_status = status.as_u16();
-    let status_success = status.is_success();
     let mut telemetry_guard = ProxyTelemetryGuard {
         session_id: target.telemetry_session_id.clone(),
         task_id: proxy_task_id,
@@ -1254,15 +1300,17 @@ async fn proxy_openai(
         started_at,
         started_at_ms,
         vector_metadata,
+        api_format,
         recorded: false,
     };
-    if response_is_json && !response_is_sse {
+    if (response_is_json && !response_is_sse) || (api_format.is_anthropic() && !status_success) {
         let response_body =
             match collect_bounded_response_body(response, MAX_PROXY_JSON_RESPONSE_BYTES).await {
                 Ok(bytes) => bytes,
                 Err(error_text) => {
                     telemetry_guard.record_once(Some(error_text.clone()));
-                    return plain_response(
+                    return error_response(
+                        api_format,
                         StatusCode::BAD_GATEWAY,
                         &format!("proxy response error: {error_text}"),
                     );
@@ -1273,15 +1321,24 @@ async fn proxy_openai(
         } else {
             Some(format!("upstream returned {}", http_status))
         });
-        let response_body = rewrite_json_response_model(response_body, &response_model);
-        return builder
-            .body(Body::from(response_body))
-            .unwrap_or_else(|err| {
-                plain_response(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("proxy response error: {}", err),
-                )
-            });
+        let response_body =
+            rewrite_json_response(response_body, &response_model, api_format, status);
+        if api_format.is_anthropic() && !status_success {
+            if let Some(request_id) = response_request_id(&response_body) {
+                builder = builder.header("request-id", request_id);
+            }
+        }
+        return match builder.body(Body::from(response_body)) {
+            Ok(mut response) => {
+                add_format_header(&mut response, api_format);
+                response
+            }
+            Err(err) => error_response(
+                api_format,
+                StatusCode::BAD_GATEWAY,
+                &format!("proxy response error: {}", err),
+            ),
+        };
     }
 
     if response_is_sse {
@@ -1293,17 +1350,29 @@ async fn proxy_openai(
             LinesCodec::new_with_max_length(16 * 1024 * 1024),
         ));
         let stream = futures_util::stream::unfold(
-            (line_stream, false, telemetry_guard, response_model),
-            move |(mut line_stream, finalized, mut telemetry_guard, response_model)| async move {
+            (
+                line_stream,
+                false,
+                telemetry_guard,
+                response_model,
+                api_format,
+            ),
+            move |(mut line_stream, finalized, mut telemetry_guard, response_model, api_format)| async move {
                 if finalized {
                     return None;
                 }
                 match line_stream.as_mut().next().await {
                     Some(Ok(line)) => {
-                        let line = rewrite_sse_response_line(&line, &response_model);
+                        let line = rewrite_sse_line(&line, &response_model, api_format);
                         Some((
                             Ok::<_, std::io::Error>(Bytes::from(format!("{line}\n"))),
-                            (line_stream, false, telemetry_guard, response_model),
+                            (
+                                line_stream,
+                                false,
+                                telemetry_guard,
+                                response_model,
+                                api_format,
+                            ),
                         ))
                     }
                     Some(Err(err)) => {
@@ -1311,7 +1380,13 @@ async fn proxy_openai(
                         telemetry_guard.record_once(Some(error_text.clone()));
                         Some((
                             Err(std::io::Error::other(error_text)),
-                            (line_stream, true, telemetry_guard, response_model),
+                            (
+                                line_stream,
+                                true,
+                                telemetry_guard,
+                                response_model,
+                                api_format,
+                            ),
                         ))
                     }
                     None => {
@@ -1325,14 +1400,17 @@ async fn proxy_openai(
                 }
             },
         );
-        return builder
-            .body(Body::from_stream(stream))
-            .unwrap_or_else(|err| {
-                plain_response(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("proxy response error: {}", err),
-                )
-            });
+        return match builder.body(Body::from_stream(stream)) {
+            Ok(mut response) => {
+                add_format_header(&mut response, api_format);
+                response
+            }
+            Err(err) => error_response(
+                api_format,
+                StatusCode::BAD_GATEWAY,
+                &format!("proxy response error: {}", err),
+            ),
+        };
     }
 
     let upstream_stream = Box::pin(response.bytes_stream());
@@ -1363,19 +1441,23 @@ async fn proxy_openai(
             }
         },
     );
-    builder
-        .body(Body::from_stream(stream))
-        .unwrap_or_else(|err| {
-            plain_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("proxy response error: {}", err),
-            )
-        })
+    match builder.body(Body::from_stream(stream)) {
+        Ok(mut response) => {
+            add_format_header(&mut response, api_format);
+            response
+        }
+        Err(err) => error_response(
+            api_format,
+            StatusCode::BAD_GATEWAY,
+            &format!("proxy response error: {}", err),
+        ),
+    }
 }
 
-fn proxy_router_from_source_with_limit(
+fn proxy_router_from_source_with_limits(
     source: Arc<dyn ProxyDataSource>,
     request_body_limit: usize,
+    anthropic_request_body_limit: usize,
 ) -> Router {
     let router_state = ProxyRouterState { source };
     let auth_layer = middleware::from_fn_with_state(router_state.clone(), proxy_auth_middleware);
@@ -1383,22 +1465,35 @@ fn proxy_router_from_source_with_limit(
         .route("/", get(proxy_index))
         .route("/health", get(proxy_health))
         .route("/v1/models", get(proxy_models))
-        .route("/v1/chat/completions", any(proxy_openai))
-        .route("/v1/completions", any(proxy_openai))
-        .route("/embedding", any(proxy_openai))
-        .route("/embeddings", any(proxy_openai))
-        .route("/v1/embeddings", any(proxy_openai))
-        .route("/rerank", any(proxy_openai))
-        .route("/reranking", any(proxy_openai))
-        .route("/v1/rerank", any(proxy_openai))
-        .route("/v1/reranking", any(proxy_openai))
+        .route("/v1/models/:model_id", get(proxy_model))
+        .route("/v1/chat/completions", any(proxy_upstream))
+        .route("/v1/completions", any(proxy_upstream))
+        .route(
+            "/v1/messages",
+            any(proxy_upstream).layer(DefaultBodyLimit::max(anthropic_request_body_limit)),
+        )
+        .route(
+            "/v1/messages/count_tokens",
+            any(proxy_upstream).layer(DefaultBodyLimit::max(anthropic_request_body_limit)),
+        )
+        .route("/embedding", any(proxy_upstream))
+        .route("/embeddings", any(proxy_upstream))
+        .route("/v1/embeddings", any(proxy_upstream))
+        .route("/rerank", any(proxy_upstream))
+        .route("/reranking", any(proxy_upstream))
+        .route("/v1/rerank", any(proxy_upstream))
+        .route("/v1/reranking", any(proxy_upstream))
         .route_layer(auth_layer)
         .layer(DefaultBodyLimit::max(request_body_limit))
         .with_state(router_state)
 }
 
 pub(crate) fn proxy_router_from_source(source: Arc<dyn ProxyDataSource>) -> Router {
-    proxy_router_from_source_with_limit(source, MAX_PROXY_REQUEST_BODY_BYTES)
+    proxy_router_from_source_with_limits(
+        source,
+        MAX_PROXY_REQUEST_BODY_BYTES,
+        MAX_ANTHROPIC_REQUEST_BODY_BYTES,
+    )
 }
 
 fn proxy_router(app: tauri::AppHandle) -> Router {
@@ -1849,6 +1944,7 @@ mod tests {
     use bytes::Bytes;
     use serde_json::json;
     use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
@@ -1904,6 +2000,135 @@ mod tests {
         .into_response()
     }
 
+    #[derive(Debug, Clone)]
+    struct CapturedAnthropicRequest {
+        path: String,
+        body: serde_json::Value,
+        anthropic_version: Option<String>,
+        anthropic_beta: Option<String>,
+        authorization: Option<String>,
+        x_api_key: Option<String>,
+    }
+
+    async fn mock_anthropic_upstream(
+        State(received): State<Arc<Mutex<Vec<CapturedAnthropicRequest>>>>,
+        uri: Uri,
+        headers: HeaderMap,
+        Json(body): Json<serde_json::Value>,
+    ) -> Response {
+        let header = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        };
+        received.lock().unwrap().push(CapturedAnthropicRequest {
+            path: uri.path().to_string(),
+            body: body.clone(),
+            anthropic_version: header("anthropic-version"),
+            anthropic_beta: header("anthropic-beta"),
+            authorization: header("authorization"),
+            x_api_key: header("x-api-key"),
+        });
+
+        if body
+            .get("metadata")
+            .and_then(|metadata| metadata.get("user_id"))
+            .and_then(serde_json::Value::as_str)
+            == Some("upstream-error")
+        {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": { "message": "Messages API unavailable" } })),
+            )
+                .into_response();
+        }
+        if uri.path() == "/v1/messages/count_tokens" {
+            return Json(json!({ "input_tokens": 23 })).into_response();
+        }
+        if body.get("stream").and_then(serde_json::Value::as_bool) == Some(true) {
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(Body::from(concat!(
+                    "event: message_start\n",
+                    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_local\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"upstream-private\",\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":23,\"output_tokens\":0}}}\n\n",
+                    "event: content_block_start\n",
+                    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_local\",\"name\":\"get_weather\",\"input\":{}}}\n\n",
+                    "event: content_block_delta\n",
+                    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\\\"Shanghai\\\"}\"}}\n\n",
+                    "event: content_block_stop\n",
+                    "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+                    "event: message_delta\n",
+                    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":7}}\n\n",
+                    "event: message_stop\n",
+                    "data: {\"type\":\"message_stop\"}\n\n"
+                )))
+                .unwrap();
+        }
+        Json(json!({
+            "id": "msg_local",
+            "type": "message",
+            "role": "assistant",
+            "model": "upstream-private",
+            "content": [{
+                "type": "tool_use",
+                "id": "toolu_local",
+                "name": "get_weather",
+                "input": { "city": "Shanghai" }
+            }],
+            "stop_reason": "tool_use",
+            "stop_sequence": null,
+            "usage": { "input_tokens": 23, "output_tokens": 7 }
+        }))
+        .into_response()
+    }
+
+    fn anthropic_proxy_snapshot(
+        upstream_address: std::net::SocketAddr,
+    ) -> super::ProxyRuntimeSnapshot {
+        let instance_id = "anthropic-instance".to_string();
+        let instance = InstanceConfig {
+            id: instance_id.clone(),
+            name: "Private Anthropic target".into(),
+            model_path: r"C:\private\anthropic.gguf".into(),
+            alias: "upstream-private".into(),
+            api_key: "upstream-secret".into(),
+            host: upstream_address.ip().to_string(),
+            port: upstream_address.port(),
+            ..InstanceConfig::default()
+        };
+        super::ProxyRuntimeSnapshot {
+            config: ProxyConfig {
+                enabled: true,
+                public_api_key: "public-sdk-key".into(),
+                default_instance_id: instance_id.clone(),
+                routes: vec![ProxyRoute {
+                    model_alias: "local-claude".into(),
+                    target_instance_id: instance_id.clone(),
+                    ..ProxyRoute::default()
+                }],
+                ..ProxyConfig::default()
+            },
+            instances: HashMap::from([(instance_id.clone(), instance.clone())]),
+            running: HashMap::from([(
+                instance_id.clone(),
+                RunningInstance {
+                    instance_id,
+                    pid: std::process::id(),
+                    port: upstream_address.port(),
+                    host: upstream_address.ip().to_string(),
+                    start_time: 0,
+                    executable_path: String::new(),
+                    telemetry_session_id: None,
+                    workload: "inference".into(),
+                    launch_config: Some(instance),
+                },
+            )]),
+            bound_addr: String::new(),
+            last_error: None,
+        }
+    }
+
     #[test]
     fn proxy_listener_defaults_to_loopback_and_rejects_cleartext_public_bindings() {
         let instances = HashMap::new();
@@ -1954,9 +2179,10 @@ mod tests {
             bound_addr: String::new(),
             last_error: None,
         };
-        let router = super::proxy_router_from_source_with_limit(
+        let router = super::proxy_router_from_source_with_limits(
             Arc::new(TestProxySource { snapshot }),
             1_024,
+            super::MAX_ANTHROPIC_REQUEST_BODY_BYTES,
         );
         let (address, task) = spawn_test_router(router).await;
         let client = reqwest::Client::new();
@@ -1992,6 +2218,38 @@ mod tests {
             .unwrap()
             .status();
         assert_eq!(rejected_status, StatusCode::PAYLOAD_TOO_LARGE);
+
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn anthropic_request_limit_returns_the_anthropic_413_shape() {
+        let snapshot = super::ProxyRuntimeSnapshot {
+            config: ProxyConfig::default(),
+            instances: HashMap::new(),
+            running: HashMap::new(),
+            bound_addr: String::new(),
+            last_error: None,
+        };
+        let router = super::proxy_router_from_source_with_limits(
+            Arc::new(TestProxySource { snapshot }),
+            super::MAX_PROXY_REQUEST_BODY_BYTES,
+            64,
+        );
+        let (address, task) = spawn_test_router(router).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{address}/v1/messages"))
+            .header("content-type", "application/json")
+            .body("x".repeat(65))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert!(response.headers().contains_key("request-id"));
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "request_too_large");
 
         task.abort();
     }
@@ -2098,19 +2356,25 @@ mod tests {
         let response = Bytes::from_static(
             br#"{"id":"chatcmpl-test","model":"C:\\private\\model.gguf","choices":[]}"#,
         );
-        let rewritten = super::rewrite_json_response_model(response, "route-model");
+        let rewritten = super::rewrite_json_response(
+            response,
+            "route-model",
+            super::ProxyApiFormat::OpenAi,
+            StatusCode::OK,
+        );
         let rewritten_json: serde_json::Value = serde_json::from_slice(&rewritten).unwrap();
         assert_eq!(rewritten_json["model"], "route-model");
         assert!(!String::from_utf8_lossy(&rewritten).contains("private"));
 
-        let sse = super::rewrite_sse_response_line(
+        let sse = super::rewrite_sse_line(
             r#"data: {"id":"chatcmpl-test","model":"C:\\private\\model.gguf","choices":[]}"#,
             "route-model",
+            super::ProxyApiFormat::OpenAi,
         );
         assert!(sse.contains(r#""model":"route-model""#));
         assert!(!sse.contains("private"));
         assert_eq!(
-            super::rewrite_sse_response_line("data: [DONE]", "route-model"),
+            super::rewrite_sse_line("data: [DONE]", "route-model", super::ProxyApiFormat::OpenAi,),
             "data: [DONE]"
         );
     }
@@ -2677,6 +2941,158 @@ mod tests {
         upstream_task.abort();
     }
 
+    #[tokio::test]
+    async fn official_anthropic_sdk_exercises_messages_tools_images_streaming_and_models() {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedAnthropicRequest>::new()));
+        let upstream_router = Router::new()
+            .route("/v1/messages", post(mock_anthropic_upstream))
+            .route("/v1/messages/count_tokens", post(mock_anthropic_upstream))
+            .with_state(captured.clone());
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+        let proxy_router = super::proxy_router_from_source(Arc::new(TestProxySource {
+            snapshot: anthropic_proxy_snapshot(upstream_address),
+        }));
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+
+        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("scripts")
+            .join("test-anthropic-sdk-client.mjs");
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            tokio::process::Command::new("node")
+                .arg(script)
+                .arg(format!("http://{proxy_address}"))
+                .arg("local-claude")
+                .output(),
+        )
+        .await
+        .expect("Anthropic SDK smoke test timed out")
+        .expect("Node.js must be available for the official Anthropic SDK smoke test");
+        assert!(
+            output.status.success(),
+            "Anthropic SDK smoke failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let sdk_result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(sdk_result["model"], "local-claude");
+        assert_eq!(sdk_result["inputTokens"], 23);
+        assert_eq!(sdk_result["streamEvents"], 6);
+
+        let captured = captured.lock().unwrap().clone();
+        assert_eq!(captured.len(), 4);
+        assert!(captured
+            .iter()
+            .all(|request| request.body["model"] == "upstream-private"));
+        assert!(captured
+            .iter()
+            .all(|request| request.anthropic_version.as_deref() == Some("2023-06-01")));
+        assert!(captured.iter().all(|request| {
+            request.anthropic_beta.as_deref() == Some("prompt-caching-2024-07-31")
+        }));
+        assert!(captured
+            .iter()
+            .all(|request| request.authorization.as_deref() == Some("Bearer upstream-secret")));
+        assert!(captured.iter().all(|request| request.x_api_key.is_none()));
+        assert!(captured
+            .iter()
+            .any(|request| request.path == "/v1/messages/count_tokens"));
+        assert!(captured.iter().any(|request| {
+            request.body["messages"].as_array().is_some_and(|messages| {
+                messages.iter().any(|message| {
+                    message["content"].as_array().is_some_and(|content| {
+                        content.iter().any(|block| block["type"] == "tool_result")
+                    })
+                })
+            })
+        }));
+        assert!(captured.iter().any(|request| {
+            request.body["messages"][0]["content"]
+                .as_array()
+                .is_some_and(|content| content.iter().any(|block| block["type"] == "image"))
+        }));
+        assert!(captured
+            .iter()
+            .any(|request| { request.body["system"][0]["cache_control"]["type"] == "ephemeral" }));
+        assert!(captured
+            .iter()
+            .any(|request| request.body["thinking"]["budget_tokens"] == 1024));
+
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn anthropic_auth_and_upstream_failures_use_anthropic_errors() {
+        let captured = Arc::new(Mutex::new(Vec::<CapturedAnthropicRequest>::new()));
+        let upstream_router = Router::new()
+            .route("/v1/messages", post(mock_anthropic_upstream))
+            .with_state(captured);
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+        let proxy_router = super::proxy_router_from_source(Arc::new(TestProxySource {
+            snapshot: anthropic_proxy_snapshot(upstream_address),
+        }));
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+        let client = reqwest::Client::new();
+
+        let unauthorized = client
+            .post(format!("http://{proxy_address}/v1/messages"))
+            .json(&json!({
+                "model": "local-claude",
+                "max_tokens": 8,
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            unauthorized
+                .headers()
+                .get("x-llama-server-manager-api-format")
+                .and_then(|value| value.to_str().ok()),
+            Some("anthropic")
+        );
+        assert!(unauthorized.headers().contains_key("request-id"));
+        let unauthorized_body: serde_json::Value = unauthorized.json().await.unwrap();
+        assert_eq!(unauthorized_body["type"], "error");
+        assert_eq!(unauthorized_body["error"]["type"], "authentication_error");
+
+        let upstream_error = client
+            .post(format!("http://{proxy_address}/v1/messages"))
+            .header("x-api-key", "public-sdk-key")
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model": "local-claude",
+                "max_tokens": 8,
+                "metadata": { "user_id": "upstream-error" },
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(upstream_error.status(), StatusCode::NOT_FOUND);
+        assert!(upstream_error.headers().contains_key("request-id"));
+        assert_eq!(
+            upstream_error
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let upstream_error_body: serde_json::Value = upstream_error.json().await.unwrap();
+        assert_eq!(upstream_error_body["type"], "error");
+        assert_eq!(upstream_error_body["error"]["type"], "not_found_error");
+        assert_eq!(
+            upstream_error_body["error"]["message"],
+            "Messages API unavailable"
+        );
+
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
     #[test]
     fn public_credentials_and_connection_headers_are_never_forwarded() {
         let mut headers = HeaderMap::new();
@@ -2829,7 +3245,14 @@ mod tests {
         };
         let headers = HeaderMap::new();
 
-        for path in ["/", "/health", "/v1/models", "/v1/chat/completions"] {
+        for path in [
+            "/",
+            "/health",
+            "/v1/models",
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/messages/count_tokens",
+        ] {
             assert!(!super::proxy_request_is_authorized(&config, path, &headers));
         }
     }

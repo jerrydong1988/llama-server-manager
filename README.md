@@ -54,9 +54,9 @@ Choose model, engine, and port per instance, then tune about 159 llama.cpp optio
 
 ### 实例路由 / Instance Routing
 
-把多个运行实例聚合为统一 OpenAI 兼容入口，按模型名或别名分发，并支持鉴权与跨平台的当前用户级独立后台运行。
+把多个运行实例聚合为统一 OpenAI / Anthropic 兼容入口，按模型名或别名分发，并支持鉴权与跨平台的当前用户级独立后台运行。Anthropic 路径原生支持 Messages、流式事件、工具与图片内容块、Token Count 和 Claude Code 模型发现。
 
-Expose running instances through one OpenAI-compatible endpoint with aliases, authentication, and a cross-platform per-user background runtime.
+Expose running instances through one OpenAI / Anthropic-compatible endpoint with aliases, authentication, and a cross-platform per-user background runtime. The Anthropic routes support Messages, streaming events, tool and image blocks, token counting, and Claude Code model discovery.
 
 ![实例路由 / Instance Routing](public/docs/guide/08-instance-routing.png)
 
@@ -154,6 +154,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)
 - [llama.cpp 参数兼容机制 / llama.cpp Compatibility Policy](docs/LLAMA_CPP_COMPATIBILITY.md)
+- [Anthropic API 与 Claude Code 配置 / Anthropic API and Claude Code](docs/ANTHROPIC_API_COMPATIBILITY.md)
 - 应用内左侧“使用说明”可离线查看同一内容，并启动交互式引导。
 - 提交问题前请附版本、平台、后端类型和已脱敏的服务器日志；不要上传 API Key、私有路径或 SSH 凭据。
 

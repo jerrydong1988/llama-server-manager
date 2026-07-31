@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
@@ -86,6 +86,7 @@ pub struct InferenceRequestSummary {
     pub slot_id: u32,
     pub completed_at: i64,
     pub source: String,
+    pub api_format: Option<String>,
     pub model: Option<String>,
     pub target_instance_id: Option<String>,
     pub http_status: Option<u16>,
@@ -216,6 +217,7 @@ pub struct ProxyRequestRecord {
     pub http_status: Option<u16>,
     pub duration_ms: f64,
     pub error_text: Option<String>,
+    pub api_format: String,
 }
 
 #[derive(Debug, Clone)]
@@ -396,6 +398,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             slot_id INTEGER NOT NULL,
             completed_at INTEGER NOT NULL,
             source TEXT NOT NULL DEFAULT 'log',
+            api_format TEXT,
             model TEXT,
             target_instance_id TEXT,
             http_status INTEGER,
@@ -499,6 +502,7 @@ fn migrate_inference_request_columns(conn: &Connection) -> Result<(), String> {
 
     let additions = [
         ("source", "TEXT NOT NULL DEFAULT 'log'"),
+        ("api_format", "TEXT"),
         ("model", "TEXT"),
         ("target_instance_id", "TEXT"),
         ("http_status", "INTEGER"),
@@ -1115,12 +1119,13 @@ fn insert_proxy_request(
 ) -> Result<(), String> {
     conn.execute(
         "INSERT INTO inference_requests
-            (session_id, task_id, slot_id, completed_at, source, model, target_instance_id,
-             http_status, error_text, total_time_ms)
-         VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6, ?7, ?8)
+            (session_id, task_id, slot_id, completed_at, source, api_format, model,
+             target_instance_id, http_status, error_text, total_time_ms)
+         VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(session_id, task_id) DO UPDATE SET
              completed_at = excluded.completed_at,
              source = excluded.source,
+             api_format = excluded.api_format,
              model = excluded.model,
              target_instance_id = excluded.target_instance_id,
              http_status = excluded.http_status,
@@ -1130,6 +1135,7 @@ fn insert_proxy_request(
             session_id,
             record.task_id,
             completed_at,
+            record.api_format,
             record.model.as_deref(),
             record.target_instance_id,
             record.http_status.map(|v| v as i64),
@@ -2775,7 +2781,7 @@ fn inference_requests_for_session(
 ) -> Result<Vec<InferenceRequestSummary>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT session_id, task_id, slot_id, completed_at, source, model, target_instance_id, http_status, error_text,
+            "SELECT session_id, task_id, slot_id, completed_at, source, api_format, model, target_instance_id, http_status, error_text,
                     prompt_tokens, prompt_time_ms, prompt_tps,
                     generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
                     spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms
@@ -2795,22 +2801,23 @@ fn inference_requests_for_session(
                 source: row
                     .get::<_, Option<String>>(4)?
                     .unwrap_or_else(|| "log".into()),
-                model: row.get(5)?,
-                target_instance_id: row.get(6)?,
-                http_status: row.get::<_, Option<i64>>(7)?.map(|v| v as u16),
-                error_text: row.get(8)?,
-                prompt_tokens: row.get::<_, Option<i64>>(9)?.map(|v| v as u64),
-                prompt_time_ms: row.get(10)?,
-                prompt_tps: row.get(11)?,
-                generated_tokens: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-                generation_time_ms: row.get(13)?,
-                generation_tps: row.get(14)?,
-                total_tokens: row.get::<_, Option<i64>>(15)?.map(|v| v as u64),
-                total_time_ms: row.get(16)?,
-                spec_accept_rate: row.get(17)?,
-                spec_accepted: row.get::<_, Option<i64>>(18)?.map(|v| v as u64),
-                spec_generated: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
-                spec_gen_time_ms: row.get(20)?,
+                api_format: row.get(5)?,
+                model: row.get(6)?,
+                target_instance_id: row.get(7)?,
+                http_status: row.get::<_, Option<i64>>(8)?.map(|v| v as u16),
+                error_text: row.get(9)?,
+                prompt_tokens: row.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+                prompt_time_ms: row.get(11)?,
+                prompt_tps: row.get(12)?,
+                generated_tokens: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
+                generation_time_ms: row.get(14)?,
+                generation_tps: row.get(15)?,
+                total_tokens: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                total_time_ms: row.get(17)?,
+                spec_accept_rate: row.get(18)?,
+                spec_accepted: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+                spec_generated: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
+                spec_gen_time_ms: row.get(21)?,
             })
         })
         .map_err(|e| format!("无法查询推理请求: {}", e))?;
@@ -3942,6 +3949,9 @@ mod tests {
             .iter()
             .any(|column| column == "max_tokens_observed"));
         assert!(sample_columns.iter().any(|column| column == "gpu_name"));
+        assert!(column_names(&conn, "inference_requests")
+            .iter()
+            .any(|column| column == "api_format"));
         for index_name in [
             "idx_vector_activity_session_completed",
             "idx_vector_activity_session_source_completed",
@@ -4002,6 +4012,49 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn proxy_request_protocol_is_persisted_and_exposed() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        insert_run_session(
+            &conn,
+            &RunSessionStart {
+                id: "anthropic-session",
+                instance_id: "anthropic-instance",
+                instance_name: "Anthropic",
+                model_path: "model.gguf",
+                engine_id: "engine",
+                backend: "cpu",
+                config_hash: "hash",
+                command_line: "llama-server --jinja",
+                workload: ModelWorkload::Inference,
+                started_at: 1,
+            },
+        )
+        .unwrap();
+        insert_proxy_request(
+            &conn,
+            "anthropic-session",
+            2,
+            &ProxyRequestRecord {
+                task_id: 42,
+                model: Some("local-claude".into()),
+                target_instance_id: "anthropic-instance".into(),
+                http_status: Some(200),
+                duration_ms: 12.5,
+                error_text: None,
+                api_format: "anthropic".into(),
+            },
+        )
+        .unwrap();
+
+        let requests = inference_requests_for_session(&conn, "anthropic-session", 10).unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].source, "proxy");
+        assert_eq!(requests[0].api_format.as_deref(), Some("anthropic"));
+        assert_eq!(requests[0].model.as_deref(), Some("local-claude"));
     }
 
     #[test]
