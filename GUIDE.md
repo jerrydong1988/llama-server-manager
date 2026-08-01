@@ -6,6 +6,10 @@
 
 This guide follows the real workflow from models and engines to instances, routing, and monitoring. The in-app Guide ships the same content and images for offline use.
 
+在线最新版本请访问[文档主站](https://docs.cnzone.net/docs)，正式安装包请从[下载中心](https://download.cnzone.net/)获取。
+
+Visit the [documentation site](https://docs.cnzone.net/docs) for the latest online version and the [Download Center](https://download.cnzone.net/) for official installers.
+
 ---
 
 ## 目录 / Table of Contents
@@ -30,12 +34,12 @@ This guide follows the real workflow from models and engines to instances, routi
 
 ### 安装 / Install
 
-1. 从 [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) 下载对应平台安装包。
+1. 从[下载中心](https://download.cnzone.net/)下载对应平台安装包；无法访问时可使用 [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) 备用源。
 2. Windows 使用 MSI 或 NSIS 安装包；macOS 使用 DMG；Linux 使用 DEB 或 AppImage。
 3. 准备与本机后端匹配的 `llama-server`，例如 CUDA、ROCm、Vulkan 或 CPU 构建。
 4. 准备本地 GGUF 模型，或稍后从 ModelScope / HuggingFace 下载。
 
-1. Download the package for your platform from [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest).
+1. Download the package for your platform from the [Download Center](https://download.cnzone.net/), with [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) available as an alternative source.
 2. Use MSI or NSIS on Windows, DMG on macOS, and DEB or AppImage on Linux.
 3. Prepare a `llama-server` build for your backend, such as CUDA, ROCm, Vulkan, or CPU.
 4. Prepare a local GGUF model, or download one later from ModelScope or HuggingFace.
@@ -50,9 +54,9 @@ AppImage autostart records the original AppImage location; do not move or delete
 
 The app checks the project's Cloudflare R2 update service at startup. When an update is available, a version button appears in the header. The signed package is downloaded, installed, and followed by a restart only after confirmation. If instances or routing are active, the confirmation warns that current work may be interrupted.
 
-`v2.9.35` 及更早版本没有内置 Tauri Updater，因此必须先手动安装第一个启用 Updater 的版本；之后才能使用应用内更新。Linux 自动更新仅支持 AppImage，DEB 用户继续从 GitHub Releases 手动安装。
+`v2.9.35` 及更早版本没有内置 Tauri Updater，因此必须先手动安装 `v2.9.36` 或更新版本；之后才能使用应用内更新。Linux 自动更新仅支持 AppImage，DEB 用户继续从下载中心或 GitHub Releases 手动安装。
 
-`v2.9.35` and earlier do not contain Tauri Updater, so the first updater-enabled release must be installed manually. In-app updates work for later releases. Linux in-app updates are available for AppImage; DEB users continue to install updates manually from GitHub Releases.
+`v2.9.35` and earlier do not contain Tauri Updater, so `v2.9.36` or later must first be installed manually. In-app updates work for later releases. Linux in-app updates are available for AppImage; DEB users continue to install updates manually from the Download Center or GitHub Releases.
 
 ### 首次运行的五个步骤 / Five First-Run Steps
 
@@ -266,9 +270,9 @@ When startup fails, inspect the instance state and server logs instead of repeat
 
 ## 参数配置 / Parameter Configuration
 
-参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等约 159 个 llama.cpp 参数。
+参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版基线跟踪 248 个参数条目。
 
-Configuration is stored per instance and covers about 159 llama.cpp options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing.
+Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream baseline tracks 248 parameter entries.
 
 ![参数搜索、预设、分组和校验提示 / Configuration search, presets, groups, and validation](public/docs/guide/06-configuration.png)
 
@@ -338,9 +342,9 @@ Worker addresses support IPv4, hostnames, and IPv6. When entering an IPv6 addres
 
 ## 实例路由 / Instance Routing
 
-实例路由提供一个统一的 OpenAI 兼容入口，根据请求中的模型名或别名，把流量转发到正在运行的 llama-server 实例。默认监听 `127.0.0.1:11435`。
+实例路由在同一监听地址提供 OpenAI 与 Anthropic 两种 API 格式，根据请求中的模型名或别名，把流量转发到正在运行的 `llama-server` 实例。默认监听 `127.0.0.1:11435`。
 
-Instance Routing exposes one OpenAI-compatible endpoint and forwards requests to running llama-server instances by requested model name or alias. The default listener is `127.0.0.1:11435`.
+Instance Routing exposes OpenAI and Anthropic API formats on the same listener and forwards requests to running `llama-server` instances by requested model name or alias. The default listener is `127.0.0.1:11435`.
 
 ![统一端点、路由规则和后端目标 / Unified endpoint, route rules, and backend targets](public/docs/guide/08-instance-routing.png)
 
@@ -351,16 +355,33 @@ Instance Routing exposes one OpenAI-compatible endpoint and forwards requests to
 3. 为路由规则选择目标实例，并填写客户端使用的模型别名。
 4. 需要时设置代理 API Key；设置后所有代理端点都需要鉴权。
 5. 保存配置，然后启动实例路由。
-6. 复制统一 API 入口并用 `/v1/models` 或聊天请求测试；已配置密钥时请携带 Bearer Token 或 `x-api-key`。
+6. 复制统一 API 入口并用 `/v1/models`、OpenAI 聊天请求或 Anthropic Messages 请求测试；已配置密钥时请携带 Bearer Token 或 `x-api-key`。
 
 1. Start at least one backend instance.
 2. Set the listen host and port.
 3. Choose a target instance and define the model alias clients will send.
 4. Configure a proxy API key when needed; once set, every proxy endpoint requires authentication.
 5. Save, then start routing.
-6. Copy the endpoint and test `/v1/models` or a chat request, sending a Bearer token or `x-api-key` when configured.
+6. Copy the endpoint and test `/v1/models`, an OpenAI chat request, or an Anthropic Messages request, sending a bearer token or `x-api-key` when configured.
 
 ![实例、别名和统一 API 的请求路径 / Request path from instances and aliases to the unified API](public/docs/guide/flow-03-route-requests.png)
+
+### API 格式与 Claude Code / API Formats and Claude Code
+
+| 客户端能力 / Client capability | 端点 / Endpoint |
+|---|---|
+| OpenAI 模型发现 / Model discovery | `GET /v1/models`、`GET /v1/models/:model_id` |
+| OpenAI Chat Completions | `POST /v1/chat/completions` |
+| Anthropic Messages，同步与 SSE 流式 / Messages, sync and SSE | `POST /v1/messages` |
+| Anthropic 输入 Token 计数 / Input token counting | `POST /v1/messages/count_tokens` |
+
+Anthropic 路径支持文本、图片、thinking、工具调用、工具结果和流式事件。工具调用要求目标实例启用 `--jinja`。Claude Code 应把 `ANTHROPIC_BASE_URL` 指向统一路由根地址（不要附加 `/v1`），并将 `ANTHROPIC_MODEL` 设为已配置的公开模型名；配置代理密钥时同时设置 `ANTHROPIC_AUTH_TOKEN`。
+
+Anthropic routes support text, images, thinking, tool calls, tool results, and streaming events. Tool use requires `--jinja` on the target instance. Point Claude Code's `ANTHROPIC_BASE_URL` at the routing root without `/v1`, set `ANTHROPIC_MODEL` to a configured public model name, and set `ANTHROPIC_AUTH_TOKEN` when the proxy uses authentication.
+
+代理不会在 OpenAI 与 Anthropic 请求体之间互相转换；两种客户端调用各自的协议端点，但共享同一套路由规则、公开模型别名和鉴权配置。prompt caching、服务端工具等云端专属能力不会由管理器模拟，最终能力取决于目标 `llama-server` 与模型。
+
+The proxy does not translate request bodies between OpenAI and Anthropic formats. Each client uses its native endpoints while sharing routing rules, public model aliases, and authentication. Cloud-only capabilities such as prompt caching and server-side tools are not emulated by the manager and remain dependent on the target `llama-server` and model.
 
 ### 安全与后台保活 / Security and Background Keep-Alive
 

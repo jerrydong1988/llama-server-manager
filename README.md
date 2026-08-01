@@ -6,7 +6,24 @@ Llama Server Manager 是面向 `llama-server` 的桌面管理器，覆盖模型�
 
 Llama Server Manager is a desktop manager for `llama-server`, covering model downloads and inventory, engine management, instance lifecycle, cluster workers, unified API routing, performance telemetry, and logs.
 
-[下载最新版 / Download Latest](https://github.com/jerrydong1988/llama-server-manager/releases/latest) | [完整使用说明 / Full User Guide](GUIDE.md) | [发布签名配置 / Release Signing](docs/RELEASE_SIGNING.md) | [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md) | [隐私政策 / Privacy](PRIVACY.md) | [代码签名政策 / Code Signing](CODE_SIGNING_POLICY.md)
+[官方网站 / Website](https://docs.cnzone.net/) | [使用文档 / Documentation](https://docs.cnzone.net/docs) | [下载中心 / Download](https://download.cnzone.net/) | [版本说明 / Release Notes](https://docs.cnzone.net/release-notes) | [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest)
+
+## 安装与更新 / Install and Update
+
+优先从[下载中心](https://download.cnzone.net/)获取适合当前平台的正式安装包；[GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest)保留为备用下载源。
+
+Use the [Download Center](https://download.cnzone.net/) for the recommended platform package. [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) remains available as an alternative source.
+
+| 平台 / Platform | 安装包 / Package | 更新方式 / Update path |
+|---|---|---|
+| Windows x64 | NSIS、MSI | `v2.9.36+` 支持应用内更新 / In-app updates from `v2.9.36+` |
+| macOS Apple Silicon | DMG | `v2.9.36+` 支持应用内更新 / In-app updates from `v2.9.36+` |
+| Linux x64 / ARM64 | AppImage | 支持应用内更新 / In-app updates supported |
+| Linux x64 / ARM64 | DEB | 从下载中心手动更新 / Manual updates from the Download Center |
+
+`v2.9.35` 及更早版本尚未内置 Tauri Updater，需要先手动安装 `v2.9.36` 或更新版本。应用内更新由 Cloudflare R2 分发，并在安装前执行项目专用的 Tauri 签名校验。
+
+`v2.9.35` and earlier do not include Tauri Updater and must first be upgraded manually to `v2.9.36` or later. In-app updates are distributed through Cloudflare R2 and verified with the project-specific Tauri signature before installation.
 
 ## 快速开始 / Quick Start
 
@@ -46,9 +63,9 @@ Scan GGUF models, shards, and projectors; manage ModelScope and HuggingFace queu
 
 ### 实例配置 / Instance Configuration
 
-为每个实例独立选择模型、引擎和端口，通过参数搜索、场景预设和分级校验调整约 159 个 llama.cpp 参数。
+为每个实例独立选择模型、引擎和端口，通过参数搜索、场景预设和分级校验调整结构化选项，并依据所选 `llama-server --help` 进行运行时能力协商。当前上游稳定版基线跟踪 248 个参数条目。
 
-Choose model, engine, and port per instance, then tune about 159 llama.cpp options with search, presets, and validation.
+Choose model, engine, and port per instance, tune structured options with search, presets, and validation, and negotiate runtime capabilities against the selected `llama-server --help`. The current stable upstream baseline tracks 248 parameter entries.
 
 ![参数配置 / Parameter Configuration](public/docs/guide/06-configuration.png)
 
@@ -91,17 +108,21 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - 完整中英双语界面、深色 / 明亮主题、窗口状态记忆。
 - AMD ADLX、NVIDIA NVML 和系统指标自适应降级。
 - 实例 API Key 与 API Key 文件支持，统一路由可独立鉴权并保护全部代理端点。
+- 同一统一路由同时支持 OpenAI 与 Anthropic API 格式，包括 Messages、Token Count、工具调用、图片内容块和 Claude Code 模型发现。
+- 独立后台运行时可在管理界面退出后继续托管实例与路由，并在当前用户登录后恢复。
 - 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
 - 端口冲突、路径、配置规则和启动健康检查。
-- 系统托盘、实例自动启动、路由后台保活，以及由 Cloudflare R2 分发、Tauri 签名校验的应用内更新。
+- 系统托盘、实例自动启动，以及由 Cloudflare R2 分发、Tauri 签名校验的应用内更新。
 
 - Tauri 2, React 18, and TypeScript desktop application.
 - Full Chinese and English UI, light and dark themes, persisted window state.
 - AMD ADLX, NVIDIA NVML, and system-metric fallback.
 - Inline or file-based instance keys plus routing authentication across every proxy endpoint.
+- OpenAI and Anthropic API formats on the same unified listener, including Messages, token counting, tools, image blocks, and Claude Code model discovery.
+- An independent background runtime that keeps instances and routing alive after the management UI exits and restores them at user login.
 - Atomic configuration saves, backup fallback, persistent downloads and logs.
 - Port, path, configuration, startup, and health validation.
-- System tray, instance auto-start, routing keep-alive, and Tauri-signed in-app updates distributed through Cloudflare R2.
+- System tray, instance auto-start, and Tauri-signed in-app updates distributed through Cloudflare R2.
 
 ## 系统要求 / Requirements
 
@@ -149,7 +170,11 @@ xattr -cr /Applications/LlamaServerManager.app
 
 ## 使用说明与问题反馈 / Guide and Support
 
-- [完整图文使用说明 / Full Illustrated User Guide](GUIDE.md)
+- [官方网站 / Website](https://docs.cnzone.net/)
+- [在线使用文档 / Online Documentation](https://docs.cnzone.net/docs)
+- [下载中心 / Download Center](https://download.cnzone.net/)
+- [在线版本说明 / Online Release Notes](https://docs.cnzone.net/release-notes)
+- [仓库版离线图文说明 / Repository Offline Guide](GUIDE.md)
 - [隐私政策 / Privacy Policy](PRIVACY.md)
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)
