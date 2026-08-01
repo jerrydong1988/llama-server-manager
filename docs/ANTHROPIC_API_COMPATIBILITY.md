@@ -2,6 +2,8 @@
 
 实例路由在同一监听地址同时提供 OpenAI 与 Anthropic 两套 API 格式。Anthropic 请求由路由代理完成鉴权、模型选择与公开别名改写，然后无损转发给 llama.cpp 原生 Messages API。
 
+面向普通用户的最新说明同时发布在[在线路由文档](https://docs.cnzone.net/docs/routing)。
+
 ## 端点
 
 | 功能 | 端点 |
@@ -13,7 +15,7 @@
 
 请求可使用 `x-api-key: <代理 API Key>` 或 `Authorization: Bearer <代理 API Key>`。代理验证公开凭据后会将其移除，仅向目标实例发送该实例自己的 API Key；`anthropic-version`、`anthropic-beta` 与自定义业务请求头会继续转发。
 
-当前项目支持的 llama.cpp 基线为 `b10199`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
+`v2.9.37` 的 llama.cpp 稳定版基线为 `b10215`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。后续版本的权威基线以 `scripts/llama-parameter-baseline.json` 为准。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
 
 ## Claude Code（PowerShell）
 
