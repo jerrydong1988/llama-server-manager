@@ -103,12 +103,32 @@ function sanitize(html: string): string {
   return template.innerHTML
 }
 
+type StableRect = Pick<DOMRect, 'x' | 'y' | 'width' | 'height'>
+
+const rectIsStable = (left: StableRect, right: StableRect) => (
+  Math.abs(left.x - right.x) < 0.5
+  && Math.abs(left.y - right.y) < 0.5
+  && Math.abs(left.width - right.width) < 0.5
+  && Math.abs(left.height - right.height) < 0.5
+)
+
 function waitDOM(selector: string, timeout: number): Promise<Element> {
   return new Promise((resolve, reject) => {
     const start = Date.now()
+    let previousRect: StableRect | null = null
+    let stableFrames = 0
     const check = () => {
       const element = document.querySelector(selector)
-      if (element) return resolve(element)
+      const rect = element?.getBoundingClientRect()
+      if (element && rect && rect.width > 0 && rect.height > 0) {
+        const nextRect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height }
+        stableFrames = previousRect && rectIsStable(previousRect, nextRect) ? stableFrames + 1 : 0
+        previousRect = nextRect
+        if (stableFrames >= 2) return resolve(element)
+      } else {
+        previousRect = null
+        stableFrames = 0
+      }
       if (Date.now() - start > timeout) return reject(new Error(`timeout: ${selector}`))
       requestAnimationFrame(check)
     }
@@ -277,6 +297,7 @@ export default function GuidePage() {
   const startTour = async () => {
     let cancelled = false
     try {
+      await document.fonts.ready
       for (let index = 0; index < tourSteps.length; index += 1) {
         const step = tourSteps[index]
         if (step.tab === 'config') {
@@ -328,6 +349,7 @@ export default function GuidePage() {
             onDestroyed: settle,
           })
           walkthrough.drive()
+          requestAnimationFrame(() => requestAnimationFrame(() => walkthrough.refresh()))
         })
 
         if (cancelled) break

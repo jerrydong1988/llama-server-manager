@@ -13,13 +13,30 @@ import type {
 
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
 const BROWSER_SCENARIO = new URLSearchParams(window.location.search).get('scenario')
+const IS_DOCS_SCENARIO = BROWSER_SCENARIO === 'docs-screenshots'
+const HAS_MONITORING_DATA = BROWSER_SCENARIO === 'monitoring' || IS_DOCS_SCENARIO
+const HAS_PROXY_DATA = [
+  'background-runtime-active',
+  'proxy-routing',
+  'proxy-route-health',
+  'proxy-route-legacy-ids',
+  'docs-screenshots',
+].includes(BROWSER_SCENARIO ?? '')
 const INSTANCE_ID = 'browser-test-instance'
 const STOPPED_INSTANCE_ID = 'browser-stopped-instance'
+const EMBEDDING_INSTANCE_ID = 'browser-embedding-instance'
 const ENGINE_ID = 'browser-test-engine'
+const VULKAN_ENGINE_ID = 'browser-vulkan-engine'
 const MODEL_PATH = 'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf'
 const AMBIGUOUS_MODEL_PATH = 'C:\\browser-test\\models\\Vision-Ambiguous-Q8_0.gguf'
 const QWEN_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Qwen-BF16.gguf'
 const LLAVA_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Llava-BF16.gguf'
+const DOCS_MODEL_ROOT = 'C:\\AI\\Models'
+const DOCS_ENGINE_ROOT = 'C:\\AI\\Engines'
+const DOCS_CHAT_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Qwen3-8B-Q4_K_M.gguf`
+const DOCS_VISION_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Qwen3-VL-7B-Q5_K_M.gguf`
+const DOCS_EMBEDDING_MODEL_PATH = `${DOCS_MODEL_ROOT}\\Embedding-Mini-Q8_0.gguf`
+const DOCS_PROJECTOR_PATH = `${DOCS_MODEL_ROOT}\\mmproj-Qwen3-VL-F16.gguf`
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
@@ -76,15 +93,77 @@ const llavaProjector: ModelInfo = {
   capabilities: { metadata_complete: true, is_mmproj: true, projector_family: 'llava' },
 }
 
-const models = [model, ambiguousModel, qwenProjector, llavaProjector]
+const docsModels: ModelInfo[] = [
+  {
+    ...model,
+    id: 'docs-qwen3-chat',
+    name: 'Qwen3 8B Chat · Q4_K_M',
+    path: DOCS_CHAT_MODEL_PATH,
+    size: 5_032_755_200,
+    quant_type: 'Q4_K_M',
+    capabilities: {
+      metadata_complete: true,
+      vision_status: 'text-only',
+      model_name: 'Qwen3 8B Chat',
+      base_model_repo: 'https://huggingface.co/Qwen/Qwen3-8B',
+      tags: ['text-generation'],
+    },
+  },
+  {
+    ...model,
+    id: 'docs-qwen3-vision',
+    name: 'Qwen3 VL 7B · Q5_K_M',
+    path: DOCS_VISION_MODEL_PATH,
+    size: 6_442_450_944,
+    quant_type: 'Q5_K_M',
+    capabilities: {
+      metadata_complete: true,
+      is_vision_model: true,
+      vision_status: 'confirmed',
+      vision_family: 'qwen-vl',
+      model_name: 'Qwen3 VL 7B',
+      base_model_repo: 'https://huggingface.co/Qwen/Qwen3-VL-7B-Instruct',
+      tags: ['image-text-to-text'],
+    },
+  },
+  {
+    ...model,
+    id: 'docs-embedding-mini',
+    name: 'Embedding Mini · Q8_0',
+    path: DOCS_EMBEDDING_MODEL_PATH,
+    size: 1_073_741_824,
+    architecture: 'bert',
+    context_length: 8_192,
+    capabilities: {
+      metadata_complete: true,
+      is_embedding_model: true,
+      vision_status: 'text-only',
+      model_name: 'Embedding Mini',
+      tags: ['feature-extraction'],
+    },
+  },
+  {
+    ...qwenProjector,
+    id: 'docs-qwen3-projector',
+    name: 'mmproj Qwen3 VL · F16',
+    path: DOCS_PROJECTOR_PATH,
+    capabilities: {
+      ...qwenProjector.capabilities,
+      model_name: 'Qwen3 VL 7B',
+      base_model_repo: 'https://huggingface.co/Qwen/Qwen3-VL-7B-Instruct',
+    },
+  },
+]
+
+const models = IS_DOCS_SCENARIO ? docsModels : [model, ambiguousModel, qwenProjector, llavaProjector]
 
 const engine: EngineInfo = {
   id: ENGINE_ID,
-  name: 'Browser Test Engine',
-  dir: 'C:\\browser-test\\engine',
-  exe: 'C:\\browser-test\\engine\\llama-server.exe',
-  version: 'version: 10042 (browser-test)',
-  backend: 'Vulkan',
+  name: IS_DOCS_SCENARIO ? 'CUDA 12.4' : 'Browser Test Engine',
+  dir: IS_DOCS_SCENARIO ? `${DOCS_ENGINE_ROOT}\\cuda-b10042` : 'C:\\browser-test\\engine',
+  exe: IS_DOCS_SCENARIO ? `${DOCS_ENGINE_ROOT}\\cuda-b10042\\llama-server.exe` : 'C:\\browser-test\\engine\\llama-server.exe',
+  version: IS_DOCS_SCENARIO ? 'version: 10042 (6d2f8e1)' : 'version: 10042 (browser-test)',
+  backend: IS_DOCS_SCENARIO ? 'CUDA' : 'Vulkan',
   capabilities: {
     status: 'detected',
     versionStatus: 'detected',
@@ -101,17 +180,34 @@ const engine: EngineInfo = {
     reportedDefaultsVersion: 1,
     helpHash: 'browser-test-help',
     executableFingerprint: 'browser-test-engine-fingerprint',
-    probedAt: 1,
+    probedAt: IS_DOCS_SCENARIO ? Date.UTC(2026, 6, 31, 12, 0, 0) / 1000 : 1,
   },
 }
+
+const vulkanEngine: EngineInfo = {
+  ...clone(engine),
+  id: VULKAN_ENGINE_ID,
+  name: 'Vulkan',
+  dir: `${DOCS_ENGINE_ROOT}\\vulkan-b10042`,
+  exe: `${DOCS_ENGINE_ROOT}\\vulkan-b10042\\llama-server.exe`,
+  version: 'version: 10042 (6d2f8e1)',
+  backend: 'Vulkan',
+  capabilities: {
+    ...clone(engine.capabilities!),
+    helpHash: 'docs-vulkan-help',
+    executableFingerprint: 'docs-vulkan-engine-fingerprint',
+  },
+}
+
+const engines = IS_DOCS_SCENARIO ? [engine, vulkanEngine] : [engine]
 
 const instanceConfig: InstanceConfig = {
   ...defaultInstanceConfig(),
   id: INSTANCE_ID,
-  name: 'Browser Parameter Regression',
+  name: IS_DOCS_SCENARIO ? 'Qwen3 8B Chat' : 'Browser Parameter Regression',
   engine_id: ENGINE_ID,
-  model_path: MODEL_PATH,
-  alias: 'browser-parameter-regression',
+  model_path: IS_DOCS_SCENARIO ? DOCS_CHAT_MODEL_PATH : MODEL_PATH,
+  alias: IS_DOCS_SCENARIO ? 'qwen3-chat' : 'browser-parameter-regression',
   port: 18081,
   temp: 0.6,
   top_k: 20,
@@ -120,6 +216,28 @@ const instanceConfig: InstanceConfig = {
   models_autoload: false,
   image_min_tokens: 1_024,
   explicit_overrides: ['temp', 'top_k', 'kv_unified', 'kv_unified_mode', 'models_autoload', 'image_min_tokens'],
+}
+
+const docsVisionConfig: InstanceConfig = {
+  ...clone(instanceConfig),
+  id: STOPPED_INSTANCE_ID,
+  name: 'Qwen3 VL 7B',
+  model_path: DOCS_VISION_MODEL_PATH,
+  mmproj_path: DOCS_PROJECTOR_PATH,
+  alias: 'qwen3-vl',
+  port: 18082,
+  explicit_overrides: [...(instanceConfig.explicit_overrides ?? []), 'mmproj_path'],
+}
+
+const docsEmbeddingConfig: InstanceConfig = {
+  ...clone(instanceConfig),
+  id: EMBEDDING_INSTANCE_ID,
+  name: 'Embedding Mini',
+  model_path: DOCS_EMBEDDING_MODEL_PATH,
+  alias: 'embedding-mini',
+  port: 18083,
+  embedding: true,
+  pooling: 'mean',
 }
 
 const state: GlobalConfigShape = {
@@ -131,6 +249,28 @@ const state: GlobalConfigShape = {
   instance_order: [INSTANCE_ID],
   last_tab: 'instances',
   dark_mode: true,
+}
+
+if (IS_DOCS_SCENARIO) {
+  state.instances = {
+    [INSTANCE_ID]: clone(instanceConfig),
+    [STOPPED_INSTANCE_ID]: clone(docsVisionConfig),
+    [EMBEDDING_INSTANCE_ID]: clone(docsEmbeddingConfig),
+  }
+  state.model_dirs = [DOCS_MODEL_ROOT]
+  state.engine_dirs = [DOCS_ENGINE_ROOT]
+  state.default_engine_id = ENGINE_ID
+  state.running = {
+    [INSTANCE_ID]: {
+      instance_id: INSTANCE_ID,
+      pid: 4243,
+      port: instanceConfig.port,
+      host: instanceConfig.host,
+      start_time: Math.floor(Date.now() / 1000) - 1_260,
+    },
+  }
+  state.instance_order = [INSTANCE_ID, STOPPED_INSTANCE_ID, EMBEDDING_INSTANCE_ID]
+  state.last_tab = 'dashboard'
 }
 
 type BrowserProxyRoute = {
@@ -155,16 +295,40 @@ type BrowserProxyConfig = {
 }
 
 const proxyConfig: BrowserProxyConfig = {
-  enabled: ['background-runtime-active', 'proxy-routing', 'proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? ''),
+  enabled: HAS_PROXY_DATA,
   host: '127.0.0.1',
   port: 11435,
-  public_api_key: '',
-  default_instance_id: '',
+  public_api_key: IS_DOCS_SCENARIO ? 'lsm-demo-key' : '',
+  default_instance_id: IS_DOCS_SCENARIO ? INSTANCE_ID : '',
   routing_strategy: 'firstHealthy',
   timeout_ms: 600_000,
   background_service_mode: false,
   runtime_service_enabled: BROWSER_SCENARIO === 'background-runtime-active',
-  routes: BROWSER_SCENARIO === 'proxy-route-health'
+  routes: IS_DOCS_SCENARIO
+    ? [
+        {
+          id: 'docs-chat-route',
+          enabled: true,
+          priority: 1,
+          model_alias: 'qwen3-chat',
+          target_instance_id: INSTANCE_ID,
+        },
+        {
+          id: 'docs-vision-route',
+          enabled: true,
+          priority: 1,
+          model_alias: 'qwen3-vl',
+          target_instance_id: STOPPED_INSTANCE_ID,
+        },
+        {
+          id: 'docs-embedding-route',
+          enabled: true,
+          priority: 1,
+          model_alias: 'embedding-mini',
+          target_instance_id: EMBEDDING_INSTANCE_ID,
+        },
+      ]
+    : BROWSER_SCENARIO === 'proxy-route-health'
     ? [
         {
           id: 'primary-stopped-route',
@@ -201,20 +365,40 @@ const proxyConfig: BrowserProxyConfig = {
     : [],
 }
 const proxyStatus = {
-  running: ['background-runtime-active', 'proxy-routing', 'proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? ''),
+  running: HAS_PROXY_DATA,
   bound_addr: '127.0.0.1:11435',
-  active_routes: ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : 0,
+  active_routes: IS_DOCS_SCENARIO ? 1 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : 0,
   last_error: null,
 }
 const runningProxyTarget = {
   instance_id: INSTANCE_ID,
-  name: 'Browser Parameter Regression',
-  alias: 'browser-parameter-regression',
+  name: IS_DOCS_SCENARIO ? 'Qwen3 8B Chat' : 'Browser Parameter Regression',
+  alias: IS_DOCS_SCENARIO ? 'qwen3-chat' : 'browser-parameter-regression',
   host: '127.0.0.1',
   port: 18081,
   running: true,
 }
-const proxyTargets = BROWSER_SCENARIO === 'proxy-routing'
+const proxyTargets = IS_DOCS_SCENARIO
+  ? [
+      runningProxyTarget,
+      {
+        instance_id: STOPPED_INSTANCE_ID,
+        name: 'Qwen3 VL 7B',
+        alias: 'qwen3-vl',
+        host: '127.0.0.1',
+        port: 18082,
+        running: false,
+      },
+      {
+        instance_id: EMBEDDING_INSTANCE_ID,
+        name: 'Embedding Mini',
+        alias: 'embedding-mini',
+        host: '127.0.0.1',
+        port: 18083,
+        running: false,
+      },
+    ]
+  : BROWSER_SCENARIO === 'proxy-routing'
   ? [runningProxyTarget]
   : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '')
   ? [{
@@ -228,7 +412,7 @@ const proxyTargets = BROWSER_SCENARIO === 'proxy-routing'
     : []
 const runtimeStatus = {
   servicePid: 4242,
-  serviceVersion: '2.9.30-browser-test',
+  serviceVersion: IS_DOCS_SCENARIO ? '2.9.37' : '2.9.30-browser-test',
   backgroundEnabled: BROWSER_SCENARIO === 'background-runtime-active',
   registeredForLogin: BROWSER_SCENARIO === 'background-runtime-active',
   running: BROWSER_SCENARIO === 'background-runtime-active'
@@ -395,17 +579,17 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
 }
 
 const systemMetrics: SystemMetrics = {
-  cpu_percent: BROWSER_SCENARIO === 'monitoring' ? 8 : 0,
-  memory_mb: BROWSER_SCENARIO === 'monitoring' ? 14 * 1024 : 128,
+  cpu_percent: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 24 : 8) : 0,
+  memory_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 11 * 1024 : 14 * 1024) : 128,
   uptime_secs: 30,
-  gpu_percent: BROWSER_SCENARIO === 'monitoring' ? 12 : 0,
-  vram_used_mb: BROWSER_SCENARIO === 'monitoring' ? 24 * 1024 : 256,
-  vram_total_mb: BROWSER_SCENARIO === 'monitoring' ? 32 * 1024 : 8_192,
-  system_cpu_percent: BROWSER_SCENARIO === 'monitoring' ? 9 : 0,
-  system_memory_total_mb: 32_768,
-  system_memory_used_mb: BROWSER_SCENARIO === 'monitoring' ? 14 * 1024 : 8_192,
-  gpu_vendor: 'Mock',
-  gpu_name: 'Browser Test GPU',
+  gpu_percent: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 68 : 12) : 0,
+  vram_used_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 9_420 : 24 * 1024) : 256,
+  vram_total_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 16_384 : 32 * 1024) : 8_192,
+  system_cpu_percent: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 31 : 9) : 0,
+  system_memory_total_mb: IS_DOCS_SCENARIO ? 65_536 : 32_768,
+  system_memory_used_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 27 * 1024 : 14 * 1024) : 8_192,
+  gpu_vendor: IS_DOCS_SCENARIO ? 'NVIDIA' : 'Mock',
+  gpu_name: IS_DOCS_SCENARIO ? 'NVIDIA GeForce RTX 5080' : 'Browser Test GPU',
 }
 
 const monitoringNow = Date.now()
@@ -418,9 +602,9 @@ const monitoringFrame: MonitoringFrame = {
   ts: monitoringNow,
   workload: 'inference',
   state: 'active',
-  throughput: 25.8,
+  throughput: IS_DOCS_SCENARIO ? 47.6 : 25.8,
   throughputUnit: 'tok/s',
-  outputTokensPerSecond: 25.8,
+  outputTokensPerSecond: IS_DOCS_SCENARIO ? 47.6 : 25.8,
   inputTokensPerSecond: 0,
   itemsPerSecond: null,
   activeRequests: 1,
@@ -433,48 +617,48 @@ const monitoringFrame: MonitoringFrame = {
   dataAgeMs: 0,
   system: {
     ...systemMetrics,
-    system_cpu_percent: 99,
-    gpu_percent: 98,
-    system_memory_used_mb: 31 * 1024,
-    vram_used_mb: 31 * 1024,
+    system_cpu_percent: IS_DOCS_SCENARIO ? 31 : 99,
+    gpu_percent: IS_DOCS_SCENARIO ? 68 : 98,
+    system_memory_used_mb: IS_DOCS_SCENARIO ? 27 * 1024 : 31 * 1024,
+    vram_used_mb: IS_DOCS_SCENARIO ? 9_420 : 31 * 1024,
   },
 }
 const monitoringSessions = [
   {
     id: monitoringSessionId,
     instance_id: INSTANCE_ID,
-    instance_name: 'Browser Parameter Regression',
-    model_name: 'Qwen Browser Test Q8_0.gguf',
-    model_path: MODEL_PATH,
+    instance_name: IS_DOCS_SCENARIO ? 'Qwen3 8B Chat' : 'Browser Parameter Regression',
+    model_name: IS_DOCS_SCENARIO ? 'Qwen3 8B Chat · Q4_K_M' : 'Qwen Browser Test Q8_0.gguf',
+    model_path: IS_DOCS_SCENARIO ? DOCS_CHAT_MODEL_PATH : MODEL_PATH,
     config_hash: 'browser-active-config',
     engine_id: ENGINE_ID,
-    backend: 'Vulkan',
+    backend: IS_DOCS_SCENARIO ? 'CUDA' : 'Vulkan',
     workload: 'inference',
     started_at: monitoringNow - 120_000,
     stopped_at: null,
     duration_secs: null,
-    avg_tokens_per_second: 25.8,
-    avg_tokens_per_sec: 25.8,
-    peak_vram_mb: 31 * 1024,
+    avg_tokens_per_second: IS_DOCS_SCENARIO ? 47.6 : 25.8,
+    avg_tokens_per_sec: IS_DOCS_SCENARIO ? 47.6 : 25.8,
+    peak_vram_mb: IS_DOCS_SCENARIO ? 9_420 : 31 * 1024,
     sample_count: 2,
     stop_reason: null,
   },
   {
     id: stoppedMonitoringSessionId,
     instance_id: STOPPED_INSTANCE_ID,
-    instance_name: 'Stopped Monitoring Instance',
-    model_name: 'Historical Browser Model',
-    model_path: MODEL_PATH,
+    instance_name: IS_DOCS_SCENARIO ? 'Qwen3 VL 7B' : 'Stopped Monitoring Instance',
+    model_name: IS_DOCS_SCENARIO ? 'Qwen3 VL 7B · Q5_K_M' : 'Historical Browser Model',
+    model_path: IS_DOCS_SCENARIO ? DOCS_VISION_MODEL_PATH : MODEL_PATH,
     config_hash: 'browser-stopped-config',
     engine_id: ENGINE_ID,
-    backend: 'Vulkan',
+    backend: IS_DOCS_SCENARIO ? 'CUDA' : 'Vulkan',
     workload: 'inference',
     started_at: monitoringNow - 600_000,
     stopped_at: monitoringNow - 300_000,
     duration_secs: 300,
-    avg_tokens_per_second: 18,
-    avg_tokens_per_sec: 18,
-    peak_vram_mb: 31 * 1024,
+    avg_tokens_per_second: IS_DOCS_SCENARIO ? 32.4 : 18,
+    avg_tokens_per_sec: IS_DOCS_SCENARIO ? 32.4 : 18,
+    peak_vram_mb: IS_DOCS_SCENARIO ? 11_240 : 31 * 1024,
     sample_count: 1,
     stop_reason: 'stopped',
   },
@@ -509,13 +693,28 @@ const monitoringSamples = [
 const monitoringOverview = {
   active_sessions: 1,
   sessions_24h: 2,
-  avg_tokens_per_sec_24h: 21.9,
-  peak_vram_mb_24h: 31 * 1024,
+  avg_tokens_per_sec_24h: IS_DOCS_SCENARIO ? 41.3 : 21.9,
+  peak_vram_mb_24h: IS_DOCS_SCENARIO ? 11_240 : 31 * 1024,
   dropped_writes: 0,
   last_write_error: null,
   last_write_error_at: null,
   latest_samples: monitoringSamples,
 }
+const monitoringSeries = Array.from({ length: IS_DOCS_SCENARIO ? 18 : 1 }, (_, index) => {
+  const offset = IS_DOCS_SCENARIO ? 17 - index : 0
+  const throughput = IS_DOCS_SCENARIO ? 39.8 + (index % 6) * 1.7 : monitoringFrame.throughput
+  return {
+    ...clone(monitoringFrame),
+    ts: monitoringNow - offset * 20_000,
+    throughput,
+    outputTokensPerSecond: throughput,
+    system: {
+      ...clone(monitoringFrame.system ?? systemMetrics),
+      system_cpu_percent: IS_DOCS_SCENARIO ? 27 + (index % 5) : monitoringFrame.system?.system_cpu_percent ?? 0,
+      gpu_percent: IS_DOCS_SCENARIO ? 61 + (index % 8) : monitoringFrame.system?.gpu_percent ?? 0,
+    },
+  }
+})
 const emptyMonitoringAnalysis = {
   request_count: 0,
   avg_prompt_tokens: 0,
@@ -575,14 +774,63 @@ mockIPC((command, payload) => {
       return buttons?.OkCancelCustom?.[0] ?? buttons?.OkCustom ?? 'Ok'
     }
     case 'get_startup_elapsed': return 1
-    case 'get_cached_scan': return [clone(models), [clone(engine)]]
+    case 'get_cached_scan': return [clone(models), clone(engines)]
     case 'load_config': return clone(control.state)
     case 'scan_models':
     case 'get_models': return clone(models)
     case 'scan_engines':
-    case 'get_engines': return [clone(engine)]
+    case 'get_engines': return clone(engines)
     case 'probe_engine_capabilities': return clone(engine)
     case 'get_download_manager_snapshot':
+      if (IS_DOCS_SCENARIO) {
+        return {
+          queue: [
+            {
+              id: 'docs-download-active',
+              repo_id: 'Qwen/Qwen3-14B-GGUF',
+              source: 'huggingface',
+              files: [{
+                name: 'Qwen3-14B-Q4_K_M.gguf',
+                path: 'Qwen3-14B-Q4_K_M.gguf',
+                size: 9_124_839_936,
+                file_type: 'model',
+                task_id: 'docs-download-task-active',
+                run_id: 'docs-download-run-active',
+                downloaded: 5_368_709_120,
+                version: 3,
+                status: 'active',
+              }],
+              save_dir: DOCS_MODEL_ROOT,
+              added_at: Date.now() - 420_000,
+              status: 'active',
+            },
+            {
+              id: 'docs-download-paused',
+              repo_id: 'Qwen/Qwen3-VL-30B-A3B-GGUF',
+              source: 'modelscope',
+              files: [{
+                name: 'Qwen3-VL-30B-A3B-Q4_K_M.gguf',
+                path: 'Qwen3-VL-30B-A3B-Q4_K_M.gguf',
+                size: 19_327_352_832,
+                file_type: 'model',
+                task_id: 'docs-download-task-paused',
+                run_id: 'docs-download-run-paused',
+                downloaded: 4_294_967_296,
+                version: 2,
+                status: 'paused',
+              }],
+              save_dir: DOCS_MODEL_ROOT,
+              added_at: Date.now() - 1_200_000,
+              status: 'paused',
+            },
+          ],
+          active_count: 1,
+          max_concurrent: 3,
+          resume_policy: 'auto_on_launch',
+          bandwidth_limit_bytes_per_sec: 0,
+          low_priority_throttle: false,
+        }
+      }
       if (BROWSER_SCENARIO === 'download-resume') {
         return {
           queue: [{
@@ -614,10 +862,10 @@ mockIPC((command, payload) => {
       return { queue: [], active_count: 0, max_concurrent: 3, resume_policy: 'manual', bandwidth_limit_bytes_per_sec: 0, low_priority_throttle: false }
     case 'restore_download_queue': return []
     case 'get_monitoring_series':
-      return BROWSER_SCENARIO === 'monitoring' ? [clone(monitoringFrame)] : []
+      return HAS_MONITORING_DATA ? clone(monitoringSeries) : []
     case 'get_system_health': return clone(systemMetrics)
     case 'get_telemetry_overview':
-      return BROWSER_SCENARIO === 'monitoring'
+      return HAS_MONITORING_DATA
         ? clone(monitoringOverview)
         : {
             active_sessions: 0,
@@ -630,17 +878,41 @@ mockIPC((command, payload) => {
             latest_samples: [],
           }
     case 'list_telemetry_sessions':
-      return BROWSER_SCENARIO === 'monitoring' ? clone(monitoringSessions) : []
+      return HAS_MONITORING_DATA ? clone(monitoringSessions) : []
     case 'get_telemetry_session_detail':
       return {
-        samples: BROWSER_SCENARIO === 'monitoring' ? clone(monitoringSamples) : [],
+        samples: HAS_MONITORING_DATA ? clone(monitoringSamples) : [],
         requests: [],
         analysis: clone(emptyMonitoringAnalysis),
         diagnostics: [],
       }
     case 'list_inference_requests': return []
     case 'get_workers':
-      return BROWSER_SCENARIO === 'cluster-worker'
+      return IS_DOCS_SCENARIO
+        ? [
+            {
+              id: 'docs-local-worker',
+              host: '127.0.0.1',
+              port: 50052,
+              name: 'Local GPU Worker',
+              origin: 'local',
+              devices: [{ device_type: 'CUDA', name: 'NVIDIA GeForce RTX 5080', vram_mb: 16_384, free_mb: 12_288 }],
+              status: 'Online',
+              last_seen: new Date().toISOString(),
+              auto_discovered: true,
+            },
+            {
+              id: 'docs-nas-worker',
+              host: '192.168.1.20',
+              port: 50052,
+              name: 'NAS Compute Node',
+              origin: 'manual',
+              devices: [{ device_type: 'CPU', name: 'AMD Ryzen Embedded', vram_mb: 0, free_mb: 0 }],
+              status: 'Offline',
+              auto_discovered: false,
+            },
+          ]
+        : BROWSER_SCENARIO === 'cluster-worker'
         ? [{
             id: 'browser-cluster-worker',
             host: '192.168.50.10',
@@ -723,7 +995,7 @@ mockIPC((command, payload) => {
       }
       return null
     }
-    case 'get_download_resume_policy': return 'manual'
+    case 'get_download_resume_policy': return IS_DOCS_SCENARIO ? 'auto_on_launch' : 'manual'
     case 'get_download_concurrency': return 3
     case 'get_download_bandwidth_limit': return 0
     case 'get_download_low_priority_throttle': return false

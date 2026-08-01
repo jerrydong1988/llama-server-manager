@@ -20,6 +20,7 @@
     "check:cross-platform-release": "node scripts/check-cross-platform-release.cjs",
     "check:browser-test": "tsc -p tsconfig.browser-test.json --noEmit && tsc -p tsconfig.browser-test.node.json --noEmit && node scripts/check-browser-test-isolation.cjs",
     "test:browser": "playwright test --config playwright.config.ts",
+    "docs:screenshots": "node scripts/generate-guide-screenshots.mjs",
     "test:runtime-service": "node scripts/test-runtime-service.cjs",
     "check:llama-upstream": "node scripts/check-llama-upstream.cjs",
     "test:cross-platform": "node scripts/test-cross-platform-paths.cjs",
