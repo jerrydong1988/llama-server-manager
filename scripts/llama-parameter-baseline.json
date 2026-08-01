@@ -1,18 +1,18 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-07-31",
+  "verifiedAt": "2026-08-01",
   "source": "https://github.com/ggerganov/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10215",
-  "upstreamCommit": "eb41d503ba9496b816ff4180a34780bc13a4f4b8",
-  "upstreamMasterChecked": "876a4321163249c43ca4e986818fab5ab081f282",
+  "upstreamRelease": "b10217",
+  "upstreamCommit": "ddd4ec1428a6201e18975ea52b07c71e0f9aef26",
+  "upstreamMasterChecked": "de699957b92f490efebad149665b0dccf127eaff",
   "releaseSnapshot": {
-    "ref": "b10215",
-    "commit": "eb41d503ba9496b816ff4180a34780bc13a4f4b8",
+    "ref": "b10217",
+    "commit": "ddd4ec1428a6201e18975ea52b07c71e0f9aef26",
     "parameterCount": 248,
     "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
     "parameters": [
@@ -2165,7 +2165,7 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "876a4321163249c43ca4e986818fab5ab081f282",
+    "commit": "de699957b92f490efebad149665b0dccf127eaff",
     "parameterCount": 248,
     "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
     "parameters": [
