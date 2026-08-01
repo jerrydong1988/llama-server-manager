@@ -15,7 +15,7 @@
 
 请求可使用 `x-api-key: <代理 API Key>` 或 `Authorization: Bearer <代理 API Key>`。代理验证公开凭据后会将其移除，仅向目标实例发送该实例自己的 API Key；`anthropic-version`、`anthropic-beta` 与自定义业务请求头会继续转发。
 
-`v2.9.38` 的 llama.cpp 稳定版基线为 `b10217`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。后续版本的权威基线以 `scripts/llama-parameter-baseline.json` 为准。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
+`v2.9.38` 的 llama.cpp 稳定版基线为 `b10218`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。后续版本的权威基线以 `scripts/llama-parameter-baseline.json` 为准。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
 
 ## Claude Code（PowerShell）
 
