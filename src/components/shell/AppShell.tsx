@@ -121,6 +121,8 @@ export function AppShell({
                     <button
                       ref={active ? activeNavRef : undefined}
                       type="button"
+                      aria-current={active ? 'page' : undefined}
+                      data-nav-id={item.id}
                       onClick={() => onNavigate(item.id)}
                       className={joinClassNames(
                         'group flex h-9 w-full snap-start items-center gap-2.5 whitespace-nowrap rounded-lg px-2.5 text-sm transition lg:h-10',

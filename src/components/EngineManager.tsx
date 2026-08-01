@@ -375,21 +375,25 @@ const EngineManager = () => {
                             />
                           ) : (
                             <>
-                              <p className="truncate text-sm font-medium text-slate-100">{engine.name}</p>
+                              <p className="min-w-0 flex-1 truncate text-sm font-medium text-slate-100">{engine.name}</p>
                               <button
                                 onClick={event => {
                                   event.stopPropagation()
                                   setEditingId(engine.id)
                                   setEditName(engine.name)
                                 }}
-                                className="rounded-md p-1 text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
+                                className="shrink-0 rounded-md p-1 text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
                                 title={labels.rename}
                               >
                                 <Pencil className="h-3.5 w-3.5" />
                               </button>
                               {isDefault && (
-                                <span className="rounded-full border border-amber-500/20 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-300">
-                                  {t.engineMgr.defaultEngine}
+                                <span
+                                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-amber-500/20 bg-amber-500/10 text-amber-300"
+                                  aria-label={t.engineMgr.defaultEngine}
+                                  title={t.engineMgr.defaultEngine}
+                                >
+                                  <Star className="h-3.5 w-3.5" aria-hidden="true" />
                                 </span>
                               )}
                             </>
@@ -416,7 +420,7 @@ const EngineManager = () => {
                             event.stopPropagation()
                             setDefaultEngineId(engine.id)
                           }}
-                          className={`rounded-lg px-3 py-1.5 text-xs transition ${
+                          className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs transition ${
                             isDefault
                               ? 'bg-blue-600 text-white'
                               : 'border border-slate-700 bg-slate-900 text-slate-200 hover:border-slate-600 hover:bg-slate-800'
