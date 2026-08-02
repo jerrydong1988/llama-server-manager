@@ -19,6 +19,8 @@
 
 `v2.9.38` 的 llama.cpp 稳定版基线为 `b10218`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。后续版本的权威基线以 `scripts/llama-parameter-baseline.json` 为准。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
 
+模型发现会把运行时探测值（首次探测前可使用明确的非自动 `ctx_size` 配置）同时公开为 `context_length`、`context_window` 和 `max_model_len`，故障转移配置采用所有候选目标的安全最小值。Messages 请求在上下文已知时先调用目标 `/v1/messages/count_tokens`，将输入 Token 与 `max_tokens` 相加；超过 `n_ctx` 时返回 Anthropic `400 invalid_request_error`，不会进入生成。旧目标缺少计数端点时保持兼容转发，由目标执行最终校验。
+
 ## Claude Code（PowerShell）
 
 先在“实例路由”中为本地模型配置一个公开模型名，例如 `local-claude`，启动目标实例与代理，再在启动 Claude Code 的同一 PowerShell 会话中设置：
@@ -45,4 +47,4 @@ claude --model local-claude
 
 ## Anthropic API and Claude Code
 
-The routing proxy exposes OpenAI and Anthropic formats on the same listener. Use `POST /v1/messages`, `POST /v1/messages/count_tokens`, and `GET /v1/models`. Point `ANTHROPIC_BASE_URL` at the proxy root, authenticate with either a bearer token or `x-api-key`, and set `ANTHROPIC_MODEL` to a configured public route name. Tool use requires `--jinja` on the target llama-server. Cloud-only Anthropic features are passed through without manager-side emulation and remain dependent on the selected llama-server and model.
+The routing proxy exposes OpenAI and Anthropic formats on the same listener. Use `POST /v1/messages`, `POST /v1/messages/count_tokens`, and `GET /v1/models`. Model discovery publishes the safe probed context, with an explicit non-auto `ctx_size` fallback before the first probe, as `context_length`, `context_window`, and `max_model_len`; Messages preflight combines native input-token counting with `max_tokens` and returns Anthropic `400 invalid_request_error` before generation when the request exceeds `n_ctx`. Point `ANTHROPIC_BASE_URL` at the proxy root, authenticate with either a bearer token or `x-api-key`, and set `ANTHROPIC_MODEL` to a configured public route name. Tool use requires `--jinja` on the target llama-server. Cloud-only Anthropic features are passed through without manager-side emulation and remain dependent on the selected llama-server and model.

@@ -21,8 +21,8 @@ use tokio_util::io::StreamReader;
 
 use crate::commands::config::update_and_persist;
 use crate::commands::proxy_protocol::{
-    add_format_header, ensure_request_id_header, error_response, request_format,
-    response_request_id, rewrite_json_response, rewrite_sse_line, ProxyApiFormat,
+    add_format_header, context_limit_error_response, ensure_request_id_header, error_response,
+    request_format, response_request_id, rewrite_json_response, rewrite_sse_line, ProxyApiFormat,
 };
 use crate::commands::proxy_runtime::{
     GlobalRequestPermit, RouterRuntime, RoutingCandidate, TargetCapabilities, TargetHealthSnapshot,
@@ -46,6 +46,8 @@ const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_PROXY_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PROXY_JSON_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_TOKEN_COUNT_RESPONSE_BYTES: usize = 64 * 1024;
+const MAX_COMPLETION_PREFLIGHT_PROMPTS: usize = 16;
 const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
 const MAX_ANTHROPIC_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
 const TARGET_CAPABILITY_MAX_AGE: Duration = Duration::from_secs(60);
@@ -190,6 +192,7 @@ struct ResolvedProxyTarget {
     api_key: String,
     api_prefix: String,
     scheme: &'static str,
+    configured_context_length: Option<u64>,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
     route_priority: i32,
@@ -835,6 +838,8 @@ fn resolved_target_for_id(
         api_key: effective_api_key(config),
         api_prefix: config.api_prefix.clone(),
         scheme: effective_server_scheme(config),
+        configured_context_length: (!config.ctx_size_auto && config.ctx_size > 0)
+            .then_some(config.ctx_size as u64),
         telemetry_session_id: running_info.telemetry_session_id.clone(),
         workload,
         route_priority,
@@ -1035,6 +1040,89 @@ fn request_uses_streaming(body: &[u8]) -> bool {
         .ok()
         .and_then(|value| value.get("stream").and_then(serde_json::Value::as_bool))
         .unwrap_or(false)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum InputTokenCounter {
+    Native(&'static str),
+    Completion,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ContextPreflightSpec {
+    counter: InputTokenCounter,
+    error_param: &'static str,
+    requested_output_tokens: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContextLimitViolation {
+    error_param: &'static str,
+    input_tokens: Option<u64>,
+    requested_output_tokens: u64,
+    context_window: u64,
+}
+
+fn context_preflight_spec(path: &str, body: &[u8]) -> Option<ContextPreflightSpec> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let output_tokens = |names: &[&str]| {
+        names
+            .iter()
+            .find_map(|name| value.get(*name).and_then(serde_json::Value::as_u64))
+            .unwrap_or(0)
+            .max(1)
+    };
+    match path {
+        "/v1/chat/completions" => Some(ContextPreflightSpec {
+            counter: InputTokenCounter::Native("/v1/chat/completions/input_tokens"),
+            error_param: "messages",
+            requested_output_tokens: output_tokens(&["max_completion_tokens", "max_tokens"]),
+        }),
+        "/v1/responses" => Some(ContextPreflightSpec {
+            counter: InputTokenCounter::Native("/v1/responses/input_tokens"),
+            error_param: "input",
+            requested_output_tokens: output_tokens(&["max_output_tokens"]),
+        }),
+        "/v1/messages" => Some(ContextPreflightSpec {
+            counter: InputTokenCounter::Native("/v1/messages/count_tokens"),
+            error_param: "messages",
+            requested_output_tokens: output_tokens(&["max_tokens"]),
+        }),
+        "/v1/completions" => Some(ContextPreflightSpec {
+            counter: InputTokenCounter::Completion,
+            error_param: "prompt",
+            requested_output_tokens: output_tokens(&["max_tokens"]),
+        }),
+        _ => None,
+    }
+}
+
+fn completion_tokenize_bodies(body: &[u8]) -> Option<Vec<Bytes>> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let prompt = value.get("prompt")?;
+    let prompts = match prompt {
+        serde_json::Value::Array(items)
+            if items.iter().all(|item| item.is_string() || item.is_array()) =>
+        {
+            if items.is_empty() || items.len() > MAX_COMPLETION_PREFLIGHT_PROMPTS {
+                return None;
+            }
+            items.iter().collect::<Vec<_>>()
+        }
+        _ => vec![prompt],
+    };
+    prompts
+        .into_iter()
+        .map(|content| {
+            serde_json::to_vec(&json!({
+                "content": content,
+                "add_special": true,
+                "parse_special": true,
+            }))
+            .ok()
+            .map(Bytes::from)
+        })
+        .collect()
 }
 
 fn rewrite_request_model(body: &Bytes, upstream_model_id: &str) -> Bytes {
@@ -1424,6 +1512,24 @@ fn should_forward_request_header(name: &str, connection_tokens: &HashSet<String>
     ) && !is_hop_by_hop_header(name, connection_tokens)
 }
 
+fn apply_target_request_headers(
+    mut request: reqwest::RequestBuilder,
+    headers: &HeaderMap,
+    target: &ResolvedProxyTarget,
+) -> reqwest::RequestBuilder {
+    let connection_tokens = connection_header_tokens(headers);
+    for (name, value) in headers.iter() {
+        let lower = name.as_str().to_ascii_lowercase();
+        if should_forward_request_header(&lower, &connection_tokens) {
+            request = request.header(name.as_str(), value.as_bytes());
+        }
+    }
+    if !target.api_key.trim().is_empty() {
+        request = request.bearer_auth(target.api_key.trim());
+    }
+    request
+}
+
 fn append_bounded_response_chunk(
     body: &mut Vec<u8>,
     chunk: &[u8],
@@ -1453,6 +1559,117 @@ async fn collect_bounded_response_body(
         append_bounded_response_chunk(&mut body, &chunk, limit)?;
     }
     Ok(Bytes::from(body))
+}
+
+async fn fetch_token_count_value(
+    client: &reqwest::Client,
+    target: &ResolvedProxyTarget,
+    headers: &HeaderMap,
+    path: &str,
+    body: Bytes,
+    proxy_config: &ProxyConfig,
+) -> Option<serde_json::Value> {
+    let timeout_ms = proxy_config
+        .health_check_timeout_ms
+        .max(1_000)
+        .min(proxy_config.timeout_ms.max(1_000));
+    let request = client
+        .post(target_url_for_path(target, path))
+        .timeout(Duration::from_millis(timeout_ms))
+        .header("accept", "application/json")
+        .header("accept-encoding", "identity")
+        .header("content-type", "application/json");
+    let response = apply_target_request_headers(request, headers, target)
+        .body(body)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = collect_bounded_response_body(response, MAX_TOKEN_COUNT_RESPONSE_BYTES)
+        .await
+        .ok()?;
+    serde_json::from_slice(&body).ok()
+}
+
+async fn fetch_input_token_count(
+    client: &reqwest::Client,
+    target: &ResolvedProxyTarget,
+    headers: &HeaderMap,
+    upstream_body: &Bytes,
+    counter: InputTokenCounter,
+    proxy_config: &ProxyConfig,
+) -> Option<u64> {
+    match counter {
+        InputTokenCounter::Native(path) => fetch_token_count_value(
+            client,
+            target,
+            headers,
+            path,
+            upstream_body.clone(),
+            proxy_config,
+        )
+        .await?
+        .get("input_tokens")
+        .and_then(serde_json::Value::as_u64),
+        InputTokenCounter::Completion => {
+            let bodies = completion_tokenize_bodies(upstream_body)?;
+            let counts = futures_util::future::join_all(bodies.into_iter().map(|body| {
+                fetch_token_count_value(client, target, headers, "/tokenize", body, proxy_config)
+            }))
+            .await;
+            let mut maximum = None;
+            for value in counts {
+                let count = value?
+                    .get("tokens")
+                    .and_then(serde_json::Value::as_array)?
+                    .len() as u64;
+                maximum = Some(maximum.map_or(count, |current: u64| current.max(count)));
+            }
+            maximum
+        }
+    }
+}
+
+async fn context_limit_violation(
+    client: &reqwest::Client,
+    target: &ResolvedProxyTarget,
+    headers: &HeaderMap,
+    path: &str,
+    upstream_body: &Bytes,
+    proxy_config: &ProxyConfig,
+    context_window: u64,
+) -> Option<ContextLimitViolation> {
+    if context_window == 0 {
+        return None;
+    }
+    let spec = context_preflight_spec(path, upstream_body)?;
+    if spec.requested_output_tokens > context_window {
+        return Some(ContextLimitViolation {
+            error_param: spec.error_param,
+            input_tokens: None,
+            requested_output_tokens: spec.requested_output_tokens,
+            context_window,
+        });
+    }
+    let input_tokens = fetch_input_token_count(
+        client,
+        target,
+        headers,
+        upstream_body,
+        spec.counter,
+        proxy_config,
+    )
+    .await?;
+    (input_tokens.saturating_add(spec.requested_output_tokens) > context_window).then_some(
+        ContextLimitViolation {
+            error_param: spec.error_param,
+            input_tokens: Some(input_tokens),
+            requested_output_tokens: spec.requested_output_tokens,
+            context_window,
+        },
+    )
 }
 
 fn target_url_for_path(target: &ResolvedProxyTarget, path: &str) -> String {
@@ -1581,7 +1798,7 @@ fn capabilities_from_values(
         capabilities.context_length = items
             .iter()
             .filter_map(|slot| slot.get("n_ctx").and_then(serde_json::Value::as_u64))
-            .max()
+            .min()
             .or(capabilities.context_length);
     }
     capabilities.updated_at_ms = current_time_ms().max(0) as u64;
@@ -1845,6 +2062,7 @@ async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde
             "slots": "/slots?model={public_model}",
             "models": "/v1/models",
             "chat_completions": "/v1/chat/completions",
+            "chat_completions_input_tokens": "/v1/chat/completions/input_tokens",
             "completions": "/v1/completions",
             "responses": "/v1/responses",
             "responses_input_tokens": "/v1/responses/input_tokens",
@@ -1853,6 +2071,11 @@ async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde
             "anthropic_count_tokens": "/v1/messages/count_tokens"
         },
         "api_formats": ["openai", "anthropic"],
+        "context_safety": {
+            "model_metadata_fields": ["context_length", "context_window", "max_model_len"],
+            "failover_advertises_minimum": true,
+            "generation_preflight": ["chat_completions", "completions", "responses", "anthropic_messages"]
+        },
         "anthropic_compatibility": {
             "transport": "llama.cpp native Messages API",
             "minimum_supported_baseline": "b10199",
@@ -1865,34 +2088,93 @@ async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde
     }))
 }
 
-async fn proxy_models(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
-    let snapshot = router_state.source.proxy_snapshot();
-    let config = snapshot.config;
-    let targets = list_proxy_targets_from(&snapshot.instances, &snapshot.running);
-    let ids = listed_proxy_model_ids(&config, &targets);
-
-    let first_id = ids.first().cloned();
-    let last_id = ids.last().cloned();
-    Json(json!({
-        "object": "list",
-        "data": ids.into_iter().map(|id| {
-            let health = resolve_proxy_candidates_from(&config, &snapshot.instances, &snapshot.running, Some(&id), None)
-                .first()
-                .map(|target| router_state.runtime.target_snapshot(&target.public.instance_id));
-            proxy_model_descriptor(id, health.as_ref())
-        }).collect::<Vec<_>>(),
-        "first_id": first_id,
-        "last_id": last_id,
-        "has_more": false
-    }))
+fn model_health_snapshots(
+    runtime: &RouterRuntime,
+    candidates: &[ResolvedProxyTarget],
+) -> Vec<TargetHealthSnapshot> {
+    let mut seen = HashSet::new();
+    candidates
+        .iter()
+        .filter(|target| seen.insert(target.public.instance_id.clone()))
+        .map(|target| {
+            let mut snapshot = runtime.target_snapshot(&target.public.instance_id);
+            if snapshot.capabilities.context_length.is_none() {
+                snapshot.capabilities.context_length = target.configured_context_length;
+            }
+            snapshot
+        })
+        .collect()
 }
 
-fn proxy_model_descriptor(id: String, health: Option<&TargetHealthSnapshot>) -> serde_json::Value {
-    let context_length = health.and_then(|health| health.capabilities.context_length);
-    let status = health
-        .map(|health| health.status.as_str())
-        .unwrap_or("unknown");
-    let capabilities = health.map(|health| &health.capabilities);
+fn safe_context_window(health: &[TargetHealthSnapshot]) -> Option<u64> {
+    if health.is_empty()
+        || health.iter().any(|target| {
+            target
+                .capabilities
+                .context_length
+                .map_or(true, |context| context == 0)
+        })
+    {
+        return None;
+    }
+    health
+        .iter()
+        .filter_map(|target| target.capabilities.context_length)
+        .min()
+}
+
+fn aggregate_target_capability(
+    health: &[TargetHealthSnapshot],
+    value: impl Fn(&TargetCapabilities) -> Option<bool>,
+) -> Option<bool> {
+    if health.is_empty() {
+        return None;
+    }
+    let mut unknown = false;
+    for target in health {
+        match value(&target.capabilities) {
+            Some(false) => return Some(false),
+            Some(true) => {}
+            None => unknown = true,
+        }
+    }
+    (!unknown).then_some(true)
+}
+
+fn aggregate_model_status(health: &[TargetHealthSnapshot]) -> &'static str {
+    if health.is_empty() {
+        return "unknown";
+    }
+    let ready = health.iter().filter(|target| target.ready).count();
+    if ready == health.len() {
+        "ready"
+    } else if ready > 0 {
+        "degraded"
+    } else if health.iter().any(|target| target.status == "circuit_open") {
+        "circuit_open"
+    } else {
+        "unavailable"
+    }
+}
+
+fn proxy_model_descriptor(id: String, health: &[TargetHealthSnapshot]) -> serde_json::Value {
+    let context_window = safe_context_window(health);
+    let status = aggregate_model_status(health);
+    let tools = aggregate_target_capability(health, |caps| {
+        caps.chat_template_caps
+            .get("supports_tools")
+            .and_then(serde_json::Value::as_bool)
+    });
+    let vision = aggregate_target_capability(health, |caps| {
+        caps.modalities
+            .get("vision")
+            .and_then(serde_json::Value::as_bool)
+    });
+    let video = aggregate_target_capability(health, |caps| {
+        caps.modalities
+            .get("video")
+            .and_then(serde_json::Value::as_bool)
+    });
     json!({
         "id": id,
         "object": "model",
@@ -1901,17 +2183,53 @@ fn proxy_model_descriptor(id: String, health: Option<&TargetHealthSnapshot>) -> 
         "type": "model",
         "display_name": id,
         "created_at": "1970-01-01T00:00:00Z",
-        "context_length": context_length,
+        "context_length": context_window,
+        "context_window": context_window,
+        "max_model_len": context_window,
         "status": status,
         "capabilities": {
             "chat_completions": true,
             "responses": true,
             "anthropic_messages": true,
-            "tools": capabilities.and_then(|caps| caps.chat_template_caps.get("supports_tools")).and_then(serde_json::Value::as_bool),
-            "vision": capabilities.and_then(|caps| caps.modalities.get("vision")).and_then(serde_json::Value::as_bool),
-            "video": capabilities.and_then(|caps| caps.modalities.get("video")).and_then(serde_json::Value::as_bool),
+            "tools": tools,
+            "vision": vision,
+            "video": video,
         }
     })
+}
+
+async fn proxy_models(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
+    let snapshot = router_state.source.proxy_snapshot();
+    let config = snapshot.config;
+    let targets = list_proxy_targets_from(&snapshot.instances, &snapshot.running);
+    let ids = listed_proxy_model_ids(&config, &targets);
+    let model_candidates = ids
+        .iter()
+        .map(|id| {
+            (
+                id.clone(),
+                resolve_proxy_candidates_from(
+                    &config,
+                    &snapshot.instances,
+                    &snapshot.running,
+                    Some(id),
+                    None,
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+    let first_id = ids.first().cloned();
+    let last_id = ids.last().cloned();
+    Json(json!({
+        "object": "list",
+        "data": model_candidates.into_iter().map(|(id, candidates)| {
+            let health = model_health_snapshots(&router_state.runtime, &candidates);
+            proxy_model_descriptor(id, &health)
+        }).collect::<Vec<_>>(),
+        "first_id": first_id,
+        "last_id": last_id,
+        "has_more": false
+    }))
 }
 
 async fn proxy_model(
@@ -1926,20 +2244,15 @@ async fn proxy_model(
         .into_iter()
         .any(|id| id == model_id)
     {
-        let health = resolve_proxy_candidates_from(
+        let candidates = resolve_proxy_candidates_from(
             &snapshot.config,
             &snapshot.instances,
             &snapshot.running,
             Some(&model_id),
             None,
-        )
-        .first()
-        .map(|target| {
-            router_state
-                .runtime
-                .target_snapshot(&target.public.instance_id)
-        });
-        let mut response = Json(proxy_model_descriptor(model_id, health.as_ref())).into_response();
+        );
+        let health = model_health_snapshots(&router_state.runtime, &candidates);
+        let mut response = Json(proxy_model_descriptor(model_id, &health)).into_response();
         add_format_header(&mut response, format);
         response
     } else {
@@ -2120,6 +2433,57 @@ async fn proxy_upstream(
     let started_at = std::time::Instant::now();
     let started_at_ms = current_time_ms();
     let proxy_task_id = next_proxy_task_id();
+    let client = proxy_http_client(proxy_config.connect_timeout_ms);
+
+    let context_window = router_state
+        .runtime
+        .target_snapshot(&target.public.instance_id)
+        .capabilities
+        .context_length
+        .or(target.configured_context_length)
+        .filter(|value| *value > 0);
+    if let Some(context_window) = context_window {
+        if let Some(violation) = context_limit_violation(
+            &client,
+            &target,
+            &headers,
+            uri.path(),
+            &upstream_body,
+            &proxy_config,
+            context_window,
+        )
+        .await
+        {
+            router_state.runtime.record_rejected();
+            let error_text = format!(
+                "context window exceeded: input_tokens={:?}, requested_output_tokens={}, context_window={}",
+                violation.input_tokens,
+                violation.requested_output_tokens,
+                violation.context_window
+            );
+            let _ = record_proxy_telemetry(
+                target.telemetry_session_id.as_deref(),
+                &ProxyTelemetryRecord {
+                    task_id: proxy_task_id,
+                    model: requested_model.clone(),
+                    target_instance_id: target.public.instance_id.clone(),
+                    http_status: Some(StatusCode::BAD_REQUEST.as_u16()),
+                    started_at_ms,
+                    duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+                    error_text: Some(error_text),
+                    api_format,
+                },
+                vector_metadata.as_ref(),
+            );
+            return context_limit_error_response(
+                api_format,
+                violation.error_param,
+                violation.input_tokens,
+                violation.requested_output_tokens,
+                violation.context_window,
+            );
+        }
+    }
 
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
         Ok(method) => method,
@@ -2132,24 +2496,13 @@ async fn proxy_upstream(
         }
     };
 
-    let client = proxy_http_client(proxy_config.connect_timeout_ms);
     let mut request = client
         .request(reqwest_method, target_url(&target, &uri))
         .header("accept-encoding", "identity");
     if !request_streaming {
         request = request.timeout(Duration::from_millis(proxy_config.timeout_ms.max(1_000)));
     }
-    let connection_tokens = connection_header_tokens(&headers);
-    for (name, value) in headers.iter() {
-        let lower = name.as_str().to_ascii_lowercase();
-        if !should_forward_request_header(&lower, &connection_tokens) {
-            continue;
-        }
-        request = request.header(name.as_str(), value.as_bytes());
-    }
-    if !target.api_key.trim().is_empty() {
-        request = request.bearer_auth(target.api_key.trim());
-    }
+    request = apply_target_request_headers(request, &headers, &target);
 
     let response = match request.body(upstream_body).send().await {
         Ok(response) => response,
@@ -2980,6 +3333,7 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone)]
@@ -3134,6 +3488,73 @@ mod tests {
             StatusCode::NOT_FOUND,
             "unsupported mock endpoint",
         )
+    }
+
+    #[derive(Default)]
+    struct ContextGuardUpstreamState {
+        count_requests: AtomicUsize,
+        generation_requests: AtomicUsize,
+    }
+
+    async fn mock_context_guard_upstream(
+        State(state): State<Arc<ContextGuardUpstreamState>>,
+        uri: Uri,
+        body: Bytes,
+    ) -> Response {
+        match uri.path() {
+            "/health" => return Json(json!({ "status": "ok" })).into_response(),
+            "/props" => {
+                return Json(json!({
+                    "default_generation_settings": { "n_ctx": 10 },
+                    "total_slots": 1,
+                    "chat_template_caps": { "supports_tools": true },
+                    "modalities": { "vision": false, "video": false }
+                }))
+                .into_response()
+            }
+            "/slots" => {
+                return Json(json!([
+                    { "id": 0, "n_ctx": 10, "is_processing": false }
+                ]))
+                .into_response()
+            }
+            "/v1/chat/completions/input_tokens"
+            | "/v1/responses/input_tokens"
+            | "/v1/messages/count_tokens" => {
+                state.count_requests.fetch_add(1, Ordering::Relaxed);
+                return Json(json!({
+                    "object": "response.input_tokens",
+                    "input_tokens": 8
+                }))
+                .into_response();
+            }
+            "/tokenize" => {
+                state.count_requests.fetch_add(1, Ordering::Relaxed);
+                return Json(json!({ "tokens": [1, 2, 3, 4, 5, 6, 7, 8] })).into_response();
+            }
+            _ => {}
+        }
+        state.generation_requests.fetch_add(1, Ordering::Relaxed);
+        let request: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        if uri.path() == "/v1/messages" {
+            return Json(json!({
+                "id": "msg_allowed",
+                "type": "message",
+                "role": "assistant",
+                "model": "upstream-private",
+                "content": [],
+                "stop_reason": "end_turn",
+                "usage": { "input_tokens": 8, "output_tokens": 1 }
+            }))
+            .into_response();
+        }
+        Json(json!({
+            "id": "chatcmpl_allowed",
+            "object": "chat.completion",
+            "model": request.get("model").cloned().unwrap_or_default(),
+            "choices": []
+        }))
+        .into_response()
     }
 
     #[derive(Debug, Clone)]
@@ -3308,6 +3729,123 @@ mod tests {
             bound_addr: String::new(),
             last_error: None,
         }
+    }
+
+    fn target_health(
+        instance_id: &str,
+        context_length: Option<u64>,
+        ready: bool,
+        supports_tools: Option<bool>,
+    ) -> super::TargetHealthSnapshot {
+        super::TargetHealthSnapshot {
+            instance_id: instance_id.into(),
+            status: if ready { "ready" } else { "unavailable" }.into(),
+            ready,
+            consecutive_failures: 0,
+            circuit_open_until_ms: 0,
+            last_checked_at_ms: 0,
+            last_success_at_ms: 0,
+            latency_ms: None,
+            active_requests: 0,
+            last_error: None,
+            capabilities: super::TargetCapabilities {
+                context_length,
+                chat_template_caps: supports_tools
+                    .map(|value| json!({ "supports_tools": value }))
+                    .unwrap_or_default(),
+                modalities: json!({ "vision": false, "video": false }),
+                ..super::TargetCapabilities::default()
+            },
+        }
+    }
+
+    #[test]
+    fn model_metadata_uses_compatibility_aliases_and_safe_failover_capabilities() {
+        let descriptor = super::proxy_model_descriptor(
+            "public-model".into(),
+            &[
+                target_health("primary", Some(131_072), true, Some(true)),
+                target_health("fallback", Some(65_536), false, Some(false)),
+            ],
+        );
+        assert_eq!(descriptor["context_length"], 65_536);
+        assert_eq!(descriptor["context_window"], 65_536);
+        assert_eq!(descriptor["max_model_len"], 65_536);
+        assert_eq!(descriptor["status"], "degraded");
+        assert_eq!(descriptor["capabilities"]["tools"], false);
+
+        let unknown = super::proxy_model_descriptor(
+            "public-model".into(),
+            &[
+                target_health("primary", Some(131_072), true, Some(true)),
+                target_health("fallback", None, true, Some(true)),
+            ],
+        );
+        assert!(unknown["context_length"].is_null());
+        assert!(unknown["context_window"].is_null());
+        assert!(unknown["max_model_len"].is_null());
+    }
+
+    #[test]
+    fn model_metadata_uses_only_explicit_context_before_runtime_probe() {
+        let mut snapshot = openai_proxy_snapshot("127.0.0.1:18080".parse().unwrap(), "");
+        for instance in snapshot.instances.values_mut() {
+            instance.ctx_size = 131_072;
+            instance.ctx_size_auto = false;
+        }
+        for running in snapshot.running.values_mut() {
+            let config = running.launch_config.as_mut().unwrap();
+            config.ctx_size = 131_072;
+            config.ctx_size_auto = false;
+        }
+        let candidates = super::resolve_proxy_candidates_from(
+            &snapshot.config,
+            &snapshot.instances,
+            &snapshot.running,
+            Some("local-openai"),
+            None,
+        );
+        let runtime = super::RouterRuntime::default();
+        let configured = super::model_health_snapshots(&runtime, &candidates);
+        assert_eq!(super::safe_context_window(&configured), Some(131_072));
+
+        runtime.mark_probe_success(
+            "openai-upstream",
+            1.0,
+            Some(super::TargetCapabilities {
+                context_length: Some(65_536),
+                ..super::TargetCapabilities::default()
+            }),
+        );
+        let probed = super::model_health_snapshots(&runtime, &candidates);
+        assert_eq!(super::safe_context_window(&probed), Some(65_536));
+
+        for running in snapshot.running.values_mut() {
+            running.launch_config.as_mut().unwrap().ctx_size_auto = true;
+        }
+        let automatic = super::resolve_proxy_candidates_from(
+            &snapshot.config,
+            &snapshot.instances,
+            &snapshot.running,
+            Some("local-openai"),
+            None,
+        );
+        let unknown_runtime = super::RouterRuntime::default();
+        let unknown = super::model_health_snapshots(&unknown_runtime, &automatic);
+        assert_eq!(super::safe_context_window(&unknown), None);
+    }
+
+    #[test]
+    fn capability_discovery_uses_the_smallest_slot_context() {
+        let capabilities = super::capabilities_from_values(
+            None,
+            Some(&json!([
+                { "id": 0, "n_ctx": 131_072, "is_processing": false },
+                { "id": 1, "n_ctx": 65_536, "is_processing": false }
+            ])),
+            &super::TargetCapabilities::default(),
+        );
+        assert_eq!(capabilities.context_length, Some(65_536));
     }
 
     #[test]
@@ -3579,6 +4117,7 @@ mod tests {
             api_key: String::new(),
             api_prefix: "v1".into(),
             scheme: "https",
+            configured_context_length: None,
             telemetry_session_id: None,
             workload: ModelWorkload::Inference,
             route_priority: 0,
@@ -4307,6 +4846,122 @@ mod tests {
         assert_eq!(first["n_ctx"], 131072);
         assert!(first.get("prompt").is_none());
         assert!(slots.as_array().unwrap()[1].get("tokens").is_none());
+
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn context_preflight_rejects_openai_and_anthropic_overflow_before_generation() {
+        let upstream_state = Arc::new(ContextGuardUpstreamState::default());
+        let upstream_router = Router::new()
+            .fallback(axum::routing::any(mock_context_guard_upstream))
+            .with_state(upstream_state.clone());
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+        let snapshot = openai_proxy_snapshot(upstream_address, "");
+        let (proxy_router, runtime) =
+            super::proxy_router_from_source_with_runtime(Arc::new(TestProxySource { snapshot }));
+        runtime.mark_probe_success(
+            "openai-upstream",
+            1.0,
+            Some(super::TargetCapabilities {
+                context_length: Some(10),
+                updated_at_ms: u64::MAX,
+                ..super::TargetCapabilities::default()
+            }),
+        );
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+        let client = reqwest::Client::new();
+
+        for (path, request) in [
+            (
+                "/v1/chat/completions",
+                json!({
+                    "model": "local-openai",
+                    "messages": [{ "role": "user", "content": "hello" }],
+                    "max_tokens": 3
+                }),
+            ),
+            (
+                "/v1/completions",
+                json!({
+                    "model": "local-openai",
+                    "prompt": "hello",
+                    "max_tokens": 3
+                }),
+            ),
+            (
+                "/v1/responses",
+                json!({
+                    "model": "local-openai",
+                    "input": "hello",
+                    "max_output_tokens": 3
+                }),
+            ),
+        ] {
+            let response = client
+                .post(format!("http://{proxy_address}{path}"))
+                .json(&request)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-llama-server-manager-context-window")
+                    .and_then(|value| value.to_str().ok()),
+                Some("10")
+            );
+            let body: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(body["error"]["code"], "context_length_exceeded");
+            assert_eq!(body["error"]["details"]["input_tokens"], 8);
+        }
+
+        let anthropic = client
+            .post(format!("http://{proxy_address}/v1/messages"))
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model": "local-openai",
+                "messages": [{ "role": "user", "content": "hello" }],
+                "max_tokens": 3
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(anthropic.status(), StatusCode::BAD_REQUEST);
+        assert!(anthropic.headers().contains_key("request-id"));
+        assert_eq!(
+            anthropic
+                .headers()
+                .get("x-llama-server-manager-api-format")
+                .and_then(|value| value.to_str().ok()),
+            Some("anthropic")
+        );
+        let anthropic_body: serde_json::Value = anthropic.json().await.unwrap();
+        assert_eq!(anthropic_body["type"], "error");
+        assert_eq!(anthropic_body["error"]["type"], "invalid_request_error");
+        assert_eq!(
+            upstream_state.generation_requests.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(upstream_state.count_requests.load(Ordering::Relaxed), 4);
+
+        let allowed = client
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .json(&json!({
+                "model": "local-openai",
+                "messages": [{ "role": "user", "content": "hello" }],
+                "max_tokens": 2
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        assert_eq!(
+            upstream_state.generation_requests.load(Ordering::Relaxed),
+            1
+        );
 
         proxy_task.abort();
         upstream_task.abort();
