@@ -55,7 +55,17 @@ fn anthropic_error_type(status: StatusCode) -> &'static str {
     }
 }
 
-fn anthropic_request_id() -> String {
+fn openai_error_type(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::UNAUTHORIZED => "authentication_error",
+        StatusCode::FORBIDDEN => "permission_error",
+        StatusCode::TOO_MANY_REQUESTS => "rate_limit_error",
+        status if status.is_client_error() => "invalid_request_error",
+        _ => "server_error",
+    }
+}
+
+pub(crate) fn proxy_request_id() -> String {
     format!("req_{}", uuid::Uuid::new_v4().simple())
 }
 
@@ -75,16 +85,28 @@ pub(crate) fn error_response(
     status: StatusCode,
     message: &str,
 ) -> Response {
-    let request_id = format.is_anthropic().then(anthropic_request_id);
+    let request_id = proxy_request_id();
     let value = match format {
-        ProxyApiFormat::OpenAi => json!({ "error": message }),
-        ProxyApiFormat::Anthropic => {
-            anthropic_error_value(status, message, request_id.as_deref().unwrap_or_default())
-        }
+        ProxyApiFormat::OpenAi => json!({
+            "error": {
+                "message": message,
+                "type": openai_error_type(status),
+                "param": Value::Null,
+                "code": Value::Null,
+            }
+        }),
+        ProxyApiFormat::Anthropic => anthropic_error_value(status, message, &request_id),
     };
     let mut response = (status, Json(value)).into_response();
-    if let Some(request_id) = request_id.and_then(|value| HeaderValue::from_str(&value).ok()) {
-        response.headers_mut().insert("request-id", request_id);
+    if let Ok(header_value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert(
+            if format.is_anthropic() {
+                "request-id"
+            } else {
+                "x-request-id"
+            },
+            header_value,
+        );
     }
     add_format_header(&mut response, format);
     response
@@ -131,6 +153,13 @@ fn rewrite_known_model_fields(value: &mut Value, public_model_id: &str, format: 
                 );
             }
         }
+    } else if let Some(response) = object.get_mut("response").and_then(Value::as_object_mut) {
+        if response.contains_key("model") {
+            response.insert(
+                "model".to_string(),
+                Value::String(public_model_id.to_string()),
+            );
+        }
     }
 }
 
@@ -162,19 +191,63 @@ pub(crate) fn rewrite_json_response(
                 rewrite_known_model_fields(&mut value, public_model_id, format);
                 if value.get("request_id").and_then(Value::as_str).is_none() {
                     if let Some(object) = value.as_object_mut() {
-                        object.insert(
-                            "request_id".to_string(),
-                            Value::String(anthropic_request_id()),
-                        );
+                        object.insert("request_id".to_string(), Value::String(proxy_request_id()));
                     }
                 }
                 return serde_json::to_vec(&value).map(Bytes::from).unwrap_or(body);
             }
         }
-        let request_id = anthropic_request_id();
+        let request_id = proxy_request_id();
         return serde_json::to_vec(&anthropic_error_value(status, &message, &request_id))
             .map(Bytes::from)
             .unwrap_or(body);
+    }
+
+    if !status.is_success() {
+        let message = parsed
+            .as_ref()
+            .ok()
+            .and_then(upstream_error_message)
+            .map(str::to_string)
+            .or_else(|| {
+                let message = String::from_utf8_lossy(&body).trim().to_string();
+                (!message.is_empty()).then_some(message)
+            })
+            .unwrap_or_else(|| {
+                status
+                    .canonical_reason()
+                    .unwrap_or("upstream request failed")
+                    .to_string()
+            });
+        if let Ok(mut value) = parsed {
+            if let Some(error) = value.get_mut("error").and_then(Value::as_object_mut) {
+                if error.get("message").and_then(Value::as_str).is_some() {
+                    error
+                        .entry("type")
+                        .or_insert_with(|| Value::String(openai_error_type(status).to_string()));
+                    error.entry("param").or_insert(Value::Null);
+                    error.entry("code").or_insert(Value::Null);
+                }
+            }
+            let normalized = value
+                .get("error")
+                .and_then(Value::as_object)
+                .is_some_and(|error| error.get("message").and_then(Value::as_str).is_some());
+            if normalized {
+                rewrite_known_model_fields(&mut value, public_model_id, format);
+                return serde_json::to_vec(&value).map(Bytes::from).unwrap_or(body);
+            }
+        }
+        return serde_json::to_vec(&json!({
+            "error": {
+                "message": message,
+                "type": openai_error_type(status),
+                "param": Value::Null,
+                "code": Value::Null,
+            }
+        }))
+        .map(Bytes::from)
+        .unwrap_or(body);
     }
 
     let Ok(mut value) = parsed else {
@@ -212,6 +285,20 @@ pub(crate) fn add_format_header(response: &mut Response, format: ProxyApiFormat)
             ANTHROPIC_FORMAT_HEADER,
             HeaderValue::from_static("anthropic"),
         );
+    }
+}
+
+pub(crate) fn ensure_request_id_header(response: &mut Response, format: ProxyApiFormat) {
+    let name = if format.is_anthropic() {
+        "request-id"
+    } else {
+        "x-request-id"
+    };
+    if response.headers().contains_key(name) {
+        return;
+    }
+    if let Ok(value) = HeaderValue::from_str(&proxy_request_id()) {
+        response.headers_mut().insert(name, value);
     }
 }
 
@@ -272,6 +359,59 @@ mod tests {
         assert!(value["request_id"]
             .as_str()
             .is_some_and(|request_id| request_id.starts_with("req_")));
+    }
+
+    #[test]
+    fn responses_stream_rewrites_nested_response_model_only() {
+        let line = rewrite_sse_line(
+            r#"data: {"type":"response.created","response":{"model":"private-model"},"input":{"model":"tool-input"}}"#,
+            "public-model",
+            ProxyApiFormat::OpenAi,
+        );
+        let value: Value = serde_json::from_str(line.strip_prefix("data: ").unwrap()).unwrap();
+        assert_eq!(value["response"]["model"], "public-model");
+        assert_eq!(value["input"]["model"], "tool-input");
+    }
+
+    #[test]
+    fn nonstandard_openai_upstream_errors_use_the_sdk_envelope() {
+        let body = rewrite_json_response(
+            Bytes::from_static(br#"{"message":"backend overloaded"}"#),
+            "public-model",
+            ProxyApiFormat::OpenAi,
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["message"], "backend overloaded");
+        assert_eq!(value["error"]["type"], "server_error");
+        assert!(value["error"]["param"].is_null());
+        assert!(value["error"]["code"].is_null());
+    }
+
+    #[test]
+    fn partial_openai_error_objects_receive_all_sdk_fields() {
+        let body = rewrite_json_response(
+            Bytes::from_static(br#"{"error":{"message":"bad request"}}"#),
+            "public-model",
+            ProxyApiFormat::OpenAi,
+            StatusCode::BAD_REQUEST,
+        );
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["message"], "bad request");
+        assert_eq!(value["error"]["type"], "invalid_request_error");
+        assert!(value["error"]["param"].is_null());
+        assert!(value["error"]["code"].is_null());
+    }
+
+    #[test]
+    fn openai_errors_always_include_a_request_id_header() {
+        let response = error_response(
+            ProxyApiFormat::OpenAi,
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate limit exceeded",
+        );
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key("x-request-id"));
     }
 
     #[tokio::test]

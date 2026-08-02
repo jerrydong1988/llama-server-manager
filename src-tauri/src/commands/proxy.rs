@@ -4,14 +4,16 @@ use axum::{
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{any, get},
+    routing::{get, post},
     Json, Router,
 };
+use base64::Engine;
 use futures_util::{StreamExt, TryStreamExt};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use tokio_util::codec::{FramedRead, LinesCodec};
@@ -19,8 +21,12 @@ use tokio_util::io::StreamReader;
 
 use crate::commands::config::update_and_persist;
 use crate::commands::proxy_protocol::{
-    add_format_header, error_response, request_format, response_request_id, rewrite_json_response,
-    rewrite_sse_line, ProxyApiFormat,
+    add_format_header, ensure_request_id_header, error_response, request_format,
+    response_request_id, rewrite_json_response, rewrite_sse_line, ProxyApiFormat,
+};
+use crate::commands::proxy_runtime::{
+    GlobalRequestPermit, RouterRuntime, RoutingCandidate, TargetCapabilities, TargetHealthSnapshot,
+    TargetRequestPermit,
 };
 use crate::commands::server::{effective_api_key, effective_server_scheme};
 use crate::commands::telemetry::{
@@ -34,19 +40,60 @@ use crate::models::{
 use crate::vector_policy::ModelWorkload;
 
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
-static PROXY_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_keepalive(Duration::from_secs(30))
-        .build()
-        .expect("proxy HTTP client configuration must be valid")
-});
+static PROXY_HTTP_CLIENTS: LazyLock<Mutex<HashMap<u64, reqwest::Client>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_PROXY_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PROXY_JSON_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
 const MAX_ANTHROPIC_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
+const TARGET_CAPABILITY_MAX_AGE: Duration = Duration::from_secs(60);
+const PROXY_API_KEY_HASH_PREFIX: &str = "sha256:";
+
+fn proxy_http_client(connect_timeout_ms: u64) -> reqwest::Client {
+    let connect_timeout_ms = connect_timeout_ms.clamp(100, 60_000);
+    let mut clients = PROXY_HTTP_CLIENTS.lock().unwrap();
+    clients
+        .entry(connect_timeout_ms)
+        .or_insert_with(|| {
+            reqwest::Client::builder()
+                .connect_timeout(Duration::from_millis(connect_timeout_ms))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .tcp_keepalive(Duration::from_secs(30))
+                .build()
+                .expect("proxy HTTP client configuration must be valid")
+        })
+        .clone()
+}
+
+fn hash_proxy_api_key(key: &str) -> String {
+    let digest = Sha256::digest(key.as_bytes());
+    format!(
+        "{PROXY_API_KEY_HASH_PREFIX}{}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+    )
+}
+
+fn is_hashed_proxy_api_key(value: &str) -> bool {
+    value
+        .strip_prefix(PROXY_API_KEY_HASH_PREFIX)
+        .is_some_and(|digest| {
+            digest.len() == 43
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+}
+
+fn proxy_api_key_matches(stored: &str, presented: &str) -> bool {
+    let candidate = if is_hashed_proxy_api_key(stored) {
+        hash_proxy_api_key(presented)
+    } else {
+        presented.to_string()
+    };
+    constant_time_eq(stored.as_bytes(), candidate.as_bytes())
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VectorRequestMetadata {
@@ -136,6 +183,7 @@ fn stored_target_matches_endpoint(
     )
 }
 
+#[derive(Clone)]
 struct ResolvedProxyTarget {
     public: ProxyTarget,
     upstream_model_id: String,
@@ -144,11 +192,14 @@ struct ResolvedProxyTarget {
     scheme: &'static str,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
+    route_priority: i32,
+    route_weight: u32,
+    route_max_concurrent_requests: u32,
 }
 
 pub(crate) struct ProxyRequestResolution {
     config: ProxyConfig,
-    target: Option<ResolvedProxyTarget>,
+    candidates: Vec<ResolvedProxyTarget>,
 }
 
 #[derive(Clone)]
@@ -161,8 +212,11 @@ pub(crate) struct ProxyRuntimeSnapshot {
 }
 
 pub(crate) trait ProxyDataSource: Send + Sync {
-    fn proxy_auth_key(&self) -> String;
     fn proxy_snapshot(&self) -> ProxyRuntimeSnapshot;
+
+    fn proxy_config(&self) -> ProxyConfig {
+        self.proxy_snapshot().config
+    }
 
     fn resolve_proxy_request(
         &self,
@@ -183,6 +237,7 @@ pub(crate) trait ProxyDataSource: Send + Sync {
 #[derive(Clone)]
 struct ProxyRouterState {
     source: Arc<dyn ProxyDataSource>,
+    runtime: Arc<RouterRuntime>,
 }
 
 #[derive(Clone)]
@@ -191,16 +246,6 @@ struct TauriProxyDataSource {
 }
 
 impl ProxyDataSource for TauriProxyDataSource {
-    fn proxy_auth_key(&self) -> String {
-        self.app
-            .state::<AppState>()
-            .proxy_config
-            .lock()
-            .unwrap()
-            .public_api_key
-            .clone()
-    }
-
     fn proxy_snapshot(&self) -> ProxyRuntimeSnapshot {
         let state = self.app.state::<AppState>();
         let config = state.proxy_config.lock().unwrap().clone();
@@ -220,6 +265,15 @@ impl ProxyDataSource for TauriProxyDataSource {
             running,
             config,
         }
+    }
+
+    fn proxy_config(&self) -> ProxyConfig {
+        self.app
+            .state::<AppState>()
+            .proxy_config
+            .lock()
+            .unwrap()
+            .clone()
     }
 
     fn resolve_proxy_request(
@@ -254,6 +308,9 @@ struct ProxyTelemetryGuard {
     vector_metadata: Option<VectorRequestMetadata>,
     api_format: ProxyApiFormat,
     recorded: bool,
+    runtime: Arc<RouterRuntime>,
+    _global_permit: Option<GlobalRequestPermit>,
+    _target_permit: Option<TargetRequestPermit>,
 }
 
 struct ProxyTelemetryRecord {
@@ -273,6 +330,8 @@ impl ProxyTelemetryGuard {
             return;
         }
         self.recorded = true;
+        self.runtime
+            .record_completed(self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
         let _ = record_proxy_telemetry(
             self.session_id.as_deref(),
             &ProxyTelemetryRecord {
@@ -422,6 +481,7 @@ async fn shutdown_proxy_runtime(state: &AppState) -> Result<(), String> {
     let result = await_proxy_task_shutdown(sender, task).await;
 
     *state.proxy_bound_addr.lock().unwrap() = None;
+    *state.proxy_router_runtime.lock().unwrap() = None;
     if let Err(err) = &result {
         *state.proxy_last_error.lock().unwrap() = Some(err.clone());
     }
@@ -461,24 +521,46 @@ fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
     let active_routes = config.routes.iter().filter(|route| route.enabled).count();
     let last_error = state.proxy_last_error.lock().unwrap().clone();
     let actual_bound_addr = state.proxy_bound_addr.lock().unwrap().clone();
+    let bound_addr = actual_bound_addr.unwrap_or_else(|| proxy_bound_addr(&config));
+    if running {
+        if let Some(runtime) = state.proxy_router_runtime.lock().unwrap().clone() {
+            let snapshot = ProxyRuntimeSnapshot {
+                config,
+                instances: state.instances.lock().unwrap().clone(),
+                running: state.running.lock().unwrap().clone(),
+                bound_addr,
+                last_error,
+            };
+            return status_with_runtime(&snapshot, &runtime);
+        }
+    }
     ProxyStatus {
         running,
-        bound_addr: actual_bound_addr.unwrap_or_else(|| proxy_bound_addr(&config)),
+        bound_addr,
         active_routes,
+        healthy_routes: 0,
+        unhealthy_routes: active_routes,
+        in_flight_requests: 0,
+        total_requests: 0,
         last_error,
     }
 }
 
 fn proxy_status_from_snapshot(snapshot: &ProxyRuntimeSnapshot) -> ProxyStatus {
+    let active_routes = snapshot
+        .config
+        .routes
+        .iter()
+        .filter(|route| route.enabled)
+        .count();
     ProxyStatus {
         running: true,
         bound_addr: snapshot.bound_addr.clone(),
-        active_routes: snapshot
-            .config
-            .routes
-            .iter()
-            .filter(|route| route.enabled)
-            .count(),
+        active_routes,
+        healthy_routes: 0,
+        unhealthy_routes: active_routes,
+        in_flight_requests: 0,
+        total_requests: 0,
         last_error: snapshot.last_error.clone(),
     }
 }
@@ -517,12 +599,107 @@ pub(crate) fn normalize_and_validate_proxy_config(
                 .to_string(),
         );
     }
+    config.public_api_key = config.public_api_key.trim().to_string();
     config.default_instance_id = config.default_instance_id.trim().to_string();
+    config.routing_strategy = match config.routing_strategy.trim() {
+        "" | "firstHealthy" | "priorityFailover" => "priorityFailover".to_string(),
+        "roundRobin" => "roundRobin".to_string(),
+        "leastBusy" => "leastBusy".to_string(),
+        "weighted" => "weighted".to_string(),
+        unsupported => return Err(format!("不支持的路由策略：{unsupported}")),
+    };
+    config.timeout_ms = config.timeout_ms.clamp(1_000, 24 * 60 * 60 * 1_000);
+    config.connect_timeout_ms = config.connect_timeout_ms.clamp(100, 60_000);
+    config.streaming_idle_timeout_ms = config
+        .streaming_idle_timeout_ms
+        .clamp(1_000, 24 * 60 * 60 * 1_000);
+    config.health_check_interval_ms = config.health_check_interval_ms.clamp(1_000, 300_000);
+    config.health_check_timeout_ms = config
+        .health_check_timeout_ms
+        .clamp(250, config.health_check_interval_ms.max(250));
+    config.unhealthy_threshold = config.unhealthy_threshold.clamp(1, 100);
+    config.recovery_cooldown_ms = config.recovery_cooldown_ms.clamp(1_000, 3_600_000);
+    config.max_concurrent_requests = config.max_concurrent_requests.clamp(1, 100_000);
+    config.queue_timeout_ms = config.queue_timeout_ms.clamp(10, 300_000);
+    config.requests_per_minute = config.requests_per_minute.min(10_000_000);
+
+    let mut origins = HashSet::new();
+    config.cors_allowed_origins = config
+        .cors_allowed_origins
+        .into_iter()
+        .map(|origin| origin.trim().trim_end_matches('/').to_string())
+        .filter(|origin| !origin.is_empty())
+        .map(|origin| {
+            let parsed = reqwest::Url::parse(&origin)
+                .map_err(|_| format!("无效的 CORS Origin：{origin}"))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.path() != "/"
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+            {
+                return Err(format!("CORS Origin 必须是纯 HTTP(S) 源地址：{origin}"));
+            }
+            Ok(origin)
+        })
+        .collect::<Result<Vec<_>, String>>()?
+        .into_iter()
+        .filter(|origin| origins.insert(origin.to_ascii_lowercase()))
+        .collect();
+
+    let valid_scopes = HashSet::from(["inference", "discovery"]);
+    let mut key_ids = HashSet::new();
+    let mut key_values = HashSet::new();
+    for api_key in &mut config.api_keys {
+        api_key.id = api_key.id.trim().to_string();
+        api_key.name = api_key.name.trim().to_string();
+        api_key.key = api_key.key.trim().to_string();
+        if api_key.id.is_empty() || !key_ids.insert(api_key.id.clone()) {
+            loop {
+                let replacement = uuid::Uuid::new_v4().to_string();
+                if key_ids.insert(replacement.clone()) {
+                    api_key.id = replacement;
+                    break;
+                }
+            }
+        }
+        api_key.scopes = api_key
+            .scopes
+            .iter()
+            .map(|scope| scope.trim().to_ascii_lowercase())
+            .filter(|scope| !scope.is_empty())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        api_key.scopes.sort();
+        if api_key
+            .scopes
+            .iter()
+            .any(|scope| !valid_scopes.contains(scope.as_str()))
+        {
+            return Err(format!("API Key {} 包含不支持的权限范围", api_key.name));
+        }
+        api_key.requests_per_minute = api_key.requests_per_minute.min(10_000_000);
+        if api_key.enabled && !is_hashed_proxy_api_key(&api_key.key) && api_key.key.len() < 16 {
+            return Err(format!("API Key {} 至少需要 16 个字符", api_key.name));
+        }
+        if api_key.key.len() >= 16 && !is_hashed_proxy_api_key(&api_key.key) {
+            api_key.key = hash_proxy_api_key(&api_key.key);
+        }
+        if api_key.enabled && !key_values.insert(api_key.key.clone()) {
+            return Err("启用的代理 API Key 不能重复".to_string());
+        }
+    }
+
     let mut route_ids = HashSet::new();
     for route in &mut config.routes {
         route.id = route.id.trim().to_string();
         route.model_alias = route.model_alias.trim().to_string();
         route.target_instance_id = route.target_instance_id.trim().to_string();
+        route.weight = route.weight.clamp(1, 1_000);
+        route.max_concurrent_requests = route.max_concurrent_requests.min(100_000);
         if route.id.is_empty() || !route_ids.insert(route.id.clone()) {
             loop {
                 let replacement = uuid::Uuid::new_v4().to_string();
@@ -625,6 +802,171 @@ fn resolve_proxy_target(
     )
 }
 
+fn resolved_target_for_id(
+    instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, crate::models::RunningInstance>,
+    id: &str,
+    endpoint_workload: Option<ModelWorkload>,
+    route_priority: i32,
+    route_weight: u32,
+    route_max_concurrent_requests: u32,
+) -> Option<ResolvedProxyTarget> {
+    let stored_config = instances.get(id)?;
+    let running_info = running.get(id)?;
+    let config = running_info.launch_config.as_ref().unwrap_or(stored_config);
+    if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
+        return None;
+    }
+    let workload = stored_instance_workload(config, &running_info.workload);
+    Some(ResolvedProxyTarget {
+        public: ProxyTarget {
+            instance_id: id.to_string(),
+            name: config.name.clone(),
+            alias: public_model_id(config),
+            host: normalize_host(&running_info.host),
+            port: running_info.port,
+            running: true,
+        },
+        upstream_model_id: if config.alias.trim().is_empty() {
+            config.model_path.trim().to_string()
+        } else {
+            config.alias.trim().to_string()
+        },
+        api_key: effective_api_key(config),
+        api_prefix: config.api_prefix.clone(),
+        scheme: effective_server_scheme(config),
+        telemetry_session_id: running_info.telemetry_session_id.clone(),
+        workload,
+        route_priority,
+        route_weight: route_weight.max(1),
+        route_max_concurrent_requests,
+    })
+}
+
+fn resolve_proxy_candidates_from(
+    proxy_config: &ProxyConfig,
+    instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, crate::models::RunningInstance>,
+    requested_model: Option<&str>,
+    endpoint_workload: Option<ModelWorkload>,
+) -> Vec<ResolvedProxyTarget> {
+    let requested_model = requested_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty());
+
+    if let Some(model) = requested_model {
+        let matching_routes = proxy_config
+            .routes
+            .iter()
+            .enumerate()
+            .filter(|(_, route)| route_is_configured(route) && route.model_alias.trim() == model)
+            .collect::<Vec<_>>();
+        if !matching_routes.is_empty() {
+            let mut candidates = matching_routes
+                .into_iter()
+                .filter_map(|(index, route)| {
+                    resolved_target_for_id(
+                        instances,
+                        running,
+                        route.target_instance_id.trim(),
+                        endpoint_workload,
+                        route.priority,
+                        route.weight,
+                        route.max_concurrent_requests,
+                    )
+                    .map(|target| (route.priority, index, target))
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|(priority, index, _)| (*priority, *index));
+            return candidates
+                .into_iter()
+                .map(|(_, _, target)| target)
+                .collect();
+        }
+
+        let has_explicit_routes = proxy_config.routes.iter().any(route_is_configured);
+        if proxy_config.strict_model_routing && has_explicit_routes {
+            return Vec::new();
+        }
+        let routed_ids = proxy_config
+            .routes
+            .iter()
+            .filter(|route| route_is_configured(route))
+            .map(|route| route.target_instance_id.trim())
+            .collect::<HashSet<_>>();
+        let mut candidates = Vec::new();
+        let mut ids = instances.keys().collect::<Vec<_>>();
+        ids.sort();
+        for id in ids {
+            let stored_config = &instances[id];
+            let config = running
+                .get(id)
+                .and_then(|running_info| running_info.launch_config.as_ref())
+                .unwrap_or(stored_config);
+            let public_match = public_model_id(config) == model;
+            let legacy_match = !proxy_config.strict_model_routing
+                && (config.name.trim() == model || id.as_str() == model);
+            if (public_match || legacy_match) && !routed_ids.contains(id.as_str()) {
+                if let Some(target) =
+                    resolved_target_for_id(instances, running, id, endpoint_workload, 0, 1, 0)
+                {
+                    candidates.push(target);
+                }
+            }
+        }
+        if candidates.is_empty() && !proxy_config.strict_model_routing {
+            let default_instance_id = proxy_config.default_instance_id.trim();
+            if !default_instance_id.is_empty() {
+                if let Some(target) = resolved_target_for_id(
+                    instances,
+                    running,
+                    default_instance_id,
+                    endpoint_workload,
+                    0,
+                    1,
+                    0,
+                ) {
+                    candidates.push(target);
+                }
+            }
+        }
+        return candidates;
+    }
+
+    let default_instance_id = proxy_config.default_instance_id.trim();
+    if !default_instance_id.is_empty() {
+        if let Some(target) = resolved_target_for_id(
+            instances,
+            running,
+            default_instance_id,
+            endpoint_workload,
+            0,
+            1,
+            0,
+        ) {
+            return vec![target];
+        }
+    }
+
+    let routed_ids = proxy_config
+        .routes
+        .iter()
+        .filter(|route| route_is_configured(route))
+        .map(|route| route.target_instance_id.trim())
+        .collect::<HashSet<_>>();
+    let mut ids = running.keys().collect::<Vec<_>>();
+    ids.sort();
+    let mut candidates = ids
+        .into_iter()
+        .filter(|id| !routed_ids.contains(id.as_str()))
+        .filter_map(|id| resolved_target_for_id(instances, running, id, endpoint_workload, 0, 1, 0))
+        .collect::<Vec<_>>();
+    if proxy_config.strict_model_routing && candidates.len() != 1 {
+        candidates.clear();
+    }
+    candidates
+}
+
 fn resolve_proxy_target_from(
     proxy_config: &ProxyConfig,
     instances: &HashMap<String, InstanceConfig>,
@@ -632,123 +974,25 @@ fn resolve_proxy_target_from(
     requested_model: Option<&str>,
     endpoint_workload: Option<ModelWorkload>,
 ) -> Option<ResolvedProxyTarget> {
-    let mut had_candidate = false;
-    let mut routed_target_ids = None;
-    let requested_model = requested_model
-        .map(str::trim)
-        .filter(|model| !model.is_empty());
-    let resolve_id = |id: &str| {
-        let stored_config = instances.get(id)?;
-        let running_info = running.get(id)?;
-        let config = running_info.launch_config.as_ref().unwrap_or(stored_config);
-        if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
-            return None;
-        }
-        let workload = stored_instance_workload(config, &running_info.workload);
-        Some(ResolvedProxyTarget {
-            public: ProxyTarget {
-                instance_id: id.to_string(),
-                name: config.name.clone(),
-                alias: public_model_id(config),
-                host: normalize_host(&running_info.host),
-                port: running_info.port,
-                running: true,
-            },
-            upstream_model_id: if config.alias.trim().is_empty() {
-                config.model_path.trim().to_string()
-            } else {
-                config.alias.trim().to_string()
-            },
-            api_key: effective_api_key(config),
-            api_prefix: config.api_prefix.clone(),
-            scheme: effective_server_scheme(config),
-            telemetry_session_id: running_info.telemetry_session_id.clone(),
-            workload,
+    resolve_proxy_candidates_from(
+        proxy_config,
+        instances,
+        running,
+        requested_model,
+        endpoint_workload,
+    )
+    .into_iter()
+    .next()
+}
+
+fn all_resolved_targets(snapshot: &ProxyRuntimeSnapshot) -> Vec<ResolvedProxyTarget> {
+    let mut ids = snapshot.running.keys().collect::<Vec<_>>();
+    ids.sort();
+    ids.into_iter()
+        .filter_map(|id| {
+            resolved_target_for_id(&snapshot.instances, &snapshot.running, id, None, 0, 1, 0)
         })
-    };
-
-    if let Some(model) = requested_model {
-        let mut best_match: Option<(i32, usize, ResolvedProxyTarget)> = None;
-        for (index, route) in proxy_config.routes.iter().enumerate() {
-            if route.enabled && route.model_alias.trim() == model {
-                had_candidate = true;
-                let target_instance_id = route.target_instance_id.trim();
-                let candidate_order = (route.priority, index);
-                let is_better = match best_match.as_ref() {
-                    Some((priority, existing_index, _)) => {
-                        candidate_order < (*priority, *existing_index)
-                    }
-                    None => true,
-                };
-                if !target_instance_id.is_empty() && is_better {
-                    if let Some(target) = resolve_id(target_instance_id) {
-                        best_match = Some((route.priority, index, target));
-                    }
-                }
-            }
-        }
-        if let Some((_, _, target)) = best_match {
-            return Some(target);
-        }
-
-        // A matching public route is authoritative. If all of its configured
-        // targets are unavailable, do not silently send the request to an
-        // unrelated model through the generic first-healthy fallback.
-        if had_candidate {
-            return None;
-        }
-
-        let routed_ids = proxy_config
-            .routes
-            .iter()
-            .filter(|route| route_is_configured(route))
-            .map(|route| route.target_instance_id.trim())
-            .collect::<HashSet<_>>();
-        for (id, stored_config) in instances.iter() {
-            let config = running
-                .get(id)
-                .and_then(|running_info| running_info.launch_config.as_ref())
-                .unwrap_or(stored_config);
-            if public_model_id(config) == model || config.name.trim() == model || id == model {
-                had_candidate = true;
-                if routed_ids.contains(id.as_str()) {
-                    continue;
-                }
-                if let Some(target) = resolve_id(id) {
-                    return Some(target);
-                }
-            }
-        }
-
-        if had_candidate {
-            return None;
-        }
-        routed_target_ids = Some(routed_ids);
-    }
-
-    let default_instance_id = proxy_config.default_instance_id.trim();
-    if !default_instance_id.is_empty() && running.contains_key(default_instance_id) {
-        had_candidate = true;
-        if let Some(target) = resolve_id(default_instance_id) {
-            return Some(target);
-        }
-    }
-
-    if proxy_config.routing_strategy == "firstHealthy" || !had_candidate {
-        for id in running.keys() {
-            if routed_target_ids
-                .as_ref()
-                .is_some_and(|routed_ids| routed_ids.contains(id.as_str()))
-            {
-                continue;
-            }
-            if let Some(target) = resolve_id(id) {
-                return Some(target);
-            }
-        }
-    }
-
-    None
+        .collect()
 }
 
 pub(crate) fn proxy_request_resolution_from(
@@ -758,20 +1002,22 @@ pub(crate) fn proxy_request_resolution_from(
     requested_model: Option<&str>,
     endpoint_workload: Option<ModelWorkload>,
 ) -> ProxyRequestResolution {
-    let target = resolve_proxy_target_from(
+    let candidates = resolve_proxy_candidates_from(
         &config,
         instances,
         running,
         requested_model,
         endpoint_workload,
     );
-    ProxyRequestResolution { config, target }
+    ProxyRequestResolution { config, candidates }
 }
 
 fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
-    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
-        return Ok(None);
-    };
+    let value = serde_json::from_slice::<serde_json::Value>(body)
+        .map_err(|_| "request body must be a valid JSON object".to_string())?;
+    if !value.is_object() {
+        return Err("request body must be a JSON object".to_string());
+    }
     let Some(model) = value.get("model").and_then(|model| model.as_str()) else {
         return Ok(None);
     };
@@ -782,6 +1028,13 @@ fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
         ));
     }
     Ok(Some(model.to_string()))
+}
+
+fn request_uses_streaming(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("stream").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
 }
 
 fn rewrite_request_model(body: &Bytes, upstream_model_id: &str) -> Bytes {
@@ -847,21 +1100,91 @@ fn is_proxy_authorized(public_api_key: &str, headers: &HeaderMap) -> bool {
         return true;
     }
     let expected = public_api_key.trim();
-    let bearer = format!("Bearer {}", expected);
     let auth_ok = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
+        .map(str::trim)
         .map(|value| {
-            constant_time_eq(value.as_bytes(), bearer.as_bytes())
-                || constant_time_eq(value.as_bytes(), expected.as_bytes())
+            value
+                .find(char::is_whitespace)
+                .and_then(|separator| {
+                    value[..separator]
+                        .eq_ignore_ascii_case("bearer")
+                        .then(|| value[separator..].trim_start())
+                })
+                .unwrap_or(value)
         })
+        .map(|value| proxy_api_key_matches(expected, value))
         .unwrap_or(false);
     let api_key_ok = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
-        .map(|value| constant_time_eq(value.as_bytes(), expected.as_bytes()))
+        .map(|value| proxy_api_key_matches(expected, value))
         .unwrap_or(false);
     auth_ok || api_key_ok
+}
+
+#[derive(Debug, Clone)]
+struct ProxyAuthContext {
+    client_id: String,
+    requests_per_minute: u32,
+    scopes: Vec<String>,
+}
+
+fn request_scope(path: &str) -> &'static str {
+    if path == "/"
+        || matches!(
+            path,
+            "/health" | "/live" | "/ready" | "/metrics" | "/props" | "/slots"
+        )
+        || path == "/v1/models"
+        || path.starts_with("/v1/models/")
+    {
+        "discovery"
+    } else {
+        "inference"
+    }
+}
+
+fn authenticate_proxy_request(
+    config: &ProxyConfig,
+    _path: &str,
+    headers: &HeaderMap,
+) -> Option<ProxyAuthContext> {
+    let enabled_keys = config
+        .api_keys
+        .iter()
+        .filter(|api_key| api_key.enabled && !api_key.key.trim().is_empty())
+        .collect::<Vec<_>>();
+    let legacy_enabled = !config.public_api_key.trim().is_empty();
+    if !legacy_enabled && enabled_keys.is_empty() {
+        return Some(ProxyAuthContext {
+            client_id: "anonymous".into(),
+            requests_per_minute: config.requests_per_minute,
+            scopes: vec!["inference".into(), "discovery".into()],
+        });
+    }
+    if legacy_enabled && is_proxy_authorized(&config.public_api_key, headers) {
+        return Some(ProxyAuthContext {
+            client_id: "legacy".into(),
+            requests_per_minute: config.requests_per_minute,
+            scopes: vec!["inference".into(), "discovery".into()],
+        });
+    }
+    for api_key in enabled_keys {
+        if is_proxy_authorized(&api_key.key, headers) {
+            return Some(ProxyAuthContext {
+                client_id: api_key.id.clone(),
+                requests_per_minute: if api_key.requests_per_minute == 0 {
+                    config.requests_per_minute
+                } else {
+                    api_key.requests_per_minute
+                },
+                scopes: api_key.scopes.clone(),
+            });
+        }
+    }
+    None
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
@@ -879,6 +1202,7 @@ fn proxy_request_is_authorized(config: &ProxyConfig, _path: &str, headers: &Head
     is_proxy_authorized(&config.public_api_key, headers)
 }
 
+#[cfg(test)]
 fn authorize_and_strip_proxy_credentials(public_api_key: &str, headers: &mut HeaderMap) -> bool {
     if !is_proxy_authorized(public_api_key, headers) {
         return false;
@@ -888,20 +1212,134 @@ fn authorize_and_strip_proxy_credentials(public_api_key: &str, headers: &mut Hea
     true
 }
 
-async fn proxy_auth_middleware(
+fn cors_origin(config: &ProxyConfig, headers: &HeaderMap) -> Result<Option<String>, String> {
+    let Some(origin) = headers.get("origin").and_then(|value| value.to_str().ok()) else {
+        return Ok(None);
+    };
+    let normalized = origin.trim().trim_end_matches('/');
+    if config
+        .cors_allowed_origins
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(normalized))
+    {
+        Ok(Some(normalized.to_string()))
+    } else {
+        Err("origin is not allowed by the router CORS policy".into())
+    }
+}
+
+fn apply_cors_headers(response: &mut Response, origin: Option<&str>) {
+    let Some(origin) = origin else {
+        return;
+    };
+    if let Ok(value) = HeaderValue::from_str(origin) {
+        response
+            .headers_mut()
+            .insert("access-control-allow-origin", value);
+    }
+    response
+        .headers_mut()
+        .append("vary", HeaderValue::from_static("Origin"));
+    response.headers_mut().insert(
+        "access-control-allow-methods",
+        HeaderValue::from_static("GET, POST, OPTIONS"),
+    );
+    response.headers_mut().insert(
+        "access-control-allow-headers",
+        HeaderValue::from_static(
+            "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-request-id, openai-organization, openai-project",
+        ),
+    );
+    response.headers_mut().insert(
+        "access-control-expose-headers",
+        HeaderValue::from_static(
+            "request-id, x-request-id, retry-after, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining",
+        ),
+    );
+    response
+        .headers_mut()
+        .insert("access-control-max-age", HeaderValue::from_static("600"));
+}
+
+fn apply_rate_headers(response: &mut Response, format: ProxyApiFormat, limit: u32, remaining: u32) {
+    if limit == 0 {
+        return;
+    }
+    let (limit_name, remaining_name) = if format.is_anthropic() {
+        (
+            "anthropic-ratelimit-requests-limit",
+            "anthropic-ratelimit-requests-remaining",
+        )
+    } else {
+        (
+            "x-ratelimit-limit-requests",
+            "x-ratelimit-remaining-requests",
+        )
+    };
+    if let Ok(value) = HeaderValue::from_str(&limit.to_string()) {
+        response.headers_mut().insert(limit_name, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&remaining.to_string()) {
+        response.headers_mut().insert(remaining_name, value);
+    }
+}
+
+async fn proxy_security_middleware(
     State(router_state): State<ProxyRouterState>,
     mut request: Request,
     next: Next,
 ) -> Response {
-    let public_api_key = router_state.source.proxy_auth_key();
-    if !authorize_and_strip_proxy_credentials(&public_api_key, request.headers_mut()) {
-        let format = request_format(
-            request.uri().path(),
-            request.headers().contains_key("anthropic-version"),
-        );
-        return error_response(format, StatusCode::UNAUTHORIZED, "unauthorized");
+    let config = router_state.source.proxy_config();
+    let format = request_format(
+        request.uri().path(),
+        request.headers().contains_key("anthropic-version"),
+    );
+    let origin = match cors_origin(&config, request.headers()) {
+        Ok(origin) => origin,
+        Err(error) => return error_response(format, StatusCode::FORBIDDEN, &error),
+    };
+    if request.method() == Method::OPTIONS {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        apply_cors_headers(&mut response, origin.as_deref());
+        ensure_request_id_header(&mut response, format);
+        return response;
     }
-    next.run(request).await
+    let Some(auth) = authenticate_proxy_request(&config, request.uri().path(), request.headers())
+    else {
+        let mut response = error_response(format, StatusCode::UNAUTHORIZED, "unauthorized");
+        apply_cors_headers(&mut response, origin.as_deref());
+        return response;
+    };
+    if !auth.scopes.is_empty()
+        && !auth
+            .scopes
+            .iter()
+            .any(|scope| scope == request_scope(request.uri().path()))
+    {
+        let mut response = error_response(format, StatusCode::FORBIDDEN, "API key scope denied");
+        apply_cors_headers(&mut response, origin.as_deref());
+        return response;
+    }
+    let rate = router_state
+        .runtime
+        .check_rate_limit(&auth.client_id, auth.requests_per_minute);
+    if !rate.allowed {
+        let mut response =
+            error_response(format, StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
+        if let Ok(value) = HeaderValue::from_str(&rate.retry_after_secs.to_string()) {
+            response.headers_mut().insert("retry-after", value);
+        }
+        apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
+        apply_cors_headers(&mut response, origin.as_deref());
+        return response;
+    }
+    request.headers_mut().remove("authorization");
+    request.headers_mut().remove("x-api-key");
+    let mut response = next.run(request).await;
+    ensure_request_id_header(&mut response, format);
+    apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
+    apply_cors_headers(&mut response, origin.as_deref());
+    response
 }
 
 fn target_url(target: &ResolvedProxyTarget, uri: &Uri) -> String {
@@ -1017,14 +1455,382 @@ async fn collect_bounded_response_body(
     Ok(Bytes::from(body))
 }
 
+fn target_url_for_path(target: &ResolvedProxyTarget, path: &str) -> String {
+    let uri = path
+        .parse::<Uri>()
+        .unwrap_or_else(|_| Uri::from_static("/health"));
+    target_url(target, &uri)
+}
+
+fn query_parameter(uri: &Uri, name: &str) -> Option<String> {
+    let url = reqwest::Url::parse(&format!("http://router.local{}", uri)).ok()?;
+    url.query_pairs()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.into_owned())
+}
+
+fn routing_candidate(target: &ResolvedProxyTarget) -> RoutingCandidate {
+    RoutingCandidate {
+        instance_id: target.public.instance_id.clone(),
+        priority: target.route_priority,
+        weight: target.route_weight,
+        max_concurrent_requests: target.route_max_concurrent_requests,
+    }
+}
+
+fn routing_group_key(
+    requested_model: Option<&str>,
+    endpoint_workload: Option<ModelWorkload>,
+) -> String {
+    format!(
+        "{}:{}",
+        endpoint_workload
+            .unwrap_or(ModelWorkload::Inference)
+            .as_str(),
+        requested_model.unwrap_or("__default__")
+    )
+}
+
+fn select_resolved_target(
+    router_state: &ProxyRouterState,
+    requested_model: Option<&str>,
+    endpoint_workload: Option<ModelWorkload>,
+) -> Option<(ProxyConfig, ResolvedProxyTarget)> {
+    let snapshot = router_state.source.proxy_snapshot();
+    let candidates = resolve_proxy_candidates_from(
+        &snapshot.config,
+        &snapshot.instances,
+        &snapshot.running,
+        requested_model,
+        endpoint_workload,
+    );
+    let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
+    let selected = router_state.runtime.select_target(
+        &scheduling,
+        &snapshot.config.routing_strategy,
+        &routing_group_key(requested_model, endpoint_workload),
+    )?;
+    let target = candidates
+        .into_iter()
+        .find(|target| target.public.instance_id == selected.instance_id)?;
+    Some((snapshot.config, target))
+}
+
+async fn fetch_target_json(
+    target: &ResolvedProxyTarget,
+    path: &str,
+    config: &ProxyConfig,
+) -> Result<serde_json::Value, String> {
+    let client = proxy_http_client(config.connect_timeout_ms);
+    let mut request = client
+        .get(target_url_for_path(target, path))
+        .timeout(Duration::from_millis(
+            config.health_check_timeout_ms.max(250),
+        ))
+        .header("accept-encoding", "identity");
+    if !target.api_key.trim().is_empty() {
+        request = request.bearer_auth(target.api_key.trim());
+    }
+    let response = request.send().await.map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("upstream returned {}", response.status().as_u16()));
+    }
+    response.json().await.map_err(|error| error.to_string())
+}
+
+fn capabilities_from_values(
+    props: Option<&serde_json::Value>,
+    slots: Option<&serde_json::Value>,
+    previous: &TargetCapabilities,
+) -> TargetCapabilities {
+    let mut capabilities = previous.clone();
+    if let Some(props) = props {
+        capabilities.context_length = props
+            .pointer("/default_generation_settings/n_ctx")
+            .and_then(serde_json::Value::as_u64)
+            .or(capabilities.context_length);
+        capabilities.total_slots = props
+            .get("total_slots")
+            .and_then(serde_json::Value::as_u64)
+            .or(capabilities.total_slots);
+        capabilities.modalities = props
+            .get("modalities")
+            .cloned()
+            .unwrap_or_else(|| capabilities.modalities.clone());
+        capabilities.chat_template_caps = props
+            .get("chat_template_caps")
+            .cloned()
+            .unwrap_or_else(|| capabilities.chat_template_caps.clone());
+        capabilities.is_sleeping = props
+            .get("is_sleeping")
+            .and_then(serde_json::Value::as_bool)
+            .or(capabilities.is_sleeping);
+    }
+    if let Some(items) = slots.and_then(serde_json::Value::as_array) {
+        capabilities.total_slots = Some(items.len() as u64);
+        capabilities.busy_slots = Some(
+            items
+                .iter()
+                .filter(|slot| {
+                    slot.get("is_processing")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                })
+                .count() as u64,
+        );
+        capabilities.context_length = items
+            .iter()
+            .filter_map(|slot| slot.get("n_ctx").and_then(serde_json::Value::as_u64))
+            .max()
+            .or(capabilities.context_length);
+    }
+    capabilities.updated_at_ms = current_time_ms().max(0) as u64;
+    capabilities
+}
+
+async fn probe_target(
+    runtime: Arc<RouterRuntime>,
+    target: ResolvedProxyTarget,
+    config: ProxyConfig,
+) {
+    let started = std::time::Instant::now();
+    let health = fetch_target_json(&target, "/health", &config).await;
+    if let Err(error) = health {
+        runtime.mark_probe_failure(
+            &target.public.instance_id,
+            error,
+            config.unhealthy_threshold,
+            Duration::from_millis(config.recovery_cooldown_ms),
+        );
+        return;
+    }
+    let previous = runtime
+        .target_snapshot(&target.public.instance_id)
+        .capabilities;
+    let props = if runtime.capabilities_stale(&target.public.instance_id, TARGET_CAPABILITY_MAX_AGE)
+    {
+        fetch_target_json(&target, "/props", &config).await.ok()
+    } else {
+        None
+    };
+    let slots = fetch_target_json(&target, "/slots", &config).await.ok();
+    let capabilities = capabilities_from_values(props.as_ref(), slots.as_ref(), &previous);
+    runtime.mark_probe_success(
+        &target.public.instance_id,
+        started.elapsed().as_secs_f64() * 1_000.0,
+        Some(capabilities),
+    );
+}
+
+async fn probe_snapshot_targets(source: Arc<dyn ProxyDataSource>, runtime: Arc<RouterRuntime>) {
+    let snapshot = source.proxy_snapshot();
+    let targets = all_resolved_targets(&snapshot);
+    let target_ids = targets
+        .iter()
+        .map(|target| target.public.instance_id.clone())
+        .collect::<HashSet<_>>();
+    runtime.retain_targets(&target_ids);
+    futures_util::future::join_all(
+        targets
+            .into_iter()
+            .map(|target| probe_target(runtime.clone(), target, snapshot.config.clone())),
+    )
+    .await;
+}
+
+fn spawn_health_probe_loop(source: Weak<dyn ProxyDataSource>, runtime: Weak<RouterRuntime>) {
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    handle.spawn(async move {
+        loop {
+            let (Some(source), Some(runtime)) = (source.upgrade(), runtime.upgrade()) else {
+                break;
+            };
+            let interval_ms = source.proxy_config().health_check_interval_ms.max(1_000);
+            probe_snapshot_targets(source, runtime).await;
+            tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+        }
+    });
+}
+
+pub(crate) fn status_with_runtime(
+    snapshot: &ProxyRuntimeSnapshot,
+    runtime: &RouterRuntime,
+) -> ProxyStatus {
+    let mut status = proxy_status_from_snapshot(snapshot);
+    let mut route_ids = snapshot
+        .config
+        .routes
+        .iter()
+        .filter(|route| route_is_configured(route))
+        .map(|route| route.target_instance_id.clone())
+        .collect::<Vec<_>>();
+    let explicitly_routed = route_ids.iter().cloned().collect::<HashSet<_>>();
+    route_ids.extend(
+        snapshot
+            .running
+            .keys()
+            .filter(|id| !explicitly_routed.contains(id.as_str()))
+            .cloned(),
+    );
+    status.active_routes = route_ids.len();
+    let (healthy, unhealthy) = runtime.route_health_counts(route_ids);
+    status.healthy_routes = healthy;
+    status.unhealthy_routes = unhealthy;
+    status.in_flight_requests = runtime.in_flight_requests();
+    status.total_requests = runtime.total_requests();
+    status
+}
+
 async fn proxy_health(State(router_state): State<ProxyRouterState>) -> Json<ProxyStatus> {
-    Json(proxy_status_from_snapshot(
-        &router_state.source.proxy_snapshot(),
-    ))
+    let snapshot = router_state.source.proxy_snapshot();
+    Json(status_with_runtime(&snapshot, &router_state.runtime))
+}
+
+async fn proxy_live(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
+    Json(json!({
+        "status": "live",
+        "service": "llama-server-manager routing proxy",
+        "in_flight_requests": router_state.runtime.in_flight_requests(),
+        "total_requests": router_state.runtime.total_requests(),
+    }))
+}
+
+async fn proxy_ready(State(router_state): State<ProxyRouterState>) -> Response {
+    probe_snapshot_targets(router_state.source.clone(), router_state.runtime.clone()).await;
+    let snapshot = router_state.source.proxy_snapshot();
+    let status = status_with_runtime(&snapshot, &router_state.runtime);
+    let target_ids = snapshot.running.keys().cloned().collect::<Vec<_>>();
+    let targets = router_state.runtime.snapshots(target_ids);
+    let ready = status.healthy_routes > 0;
+    let code = if ready {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (
+        code,
+        Json(json!({
+            "status": if ready { "ready" } else { "unavailable" },
+            "healthy_routes": status.healthy_routes,
+            "unhealthy_routes": status.unhealthy_routes,
+            "targets": targets,
+        })),
+    )
+        .into_response()
+}
+
+async fn proxy_metrics(State(router_state): State<ProxyRouterState>) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
+        .body(Body::from(router_state.runtime.prometheus_metrics()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+fn sanitized_props(
+    model: &str,
+    value: &serde_json::Value,
+    health: &TargetHealthSnapshot,
+) -> serde_json::Value {
+    json!({
+        "model": model,
+        "default_generation_settings": {
+            "n_ctx": value.pointer("/default_generation_settings/n_ctx").and_then(serde_json::Value::as_u64)
+        },
+        "total_slots": value.get("total_slots").and_then(serde_json::Value::as_u64),
+        "chat_template_caps": value.get("chat_template_caps").cloned().unwrap_or(serde_json::Value::Null),
+        "modalities": value.get("modalities").cloned().unwrap_or(serde_json::Value::Null),
+        "is_sleeping": value.get("is_sleeping").and_then(serde_json::Value::as_bool),
+        "router": {
+            "status": health.status,
+            "latency_ms": health.latency_ms,
+            "active_requests": health.active_requests,
+        }
+    })
+}
+
+fn sanitized_slots(value: &serde_json::Value) -> serde_json::Value {
+    serde_json::Value::Array(
+        value
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|slot| {
+                let mut sanitized = serde_json::Map::new();
+                for key in ["id", "n_ctx", "speculative", "is_processing", "n_past"] {
+                    if let Some(value) = slot.get(key) {
+                        sanitized.insert(key.to_string(), value.clone());
+                    }
+                }
+                serde_json::Value::Object(sanitized)
+            })
+            .collect(),
+    )
+}
+
+async fn proxy_props(State(router_state): State<ProxyRouterState>, uri: Uri) -> Response {
+    let requested_model = query_parameter(&uri, "model");
+    let Some((config, target)) =
+        select_resolved_target(&router_state, requested_model.as_deref(), None)
+    else {
+        return error_response(
+            ProxyApiFormat::OpenAi,
+            StatusCode::NOT_FOUND,
+            "no ready model matches the selector",
+        );
+    };
+    match fetch_target_json(&target, "/props", &config).await {
+        Ok(value) => {
+            let public_model =
+                public_response_model(&config, &target.public, requested_model.as_deref());
+            Json(sanitized_props(
+                &public_model,
+                &value,
+                &router_state
+                    .runtime
+                    .target_snapshot(&target.public.instance_id),
+            ))
+            .into_response()
+        }
+        Err(error) => error_response(
+            ProxyApiFormat::OpenAi,
+            StatusCode::BAD_GATEWAY,
+            &format!("upstream props request failed: {error}"),
+        ),
+    }
+}
+
+async fn proxy_slots(State(router_state): State<ProxyRouterState>, uri: Uri) -> Response {
+    let requested_model = query_parameter(&uri, "model");
+    let Some((config, target)) =
+        select_resolved_target(&router_state, requested_model.as_deref(), None)
+    else {
+        return error_response(
+            ProxyApiFormat::OpenAi,
+            StatusCode::NOT_FOUND,
+            "no ready model matches the selector",
+        );
+    };
+    let upstream_path = if query_parameter(&uri, "fail_on_no_slot").as_deref() == Some("1") {
+        "/slots?fail_on_no_slot=1"
+    } else {
+        "/slots"
+    };
+    match fetch_target_json(&target, upstream_path, &config).await {
+        Ok(value) => Json(sanitized_slots(&value)).into_response(),
+        Err(error) => error_response(
+            ProxyApiFormat::OpenAi,
+            StatusCode::BAD_GATEWAY,
+            &format!("upstream slots request failed: {error}"),
+        ),
+    }
 }
 
 async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
-    let status = proxy_status_from_snapshot(&router_state.source.proxy_snapshot());
+    let snapshot = router_state.source.proxy_snapshot();
+    let status = status_with_runtime(&snapshot, &router_state.runtime);
     Json(json!({
         "service": "llama-server-manager routing proxy",
         "status": if status.running { "running" } else { "stopped" },
@@ -1032,9 +1838,16 @@ async fn proxy_index(State(router_state): State<ProxyRouterState>) -> Json<serde
         "active_routes": status.active_routes,
         "endpoints": {
             "health": "/health",
+            "liveness": "/live",
+            "readiness": "/ready",
+            "metrics": "/metrics",
+            "props": "/props?model={public_model}",
+            "slots": "/slots?model={public_model}",
             "models": "/v1/models",
             "chat_completions": "/v1/chat/completions",
             "completions": "/v1/completions",
+            "responses": "/v1/responses",
+            "responses_input_tokens": "/v1/responses/input_tokens",
             "embeddings": "/v1/embeddings",
             "anthropic_messages": "/v1/messages",
             "anthropic_count_tokens": "/v1/messages/count_tokens"
@@ -1062,21 +1875,42 @@ async fn proxy_models(State(router_state): State<ProxyRouterState>) -> Json<serd
     let last_id = ids.last().cloned();
     Json(json!({
         "object": "list",
-        "data": ids.into_iter().map(proxy_model_descriptor).collect::<Vec<_>>(),
+        "data": ids.into_iter().map(|id| {
+            let health = resolve_proxy_candidates_from(&config, &snapshot.instances, &snapshot.running, Some(&id), None)
+                .first()
+                .map(|target| router_state.runtime.target_snapshot(&target.public.instance_id));
+            proxy_model_descriptor(id, health.as_ref())
+        }).collect::<Vec<_>>(),
         "first_id": first_id,
         "last_id": last_id,
         "has_more": false
     }))
 }
 
-fn proxy_model_descriptor(id: String) -> serde_json::Value {
+fn proxy_model_descriptor(id: String, health: Option<&TargetHealthSnapshot>) -> serde_json::Value {
+    let context_length = health.and_then(|health| health.capabilities.context_length);
+    let status = health
+        .map(|health| health.status.as_str())
+        .unwrap_or("unknown");
+    let capabilities = health.map(|health| &health.capabilities);
     json!({
         "id": id,
         "object": "model",
         "owned_by": "llama-server-manager",
+        "created": 0,
         "type": "model",
         "display_name": id,
-        "created_at": "1970-01-01T00:00:00Z"
+        "created_at": "1970-01-01T00:00:00Z",
+        "context_length": context_length,
+        "status": status,
+        "capabilities": {
+            "chat_completions": true,
+            "responses": true,
+            "anthropic_messages": true,
+            "tools": capabilities.and_then(|caps| caps.chat_template_caps.get("supports_tools")).and_then(serde_json::Value::as_bool),
+            "vision": capabilities.and_then(|caps| caps.modalities.get("vision")).and_then(serde_json::Value::as_bool),
+            "video": capabilities.and_then(|caps| caps.modalities.get("video")).and_then(serde_json::Value::as_bool),
+        }
     })
 }
 
@@ -1092,7 +1926,20 @@ async fn proxy_model(
         .into_iter()
         .any(|id| id == model_id)
     {
-        let mut response = Json(proxy_model_descriptor(model_id)).into_response();
+        let health = resolve_proxy_candidates_from(
+            &snapshot.config,
+            &snapshot.instances,
+            &snapshot.running,
+            Some(&model_id),
+            None,
+        )
+        .first()
+        .map(|target| {
+            router_state
+                .runtime
+                .target_snapshot(&target.public.instance_id)
+        });
+        let mut response = Json(proxy_model_descriptor(model_id, health.as_ref())).into_response();
         add_format_header(&mut response, format);
         response
     } else {
@@ -1172,20 +2019,89 @@ async fn proxy_upstream(
         Ok(model) => model,
         Err(error) => return error_response(api_format, StatusCode::BAD_REQUEST, &error),
     };
+    let request_streaming = request_uses_streaming(&body);
     let vector_metadata = vector_request_metadata(uri.path(), &body);
     let resolution = router_state.source.resolve_proxy_request(
         requested_model.as_deref(),
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
     let proxy_config = resolution.config;
-    let target = match resolution.target {
-        Some(target) => target,
+    let global_permit = match router_state
+        .runtime
+        .acquire_global(
+            proxy_config.max_concurrent_requests,
+            Duration::from_millis(proxy_config.queue_timeout_ms),
+        )
+        .await
+    {
+        Some(permit) => permit,
         None => {
+            let mut response = error_response(
+                api_format,
+                StatusCode::TOO_MANY_REQUESTS,
+                "router concurrency limit exceeded",
+            );
+            if let Ok(value) = HeaderValue::from_str(
+                &proxy_config
+                    .queue_timeout_ms
+                    .saturating_add(999)
+                    .div_ceil(1_000)
+                    .to_string(),
+            ) {
+                response.headers_mut().insert("retry-after", value);
+            }
+            return response;
+        }
+    };
+    let mut candidates = resolution.candidates;
+    let routing_key = routing_group_key(
+        requested_model.as_deref(),
+        vector_metadata.as_ref().map(|metadata| metadata.workload),
+    );
+    if candidates.is_empty() {
+        return error_response(
+            api_format,
+            if requested_model.is_some() {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            },
+            "no public route matches the requested model",
+        );
+    }
+    let (target, target_permit) = loop {
+        let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
+        let Some(selected) = router_state.runtime.select_target(
+            &scheduling,
+            &proxy_config.routing_strategy,
+            &routing_key,
+        ) else {
+            return error_response(
+                api_format,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "all matching routes are unavailable or at capacity",
+            );
+        };
+        let Some(index) = candidates
+            .iter()
+            .position(|target| target.public.instance_id == selected.instance_id)
+        else {
             return error_response(
                 api_format,
                 StatusCode::BAD_GATEWAY,
-                "no running instance matches the requested model",
-            )
+                "router selected an unknown target",
+            );
+        };
+        let target = candidates.remove(index);
+        if let Some(permit) = router_state.runtime.acquire_target(&selected) {
+            break (target, permit);
+        }
+        if candidates.is_empty() {
+            return error_response(
+                api_format,
+                StatusCode::TOO_MANY_REQUESTS,
+                "all matching targets are at capacity",
+            );
         }
     };
     if !vector_endpoint_matches_target(
@@ -1216,10 +2132,13 @@ async fn proxy_upstream(
         }
     };
 
-    let mut request = PROXY_HTTP_CLIENT
+    let client = proxy_http_client(proxy_config.connect_timeout_ms);
+    let mut request = client
         .request(reqwest_method, target_url(&target, &uri))
-        .timeout(Duration::from_millis(proxy_config.timeout_ms.max(1_000)))
         .header("accept-encoding", "identity");
+    if !request_streaming {
+        request = request.timeout(Duration::from_millis(proxy_config.timeout_ms.max(1_000)));
+    }
     let connection_tokens = connection_header_tokens(&headers);
     for (name, value) in headers.iter() {
         let lower = name.as_str().to_ascii_lowercase();
@@ -1235,6 +2154,15 @@ async fn proxy_upstream(
     let response = match request.body(upstream_body).send().await {
         Ok(response) => response,
         Err(err) => {
+            router_state.runtime.mark_request_failure(
+                &target.public.instance_id,
+                err.to_string(),
+                proxy_config.unhealthy_threshold,
+                Duration::from_millis(proxy_config.recovery_cooldown_ms),
+            );
+            router_state
+                .runtime
+                .record_completed(started_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
             let _ = record_proxy_telemetry(
                 target.telemetry_session_id.as_deref(),
                 &ProxyTelemetryRecord {
@@ -1256,9 +2184,22 @@ async fn proxy_upstream(
             );
         }
     };
-
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+        router_state.runtime.mark_request_failure(
+            &target.public.instance_id,
+            format!("upstream returned {}", status.as_u16()),
+            proxy_config.unhealthy_threshold,
+            Duration::from_millis(proxy_config.recovery_cooldown_ms),
+        );
+    } else {
+        router_state.runtime.mark_probe_success(
+            &target.public.instance_id,
+            started_at.elapsed().as_secs_f64() * 1_000.0,
+            None,
+        );
+    }
     let mut builder = Response::builder().status(status);
     let response_content_type = response
         .headers()
@@ -1273,7 +2214,7 @@ async fn proxy_upstream(
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
         if lower == "content-length"
-            || (api_format.is_anthropic() && !status_success && lower == "content-type")
+            || (!status_success && lower == "content-type")
             || (api_format.is_anthropic() && !status_success && lower == "request-id")
             || is_hop_by_hop_header(&lower, &response_connection_tokens)
         {
@@ -1286,7 +2227,7 @@ async fn proxy_upstream(
             builder = builder.header(header_name, header_value);
         }
     }
-    if api_format.is_anthropic() && !status_success {
+    if !status_success {
         builder = builder.header("content-type", "application/json");
     }
 
@@ -1302,6 +2243,9 @@ async fn proxy_upstream(
         vector_metadata,
         api_format,
         recorded: false,
+        runtime: router_state.runtime.clone(),
+        _global_permit: Some(global_permit),
+        _target_permit: Some(target_permit),
     };
     if (response_is_json && !response_is_sse) || (api_format.is_anthropic() && !status_success) {
         let response_body =
@@ -1356,13 +2300,21 @@ async fn proxy_upstream(
                 telemetry_guard,
                 response_model,
                 api_format,
+                Duration::from_millis(proxy_config.streaming_idle_timeout_ms),
             ),
-            move |(mut line_stream, finalized, mut telemetry_guard, response_model, api_format)| async move {
+            move |(
+                mut line_stream,
+                finalized,
+                mut telemetry_guard,
+                response_model,
+                api_format,
+                idle_timeout,
+            )| async move {
                 if finalized {
                     return None;
                 }
-                match line_stream.as_mut().next().await {
-                    Some(Ok(line)) => {
+                match tokio::time::timeout(idle_timeout, line_stream.as_mut().next()).await {
+                    Ok(Some(Ok(line))) => {
                         let line = rewrite_sse_line(&line, &response_model, api_format);
                         Some((
                             Ok::<_, std::io::Error>(Bytes::from(format!("{line}\n"))),
@@ -1372,10 +2324,11 @@ async fn proxy_upstream(
                                 telemetry_guard,
                                 response_model,
                                 api_format,
+                                idle_timeout,
                             ),
                         ))
                     }
-                    Some(Err(err)) => {
+                    Ok(Some(Err(err))) => {
                         let error_text = err.to_string();
                         telemetry_guard.record_once(Some(error_text.clone()));
                         Some((
@@ -1386,16 +2339,38 @@ async fn proxy_upstream(
                                 telemetry_guard,
                                 response_model,
                                 api_format,
+                                idle_timeout,
                             ),
                         ))
                     }
-                    None => {
+                    Ok(None) => {
                         telemetry_guard.record_once(if status_success {
                             None
                         } else {
                             Some(format!("upstream returned {}", http_status))
                         });
                         None
+                    }
+                    Err(_) => {
+                        let error_text = format!(
+                            "upstream stream was idle for {} milliseconds",
+                            idle_timeout.as_millis()
+                        );
+                        telemetry_guard.record_once(Some(error_text.clone()));
+                        Some((
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                error_text,
+                            )),
+                            (
+                                line_stream,
+                                true,
+                                telemetry_guard,
+                                response_model,
+                                api_format,
+                                idle_timeout,
+                            ),
+                        ))
                     }
                 }
             },
@@ -1414,29 +2389,47 @@ async fn proxy_upstream(
     }
 
     let upstream_stream = Box::pin(response.bytes_stream());
+    let idle_timeout = Duration::from_millis(proxy_config.streaming_idle_timeout_ms);
     let stream = futures_util::stream::unfold(
-        (upstream_stream, false, telemetry_guard),
-        move |(mut upstream_stream, finalized, mut telemetry_guard)| async move {
+        (upstream_stream, false, telemetry_guard, idle_timeout),
+        move |(mut upstream_stream, finalized, mut telemetry_guard, idle_timeout)| async move {
             if finalized {
                 return None;
             }
-            match upstream_stream.as_mut().next().await {
-                Some(Ok(bytes)) => Some((Ok(bytes), (upstream_stream, false, telemetry_guard))),
-                Some(Err(err)) => {
+            match tokio::time::timeout(idle_timeout, upstream_stream.as_mut().next()).await {
+                Ok(Some(Ok(bytes))) => Some((
+                    Ok(bytes),
+                    (upstream_stream, false, telemetry_guard, idle_timeout),
+                )),
+                Ok(Some(Err(err))) => {
                     let error_text = err.to_string();
                     telemetry_guard.record_once(Some(error_text.clone()));
                     Some((
                         Err(std::io::Error::other(error_text)),
-                        (upstream_stream, true, telemetry_guard),
+                        (upstream_stream, true, telemetry_guard, idle_timeout),
                     ))
                 }
-                None => {
+                Ok(None) => {
                     telemetry_guard.record_once(if status_success {
                         None
                     } else {
                         Some(format!("upstream returned {}", http_status))
                     });
                     None
+                }
+                Err(_) => {
+                    let error_text = format!(
+                        "upstream stream was idle for {} milliseconds",
+                        idle_timeout.as_millis()
+                    );
+                    telemetry_guard.record_once(Some(error_text.clone()));
+                    Some((
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            error_text,
+                        )),
+                        (upstream_stream, true, telemetry_guard, idle_timeout),
+                    ))
                 }
             }
         },
@@ -1454,50 +2447,86 @@ async fn proxy_upstream(
     }
 }
 
+fn proxy_router_from_source_with_runtime_and_limits(
+    source: Arc<dyn ProxyDataSource>,
+    runtime: Arc<RouterRuntime>,
+    request_body_limit: usize,
+    anthropic_request_body_limit: usize,
+) -> Router {
+    let weak_source: Weak<dyn ProxyDataSource> = Arc::downgrade(&source);
+    spawn_health_probe_loop(weak_source, Arc::downgrade(&runtime));
+    let router_state = ProxyRouterState { source, runtime };
+    let security_layer =
+        middleware::from_fn_with_state(router_state.clone(), proxy_security_middleware);
+    Router::new()
+        .route("/", get(proxy_index))
+        .route("/health", get(proxy_health))
+        .route("/live", get(proxy_live))
+        .route("/ready", get(proxy_ready))
+        .route("/metrics", get(proxy_metrics))
+        .route("/props", get(proxy_props))
+        .route("/slots", get(proxy_slots))
+        .route("/v1/models", get(proxy_models))
+        .route("/v1/models/:model_id", get(proxy_model))
+        .route("/v1/chat/completions", post(proxy_upstream))
+        .route("/v1/chat/completions/input_tokens", post(proxy_upstream))
+        .route("/v1/completions", post(proxy_upstream))
+        .route("/v1/responses", post(proxy_upstream))
+        .route("/v1/responses/input_tokens", post(proxy_upstream))
+        .route(
+            "/v1/messages",
+            post(proxy_upstream).layer(DefaultBodyLimit::max(anthropic_request_body_limit)),
+        )
+        .route(
+            "/v1/messages/count_tokens",
+            post(proxy_upstream).layer(DefaultBodyLimit::max(anthropic_request_body_limit)),
+        )
+        .route("/embedding", post(proxy_upstream))
+        .route("/embeddings", post(proxy_upstream))
+        .route("/v1/embeddings", post(proxy_upstream))
+        .route("/rerank", post(proxy_upstream))
+        .route("/reranking", post(proxy_upstream))
+        .route("/v1/rerank", post(proxy_upstream))
+        .route("/v1/reranking", post(proxy_upstream))
+        .route_layer(security_layer)
+        .layer(DefaultBodyLimit::max(request_body_limit))
+        .with_state(router_state)
+}
+
+#[cfg(test)]
 fn proxy_router_from_source_with_limits(
     source: Arc<dyn ProxyDataSource>,
     request_body_limit: usize,
     anthropic_request_body_limit: usize,
 ) -> Router {
-    let router_state = ProxyRouterState { source };
-    let auth_layer = middleware::from_fn_with_state(router_state.clone(), proxy_auth_middleware);
-    Router::new()
-        .route("/", get(proxy_index))
-        .route("/health", get(proxy_health))
-        .route("/v1/models", get(proxy_models))
-        .route("/v1/models/:model_id", get(proxy_model))
-        .route("/v1/chat/completions", any(proxy_upstream))
-        .route("/v1/completions", any(proxy_upstream))
-        .route(
-            "/v1/messages",
-            any(proxy_upstream).layer(DefaultBodyLimit::max(anthropic_request_body_limit)),
-        )
-        .route(
-            "/v1/messages/count_tokens",
-            any(proxy_upstream).layer(DefaultBodyLimit::max(anthropic_request_body_limit)),
-        )
-        .route("/embedding", any(proxy_upstream))
-        .route("/embeddings", any(proxy_upstream))
-        .route("/v1/embeddings", any(proxy_upstream))
-        .route("/rerank", any(proxy_upstream))
-        .route("/reranking", any(proxy_upstream))
-        .route("/v1/rerank", any(proxy_upstream))
-        .route("/v1/reranking", any(proxy_upstream))
-        .route_layer(auth_layer)
-        .layer(DefaultBodyLimit::max(request_body_limit))
-        .with_state(router_state)
+    proxy_router_from_source_with_runtime_and_limits(
+        source,
+        Arc::new(RouterRuntime::default()),
+        request_body_limit,
+        anthropic_request_body_limit,
+    )
 }
 
+pub(crate) fn proxy_router_from_source_with_runtime(
+    source: Arc<dyn ProxyDataSource>,
+) -> (Router, Arc<RouterRuntime>) {
+    let runtime = Arc::new(RouterRuntime::default());
+    let router = proxy_router_from_source_with_runtime_and_limits(
+        source,
+        runtime.clone(),
+        MAX_PROXY_REQUEST_BODY_BYTES,
+        MAX_ANTHROPIC_REQUEST_BODY_BYTES,
+    );
+    (router, runtime)
+}
+
+#[cfg(test)]
 pub(crate) fn proxy_router_from_source(source: Arc<dyn ProxyDataSource>) -> Router {
     proxy_router_from_source_with_limits(
         source,
         MAX_PROXY_REQUEST_BODY_BYTES,
         MAX_ANTHROPIC_REQUEST_BODY_BYTES,
     )
-}
-
-fn proxy_router(app: tauri::AppHandle) -> Router {
-    proxy_router_from_source(Arc::new(TauriProxyDataSource { app }))
 }
 
 pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<ProxyConfig, String> {
@@ -1710,8 +2739,11 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
     *state.proxy_last_error.lock().unwrap() = None;
     *state.proxy_config.lock().unwrap() = config.clone();
     let app_for_server = app.clone();
+    let source: Arc<dyn ProxyDataSource> = Arc::new(TauriProxyDataSource { app: app.clone() });
+    let (router, router_runtime) = proxy_router_from_source_with_runtime(source);
+    *state.proxy_router_runtime.lock().unwrap() = Some(router_runtime);
     let server_task = tokio::spawn(async move {
-        let result = axum::serve(listener, proxy_router(app_for_server.clone()))
+        let result = axum::serve(listener, router)
             .with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
             })
@@ -1722,6 +2754,7 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
                     Some(format!("proxy server error: {}", err));
             }
             *state.proxy_shutdown.lock().unwrap() = None;
+            *state.proxy_router_runtime.lock().unwrap() = None;
             *state.proxy_bound_addr.lock().unwrap() = None;
             let _ = state.proxy_task.lock().unwrap().take();
         }
@@ -1933,7 +2966,9 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{InstanceConfig, ProxyConfig, ProxyRoute, ProxyTarget, RunningInstance};
+    use crate::models::{
+        InstanceConfig, ProxyApiKey, ProxyConfig, ProxyRoute, ProxyTarget, RunningInstance,
+    };
     use crate::vector_policy::ModelWorkload;
     use axum::body::Body;
     use axum::extract::State;
@@ -1953,10 +2988,6 @@ mod tests {
     }
 
     impl super::ProxyDataSource for TestProxySource {
-        fn proxy_auth_key(&self) -> String {
-            self.snapshot.config.public_api_key.clone()
-        }
-
         fn proxy_snapshot(&self) -> super::ProxyRuntimeSnapshot {
             self.snapshot.clone()
         }
@@ -1998,6 +3029,111 @@ mod tests {
             "choices": []
         }))
         .into_response()
+    }
+
+    async fn mock_openai_upstream(uri: Uri, body: Bytes) -> Response {
+        if uri.path() == "/health" {
+            return Json(json!({ "status": "ok" })).into_response();
+        }
+        if uri.path() == "/props" {
+            return Json(json!({
+                "default_generation_settings": { "n_ctx": 131072 },
+                "total_slots": 4,
+                "chat_template_caps": { "supports_tools": true },
+                "modalities": { "vision": true },
+                "model_path": "C:\\private\\openai.gguf",
+                "chat_template": "private template"
+            }))
+            .into_response();
+        }
+        if uri.path() == "/slots" {
+            return Json(json!([
+                { "id": 0, "n_ctx": 131072, "is_processing": false, "prompt": "private prompt" },
+                { "id": 1, "n_ctx": 131072, "is_processing": false, "tokens": [1, 2, 3] }
+            ]))
+            .into_response();
+        }
+        let request: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+        if uri.path() == "/v1/responses/input_tokens" {
+            return Json(json!({
+                "object": "response.input_tokens",
+                "input_tokens": 5
+            }))
+            .into_response();
+        }
+        if uri.path() == "/v1/responses" {
+            if request.get("stream").and_then(serde_json::Value::as_bool) == Some(true) {
+                return Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(concat!(
+                        "event: response.created\n",
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_local\",\"object\":\"response\",\"created_at\":0,\"status\":\"in_progress\",\"model\":\"upstream-private\",\"output\":[]}}\n\n",
+                        "event: response.output_text.delta\n",
+                        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_local\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello from Responses\"}\n\n",
+                        "event: response.completed\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_local\",\"object\":\"response\",\"created_at\":0,\"status\":\"completed\",\"model\":\"upstream-private\",\"output\":[]}}\n\n"
+                    )))
+                    .unwrap();
+            }
+            return Json(json!({
+                "id": "resp_local",
+                "object": "response",
+                "created_at": 0,
+                "status": "completed",
+                "model": "upstream-private",
+                "output_text": "Hello from Responses",
+                "output": [{
+                    "id": "msg_local",
+                    "type": "message",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{
+                        "type": "output_text",
+                        "text": "Hello from Responses",
+                        "annotations": []
+                    }]
+                }],
+                "usage": { "input_tokens": 5, "output_tokens": 4, "total_tokens": 9 }
+            }))
+            .into_response();
+        }
+        if uri.path() == "/v1/chat/completions" {
+            if request.get("stream").and_then(serde_json::Value::as_bool) == Some(true) {
+                return Response::builder()
+                    .header("content-type", "text/event-stream")
+                    .body(Body::from(concat!(
+                        "data: {\"id\":\"chatcmpl_local\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"upstream-private\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":\"stop\"}]}\n\n",
+                        "data: [DONE]\n\n"
+                    )))
+                    .unwrap();
+            }
+            return Json(json!({
+                "id": "chatcmpl_local",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "upstream-private",
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": null,
+                        "tool_calls": [{
+                            "id": "call_local",
+                            "type": "function",
+                            "function": { "name": "get_weather", "arguments": "{\"city\":\"Shanghai\"}" }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                "usage": { "prompt_tokens": 5, "completion_tokens": 4, "total_tokens": 9 }
+            }))
+            .into_response();
+        }
+        super::error_response(
+            super::ProxyApiFormat::OpenAi,
+            StatusCode::NOT_FOUND,
+            "unsupported mock endpoint",
+        )
     }
 
     #[derive(Debug, Clone)]
@@ -2129,6 +3265,51 @@ mod tests {
         }
     }
 
+    fn openai_proxy_snapshot(
+        upstream_address: std::net::SocketAddr,
+        public_api_key: &str,
+    ) -> super::ProxyRuntimeSnapshot {
+        let instance_id = "openai-upstream".to_string();
+        let instance = InstanceConfig {
+            id: instance_id.clone(),
+            name: "Private OpenAI backend".into(),
+            model_path: r"C:\private\openai.gguf".into(),
+            alias: "upstream-private".into(),
+            host: upstream_address.ip().to_string(),
+            port: upstream_address.port(),
+            ..InstanceConfig::default()
+        };
+        super::ProxyRuntimeSnapshot {
+            config: ProxyConfig {
+                enabled: true,
+                public_api_key: public_api_key.into(),
+                routes: vec![ProxyRoute {
+                    model_alias: "local-openai".into(),
+                    target_instance_id: instance_id.clone(),
+                    ..ProxyRoute::default()
+                }],
+                ..ProxyConfig::default()
+            },
+            instances: HashMap::from([(instance_id.clone(), instance.clone())]),
+            running: HashMap::from([(
+                instance_id.clone(),
+                RunningInstance {
+                    instance_id,
+                    pid: std::process::id(),
+                    port: upstream_address.port(),
+                    host: upstream_address.ip().to_string(),
+                    start_time: 0,
+                    executable_path: String::new(),
+                    telemetry_session_id: None,
+                    workload: "inference".into(),
+                    launch_config: Some(instance),
+                },
+            )]),
+            bound_addr: String::new(),
+            last_error: None,
+        }
+    }
+
     #[test]
     fn proxy_listener_defaults_to_loopback_and_rejects_cleartext_public_bindings() {
         let instances = HashMap::new();
@@ -2145,6 +3326,135 @@ mod tests {
             ..ProxyConfig::default()
         };
         assert!(super::normalize_and_validate_proxy_config(public, &instances).is_err());
+    }
+
+    #[test]
+    fn production_router_settings_are_normalized_and_security_boundaries_rejected() {
+        let instances = HashMap::new();
+        let normalized = super::normalize_and_validate_proxy_config(
+            ProxyConfig {
+                routing_strategy: "firstHealthy".into(),
+                connect_timeout_ms: 1,
+                max_concurrent_requests: 0,
+                cors_allowed_origins: vec![
+                    " https://app.example.com/ ".into(),
+                    "https://APP.example.com".into(),
+                ],
+                api_keys: vec![ProxyApiKey {
+                    id: " key-id ".into(),
+                    name: " Browser client ".into(),
+                    key: " 0123456789abcdef ".into(),
+                    enabled: true,
+                    scopes: vec!["Discovery".into(), "discovery".into()],
+                    requests_per_minute: 50,
+                }],
+                ..ProxyConfig::default()
+            },
+            &instances,
+        )
+        .unwrap();
+        assert_eq!(normalized.routing_strategy, "priorityFailover");
+        assert_eq!(normalized.connect_timeout_ms, 100);
+        assert_eq!(normalized.max_concurrent_requests, 1);
+        assert_eq!(
+            normalized.cors_allowed_origins,
+            vec!["https://app.example.com"]
+        );
+        assert_eq!(normalized.api_keys[0].id, "key-id");
+        assert_eq!(normalized.api_keys[0].name, "Browser client");
+        assert_eq!(normalized.api_keys[0].scopes, vec!["discovery"]);
+        assert!(normalized.api_keys[0]
+            .key
+            .starts_with(super::PROXY_API_KEY_HASH_PREFIX));
+        assert!(!normalized.api_keys[0].key.contains("0123456789abcdef"));
+        let mut hashed_headers = HeaderMap::new();
+        hashed_headers.insert("authorization", "Bearer 0123456789abcdef".parse().unwrap());
+        assert!(super::is_proxy_authorized(
+            &normalized.api_keys[0].key,
+            &hashed_headers
+        ));
+        hashed_headers.insert(
+            "authorization",
+            format!("Bearer {}", normalized.api_keys[0].key)
+                .parse()
+                .unwrap(),
+        );
+        assert!(!super::is_proxy_authorized(
+            &normalized.api_keys[0].key,
+            &hashed_headers
+        ));
+
+        for origin in [
+            "*",
+            "file:///tmp/client",
+            "https://app.example.com/path",
+            "https://user:password@app.example.com",
+        ] {
+            let rejected = ProxyConfig {
+                cors_allowed_origins: vec![origin.into()],
+                ..ProxyConfig::default()
+            };
+            assert!(super::normalize_and_validate_proxy_config(rejected, &instances).is_err());
+        }
+        let short_key = ProxyConfig {
+            api_keys: vec![ProxyApiKey {
+                key: "too-short".into(),
+                ..ProxyApiKey::default()
+            }],
+            ..ProxyConfig::default()
+        };
+        assert!(super::normalize_and_validate_proxy_config(short_key, &instances).is_err());
+        let unsupported_scope = ProxyConfig {
+            api_keys: vec![ProxyApiKey {
+                key: "0123456789abcdef".into(),
+                scopes: vec!["admin".into()],
+                ..ProxyApiKey::default()
+            }],
+            ..ProxyConfig::default()
+        };
+        assert!(super::normalize_and_validate_proxy_config(unsupported_scope, &instances).is_err());
+    }
+
+    #[tokio::test]
+    async fn runtime_status_reports_real_health_traffic_and_implicit_alias_routes() {
+        let mut snapshot = openai_proxy_snapshot("127.0.0.1:18080".parse().unwrap(), "");
+        let runtime = Arc::new(super::RouterRuntime::default());
+        runtime.mark_probe_success("openai-upstream", 2.5, None);
+        let permit = runtime
+            .acquire_global(4, std::time::Duration::from_millis(10))
+            .await
+            .unwrap();
+
+        let status = super::status_with_runtime(&snapshot, &runtime);
+        assert_eq!(status.active_routes, 1);
+        assert_eq!(status.healthy_routes, 1);
+        assert_eq!(status.unhealthy_routes, 0);
+        assert_eq!(status.in_flight_requests, 1);
+        assert_eq!(status.total_requests, 1);
+
+        let mut implicit_instance = snapshot.instances["openai-upstream"].clone();
+        implicit_instance.id = "implicit-upstream".into();
+        implicit_instance.alias = "implicit-public-model".into();
+        let mut implicit_running = snapshot.running["openai-upstream"].clone();
+        implicit_running.instance_id = "implicit-upstream".into();
+        implicit_running.launch_config = Some(implicit_instance.clone());
+        snapshot
+            .instances
+            .insert("implicit-upstream".into(), implicit_instance);
+        snapshot
+            .running
+            .insert("implicit-upstream".into(), implicit_running);
+        runtime.mark_probe_success("implicit-upstream", 1.5, None);
+        let mixed_status = super::status_with_runtime(&snapshot, &runtime);
+        assert_eq!(mixed_status.active_routes, 2);
+        assert_eq!(mixed_status.healthy_routes, 2);
+        assert_eq!(mixed_status.unhealthy_routes, 0);
+
+        snapshot.config.routes.clear();
+        let fallback_status = super::status_with_runtime(&snapshot, &runtime);
+        assert_eq!(fallback_status.active_routes, 2);
+        assert_eq!(fallback_status.healthy_routes, 2);
+        drop(permit);
     }
 
     #[test]
@@ -2271,6 +3581,9 @@ mod tests {
             scheme: "https",
             telemetry_session_id: None,
             workload: ModelWorkload::Inference,
+            route_priority: 0,
+            route_weight: 1,
+            route_max_concurrent_requests: 0,
         };
         let uri: Uri = "/models?limit=1".parse().unwrap();
 
@@ -2824,14 +4137,27 @@ mod tests {
         )
         .is_none());
 
-        let fallback = super::resolve_proxy_target_from(
+        assert!(super::resolve_proxy_target_from(
             &config,
             &instances,
             &running,
             Some("unknown-model"),
             None,
         )
-        .expect("an unknown model may still use the configured default instance");
+        .is_none());
+
+        let legacy_config = ProxyConfig {
+            strict_model_routing: false,
+            ..config
+        };
+        let fallback = super::resolve_proxy_target_from(
+            &legacy_config,
+            &instances,
+            &running,
+            Some("unknown-model"),
+            None,
+        )
+        .expect("legacy permissive routing may still use the configured default instance");
         assert_eq!(fallback.public.instance_id, fallback_id);
     }
 
@@ -2937,6 +4263,216 @@ mod tests {
                 r"C:\private\model.gguf".to_string()
             ]
         );
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn discovery_endpoints_expose_capabilities_without_private_backend_state() {
+        let upstream_router = Router::new()
+            .route("/health", axum::routing::any(mock_openai_upstream))
+            .route("/props", axum::routing::any(mock_openai_upstream))
+            .route("/slots", axum::routing::any(mock_openai_upstream));
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+        let proxy_router = super::proxy_router_from_source(Arc::new(TestProxySource {
+            snapshot: openai_proxy_snapshot(upstream_address, ""),
+        }));
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+        let client = reqwest::Client::new();
+
+        let props: serde_json::Value = client
+            .get(format!("http://{proxy_address}/props?model=local-openai"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(props["model"], "local-openai");
+        assert_eq!(props["default_generation_settings"]["n_ctx"], 131072);
+        assert_eq!(props["total_slots"], 4);
+        assert!(props.get("model_path").is_none());
+        assert!(props.get("chat_template").is_none());
+        assert!(!props.to_string().contains("private template"));
+
+        let slots: serde_json::Value = client
+            .get(format!("http://{proxy_address}/slots?model=local-openai"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let first = slots.as_array().unwrap().first().unwrap();
+        assert_eq!(first["n_ctx"], 131072);
+        assert!(first.get("prompt").is_none());
+        assert!(slots.as_array().unwrap()[1].get("tokens").is_none());
+
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn scoped_keys_rate_limits_and_exact_cors_are_enforced() {
+        let snapshot = super::ProxyRuntimeSnapshot {
+            config: ProxyConfig {
+                enabled: true,
+                cors_allowed_origins: vec!["https://app.example.com".into()],
+                api_keys: vec![
+                    ProxyApiKey {
+                        id: "discovery-client".into(),
+                        name: "Discovery".into(),
+                        key: "discovery-key-123456".into(),
+                        enabled: true,
+                        scopes: vec!["discovery".into()],
+                        requests_per_minute: 1,
+                    },
+                    ProxyApiKey {
+                        id: "inference-client".into(),
+                        name: "Inference".into(),
+                        key: "inference-key-123456".into(),
+                        enabled: true,
+                        scopes: vec!["inference".into()],
+                        requests_per_minute: 0,
+                    },
+                ],
+                ..ProxyConfig::default()
+            },
+            instances: HashMap::new(),
+            running: HashMap::new(),
+            bound_addr: String::new(),
+            last_error: None,
+        };
+        let router = super::proxy_router_from_source(Arc::new(TestProxySource { snapshot }));
+        let (address, task) = spawn_test_router(router).await;
+        let client = reqwest::Client::new();
+
+        let unauthorized = client
+            .get(format!("http://{address}/live"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        assert!(unauthorized.headers().contains_key("x-request-id"));
+        let unauthorized_body: serde_json::Value = unauthorized.json().await.unwrap();
+        assert_eq!(unauthorized_body["error"]["type"], "authentication_error");
+
+        let preflight = client
+            .request(
+                reqwest::Method::OPTIONS,
+                format!("http://{address}/v1/responses"),
+            )
+            .header("origin", "https://app.example.com")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(preflight.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            preflight
+                .headers()
+                .get("access-control-allow-origin")
+                .and_then(|value| value.to_str().ok()),
+            Some("https://app.example.com")
+        );
+
+        let denied_origin = client
+            .get(format!("http://{address}/live"))
+            .header("origin", "https://evil.example.com")
+            .header("authorization", "Bearer discovery-key-123456")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(denied_origin.status(), StatusCode::FORBIDDEN);
+
+        let scope_denied = client
+            .get(format!("http://{address}/v1/models"))
+            .header("authorization", "Bearer inference-key-123456")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(scope_denied.status(), StatusCode::FORBIDDEN);
+
+        let accepted = client
+            .get(format!("http://{address}/live"))
+            .header("origin", "https://app.example.com")
+            .header("x-api-key", "discovery-key-123456")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(accepted.status(), StatusCode::OK);
+        assert_eq!(
+            accepted
+                .headers()
+                .get("x-ratelimit-limit-requests")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+
+        let rate_limited = client
+            .get(format!("http://{address}/live"))
+            .header("x-api-key", "discovery-key-123456")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rate_limited.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(rate_limited.headers().contains_key("retry-after"));
+        assert_eq!(
+            rate_limited
+                .headers()
+                .get("x-ratelimit-remaining-requests")
+                .and_then(|value| value.to_str().ok()),
+            Some("0")
+        );
+
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn official_openai_sdk_exercises_chat_responses_streaming_tokens_and_models() {
+        let upstream_router = Router::new()
+            .route("/health", axum::routing::any(mock_openai_upstream))
+            .route("/props", axum::routing::any(mock_openai_upstream))
+            .route("/slots", axum::routing::any(mock_openai_upstream))
+            .route(
+                "/v1/chat/completions",
+                axum::routing::any(mock_openai_upstream),
+            )
+            .route("/v1/responses", axum::routing::any(mock_openai_upstream))
+            .route(
+                "/v1/responses/input_tokens",
+                axum::routing::any(mock_openai_upstream),
+            );
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+        let snapshot = openai_proxy_snapshot(upstream_address, "public-sdk-key");
+        let proxy_router = super::proxy_router_from_source(Arc::new(TestProxySource { snapshot }));
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("scripts")
+            .join("test-openai-sdk-client.mjs");
+        let output = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            tokio::process::Command::new("node")
+                .arg(script)
+                .arg(format!("http://{proxy_address}"))
+                .arg("local-openai")
+                .output(),
+        )
+        .await
+        .expect("OpenAI SDK smoke test timed out")
+        .expect("Node.js must be available for the official OpenAI SDK smoke test");
+        assert!(
+            output.status.success(),
+            "OpenAI SDK smoke failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let sdk_result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(sdk_result["model"], "local-openai");
+        assert_eq!(sdk_result["inputTokens"], 5);
+        assert!(sdk_result["chatChunks"].as_u64().unwrap_or(0) >= 1);
+        assert!(sdk_result["responseEvents"].as_u64().unwrap_or(0) >= 2);
+
         proxy_task.abort();
         upstream_task.abort();
     }
@@ -3156,9 +4692,27 @@ mod tests {
         let mut bearer = HeaderMap::new();
         bearer.insert("authorization", "Bearer secret".parse().unwrap());
         assert!(super::is_proxy_authorized(&config.public_api_key, &bearer));
+        bearer.insert("authorization", "bearer   secret".parse().unwrap());
+        assert!(super::is_proxy_authorized(&config.public_api_key, &bearer));
         let mut api_key = HeaderMap::new();
         api_key.insert("x-api-key", "secret".parse().unwrap());
         assert!(super::is_proxy_authorized(&config.public_api_key, &api_key));
+    }
+
+    #[test]
+    fn cors_headers_preserve_existing_vary_dimensions() {
+        let mut response = Response::builder()
+            .header("vary", "Accept")
+            .body(Body::empty())
+            .unwrap();
+        super::apply_cors_headers(&mut response, Some("https://app.example.com"));
+        let vary = response
+            .headers()
+            .get_all("vary")
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect::<Vec<_>>();
+        assert_eq!(vary, vec!["Accept", "Origin"]);
     }
 
     #[test]

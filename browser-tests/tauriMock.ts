@@ -277,8 +277,19 @@ type BrowserProxyRoute = {
   id: string
   enabled: boolean
   priority: number
+  weight?: number
+  max_concurrent_requests?: number
   model_alias: string
   target_instance_id: string
+}
+
+type BrowserProxyApiKey = {
+  id: string
+  name: string
+  key: string
+  enabled: boolean
+  scopes: string[]
+  requests_per_minute: number
 }
 
 type BrowserProxyConfig = {
@@ -288,7 +299,19 @@ type BrowserProxyConfig = {
   public_api_key: string
   default_instance_id: string
   routing_strategy: string
+  strict_model_routing: boolean
+  connect_timeout_ms: number
   timeout_ms: number
+  streaming_idle_timeout_ms: number
+  health_check_interval_ms: number
+  health_check_timeout_ms: number
+  unhealthy_threshold: number
+  recovery_cooldown_ms: number
+  max_concurrent_requests: number
+  queue_timeout_ms: number
+  requests_per_minute: number
+  cors_allowed_origins: string[]
+  api_keys: BrowserProxyApiKey[]
   background_service_mode: boolean
   runtime_service_enabled: boolean
   routes: BrowserProxyRoute[]
@@ -300,8 +323,20 @@ const proxyConfig: BrowserProxyConfig = {
   port: 11435,
   public_api_key: IS_DOCS_SCENARIO ? 'lsm-demo-key' : '',
   default_instance_id: IS_DOCS_SCENARIO ? INSTANCE_ID : '',
-  routing_strategy: 'firstHealthy',
+  routing_strategy: 'priorityFailover',
+  strict_model_routing: true,
+  connect_timeout_ms: 5_000,
   timeout_ms: 600_000,
+  streaming_idle_timeout_ms: 300_000,
+  health_check_interval_ms: 5_000,
+  health_check_timeout_ms: 2_000,
+  unhealthy_threshold: 3,
+  recovery_cooldown_ms: 15_000,
+  max_concurrent_requests: 64,
+  queue_timeout_ms: 1_000,
+  requests_per_minute: 0,
+  cors_allowed_origins: [],
+  api_keys: [],
   background_service_mode: false,
   runtime_service_enabled: BROWSER_SCENARIO === 'background-runtime-active',
   routes: IS_DOCS_SCENARIO
@@ -367,7 +402,11 @@ const proxyConfig: BrowserProxyConfig = {
 const proxyStatus = {
   running: HAS_PROXY_DATA,
   bound_addr: '127.0.0.1:11435',
-  active_routes: IS_DOCS_SCENARIO ? 1 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : 0,
+  active_routes: IS_DOCS_SCENARIO ? 3 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : BROWSER_SCENARIO === 'proxy-routing' ? 1 : 0,
+  healthy_routes: HAS_PROXY_DATA ? 1 : 0,
+  unhealthy_routes: IS_DOCS_SCENARIO ? 2 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 1 : 0,
+  in_flight_requests: 0,
+  total_requests: IS_DOCS_SCENARIO ? 42 : 0,
   last_error: null,
 }
 const runningProxyTarget = {
@@ -946,9 +985,18 @@ mockIPC((command, payload) => {
     }
     case 'save_proxy_config': {
       const next = clone(args.config as BrowserProxyConfig)
+      next.api_keys = next.api_keys.map(apiKey => ({
+        ...apiKey,
+        key: apiKey.key.startsWith('sha256:') ? apiKey.key : `sha256:${'a'.repeat(43)}`,
+      }))
       Object.assign(proxyConfig, next)
       proxyConfig.routes = next.routes
-      proxyStatus.active_routes = next.routes.filter(route => route.enabled).length
+      const enabledRoutes = next.routes.filter(route => route.enabled)
+      proxyStatus.active_routes = enabledRoutes.length || proxyTargets.filter(target => target.running).length
+      proxyStatus.healthy_routes = enabledRoutes.length
+        ? enabledRoutes.filter(route => proxyTargets.some(target => target.instance_id === route.target_instance_id && target.running)).length
+        : proxyTargets.filter(target => target.running).length
+      proxyStatus.unhealthy_routes = Math.max(0, proxyStatus.active_routes - proxyStatus.healthy_routes)
       return clone(proxyConfig)
     }
     case 'start_proxy':

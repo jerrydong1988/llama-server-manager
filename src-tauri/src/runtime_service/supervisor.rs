@@ -5,9 +5,11 @@ use super::protocol::{
 };
 use super::transport::runtime_state_path;
 use crate::commands::proxy::{
-    normalize_and_validate_proxy_config, proxy_request_resolution_from, proxy_router_from_source,
-    ProxyDataSource, ProxyRequestResolution, ProxyRuntimeSnapshot,
+    normalize_and_validate_proxy_config, proxy_request_resolution_from,
+    proxy_router_from_source_with_runtime, status_with_runtime, ProxyDataSource,
+    ProxyRequestResolution, ProxyRuntimeSnapshot,
 };
+use crate::commands::proxy_runtime::RouterRuntime;
 use crate::commands::server::{
     advance_health_state, collect_instance_monitor_sample, effective_api_key,
     effective_server_scheme, read_process_identity, running_instance_matches_live_process,
@@ -169,6 +171,7 @@ pub struct RuntimeSupervisor {
     state: Mutex<PersistedRuntimeState>,
     proxy_status: Mutex<ProxyStatus>,
     proxy_runtime: tokio::sync::Mutex<Option<RuntimeProxy>>,
+    proxy_router_runtime: Mutex<Option<Arc<RouterRuntime>>>,
     health: Mutex<HashMap<String, String>>,
     perf_trackers: Mutex<HashMap<String, Arc<Mutex<RuntimePerfTracker>>>>,
     last_error: Mutex<Option<String>>,
@@ -219,9 +222,14 @@ impl RuntimeSupervisor {
                 running: false,
                 bound_addr,
                 active_routes,
+                healthy_routes: 0,
+                unhealthy_routes: active_routes,
+                in_flight_requests: 0,
+                total_requests: 0,
                 last_error: None,
             }),
             proxy_runtime: tokio::sync::Mutex::new(None),
+            proxy_router_runtime: Mutex::new(None),
             health: Mutex::new(HashMap::new()),
             perf_trackers: Mutex::new(HashMap::new()),
             last_error: Mutex::new(None),
@@ -256,6 +264,13 @@ impl RuntimeSupervisor {
             .iter()
             .map(|(instance_id, tracker)| (instance_id.clone(), tracker.lock().unwrap().snapshot()))
             .collect();
+        let proxy = self
+            .proxy_router_runtime
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|runtime| status_with_runtime(&self.proxy_snapshot(), &runtime))
+            .unwrap_or_else(|| self.proxy_status.lock().unwrap().clone());
         RuntimeServiceStatus {
             protocol_version: RUNTIME_PROTOCOL_VERSION,
             service_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -268,7 +283,7 @@ impl RuntimeSupervisor {
             background_enabled,
             registered_for_login,
             last_error: self.last_error.lock().unwrap().clone(),
-            proxy: self.proxy_status.lock().unwrap().clone(),
+            proxy,
             running,
             health: self.health.lock().unwrap().clone(),
             monitoring,
@@ -1026,10 +1041,6 @@ impl RuntimeSupervisor {
             return Err(error);
         }
         let host = config.host.trim();
-        let local = matches!(host, "" | "localhost" | "127.0.0.1" | "::1" | "[::1]");
-        if !local && config.public_api_key.trim().is_empty() {
-            return Err("代理监听非本机地址时必须设置公开 API Key".into());
-        }
         let bound_addr = crate::utils::format_host_port(host, config.port);
         let listener = tokio::net::TcpListener::bind(&bound_addr)
             .await
@@ -1058,9 +1069,11 @@ impl RuntimeSupervisor {
         }
         let (shutdown, receiver) = tokio::sync::oneshot::channel();
         let source: Arc<dyn ProxyDataSource> = self.clone();
+        let (router, router_runtime) = proxy_router_from_source_with_runtime(source);
+        *self.proxy_router_runtime.lock().unwrap() = Some(router_runtime);
         let supervisor = self.clone();
         let task = tokio::spawn(async move {
-            let result = axum::serve(listener, proxy_router_from_source(source))
+            let result = axum::serve(listener, router)
                 .with_graceful_shutdown(async move {
                     let _ = receiver.await;
                 })
@@ -1077,6 +1090,7 @@ impl RuntimeSupervisor {
                     status.last_error = Some(error.clone());
                 }
             }
+            *supervisor.proxy_router_runtime.lock().unwrap() = None;
             if let Some(error) = runtime_error {
                 *supervisor.last_error.lock().unwrap() = Some(error);
             }
@@ -1107,6 +1121,7 @@ impl RuntimeSupervisor {
                 }
             }
         }
+        *self.proxy_router_runtime.lock().unwrap() = None;
         {
             let mut status = self.proxy_status.lock().unwrap();
             status.running = false;
@@ -1357,15 +1372,6 @@ impl RuntimeSupervisor {
 }
 
 impl ProxyDataSource for RuntimeSupervisor {
-    fn proxy_auth_key(&self) -> String {
-        self.state
-            .lock()
-            .unwrap()
-            .proxy_config
-            .public_api_key
-            .clone()
-    }
-
     fn proxy_snapshot(&self) -> ProxyRuntimeSnapshot {
         let state = self.state.lock().unwrap();
         let proxy_status = self.proxy_status.lock().unwrap();
