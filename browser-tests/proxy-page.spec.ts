@@ -15,14 +15,18 @@ test('routing page documents OpenAI and Anthropic endpoints and compatibility bo
   await expect(compatibility).toContainText('OpenAI')
   await expect(compatibility).toContainText('Anthropic')
   await expect(compatibility).toContainText('/v1/chat/completions')
+  await expect(compatibility).toContainText('/v1/responses')
   await expect(compatibility).toContainText('/v1/messages')
   await expect(compatibility).toContainText('/v1/messages/count_tokens')
   await expect(compatibility).toContainText('/v1/models')
+  await expect(compatibility).toContainText('/slots')
+  await expect(compatibility).toContainText('/ready')
+  await expect(compatibility).toContainText('/metrics')
   await expect(compatibility).toContainText('--jinja')
   await expect(compatibility).toContainText('32 MiB')
 })
 
-test('route switches expose current state and saving refreshes the enabled-rule count', async ({ page }) => {
+test('route switches expose current state and saving refreshes runtime health', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
     localStorage.setItem('lastTab', 'proxy')
@@ -30,10 +34,8 @@ test('route switches expose current state and saving refreshes the enabled-rule 
   await page.goto('/?scenario=proxy-routing')
 
   const routeSection = page.getByRole('heading', { name: '路由表' }).locator('xpath=ancestor::section[1]')
-  const enabledMetric = page.getByText('已启用规则', { exact: true }).locator('..')
-  const healthyMetric = page.getByText('当前健康路由', { exact: true }).locator('..')
-  await expect(enabledMetric.locator('p').nth(1)).toHaveText('0')
-  await expect(healthyMetric.locator('p').nth(1)).toHaveText('0')
+  const healthyMetric = page.getByText('健康路由', { exact: true }).locator('..')
+  await expect(healthyMetric.locator('p').nth(1)).toHaveText('1/1')
 
   await routeSection.getByRole('button', { name: '添加路由' }).click()
   const routeSwitch = routeSection.getByRole('switch', { name: '路由启用状态' })
@@ -55,9 +57,8 @@ test('route switches expose current state and saving refreshes the enabled-rule 
   await page.getByRole('button', { name: '保存' }).click()
 
   await expect(page.getByText('代理配置已保存并生效')).toBeVisible()
-  await expect(enabledMetric.locator('p').nth(1)).toHaveText('1')
-  await expect(healthyMetric.locator('p').nth(1)).toHaveText('1')
-  await expect(routeSection.getByText('当前命中', { exact: true })).toBeVisible()
+  await expect(healthyMetric.locator('p').nth(1)).toHaveText('1/1')
+  await expect(routeSection.getByText('调度池', { exact: true })).toBeVisible()
   await expect(routeSection).toContainText('显式规则会遮蔽对应实例的对外别名')
 
   const savedRoute = await page.evaluate(() => {
@@ -67,8 +68,48 @@ test('route switches expose current state and saving refreshes the enabled-rule 
   })
   expect(savedRoute).toMatchObject({
     enabled: true,
+    weight: 1,
+    max_concurrent_requests: 0,
     model_alias: 'public-browser-model',
     target_instance_id: 'browser-test-instance',
+  })
+})
+
+test('production scheduling and scoped API keys round-trip through the settings UI', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'proxy')
+  })
+  await page.goto('/?scenario=proxy-routing')
+
+  await page.getByRole('combobox', { name: '调度策略' }).selectOption('weighted')
+  await expect(page.getByRole('switch', { name: '已启用' })).toBeChecked()
+  await page.getByRole('button', { name: '添加 API Key' }).click()
+  const keyInput = page.getByRole('textbox', { name: 'API Key（至少 16 字符）' })
+  await expect(keyInput).toHaveAttribute('type', 'password')
+  const generatedKey = await keyInput.inputValue()
+  expect(generatedKey).toMatch(/^lsm_[0-9a-f]{32}$/)
+  await expect(page.getByRole('button', { name: '复制新 API Key' })).toBeVisible()
+  await page.getByRole('textbox', { name: /允许的 CORS Origin/ }).fill('https://app.example.com')
+  await page.getByRole('button', { name: '保存' }).click()
+
+  await expect(page.getByText('已安全哈希保存；输入新值可轮换此密钥。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '复制新 API Key' })).toHaveCount(0)
+  const savedConfig = await page.evaluate(() => {
+    const call = [...window.__TAURI_BROWSER_TEST__.calls].reverse().find(item => item.command === 'save_proxy_config')
+    return (call?.payload as { config?: Record<string, unknown> } | undefined)?.config
+  })
+  expect(savedConfig).toMatchObject({
+    routing_strategy: 'weighted',
+    strict_model_routing: true,
+    max_concurrent_requests: 64,
+    queue_timeout_ms: 1000,
+    cors_allowed_origins: ['https://app.example.com'],
+    api_keys: [{
+      name: 'API Key 1',
+      scopes: ['inference', 'discovery'],
+      requests_per_minute: 0,
+    }],
   })
 })
 
@@ -79,16 +120,14 @@ test('route health separates enabled rules from currently healthy failover targe
   })
   await page.goto('/?scenario=proxy-route-health')
 
-  const enabledMetric = page.getByText('已启用规则', { exact: true }).locator('..')
-  const healthyMetric = page.getByText('当前健康路由', { exact: true }).locator('..')
-  await expect(enabledMetric.locator('p').nth(1)).toHaveText('2')
-  await expect(healthyMetric.locator('p').nth(1)).toHaveText('1')
+  const healthyMetric = page.getByText('健康路由', { exact: true }).locator('..')
+  await expect(healthyMetric.locator('p').nth(1)).toHaveText('1/2')
 
   const routeSection = page.getByRole('heading', { name: '路由表' }).locator('xpath=ancestor::section[1]')
   const rows = routeSection.locator('tbody tr')
   await expect(rows).toHaveCount(2)
   await expect(rows.nth(0)).toContainText('目标已停止')
-  await expect(rows.nth(1)).toContainText('当前命中')
+  await expect(rows.nth(1)).toContainText('调度池')
 
   await rows.nth(0).getByRole('button', { name: '测试路由' }).click()
   await expect(rows.nth(0)).toContainText('当前实际命中: Browser Parameter Regression')
@@ -101,7 +140,7 @@ test('route health separates enabled rules from currently healthy failover targe
     window.__TAURI_BROWSER_TEST__.failProxyTargets = true
     window.__TAURI_BROWSER_TEST__.failRuntimeStatus = true
   })
-  await expect(healthyMetric.locator('p').nth(1)).toHaveText('0', { timeout: 7_000 })
+  await expect(healthyMetric.locator('p').nth(1)).toHaveText('—', { timeout: 7_000 })
   await expect(rows.nth(0)).toContainText('目标状态未知')
   await expect(rows.nth(1)).toContainText('目标状态未知')
   const overview = page.getByRole('heading', { name: '实例路由' }).locator('xpath=ancestor::section[1]')
@@ -112,8 +151,8 @@ test('route health separates enabled rules from currently healthy failover targe
     window.__TAURI_BROWSER_TEST__.failProxyTargets = false
     window.__TAURI_BROWSER_TEST__.failRuntimeStatus = false
   })
-  await expect(healthyMetric.locator('p').nth(1)).toHaveText('1', { timeout: 7_000 })
-  await expect(rows.nth(1)).toContainText('当前命中')
+  await expect(healthyMetric.locator('p').nth(1)).toHaveText('1/2', { timeout: 7_000 })
+  await expect(rows.nth(1)).toContainText('调度池')
   await expect(overview.getByText('运行中', { exact: true })).toBeVisible()
 })
 

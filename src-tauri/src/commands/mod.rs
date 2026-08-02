@@ -12,6 +12,7 @@ pub mod monitoring;
 pub mod nvml;
 pub mod proxy;
 mod proxy_protocol;
+pub(crate) mod proxy_runtime;
 pub mod scanner;
 pub mod server;
 pub mod telemetry;

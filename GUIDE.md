@@ -342,9 +342,9 @@ Worker addresses support IPv4, hostnames, and IPv6. When entering an IPv6 addres
 
 ## 实例路由 / Instance Routing
 
-实例路由在同一监听地址提供 OpenAI 与 Anthropic 两种 API 格式，根据请求中的模型名或别名，把流量转发到正在运行的 `llama-server` 实例。默认监听 `127.0.0.1:11435`。
+实例路由在同一监听地址提供 OpenAI 与 Anthropic 原生 API 格式，根据精确公开模型名把流量转发到 `llama-server`。默认监听 `127.0.0.1:11435`，并集成严格模型边界、主动健康探测、熔断、调度、并发/限流和 Prometheus 指标。
 
-Instance Routing exposes OpenAI and Anthropic API formats on the same listener and forwards requests to running `llama-server` instances by requested model name or alias. The default listener is `127.0.0.1:11435`.
+Instance Routing exposes native OpenAI and Anthropic formats on one listener, routing exact public model IDs to `llama-server` with active probes, circuit breaking, scheduling, concurrency/rate controls, and Prometheus metrics. The default listener is `127.0.0.1:11435`.
 
 ![统一端点、路由规则和后端目标 / Unified endpoint, route rules, and backend targets](public/docs/guide/08-instance-routing.png)
 
@@ -352,17 +352,17 @@ Instance Routing exposes OpenAI and Anthropic API formats on the same listener a
 
 1. 先启动至少一个后端实例。
 2. 设置监听主机和端口。
-3. 为路由规则选择目标实例，并填写客户端使用的模型别名。
-4. 需要时设置代理 API Key；设置后所有代理端点都需要鉴权。
-5. 保存配置，然后启动实例路由。
-6. 复制统一 API 入口并用 `/v1/models`、OpenAI 聊天请求或 Anthropic Messages 请求测试；已配置密钥时请携带 Bearer Token 或 `x-api-key`。
+3. 保持“严格模型路由”启用，为规则填写客户端使用的公开模型名并选择目标；相同模型名可配置多个优先级层。
+4. 选择优先级故障切换、轮询、最空闲或加权调度；按工作负载设置全局与单目标并发、排队、健康探测和流式空闲超时。
+5. 需要时添加具名 API Key，在首次保存前复制原文，并分配“推理”或“发现与诊断”权限；保存后只保留不可逆摘要。
+6. 保存并启动路由，然后用 `/ready`、`/v1/models`、`/slots?model=<公开模型名>`、OpenAI 或 Anthropic 客户端验证。
 
 1. Start at least one backend instance.
 2. Set the listen host and port.
-3. Choose a target instance and define the model alias clients will send.
-4. Configure a proxy API key when needed; once set, every proxy endpoint requires authentication.
-5. Save, then start routing.
-6. Copy the endpoint and test `/v1/models`, an OpenAI chat request, or an Anthropic Messages request, sending a bearer token or `x-api-key` when configured.
+3. Keep strict routing enabled, define exact public model IDs, and add priority tiers where failover is needed.
+4. Choose priority failover, round-robin, least-busy, or weighted scheduling and set global/per-target traffic limits.
+5. Add scoped API keys when needed and copy each plaintext secret before the first save; only a non-recoverable digest is persisted.
+6. Start routing and validate `/ready`, `/v1/models`, `/slots?model=<public-model>`, and the native OpenAI or Anthropic client path.
 
 ![实例、别名和统一 API 的请求路径 / Request path from instances and aliases to the unified API](public/docs/guide/flow-03-route-requests.png)
 
@@ -372,22 +372,29 @@ Instance Routing exposes OpenAI and Anthropic API formats on the same listener a
 |---|---|
 | OpenAI 模型发现 / Model discovery | `GET /v1/models`、`GET /v1/models/:model_id` |
 | OpenAI Chat Completions | `POST /v1/chat/completions` |
+| OpenAI Responses | `POST /v1/responses` |
+| OpenAI 输入 Token 计数 / Input token counting | `POST /v1/chat/completions/input_tokens`、`POST /v1/responses/input_tokens` |
+| OpenAI Embeddings / Rerank | `POST /v1/embeddings`、`POST /v1/rerank` |
 | Anthropic Messages，同步与 SSE 流式 / Messages, sync and SSE | `POST /v1/messages` |
 | Anthropic 输入 Token 计数 / Input token counting | `POST /v1/messages/count_tokens` |
+| 上下文与槽位发现 / Context and slots | `GET /props?model=...`、`GET /slots?model=...` |
+| 存活、就绪与指标 / Liveness, readiness, metrics | `GET /live`、`GET /ready`、`GET /metrics` |
 
 Anthropic 路径支持文本、图片、thinking、工具调用、工具结果和流式事件。工具调用要求目标实例启用 `--jinja`。Claude Code 应把 `ANTHROPIC_BASE_URL` 指向统一路由根地址（不要附加 `/v1`），并将 `ANTHROPIC_MODEL` 设为已配置的公开模型名；配置代理密钥时同时设置 `ANTHROPIC_AUTH_TOKEN`。
 
 Anthropic routes support text, images, thinking, tool calls, tool results, and streaming events. Tool use requires `--jinja` on the target instance. Point Claude Code's `ANTHROPIC_BASE_URL` at the routing root without `/v1`, set `ANTHROPIC_MODEL` to a configured public model name, and set `ANTHROPIC_AUTH_TOKEN` when the proxy uses authentication.
 
-代理不会在 OpenAI 与 Anthropic 请求体之间互相转换；两种客户端调用各自的协议端点，但共享同一套路由规则、公开模型别名和鉴权配置。prompt caching、服务端工具等云端专属能力不会由管理器模拟，最终能力取决于目标 `llama-server` 与模型。
+代理不会在 OpenAI 与 Anthropic 请求体之间互相转换；两种客户端调用各自的协议端点，但共享同一套路由规则、公开模型名和鉴权配置。`/props` 与 `/slots` 会透传必要的上下文和负载信息，同时移除模型路径、模板正文、提示词和 Token。prompt caching、服务端工具等云端专属能力不会由管理器模拟，最终能力取决于目标 `llama-server` 与模型。
 
-The proxy does not translate request bodies between OpenAI and Anthropic formats. Each client uses its native endpoints while sharing routing rules, public model aliases, and authentication. Cloud-only capabilities such as prompt caching and server-side tools are not emulated by the manager and remain dependent on the target `llama-server` and model.
+The proxy does not translate request bodies between OpenAI and Anthropic formats. Each client uses native endpoints while sharing exact public model IDs and authentication. `/props` and `/slots` preserve context/capacity discovery while removing paths, templates, prompts, and tokens. Cloud-only capabilities are not emulated by the manager.
+
+完整端点、调度、错误格式、超时、权限与部署边界见[生产级模型路由器说明](docs/ROUTER_API_COMPATIBILITY.md)。
 
 ### 安全与后台保活 / Security and Background Keep-Alive
 
-- 监听非本机地址时必须设置代理 API Key，否则不允许启动。
-- 配置代理 API Key 后，服务首页、健康检查、模型列表和推理接口统一鉴权。
-- 路由只选择当前有效目标；目标实例停止后，对应请求会失败或没有可用目标。
+- 内置路由只允许监听回环地址；远程访问必须使用提供 TLS 的可信反向代理、Tunnel、VPN 或 SSH 隧道。
+- 多 API Key 可分别授予推理、发现权限与独立 RPM；精确 CORS Origin 防止未经授权的浏览器跨域调用。
+- 路由依据实际 `/health` 探测和熔断状态选择目标，网络错误、`5xx` 或 `429` 会推动后续请求切换到健康层级。
 - 未开启独立后台运行时，实例与路由仍由隔离的运行时进程托管，但主程序退出后会自动停止；仅关闭窗口则仍可继续在托盘运行。
 - 开启“独立后台运行时”后，退出管理界面不会中断已托管实例或统一端点，并会注册当前用户登录后的自动恢复。Windows 使用当前用户启动项，macOS 使用用户 LaunchAgent，Linux 优先使用 systemd 用户服务并在不可用时回退到 XDG Autostart；第一阶段不安装需要管理员权限的系统级服务。
 - 退出应用时会明确提供“退出界面并保持后台运行”与“停止实例、路由并退出”两种选择；运行时升级会保留运行意图，受控重启实例后恢复路由、日志和监控监督链。
@@ -396,9 +403,9 @@ The proxy does not translate request bodies between OpenAI and Anthropic formats
 - 第一阶段保证正常退出管理界面后持续运行，并在当前用户再次登录时恢复；它不是机器级高可用服务。管理界面打开时会自动拉起异常退出的运行时；界面已退出后若本次运行时自身崩溃，需要重新打开管理器或重新登录。macOS/Linux 在登录启动器接管后可继续使用其失败重启策略，Windows 登录项只负责登录恢复。
 - 修改未保存的路由草稿后直接启动时，应用会先保存有效配置，避免界面与后台状态不一致。
 
-- A proxy API key is mandatory for non-local listeners.
-- Once configured, the proxy key protects the index, health, model-list, and inference endpoints.
-- Routing resolves active targets; requests fail when the selected backend is unavailable.
+- The built-in listener is loopback-only; use a trusted TLS reverse proxy, tunnel, VPN, or SSH tunnel for remote access.
+- Scoped multi-key authentication, per-key RPM, and exact-origin CORS protect inference and discovery independently.
+- Active `/health` probes and circuit state drive selection; network errors, `5xx`, and `429` move subsequent traffic to a healthy tier.
 - Without the independent runtime option, an isolated runtime still supervises instances and routing while the app is open, but stops them after the main process exits; closing only the window keeps the tray session alive.
 - Enabling the independent background runtime preserves managed instances and the unified endpoint after the management UI exits and registers per-user login recovery. Windows uses the current-user startup entry, macOS a user LaunchAgent, and Linux a systemd user service with XDG Autostart fallback. Phase one does not install an administrator-managed system service.
 - Exit confirmation distinguishes keeping the runtime from stopping instances and routing. Runtime upgrades retain desired state and restore each instance under a fresh logging and monitoring supervisor.
@@ -521,9 +528,9 @@ Use the instance key or the routing proxy key as appropriate. For `api_key_file`
 
 ### 为什么非本机路由无法启动？ / Why can routing not bind publicly?
 
-实例路由在监听非本机地址时强制要求代理 API Key。设置密钥、保存配置，再检查端口和防火墙后启动。
+内置实例路由有意只接受 `127.0.0.1`、`localhost` 或 `::1`。请恢复回环监听，并通过本机 TLS 反向代理、Cloudflare Tunnel、VPN 或 SSH 隧道向其他设备提供服务。
 
-Non-local routing requires a proxy API key. Set and save it, then verify the port and firewall.
+The built-in router intentionally accepts loopback hosts only. Restore a loopback listener and expose it through a local TLS reverse proxy, Cloudflare Tunnel, VPN, or SSH tunnel.
 
 ### 应用重启后下载怎么办？ / What happens to downloads after restart?
 

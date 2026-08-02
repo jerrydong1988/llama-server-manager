@@ -4,6 +4,8 @@
 
 面向普通用户的最新说明同时发布在[在线路由文档](https://docs.cnzone.net/docs/routing)。
 
+严格模型边界、四种调度策略、健康探测、熔断、限流、CORS、`/props`、`/slots` 与 Prometheus 的完整说明见[生产级模型路由器文档](ROUTER_API_COMPATIBILITY.md)。
+
 ## 端点
 
 | 功能 | 端点 |
@@ -13,7 +15,7 @@
 | Claude Code / SDK 模型发现 | `GET /v1/models` |
 | 单模型信息 | `GET /v1/models/:model_id` |
 
-请求可使用 `x-api-key: <代理 API Key>` 或 `Authorization: Bearer <代理 API Key>`。代理验证公开凭据后会将其移除，仅向目标实例发送该实例自己的 API Key；`anthropic-version`、`anthropic-beta` 与自定义业务请求头会继续转发。
+请求可使用 `x-api-key: <代理 API Key>` 或 `Authorization: Bearer <代理 API Key>`。代理验证公开凭据后会将其移除，仅向目标实例发送该实例自己的 API Key；`anthropic-version`、`anthropic-beta` 与自定义业务请求头会继续转发。推荐创建仅含 `inference` 权限的具名 API Key；新 Key 保存后只持久化不可逆摘要，因此必须在首次保存前复制原文。
 
 `v2.9.38` 的 llama.cpp 稳定版基线为 `b10218`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。后续版本的权威基线以 `scripts/llama-parameter-baseline.json` 为准。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
 
@@ -36,7 +38,7 @@ claude --model local-claude
 
 ## 兼容边界
 
-- 代理不把 OpenAI 请求转换为 Anthropic，也不把 Anthropic 请求转换为 OpenAI；两种客户端各自调用对应路径，共用同一路由表。
+- 代理不把 OpenAI 请求转换为 Anthropic，也不把 Anthropic 请求转换为 OpenAI；两种客户端各自调用对应路径，共用严格公开模型路由、健康状态与鉴权。
 - 文本、图片、`tool_use`、`tool_result`、usage 字段和流式事件由 llama.cpp 原生实现处理，代理只改写协议规定的模型标识，不改写工具输入中的同名字段。
 - `prompt caching`、服务端 Web Search、Files、Message Batches、引用、云端计费和加密思考等 Anthropic 云服务能力不会由本地代理模拟。相关请求头会透明转发，但最终行为取决于目标 llama-server 与模型。
 - llama.cpp 对 Anthropic API 的目标是实用兼容，并不承诺覆盖 Anthropic 云端 API 的每一项扩展。目标实例过旧或不提供 Messages 端点时，代理会返回 Anthropic 格式的明确错误。

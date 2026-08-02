@@ -71,9 +71,9 @@ Choose model, engine, and port per instance, tune structured options with search
 
 ### 实例路由 / Instance Routing
 
-把多个运行实例聚合为统一 OpenAI / Anthropic 兼容入口，按模型名或别名分发，并支持鉴权与跨平台的当前用户级独立后台运行。Anthropic 路径原生支持 Messages、流式事件、工具与图片内容块、Token Count 和 Claude Code 模型发现。
+把多个运行实例聚合为生产级 OpenAI / Anthropic 兼容入口。支持 Chat Completions、Responses、Messages、Token Count、Embeddings、Rerank、严格模型边界、四种调度策略、主动健康探测、熔断、并发与限流、细粒度 API Key、CORS、安全 `/props`/`/slots` 发现和 Prometheus 指标。
 
-Expose running instances through one OpenAI / Anthropic-compatible endpoint with aliases, authentication, and a cross-platform per-user background runtime. The Anthropic routes support Messages, streaming events, tool and image blocks, token counting, and Claude Code model discovery.
+Expose running instances through one production OpenAI / Anthropic-compatible gateway with Chat Completions, Responses, Messages, embeddings, rerank, strict model boundaries, four schedulers, active probes, circuit breaking, concurrency and rate limits, scoped API keys, safe capability discovery, and Prometheus metrics.
 
 ![实例路由 / Instance Routing](public/docs/guide/08-instance-routing.png)
 
@@ -96,7 +96,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 | 实例管理 | 多实例、端口检查、启停、连接测试、命令预览 | Instances | Multi-instance lifecycle, port checks, health, command preview |
 | 参数配置 | 搜索、预设、校验、鉴权、缓存和推测解码 | Configuration | Search, presets, validation, auth, cache, speculative decoding |
 | 集群管理 | Worker 发现、本地与 SSH 启动、RPC 配置 | Cluster | Worker discovery, local or SSH launch, RPC configuration |
-| 实例路由 | 统一 API、模型别名、鉴权、后台保活 | Routing | Unified API, aliases, authentication, keep-alive |
+| 实例路由 | 双协议 API、严格路由、调度、熔断、限流、可观测性 | Routing | Dual-protocol API, strict routing, scheduling, resilience, observability |
 | 性能监控 | 生成与向量吞吐、双来源遥测、历史基线和诊断 | Performance | Generation and vector throughput, dual-source telemetry, baselines, diagnostics |
 | 监控大屏 | 服务健康、吞吐、压力、下载和告警 | Monitoring Wall | Health, throughput, pressure, downloads, alerts |
 | 服务器日志 | 实时 stdout/stderr、筛选、跟随和持久化 | Logs | Live output, filtering, tail follow, persistence |
@@ -107,8 +107,8 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - Tauri 2 + React 18 + TypeScript 桌面应用。
 - 完整中英双语界面、深色 / 明亮主题、窗口状态记忆。
 - AMD ADLX、NVIDIA NVML 和系统指标自适应降级。
-- 实例 API Key 与 API Key 文件支持，统一路由可独立鉴权并保护全部代理端点。
-- 同一统一路由同时支持 OpenAI 与 Anthropic API 格式，包括 Messages、Token Count、工具调用、图片内容块和 Claude Code 模型发现。
+- 实例 API Key 与 API Key 文件支持；统一路由支持摘要持久化的多 Key、推理/发现权限、独立限流和精确 Origin CORS。
+- 同一统一路由原生支持 OpenAI Chat Completions / Responses 与 Anthropic Messages，并提供严格模型边界、健康探测、熔断、四种调度策略、安全 `/slots` 发现和 Prometheus 指标。
 - 独立后台运行时可在管理界面退出后继续托管实例与路由，并在当前用户登录后恢复。
 - 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
 - 端口冲突、路径、配置规则和启动健康检查。
@@ -117,8 +117,8 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - Tauri 2, React 18, and TypeScript desktop application.
 - Full Chinese and English UI, light and dark themes, persisted window state.
 - AMD ADLX, NVIDIA NVML, and system-metric fallback.
-- Inline or file-based instance keys plus routing authentication across every proxy endpoint.
-- OpenAI and Anthropic API formats on the same unified listener, including Messages, token counting, tools, image blocks, and Claude Code model discovery.
+- Inline or file-based instance keys plus hashed, scoped multi-key routing authentication, per-key limits, and exact-origin CORS.
+- Native OpenAI Chat Completions / Responses and Anthropic Messages on one listener, with strict model boundaries, active probes, circuit breaking, four schedulers, safe `/slots` discovery, and Prometheus metrics.
 - An independent background runtime that keeps instances and routing alive after the management UI exits and restores them at user login.
 - Atomic configuration saves, backup fallback, persistent downloads and logs.
 - Port, path, configuration, startup, and health validation.
@@ -179,6 +179,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)
 - [llama.cpp 参数兼容机制 / llama.cpp Compatibility Policy](docs/LLAMA_CPP_COMPATIBILITY.md)
+- [生产级模型路由器 / Production Model Router](docs/ROUTER_API_COMPATIBILITY.md)
 - [Anthropic API 与 Claude Code 配置 / Anthropic API and Claude Code](docs/ANTHROPIC_API_COMPATIBILITY.md)
 - 应用内左侧“使用说明”可离线查看同一内容，并启动交互式引导。
 - 提交问题前请附版本、平台、后端类型和已脱敏的服务器日志；不要上传 API Key、私有路径或 SSH 凭据。

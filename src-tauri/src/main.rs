@@ -641,6 +641,7 @@ fn main() {
             proxy_config: Mutex::new(initial_config.proxy_config),
             proxy_shutdown: Mutex::new(None),
             proxy_task: Mutex::new(None),
+            proxy_router_runtime: Mutex::new(None),
             proxy_bound_addr: Mutex::new(None),
             proxy_last_error: Mutex::new(None),
             proxy_lifecycle_lock: tokio::sync::Mutex::new(()),

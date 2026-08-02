@@ -50,8 +50,24 @@ pub struct ModelCapabilities {
 mod model_capability_tests {
     use super::{
         ensure_managed_public_model_alias, migrate_legacy_load_mode, public_model_id,
-        InstanceConfig, ModelCapabilities,
+        InstanceConfig, ModelCapabilities, ProxyConfig,
     };
+
+    #[test]
+    fn legacy_proxy_config_remains_permissive_while_new_configs_are_strict() {
+        let legacy: ProxyConfig = serde_json::from_str(
+            r#"{"enabled":true,"host":"127.0.0.1","port":11435,"routing_strategy":"firstHealthy"}"#,
+        )
+        .unwrap();
+        assert!(!legacy.strict_model_routing);
+        assert_eq!(legacy.max_concurrent_requests, 64);
+        assert_eq!(legacy.health_check_interval_ms, 5_000);
+
+        assert!(ProxyConfig::default().strict_model_routing);
+        let explicit: ProxyConfig =
+            serde_json::from_str(r#"{"strict_model_routing":true}"#).unwrap();
+        assert!(explicit.strict_model_routing);
+    }
 
     #[test]
     fn vector_capabilities_distinguish_missing_cache_fields_from_explicit_false() {
@@ -973,6 +989,10 @@ pub struct ProxyRoute {
     pub model_alias: String,
     pub target_instance_id: String,
     pub priority: i32,
+    /// Relative traffic share for weighted scheduling within the same priority tier.
+    pub weight: u32,
+    /// Optional per-target concurrency ceiling. Zero inherits the router-wide limit.
+    pub max_concurrent_requests: u32,
 }
 
 impl Default for ProxyRoute {
@@ -983,6 +1003,34 @@ impl Default for ProxyRoute {
             model_alias: String::new(),
             target_instance_id: String::new(),
             priority: 0,
+            weight: 1,
+            max_concurrent_requests: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct ProxyApiKey {
+    pub id: String,
+    pub name: String,
+    pub key: String,
+    pub enabled: bool,
+    /// Supported scopes are `inference` and `discovery`. Empty grants both.
+    pub scopes: Vec<String>,
+    /// Optional per-key request limit. Zero inherits the router-wide value.
+    pub requests_per_minute: u32,
+}
+
+impl Default for ProxyApiKey {
+    fn default() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: String::new(),
+            key: String::new(),
+            enabled: true,
+            scopes: vec!["inference".into(), "discovery".into()],
+            requests_per_minute: 0,
         }
     }
 }
@@ -997,7 +1045,24 @@ pub struct ProxyConfig {
     pub default_instance_id: String,
     pub routes: Vec<ProxyRoute>,
     pub routing_strategy: String,
+    /// Reject internal instance identifiers and undeclared model selectors.
+    /// Existing saved configurations did not contain this field, so deserialize
+    /// them permissively while keeping newly created configurations strict.
+    #[serde(default)]
+    pub strict_model_routing: bool,
     pub timeout_ms: u64,
+    pub connect_timeout_ms: u64,
+    pub streaming_idle_timeout_ms: u64,
+    pub health_check_interval_ms: u64,
+    pub health_check_timeout_ms: u64,
+    pub unhealthy_threshold: u32,
+    pub recovery_cooldown_ms: u64,
+    pub max_concurrent_requests: u32,
+    pub queue_timeout_ms: u64,
+    /// Router-wide request limit per authenticated client. Zero disables it.
+    pub requests_per_minute: u32,
+    pub cors_allowed_origins: Vec<String>,
+    pub api_keys: Vec<ProxyApiKey>,
     /// Legacy tray keep-alive preference retained for config compatibility.
     pub background_service_mode: bool,
     /// Runs routing and managed instances in the independent per-user runtime.
@@ -1013,8 +1078,20 @@ impl Default for ProxyConfig {
             public_api_key: String::new(),
             default_instance_id: String::new(),
             routes: Vec::new(),
-            routing_strategy: "firstHealthy".into(),
+            routing_strategy: "priorityFailover".into(),
+            strict_model_routing: true,
             timeout_ms: 600_000,
+            connect_timeout_ms: 5_000,
+            streaming_idle_timeout_ms: 300_000,
+            health_check_interval_ms: 5_000,
+            health_check_timeout_ms: 2_000,
+            unhealthy_threshold: 3,
+            recovery_cooldown_ms: 15_000,
+            max_concurrent_requests: 64,
+            queue_timeout_ms: 1_000,
+            requests_per_minute: 0,
+            cors_allowed_origins: Vec::new(),
+            api_keys: Vec::new(),
             background_service_mode: false,
             runtime_service_enabled: false,
         }
@@ -1026,6 +1103,14 @@ pub struct ProxyStatus {
     pub running: bool,
     pub bound_addr: String,
     pub active_routes: usize,
+    #[serde(default)]
+    pub healthy_routes: usize,
+    #[serde(default)]
+    pub unhealthy_routes: usize,
+    #[serde(default)]
+    pub in_flight_requests: usize,
+    #[serde(default)]
+    pub total_requests: u64,
     pub last_error: Option<String>,
 }
 
@@ -1072,6 +1157,7 @@ pub struct AppState {
     pub proxy_config: Mutex<ProxyConfig>,
     pub proxy_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     pub proxy_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    pub proxy_router_runtime: Mutex<Option<Arc<crate::commands::proxy_runtime::RouterRuntime>>>,
     pub proxy_bound_addr: Mutex<Option<String>>,
     pub proxy_last_error: Mutex<Option<String>>,
     pub proxy_lifecycle_lock: tokio::sync::Mutex<()>,

@@ -11,8 +11,19 @@ type ProxyRoute = {
   id: string
   enabled: boolean
   priority: number
+  weight: number
+  maxConcurrentRequests: number
   modelAlias: string
   targetInstanceId: string
+}
+
+type ProxyApiKey = {
+  id: string
+  name: string
+  key: string
+  enabled: boolean
+  scopes: string[]
+  requestsPerMinute: number
 }
 
 type ProxyConfig = {
@@ -22,7 +33,19 @@ type ProxyConfig = {
   publicApiKey: string
   defaultInstanceId: string
   routingStrategy: string
+  strictModelRouting: boolean
+  connectTimeoutMs: number
   timeoutMs: number
+  streamingIdleTimeoutMs: number
+  healthCheckIntervalMs: number
+  healthCheckTimeoutMs: number
+  unhealthyThreshold: number
+  recoveryCooldownMs: number
+  maxConcurrentRequests: number
+  queueTimeoutMs: number
+  requestsPerMinute: number
+  corsAllowedOrigins: string[]
+  apiKeys: ProxyApiKey[]
   backgroundServiceMode: boolean
   runtimeServiceEnabled: boolean
   routes: ProxyRoute[]
@@ -32,8 +55,16 @@ type ProxyStatus = {
   running: boolean
   boundAddr: string
   activeRoutes: number
+  healthyRoutes: number
+  unhealthyRoutes: number
+  inFlightRequests: number
+  totalRequests: number
   lastError: string | null
 }
+
+type NumericProxyConfigKey = 'connectTimeoutMs' | 'timeoutMs' | 'streamingIdleTimeoutMs'
+  | 'healthCheckIntervalMs' | 'healthCheckTimeoutMs' | 'unhealthyThreshold'
+  | 'recoveryCooldownMs' | 'maxConcurrentRequests' | 'queueTimeoutMs' | 'requestsPerMinute'
 
 type RuntimeServiceView = {
   servicePid: number
@@ -75,8 +106,20 @@ const defaultConfig: ProxyConfig = {
   port: 11435,
   publicApiKey: '',
   defaultInstanceId: '',
-  routingStrategy: 'firstHealthy',
+  routingStrategy: 'priorityFailover',
+  strictModelRouting: true,
+  connectTimeoutMs: 5000,
   timeoutMs: 600000,
+  streamingIdleTimeoutMs: 300000,
+  healthCheckIntervalMs: 5000,
+  healthCheckTimeoutMs: 2000,
+  unhealthyThreshold: 3,
+  recoveryCooldownMs: 15000,
+  maxConcurrentRequests: 64,
+  queueTimeoutMs: 1000,
+  requestsPerMinute: 0,
+  corsAllowedOrigins: [],
+  apiKeys: [],
   backgroundServiceMode: false,
   runtimeServiceEnabled: false,
   routes: [],
@@ -130,14 +173,29 @@ function normalizeRoute(value: unknown, index: number): ProxyRoute {
     id: getString(record, ['id'], `route-${index + 1}`),
     enabled: getBoolean(record, ['enabled'], true),
     priority: getNumber(record, ['priority'], index + 1),
+    weight: getNumber(record, ['weight'], 1),
+    maxConcurrentRequests: getNumber(record, ['max_concurrent_requests', 'maxConcurrentRequests'], 0),
     modelAlias: getString(record, ['model_alias', 'modelAlias', 'model_pattern', 'modelPattern', 'model']),
     targetInstanceId: getString(record, ['target_instance_id', 'targetInstanceId', 'target_id', 'targetId', 'instance_id', 'instanceId']),
+  }
+}
+
+function normalizeApiKey(value: unknown, index: number): ProxyApiKey {
+  const record = asRecord(value)
+  return {
+    id: getString(record, ['id'], `key-${index + 1}`),
+    name: getString(record, ['name'], `API Key ${index + 1}`),
+    key: getString(record, ['key']),
+    enabled: getBoolean(record, ['enabled'], true),
+    scopes: Array.isArray(record.scopes) ? record.scopes.filter((scope): scope is string => typeof scope === 'string') : ['inference', 'discovery'],
+    requestsPerMinute: getNumber(record, ['requests_per_minute', 'requestsPerMinute'], 0),
   }
 }
 
 function normalizeConfig(value: unknown): ProxyConfig {
   const record = asRecord(value)
   const routesValue = Array.isArray(record.routes) ? record.routes : []
+  const apiKeysValue = Array.isArray(record.api_keys) ? record.api_keys : Array.isArray(record.apiKeys) ? record.apiKeys : []
   const routeIds = new Set<string>()
   const routes = routesValue.map(normalizeRoute).map((route, index) => {
     let id = route.id.trim()
@@ -160,7 +218,19 @@ function normalizeConfig(value: unknown): ProxyConfig {
     publicApiKey: getString(record, ['public_api_key', 'publicApiKey']),
     defaultInstanceId: getString(record, ['default_instance_id', 'defaultInstanceId', 'default_target_id', 'defaultTargetId']),
     routingStrategy: getString(record, ['routing_strategy', 'routingStrategy'], defaultConfig.routingStrategy),
+    strictModelRouting: getBoolean(record, ['strict_model_routing', 'strictModelRouting'], defaultConfig.strictModelRouting),
+    connectTimeoutMs: getNumber(record, ['connect_timeout_ms', 'connectTimeoutMs'], defaultConfig.connectTimeoutMs),
     timeoutMs: getNumber(record, ['timeout_ms', 'timeoutMs'], defaultConfig.timeoutMs),
+    streamingIdleTimeoutMs: getNumber(record, ['streaming_idle_timeout_ms', 'streamingIdleTimeoutMs'], defaultConfig.streamingIdleTimeoutMs),
+    healthCheckIntervalMs: getNumber(record, ['health_check_interval_ms', 'healthCheckIntervalMs'], defaultConfig.healthCheckIntervalMs),
+    healthCheckTimeoutMs: getNumber(record, ['health_check_timeout_ms', 'healthCheckTimeoutMs'], defaultConfig.healthCheckTimeoutMs),
+    unhealthyThreshold: getNumber(record, ['unhealthy_threshold', 'unhealthyThreshold'], defaultConfig.unhealthyThreshold),
+    recoveryCooldownMs: getNumber(record, ['recovery_cooldown_ms', 'recoveryCooldownMs'], defaultConfig.recoveryCooldownMs),
+    maxConcurrentRequests: getNumber(record, ['max_concurrent_requests', 'maxConcurrentRequests'], defaultConfig.maxConcurrentRequests),
+    queueTimeoutMs: getNumber(record, ['queue_timeout_ms', 'queueTimeoutMs'], defaultConfig.queueTimeoutMs),
+    requestsPerMinute: getNumber(record, ['requests_per_minute', 'requestsPerMinute'], defaultConfig.requestsPerMinute),
+    corsAllowedOrigins: (Array.isArray(record.cors_allowed_origins) ? record.cors_allowed_origins : Array.isArray(record.corsAllowedOrigins) ? record.corsAllowedOrigins : []).filter((origin): origin is string => typeof origin === 'string'),
+    apiKeys: apiKeysValue.map(normalizeApiKey),
     backgroundServiceMode: getBoolean(record, ['background_service_mode', 'backgroundServiceMode'], defaultConfig.backgroundServiceMode),
     runtimeServiceEnabled: getBoolean(record, ['runtime_service_enabled', 'runtimeServiceEnabled'], defaultConfig.runtimeServiceEnabled),
     routes,
@@ -173,6 +243,10 @@ function normalizeStatus(value: unknown, config: ProxyConfig): ProxyStatus {
     running: getBoolean(record, ['running', 'is_running', 'isRunning'], false),
     boundAddr: getString(record, ['bound_addr', 'boundAddr', 'endpoint', 'url'], formatHostPort(config.host, config.port)),
     activeRoutes: getNumber(record, ['active_routes', 'activeRoutes'], config.routes.filter(route => route.enabled).length),
+    healthyRoutes: getNumber(record, ['healthy_routes', 'healthyRoutes'], 0),
+    unhealthyRoutes: getNumber(record, ['unhealthy_routes', 'unhealthyRoutes'], 0),
+    inFlightRequests: getNumber(record, ['in_flight_requests', 'inFlightRequests'], 0),
+    totalRequests: getNumber(record, ['total_requests', 'totalRequests'], 0),
     lastError: getString(record, ['last_error', 'lastError', 'error']) || null,
   }
 }
@@ -223,13 +297,34 @@ function toCommandConfig(config: ProxyConfig) {
     public_api_key: config.publicApiKey,
     default_instance_id: config.defaultInstanceId,
     routing_strategy: config.routingStrategy,
+    strict_model_routing: config.strictModelRouting,
+    connect_timeout_ms: config.connectTimeoutMs,
     timeout_ms: config.timeoutMs,
+    streaming_idle_timeout_ms: config.streamingIdleTimeoutMs,
+    health_check_interval_ms: config.healthCheckIntervalMs,
+    health_check_timeout_ms: config.healthCheckTimeoutMs,
+    unhealthy_threshold: config.unhealthyThreshold,
+    recovery_cooldown_ms: config.recoveryCooldownMs,
+    max_concurrent_requests: config.maxConcurrentRequests,
+    queue_timeout_ms: config.queueTimeoutMs,
+    requests_per_minute: config.requestsPerMinute,
+    cors_allowed_origins: config.corsAllowedOrigins,
+    api_keys: config.apiKeys.map(apiKey => ({
+      id: apiKey.id,
+      name: apiKey.name.trim(),
+      key: apiKey.key.trim(),
+      enabled: apiKey.enabled,
+      scopes: apiKey.scopes,
+      requests_per_minute: apiKey.requestsPerMinute,
+    })),
     background_service_mode: config.backgroundServiceMode,
     runtime_service_enabled: config.runtimeServiceEnabled,
     routes: config.routes.map(route => ({
       id: route.id,
       enabled: route.enabled,
       priority: route.priority,
+      weight: route.weight,
+      max_concurrent_requests: route.maxConcurrentRequests,
       model_alias: route.modelAlias.trim(),
       target_instance_id: route.targetInstanceId.trim(),
     })),
@@ -251,6 +346,8 @@ function sameRoute(left: ProxyRoute, right: ProxyRoute) {
   return left.id === right.id
     && left.enabled === right.enabled
     && left.priority === right.priority
+    && left.weight === right.weight
+    && left.maxConcurrentRequests === right.maxConcurrentRequests
     && left.modelAlias.trim() === right.modelAlias.trim()
     && left.targetInstanceId.trim() === right.targetInstanceId.trim()
 }
@@ -292,8 +389,16 @@ export default function ProxyPage() {
 
   const labels = useMemo(() => getProxyLabels(lang), [lang])
 
-  const isLocalHost = (host: string) => ['', 'localhost', '127.0.0.1', '::1', '[::1]'].includes(host.trim())
-  const requiresPublicKey = !isLocalHost(draft.host) && !draft.publicApiKey.trim()
+  const isLocalHost = (host: string) => {
+    const normalized = host.trim().replace(/^\[|\]$/g, '').toLowerCase()
+    const octets = normalized.split('.')
+    const loopbackIpv4 = octets.length === 4
+      && octets[0] === '127'
+      && octets.every(octet => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+    return normalized === '' || normalized === 'localhost' || normalized === '::1' || loopbackIpv4
+  }
+  const requiresPublicKey = !isLocalHost(draft.host)
+  const hasApiKeyIssues = draft.apiKeys.some(apiKey => apiKey.enabled && apiKey.key.trim().length < 16)
 
   const fallbackTargets = useMemo<ProxyTarget[]>(() => instances.map(instance => ({
     instanceId: instance.id,
@@ -312,9 +417,13 @@ export default function ProxyPage() {
   const endpoint = endpointUrl(status.boundAddr, draft)
   const apiEndpoints = {
     openAi: `${endpoint}/v1/chat/completions`,
+    responses: `${endpoint}/v1/responses`,
     anthropic: `${endpoint}/v1/messages`,
     countTokens: `${endpoint}/v1/messages/count_tokens`,
     models: `${endpoint}/v1/models`,
+    slots: `${endpoint}/slots`,
+    readiness: `${endpoint}/ready`,
+    metrics: `${endpoint}/metrics`,
   }
   const routeIssues = useMemo(() => {
     const knownTargetIds = new Set(effectiveTargets.map(target => target.instanceId))
@@ -350,7 +459,12 @@ export default function ProxyPage() {
     const selectedRouteIds = new Set<string>()
     for (const candidates of candidatesByModel.values()) {
       candidates.sort((left, right) => left.route.priority - right.route.priority || left.index - right.index)
-      if (candidates[0]) selectedRouteIds.add(candidates[0].route.id)
+      if (!candidates[0]) continue
+      selectedRouteIds.add(candidates[0].route.id)
+      if (config.routingStrategy !== 'priorityFailover') {
+        const bestPriority = candidates[0].route.priority
+        candidates.filter(candidate => candidate.route.priority === bestPriority).forEach(candidate => selectedRouteIds.add(candidate.route.id))
+      }
     }
 
     const byId = new Map<string, RouteAvailability>()
@@ -383,7 +497,7 @@ export default function ProxyPage() {
     }
 
     return { byId, healthyRoutes }
-  }, [config.routes, draft.routes, effectiveTargets])
+  }, [config.routes, config.routingStrategy, draft.routes, effectiveTargets])
 
   const loadProxy = async () => {
     setLoading(true)
@@ -494,6 +608,10 @@ export default function ProxyPage() {
     setDraft(current => ({ ...current, ...patch }))
   }
 
+  const updateNumericDraft = (key: NumericProxyConfigKey, value: number) => {
+    setDraft(current => ({ ...current, [key]: value }))
+  }
+
   const updateRoute = (id: string, patch: Partial<ProxyRoute>) => {
     setRouteTests(current => {
       const next = { ...current }
@@ -506,6 +624,49 @@ export default function ProxyPage() {
     }))
   }
 
+  const updateApiKey = (id: string, patch: Partial<ProxyApiKey>) => {
+    setDraft(current => ({
+      ...current,
+      apiKeys: current.apiKeys.map(apiKey => apiKey.id === id ? { ...apiKey, ...patch } : apiKey),
+    }))
+  }
+
+  const addApiKey = () => {
+    setDraft(current => ({
+      ...current,
+      apiKeys: [...current.apiKeys, {
+        id: crypto.randomUUID(),
+        name: `API Key ${current.apiKeys.length + 1}`,
+        key: `lsm_${crypto.randomUUID().replace(/-/g, '')}`,
+        enabled: true,
+        scopes: ['inference', 'discovery'],
+        requestsPerMinute: 0,
+      }],
+    }))
+  }
+
+  const removeApiKey = (id: string) => {
+    setDraft(current => ({ ...current, apiKeys: current.apiKeys.filter(apiKey => apiKey.id !== id) }))
+  }
+
+  const toggleApiKeyScope = (apiKey: ProxyApiKey, scope: string) => {
+    updateApiKey(apiKey.id, {
+      scopes: apiKey.scopes.includes(scope)
+        ? apiKey.scopes.filter(candidate => candidate !== scope)
+        : [...apiKey.scopes, scope],
+    })
+  }
+
+  const copyApiKey = async (apiKey: ProxyApiKey) => {
+    if (apiKey.key.startsWith('sha256:')) return
+    try {
+      await navigator.clipboard.writeText(apiKey.key)
+      setNotice(labels.apiKeyCopied)
+    } catch {
+      // ignore clipboard failures
+    }
+  }
+
   const addRoute = () => {
     setDraft(current => ({
       ...current,
@@ -515,6 +676,8 @@ export default function ProxyPage() {
           id: crypto.randomUUID(),
           enabled: true,
           priority: Math.max(0, ...current.routes.map(route => route.priority)) + 1,
+          weight: 1,
+          maxConcurrentRequests: 0,
           modelAlias: '',
           targetInstanceId: current.defaultInstanceId || (effectiveTargets.length === 1 ? effectiveTargets[0].instanceId : ''),
         },
@@ -572,8 +735,8 @@ export default function ProxyPage() {
   }
 
   const saveConfig = async () => {
-    if (hasRouteIssues) {
-      setError(labels.routeValidationSummary)
+    if (hasRouteIssues || hasApiKeyIssues) {
+      setError(hasRouteIssues ? labels.routeValidationSummary : labels.apiKeyValidation)
       return
     }
     setSaving(true)
@@ -686,7 +849,7 @@ export default function ProxyPage() {
             <Button onClick={loadProxy} disabled={loading} icon={<RefreshCw className="h-4 w-4" />}>
               {labels.refresh}
             </Button>
-            <Button onClick={saveConfig} disabled={saving || hasRouteIssues} variant="primary" icon={<Save className="h-4 w-4" />}>
+            <Button onClick={saveConfig} disabled={saving || hasRouteIssues || hasApiKeyIssues} variant="primary" icon={<Save className="h-4 w-4" />}>
               {labels.save}
             </Button>
             {statusFresh && status.running ? (
@@ -694,7 +857,7 @@ export default function ProxyPage() {
                 {labels.stop}
               </Button>
             ) : (
-              <Button onClick={() => setProxyRunning('start')} disabled={!statusFresh || busyAction !== null || requiresPublicKey || hasRouteIssues} variant="success" icon={<Zap className="h-4 w-4" />}>
+              <Button onClick={() => setProxyRunning('start')} disabled={!statusFresh || busyAction !== null || requiresPublicKey || hasRouteIssues || hasApiKeyIssues} variant="success" icon={<Zap className="h-4 w-4" />}>
                 {labels.start}
               </Button>
             )}
@@ -725,9 +888,9 @@ export default function ProxyPage() {
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
         <MetricCard label={labels.endpoint} value={endpoint} valueClassName="text-base" icon={<Activity className="h-5 w-5" />} />
         <MetricCard label={labels.defaultTarget} value={selectedTarget?.name || labels.noDefault} valueClassName="text-base" icon={<Server className="h-5 w-5" />} />
-        <MetricCard label={labels.connections} value={targetsFresh ? effectiveTargets.length : '—'} icon={<Zap className="h-5 w-5" />} />
-        <MetricCard label={labels.requests} value={config.routes.filter(route => route.enabled).length} icon={<Route className="h-5 w-5" />} />
-        <MetricCard label={labels.healthyRoutes} value={routeAvailability.healthyRoutes} icon={<HeartPulse className="h-5 w-5" />} />
+        <MetricCard label={labels.requests} value={statusFresh ? status.totalRequests : '—'} icon={<Route className="h-5 w-5" />} />
+        <MetricCard label={labels.inFlightRequests} value={statusFresh ? status.inFlightRequests : '—'} icon={<Zap className="h-5 w-5" />} />
+        <MetricCard label={labels.healthyRoutes} value={statusFresh ? `${status.healthyRoutes}/${status.activeRoutes}` : '—'} icon={<HeartPulse className="h-5 w-5" />} />
       </div>
 
       <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -746,9 +909,13 @@ export default function ProxyPage() {
             <div className="mt-4 space-y-2">
               {[
                 [labels.openAiEndpoint, apiEndpoints.openAi],
+                [labels.responsesEndpoint, apiEndpoints.responses],
                 [labels.anthropicEndpoint, apiEndpoints.anthropic],
                 [labels.tokenCountEndpoint, apiEndpoints.countTokens],
                 [labels.modelDiscoveryEndpoint, apiEndpoints.models],
+                [labels.slotsEndpoint, apiEndpoints.slots],
+                [labels.readinessEndpoint, apiEndpoints.readiness],
+                [labels.metricsEndpoint, apiEndpoints.metrics],
               ].map(([label, value]) => (
                 <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/70">
                   <div className="text-[11px] font-medium uppercase text-slate-500 dark:text-slate-400">{label}</div>
@@ -802,6 +969,34 @@ export default function ProxyPage() {
               </label>
             </div>
 
+            <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+              <label className="min-w-0">
+                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.routingStrategy}</span>
+                <SelectInput value={draft.routingStrategy} onChange={event => updateDraft({ routingStrategy: event.target.value })} className="w-full">
+                  <option value="priorityFailover">{labels.priorityFailover}</option>
+                  <option value="roundRobin">{labels.roundRobin}</option>
+                  <option value="leastBusy">{labels.leastBusy}</option>
+                  <option value="weighted">{labels.weighted}</option>
+                </SelectInput>
+              </label>
+              <div className="min-w-0">
+                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.strictRouting}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={draft.strictModelRouting}
+                  onClick={() => updateDraft({ strictModelRouting: !draft.strictModelRouting })}
+                  className={`flex h-10 w-full items-center justify-between rounded-lg border px-3 text-sm transition ${draft.strictModelRouting ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}
+                >
+                  <span>{draft.strictModelRouting ? labels.enabled : labels.disabled}</span>
+                  <span className={`relative inline-flex h-6 w-11 rounded-full ${draft.strictModelRouting ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+                    <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${draft.strictModelRouting ? 'left-6' : 'left-1'}`} />
+                  </span>
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.strictRoutingHint}</p>
+
             <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
               <label className="min-w-0">
                 <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.publicKey}</span>
@@ -829,6 +1024,101 @@ export default function ProxyPage() {
                 <span className="font-semibold">{labels.lastError}: </span>{status.lastError}
               </div>
             ) : null}
+          </Surface>
+
+          <Surface as="section" className="p-5">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.resilience}</h3>
+              <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{labels.resilienceHint}</p>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {([
+                ['connectTimeoutMs', labels.connectTimeout, 100],
+                ['streamingIdleTimeoutMs', labels.streamingIdleTimeout, 1000],
+                ['healthCheckIntervalMs', labels.healthCheckInterval, 1000],
+                ['healthCheckTimeoutMs', labels.healthCheckTimeout, 250],
+                ['unhealthyThreshold', labels.unhealthyThreshold, 1],
+                ['recoveryCooldownMs', labels.recoveryCooldown, 1000],
+                ['maxConcurrentRequests', labels.maxConcurrentRequests, 1],
+                ['queueTimeoutMs', labels.queueTimeout, 10],
+                ['requestsPerMinute', labels.requestsPerMinute, 0],
+              ] as Array<[NumericProxyConfigKey, string, number]>).map(([key, label, min]) => (
+                <label key={key} className="min-w-0">
+                  <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{label}</span>
+                  <TextInput
+                    type="number"
+                    min={min}
+                    value={draft[key]}
+                    onChange={event => updateNumericDraft(key, Math.max(min, Number(event.target.value) || min))}
+                  />
+                </label>
+              ))}
+            </div>
+          </Surface>
+
+          <Surface as="section" className="p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.accessControl}</h3>
+                <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{labels.accessControlHint}</p>
+              </div>
+              <Button onClick={addApiKey} icon={<Plus className="h-4 w-4" />}>{labels.addApiKey}</Button>
+            </div>
+            <label className="mt-4 block min-w-0">
+              <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.corsOrigins}</span>
+              <TextInput
+                value={draft.corsAllowedOrigins.join(', ')}
+                placeholder="https://app.example.com, https://admin.example.com"
+                onChange={event => updateDraft({ corsAllowedOrigins: event.target.value.split(',').map(origin => origin.trim()).filter(Boolean) })}
+              />
+              <span className="mt-1.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.corsOriginsHint}</span>
+            </label>
+            <div className="mt-4 space-y-3">
+              {draft.apiKeys.length === 0 ? <EmptyPanel title={labels.noApiKeys} /> : draft.apiKeys.map(apiKey => (
+                <div key={apiKey.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70">
+                  <div className="grid gap-3 lg:grid-cols-[180px_minmax(220px,1fr)_140px_auto]">
+                    <TextInput aria-label={labels.apiKeyName} value={apiKey.name} placeholder={labels.apiKeyName} onChange={event => updateApiKey(apiKey.id, { name: event.target.value })} />
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 gap-2">
+                        <TextInput aria-label={labels.apiKeyValue} type="password" autoComplete="off" value={apiKey.key} placeholder={labels.apiKeyValue} onChange={event => updateApiKey(apiKey.id, { key: event.target.value })} className="min-w-0 flex-1" />
+                        {!apiKey.key.startsWith('sha256:') ? <IconButton label={labels.copyApiKey} onClick={() => void copyApiKey(apiKey)} icon={<Copy className="h-4 w-4" />} /> : null}
+                      </div>
+                      {apiKey.key.startsWith('sha256:') ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyHashedHint}</p> : null}
+                    </div>
+                    <TextInput aria-label={labels.requestsPerMinute} type="number" min={0} value={apiKey.requestsPerMinute} onChange={event => updateApiKey(apiKey.id, { requestsPerMinute: Math.max(0, Number(event.target.value) || 0) })} />
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-label={labels.enabled}
+                        aria-checked={apiKey.enabled}
+                        onClick={() => updateApiKey(apiKey.id, { enabled: !apiKey.enabled })}
+                        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition ${apiKey.enabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'}`}
+                      >
+                        <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${apiKey.enabled ? 'left-6' : 'left-1'}`} />
+                      </button>
+                      <IconButton label={labels.removeApiKey} onClick={() => removeApiKey(apiKey.id)} icon={<Trash2 className="h-4 w-4" />} />
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-slate-500 dark:text-slate-400">{labels.scopes}:</span>
+                    {['inference', 'discovery'].map(scope => (
+                      <button
+                        key={scope}
+                        type="button"
+                        aria-pressed={apiKey.scopes.includes(scope)}
+                        onClick={() => toggleApiKeyScope(apiKey, scope)}
+                        className={`rounded-full border px-2.5 py-1 text-xs font-medium ${apiKey.scopes.includes(scope) ? 'border-blue-500/40 bg-blue-500/10 text-blue-700 dark:text-blue-300' : 'border-slate-300 text-slate-500 dark:border-slate-700 dark:text-slate-400'}`}
+                      >
+                        {scope === 'inference' ? labels.inferenceScope : labels.discoveryScope}
+                      </button>
+                    ))}
+                    <span className="ml-auto text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyRpmHint}</span>
+                  </div>
+                  {apiKey.enabled && apiKey.key.trim().length < 16 ? <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{labels.apiKeyValidation}</p> : null}
+                </div>
+              ))}
+            </div>
           </Surface>
 
           <Surface as="section" className="p-5">
@@ -881,6 +1171,36 @@ export default function ProxyPage() {
                       aria-label={labels.priority}
                       value={route.priority}
                       onChange={event => updateRoute(route.id, { priority: Number(event.target.value) || 0 })}
+                      className="h-9"
+                    />
+                  ),
+                },
+                {
+                  key: 'weight',
+                  header: labels.weight,
+                  width: 88,
+                  render: route => (
+                    <TextInput
+                      type="number"
+                      min={1}
+                      aria-label={labels.weight}
+                      value={route.weight}
+                      onChange={event => updateRoute(route.id, { weight: Math.max(1, Number(event.target.value) || 1) })}
+                      className="h-9"
+                    />
+                  ),
+                },
+                {
+                  key: 'maxConcurrency',
+                  header: labels.routeConcurrency,
+                  width: 112,
+                  render: route => (
+                    <TextInput
+                      type="number"
+                      min={0}
+                      aria-label={labels.routeConcurrency}
+                      value={route.maxConcurrentRequests}
+                      onChange={event => updateRoute(route.id, { maxConcurrentRequests: Math.max(0, Number(event.target.value) || 0) })}
                       className="h-9"
                     />
                   ),
