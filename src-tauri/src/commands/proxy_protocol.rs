@@ -112,6 +112,82 @@ pub(crate) fn error_response(
     response
 }
 
+pub(crate) fn context_limit_error_response(
+    format: ProxyApiFormat,
+    param: &str,
+    input_tokens: Option<u64>,
+    requested_output_tokens: u64,
+    context_window: u64,
+) -> Response {
+    let request_id = proxy_request_id();
+    let message = match input_tokens {
+        Some(input_tokens) => {
+            let required_tokens = input_tokens.saturating_add(requested_output_tokens);
+            format!(
+                "This request requires at least {required_tokens} tokens ({input_tokens} input + {requested_output_tokens} output), but the selected route supports a {context_window} token context window. Reduce the input or output token limit."
+            )
+        }
+        None => format!(
+            "The requested output limit of {requested_output_tokens} tokens exceeds the selected route's {context_window} token context window. Reduce the output token limit."
+        ),
+    };
+    let value = match format {
+        ProxyApiFormat::OpenAi => json!({
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "param": param,
+                "code": "context_length_exceeded",
+                "details": {
+                    "input_tokens": input_tokens,
+                    "requested_output_tokens": requested_output_tokens,
+                    "context_window": context_window,
+                }
+            }
+        }),
+        ProxyApiFormat::Anthropic => {
+            let mut value = anthropic_error_value(StatusCode::BAD_REQUEST, &message, &request_id);
+            value["error"]["details"] = json!({
+                "input_tokens": input_tokens,
+                "requested_output_tokens": requested_output_tokens,
+                "context_window": context_window,
+            });
+            value
+        }
+    };
+    let mut response = (StatusCode::BAD_REQUEST, Json(value)).into_response();
+    if let Ok(header_value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert(
+            if format.is_anthropic() {
+                "request-id"
+            } else {
+                "x-request-id"
+            },
+            header_value,
+        );
+    }
+    for (name, value) in [
+        ("x-llama-server-manager-context-window", context_window),
+        (
+            "x-llama-server-manager-requested-output-tokens",
+            requested_output_tokens,
+        ),
+    ] {
+        if let Ok(value) = HeaderValue::from_str(&value.to_string()) {
+            response.headers_mut().insert(name, value);
+        }
+    }
+    if let Some(input_tokens) = input_tokens {
+        if let Ok(value) = HeaderValue::from_str(&input_tokens.to_string()) {
+            response
+                .headers_mut()
+                .insert("x-llama-server-manager-input-tokens", value);
+        }
+    }
+    add_format_header(&mut response, format);
+    response
+}
+
 fn upstream_error_message(value: &Value) -> Option<&str> {
     value
         .get("error")
@@ -330,6 +406,38 @@ mod tests {
             Some("anthropic")
         );
         assert!(response.headers().contains_key("request-id"));
+    }
+
+    #[tokio::test]
+    async fn context_limit_errors_are_machine_readable_in_both_formats() {
+        let openai =
+            context_limit_error_response(ProxyApiFormat::OpenAi, "messages", Some(80), 49, 128);
+        assert_eq!(openai.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            openai
+                .headers()
+                .get("x-llama-server-manager-context-window")
+                .and_then(|value| value.to_str().ok()),
+            Some("128")
+        );
+        let body = axum::body::to_bytes(openai.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["error"]["code"], "context_length_exceeded");
+        assert_eq!(value["error"]["details"]["input_tokens"], 80);
+
+        let anthropic =
+            context_limit_error_response(ProxyApiFormat::Anthropic, "messages", Some(80), 49, 128);
+        assert_eq!(anthropic.status(), StatusCode::BAD_REQUEST);
+        assert!(anthropic.headers().contains_key("request-id"));
+        assert_eq!(
+            anthropic
+                .headers()
+                .get(ANTHROPIC_FORMAT_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some("anthropic")
+        );
     }
 
     #[test]

@@ -45,6 +45,21 @@ Messages 的文本、图片、thinking、`tool_use`、`tool_result`、usage 和�
 
 `/props` 只公开 `n_ctx`、槽位数量、模板能力、多模态能力、睡眠状态和路由健康摘要；不会暴露模型路径或聊天模板正文。`/slots` 只公开每个槽位的 `id`、`n_ctx`、`speculative`、`is_processing` 和 `n_past`，不会暴露提示词或 Token。比如后端 `http://127.0.0.1:8080/slots` 报告 `n_ctx: 131072` 时，客户端可通过 `GET /slots?model=my-model` 从统一路由取得同一个 128K 上下文信息。
 
+`/v1/models` 与 `/v1/models/:model_id` 会把同一个上下文窗口同时写入 `context_length`、`context_window` 和 vLLM 兼容的 `max_model_len`。运行时探测到的 `n_ctx` 优先；首次探测完成前，仅将管理器明确配置且未启用自动上下文的 `ctx_size` 作为兜底。模型发现本身不会发起探测或改变目标健康状态。一个公开模型映射到多个故障转移目标时，路由器只声明所有候选目标都能安全支持的最小上下文；任一候选既没有有效运行时值也没有明确配置值时，三个字段都返回 `null`，不会猜测或夸大能力。工具和多模态能力同样采用保守聚合。
+
+## 上下文超限保护
+
+当选中目标已有可信 `n_ctx` 时，路由器会在生成请求进入推理队列前执行 Token 预检：
+
+- Chat Completions 使用目标的 `/v1/chat/completions/input_tokens`。
+- Responses 使用目标的 `/v1/responses/input_tokens`。
+- Anthropic Messages 使用目标的 `/v1/messages/count_tokens`。
+- Legacy Completions 的单条或小批量 prompt 使用目标的 `/tokenize`，并与实际请求相同地加入特殊 Token。
+
+预检比较“模板化后的输入 Token + 请求的最大输出 Token”与目标实际上下文窗口。超过限制时不发送生成请求，OpenAI 返回 `400 invalid_request_error` 和 `code: context_length_exceeded`，Anthropic 返回 `400 invalid_request_error` 信封；两者都附带输入、输出、上下文的机器可读详情和 `x-llama-server-manager-*` 响应头。`n_ctx`/`max_model_len` 表示输入与输出合计窗口，不是单独的最大输出长度。
+
+Token 计数端点由目标 llama-server 提供。如果目标版本不支持、请求超时或计数响应无效，路由器会保持兼容并继续转发原请求，让目标执行最终校验；不会用字符数或经验比例制造可能误判中文、代码、工具定义和多模态请求的伪精确结果。客户端仍应根据 `/v1/models` 的上下文元数据提前压缩会话。
+
 ## 严格模型边界
 
 建议始终启用 `strictModelRouting`：
@@ -116,4 +131,4 @@ CORS 只接受逗号分隔的精确 HTTP(S) Origin，例如 `https://app.example
 
 ## Production router summary
 
-The router exposes native OpenAI Chat Completions, Responses, Completions, embeddings and rerank endpoints together with Anthropic Messages and token counting. Exact public model IDs form a strict security boundary. Priority tiers, round-robin/least-busy/weighted scheduling, active probes, circuit breaking, independent streaming timeouts, concurrency queues, scoped hashed API keys, exact-origin CORS, safe `/props` and `/slots` discovery, request IDs, and Prometheus metrics are built in. The listener remains loopback-only; terminate TLS at a trusted local reverse proxy or tunnel for remote access.
+The router exposes native OpenAI Chat Completions, Responses, Completions, embeddings and rerank endpoints together with Anthropic Messages and token counting. Model discovery publishes `context_length`, `context_window`, and vLLM-compatible `max_model_len` using the safe minimum across failover targets. Exact token-count preflight rejects oversized generation requests in OpenAI or Anthropic error format when the target supports counting, while unsupported counters fail open to the target's own validation. Exact public model IDs form a strict security boundary. Priority tiers, round-robin/least-busy/weighted scheduling, active probes, circuit breaking, independent streaming timeouts, concurrency queues, scoped hashed API keys, exact-origin CORS, safe `/props` and `/slots` discovery, request IDs, and Prometheus metrics are built in. The listener remains loopback-only; terminate TLS at a trusted local reverse proxy or tunnel for remote access.

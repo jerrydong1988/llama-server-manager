@@ -14,6 +14,7 @@ const packageJson = JSON.parse(read('package.json'))
 for (const route of [
   '/v1/models',
   '/v1/chat/completions',
+  '/v1/chat/completions/input_tokens',
   '/v1/completions',
   '/v1/responses',
   '/v1/responses/input_tokens',
@@ -56,11 +57,23 @@ assert.match(proxy, /for key in \["id", "n_ctx", "speculative", "is_processing",
 assert.doesNotMatch(proxy.match(/fn sanitized_slots[\s\S]*?\n}/)?.[0] ?? '', /prompt|tokens/)
 assert.match(protocol, /"param": Value::Null/)
 assert.match(protocol, /"code": Value::Null/)
+assert.match(protocol, /"context_length_exceeded"/)
+assert.match(protocol, /x-llama-server-manager-context-window/)
 assert.match(protocol, /response.*get_mut/s)
+for (const field of ['"context_length": context_window', '"context_window": context_window', '"max_model_len": context_window']) {
+  assert.ok(proxy.includes(field), `model discovery omits ${field}`)
+}
+for (const counter of ['/v1/chat/completions/input_tokens', '/v1/responses/input_tokens', '/v1/messages/count_tokens', '/tokenize']) {
+  assert.ok(proxy.includes(`"${counter}"`), `context preflight omits ${counter}`)
+}
+assert.match(proxy, /safe_context_window/)
+assert.match(proxy, /context_limit_violation/)
 assert.match(runtime, /lsm_router_requests_total/)
 assert.match(runtime, /circuit_open_until_ms/)
 assert.match(docs, /`GET \/slots\?model=/)
 assert.match(docs, /131072/)
+assert.match(docs, /max_model_len/)
+assert.match(docs, /context_length_exceeded/)
 assert.match(docs, /x-request-id/)
 assert.match(docs, /request-id/)
 assert.equal(packageJson.devDependencies.openai, '7.3.0')

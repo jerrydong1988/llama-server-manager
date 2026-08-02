@@ -427,6 +427,12 @@ impl RouterRuntime {
         }
     }
 
+    pub(crate) fn record_rejected(&self) {
+        self.metrics
+            .rejected_requests
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn capabilities_stale(&self, instance_id: &str, max_age: Duration) -> bool {
         let targets = self.targets.lock().unwrap();
         let updated_at = targets

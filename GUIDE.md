@@ -386,7 +386,11 @@ Anthropic routes support text, images, thinking, tool calls, tool results, and s
 
 代理不会在 OpenAI 与 Anthropic 请求体之间互相转换；两种客户端调用各自的协议端点，但共享同一套路由规则、公开模型名和鉴权配置。`/props` 与 `/slots` 会透传必要的上下文和负载信息，同时移除模型路径、模板正文、提示词和 Token。prompt caching、服务端工具等云端专属能力不会由管理器模拟，最终能力取决于目标 `llama-server` 与模型。
 
+`/v1/models` 会把后端运行时 `n_ctx` 同时公开为 `context_length`、`context_window` 和 vLLM 兼容的 `max_model_len`；首次探测前可使用明确的非自动 `ctx_size` 配置，故障转移目标不一致时采用安全最小值，任一目标未知时不猜测。对于 Chat Completions、Responses、Legacy Completions 和 Anthropic Messages，路由会优先调用目标原生 Token 计数接口，比较输入与最大输出之和；超出上下文时在进入推理前返回 `400`，OpenAI 使用 `context_length_exceeded`，Anthropic 使用 `invalid_request_error`。旧版目标缺少计数接口时继续转发，由目标执行最终校验，不使用字符数估算。
+
 The proxy does not translate request bodies between OpenAI and Anthropic formats. Each client uses native endpoints while sharing exact public model IDs and authentication. `/props` and `/slots` preserve context/capacity discovery while removing paths, templates, prompts, and tokens. Cloud-only capabilities are not emulated by the manager.
+
+`/v1/models` publishes the runtime `n_ctx` as `context_length`, `context_window`, and vLLM-compatible `max_model_len`, with an explicit non-auto `ctx_size` fallback before the first probe, the safe minimum across failover targets, and no guessed value when any target is unknown. Chat Completions, Responses, small Legacy Completions batches, and Anthropic Messages use the target's native token counter before inference; oversized requests receive an OpenAI `400 context_length_exceeded` or Anthropic `400 invalid_request_error`. Older targets without a compatible counter fail open to their own final validation rather than using an inaccurate character estimate.
 
 完整端点、调度、错误格式、超时、权限与部署边界见[生产级模型路由器说明](docs/ROUTER_API_COMPATIBILITY.md)。
 
