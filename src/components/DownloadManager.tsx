@@ -4,7 +4,7 @@ import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
 import { formatMessage, useI18n } from '../i18n'
 import { invokeApp as invoke } from '../lib/ipc'
-import { pathJoin, pathsEqual } from '../utils/path'
+import { formatPathForDisplay, pathJoin, pathsEqual } from '../utils/path'
 import { forEachConcurrent } from '../utils/async'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
 import { PathText, surfaceClassName } from './ui'
@@ -1021,7 +1021,7 @@ export default function DownloadManager() {
                 <div className="flex min-w-0 gap-2" data-guide="download-save-dir">
                   <input
                     type="text"
-                    value={saveDir}
+                    value={formatPathForDisplay(saveDir)}
                     onChange={e => saveDirPersist(e.target.value)}
                     placeholder={ui.storageSection}
                     aria-label={ui.storageSection}
@@ -1140,7 +1140,7 @@ export default function DownloadManager() {
                     </div>
                     <div className="mt-3 space-y-1 text-xs text-slate-500 dark:text-slate-400">
                       {group.files.slice(0, 4).map(file => (
-                        <div key={file.task_id || file.name} className="truncate" title={file.path || file.name}>{file.name}</div>
+                        <div key={file.task_id || file.name} className="truncate" title={formatPathForDisplay(file.path || file.name)}>{file.name}</div>
                       ))}
                       {group.files.length > 4 && (
                         <div>{formatMessage(ui.moreFiles, { count: group.files.length - 4 })}</div>

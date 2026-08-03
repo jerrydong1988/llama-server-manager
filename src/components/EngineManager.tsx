@@ -258,9 +258,7 @@ const EngineManager = () => {
                 <InsetSurface key={dir} className="p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-slate-100" title={dir}>
-                        {dir}
-                      </p>
+                      <PathText value={dir} maxLength={38} className="text-sm font-medium text-slate-100" />
                       <p className="mt-1 text-xs text-slate-500">
                         {engines.filter(engine => isPathWithinRoot(engine.dir, dir)).length} {labels.discovered}
                       </p>
@@ -401,9 +399,7 @@ const EngineManager = () => {
                             </>
                           )}
                         </div>
-                        <p className="mt-1 truncate text-xs text-slate-500" title={engine.dir}>
-                          {engine.dir}
-                        </p>
+                        <PathText value={engine.dir} maxLength={64} className="mt-1 text-xs text-slate-500" />
                       </div>
                       <div className="flex items-center">
                         <span className={`rounded-full border px-2.5 py-1 text-xs ${backendTone(engine.backend)}`}>

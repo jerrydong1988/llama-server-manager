@@ -5,7 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAppStore, type ModelInfo } from '../store'
 import { invokeApp as invoke } from '../lib/ipc'
 import { formatMessage, useI18n } from '../i18n'
-import { dedupePaths, isPathWithinRoot, normalizePath, pathJoin, pathsEqual } from '../utils/path'
+import { dedupePaths, formatPathForDisplay, isPathWithinRoot, normalizePath, pathJoin, pathsEqual } from '../utils/path'
 import { formatSize } from '../utils/format'
 import { Button, InsetSurface, MetricCard, PathText, Surface, TextInput } from './ui'
 
@@ -102,7 +102,7 @@ const matchNode = (node: TreeNode, query: string): boolean => {
 
   const normalizedQuery = query.toLowerCase()
   return (
-    node.name.toLowerCase().includes(normalizedQuery) ||
+    formatPathForDisplay(node.name).toLowerCase().includes(normalizedQuery) ||
     !!node.model?.quant_type?.toLowerCase().includes(normalizedQuery) ||
     !!node.model?.architecture?.toLowerCase().includes(normalizedQuery) ||
     !!node.model?.file_type?.toLowerCase().includes(normalizedQuery)
@@ -272,6 +272,7 @@ const ModelRepo = () => {
 
   const renderNode = (node: TreeNode, depth: number): ReactNode => {
     const nodeKey = node.path
+    const displayName = formatPathForDisplay(node.name)
     const isCollapsed = collapsed.has(nodeKey)
     const isMatch = !!searchQuery && matchNode(node, searchQuery)
     const hasChildMatch = !!searchQuery && !isMatch && matchingPaths.has(node.path)
@@ -303,7 +304,7 @@ const ModelRepo = () => {
             <span className="w-4 shrink-0 text-slate-500">{isCollapsed ? '>' : 'v'}</span>
             <FolderTree className="h-4 w-4 shrink-0 text-amber-400" />
             <span className={`min-w-0 flex-1 truncate text-sm ${isMatch ? 'text-blue-100' : 'text-slate-100'}`}>
-              {highlightText(node.name, searchQuery)}
+              {highlightText(displayName, searchQuery)}
             </span>
             <span className="shrink-0 text-xs text-slate-500">
               {stats.models > 0 ? `${stats.models} ${t.modelRepo.typeModelShort}` : ''}
@@ -434,9 +435,7 @@ const ModelRepo = () => {
                   <InsetSurface key={tree.path} className="p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-slate-100" title={tree.name}>
-                          {tree.name}
-                        </p>
+                        <PathText value={tree.name} maxLength={38} className="text-sm font-medium text-slate-100" />
                         <p className="mt-1 text-xs text-slate-500">
                           {treeStats.models} {t.modelRepo.typeModelShort} · {treeStats.mmproj} {t.modelRepo.typeMmprojShort} · {formatSize(treeStats.size)}
                         </p>

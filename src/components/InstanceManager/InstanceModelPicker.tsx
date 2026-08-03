@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, File, FolderOpen, Image, X } from 'lucide-re
 import type { ModelInfo } from '../../store/types'
 import { useI18n } from '../../i18n'
 import { isPathWithinRoot, normalizePath, pathJoin } from '../../utils/path'
-import { Button, Surface } from '../ui'
+import { Button, PathText, Surface } from '../ui'
 import { findMatchingProjector } from '../../modelProjector'
 
 interface PickerNode {
@@ -54,7 +54,11 @@ export function InstanceModelPicker({ models, modelDirs, collapsed, onToggle, on
           <button type="button" onClick={() => onToggle(node.path)} style={{ paddingLeft: `${depth * 12 + 4}px` }} className="flex w-full items-center gap-1.5 rounded py-1 text-left text-xs hover:bg-slate-100 dark:hover:bg-slate-800">
             {isCollapsed ? <ChevronRight className="h-3 w-3 shrink-0 text-slate-400" /> : <ChevronDown className="h-3 w-3 shrink-0 text-slate-400" />}
             <FolderOpen className="h-3 w-3 shrink-0 text-amber-500" />
-            <span className="truncate font-medium">{node.name}</span>
+            {depth === 0 ? (
+              <PathText value={node.name} maxLength={78} className="flex-1 font-medium" />
+            ) : (
+              <span className="truncate font-medium">{node.name}</span>
+            )}
           </button>
           {!isCollapsed && node.children && [...node.children.values()]
             .sort((left, right) => left.isDir !== right.isDir ? (left.isDir ? -1 : 1) : left.name.localeCompare(right.name))

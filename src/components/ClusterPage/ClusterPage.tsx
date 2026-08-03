@@ -5,7 +5,7 @@ import { Check, Copy, Network, Play, Plus, Radio, RefreshCw, Server, Square, Sto
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
 import { getClusterLabels } from '../../i18n/pageLabels'
-import { pathsEqual } from '../../utils/path'
+import { formatPathForDisplay, pathsEqual } from '../../utils/path'
 import { Badge, Button, InsetSurface, MetricCard, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -716,7 +716,7 @@ export default function ClusterPage() {
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.remoteRpcPath}</label>
-                    <TextInput type="text" value={launchForm.rpcPath} onChange={event => setLaunchForm({ ...launchForm, rpcPath: event.target.value })} placeholder={t.clusterPage.rpcPathPlaceholder} className="h-10" />
+                    <TextInput type="text" value={formatPathForDisplay(launchForm.rpcPath)} onChange={event => setLaunchForm({ ...launchForm, rpcPath: event.target.value })} placeholder={t.clusterPage.rpcPathPlaceholder} className="h-10" />
                   </div>
                 </>
               )}
@@ -729,7 +729,7 @@ export default function ClusterPage() {
                   </div>
                   <div>
                     <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.sshKeyPath}</label>
-                    <TextInput type="text" value={launchForm.keyPath} onChange={event => setLaunchForm({ ...launchForm, keyPath: event.target.value })} placeholder="~/.ssh/id_rsa" className="h-10" />
+                    <TextInput type="text" value={formatPathForDisplay(launchForm.keyPath)} onChange={event => setLaunchForm({ ...launchForm, keyPath: event.target.value })} placeholder="~/.ssh/id_rsa" className="h-10" />
                   </div>
                   <div className="text-xs text-slate-500">
                     {labels.sshKeyNotice}
@@ -810,7 +810,7 @@ export default function ClusterPage() {
                   </SelectInput>
                 ) : (
                   <div className="flex gap-2">
-                    <TextInput type="text" value={localEngine} onChange={event => setLocalEngine(event.target.value)} placeholder={t.clusterPage.engineDirPlaceholder} className="h-10 flex-1" />
+                    <TextInput type="text" value={formatPathForDisplay(localEngine)} onChange={event => setLocalEngine(event.target.value)} placeholder={t.clusterPage.engineDirPlaceholder} className="h-10 flex-1" />
                     <Button
                       onClick={async () => {
                         try {

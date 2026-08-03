@@ -8,6 +8,7 @@ import { hasExplicitOverride } from '../../parameterIntent'
 import WorkerSelector from './WorkerSelector'
 import { Button, TextInput } from '../ui'
 import { getResettableFields, type ModelWorkload } from '../../modelPolicy'
+import { formatPathForDisplay } from '../../utils/path'
 
 const formGridClassName = 'config-form-grid'
 const wideGridClassName = 'config-form-grid'
@@ -126,7 +127,7 @@ export function BasicSection({ local, set, inherit, t, isEmbedding, workload, mo
       <div className={formGridClassName}>
         <SearchTarget label={`${t.configPage.modelPath} (--model, -m)`} fieldKey="model_path" title={t.configPage.modelPathTip}>
           <div className="flex gap-1">
-            <TextInput type="text" value={local.model_path} onChange={e => set('model_path', e.target.value)} onBlur={e => onCommitModelPath?.(e.target.value)} className="h-10 flex-1" />
+            <TextInput type="text" value={formatPathForDisplay(local.model_path)} onChange={e => set('model_path', e.target.value)} onBlur={e => onCommitModelPath?.(e.target.value)} className="h-10 flex-1" />
             <Button onClick={onShowPicker} variant="primary" size="icon" title={t.configPage.modelPathBtn}><FolderOpen className="h-4 w-4" /></Button>
           </div>
         </SearchTarget>
@@ -344,19 +345,19 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
         {!isEmbedding && (
         <CollapsibleGroup id="config-advanced-model" title={t.configPage.subAdvModelAdapt} onReset={() => resetGroup('advancedModelAdapt')} summary={summary(ADVANCED_GROUP_CONFIG_KEYS.advancedModelAdapt)}>
           <div className={formGridClassName}>
-            <Input label={`${t.configPage.chatTemplateFile} (--chat-template-file)`} value={local.chat_template_file} onChange={v => set('chat_template_file', v)} title={t.configPage.chatTemplateFileTip}  fieldKey={a('chat_template_file')} />
-            <Input label={`${t.configPage.lora} (--lora)`} value={local.lora_path} onChange={v => set('lora_path', v)} title={t.configPage.loraTip}  fieldKey={a('lora_path')} />
+            <Input label={`${t.configPage.chatTemplateFile} (--chat-template-file)`} value={formatPathForDisplay(local.chat_template_file)} onChange={v => set('chat_template_file', v)} title={t.configPage.chatTemplateFileTip}  fieldKey={a('chat_template_file')} />
+            <Input label={`${t.configPage.lora} (--lora)`} value={formatPathForDisplay(local.lora_path)} onChange={v => set('lora_path', v)} title={t.configPage.loraTip}  fieldKey={a('lora_path')} />
             <Switch label={`${t.configPage.loraInitNoApply} (--lora-init-without-apply)`} value={local.lora_init_without_apply} onChange={v => set('lora_init_without_apply', v)} title={t.configPage.loraInitNoApplyTip}  fieldKey={a('lora_init_without_apply')} />
       <Input label={`${t.configPage.loraScaled} (--lora-scaled)`} value={local.lora_scaled || ''} onChange={v => set('lora_scaled', v)} title={t.configPage.loraScaledTip} disabled={isEmbedding}  fieldKey={a('lora_scaled')} />
             <SearchTarget label={`${t.configPage.mmproj} (--mmproj)`} fieldKey={a('mmproj_path')} title={t.configPage.mmprojTip}>
               <div className="flex gap-1">
-                <TextInput type="text" value={local.mmproj_path} onChange={e => set('mmproj_path', e.target.value)} disabled={isEmbedding} className="h-10 flex-1" />
+                <TextInput type="text" value={formatPathForDisplay(local.mmproj_path)} onChange={e => set('mmproj_path', e.target.value)} disabled={isEmbedding} className="h-10 flex-1" />
                 <Button onClick={onShowMmprojPicker} variant="primary" size="icon" title={t.configPage.mmprojPathBtn} aria-label={t.configPage.mmprojPathBtn} disabled={isEmbedding}>
                   <FolderOpen className="h-4 w-4" />
                 </Button>
               </div>
             </SearchTarget>
-            <Input label={`${t.configPage.grammarFile} (--grammar-file)`} value={local.grammar_file} onChange={v => set('grammar_file', v)} title={t.configPage.grammarFileTip}  fieldKey={a('grammar_file')} />
+            <Input label={`${t.configPage.grammarFile} (--grammar-file)`} value={formatPathForDisplay(local.grammar_file)} onChange={v => set('grammar_file', v)} title={t.configPage.grammarFileTip}  fieldKey={a('grammar_file')} />
             <Input label={`${t.configPage.grammar} (--grammar)`} value={local.grammar} onChange={v => set('grammar', v)} title={t.configPage.grammarTip}  fieldKey={a('grammar')} />
             <Num label={`${t.configPage.embdNormalize} (--embd-normalize)`} value={local.embd_normalize} onChange={v => set('embd_normalize', v)} min={-1} title={t.configPage.embdNormalizeTip}  fieldKey={a('embd_normalize')} />
             <Switch label={`${t.configPage.reranking} (--reranking)`} value={local.reranking} onChange={v => set('reranking', v)} title={t.configPage.rerankingTip}  fieldKey={a('reranking')} />
@@ -428,7 +429,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
           <div className={formGridClassName}>
             <SearchTarget label={`${t.configPage.draftModel} (--draft-model, -md)`} fieldKey="draft_model_path" title={t.configPage.draftModelTip}>
               <div className="flex gap-1">
-                <TextInput type="text" value={local.draft_model_path} onChange={e => set('draft_model_path', e.target.value)} disabled={isEmbedding} className="h-10 flex-1" />
+                <TextInput type="text" value={formatPathForDisplay(local.draft_model_path)} onChange={e => set('draft_model_path', e.target.value)} disabled={isEmbedding} className="h-10 flex-1" />
                 <Button onClick={onShowDraftPicker} disabled={isEmbedding} variant="primary" size="icon" title={t.configPage.draftModelTip}><FolderOpen className="h-4 w-4" /></Button>
               </div>
             </SearchTarget>
@@ -567,7 +568,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
         <CollapsibleGroup id="config-advanced-server" title={t.configPage.subAdvServer} onReset={() => resetGroup('advancedServerBasic')} summary={summary(ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic)}>
           <div className={formGridClassName}>
             <Input label={`${t.configPage.apiKey} (--api-key)`} value={local.api_key} onChange={v => set('api_key', v)} type="password" title={t.configPage.apiKeyTip}  fieldKey={a('api_key')} />
-            <Input label={`${t.configPage.apiKeyFile} (--api-key-file)`} value={local.api_key_file} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip}  fieldKey={a('api_key_file')} />
+            <Input label={`${t.configPage.apiKeyFile} (--api-key-file)`} value={formatPathForDisplay(local.api_key_file)} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip}  fieldKey={a('api_key_file')} />
             <Switch label={`${t.configPage.noUi} (--ui / --no-ui)`} value={!local.no_ui} onChange={v => set('no_ui', !v)} title={t.configPage.noUiTip}  fieldKey={a('no_ui')} />
       <Switch label={`${t.configPage.offline} (--offline)`} value={local.offline} onChange={v => set('offline', v)} title={t.configPage.offlineTip}  fieldKey={a('offline')} />
             <Input label={`${t.configPage.pathPrefix} (--path)`} value={local.path_prefix} onChange={v => set('path_prefix', v)} title={t.configPage.pathPrefixTip}  fieldKey={a('path_prefix')} />
@@ -581,8 +582,8 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Switch label={`${t.configPage.verbose} (--verbose, -v)`} value={local.verbose} onChange={v => set('verbose', v)} title={t.configPage.verboseTip}  fieldKey={a('verbose')} />
           </div>
           <div className={`${wideGridClassName} mt-3`}>
-            <Input label={`${t.configPage.sslKey} (--ssl-key-file)`} value={local.ssl_key_file} onChange={v => set('ssl_key_file', v)} title={t.configPage.sslKeyTip}  fieldKey={a('ssl_key_file')} />
-            <Input label={`${t.configPage.sslCert} (--ssl-cert-file)`} value={local.ssl_cert_file} onChange={v => set('ssl_cert_file', v)} title={t.configPage.sslCertTip}  fieldKey={a('ssl_cert_file')} />
+            <Input label={`${t.configPage.sslKey} (--ssl-key-file)`} value={formatPathForDisplay(local.ssl_key_file)} onChange={v => set('ssl_key_file', v)} title={t.configPage.sslKeyTip}  fieldKey={a('ssl_key_file')} />
+            <Input label={`${t.configPage.sslCert} (--ssl-cert-file)`} value={formatPathForDisplay(local.ssl_cert_file)} onChange={v => set('ssl_cert_file', v)} title={t.configPage.sslCertTip}  fieldKey={a('ssl_cert_file')} />
           </div>
         </CollapsibleGroup>
 
@@ -593,11 +594,11 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Switch label={`${t.configPage.metrics} (--metrics)`} value={local.metrics} onChange={v => set('metrics', v)} title={t.configPage.metricsTip}  fieldKey={a('metrics')} />
             <Switch label={`${t.configPage.props} (--props)`} value={local.props} onChange={v => set('props', v)} title={t.configPage.propsTip}  fieldKey={a('props')} />
             {!isEmbedding && (<>
-            <Input label={`${t.configPage.slotSavePath} (--slot-save-path)`} value={local.slot_save_path} onChange={v => set('slot_save_path', v)} title={t.configPage.slotSavePathTip}  fieldKey={a('slot_save_path')} />
-            <Input label={`${t.configPage.logPromptsDir} (--log-prompts-dir)`} value={local.log_prompts_dir} onChange={v => set('log_prompts_dir', v)} title={t.configPage.logPromptsDirTip} fieldKey={a('log_prompts_dir')} />
+            <Input label={`${t.configPage.slotSavePath} (--slot-save-path)`} value={formatPathForDisplay(local.slot_save_path)} onChange={v => set('slot_save_path', v)} title={t.configPage.slotSavePathTip}  fieldKey={a('slot_save_path')} />
+            <Input label={`${t.configPage.logPromptsDir} (--log-prompts-dir)`} value={formatPathForDisplay(local.log_prompts_dir)} onChange={v => set('log_prompts_dir', v)} title={t.configPage.logPromptsDirTip} fieldKey={a('log_prompts_dir')} />
             <Num label={`${t.configPage.slotPromptSimilarity} (--slot-prompt-similarity, -sps)`} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip}  fieldKey={a('slot_prompt_similarity')} />
             <Switch label={`${t.configPage.prefillAssistant} (--prefill-assistant)`} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip}  fieldKey={a('prefill_assistant')} />
-            <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={local.ui_config_file} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip}  fieldKey={a('ui_config_file')} />
+            <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={formatPathForDisplay(local.ui_config_file)} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip}  fieldKey={a('ui_config_file')} />
             <Input label={`${t.configPage.uiConfig} (--ui-config)`} value={local.ui_config} onChange={v => set('ui_config', v)} title={t.configPage.uiConfigTip}  fieldKey={a('ui_config')} />
             <Switch label={`${t.configPage.uiMcpProxy} (--ui-mcp-proxy)`} value={local.ui_mcp_proxy} onChange={v => set('ui_mcp_proxy', v)} title={t.configPage.uiMcpProxyTip}  fieldKey={a('ui_mcp_proxy')} />
             <Switch label={`${t.configPage.agent} (--agent)`} value={local.agent} onChange={v => set('agent', v)} title={t.configPage.agentTip}  fieldKey={a('agent')} />
@@ -616,8 +617,8 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
         {!isEmbedding && (
         <CollapsibleGroup id="config-advanced-multi" title={t.configPage.subAdvMulti} onReset={() => resetGroup('advancedMulti')} summary={summary(ADVANCED_GROUP_CONFIG_KEYS.advancedMulti)}>
           <div className={formGridClassName}>
-            <Input label={`${t.configPage.modelsDir} (--models-dir)`} value={local.models_dir} onChange={v => set('models_dir', v)} title={t.configPage.modelsDirTip}  fieldKey={a('models_dir')} />
-            <Input label={`${t.configPage.modelsPreset} (--models-preset)`} value={local.models_preset} onChange={v => set('models_preset', v)} title={t.configPage.modelsPresetTip}  fieldKey={a('models_preset')} />
+            <Input label={`${t.configPage.modelsDir} (--models-dir)`} value={formatPathForDisplay(local.models_dir)} onChange={v => set('models_dir', v)} title={t.configPage.modelsDirTip}  fieldKey={a('models_dir')} />
+            <Input label={`${t.configPage.modelsPreset} (--models-preset)`} value={formatPathForDisplay(local.models_preset)} onChange={v => set('models_preset', v)} title={t.configPage.modelsPresetTip}  fieldKey={a('models_preset')} />
             <Num label={`${t.configPage.modelsMax} (--models-max)`} value={local.models_max} onChange={v => set('models_max', v)} min={0} title={t.configPage.modelsMaxTip}  fieldKey={a('models_max')} />
             <Switch label={`${t.configPage.modelsAutoload} (--models-autoload)`} value={local.models_autoload} onChange={v => set('models_autoload', v)} title={t.configPage.modelsAutoloadTip}  fieldKey={a('models_autoload')} />
             <Input label={`${t.configPage.mmprojUrl} (--mmproj-url)`} value={local.mmproj_url} onChange={v => set('mmproj_url', v)} title={t.configPage.mmprojUrlTip} disabled={isEmbedding}  fieldKey={a('mmproj_url')} />
@@ -652,7 +653,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
               fieldKey={a('image_max_tokens')}
             />
             <Num label={`${t.configPage.mtmdBatchMaxTokens} (--mtmd-batch-max-tokens)`} value={local.mtmd_batch_max_tokens} onChange={v => set('mtmd_batch_max_tokens', v)} min={256} step={256} title={t.configPage.mtmdBatchMaxTokensTip} disabled={isEmbedding}  fieldKey={a('mtmd_batch_max_tokens')} />
-            <Input label={`${t.configPage.mediaPath} (--media-path)`} value={local.media_path} onChange={v => set('media_path', v)} title={t.configPage.mediaPathTip}  fieldKey={a('media_path')} />
+            <Input label={`${t.configPage.mediaPath} (--media-path)`} value={formatPathForDisplay(local.media_path)} onChange={v => set('media_path', v)} title={t.configPage.mediaPathTip}  fieldKey={a('media_path')} />
             <Input label={`${t.configPage.tags} (--tags)`} value={local.tags} onChange={v => set('tags', v)} title={t.configPage.tagsTip}  fieldKey={a('tags')} />
             <Input label={`${t.configPage.tools} (--tools)`} value={local.tools} onChange={v => set('tools', v)} title={t.configPage.toolsTip}  fieldKey={a('tools')} />
           </div>
