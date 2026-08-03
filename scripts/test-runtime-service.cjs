@@ -330,7 +330,14 @@ async function main() {
       enabled: true,
       host: '127.0.0.1',
       port: proxyPort,
-      public_api_key: 'runtime-smoke-proxy-key',
+      api_keys: [{
+        id: 'runtime-smoke-client',
+        name: 'Runtime smoke client',
+        key: 'runtime-smoke-proxy-key',
+        enabled: true,
+        scopes: ['inference', 'discovery'],
+        requests_per_minute: 0,
+      }],
       default_instance_id: launchSpec.instance_id,
       routes: [{
         id: 'runtime-smoke-route',

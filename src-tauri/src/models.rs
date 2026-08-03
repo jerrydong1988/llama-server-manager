@@ -1041,6 +1041,8 @@ pub struct ProxyConfig {
     pub enabled: bool,
     pub host: String,
     pub port: u16,
+    /// Deprecated input retained only for one-time migration into `api_keys`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub public_api_key: String,
     pub default_instance_id: String,
     pub routes: Vec<ProxyRoute>,

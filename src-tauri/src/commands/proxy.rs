@@ -52,6 +52,7 @@ const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
 const MAX_ANTHROPIC_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
 const TARGET_CAPABILITY_MAX_AGE: Duration = Duration::from_secs(60);
 const PROXY_API_KEY_HASH_PREFIX: &str = "sha256:";
+const SUPPORTED_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 fn proxy_http_client(connect_timeout_ms: u64) -> reqwest::Client {
     let connect_timeout_ms = connect_timeout_ms.clamp(100, 60_000);
@@ -602,7 +603,6 @@ pub(crate) fn normalize_and_validate_proxy_config(
                 .to_string(),
         );
     }
-    config.public_api_key = config.public_api_key.trim().to_string();
     config.default_instance_id = config.default_instance_id.trim().to_string();
     config.routing_strategy = match config.routing_strategy.trim() {
         "" | "firstHealthy" | "priorityFailover" => "priorityFailover".to_string(),
@@ -625,6 +625,37 @@ pub(crate) fn normalize_and_validate_proxy_config(
     config.max_concurrent_requests = config.max_concurrent_requests.clamp(1, 100_000);
     config.queue_timeout_ms = config.queue_timeout_ms.clamp(10, 300_000);
     config.requests_per_minute = config.requests_per_minute.min(10_000_000);
+
+    let legacy_key = config.public_api_key.trim();
+    if !legacy_key.is_empty() {
+        let legacy_hash = if is_hashed_proxy_api_key(legacy_key) {
+            legacy_key.to_string()
+        } else {
+            hash_proxy_api_key(legacy_key)
+        };
+        if let Some(existing) = config.api_keys.iter_mut().find(|api_key| {
+            let candidate = api_key.key.trim();
+            let candidate_hash = if is_hashed_proxy_api_key(candidate) {
+                candidate.to_string()
+            } else {
+                hash_proxy_api_key(candidate)
+            };
+            candidate_hash == legacy_hash
+        }) {
+            existing.enabled = true;
+            existing.scopes = vec!["inference".into(), "discovery".into()];
+        } else {
+            config.api_keys.push(crate::models::ProxyApiKey {
+                id: "migrated-legacy-key".into(),
+                name: "Migrated legacy key".into(),
+                key: legacy_hash,
+                enabled: true,
+                scopes: vec!["inference".into(), "discovery".into()],
+                requests_per_minute: 0,
+            });
+        }
+    }
+    config.public_api_key.clear();
 
     let mut origins = HashSet::new();
     config.cors_allowed_origins = config
@@ -1183,11 +1214,11 @@ fn public_response_model(
     }
 }
 
-fn is_proxy_authorized(public_api_key: &str, headers: &HeaderMap) -> bool {
-    if public_api_key.trim().is_empty() {
+fn is_proxy_authorized(api_key: &str, headers: &HeaderMap) -> bool {
+    if api_key.trim().is_empty() {
         return true;
     }
-    let expected = public_api_key.trim();
+    let expected = api_key.trim();
     let auth_ok = headers
         .get("authorization")
         .and_then(|value| value.to_str().ok())
@@ -1244,17 +1275,9 @@ fn authenticate_proxy_request(
         .iter()
         .filter(|api_key| api_key.enabled && !api_key.key.trim().is_empty())
         .collect::<Vec<_>>();
-    let legacy_enabled = !config.public_api_key.trim().is_empty();
-    if !legacy_enabled && enabled_keys.is_empty() {
+    if enabled_keys.is_empty() {
         return Some(ProxyAuthContext {
             client_id: "anonymous".into(),
-            requests_per_minute: config.requests_per_minute,
-            scopes: vec!["inference".into(), "discovery".into()],
-        });
-    }
-    if legacy_enabled && is_proxy_authorized(&config.public_api_key, headers) {
-        return Some(ProxyAuthContext {
-            client_id: "legacy".into(),
             requests_per_minute: config.requests_per_minute,
             scopes: vec!["inference".into(), "discovery".into()],
         });
@@ -1286,13 +1309,17 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 
 #[cfg(test)]
-fn proxy_request_is_authorized(config: &ProxyConfig, _path: &str, headers: &HeaderMap) -> bool {
-    is_proxy_authorized(&config.public_api_key, headers)
+fn proxy_request_is_authorized(config: &ProxyConfig, path: &str, headers: &HeaderMap) -> bool {
+    authenticate_proxy_request(config, path, headers).is_some()
 }
 
 #[cfg(test)]
-fn authorize_and_strip_proxy_credentials(public_api_key: &str, headers: &mut HeaderMap) -> bool {
-    if !is_proxy_authorized(public_api_key, headers) {
+fn authorize_and_strip_proxy_credentials(
+    config: &ProxyConfig,
+    path: &str,
+    headers: &mut HeaderMap,
+) -> bool {
+    if authenticate_proxy_request(config, path, headers).is_none() {
         return false;
     }
     headers.remove("authorization");
@@ -1372,6 +1399,27 @@ fn apply_rate_headers(response: &mut Response, format: ProxyApiFormat, limit: u3
     }
 }
 
+fn validate_anthropic_version(path: &str, headers: &HeaderMap) -> Result<(), String> {
+    if !matches!(path, "/v1/messages" | "/v1/messages/count_tokens") {
+        return Ok(());
+    }
+    let Some(version) = headers.get("anthropic-version") else {
+        return Err(format!(
+            "anthropic-version header is required; supported version is {SUPPORTED_ANTHROPIC_VERSION}"
+        ));
+    };
+    let version = version
+        .to_str()
+        .map(str::trim)
+        .map_err(|_| "anthropic-version header must be valid ASCII".to_string())?;
+    if version != SUPPORTED_ANTHROPIC_VERSION {
+        return Err(format!(
+            "unsupported anthropic-version {version:?}; supported version is {SUPPORTED_ANTHROPIC_VERSION}"
+        ));
+    }
+    Ok(())
+}
+
 async fn proxy_security_middleware(
     State(router_state): State<ProxyRouterState>,
     mut request: Request,
@@ -1405,6 +1453,11 @@ async fn proxy_security_middleware(
             .any(|scope| scope == request_scope(request.uri().path()))
     {
         let mut response = error_response(format, StatusCode::FORBIDDEN, "API key scope denied");
+        apply_cors_headers(&mut response, origin.as_deref());
+        return response;
+    }
+    if let Err(error) = validate_anthropic_version(request.uri().path(), request.headers()) {
+        let mut response = error_response(format, StatusCode::BAD_REQUEST, &error);
         apply_cors_headers(&mut response, origin.as_deref());
         return response;
     }
@@ -3657,7 +3710,12 @@ mod tests {
         super::ProxyRuntimeSnapshot {
             config: ProxyConfig {
                 enabled: true,
-                public_api_key: "public-sdk-key".into(),
+                api_keys: vec![ProxyApiKey {
+                    id: "anthropic-sdk-client".into(),
+                    name: "Anthropic SDK client".into(),
+                    key: "public-sdk-key".into(),
+                    ..ProxyApiKey::default()
+                }],
                 default_instance_id: instance_id.clone(),
                 routes: vec![ProxyRoute {
                     model_alias: "local-claude".into(),
@@ -3688,7 +3746,7 @@ mod tests {
 
     fn openai_proxy_snapshot(
         upstream_address: std::net::SocketAddr,
-        public_api_key: &str,
+        api_key: &str,
     ) -> super::ProxyRuntimeSnapshot {
         let instance_id = "openai-upstream".to_string();
         let instance = InstanceConfig {
@@ -3700,10 +3758,20 @@ mod tests {
             port: upstream_address.port(),
             ..InstanceConfig::default()
         };
+        let api_keys = if api_key.is_empty() {
+            Vec::new()
+        } else {
+            vec![ProxyApiKey {
+                id: "openai-sdk-client".into(),
+                name: "OpenAI SDK client".into(),
+                key: api_key.into(),
+                ..ProxyApiKey::default()
+            }]
+        };
         super::ProxyRuntimeSnapshot {
             config: ProxyConfig {
                 enabled: true,
-                public_api_key: public_api_key.into(),
+                api_keys,
                 routes: vec![ProxyRoute {
                     model_alias: "local-openai".into(),
                     target_instance_id: instance_id.clone(),
@@ -3860,7 +3928,6 @@ mod tests {
 
         let public = ProxyConfig {
             host: "0.0.0.0".into(),
-            public_api_key: "still-cleartext".into(),
             ..ProxyConfig::default()
         };
         assert!(super::normalize_and_validate_proxy_config(public, &instances).is_err());
@@ -3951,6 +4018,35 @@ mod tests {
             ..ProxyConfig::default()
         };
         assert!(super::normalize_and_validate_proxy_config(unsupported_scope, &instances).is_err());
+    }
+
+    #[test]
+    fn legacy_single_key_is_migrated_once_into_a_scoped_hashed_key() {
+        let normalized = super::normalize_and_validate_proxy_config(
+            ProxyConfig {
+                public_api_key: "legacy-secret".into(),
+                ..ProxyConfig::default()
+            },
+            &HashMap::new(),
+        )
+        .unwrap();
+
+        assert!(normalized.public_api_key.is_empty());
+        assert_eq!(normalized.api_keys.len(), 1);
+        assert_eq!(normalized.api_keys[0].id, "migrated-legacy-key");
+        assert_eq!(
+            normalized.api_keys[0].scopes,
+            vec!["discovery", "inference"]
+        );
+        assert!(normalized.api_keys[0]
+            .key
+            .starts_with(super::PROXY_API_KEY_HASH_PREFIX));
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer legacy-secret".parse().unwrap());
+        assert!(
+            super::authenticate_proxy_request(&normalized, "/v1/chat/completions", &headers)
+                .is_some()
+        );
     }
 
     #[tokio::test]
@@ -4089,6 +4185,7 @@ mod tests {
         let response = reqwest::Client::new()
             .post(format!("http://{address}/v1/messages"))
             .header("content-type", "application/json")
+            .header("anthropic-version", super::SUPPORTED_ANTHROPIC_VERSION)
             .body("x".repeat(65))
             .send()
             .await
@@ -5171,8 +5268,33 @@ mod tests {
         assert_eq!(sdk_result["inputTokens"], 23);
         assert_eq!(sdk_result["streamEvents"], 6);
 
+        let stream_response = reqwest::Client::new()
+            .post(format!("http://{proxy_address}/v1/messages"))
+            .header("x-api-key", "public-sdk-key")
+            .header("anthropic-version", "2023-06-01")
+            .header("anthropic-beta", "prompt-caching-2024-07-31")
+            .json(&json!({
+                "model": "local-claude",
+                "max_tokens": 8,
+                "stream": true,
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(stream_response.status(), StatusCode::OK);
+        assert_eq!(
+            stream_response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        let stream_body = stream_response.text().await.unwrap();
+        assert!(stream_body.contains("event: message_start"));
+
         let captured = captured.lock().unwrap().clone();
-        assert_eq!(captured.len(), 4);
+        assert_eq!(captured.len(), 5);
         assert!(captured
             .iter()
             .all(|request| request.body["model"] == "upstream-private"));
@@ -5219,7 +5341,7 @@ mod tests {
         let captured = Arc::new(Mutex::new(Vec::<CapturedAnthropicRequest>::new()));
         let upstream_router = Router::new()
             .route("/v1/messages", post(mock_anthropic_upstream))
-            .with_state(captured);
+            .with_state(captured.clone());
         let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
         let proxy_router = super::proxy_router_from_source(Arc::new(TestProxySource {
             snapshot: anthropic_proxy_snapshot(upstream_address),
@@ -5249,6 +5371,40 @@ mod tests {
         let unauthorized_body: serde_json::Value = unauthorized.json().await.unwrap();
         assert_eq!(unauthorized_body["type"], "error");
         assert_eq!(unauthorized_body["error"]["type"], "authentication_error");
+
+        for (path, version, expected_message) in [
+            ("/v1/messages", None, "anthropic-version header is required"),
+            (
+                "/v1/messages/count_tokens",
+                Some("2099-01-01"),
+                "unsupported anthropic-version",
+            ),
+        ] {
+            let mut request = client
+                .post(format!("http://{proxy_address}{path}"))
+                .header("x-api-key", "public-sdk-key");
+            if let Some(version) = version {
+                request = request.header("anthropic-version", version);
+            }
+            let invalid_version = request
+                .json(&json!({
+                    "model": "local-claude",
+                    "max_tokens": 8,
+                    "messages": [{ "role": "user", "content": "hello" }]
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(invalid_version.status(), StatusCode::BAD_REQUEST);
+            assert!(invalid_version.headers().contains_key("request-id"));
+            let invalid_body: serde_json::Value = invalid_version.json().await.unwrap();
+            assert_eq!(invalid_body["type"], "error");
+            assert_eq!(invalid_body["error"]["type"], "invalid_request_error");
+            assert!(invalid_body["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(expected_message)));
+        }
+        assert!(captured.lock().unwrap().is_empty());
 
         let upstream_error = client
             .post(format!("http://{proxy_address}/v1/messages"))
@@ -5313,7 +5469,10 @@ mod tests {
     #[test]
     fn successful_proxy_authentication_consumes_public_credentials_once() {
         let config = ProxyConfig {
-            public_api_key: "secret".into(),
+            api_keys: vec![ProxyApiKey {
+                key: "secret".into(),
+                ..ProxyApiKey::default()
+            }],
             ..ProxyConfig::default()
         };
         let mut headers = HeaderMap::new();
@@ -5322,7 +5481,8 @@ mod tests {
         headers.insert("content-type", "application/json".parse().unwrap());
 
         assert!(super::authorize_and_strip_proxy_credentials(
-            &config.public_api_key,
+            &config,
+            "/v1/chat/completions",
             &mut headers
         ));
         assert!(!headers.contains_key("authorization"));
@@ -5332,26 +5492,19 @@ mod tests {
 
     #[test]
     fn proxy_auth_rejects_near_matches_and_accepts_both_supported_headers() {
-        let config = ProxyConfig {
-            public_api_key: "secret".into(),
-            ..ProxyConfig::default()
-        };
         for value in ["Bearer secre", "Bearer secret!", "secret!", ""] {
             let mut headers = HeaderMap::new();
             headers.insert("authorization", value.parse().unwrap());
-            assert!(!super::is_proxy_authorized(
-                &config.public_api_key,
-                &headers
-            ));
+            assert!(!super::is_proxy_authorized("secret", &headers));
         }
         let mut bearer = HeaderMap::new();
         bearer.insert("authorization", "Bearer secret".parse().unwrap());
-        assert!(super::is_proxy_authorized(&config.public_api_key, &bearer));
+        assert!(super::is_proxy_authorized("secret", &bearer));
         bearer.insert("authorization", "bearer   secret".parse().unwrap());
-        assert!(super::is_proxy_authorized(&config.public_api_key, &bearer));
+        assert!(super::is_proxy_authorized("secret", &bearer));
         let mut api_key = HeaderMap::new();
         api_key.insert("x-api-key", "secret".parse().unwrap());
-        assert!(super::is_proxy_authorized(&config.public_api_key, &api_key));
+        assert!(super::is_proxy_authorized("secret", &api_key));
     }
 
     #[test]
@@ -5371,18 +5524,15 @@ mod tests {
     }
 
     #[test]
-    fn running_public_proxy_cannot_drop_auth_or_rebind_silently() {
+    fn running_proxy_cannot_rebind_silently() {
         let current = ProxyConfig {
             host: "0.0.0.0".into(),
             port: 11435,
-            public_api_key: "secret".into(),
             ..ProxyConfig::default()
         };
-        let mut no_key = current.clone();
-        no_key.public_api_key.clear();
         assert!(super::validate_proxy_config_update(
             &current,
-            &no_key,
+            &current,
             true,
             Some("0.0.0.0:11435"),
         )
@@ -5397,11 +5547,10 @@ mod tests {
             Some("0.0.0.0:11435"),
         )
         .is_err());
-        assert!(super::validate_proxy_config_update(&current, &no_key, false, None).is_ok());
+        assert!(super::validate_proxy_config_update(&current, &current, false, None).is_ok());
 
         let local = ProxyConfig {
             host: "127.0.0.1".into(),
-            public_api_key: String::new(),
             ..ProxyConfig::default()
         };
         assert!(
@@ -5412,7 +5561,6 @@ mod tests {
         let stale_display = ProxyConfig {
             host: "127.0.0.1".into(),
             port: 11435,
-            public_api_key: String::new(),
             ..ProxyConfig::default()
         };
         assert!(super::validate_proxy_config_update(
@@ -5449,7 +5597,10 @@ mod tests {
     #[test]
     fn proxy_auth_policy_applies_to_discovery_endpoints() {
         let config = ProxyConfig {
-            public_api_key: "secret".into(),
+            api_keys: vec![ProxyApiKey {
+                key: "secret".into(),
+                ..ProxyApiKey::default()
+            }],
             ..ProxyConfig::default()
         };
         let headers = HeaderMap::new();
