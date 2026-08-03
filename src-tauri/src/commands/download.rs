@@ -1,4 +1,7 @@
 use crate::models::{AppState, DownloadArtifactState, MsFileEntry, PersistedQueueEntry};
+#[cfg(test)]
+use crate::path_utils::paths_equal;
+use crate::path_utils::{path_identity_key, path_is_within};
 use crate::utils;
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, CONTENT_LENGTH, CONTENT_RANGE, IF_RANGE};
@@ -280,12 +283,7 @@ fn normalized_destination_key(path: &Path) -> String {
         .and_then(|parent| parent.canonicalize().ok())
         .and_then(|parent| path.file_name().map(|name| parent.join(name)))
         .unwrap_or_else(|| path.to_path_buf());
-    let key = absolute.to_string_lossy().replace('\\', "/");
-    if cfg!(windows) {
-        key.to_lowercase()
-    } else {
-        key
-    }
+    path_identity_key(&absolute)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -460,20 +458,6 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-fn normalize_path_for_compare(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
-}
-
 fn queue_entry_download_dir(
     base_dir: &Path,
     entry: &PersistedQueueEntry,
@@ -516,9 +500,7 @@ fn verified_managed_cleanup_path(root: &Path, path: &Path) -> Result<PathBuf, St
     let canonical_root = match std::fs::canonicalize(root) {
         Ok(path) => path,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let normalized_root = normalize_path_for_compare(root);
-            let normalized_path = normalize_path_for_compare(path);
-            if normalized_path.starts_with(&normalized_root) {
+            if path_is_within(path, root) {
                 return Ok(path.to_path_buf());
             }
             return Err("文件不在受管目录内".into());
@@ -544,7 +526,7 @@ fn verified_managed_cleanup_path(root: &Path, path: &Path) -> Result<PathBuf, St
             }
         }
     };
-    if !canonical_ancestor.starts_with(&canonical_root) {
+    if !path_is_within(&canonical_ancestor, &canonical_root) {
         return Err("文件不在受管目录内".into());
     }
     let file_name = path
@@ -2194,21 +2176,15 @@ fn derive_entry_status(entry: &PersistedQueueEntry) -> String {
     entry.status.clone()
 }
 
-fn download_file_identity(entry: &PersistedQueueEntry, file: &MsFileEntry) -> String {
-    let identity = format!(
-        "{}|{}|{}|{}|{}",
-        entry.source.trim(),
-        entry.repo_id.trim(),
-        entry.save_dir.trim(),
-        file.path.trim(),
-        file.name.trim()
-    )
-    .replace('\\', "/");
-    if cfg!(windows) {
-        identity.to_lowercase()
-    } else {
-        identity
-    }
+fn download_file_identity(
+    base_dir: &Path,
+    entry: &PersistedQueueEntry,
+    file: &MsFileEntry,
+) -> Result<String, String> {
+    validate_managed_file(file)?;
+    let repo_dir = queue_entry_download_dir(base_dir, entry)?;
+    let destination = remote_parent_dir(&repo_dir, &file.path)?.join(&file.name);
+    Ok(path_identity_key(&destination))
 }
 
 fn file_can_write(entry: &PersistedQueueEntry, file: &MsFileEntry) -> bool {
@@ -2219,6 +2195,7 @@ fn file_can_write(entry: &PersistedQueueEntry, file: &MsFileEntry) -> bool {
 }
 
 fn conflicting_download_identity(
+    base_dir: &Path,
     candidate: &PersistedQueueEntry,
     existing: &[PersistedQueueEntry],
 ) -> Option<String> {
@@ -2229,13 +2206,13 @@ fn conflicting_download_identity(
                 .files
                 .iter()
                 .filter(|file| file_can_write(entry, file))
-                .map(|file| download_file_identity(entry, file))
+                .filter_map(|file| download_file_identity(base_dir, entry, file).ok())
         })
         .collect::<std::collections::HashSet<_>>();
     candidate
         .files
         .iter()
-        .map(|file| download_file_identity(candidate, file))
+        .filter_map(|file| download_file_identity(base_dir, candidate, file).ok())
         .find(|identity| existing_identities.contains(identity))
 }
 
@@ -3135,7 +3112,7 @@ pub async fn enqueue_download_queue(
             .values()
             .cloned(),
     );
-    if let Some(identity) = conflicting_download_identity(&entry, &existing) {
+    if let Some(identity) = conflicting_download_identity(&base_dir, &entry, &existing) {
         return Err(format!(
             "A queued or active download already owns this destination: {identity}"
         ));
@@ -3761,10 +3738,10 @@ mod audit_remediation_tests {
             trusted_download_cleanup_paths(&[entry], base, "task-1", "model.gguf", Some("run-1"))
                 .unwrap();
 
-        assert_eq!(
-            normalize_path_for_compare(&final_path),
-            normalize_path_for_compare(Path::new("/app-data/models/repo/model/model.gguf"))
-        );
+        assert!(paths_equal(
+            &final_path,
+            Path::new("/app-data/models/repo/model/model.gguf")
+        ));
         assert_eq!(
             temp_path,
             Path::new("/app-data/models/repo/model/model.gguf.part")
@@ -3846,10 +3823,10 @@ mod audit_remediation_tests {
         )
         .unwrap();
 
-        assert_eq!(
-            normalize_path_for_compare(&final_path),
-            normalize_path_for_compare(Path::new("/app-data/models/org/model/weights/model.gguf"))
-        );
+        assert!(paths_equal(
+            &final_path,
+            Path::new("/app-data/models/org/model/weights/model.gguf")
+        ));
     }
 
     #[test]
@@ -3927,6 +3904,19 @@ mod audit_remediation_tests {
             target
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn managed_cleanup_rejects_missing_sibling_with_shared_prefix() {
+        let base = std::env::temp_dir().join(format!(
+            "lsm-download-cleanup-boundary-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let root = base.join("models");
+        let sibling = base.join("models-old").join("model.gguf");
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(verified_managed_cleanup_path(&root, &sibling).is_err());
     }
 
     #[test]
@@ -4186,10 +4176,63 @@ mod audit_remediation_tests {
         duplicate.files[0].run_id = Some("run-2".into());
 
         assert_eq!(
-            download_file_identity(&entry, &file),
-            download_file_identity(&duplicate, &duplicate.files[0])
+            download_file_identity(Path::new("/app-data"), &entry, &file).unwrap(),
+            download_file_identity(Path::new("/app-data"), &duplicate, &duplicate.files[0])
+                .unwrap()
         );
-        assert!(conflicting_download_identity(&duplicate, std::slice::from_ref(&entry),).is_some());
+        assert!(conflicting_download_identity(
+            Path::new("/app-data"),
+            &duplicate,
+            std::slice::from_ref(&entry),
+        )
+        .is_some());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn artifact_identity_tracks_the_resolved_windows_destination() {
+        let file = MsFileEntry {
+            name: "Model.gguf".into(),
+            path: "Weights/Model.gguf".into(),
+            size: 100,
+            file_type: "file".into(),
+            downloaded: None,
+            status: Some("queued".into()),
+            error: None,
+            task_id: None,
+            run_id: None,
+            version: None,
+        };
+        let entry = PersistedQueueEntry {
+            id: "entry-1".into(),
+            repo_id: "Org/Model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "queued".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: None,
+            files: vec![file.clone()],
+        };
+        let mut save_dir_alias = entry.clone();
+        save_dir_alias.save_dir = "Models".into();
+        assert_eq!(
+            download_file_identity(Path::new(r"C:\AppData"), &entry, &file).unwrap(),
+            download_file_identity(Path::new(r"c:\appdata"), &save_dir_alias, &file).unwrap()
+        );
+
+        let mut remote_case_variant = entry.clone();
+        remote_case_variant.files[0].path = "weights/Model.gguf".into();
+        assert_eq!(
+            download_file_identity(Path::new(r"C:\AppData"), &entry, &file).unwrap(),
+            download_file_identity(
+                Path::new(r"C:\AppData"),
+                &remote_case_variant,
+                &remote_case_variant.files[0]
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -4222,8 +4265,8 @@ mod audit_remediation_tests {
         let second = entry("b", file("b/model.gguf"));
 
         assert_ne!(
-            download_file_identity(&first, &first.files[0]),
-            download_file_identity(&second, &second.files[0])
+            download_file_identity(Path::new("/app-data"), &first, &first.files[0]).unwrap(),
+            download_file_identity(Path::new("/app-data"), &second, &second.files[0]).unwrap()
         );
         assert_ne!(
             remote_parent_dir(Path::new("/managed"), &first.files[0].path).unwrap(),

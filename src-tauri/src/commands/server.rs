@@ -9,6 +9,7 @@ use crate::models::{
     ensure_managed_public_model_alias, migrate_legacy_load_mode, AppState, EngineCapabilities,
     InstanceConfig, RunningInstance, SystemMetrics,
 };
+use crate::path_utils::{path_identity_key, paths_equal};
 use crate::vector_policy::{normalize_for_launch, ModelWorkload};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -1526,7 +1527,7 @@ fn manual_option_value(arguments: &[String], names: &[&str]) -> AppResult<Option
 fn same_executable(left: &str, right: &str) -> bool {
     let left_path = normalized_engine_path(left);
     let right_path = normalized_engine_path(right);
-    if left_path == right_path {
+    if paths_equal(&left_path, &right_path) {
         return true;
     }
     left_path
@@ -1698,14 +1699,17 @@ fn trusted_engine_capabilities(
 ) -> EngineCapabilityResolution {
     let requested_path = normalized_engine_path(engine_exe);
     let mut engines = state.engines.lock().unwrap();
-    let selected_index = engines
-        .iter()
-        .position(|engine| engine.id == config.engine_id);
+    let selected_index = engines.iter().position(|engine| {
+        paths_equal(
+            std::path::Path::new(&engine.id),
+            std::path::Path::new(&config.engine_id),
+        )
+    });
     let Some(selected_index) = selected_index else {
         return EngineCapabilityResolution::Missing;
     };
     let engine = &mut engines[selected_index];
-    if normalized_engine_path(&engine.exe) != requested_path {
+    if !paths_equal(&normalized_engine_path(&engine.exe), &requested_path) {
         return EngineCapabilityResolution::Stale;
     }
     if engine.capabilities.executable_fingerprint.is_empty() {
@@ -1737,14 +1741,19 @@ fn validate_configured_engine(
     }
     let requested_path = normalized_engine_path(engine_exe);
     let engines = state.engines.lock().unwrap();
-    let Some(engine) = engines.iter().find(|engine| engine.id == config.engine_id) else {
+    let Some(engine) = engines.iter().find(|engine| {
+        paths_equal(
+            std::path::Path::new(&engine.id),
+            std::path::Path::new(&config.engine_id),
+        )
+    }) else {
         return Err(AppError::new(
             "CONFIGURED_ENGINE_NOT_FOUND",
             "实例配置引用的 llama-server 引擎已不存在，请重新选择引擎。",
             false,
         ));
     };
-    if normalized_engine_path(&engine.exe) != requested_path {
+    if !paths_equal(&normalized_engine_path(&engine.exe), &requested_path) {
         return Err(AppError::new(
             "CONFIGURED_ENGINE_MISMATCH",
             "请求启动的引擎与实例配置引用的引擎不一致。",
@@ -2878,15 +2887,7 @@ pub(crate) fn read_process_identity(pid: u32) -> Option<(u64, std::path::PathBuf
 
 fn normalized_executable_path(path: &std::path::Path) -> String {
     let normalized = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let value = normalized.to_string_lossy().to_string();
-    #[cfg(target_os = "windows")]
-    {
-        value.to_lowercase()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        value
-    }
+    path_identity_key(&normalized)
 }
 
 fn process_identity_matches(

@@ -42,3 +42,19 @@ test('an empty legacy root list is repaired before a manual scan', async ({ page
     return calls[calls.length - 1]?.payload
   })).toEqual({ paths: ['C:\\browser-test\\models'] })
 })
+
+test('Windows namespace aliases remain inside ordinary model and engine roots', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'engine')
+  })
+  await page.goto('/?scenario=windows-path-aliases')
+
+  await expect(page.getByText('1 个已发现', { exact: true })).toBeVisible()
+  await expect(page.getByText('Browser Test Engine', { exact: true }).first()).toBeVisible()
+
+  await page.getByRole('button', { name: '模型仓库', exact: true }).click()
+  const explorer = page.locator('[data-guide="model-search"]')
+  await expect(explorer.getByText('C:\\browser-test\\models', { exact: true })).toBeVisible()
+  await expect(explorer.getByText('Qwen Browser Test Q8_0.gguf', { exact: true })).toBeVisible()
+})

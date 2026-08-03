@@ -4,7 +4,8 @@ use crate::models::{
     InstanceConfig, ProxyConfig, WindowState,
 };
 use crate::vector_policy::normalize_for_launch;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{LazyLock, Mutex};
 use tauri::Emitter;
 
@@ -12,8 +13,17 @@ use tauri::Emitter;
 
 static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-fn normalize_model_dirs(mut model_dirs: Vec<String>) -> Vec<String> {
-    model_dirs.retain(|directory| !directory.trim().is_empty());
+fn dedupe_path_dirs(directories: Vec<String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    directories
+        .into_iter()
+        .filter(|directory| !directory.trim().is_empty())
+        .filter(|directory| seen.insert(crate::path_utils::path_identity_key(Path::new(directory))))
+        .collect()
+}
+
+fn normalize_model_dirs(model_dirs: Vec<String>) -> Vec<String> {
+    let mut model_dirs = dedupe_path_dirs(model_dirs);
     if model_dirs.is_empty() {
         model_dirs.push(crate::utils::DEFAULT_MODELS_DIR_NAME.to_string());
     }
@@ -159,6 +169,7 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
         }
     };
     config.model_dirs = normalize_model_dirs(config.model_dirs);
+    config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
     migrate_global_load_modes(&mut config);
     config
 }
@@ -172,6 +183,7 @@ fn load_global_config_for_update_unlocked(
     if let Ok(contents) = &primary {
         if let Ok(mut config) = serde_json::from_str::<GlobalConfig>(contents) {
             config.model_dirs = normalize_model_dirs(config.model_dirs);
+            config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
             migrate_global_load_modes(&mut config);
             return Ok(config);
         }
@@ -181,6 +193,7 @@ fn load_global_config_for_update_unlocked(
         let mut config = serde_json::from_str::<GlobalConfig>(&contents)
             .map_err(|error| format!("解析配置备份失败: {error}"))?;
         config.model_dirs = normalize_model_dirs(config.model_dirs);
+        config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
         migrate_global_load_modes(&mut config);
         crate::persistence::atomic_write(&primary_path, contents.as_bytes(), None)
             .map_err(|error| format!("修复主配置失败: {error}"))?;
@@ -200,30 +213,34 @@ pub fn read_config_from_disk(config_dir: &std::path::Path) -> GlobalConfig {
 
     // Resolve relative paths.
     let app_dir = crate::utils::get_data_dir();
-    global.model_dirs = global
-        .model_dirs
-        .iter()
-        .map(|d| {
-            let pb = std::path::PathBuf::from(d);
-            if pb.is_relative() {
-                app_dir.join(d).to_string_lossy().to_string()
-            } else {
-                d.clone()
-            }
-        })
-        .collect();
-    global.engine_dirs = global
-        .engine_dirs
-        .iter()
-        .map(|d| {
-            let pb = std::path::PathBuf::from(d);
-            if pb.is_relative() {
-                app_dir.join(d).to_string_lossy().to_string()
-            } else {
-                d.clone()
-            }
-        })
-        .collect();
+    global.model_dirs = normalize_model_dirs(
+        global
+            .model_dirs
+            .iter()
+            .map(|d| {
+                let pb = std::path::PathBuf::from(d);
+                if pb.is_relative() {
+                    app_dir.join(d).to_string_lossy().to_string()
+                } else {
+                    d.clone()
+                }
+            })
+            .collect(),
+    );
+    global.engine_dirs = dedupe_path_dirs(
+        global
+            .engine_dirs
+            .iter()
+            .map(|d| {
+                let pb = std::path::PathBuf::from(d);
+                if pb.is_relative() {
+                    app_dir.join(d).to_string_lossy().to_string()
+                } else {
+                    d.clone()
+                }
+            })
+            .collect(),
+    );
 
     // Filter dead processes.
     let mut restored = HashMap::new();
@@ -271,7 +288,7 @@ fn apply_frontend_config(
 ) {
     global.instances = snapshot.instances;
     global.model_dirs = normalize_model_dirs(snapshot.model_dirs);
-    global.engine_dirs = snapshot.engine_dirs;
+    global.engine_dirs = dedupe_path_dirs(snapshot.engine_dirs);
     global.default_engine_id = snapshot.default_engine_id;
     global.running = running;
     global.instance_order = snapshot.instance_order;
@@ -771,6 +788,19 @@ mod tests {
             config.model_dirs,
             vec![crate::utils::DEFAULT_MODELS_DIR_NAME.to_string()]
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn configured_scan_roots_deduplicate_windows_path_aliases() {
+        let directories = dedupe_path_dirs(vec![
+            r"C:\Models".into(),
+            r"\\?\c:\models\".into(),
+            r"\\Server\Share\Models".into(),
+            r"\\?\UNC\server\share\models".into(),
+        ]);
+
+        assert_eq!(directories, vec![r"C:\Models", r"\\Server\Share\Models"]);
     }
 }
 

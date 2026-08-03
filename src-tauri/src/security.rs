@@ -4,6 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::path_utils::{path_identity_key, path_is_within as shared_path_is_within};
+
 const PATH_AUTHORITY_FILE: &str = "authorized-paths.json";
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -16,12 +18,27 @@ struct PathAuthority {
     download_roots: BTreeSet<String>,
 }
 
+fn normalize_authority(authority: PathAuthority) -> PathAuthority {
+    let normalize_roots = |roots: BTreeSet<String>| {
+        roots
+            .into_iter()
+            .map(|root| path_identity_key(Path::new(&root)))
+            .filter(|root| !root.is_empty())
+            .collect()
+    };
+    PathAuthority {
+        engine_roots: normalize_roots(authority.engine_roots),
+        model_roots: normalize_roots(authority.model_roots),
+        download_roots: normalize_roots(authority.download_roots),
+    }
+}
+
 static PATH_AUTHORITY: LazyLock<Mutex<PathAuthority>> = LazyLock::new(|| {
     let authority = std::fs::read(path_authority_path())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or_default();
-    Mutex::new(authority)
+    Mutex::new(normalize_authority(authority))
 });
 
 fn path_authority_path() -> PathBuf {
@@ -41,15 +58,7 @@ fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn normalized_authority_key(path: &Path) -> String {
-    let value = path.to_string_lossy().to_string();
-    #[cfg(windows)]
-    {
-        value.to_lowercase()
-    }
-    #[cfg(not(windows))]
-    {
-        value
-    }
+    path_identity_key(path)
 }
 
 fn persist_authority(authority: &PathAuthority) -> Result<(), String> {
@@ -66,22 +75,7 @@ fn is_safe_relative_path(path: &Path) -> bool {
 }
 
 fn path_is_within(candidate: &Path, root: &Path) -> bool {
-    #[cfg(windows)]
-    {
-        let candidate = normalized_authority_key(candidate);
-        let mut root = normalized_authority_key(root);
-        while root.ends_with(['\\', '/']) {
-            root.pop();
-        }
-        candidate == root
-            || candidate
-                .strip_prefix(&root)
-                .is_some_and(|rest| rest.starts_with(['\\', '/']))
-    }
-    #[cfg(not(windows))]
-    {
-        candidate.starts_with(root)
-    }
+    shared_path_is_within(candidate, root)
 }
 
 fn is_authorized_by_roots(candidate: &Path, roots: &BTreeSet<String>) -> bool {
@@ -356,5 +350,24 @@ mod tests {
             &Path::new("authorized-models-sibling").join("model.gguf"),
             &roots
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn persisted_authority_migrates_windows_namespace_aliases() {
+        let authority = normalize_authority(PathAuthority {
+            engine_roots: BTreeSet::from([
+                r"C:\Engines".to_string(),
+                r"\\?\c:\engines\".to_string(),
+            ]),
+            model_roots: BTreeSet::from([
+                r"\\Server\Share\Models".to_string(),
+                r"\\?\UNC\server\share\models".to_string(),
+            ]),
+            download_roots: BTreeSet::new(),
+        });
+
+        assert_eq!(authority.engine_roots.len(), 1);
+        assert_eq!(authority.model_roots.len(), 1);
     }
 }

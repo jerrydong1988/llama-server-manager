@@ -2,7 +2,7 @@ import { startTransition } from 'react'
 import { invokeApp as invoke } from '../lib/ipc'
 import { ensureManagedPublicModelAlias, normalizeInstanceConfig } from '../modelPolicy'
 import { migrateParameterIntent } from '../parameterIntent'
-import { pathBasename } from '../utils/path'
+import { dedupePaths, pathBasename, pathComparisonKey } from '../utils/path'
 import { resolveHydratedHealth } from './bootstrapHealth'
 import { restoredDownloadStatus, restoredDownloadTimestamp } from './downloadMerge'
 import type { AppStoreGet, AppStoreSet } from './helpers'
@@ -76,21 +76,7 @@ export function isCurrentEngineInventoryRequest(requestGeneration: number): bool
 }
 
 export function normalizeModelPath(value: string): string {
-  const raw = value.trim()
-  const isWindowsUnc = /^(?:\\\\|\/\/)/.test(raw)
-  let normalized = raw.replace(/\\/g, '/')
-  if (/^\/\/\?\/UNC\//i.test(normalized)) {
-    normalized = `//${normalized.slice(8)}`
-  } else if (/^\/\/\?\//.test(normalized)) {
-    normalized = normalized.slice(4)
-  }
-
-  const isUnc = normalized.startsWith('//')
-  normalized = `${isUnc ? '//' : ''}${normalized.slice(isUnc ? 2 : 0).replace(/\/{2,}/g, '/')}`
-  if (normalized.length > 1 && normalized.endsWith('/')) normalized = normalized.slice(0, -1)
-  return (/^[A-Za-z]:\//.test(normalized) || isWindowsUnc || isUnc)
-    ? normalized.toLowerCase()
-    : normalized
+  return pathComparisonKey(value)
 }
 
 export function normalizeStoredConfig(config: InstanceConfig, models: ModelInfo[]) {
@@ -256,8 +242,8 @@ async function processConfig(
   startTransition(() => {
     set({
       instances,
-      modelDirs: global.model_dirs || [],
-      engineDirs: global.engine_dirs || [],
+      modelDirs: dedupePaths(global.model_dirs || []),
+      engineDirs: dedupePaths(global.engine_dirs || []),
       defaultEngineId: global.default_engine_id || null,
     })
   })

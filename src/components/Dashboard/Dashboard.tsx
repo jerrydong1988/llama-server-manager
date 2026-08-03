@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
+import { pathsEqual } from '../../utils/path'
 import type { DownloadProgress, Instance } from '../../store'
 import { useI18n } from '../../i18n'
 import { getDashboardLabels } from '../../i18n/pageLabels'
@@ -221,8 +222,8 @@ export default function Dashboard() {
   const transferBytes = downloadItems.reduce((total, task) => total + (task.speed || 0), 0)
 
   const engineNameFor = useCallback((instance: Instance) =>
-    engines.find(engine => engine.id === (instance.config.engine_id || defaultEngineId || ''))?.name
-    || engines.find(engine => engine.id === defaultEngineId)?.name
+    engines.find(engine => pathsEqual(engine.id, instance.config.engine_id || defaultEngineId || ''))?.name
+    || engines.find(engine => defaultEngineId && pathsEqual(engine.id, defaultEngineId))?.name
     || engines[0]?.name
     || labels.noEngine, [defaultEngineId, engines, labels.noEngine])
 
@@ -244,7 +245,7 @@ export default function Dashboard() {
 
     const byEngine = engineFilter === 'all'
       ? scoped
-      : scoped.filter(instance => (instance.config.engine_id || defaultEngineId || '') === engineFilter)
+      : scoped.filter(instance => pathsEqual(instance.config.engine_id || defaultEngineId || '', engineFilter))
 
     const bySearch = normalizedSearch
       ? byEngine.filter(instance => {

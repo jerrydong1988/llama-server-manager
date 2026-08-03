@@ -4,7 +4,7 @@ import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
 import { formatMessage, useI18n } from '../i18n'
 import { invokeApp as invoke } from '../lib/ipc'
-import { pathJoin } from '../utils/path'
+import { pathJoin, pathsEqual } from '../utils/path'
 import { forEachConcurrent } from '../utils/async'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
 import { PathText, surfaceClassName } from './ui'
@@ -255,7 +255,7 @@ export default function DownloadManager() {
               task.source === source &&
               task.repoId === trimmedRepoId &&
               task.remotePath === (file.path || file.name) &&
-              task.saveDir === saveDir,
+              pathsEqual(task.saveDir, saveDir),
             )
             const id = existing?.id || crypto.randomUUID()
             const completedAt = Date.now()
@@ -290,7 +290,7 @@ export default function DownloadManager() {
             task.source === completed.source
             && task.repoId === completed.repoId
             && task.remotePath === completed.remotePath
-            && task.saveDir === completed.saveDir,
+            && pathsEqual(task.saveDir, completed.saveDir),
           )
           if ((latest?.version ?? 0) > (completed.version ?? 0)) continue
           if (

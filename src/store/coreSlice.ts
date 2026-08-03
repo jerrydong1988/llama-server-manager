@@ -11,6 +11,7 @@ import {
 } from './bootstrap'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'
+import { dedupePaths, pathsEqual } from '../utils/path'
 
 const DEFAULT_MODEL_DIRECTORY = 'models'
 const BACKGROUND_RUNTIME_WARNING_PREFIX = 'background runtime:'
@@ -78,11 +79,11 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     setEngines: (engines) => set({ engines }),
     setModelDirs: (dirs) => {
-      set({ modelDirs: dirs })
+      set({ modelDirs: dedupePaths(dirs) })
       void get().saveConfig().catch(() => {})
     },
     setEngineDirs: (dirs) => {
-      set({ engineDirs: dirs })
+      set({ engineDirs: dedupePaths(dirs) })
       void get().saveConfig().catch(() => {})
     },
     setDefaultEngineId: (id) => {
@@ -128,12 +129,12 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       set({ isLoading: true })
       const requestGeneration = beginModelInventoryRequest()
       try {
-        const configuredPaths = paths.filter(path => path.trim().length > 0)
+        const configuredPaths = dedupePaths(paths)
         const effectivePaths = configuredPaths.length > 0
           ? configuredPaths
           : [await invoke<string>('resolve_path', { path: DEFAULT_MODEL_DIRECTORY })]
         const pathsChanged = effectivePaths.length !== paths.length
-          || effectivePaths.some((path, index) => path !== paths[index])
+          || effectivePaths.some((path, index) => !pathsEqual(path, paths[index] ?? ''))
         const models = await invoke<ModelInfo[]>('scan_models', { paths: effectivePaths })
         const applied = applyModelInventory(
           models,
@@ -154,7 +155,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     deleteModelFile: async (path) => {
       await invoke('delete_model_file', { path })
-      set((state) => ({ models: state.models.filter((model) => model.path !== path) }))
+      set((state) => ({ models: state.models.filter((model) => !pathsEqual(model.path, path)) }))
     },
     openModelFolder: async (path) => {
       await invoke('open_model_folder', { path })
@@ -174,26 +175,26 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     probeEngineCapabilities: async (id) => {
       const engine = await invoke<EngineInfo>('probe_engine_capabilities', { engineId: id })
       set((state) => ({
-        engines: state.engines.map((item) => item.id === engine.id ? engine : item),
+        engines: state.engines.map((item) => pathsEqual(item.id, engine.id) ? engine : item),
       }))
       return engine
     },
     deleteEngine: async (id) => {
       await invoke('delete_engine', { id })
-      set((state) => ({ engines: state.engines.filter((engine) => engine.id !== id) }))
+      set((state) => ({ engines: state.engines.filter((engine) => !pathsEqual(engine.id, id)) }))
     },
     renameEngine: (id, name) => {
-      const previous = get().engines.find((engine) => engine.id === id)
+      const previous = get().engines.find((engine) => pathsEqual(engine.id, id))
       set((state) => ({
         engines: state.engines.map((engine) => (
-          engine.id === id ? { ...engine, name, custom_name: name } : engine
+          pathsEqual(engine.id, id) ? { ...engine, name, custom_name: name } : engine
         )),
       }))
       void invoke('rename_engine', { id, name }).catch((error) => {
         if (previous) {
           set((state) => ({
             engines: state.engines.map((engine) => (
-              engine.id === id && engine.name === name && engine.custom_name === name
+              pathsEqual(engine.id, id) && engine.name === name && engine.custom_name === name
                 ? previous
                 : engine
             )),

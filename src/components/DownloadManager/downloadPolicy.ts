@@ -1,4 +1,5 @@
 import type { DownloadBandwidthUnit, DownloadResumePolicy } from './DownloadSettingsPanel'
+import { pathComparisonKey, pathJoin } from '../../utils/path'
 
 export const DEFAULT_SAVE_DIR = 'models'
 export const DEFAULT_BANDWIDTH_LIMIT = 0
@@ -26,6 +27,6 @@ export const preferredBandwidthDisplay = (bytes: number, fallbackUnit: DownloadB
   return { limit: Math.round(bytes / 1024), unit: 'KiB/s' as DownloadBandwidthUnit }
 }
 
-export const downloadFileKey = (source: string, repoId: string, remotePath: string, saveDir: string) => (
-  `${source}\u0000${repoId}\u0000${remotePath}\u0000${saveDir}`
+export const downloadFileKey = (_source: string, repoId: string, remotePath: string, saveDir: string) => (
+  pathComparisonKey(pathJoin(saveDir, repoId, remotePath))
 )

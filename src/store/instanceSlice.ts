@@ -11,6 +11,7 @@ import { runInstanceStart } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
 import type { AppState, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
 import { resolveEffectiveEngine } from './engineResolution'
+import { pathsEqual } from '../utils/path'
 
 const MAX_LOG_ENTRIES = 1000
 const MAX_RECENT_LOG_ENTRIES = 2000
@@ -39,7 +40,7 @@ const isStaleEngineCapabilityError = (error: unknown) => (
 
 const invalidateEngineCapabilities = (set: AppStoreSet, engineExe: string) => {
   set(state => ({
-    engines: state.engines.map(engine => engine.exe === engineExe
+    engines: state.engines.map(engine => pathsEqual(engine.exe, engineExe)
       ? {
           ...engine,
           version: '',
@@ -171,7 +172,7 @@ export function createInstanceSlice(
     })),
     generateCommand: async (config: InstanceConfig, engineExe: string) => {
       const normalized = normalizeStoredConfig(config, get().models)
-      const matchingEngine = get().engines.find(engine => engine.exe === engineExe)
+      const matchingEngine = get().engines.find(engine => pathsEqual(engine.exe, engineExe))
       if (!normalized.config.engine_id && matchingEngine) {
         normalized.config = { ...normalized.config, engine_id: matchingEngine.id }
       }
@@ -203,7 +204,7 @@ export function createInstanceSlice(
         if (!normalized.config.engine_id) {
           normalized.config = { ...normalized.config, engine_id: engine.id }
         }
-        if (normalized.changes.length > 0 || normalized.config.engine_id !== instance.config.engine_id) {
+        if (normalized.changes.length > 0 || !pathsEqual(normalized.config.engine_id, instance.config.engine_id)) {
           set((state) => ({
             instances: state.instances.map((item) => (
               item.id === id ? { ...item, config: normalized.config } : item

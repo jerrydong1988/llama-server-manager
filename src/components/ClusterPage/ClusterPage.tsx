@@ -5,6 +5,7 @@ import { Check, Copy, Network, Play, Plus, Radio, RefreshCw, Server, Square, Sto
 import { useAppStore, type WorkerInfo } from '../../store'
 import { useI18n } from '../../i18n'
 import { getClusterLabels } from '../../i18n/pageLabels'
+import { pathsEqual } from '../../utils/path'
 import { Badge, Button, InsetSurface, MetricCard, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
@@ -186,7 +187,7 @@ export default function ClusterPage() {
     setLaunching(true)
     setLaunchError('')
     try {
-      const engineDir = localEngine || engines.find(engine => engine.id === defaultEngineId)?.dir || ''
+      const engineDir = localEngine || engines.find(engine => defaultEngineId && pathsEqual(engine.id, defaultEngineId))?.dir || ''
       const result = await invoke<RpcLaunchResult>('start_local_rpc', { engineDir: engineDir || null, port: localPort })
       if (result?.ok) {
         const localHost = '127.0.0.1'
@@ -803,7 +804,7 @@ export default function ClusterPage() {
                   <SelectInput value={localEngine} onChange={event => setLocalEngine(event.target.value)} className="h-10 w-full">
                     {engines.map(engine => (
                       <option key={engine.id} value={engine.dir}>
-                        {engine.name}{engine.id === defaultEngineId ? t.clusterPage.defaultEngineLabel : ''}
+                        {engine.name}{defaultEngineId && pathsEqual(engine.id, defaultEngineId) ? t.clusterPage.defaultEngineLabel : ''}
                       </option>
                     ))}
                   </SelectInput>
