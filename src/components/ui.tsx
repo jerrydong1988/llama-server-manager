@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
+import { formatPathForDisplay } from '../utils/path'
 
 export const surfaceClassName = 'rounded-lg border border-slate-200 bg-white text-slate-900 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/70 dark:text-slate-100 dark:shadow-[0_16px_48px_rgba(15,23,42,0.28)]'
 export const insetSurfaceClassName = 'rounded-lg border border-slate-200 bg-slate-50 text-slate-900 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-100'
@@ -304,9 +305,10 @@ export function PathText({
   actions?: ReactNode
   className?: string
 }) {
-  const displayValue = multiline ? value : middleTruncate(value, maxLength)
+  const readableValue = formatPathForDisplay(value)
+  const displayValue = multiline ? readableValue : middleTruncate(readableValue, maxLength)
   return (
-    <span className={joinClassNames('flex min-w-0 items-center gap-2 font-mono text-[12px] leading-5', className)} title={value}>
+    <span className={joinClassNames('flex min-w-0 items-center gap-2 font-mono text-[12px] leading-5', className)} title={readableValue}>
       <span className={joinClassNames('min-w-0 flex-1', multiline ? 'whitespace-pre-wrap break-all' : 'truncate')}>{displayValue}</span>
       {actions ? <span className="shrink-0">{actions}</span> : null}
     </span>

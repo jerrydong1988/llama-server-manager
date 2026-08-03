@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronRight, File, FolderOpen, Image, X } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import type { ModelInfo } from '../../store'
+import { formatPathForDisplay } from '../../utils/path'
 import { Button, PathText } from '../ui'
 import { buildPickerTree, type PickerNode } from './configWorkspace'
 
@@ -78,7 +79,7 @@ export function ModelAssetPicker({
             className="flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm text-slate-100 transition hover:bg-fuchsia-500/10"
           >
             <Image className="h-4 w-4 shrink-0 text-fuchsia-400" />
-            <span className="min-w-0 flex-1 truncate" title={model.path}>{model.name}</span>
+            <span className="min-w-0 flex-1 truncate" title={formatPathForDisplay(model.path)}>{model.name}</span>
             <span className="shrink-0 text-xs text-fuchsia-300">{t.modelRepo.typeMmprojShort}</span>
           </button>
         )
@@ -91,7 +92,7 @@ export function ModelAssetPicker({
           className="flex items-center gap-2 py-2 pr-3 text-sm text-slate-500"
         >
           <Image className="h-4 w-4 shrink-0 text-fuchsia-400" />
-          <span className="min-w-0 flex-1 truncate" title={model.path}>{model.name}</span>
+          <span className="min-w-0 flex-1 truncate" title={formatPathForDisplay(model.path)}>{model.name}</span>
           <span className="shrink-0 text-xs text-fuchsia-300">{t.modelRepo.typeMmprojShort}</span>
         </div>
       )
@@ -106,7 +107,7 @@ export function ModelAssetPicker({
         className="flex w-full items-center gap-2 rounded-lg py-2 pr-3 text-left text-sm text-slate-100 transition hover:bg-blue-500/10"
       >
         <File className="h-4 w-4 shrink-0 text-sky-400" />
-        <span className="min-w-0 flex-1 truncate" title={model.path}>{model.name}</span>
+        <span className="min-w-0 flex-1 truncate" title={formatPathForDisplay(model.path)}>{model.name}</span>
         <span className="shrink-0 text-xs text-slate-500">{model.quant_type || ''}</span>
       </button>
     )

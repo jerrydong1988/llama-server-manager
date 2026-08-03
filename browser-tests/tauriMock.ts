@@ -483,6 +483,7 @@ if (BROWSER_SCENARIO === 'empty-model-roots') {
 if (BROWSER_SCENARIO === 'windows-path-aliases') {
   engine.dir = '\\\\?\\c:\\browser-test\\engine\\build'
   engine.exe = `${engine.dir}\\llama-server.exe`
+  state.model_dirs = ['\\\\?\\c:\\browser-test\\models']
   model.path = '\\\\?\\c:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf'
 }
 if (BROWSER_SCENARIO === 'empty-alias') {

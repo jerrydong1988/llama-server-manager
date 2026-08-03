@@ -52,9 +52,33 @@ test('Windows namespace aliases remain inside ordinary model and engine roots', 
 
   await expect(page.getByText('1 个已发现', { exact: true })).toBeVisible()
   await expect(page.getByText('Browser Test Engine', { exact: true }).first()).toBeVisible()
+  await expect(page.getByTitle('C:\\browser-test\\engine\\build').first()).toBeVisible()
 
   await page.getByRole('button', { name: '模型仓库', exact: true }).click()
   const explorer = page.locator('[data-guide="model-search"]')
   await expect(explorer.getByText('C:\\browser-test\\models', { exact: true })).toBeVisible()
   await expect(explorer.getByText('Qwen Browser Test Q8_0.gguf', { exact: true })).toBeVisible()
+  await expect(page.getByTitle('C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf')).toBeVisible()
+
+  const leakedNamespacePaths = await page.evaluate(() => {
+    const namespacePrefix = ['\\', '\\', '?', '\\'].join('')
+    const visibleText = document.body.innerText.includes(namespacePrefix) ? ['body text'] : []
+    const titles = [...document.querySelectorAll<HTMLElement>('[title]')]
+      .map(element => element.title)
+      .filter(title => title.includes(namespacePrefix))
+    return [...visibleText, ...titles]
+  })
+  expect(leakedNamespacePaths).toEqual([])
+})
+
+test('download storage paths use the readable Windows form', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'downloads')
+    localStorage.setItem('downloadSaveDir', '\\\\?\\c:\\browser-test\\downloads\\')
+  })
+  await page.goto('/')
+
+  await expect(page.locator('[data-guide="download-save-dir"] input')).toHaveValue('C:\\browser-test\\downloads')
+  await expect(page.getByTitle('C:\\browser-test\\downloads\\<repo>\\<file>')).toBeVisible()
 })

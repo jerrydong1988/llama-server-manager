@@ -19,6 +19,7 @@ function loadTypeScriptModule(relativePath) {
 
 const {
   dedupePaths,
+  formatPathForDisplay,
   isPathWithinRoot,
   normalizePath,
   pathComparisonKey,
@@ -37,6 +38,16 @@ assert.equal(pathJoin('models', 'org/model', 'file.gguf'), 'models/org/model/fil
 assert.equal(pathJoin('/', 'models'), '/models')
 assert.equal(normalizePath('\\\\?\\C:\\Models\\.\\Qwen\\..\\Llama\\'), 'C:/Models/Llama')
 assert.equal(normalizePath('\\\\?\\UNC\\Server\\Share\\Models'), '//Server/Share/Models')
+assert.equal(formatPathForDisplay('\\\\?\\c:\\Models\\.\\Qwen\\'), 'C:\\Models\\Qwen')
+assert.equal(formatPathForDisplay('c:/Models/Qwen'), 'C:\\Models\\Qwen')
+assert.equal(formatPathForDisplay('\\\\?\\UNC\\Server\\Share\\Models'), '\\\\Server\\Share\\Models')
+assert.equal(formatPathForDisplay('\\\\Server\\Share\\Models\\'), '\\\\Server\\Share\\Models')
+assert.equal(formatPathForDisplay('\\\\.\\PhysicalDrive0'), '\\\\.\\PhysicalDrive0')
+assert.equal(formatPathForDisplay('\\\\?\\Volume{abc}\\Models'), '\\\\?\\Volume{abc}\\Models')
+assert.equal(formatPathForDisplay('/opt/models/Qwen/'), '/opt/models/Qwen')
+assert.equal(formatPathForDisplay('/opt/models/Qwen\\literal'), '/opt/models/Qwen\\literal')
+assert.equal(formatPathForDisplay('weights/model.gguf'), 'weights/model.gguf')
+assert.equal(formatPathForDisplay('http://127.0.0.1:8080/v1/models'), 'http://127.0.0.1:8080/v1/models')
 assert.equal(pathComparisonKey('  \\\\?\\C:\\Models\\Llama  '), 'c:/models/llama')
 assert.equal(pathsEqual('C:\\Models', '\\\\?\\c:\\models\\'), true)
 assert.equal(pathsEqual('\\\\Server\\Share\\Models', '\\\\?\\UNC\\server\\share\\models'), true)

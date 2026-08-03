@@ -9,6 +9,7 @@
 const WINDOWS_DRIVE_ROOT = /^[A-Za-z]:\/$/
 const WINDOWS_DRIVE_PATH = /^[A-Za-z]:(?:\/|$)/
 const WINDOWS_HOST = typeof navigator !== 'undefined' && /windows/i.test(navigator.userAgent)
+const URI_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//
 
 const stripWindowsNamespace = (value: string): string => {
   if (/^\/\/\?\/UNC\//i.test(value)) return `//${value.slice(8)}`
@@ -49,6 +50,39 @@ export function normalizePath(p: string): string {
   const normalized = collapsePathSegments(stripWindowsNamespace(p.replace(/\\/g, '/')))
   if (normalized.length <= 1 || WINDOWS_DRIVE_ROOT.test(normalized)) return normalized
   return normalized.replace(/\/+$/, '')
+}
+
+/**
+ * Format a filesystem path for people without changing the value used for file operations.
+ *
+ * Windows extended-length paths are an implementation detail. Show drive paths as `C:\\...`
+ * and extended UNC paths as `\\\\server\\share\\...`; keep URI-like and POSIX values intact.
+ */
+export function formatPathForDisplay(p: string): string {
+  const raw = p.trim()
+  if (!raw || URI_SCHEME.test(raw)) return raw
+
+  const slashNormalized = raw.replace(/\\/g, '/')
+  const windowsStyle = /^\/\/\?\/(?:UNC\/|[A-Za-z]:\/)/i.test(slashNormalized)
+    || /^[A-Za-z]:(?:\/|$)/.test(slashNormalized)
+    || /^\\\\(?![?.]\\)/.test(raw)
+    || (WINDOWS_HOST && /^\/\/(?![?.]\/)/.test(slashNormalized))
+    || (WINDOWS_HOST && !raw.startsWith('/') && raw.includes('\\'))
+
+  if (windowsStyle) {
+    let normalized = normalizePath(raw)
+    if (/^[A-Za-z]:/.test(normalized)) {
+      normalized = `${normalized[0].toUpperCase()}${normalized.slice(1)}`
+    }
+    return normalized.replace(/\//g, '\\')
+  }
+
+  // POSIX permits backslashes in file names, so only normalize slash-separated absolute paths.
+  if (raw.startsWith('/')) {
+    const normalized = collapsePathSegments(raw)
+    return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized
+  }
+  return raw
 }
 
 /** Return a stable key for equality and containment checks without changing stored/display values. */
