@@ -1137,7 +1137,10 @@ export default function ProxyPage() {
                       </div>
                       {isStoredApiKey(apiKey.key) ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyHashedHint}</p> : null}
                     </div>
-                    <TextInput aria-label={labels.requestsPerMinute} type="number" min={0} value={apiKey.requestsPerMinute} onChange={event => updateApiKey(apiKey.id, { requestsPerMinute: Math.max(0, Number(event.target.value) || 0) })} />
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.apiKeyRequestsPerMinute}</span>
+                      <TextInput type="number" min={0} value={apiKey.requestsPerMinute} onChange={event => updateApiKey(apiKey.id, { requestsPerMinute: Math.max(0, Number(event.target.value) || 0) })} />
+                    </label>
                     <div className="flex items-center justify-end gap-2">
                       <button
                         type="button"

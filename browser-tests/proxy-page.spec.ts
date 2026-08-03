@@ -104,6 +104,7 @@ test('production scheduling and scoped API keys round-trip through the settings 
   await expect(keyInput).toHaveAttribute('type', 'password')
   await expect(page.getByRole('button', { name: '显示新 API Key（10 秒）' })).toBeVisible()
   await expect(page.getByRole('button', { name: '复制新 API Key' })).toBeVisible()
+  await expect(page.getByRole('spinbutton', { name: '每分钟请求数', exact: true })).toHaveValue('0')
   await page.getByRole('textbox', { name: /允许的 CORS Origin/ }).fill('https://app.example.com')
   await page.getByRole('button', { name: '保存' }).click()
 
