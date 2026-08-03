@@ -17,7 +17,7 @@
 
 请求可使用 `x-api-key: <代理 API Key>` 或 `Authorization: Bearer <代理 API Key>`。`/v1/messages` 与 `/v1/messages/count_tokens` 必须携带 `anthropic-version: 2023-06-01`；缺失或使用不支持的版本会返回 `400 invalid_request_error`。代理验证公开凭据后会将其移除，仅向目标实例发送该实例自己的 API Key；`anthropic-version`、`anthropic-beta` 与自定义业务请求头会继续转发。推荐创建仅含 `inference` 权限的具名 API Key；新 Key 保存前可短暂显示，保存后只持久化不可逆摘要，因此必须在首次保存前复制原文。
 
-`v2.9.39` 的 llama.cpp 稳定版基线为 `b10235`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。后续版本的权威基线以 `scripts/llama-parameter-baseline.json` 为准。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
+`v2.9.39` 的 llama.cpp 稳定版基线为 `b10236`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。后续版本的权威基线以 `scripts/llama-parameter-baseline.json` 为准。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
 
 模型发现会把运行时探测值（首次探测前可使用明确的非自动 `ctx_size` 配置）同时公开为 `context_length`、`context_window` 和 `max_model_len`，故障转移配置采用所有候选目标的安全最小值。Messages 请求在上下文已知时先调用目标 `/v1/messages/count_tokens`，将输入 Token 与 `max_tokens` 相加；超过 `n_ctx` 时返回 Anthropic `400 invalid_request_error`，不会进入生成。旧目标缺少计数端点时保持兼容转发，由目标执行最终校验。
 
