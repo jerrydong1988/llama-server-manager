@@ -1,6 +1,7 @@
 const fs = require('node:fs')
 
 const workflow = fs.readFileSync('.github/workflows/build.yml', 'utf8')
+const manualDownloadsWorkflow = fs.readFileSync('.github/workflows/publish-release-downloads.yml', 'utf8')
 const tauriConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
 const updaterBuildConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.updater.conf.json', 'utf8'))
 const readme = fs.readFileSync('README.md', 'utf8')
@@ -124,6 +125,12 @@ for (const token of [
   'Ensure release notes are present before manifest generation',
   'Sign exact updater payloads',
   'prepare-updater-release.mjs --manifest',
+  'Stage manual download packages',
+  '_aarch64-adhoc.dmg',
+  '_amd64.deb',
+  '_arm64.deb',
+  'manual-downloads/$GITHUB_REF_NAME',
+  'downloads/$GITHUB_REF_NAME/',
   'Publish immutable updater payloads to R2',
   'Publish updater manifest to R2 last',
   "cache-control 'public,max-age=31536000,immutable'",
@@ -137,6 +144,22 @@ if (
   > updaterJob.indexOf('Create signed updater manifest')
 ) {
   failures.push('release notes must exist before the updater manifest is generated')
+}
+
+for (const token of [
+  'workflow_dispatch:',
+  'environment: release-r2',
+  'RELEASE_TAG: ${{ inputs.tag }}',
+  'gh release download "$RELEASE_TAG"',
+  '_aarch64-adhoc.dmg',
+  '_amd64.deb',
+  '_arm64.deb',
+  'downloads/$RELEASE_TAG/',
+  'R2_PUBLIC_BASE_URL',
+  '?verify=$GITHUB_RUN_ID',
+  'cmp "$file" "$public_file"',
+]) {
+  if (!manualDownloadsWorkflow.includes(token)) failures.push(`manual release download backfill is missing ${token}`)
 }
 
 const windowsJob = jobBody('build-windows')
