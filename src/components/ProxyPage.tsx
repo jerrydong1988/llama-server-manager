@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { invokeApp as invoke } from '../lib/ipc'
-import { Activity, AlertTriangle, Copy, HeartPulse, Plus, PowerOff, RefreshCw, Route, Save, Server, Square, Trash2, Zap } from 'lucide-react'
+import { Activity, AlertTriangle, Copy, Eye, EyeOff, HeartPulse, Plus, PowerOff, RefreshCw, Route, Save, Server, Square, Trash2, Zap } from 'lucide-react'
 import { useAppStore } from '../store'
 import { formatHostPort, httpUrl } from '../utils/network'
 import { useI18n } from '../i18n'
@@ -30,7 +30,7 @@ type ProxyConfig = {
   enabled: boolean
   host: string
   port: number
-  publicApiKey: string
+  legacyPublicApiKey: string
   defaultInstanceId: string
   routingStrategy: string
   strictModelRouting: boolean
@@ -100,11 +100,18 @@ type RouteTestView = {
   message: string
 }
 
+const STORED_API_KEY_PREFIX = 'sha256:'
+const SECRET_REVEAL_DURATION_MS = 10_000
+
+function isStoredApiKey(value: string) {
+  return value.startsWith(STORED_API_KEY_PREFIX)
+}
+
 const defaultConfig: ProxyConfig = {
   enabled: false,
   host: '127.0.0.1',
   port: 11435,
-  publicApiKey: '',
+  legacyPublicApiKey: '',
   defaultInstanceId: '',
   routingStrategy: 'priorityFailover',
   strictModelRouting: true,
@@ -215,7 +222,7 @@ function normalizeConfig(value: unknown): ProxyConfig {
     enabled: getBoolean(record, ['enabled'], defaultConfig.enabled),
     host: getString(record, ['host', 'listen_host', 'listenHost'], defaultConfig.host),
     port: getNumber(record, ['port', 'listen_port', 'listenPort'], defaultConfig.port),
-    publicApiKey: getString(record, ['public_api_key', 'publicApiKey']),
+    legacyPublicApiKey: getString(record, ['public_api_key', 'legacyPublicApiKey']),
     defaultInstanceId: getString(record, ['default_instance_id', 'defaultInstanceId', 'default_target_id', 'defaultTargetId']),
     routingStrategy: getString(record, ['routing_strategy', 'routingStrategy'], defaultConfig.routingStrategy),
     strictModelRouting: getBoolean(record, ['strict_model_routing', 'strictModelRouting'], defaultConfig.strictModelRouting),
@@ -294,7 +301,7 @@ function toCommandConfig(config: ProxyConfig) {
     enabled: config.enabled,
     host: config.host,
     port: config.port,
-    public_api_key: config.publicApiKey,
+    public_api_key: config.legacyPublicApiKey,
     default_instance_id: config.defaultInstanceId,
     routing_strategy: config.routingStrategy,
     strict_model_routing: config.strictModelRouting,
@@ -386,8 +393,35 @@ export default function ProxyPage() {
   const [routeTests, setRouteTests] = useState<Record<string, RouteTestView>>({})
   const [stopRuntimeConfirmOpen, setStopRuntimeConfirmOpen] = useState(false)
   const [stoppingRuntime, setStoppingRuntime] = useState(false)
+  const [revealedSecretId, setRevealedSecretId] = useState<string | null>(null)
+  const revealTimerRef = useRef<number | null>(null)
 
   const labels = useMemo(() => getProxyLabels(lang), [lang])
+
+  const hideRevealedSecret = () => {
+    if (revealTimerRef.current != null) {
+      window.clearTimeout(revealTimerRef.current)
+      revealTimerRef.current = null
+    }
+    setRevealedSecretId(null)
+  }
+
+  const toggleSecretVisibility = (secretId: string) => {
+    if (revealedSecretId === secretId) {
+      hideRevealedSecret()
+      return
+    }
+    if (revealTimerRef.current != null) window.clearTimeout(revealTimerRef.current)
+    setRevealedSecretId(secretId)
+    revealTimerRef.current = window.setTimeout(() => {
+      setRevealedSecretId(current => current === secretId ? null : current)
+      revealTimerRef.current = null
+    }, SECRET_REVEAL_DURATION_MS)
+  }
+
+  useEffect(() => () => {
+    if (revealTimerRef.current != null) window.clearTimeout(revealTimerRef.current)
+  }, [])
 
   const isLocalHost = (host: string) => {
     const normalized = host.trim().replace(/^\[|\]$/g, '').toLowerCase()
@@ -397,7 +431,7 @@ export default function ProxyPage() {
       && octets.every(octet => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
     return normalized === '' || normalized === 'localhost' || normalized === '::1' || loopbackIpv4
   }
-  const requiresPublicKey = !isLocalHost(draft.host)
+  const requiresLoopbackHost = !isLocalHost(draft.host)
   const hasApiKeyIssues = draft.apiKeys.some(apiKey => apiKey.enabled && apiKey.key.trim().length < 16)
 
   const fallbackTargets = useMemo<ProxyTarget[]>(() => instances.map(instance => ({
@@ -658,7 +692,7 @@ export default function ProxyPage() {
   }
 
   const copyApiKey = async (apiKey: ProxyApiKey) => {
-    if (apiKey.key.startsWith('sha256:')) return
+    if (isStoredApiKey(apiKey.key)) return
     try {
       await navigator.clipboard.writeText(apiKey.key)
       setNotice(labels.apiKeyCopied)
@@ -739,6 +773,7 @@ export default function ProxyPage() {
       setError(hasRouteIssues ? labels.routeValidationSummary : labels.apiKeyValidation)
       return
     }
+    hideRevealedSecret()
     setSaving(true)
     setError('')
     setNotice('')
@@ -765,6 +800,7 @@ export default function ProxyPage() {
   }
 
   const persistDraftConfig = async () => {
+    hideRevealedSecret()
     const savedValue = await invoke<unknown>('save_proxy_config', { config: toCommandConfig(draft) })
     const nextConfig = normalizeConfig(savedValue ?? toCommandConfig(draft))
     setConfig(nextConfig)
@@ -857,7 +893,7 @@ export default function ProxyPage() {
                 {labels.stop}
               </Button>
             ) : (
-              <Button onClick={() => setProxyRunning('start')} disabled={!statusFresh || busyAction !== null || requiresPublicKey || hasRouteIssues || hasApiKeyIssues} variant="success" icon={<Zap className="h-4 w-4" />}>
+              <Button onClick={() => setProxyRunning('start')} disabled={!statusFresh || busyAction !== null || requiresLoopbackHost || hasRouteIssues || hasApiKeyIssues} variant="success" icon={<Zap className="h-4 w-4" />}>
                 {labels.start}
               </Button>
             )}
@@ -968,6 +1004,12 @@ export default function ProxyPage() {
                 <span className="mt-1.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.defaultTargetHint}</span>
               </label>
             </div>
+            {requiresLoopbackHost ? (
+              <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{labels.loopbackOnlyHint}</span>
+              </div>
+            ) : null}
 
             <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
               <label className="min-w-0">
@@ -997,28 +1039,6 @@ export default function ProxyPage() {
             </div>
             <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.strictRoutingHint}</p>
 
-            <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_180px]">
-              <label className="min-w-0">
-                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.publicKey}</span>
-                <TextInput type="password" autoComplete="off" value={draft.publicApiKey} onChange={event => updateDraft({ publicApiKey: event.target.value })} />
-                {requiresPublicKey ? (
-                  <div className="mt-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <span>{labels.publicKeyRequired}</span>
-                  </div>
-                ) : null}
-              </label>
-              <label className="min-w-0">
-                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.timeout}</span>
-                <TextInput
-                  type="number"
-                  min={1000}
-                  value={draft.timeoutMs}
-                  onChange={event => updateDraft({ timeoutMs: Math.max(1000, Number(event.target.value) || defaultConfig.timeoutMs) })}
-                />
-              </label>
-            </div>
-
             {status.lastError ? (
               <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                 <span className="font-semibold">{labels.lastError}: </span>{status.lastError}
@@ -1033,6 +1053,7 @@ export default function ProxyPage() {
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {([
+                ['timeoutMs', labels.timeout, 1000],
                 ['connectTimeoutMs', labels.connectTimeout, 100],
                 ['streamingIdleTimeoutMs', labels.streamingIdleTimeout, 1000],
                 ['healthCheckIntervalMs', labels.healthCheckInterval, 1000],
@@ -1064,6 +1085,21 @@ export default function ProxyPage() {
               </div>
               <Button onClick={addApiKey} icon={<Plus className="h-4 w-4" />}>{labels.addApiKey}</Button>
             </div>
+            <div className="mt-4 grid gap-3 lg:grid-cols-3">
+              {[
+                [labels.accessOriginTitle, labels.accessOriginDesc],
+                [labels.accessKeyTitle, labels.accessKeyDesc],
+                [labels.accessRouteTitle, labels.accessRouteDesc],
+              ].map(([title, description], index) => (
+                <div key={title} className="flex gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-xs font-semibold text-white">{index + 1}</span>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-400">{description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
             <label className="mt-4 block min-w-0">
               <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.corsOrigins}</span>
               <TextInput
@@ -1073,6 +1109,7 @@ export default function ProxyPage() {
               />
               <span className="mt-1.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.corsOriginsHint}</span>
             </label>
+            <p className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">{labels.apiKeyRelationshipHint}</p>
             <div className="mt-4 space-y-3">
               {draft.apiKeys.length === 0 ? <EmptyPanel title={labels.noApiKeys} /> : draft.apiKeys.map(apiKey => (
                 <div key={apiKey.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70">
@@ -1080,10 +1117,25 @@ export default function ProxyPage() {
                     <TextInput aria-label={labels.apiKeyName} value={apiKey.name} placeholder={labels.apiKeyName} onChange={event => updateApiKey(apiKey.id, { name: event.target.value })} />
                     <div className="min-w-0">
                       <div className="flex min-w-0 gap-2">
-                        <TextInput aria-label={labels.apiKeyValue} type="password" autoComplete="off" value={apiKey.key} placeholder={labels.apiKeyValue} onChange={event => updateApiKey(apiKey.id, { key: event.target.value })} className="min-w-0 flex-1" />
-                        {!apiKey.key.startsWith('sha256:') ? <IconButton label={labels.copyApiKey} onClick={() => void copyApiKey(apiKey)} icon={<Copy className="h-4 w-4" />} /> : null}
+                        <TextInput
+                          aria-label={labels.apiKeyValue}
+                          type={revealedSecretId === `api:${apiKey.id}` && !isStoredApiKey(apiKey.key) ? 'text' : 'password'}
+                          autoComplete="off"
+                          value={apiKey.key}
+                          placeholder={labels.apiKeyValue}
+                          onChange={event => updateApiKey(apiKey.id, { key: event.target.value })}
+                          className="min-w-0 flex-1"
+                        />
+                        {apiKey.key && !isStoredApiKey(apiKey.key) ? (
+                          <IconButton
+                            label={revealedSecretId === `api:${apiKey.id}` ? labels.hideApiKey : labels.revealApiKey}
+                            onClick={() => toggleSecretVisibility(`api:${apiKey.id}`)}
+                            icon={revealedSecretId === `api:${apiKey.id}` ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                          />
+                        ) : null}
+                        {apiKey.key && !isStoredApiKey(apiKey.key) ? <IconButton label={labels.copyApiKey} onClick={() => void copyApiKey(apiKey)} icon={<Copy className="h-4 w-4" />} /> : null}
                       </div>
-                      {apiKey.key.startsWith('sha256:') ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyHashedHint}</p> : null}
+                      {isStoredApiKey(apiKey.key) ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyHashedHint}</p> : null}
                     </div>
                     <TextInput aria-label={labels.requestsPerMinute} type="number" min={0} value={apiKey.requestsPerMinute} onChange={event => updateApiKey(apiKey.id, { requestsPerMinute: Math.max(0, Number(event.target.value) || 0) })} />
                     <div className="flex items-center justify-end gap-2">

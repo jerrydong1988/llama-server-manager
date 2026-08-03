@@ -354,7 +354,7 @@ Instance Routing exposes native OpenAI and Anthropic formats on one listener, ro
 2. 设置监听主机和端口。
 3. 保持“严格模型路由”启用，为规则填写客户端使用的公开模型名并选择目标；相同模型名可配置多个优先级层。
 4. 选择优先级故障切换、轮询、最空闲或加权调度；按工作负载设置全局与单目标并发、排队、健康探测和流式空闲超时。
-5. 需要时添加具名 API Key，在首次保存前复制原文，并分配“推理”或“发现与诊断”权限；保存后只保留不可逆摘要。
+5. 需要时添加具名 API Key，在首次保存前复制原文；小眼睛只会将尚未保存的明文显示 10 秒，保存后只保留不可逆摘要。
 6. 保存并启动路由，然后用 `/ready`、`/v1/models`、`/slots?model=<公开模型名>`、OpenAI 或 Anthropic 客户端验证。
 
 1. Start at least one backend instance.
@@ -382,7 +382,11 @@ Instance Routing exposes native OpenAI and Anthropic formats on one listener, ro
 
 Anthropic 路径支持文本、图片、thinking、工具调用、工具结果和流式事件。工具调用要求目标实例启用 `--jinja`。Claude Code 应把 `ANTHROPIC_BASE_URL` 指向统一路由根地址（不要附加 `/v1`），并将 `ANTHROPIC_MODEL` 设为已配置的公开模型名；配置代理密钥时同时设置 `ANTHROPIC_AUTH_TOKEN`。
 
+`/v1/messages` 与 `/v1/messages/count_tokens` 必须携带 `anthropic-version: 2023-06-01`。官方 Anthropic SDK 会自动发送；自定义 HTTP 客户端缺失或发送其他版本时，路由器返回 `400 invalid_request_error`。
+
 Anthropic routes support text, images, thinking, tool calls, tool results, and streaming events. Tool use requires `--jinja` on the target instance. Point Claude Code's `ANTHROPIC_BASE_URL` at the routing root without `/v1`, set `ANTHROPIC_MODEL` to a configured public model name, and set `ANTHROPIC_AUTH_TOKEN` when the proxy uses authentication.
+
+`/v1/messages` and `/v1/messages/count_tokens` require `anthropic-version: 2023-06-01`. Official Anthropic SDKs send it automatically; custom HTTP clients receive `400 invalid_request_error` when the header is missing or unsupported.
 
 代理不会在 OpenAI 与 Anthropic 请求体之间互相转换；两种客户端调用各自的协议端点，但共享同一套路由规则、公开模型名和鉴权配置。`/props` 与 `/slots` 会透传必要的上下文和负载信息，同时移除模型路径、模板正文、提示词和 Token。prompt caching、服务端工具等云端专属能力不会由管理器模拟，最终能力取决于目标 `llama-server` 与模型。
 
@@ -397,7 +401,9 @@ The proxy does not translate request bodies between OpenAI and Anthropic formats
 ### 安全与后台保活 / Security and Background Keep-Alive
 
 - 内置路由只允许监听回环地址；远程访问必须使用提供 TLS 的可信反向代理、Tunnel、VPN 或 SSH 隧道。
-- 多 API Key 可分别授予推理、发现权限与独立 RPM；精确 CORS Origin 防止未经授权的浏览器跨域调用。
+- CORS Origin 只决定“哪个网页可跨域调用”，API Key 决定“谁在调用”，路由决定“公开模型名去哪个实例”；三者互相独立，不需要绑定。
+- Key 不绑定某个 Origin 或某条路由；拥有“推理”权限的 Key 可调用所有已发布路由。允许的 Origin 仍须携带有效 Key，桌面与 CLI 客户端则不受 CORS 限制。
+- Origin 填浏览器地址栏中的“协议 + 主机 + 端口”，不含路径，例如 `http://localhost:3000`；多个值用逗号分隔并精确匹配。
 - 路由依据实际 `/health` 探测和熔断状态选择目标，网络错误、`5xx` 或 `429` 会推动后续请求切换到健康层级。
 - 未开启独立后台运行时，实例与路由仍由隔离的运行时进程托管，但主程序退出后会自动停止；仅关闭窗口则仍可继续在托盘运行。
 - 开启“独立后台运行时”后，退出管理界面不会中断已托管实例或统一端点，并会注册当前用户登录后的自动恢复。Windows 使用当前用户启动项，macOS 使用用户 LaunchAgent，Linux 优先使用 systemd 用户服务并在不可用时回退到 XDG Autostart；第一阶段不安装需要管理员权限的系统级服务。
@@ -408,7 +414,9 @@ The proxy does not translate request bodies between OpenAI and Anthropic formats
 - 修改未保存的路由草稿后直接启动时，应用会先保存有效配置，避免界面与后台状态不一致。
 
 - The built-in listener is loopback-only; use a trusted TLS reverse proxy, tunnel, VPN, or SSH tunnel for remote access.
-- Scoped multi-key authentication, per-key RPM, and exact-origin CORS protect inference and discovery independently.
+- CORS Origin answers which web page may call across origins, an API key identifies the caller, and a route maps a public model to an instance. These layers are independent and need no binding.
+- A key is not bound to an origin or one route. Inference-scoped keys may call every published route; allowed browser origins still need a valid key, while desktop and CLI clients that omit `Origin` are unaffected by CORS.
+- Enter only the browser address bar's scheme, host, and port, such as `http://localhost:3000`. Separate multiple exact origins with commas and omit paths.
 - Active `/health` probes and circuit state drive selection; network errors, `5xx`, and `429` move subsequent traffic to a healthy tier.
 - Without the independent runtime option, an isolated runtime still supervises instances and routing while the app is open, but stops them after the main process exits; closing only the window keeps the tray session alive.
 - Enabling the independent background runtime preserves managed instances and the unified endpoint after the management UI exits and registers per-user login recovery. Windows uses the current-user startup entry, macOS a user LaunchAgent, and Linux a systemd user service with XDG Autostart fallback. Phase one does not install an administrator-managed system service.

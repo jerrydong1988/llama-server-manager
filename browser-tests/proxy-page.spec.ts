@@ -76,11 +76,19 @@ test('route switches expose current state and saving refreshes runtime health', 
 })
 
 test('production scheduling and scoped API keys round-trip through the settings UI', async ({ page }) => {
+  await page.clock.install()
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
     localStorage.setItem('lastTab', 'proxy')
   })
   await page.goto('/?scenario=proxy-routing')
+
+  const accessControl = page.getByRole('heading', { name: '访问控制与浏览器安全' }).locator('xpath=ancestor::section[1]')
+  await expect(accessControl).toContainText('网页来源 → 调用身份 → 模型映射')
+  await expect(accessControl).toContainText('Key 不绑定某个 Origin，也不绑定某条路由')
+  await expect(accessControl).toContainText('当前不支持“一个 Key 只能调用某个模型”的逐路由授权')
+  await expect(accessControl).toContainText('http://localhost:3000')
+  await expect(page.getByText('旧版单一 API Key（可选）')).toHaveCount(0)
 
   await page.getByRole('combobox', { name: '调度策略' }).selectOption('weighted')
   await expect(page.getByRole('switch', { name: '已启用' })).toBeChecked()
@@ -89,11 +97,18 @@ test('production scheduling and scoped API keys round-trip through the settings 
   await expect(keyInput).toHaveAttribute('type', 'password')
   const generatedKey = await keyInput.inputValue()
   expect(generatedKey).toMatch(/^lsm_[0-9a-f]{32}$/)
+  await page.getByRole('button', { name: '显示新 API Key（10 秒）' }).click()
+  await expect(keyInput).toHaveAttribute('type', 'text')
+  await expect(keyInput).toHaveValue(generatedKey)
+  await page.clock.fastForward(10_000)
+  await expect(keyInput).toHaveAttribute('type', 'password')
+  await expect(page.getByRole('button', { name: '显示新 API Key（10 秒）' })).toBeVisible()
   await expect(page.getByRole('button', { name: '复制新 API Key' })).toBeVisible()
   await page.getByRole('textbox', { name: /允许的 CORS Origin/ }).fill('https://app.example.com')
   await page.getByRole('button', { name: '保存' }).click()
 
-  await expect(page.getByText('已安全哈希保存；输入新值可轮换此密钥。')).toBeVisible()
+  await expect(page.getByText('已不可逆哈希保存，无法显示原文；如已遗失，请输入新值轮换。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '显示新 API Key（10 秒）' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '复制新 API Key' })).toHaveCount(0)
   const savedConfig = await page.evaluate(() => {
     const call = [...window.__TAURI_BROWSER_TEST__.calls].reverse().find(item => item.command === 'save_proxy_config')

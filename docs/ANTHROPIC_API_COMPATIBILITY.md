@@ -15,7 +15,7 @@
 | Claude Code / SDK 模型发现 | `GET /v1/models` |
 | 单模型信息 | `GET /v1/models/:model_id` |
 
-请求可使用 `x-api-key: <代理 API Key>` 或 `Authorization: Bearer <代理 API Key>`。代理验证公开凭据后会将其移除，仅向目标实例发送该实例自己的 API Key；`anthropic-version`、`anthropic-beta` 与自定义业务请求头会继续转发。推荐创建仅含 `inference` 权限的具名 API Key；新 Key 保存后只持久化不可逆摘要，因此必须在首次保存前复制原文。
+请求可使用 `x-api-key: <代理 API Key>` 或 `Authorization: Bearer <代理 API Key>`。`/v1/messages` 与 `/v1/messages/count_tokens` 必须携带 `anthropic-version: 2023-06-01`；缺失或使用不支持的版本会返回 `400 invalid_request_error`。代理验证公开凭据后会将其移除，仅向目标实例发送该实例自己的 API Key；`anthropic-version`、`anthropic-beta` 与自定义业务请求头会继续转发。推荐创建仅含 `inference` 权限的具名 API Key；新 Key 保存前可短暂显示，保存后只持久化不可逆摘要，因此必须在首次保存前复制原文。
 
 `v2.9.38` 的 llama.cpp 稳定版基线为 `b10218`。该版本原生支持 Messages、SSE、system/messages、采样参数、停止序列、工具选择和 Token Count。后续版本的权威基线以 `scripts/llama-parameter-baseline.json` 为准。工具调用需要在目标实例配置中启用 `--jinja`。请求体上限为 32 MiB，可容纳 Anthropic API 允许的图片等多模态内容块。
 
@@ -36,7 +36,7 @@ $env:CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY = '1'
 claude --model local-claude
 ```
 
-如果代理未配置公开 API Key，可省略 `ANTHROPIC_AUTH_TOKEN`。`ANTHROPIC_BASE_URL` 填写代理根地址，不附加 `/v1`；Claude Code 会自行请求 `/v1/messages`。三个 `ANTHROPIC_DEFAULT_*_MODEL` 变量让子代理、快速模型与模型族回退继续使用同一公开路由名；如果你为不同模型族配置了不同本地实例，可以分别填写对应的公开路由名。模型发现需要 Claude Code `v2.1.129` 或更新版本。
+如果路由器未配置任何 API Key，可省略 `ANTHROPIC_AUTH_TOKEN`。`ANTHROPIC_BASE_URL` 填写代理根地址，不附加 `/v1`；Claude Code 会自行请求 `/v1/messages`。三个 `ANTHROPIC_DEFAULT_*_MODEL` 变量让子代理、快速模型与模型族回退继续使用同一公开路由名；如果你为不同模型族配置了不同本地实例，可以分别填写对应的公开路由名。模型发现需要 Claude Code `v2.1.129` 或更新版本。
 
 ## 兼容边界
 
@@ -47,4 +47,4 @@ claude --model local-claude
 
 ## Anthropic API and Claude Code
 
-The routing proxy exposes OpenAI and Anthropic formats on the same listener. Use `POST /v1/messages`, `POST /v1/messages/count_tokens`, and `GET /v1/models`. Model discovery publishes the safe probed context, with an explicit non-auto `ctx_size` fallback before the first probe, as `context_length`, `context_window`, and `max_model_len`; Messages preflight combines native input-token counting with `max_tokens` and returns Anthropic `400 invalid_request_error` before generation when the request exceeds `n_ctx`. Point `ANTHROPIC_BASE_URL` at the proxy root, authenticate with either a bearer token or `x-api-key`, and set `ANTHROPIC_MODEL` to a configured public route name. Tool use requires `--jinja` on the target llama-server. Cloud-only Anthropic features are passed through without manager-side emulation and remain dependent on the selected llama-server and model.
+The routing proxy exposes OpenAI and Anthropic formats on the same listener. Use `POST /v1/messages`, `POST /v1/messages/count_tokens`, and `GET /v1/models`. Messages and token-count requests require `anthropic-version: 2023-06-01`; missing or unsupported versions return Anthropic `400 invalid_request_error`. Model discovery publishes the safe probed context, with an explicit non-auto `ctx_size` fallback before the first probe, as `context_length`, `context_window`, and `max_model_len`; Messages preflight combines native input-token counting with `max_tokens` and returns Anthropic `400 invalid_request_error` before generation when the request exceeds `n_ctx`. Point `ANTHROPIC_BASE_URL` at the proxy root, authenticate with either a bearer token or `x-api-key`, and set `ANTHROPIC_MODEL` to a configured public route name. Tool use requires `--jinja` on the target llama-server. Cloud-only Anthropic features are passed through without manager-side emulation and remain dependent on the selected llama-server and model.

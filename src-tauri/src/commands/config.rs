@@ -735,7 +735,6 @@ mod tests {
     fn frontend_config_merge_preserves_backend_owned_fields() {
         let mut config = sample_config();
         config.download_max_concurrent = 7;
-        config.proxy_config.public_api_key = "proxy-secret".into();
         let snapshot = FrontendConfigSnapshot {
             instances: HashMap::new(),
             model_dirs: vec!["models-new".into()],
@@ -749,7 +748,6 @@ mod tests {
         apply_frontend_config(&mut config, snapshot, HashMap::new(), HashMap::new());
 
         assert_eq!(config.download_max_concurrent, 7);
-        assert_eq!(config.proxy_config.public_api_key, "proxy-secret");
         assert_eq!(config.default_engine_id, "engine-new");
         assert_eq!(config.last_tab, "dashboard");
     }

@@ -321,7 +321,7 @@ const proxyConfig: BrowserProxyConfig = {
   enabled: HAS_PROXY_DATA,
   host: '127.0.0.1',
   port: 11435,
-  public_api_key: IS_DOCS_SCENARIO ? 'lsm-demo-key' : '',
+  public_api_key: '',
   default_instance_id: IS_DOCS_SCENARIO ? INSTANCE_ID : '',
   routing_strategy: 'priorityFailover',
   strict_model_routing: true,

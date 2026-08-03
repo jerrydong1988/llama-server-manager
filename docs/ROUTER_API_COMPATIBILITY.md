@@ -29,7 +29,7 @@ Chat Completions 与 Responses 会保持工具调用、结构化输出、usage �
 | 输入 Token 计数 | `POST /v1/messages/count_tokens` |
 | 模型发现 | `GET /v1/models`、`GET /v1/models/:model_id` |
 
-Messages 的文本、图片、thinking、`tool_use`、`tool_result`、usage 和流式事件由目标 llama-server 的原生协议处理。错误采用 Anthropic `type: error` 信封并包含 `request-id`；速率限制使用 Anthropic 请求速率响应头。工具调用要求目标实例启用 `--jinja`。官方 `@anthropic-ai/sdk` 契约测试覆盖同步、流式、图片、工具、Token Count 和模型发现。
+Messages 的文本、图片、thinking、`tool_use`、`tool_result`、usage 和流式事件由目标 llama-server 的原生协议处理。`/v1/messages` 与 `/v1/messages/count_tokens` 必须携带 `anthropic-version: 2023-06-01`；缺失或不支持的版本返回 Anthropic `400 invalid_request_error`。错误采用 Anthropic `type: error` 信封并包含 `request-id`；速率限制使用 Anthropic 请求速率响应头。工具调用要求目标实例启用 `--jinja`。官方 `@anthropic-ai/sdk` 契约测试覆盖同步、流式、图片、工具、Token Count、SSE 响应头和模型发现。
 
 ### 运维与能力发现
 
@@ -99,7 +99,7 @@ Token 计数端点由目标 llama-server 提供。如果目标版本不支持、
 
 ## 鉴权、权限和 CORS
 
-路由器支持旧版单一 API Key，以及多个具名 API Key。新 Key 自动生成高熵值，保存后只持久化 SHA-256 摘要，原始 Bearer 凭据无法从配置恢复；请在首次保存前复制并交付给客户端。公开凭据在路由边界被移除，目标只会收到该实例自己的 API Key。
+路由器只使用多个具名 API Key，不再保留旧版单一 Key 入口。升级时发现的历史单 Key 会一次性迁移为具名、全权限的新 Key，并立即清空旧字段。新 Key 自动生成高熵值，保存前可通过小眼睛短暂显示 10 秒；保存后只持久化 SHA-256 摘要，原始 Bearer 凭据无法恢复，因此必须在首次保存前复制并交付给客户端。公开凭据在路由边界被移除，目标只会收到该实例自己的 API Key。
 
 客户端可使用：
 
@@ -119,7 +119,9 @@ x-api-key: <router-api-key>
 - `discovery`：根目录、模型发现、健康/就绪、指标、`/props` 和 `/slots`。
 - 空权限列表为兼容用途，等同同时授予两项；生产配置建议显式选择。
 
-CORS 只接受逗号分隔的精确 HTTP(S) Origin，例如 `https://app.example.com`。不支持 `*`、路径、查询参数或 `file:`；列表为空时拒绝所有带 `Origin` 的跨域请求。合法预检返回允许方法、请求头、公开响应头和 10 分钟缓存。
+Origin、Key 与路由分别回答三个问题：哪个网页可以跨域调用、谁在调用、公开模型名映射到哪个实例。三者互相独立，不需要一一绑定。Key 不绑定某个 Origin，也不绑定某条路由；拥有 `inference` 权限的 Key 可以调用全部已发布模型路由，当前不提供逐 Key 的模型白名单。
+
+CORS 只接受逗号分隔的精确 HTTP(S) Origin，例如 `http://localhost:3000` 或 `https://app.example.com`。填写浏览器地址栏中的“协议 + 主机 + 端口”，不要包含路径。不支持 `*`、查询参数或 `file:`；列表为空时拒绝所有带 `Origin` 的跨域请求。允许的 Origin 不会绕过 API Key：配置 Key 后，浏览器请求仍必须携带有效凭据。桌面、CLI 和其他不发送 `Origin` 的客户端不受 CORS 限制。合法预检返回允许方法、请求头、公开响应头和 10 分钟缓存。
 
 内置路由器只允许回环地址。跨机器访问应在本机前置提供 TLS 和访问控制的反向代理、Cloudflare Tunnel、VPN 或 SSH 隧道，不应把明文 HTTP 监听直接暴露到局域网或公网。
 
@@ -131,4 +133,4 @@ CORS 只接受逗号分隔的精确 HTTP(S) Origin，例如 `https://app.example
 
 ## Production router summary
 
-The router exposes native OpenAI Chat Completions, Responses, Completions, embeddings and rerank endpoints together with Anthropic Messages and token counting. Model discovery publishes `context_length`, `context_window`, and vLLM-compatible `max_model_len` using the safe minimum across failover targets. Exact token-count preflight rejects oversized generation requests in OpenAI or Anthropic error format when the target supports counting, while unsupported counters fail open to the target's own validation. Exact public model IDs form a strict security boundary. Priority tiers, round-robin/least-busy/weighted scheduling, active probes, circuit breaking, independent streaming timeouts, concurrency queues, scoped hashed API keys, exact-origin CORS, safe `/props` and `/slots` discovery, request IDs, and Prometheus metrics are built in. The listener remains loopback-only; terminate TLS at a trusted local reverse proxy or tunnel for remote access.
+The router exposes native OpenAI Chat Completions, Responses, Completions, embeddings and rerank endpoints together with Anthropic Messages and token counting. Messages requests require `anthropic-version: 2023-06-01`, and raw SSE responses preserve `text/event-stream`. Model discovery publishes `context_length`, `context_window`, and vLLM-compatible `max_model_len` using the safe minimum across failover targets. Exact token-count preflight rejects oversized generation requests in OpenAI or Anthropic error format when the target supports counting, while unsupported counters fail open to the target's own validation. Exact public model IDs form a strict security boundary. Priority tiers, round-robin/least-busy/weighted scheduling, active probes, circuit breaking, independent streaming timeouts, concurrency queues, scoped hashed API keys, exact-origin CORS, safe `/props` and `/slots` discovery, request IDs, and Prometheus metrics are built in. The listener remains loopback-only; terminate TLS at a trusted local reverse proxy or tunnel for remote access.
