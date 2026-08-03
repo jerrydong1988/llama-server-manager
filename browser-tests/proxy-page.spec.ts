@@ -104,7 +104,30 @@ test('production scheduling and scoped API keys round-trip through the settings 
   await expect(keyInput).toHaveAttribute('type', 'password')
   await expect(page.getByRole('button', { name: '显示新 API Key（10 秒）' })).toBeVisible()
   await expect(page.getByRole('button', { name: '复制新 API Key' })).toBeVisible()
-  await expect(page.getByRole('spinbutton', { name: '每分钟请求数', exact: true })).toHaveValue('0')
+  const rpmInput = page.getByRole('spinbutton', { name: '每分钟请求数', exact: true })
+  await expect(rpmInput).toHaveValue('0')
+
+  const [nameBox, keyBox, rpmBox, revealBox, copyBox, enabledBox, removeBox] = await Promise.all([
+    accessControl.getByRole('textbox', { name: '名称', exact: true }).boundingBox(),
+    keyInput.boundingBox(),
+    rpmInput.boundingBox(),
+    accessControl.getByRole('button', { name: '显示新 API Key（10 秒）' }).boundingBox(),
+    accessControl.getByRole('button', { name: '复制新 API Key' }).boundingBox(),
+    accessControl.getByRole('switch', { name: '已启用' }).boundingBox(),
+    accessControl.getByRole('button', { name: '删除 API Key' }).boundingBox(),
+  ])
+  for (const box of [nameBox, keyBox, rpmBox, revealBox, copyBox, enabledBox, removeBox]) expect(box).not.toBeNull()
+  expect(Math.abs(nameBox!.y - keyBox!.y)).toBeLessThanOrEqual(1)
+  expect(Math.abs(rpmBox!.y - keyBox!.y)).toBeLessThanOrEqual(1)
+  const keyCenterY = keyBox!.y + keyBox!.height / 2
+  for (const [control, box] of [
+    ['reveal', revealBox!],
+    ['copy', copyBox!],
+    ['enabled', enabledBox!],
+    ['remove', removeBox!],
+  ] as const) {
+    expect(Math.abs(box.y + box.height / 2 - keyCenterY), `${control} control should share the input centerline`).toBeLessThanOrEqual(1)
+  }
   await page.getByRole('textbox', { name: /允许的 CORS Origin/ }).fill('https://app.example.com')
   await page.getByRole('button', { name: '保存' }).click()
 

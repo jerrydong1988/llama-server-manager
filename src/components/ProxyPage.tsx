@@ -1113,10 +1113,14 @@ export default function ProxyPage() {
             <div className="mt-4 space-y-3">
               {draft.apiKeys.length === 0 ? <EmptyPanel title={labels.noApiKeys} /> : draft.apiKeys.map(apiKey => (
                 <div key={apiKey.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-800 dark:bg-slate-950/70">
-                  <div className="grid gap-3 lg:grid-cols-[180px_minmax(220px,1fr)_140px_auto]">
-                    <TextInput aria-label={labels.apiKeyName} value={apiKey.name} placeholder={labels.apiKeyName} onChange={event => updateApiKey(apiKey.id, { name: event.target.value })} />
+                  <div className="grid gap-3 lg:grid-cols-[180px_minmax(220px,1fr)_160px_auto] lg:items-start">
+                    <label className="min-w-0">
+                      <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.apiKeyName}</span>
+                      <TextInput aria-label={labels.apiKeyName} value={apiKey.name} placeholder={labels.apiKeyName} onChange={event => updateApiKey(apiKey.id, { name: event.target.value })} />
+                    </label>
                     <div className="min-w-0">
-                      <div className="flex min-w-0 gap-2">
+                      <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.apiKeyValue}</span>
+                      <div className="flex min-w-0 items-center gap-2">
                         <TextInput
                           aria-label={labels.apiKeyValue}
                           type={revealedSecretId === `api:${apiKey.id}` && !isStoredApiKey(apiKey.key) ? 'text' : 'password'}
@@ -1141,7 +1145,7 @@ export default function ProxyPage() {
                       <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.apiKeyRequestsPerMinute}</span>
                       <TextInput type="number" min={0} value={apiKey.requestsPerMinute} onChange={event => updateApiKey(apiKey.id, { requestsPerMinute: Math.max(0, Number(event.target.value) || 0) })} />
                     </label>
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex h-11 items-center justify-end gap-2 lg:mt-5">
                       <button
                         type="button"
                         role="switch"
