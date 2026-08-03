@@ -3,6 +3,7 @@ import { invokeApp as invoke } from '../../lib/ipc'
 import { Activity, AlertTriangle, BarChart3, Clock, Cpu, FastForward, Gauge, HardDrive, Radio, RefreshCw, Server, Zap } from 'lucide-react'
 import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
+import { pathsEqual } from '../../utils/path'
 import { useI18n } from '../../i18n'
 import { getPerformanceLabels, getSpeculativeDecodingLabels } from '../../i18n/pageLabels'
 import type {
@@ -765,8 +766,8 @@ function buildSessionBenchmark(selectedSession: TelemetrySessionSummary | undefi
   )
   const sameConfig = history.filter(session =>
     session.config_hash === selectedSession.config_hash &&
-    session.model_path === selectedSession.model_path &&
-    session.engine_id === selectedSession.engine_id &&
+    pathsEqual(session.model_path, selectedSession.model_path) &&
+    pathsEqual(session.engine_id, selectedSession.engine_id) &&
     session.backend === selectedSession.backend &&
     session.workload === selectedSession.workload
   )

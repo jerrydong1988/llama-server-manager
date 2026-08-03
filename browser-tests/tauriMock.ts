@@ -480,6 +480,11 @@ if (BROWSER_SCENARIO === 'multimodal-mismatch') {
 if (BROWSER_SCENARIO === 'empty-model-roots') {
   state.model_dirs = []
 }
+if (BROWSER_SCENARIO === 'windows-path-aliases') {
+  engine.dir = '\\\\?\\c:\\browser-test\\engine\\build'
+  engine.exe = `${engine.dir}\\llama-server.exe`
+  model.path = '\\\\?\\c:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf'
+}
 if (BROWSER_SCENARIO === 'empty-alias') {
   state.instances[INSTANCE_ID].alias = ''
   state.instances[INSTANCE_ID].explicit_overrides = (

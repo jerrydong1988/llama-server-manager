@@ -1,5 +1,6 @@
 use crate::commands::model_inventory;
 use crate::models::{AppState, EngineCapabilities, EngineInfo};
+use crate::path_utils::{path_identity_key, paths_equal};
 use std::collections::{BTreeSet, HashMap};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
@@ -392,10 +393,7 @@ pub(crate) fn executable_fingerprint(executable: &str) -> String {
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
         .map(|duration| duration.as_nanos())
         .unwrap_or(0);
-    #[cfg(windows)]
-    let normalized_path = path.to_string_lossy().to_ascii_lowercase();
-    #[cfg(not(windows))]
-    let normalized_path = path.to_string_lossy().into_owned();
+    let normalized_path = path_identity_key(&path);
 
     let mut hash = 0xcbf29ce484222325_u64;
     update_fingerprint_hash(&mut hash, normalized_path.as_bytes());
@@ -874,7 +872,12 @@ pub async fn probe_engine_capabilities(
         .lock()
         .unwrap()
         .iter()
-        .find(|engine| engine.id == engine_id)
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.id),
+                std::path::Path::new(&engine_id),
+            )
+        })
         .cloned()
         .ok_or_else(|| "engine not found".to_string())?;
     let authorized_root =
@@ -886,13 +889,18 @@ pub async fn probe_engine_capabilities(
     let mut engines = state.engines.lock().unwrap();
     let current = engines
         .iter_mut()
-        .find(|engine| engine.id == probed.id)
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.id),
+                std::path::Path::new(&probed.id),
+            )
+        })
         .ok_or_else(|| "engine was removed while capability probing was in progress".to_string())?;
     let current_path =
         std::fs::canonicalize(&current.exe).unwrap_or_else(|_| current.exe.clone().into());
     let probed_path =
         std::fs::canonicalize(&probed.exe).unwrap_or_else(|_| probed.exe.clone().into());
-    if current_path != probed_path {
+    if !paths_equal(&current_path, &probed_path) {
         return Err(
             "engine executable changed while capability probing was in progress".to_string(),
         );

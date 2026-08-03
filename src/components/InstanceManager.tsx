@@ -12,6 +12,7 @@ import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
 import { CommandFeedbackModal, MissingEngineBanner } from './InstanceManager/CommandFeedbackModal'
 import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engineResolution'
 import { markExplicitOverride } from '../parameterIntent'
+import { pathsEqual } from '../utils/path'
 
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
@@ -104,7 +105,7 @@ const InstanceManager = () => {
     return instances.filter(inst => {
       if (statusFilter === 'running' && inst.status !== 'running') return false
       if (statusFilter === 'stopped' && inst.status === 'running') return false
-      if (engineFilter !== 'all' && (inst.config.engine_id || defaultEngineId || '') !== engineFilter) return false
+      if (engineFilter !== 'all' && !pathsEqual(inst.config.engine_id || defaultEngineId || '', engineFilter)) return false
       if (!query) return true
       return inst.name.toLowerCase().includes(query)
         || inst.model.toLowerCase().includes(query)
@@ -861,7 +862,7 @@ const InstanceManager = () => {
                       void useAppStore.getState().saveConfig().catch(() => {})
                       setEnginePickerForId('')
                     }}
-                    className={`w-full rounded px-4 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800 ${(inst.config.engine_id || defaultEngineId) === engine.id ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300' : ''}`}
+                    className={`w-full rounded px-4 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800 ${pathsEqual(inst.config.engine_id || defaultEngineId || '', engine.id) ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300' : ''}`}
                   >
                     {engine.name} <span className="text-xs text-slate-400">({engine.backend})</span>
                   </button>

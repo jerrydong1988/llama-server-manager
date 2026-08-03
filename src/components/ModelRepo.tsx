@@ -5,7 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAppStore, type ModelInfo } from '../store'
 import { invokeApp as invoke } from '../lib/ipc'
 import { formatMessage, useI18n } from '../i18n'
-import { isPathWithinRoot, normalizePath, pathJoin } from '../utils/path'
+import { dedupePaths, isPathWithinRoot, normalizePath, pathJoin, pathsEqual } from '../utils/path'
 import { formatSize } from '../utils/format'
 import { Button, InsetSurface, MetricCard, PathText, Surface, TextInput } from './ui'
 
@@ -168,13 +168,16 @@ const ModelRepo = () => {
       setSelectedPath(models[0].path)
       return
     }
-    if (selectedPath && !models.some(model => model.path === selectedPath)) {
+    if (selectedPath && !models.some(model => pathsEqual(model.path, selectedPath))) {
       setSelectedPath(models[0]?.path ?? null)
     }
   }, [models, selectedPath])
 
   const trees = useMemo(() => modelDirs.map(dir => buildTree(dir, models)), [modelDirs, models])
-  const selectedModel = useMemo(() => models.find(model => model.path === selectedPath) ?? null, [models, selectedPath])
+  const selectedModel = useMemo(
+    () => models.find(model => selectedPath && pathsEqual(model.path, selectedPath)) ?? null,
+    [models, selectedPath],
+  )
   const matchingPaths = useMemo(() => {
     const paths = new Set<string>()
     if (!searchQuery) return paths
@@ -236,7 +239,7 @@ const ModelRepo = () => {
         return
       }
 
-      const nextDirs = [...new Set([...modelDirs, dir])]
+      const nextDirs = dedupePaths([...modelDirs, dir])
       setModelDirs(nextDirs)
       const error = await scanModels(nextDirs)
       setScanError(error ?? '')
@@ -252,7 +255,7 @@ const ModelRepo = () => {
       return
     }
 
-    const nextDirs = modelDirs.filter(item => item !== dir)
+    const nextDirs = modelDirs.filter(item => !pathsEqual(item, dir))
     setModelDirs(nextDirs)
     const error = await scanModels(nextDirs)
     setScanError(error ?? '')
@@ -315,7 +318,7 @@ const ModelRepo = () => {
     }
 
     const model = node.model!
-    const isSelected = selectedPath === model.path
+    const isSelected = Boolean(selectedPath && pathsEqual(selectedPath, model.path))
     const kindLabel = model.file_type === 'mmproj'
       ? t.modelRepo.typeMmprojShort
       : model.file_type === 'imatrix'

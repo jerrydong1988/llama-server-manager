@@ -2,6 +2,7 @@ import { invokeApp as invoke } from '../lib/ipc'
 import { mergeRestoredDownloadTask } from './downloadMerge'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import type { AppState, DownloadProgress, MsFileEntry, PersistedQueueEntry } from './types'
+import { pathsEqual } from '../utils/path'
 
 type ResumeDownloadTaskResult = {
   taskId: string
@@ -23,7 +24,7 @@ const findTaskForFile = (
   task.source === source
   && task.repoId === repoId
   && task.remotePath === taskRemotePath(file)
-  && task.saveDir === saveDir
+  && pathsEqual(task.saveDir, saveDir)
 ))
 
 const queueHasTask = (
@@ -35,7 +36,7 @@ const queueHasTask = (
 ) => queue.some((entry) => (
   entry.source === source
   && entry.repoId === repoId
-  && entry.saveDir === saveDir
+  && pathsEqual(entry.saveDir, saveDir)
   && entry.files.some((queuedFile) => (
     (queuedFile.task_id && queuedFile.task_id === file.task_id)
     || taskRemotePath(queuedFile) === taskRemotePath(file)

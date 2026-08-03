@@ -1,5 +1,5 @@
 import type { ModelInfo } from './store/types'
-import { pathDirname } from './utils/path'
+import { pathDirname, pathsEqual } from './utils/path'
 
 export type ProjectorMatchConfidence = 'exact' | 'compatible' | 'weak' | 'unknown' | 'mismatch'
 
@@ -80,10 +80,10 @@ export function assessProjectorMatch(model: ModelInfo, projector: ModelInfo | nu
   if (modelFamily && projectorFamily && modelFamily === projectorFamily) {
     return { confidence: 'compatible', reason: 'family' }
   }
-  if (sharesVisualTag(model, projector) && pathDirname(model.path) === pathDirname(projector.path)) {
+  if (sharesVisualTag(model, projector) && pathsEqual(pathDirname(model.path), pathDirname(projector.path))) {
     return { confidence: 'compatible', reason: 'modality-tags' }
   }
-  if (pathDirname(model.path) === pathDirname(projector.path)) {
+  if (pathsEqual(pathDirname(model.path), pathDirname(projector.path))) {
     return { confidence: 'weak', reason: 'same-directory' }
   }
   return { confidence: 'unknown', reason: 'unavailable' }
@@ -91,7 +91,7 @@ export function assessProjectorMatch(model: ModelInfo, projector: ModelInfo | nu
 
 export function findMatchingProjector(model: ModelInfo, models: ModelInfo[]): ModelInfo | null {
   const candidates = models.filter(candidate => (
-    isProjector(candidate) && pathDirname(candidate.path) === pathDirname(model.path)
+    isProjector(candidate) && pathsEqual(pathDirname(candidate.path), pathDirname(model.path))
   ))
   const score: Record<ProjectorMatchConfidence, number> = { mismatch: -1, unknown: 0, weak: 1, compatible: 2, exact: 3 }
   const ranked = candidates.map(projector => ({ projector, match: assessProjectorMatch(model, projector) }))

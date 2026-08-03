@@ -3,6 +3,7 @@ use crate::commands::model_inventory::{
     self, InventoryDirectoryRecord, InventoryEngineRecord, InventoryModelRecord,
 };
 use crate::models::{AppState, EngineInfo, InstanceConfig, ModelCapabilities, ModelInfo};
+use crate::path_utils::{path_identity_key, path_is_within, paths_equal};
 use crate::utils;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
@@ -26,15 +27,8 @@ fn canonical_key(path: &Path) -> String {
 }
 
 fn engine_path_identity(path: &Path) -> String {
-    let key = canonical_key(path);
-    #[cfg(target_os = "windows")]
-    {
-        key.to_lowercase()
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        key
-    }
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    path_identity_key(&canonical)
 }
 
 fn instances_referencing_model(
@@ -64,7 +58,7 @@ fn instances_referencing_engine(
 ) -> Vec<String> {
     instances
         .values()
-        .filter(|instance| instance.engine_id == engine_id)
+        .filter(|instance| paths_equal(Path::new(&instance.engine_id), Path::new(engine_id)))
         .map(|instance| instance.name.clone())
         .collect()
 }
@@ -180,13 +174,16 @@ fn read_directory_tree_signature(path: &Path, max_depth: usize) -> Result<String
 }
 
 fn path_is_under_directory(path: &Path, directory: &Path) -> bool {
-    let path_components = path.components().collect::<Vec<_>>();
-    let directory_components = directory.components().collect::<Vec<_>>();
-    path_components.len() > directory_components.len()
-        && path_components
+    !paths_equal(path, directory) && path_is_within(path, directory)
+}
+
+fn saved_engine_name<'a>(names: &'a HashMap<String, String>, id: &str) -> Option<&'a String> {
+    names.get(id).or_else(|| {
+        names
             .iter()
-            .zip(directory_components.iter())
-            .all(|(left, right)| left == right)
+            .find(|(saved_id, _)| paths_equal(Path::new(saved_id), Path::new(id)))
+            .map(|(_, name)| name)
+    })
 }
 
 fn cached_models_under_directory(
@@ -316,9 +313,8 @@ fn merge_scanned_engine_capabilities(scanned: &mut [EngineInfo], current: &[Engi
         }
 
         let Some(active) = current.iter().find(|candidate| {
-            candidate.id == engine.id
-                && engine_path_identity(Path::new(&candidate.exe))
-                    == engine_path_identity(Path::new(&engine.exe))
+            paths_equal(Path::new(&candidate.id), Path::new(&engine.id))
+                && paths_equal(Path::new(&candidate.exe), Path::new(&engine.exe))
         }) else {
             continue;
         };
@@ -375,7 +371,7 @@ fn scan_model_directory_incremental(
         let mut reused = 0;
         for record in cached_models_under_directory(&dir_key, inventory) {
             let mut model = record.to_model_info();
-            if !seen_display_paths.insert(model.path.clone()) {
+            if !seen_display_paths.insert(path_identity_key(Path::new(&model.path))) {
                 continue;
             }
             model.is_shard = false;
@@ -449,7 +445,7 @@ fn scan_model_directory_incremental(
         }
 
         let file_path = entry.path.to_string_lossy().to_string();
-        if !seen_display_paths.insert(file_path.clone()) {
+        if !seen_display_paths.insert(path_identity_key(Path::new(&file_path))) {
             continue;
         }
 
@@ -585,13 +581,18 @@ pub async fn scan_models(
     let scan_paths = scan_paths
         .into_iter()
         .map(|path| {
-            if path == default_path_for_check && !path.exists() {
+            if paths_equal(&path, &default_path_for_check) && !path.exists() {
                 Ok(path)
             } else {
                 crate::security::require_authorized_model_root(&path)
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut seen_scan_roots = HashSet::new();
+    let scan_paths = scan_paths
+        .into_iter()
+        .filter(|path| seen_scan_roots.insert(path_identity_key(path)))
+        .collect::<Vec<_>>();
 
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<ModelInfo>, Vec<String>> {
         let (inventory, directory_inventory) =
@@ -609,7 +610,7 @@ pub async fn scan_models(
         for scan_root in &scan_paths {
             let root_str = scan_root.display().to_string();
             if !scan_root.exists() {
-                if *scan_root == default_path_for_check {
+                if paths_equal(scan_root, &default_path_for_check) {
                     continue;
                 }
                 errors.push(format!("{} does not exist", root_str));
@@ -783,7 +784,7 @@ pub async fn get_cached_scan(
     {
         let saved_names = state.engine_names.lock().unwrap();
         for engine in &mut engines {
-            if let Some(cn) = saved_names.get(&engine.id) {
+            if let Some(cn) = saved_engine_name(&saved_names, &engine.id) {
                 engine.custom_name = Some(cn.clone());
                 engine.name = cn.clone();
             }
@@ -832,7 +833,8 @@ pub async fn delete_model_file(
     let state_models = state.models.lock().unwrap();
     let is_known = state_models
         .iter()
-        .any(|m| std::fs::canonicalize(&m.path).ok().as_ref() == Some(&canonical));
+        .filter_map(|model| std::fs::canonicalize(&model.path).ok())
+        .any(|model_path| paths_equal(&model_path, &canonical));
     drop(state_models);
     if !is_known {
         return Err("文件不在已扫描的模型列表中".to_string());
@@ -847,7 +849,11 @@ pub async fn delete_model_file(
     std::fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
     let _ = model_inventory::delete_model(&canonical.to_string_lossy());
     let mut models = state.models.lock().unwrap();
-    models.retain(|m| std::fs::canonicalize(&m.path).ok().as_ref() != Some(&canonical));
+    models.retain(|model| {
+        std::fs::canonicalize(&model.path)
+            .map(|model_path| !paths_equal(&model_path, &canonical))
+            .unwrap_or(true)
+    });
     Ok(())
 }
 
@@ -900,6 +906,11 @@ pub async fn scan_engines(
                 .map(|canonical| canonical.to_string_lossy().to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
+    let mut seen_scan_roots = HashSet::new();
+    let paths = paths
+        .into_iter()
+        .filter(|path| seen_scan_roots.insert(path_identity_key(Path::new(path))))
+        .collect::<Vec<_>>();
     let mut engines = tokio::task::spawn_blocking(move || -> Result<Vec<EngineInfo>, String> {
         let (inventory, directory_inventory) = model_inventory::load_engine_scan_indexes()?;
         let mut engines: Vec<EngineInfo> = Vec::new();
@@ -1058,7 +1069,7 @@ pub async fn scan_engines(
     {
         let saved_names = state.engine_names.lock().unwrap();
         for engine in &mut engines {
-            if let Some(cn) = saved_names.get(&engine.id) {
+            if let Some(cn) = saved_engine_name(&saved_names, &engine.id) {
                 engine.custom_name = Some(cn.clone());
                 engine.name = cn.clone();
             }
@@ -1224,6 +1235,32 @@ mod incremental_scan_tests {
         );
         assert!(instances_referencing_engine(&instances, "engine-2").is_empty());
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn engine_references_and_names_accept_windows_namespace_aliases() {
+        let stored = r"\\?\C:\Engines\llama-server";
+        let configured = r"c:\engines\llama-server\";
+        let mut instances = HashMap::new();
+        instances.insert(
+            "primary".into(),
+            InstanceConfig {
+                name: "Primary".into(),
+                engine_id: configured.into(),
+                ..InstanceConfig::default()
+            },
+        );
+        assert_eq!(
+            instances_referencing_engine(&instances, stored),
+            vec!["Primary"]
+        );
+
+        let names = HashMap::from([(configured.to_string(), "Custom".to_string())]);
+        assert_eq!(
+            saved_engine_name(&names, stored).map(String::as_str),
+            Some("Custom")
+        );
+    }
 }
 
 pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
@@ -1235,8 +1272,13 @@ pub async fn delete_engine(id: String, state: tauri::State<'_, AppState>) -> Res
         ));
     }
     let mut engines = state.engines.lock().unwrap();
-    engines.retain(|e| e.id != id);
-    let _ = model_inventory::delete_engine(&id);
+    let stored_id = engines
+        .iter()
+        .find(|engine| paths_equal(Path::new(&engine.id), Path::new(&id)))
+        .map(|engine| engine.id.clone())
+        .unwrap_or_else(|| id.clone());
+    engines.retain(|engine| !paths_equal(Path::new(&engine.id), Path::new(&id)));
+    let _ = model_inventory::delete_engine(&stored_id);
     Ok(())
 }
 
@@ -1246,11 +1288,22 @@ pub async fn rename_engine(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let mut engines = state.engines.lock().unwrap();
-    if let Some(engine) = engines.iter_mut().find(|e| e.id == id) {
+    let Some(engine) = engines
+        .iter_mut()
+        .find(|engine| paths_equal(Path::new(&engine.id), Path::new(&id)))
+    else {
+        return Err("未找到要重命名的引擎".to_string());
+    };
+    let stored_id = engine.id.clone();
+    {
         engine.custom_name = Some(name.clone());
         engine.name = name.clone();
     }
-    state.engine_names.lock().unwrap().insert(id, name);
+    drop(engines);
+    let mut engine_names = state.engine_names.lock().unwrap();
+    engine_names.retain(|saved_id, _| !paths_equal(Path::new(saved_id), Path::new(&stored_id)));
+    engine_names.insert(stored_id, name);
+    drop(engine_names);
     // Persist engine names immediately using unified atomic writes to avoid race conditions.
     crate::commands::config::update_and_persist(&state, |global| {
         global.engine_names = state.engine_names.lock().unwrap().clone();

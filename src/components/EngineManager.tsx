@@ -10,7 +10,7 @@ import {
   normalizeEngineCapabilityStatus,
   normalizeEngineVersionStatus,
 } from '../engineCapabilities'
-import { isPathWithinRoot } from '../utils/path'
+import { dedupePaths, isPathWithinRoot, pathsEqual } from '../utils/path'
 import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
 const backendTone = (backend: string) => {
@@ -67,7 +67,7 @@ const EngineManager = () => {
       setSelectedEngineId(defaultEngineId ?? engines[0].id)
       return
     }
-    if (selectedEngineId && !engines.some(engine => engine.id === selectedEngineId)) {
+    if (selectedEngineId && !engines.some(engine => pathsEqual(engine.id, selectedEngineId))) {
       setSelectedEngineId(defaultEngineId ?? engines[0]?.id ?? null)
     }
   }, [defaultEngineId, engines, selectedEngineId])
@@ -96,7 +96,7 @@ const EngineManager = () => {
   }, [backendFilter, engines, searchQuery])
 
   const selectedEngine = useMemo(
-    () => engines.find(engine => engine.id === selectedEngineId) ?? null,
+    () => engines.find(engine => selectedEngineId && pathsEqual(engine.id, selectedEngineId)) ?? null,
     [engines, selectedEngineId],
   )
 
@@ -109,7 +109,7 @@ const EngineManager = () => {
       const dir = await invoke<string | null>('pick_authorized_directory', { purpose: 'engine' })
       if (!dir) return
 
-      const nextDirs = [...new Set([...engineDirs, dir])]
+      const nextDirs = dedupePaths([...engineDirs, dir])
       setEngineDirs(nextDirs)
       await scanEngines(nextDirs)
     } catch {
@@ -118,8 +118,10 @@ const EngineManager = () => {
   }
 
   const handleRemoveDir = async (dir: string) => {
-    const removedEngineIds = new Set(engines.filter(engine => isPathWithinRoot(engine.dir, dir)).map(engine => engine.id))
-    const referenced = useAppStore.getState().instances.filter(instance => removedEngineIds.has(instance.config.engine_id))
+    const removedEngines = engines.filter(engine => isPathWithinRoot(engine.dir, dir))
+    const referenced = useAppStore.getState().instances.filter(instance => (
+      removedEngines.some(engine => pathsEqual(engine.id, instance.config.engine_id))
+    ))
     if (referenced.length > 0) {
       await message(formatMessage(t.engineMgr.removeDirInUse, { count: referenced.length }), { title: t.engineMgr.removeDirInUseTitle, kind: 'warning' })
       return
@@ -127,7 +129,7 @@ const EngineManager = () => {
     const confirmed = await confirm(t.engineMgr.removeDirConfirm, { title: t.engineMgr.remove, kind: 'warning' })
     if (!confirmed) return
 
-    const nextDirs = engineDirs.filter(item => item !== dir)
+    const nextDirs = engineDirs.filter(item => !pathsEqual(item, dir))
     setEngineDirs(nextDirs)
     await scanEngines(nextDirs)
   }
@@ -140,7 +142,7 @@ const EngineManager = () => {
     if (!confirmed) return
 
     await deleteEngine(id)
-    if (defaultEngineId === id) {
+    if (defaultEngineId && pathsEqual(defaultEngineId, id)) {
       setDefaultEngineId(null)
     }
   }
@@ -260,7 +262,7 @@ const EngineManager = () => {
                         {dir}
                       </p>
                       <p className="mt-1 text-xs text-slate-500">
-                        {engines.filter(engine => engine.dir.startsWith(dir)).length} {labels.discovered}
+                        {engines.filter(engine => isPathWithinRoot(engine.dir, dir)).length} {labels.discovered}
                       </p>
                     </div>
                     <button
@@ -338,8 +340,8 @@ const EngineManager = () => {
               </div>
               <div className="divide-y divide-slate-800 bg-slate-950/30">
                 {filteredEngines.map(engine => {
-                  const isSelected = selectedEngineId === engine.id
-                  const isDefault = defaultEngineId === engine.id
+                  const isSelected = Boolean(selectedEngineId && pathsEqual(selectedEngineId, engine.id))
+                  const isDefault = Boolean(defaultEngineId && pathsEqual(defaultEngineId, engine.id))
                   return (
                     <div
                       key={engine.id}
@@ -496,8 +498,8 @@ const EngineManager = () => {
                   [labels.lastProbe, selectedEngine.capabilities?.probedAt
                     ? new Date(selectedEngine.capabilities.probedAt * 1000).toLocaleString(lang)
                     : labels.never],
-                  [labels.default, defaultEngineId === selectedEngine.id ? (labels.yes) : (labels.no)],
-                  [labels.scanRoot, engineDirs.find(dir => selectedEngine.dir.startsWith(dir)) || '--'],
+                  [labels.default, defaultEngineId && pathsEqual(defaultEngineId, selectedEngine.id) ? labels.yes : labels.no],
+                  [labels.scanRoot, engineDirs.find(dir => isPathWithinRoot(selectedEngine.dir, dir)) || '--'],
                 ].map(([label, value]) => (
                   <div key={label} className="flex items-center justify-between gap-3">
                     <span className="text-sm text-slate-500">{label}</span>
@@ -537,7 +539,7 @@ const EngineManager = () => {
                   variant="primary"
                   icon={<Star className="h-4 w-4" />}
                 >
-                  {defaultEngineId === selectedEngine.id ? t.engineMgr.defaultEngine : t.engineMgr.setDefault}
+                  {defaultEngineId && pathsEqual(defaultEngineId, selectedEngine.id) ? t.engineMgr.defaultEngine : t.engineMgr.setDefault}
                 </Button>
                 <Button
                   onClick={() => openEngineFolder(selectedEngine.dir)}
