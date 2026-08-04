@@ -9,6 +9,7 @@ import WorkerSelector from './WorkerSelector'
 import { Button, TextInput } from '../ui'
 import { getResettableFields, type ModelWorkload } from '../../modelPolicy'
 import { formatPathForDisplay } from '../../utils/path'
+import { projectorEnabled } from '../../configSemantics'
 
 const formGridClassName = 'config-form-grid'
 const wideGridClassName = 'config-form-grid'
@@ -587,7 +588,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
           </div>
         </CollapsibleGroup>
 
-        {/* 服务扩展 (7) */}
+        {/* 服务扩展 */}
         <CollapsibleGroup id="config-advanced-server-ext" title={t.configPage.subAdvServerExt} onReset={() => resetGroup('advancedServerExt')} summary={summary(ADVANCED_GROUP_CONFIG_KEYS.advancedServerExt)}>
           <div className={formGridClassName}>
             <Switch label={`${t.configPage.slotsEnabled} (--slots / --no-slots)`} value={local.slots_enabled} onChange={v => set('slots_enabled', v)} title={t.configPage.slotsEnabledTip} fieldKey={a('slots_enabled')} />
@@ -602,6 +603,8 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Input label={`${t.configPage.uiConfig} (--ui-config)`} value={local.ui_config} onChange={v => set('ui_config', v)} title={t.configPage.uiConfigTip}  fieldKey={a('ui_config')} />
             <Switch label={`${t.configPage.uiMcpProxy} (--ui-mcp-proxy)`} value={local.ui_mcp_proxy} onChange={v => set('ui_mcp_proxy', v)} title={t.configPage.uiMcpProxyTip}  fieldKey={a('ui_mcp_proxy')} />
             <Switch label={`${t.configPage.agent} (--agent)`} value={local.agent} onChange={v => set('agent', v)} title={t.configPage.agentTip}  fieldKey={a('agent')} />
+            <Input label={`${t.configPage.mcpServersConfig} (--mcp-servers-config)`} value={formatPathForDisplay(local.mcp_servers_config)} onChange={v => set('mcp_servers_config', v)} title={t.configPage.mcpServersConfigTip} fieldKey={a('mcp_servers_config')} />
+            <Input label={`${t.configPage.mcpServersJson} (--mcp-servers-json)`} value={local.mcp_servers_json} onChange={v => set('mcp_servers_json', v)} title={t.configPage.mcpServersJsonTip} fieldKey={a('mcp_servers_json')} />
             </>)}
           </div>
           <div className={`${formGridClassName} mt-3`}>
@@ -623,7 +626,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Switch label={`${t.configPage.modelsAutoload} (--models-autoload)`} value={local.models_autoload} onChange={v => set('models_autoload', v)} title={t.configPage.modelsAutoloadTip}  fieldKey={a('models_autoload')} />
             <Input label={`${t.configPage.mmprojUrl} (--mmproj-url)`} value={local.mmproj_url} onChange={v => set('mmproj_url', v)} title={t.configPage.mmprojUrlTip} disabled={isEmbedding}  fieldKey={a('mmproj_url')} />
             <Select label={`${t.configPage.mmprojAuto} (--mmproj-auto)`} value={local.mmproj_mode || (local.no_mmproj ? 'off' : local.mmproj_auto ? 'on' : '')} onChange={v => { set('mmproj_mode', v); set('mmproj_auto', v === 'on'); set('no_mmproj', v === 'off') }} options={['', 'on', 'off']} title={t.configPage.mmprojAutoTip} defaultLabel={t.common.default} disabled={isEmbedding} fieldKey={a('mmproj_mode')} />
-      <Switch label={`${t.configPage.noMmprojOffload} (--mmproj-offload / --no-mmproj-offload)`} value={!local.no_mmproj_offload} onChange={v => set('no_mmproj_offload', !v)} title={t.configPage.noMmprojOffloadTip} disabled={isEmbedding || (!local.mmproj_path && !local.mmproj_url && (local.mmproj_mode || (local.no_mmproj ? 'off' : local.mmproj_auto ? 'on' : '')) === 'off')}  fieldKey={a('no_mmproj_offload')} />
+      <Switch label={`${t.configPage.noMmprojOffload} (--mmproj-offload / --no-mmproj-offload)`} value={!local.no_mmproj_offload} onChange={v => set('no_mmproj_offload', !v)} title={t.configPage.noMmprojOffloadTip} disabled={!projectorEnabled(local, isEmbedding)}  fieldKey={a('no_mmproj_offload')} />
             <IntentNum
               label={`${t.configPage.imageMinTokens} (--image-min-tokens)`}
               value={local.image_min_tokens}

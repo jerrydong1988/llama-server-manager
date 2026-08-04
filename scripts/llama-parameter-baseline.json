@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-08-03",
+  "verifiedAt": "2026-08-04",
   "source": "https://github.com/ggerganov/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10241",
-  "upstreamCommit": "9bd4c09ea571a9020f30eeef169b552625b5b5a4",
-  "upstreamMasterChecked": "dbadb68eecdfb3ab0e86872d011738fc937f0364",
+  "upstreamRelease": "b10267",
+  "upstreamCommit": "7bd8282c37fcd9c4d7236106d664761a23318f18",
+  "upstreamMasterChecked": "07132750825a4f2d27a547cd9cdde1c6f6001885",
   "releaseSnapshot": {
-    "ref": "b10241",
-    "commit": "9bd4c09ea571a9020f30eeef169b552625b5b5a4",
-    "parameterCount": 248,
-    "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
+    "ref": "b10267",
+    "commit": "7bd8282c37fcd9c4d7236106d664761a23318f18",
+    "parameterCount": 250,
+    "snapshotHash": "f9ddc1f3fab28acc5ee769759c7b88b0b9d14504f97a79e262cd59748720a03b",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -916,6 +916,22 @@
         ],
         "synopsisHash": "05c82898ca84ce94fa2e4c3453baf999b323548034ab0e3e416677d636387cbd",
         "descriptionHash": "d2cee3d7c0b6e5d3c3e30705ba7a9ab74fb9ce5d4000d02d83015dbbabaef78a"
+      },
+      {
+        "canonical": "--mcp-servers-config",
+        "aliases": [
+          "--mcp-servers-config"
+        ],
+        "synopsisHash": "d616ce1de9a5799b2d5e39ba51daeb7e628322480e1b3fa945d96e32ddc3a1c1",
+        "descriptionHash": "22f9e2ab34a070f8ad797fc43b6bb75e489ac0b3d878b66c9ea0229af378f5e3"
+      },
+      {
+        "canonical": "--mcp-servers-json",
+        "aliases": [
+          "--mcp-servers-json"
+        ],
+        "synopsisHash": "7f2d319a9986f91f26d6fd1d4d7e1287a23d1309fc8e67a96143c16bbb67a5a8",
+        "descriptionHash": "88bc1fe36822f6f8d0076d4079a974786f1e13d0987771794da6e7a1f409ae78"
       },
       {
         "canonical": "--media-path",
@@ -1959,7 +1975,7 @@
           "--tools"
         ],
         "synopsisHash": "de9d3b68eb5cb89492a1812a8940cd94b9b737d767fc90889fbb74ae8fdc6ed5",
-        "descriptionHash": "ea2061054bcf559efd9d0d707143923cda0c6272867743d8fc94922907ec09e5"
+        "descriptionHash": "8f450cbd74c44e3b04b27949ec476fb890cab9cbf9cf90be9c28583570aeceb5"
       },
       {
         "canonical": "--top-k",
@@ -2165,9 +2181,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "dbadb68eecdfb3ab0e86872d011738fc937f0364",
-    "parameterCount": 248,
-    "snapshotHash": "cae22ceece4621d03fe568fa7d4dbf32788ac99e2e3ae7c8e5c7e4fec1b1553b",
+    "commit": "07132750825a4f2d27a547cd9cdde1c6f6001885",
+    "parameterCount": 250,
+    "snapshotHash": "f9ddc1f3fab28acc5ee769759c7b88b0b9d14504f97a79e262cd59748720a03b",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -3069,6 +3085,22 @@
         ],
         "synopsisHash": "05c82898ca84ce94fa2e4c3453baf999b323548034ab0e3e416677d636387cbd",
         "descriptionHash": "d2cee3d7c0b6e5d3c3e30705ba7a9ab74fb9ce5d4000d02d83015dbbabaef78a"
+      },
+      {
+        "canonical": "--mcp-servers-config",
+        "aliases": [
+          "--mcp-servers-config"
+        ],
+        "synopsisHash": "d616ce1de9a5799b2d5e39ba51daeb7e628322480e1b3fa945d96e32ddc3a1c1",
+        "descriptionHash": "22f9e2ab34a070f8ad797fc43b6bb75e489ac0b3d878b66c9ea0229af378f5e3"
+      },
+      {
+        "canonical": "--mcp-servers-json",
+        "aliases": [
+          "--mcp-servers-json"
+        ],
+        "synopsisHash": "7f2d319a9986f91f26d6fd1d4d7e1287a23d1309fc8e67a96143c16bbb67a5a8",
+        "descriptionHash": "88bc1fe36822f6f8d0076d4079a974786f1e13d0987771794da6e7a1f409ae78"
       },
       {
         "canonical": "--media-path",
@@ -4112,7 +4144,7 @@
           "--tools"
         ],
         "synopsisHash": "de9d3b68eb5cb89492a1812a8940cd94b9b737d767fc90889fbb74ae8fdc6ed5",
-        "descriptionHash": "ea2061054bcf559efd9d0d707143923cda0c6272867743d8fc94922907ec09e5"
+        "descriptionHash": "8f450cbd74c44e3b04b27949ec476fb890cab9cbf9cf90be9c28583570aeceb5"
       },
       {
         "canonical": "--top-k",
@@ -4323,6 +4355,8 @@
     "--cors-headers",
     "--cors-credentials",
     "--no-cors-credentials",
+    "--mcp-servers-config",
+    "--mcp-servers-json",
     "--reasoning-preserve",
     "--no-reasoning-preserve",
     "--log-prompts-dir"

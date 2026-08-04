@@ -1,5 +1,11 @@
 import type { InstanceConfig } from '../../store'
 import { VECTOR_ALLOWED_FIELDS } from '../../modelPolicy'
+import {
+  effectiveMmprojMode,
+  ngramCacheEnabled,
+  projectorEnabled,
+  speculativeEnabled,
+} from '../../configSemantics'
 import { canonicalConfigFields } from './configWorkspace'
 
 /**
@@ -23,7 +29,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.reranking) a.add('reranking')
 
     const remove = (keys: Array<keyof InstanceConfig>) => keys.forEach(key => a.delete(key))
-    const specActive = !isEmbedding && !!config.spec_type && config.spec_type !== 'none' && a.has('spec_type')
+    const specActive = speculativeEnabled(config, isEmbedding) && a.has('spec_type')
     if (!specActive) remove([
       'draft_model_path', 'draft_gpu_layers', 'draft_tokens', 'spec_draft_n_min',
       'spec_draft_p_min', 'spec_draft_p_split', 'spec_draft_device',
@@ -31,6 +37,18 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
       'spec_draft_backend_sampling', 'spec_draft_threads', 'spec_draft_threads_batch',
       'cache_type_draft_k', 'cache_type_draft_v',
     ])
+    if (!ngramCacheEnabled(config, isEmbedding)) {
+      remove(['lookup_cache_static', 'lookup_cache_dynamic'])
+    }
+    if (effectiveMmprojMode(config) === 'off') {
+      remove(['mmproj_path', 'mmproj_url', 'no_mmproj_offload'])
+    } else if (!(
+      a.has('mmproj_path')
+      || a.has('mmproj_url')
+      || (a.has('mmproj_mode') && effectiveMmprojMode(config) === 'on')
+    )) {
+      remove(['no_mmproj_offload'])
+    }
     const fitMode = config.fit_mode || (config.fit ? 'on' : '')
     if (fitMode !== 'on') remove(['fit_target', 'fit_ctx'])
     if (!(config.mirostat > 0 && a.has('mirostat'))) remove(['mirostat_lr', 'mirostat_ent'])
@@ -50,7 +68,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
 
   const a = new Set<keyof InstanceConfig>()
   const e = isEmbedding
-  const specActive = !e && !!config.spec_type && config.spec_type !== 'none'
+  const specActive = speculativeEnabled(config, e)
 
   // ── Always active ──
   a.add('model_path'); a.add('host'); a.add('port')
@@ -61,10 +79,10 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.lora_path) a.add('lora_path')
     if (config.lora_init_without_apply) a.add('lora_init_without_apply')
     if (config.lora_scaled) a.add('lora_scaled')
-    if (config.mmproj_path) a.add('mmproj_path')
-    if (config.mmproj_url) a.add('mmproj_url')
+    if (effectiveMmprojMode(config) !== 'off' && config.mmproj_path) a.add('mmproj_path')
+    if (effectiveMmprojMode(config) !== 'off' && config.mmproj_url) a.add('mmproj_url')
     if (config.mmproj_mode || config.mmproj_auto || config.no_mmproj) a.add('mmproj_mode')
-    if (config.no_mmproj_offload) a.add('no_mmproj_offload')
+    if (projectorEnabled(config, e) && config.no_mmproj_offload) a.add('no_mmproj_offload')
     if (config.chat_template) a.add('chat_template')
     if (config.chat_template_file) a.add('chat_template_file')
     if (config.skip_chat_parsing) a.add('skip_chat_parsing')
@@ -152,8 +170,8 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     if (config.spec_draft_p_min > 0) a.add('spec_draft_p_min')
     if (Math.abs(config.spec_draft_p_split - 0.1) > 0.001) a.add('spec_draft_p_split')
     if (config.spec_draft_device) a.add('spec_draft_device')
-    if (config.lookup_cache_static) a.add('lookup_cache_static')
-    if (config.lookup_cache_dynamic) a.add('lookup_cache_dynamic')
+    if (ngramCacheEnabled(config, e) && config.lookup_cache_static) a.add('lookup_cache_static')
+    if (ngramCacheEnabled(config, e) && config.lookup_cache_dynamic) a.add('lookup_cache_dynamic')
     if (config.spec_default) a.add('spec_default')
     if (!config.spec_draft_backend_sampling) a.add('spec_draft_backend_sampling')
     if (config.spec_draft_threads > 0) a.add('spec_draft_threads')
@@ -177,6 +195,8 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
    if (config.ui_config) a.add('ui_config')
     if (config.ui_mcp_proxy) a.add('ui_mcp_proxy')
     if (config.agent) a.add('agent')
+    if (config.mcp_servers_config) a.add('mcp_servers_config')
+    if (config.mcp_servers_json) a.add('mcp_servers_json')
    // New server params
    if (config.rpc_servers) a.add('rpc_servers')
    if (Math.abs(config.sse_ping_interval - 30) > 0.001) a.add('sse_ping_interval')

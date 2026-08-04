@@ -389,16 +389,6 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
         {
             cmd.extend_from_slice(&["--lora-scaled".into(), config.lora_scaled.clone()]);
         }
-        if should_emit(config, "mmproj_path", !config.mmproj_path.is_empty())
-            && !config.mmproj_path.is_empty()
-        {
-            cmd.extend_from_slice(&["--mmproj".into(), config.mmproj_path.clone()]);
-        }
-        if should_emit(config, "mmproj_url", !config.mmproj_url.is_empty())
-            && !config.mmproj_url.is_empty()
-        {
-            cmd.extend_from_slice(&["--mmproj-url".into(), config.mmproj_url.clone()]);
-        }
         let mmproj_mode = if !config.mmproj_mode.is_empty() {
             config.mmproj_mode.as_str()
         } else if config.no_mmproj {
@@ -408,19 +398,33 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
         } else {
             ""
         };
-        if should_emit_any(
+        let projector_sources_enabled = mmproj_mode != "off";
+        let emit_mmproj_path = projector_sources_enabled
+            && should_emit(config, "mmproj_path", !config.mmproj_path.is_empty())
+            && !config.mmproj_path.is_empty();
+        if emit_mmproj_path {
+            cmd.extend_from_slice(&["--mmproj".into(), config.mmproj_path.clone()]);
+        }
+        let emit_mmproj_url = projector_sources_enabled
+            && should_emit(config, "mmproj_url", !config.mmproj_url.is_empty())
+            && !config.mmproj_url.is_empty();
+        if emit_mmproj_url {
+            cmd.extend_from_slice(&["--mmproj-url".into(), config.mmproj_url.clone()]);
+        }
+        let emit_mmproj_mode = should_emit_any(
             config,
             &["mmproj_mode", "mmproj_auto", "no_mmproj"],
             !mmproj_mode.is_empty(),
-        ) {
+        );
+        if emit_mmproj_mode {
             match mmproj_mode {
                 "on" => cmd.push("--mmproj-auto".into()),
                 "off" => cmd.push("--no-mmproj".into()),
                 _ => {}
             }
         }
-        let projector_active =
-            !config.mmproj_path.is_empty() || !config.mmproj_url.is_empty() || mmproj_mode != "off";
+        let projector_active = projector_sources_enabled
+            && (emit_mmproj_path || emit_mmproj_url || (emit_mmproj_mode && mmproj_mode == "on"));
         if projector_active && should_emit(config, "no_mmproj_offload", config.no_mmproj_offload) {
             cmd.push(
                 if config.no_mmproj_offload {
@@ -997,6 +1001,25 @@ fn append_network_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
         }
         if should_emit(config, "agent", config.agent) && config.agent {
             cmd.push("--agent".into());
+        }
+        if should_emit(
+            config,
+            "mcp_servers_config",
+            !config.mcp_servers_config.is_empty(),
+        ) && !config.mcp_servers_config.is_empty()
+        {
+            cmd.extend_from_slice(&[
+                "--mcp-servers-config".into(),
+                config.mcp_servers_config.clone(),
+            ]);
+        }
+        if should_emit(
+            config,
+            "mcp_servers_json",
+            !config.mcp_servers_json.is_empty(),
+        ) && !config.mcp_servers_json.is_empty()
+        {
+            cmd.extend_from_slice(&["--mcp-servers-json".into(), config.mcp_servers_json.clone()]);
         }
     }
 }
@@ -4558,6 +4581,7 @@ mod perf_parser_tests {
             "load_mode".into(),
             "no_repack".into(),
             "no_kv_offload".into(),
+            "mmproj_path".into(),
             "no_mmproj_offload".into(),
             "no_ui".into(),
             "perf".into(),
@@ -4566,6 +4590,7 @@ mod perf_parser_tests {
         ];
         let positive = InstanceConfig {
             model_path: "model.gguf".into(),
+            mmproj_path: "projector.gguf".into(),
             load_mode: "mmap".into(),
             spec_type: "draft-mtp".into(),
             explicit_overrides: Some(override_keys.clone()),
@@ -4673,7 +4698,7 @@ mod perf_parser_tests {
     }
 
     #[test]
-    fn projector_offload_is_inactive_only_when_no_projector_can_be_used() {
+    fn projector_mode_off_suppresses_explicit_sources_and_offload() {
         let disabled_auto = InstanceConfig {
             model_path: "model.gguf".into(),
             mmproj_mode: "off".into(),
@@ -4696,9 +4721,50 @@ mod perf_parser_tests {
             ..disabled_auto
         };
         let with_projector_command = generate_normalized_command(&with_projector, "llama-server");
-        assert!(with_projector_command
+        assert!(!with_projector_command
             .iter()
             .any(|argument| argument == "--no-mmproj-offload"));
+        assert!(!with_projector_command
+            .iter()
+            .any(|argument| argument == "--mmproj" || argument == "--mmproj-url"));
+        assert!(with_projector_command
+            .iter()
+            .any(|argument| argument == "--no-mmproj"));
+
+        let enabled_projector = InstanceConfig {
+            mmproj_mode: String::new(),
+            no_mmproj: false,
+            ..with_projector
+        };
+        let enabled_command = generate_normalized_command(&enabled_projector, "llama-server");
+        assert!(enabled_command
+            .windows(2)
+            .any(|arguments| arguments == ["--mmproj", "projector.gguf"]));
+        assert!(enabled_command
+            .iter()
+            .any(|argument| argument == "--no-mmproj-offload"));
+    }
+
+    #[test]
+    fn mcp_server_sources_are_emitted_as_distinct_arguments() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            mcp_servers_config: "C:/config/mcp.json".into(),
+            mcp_servers_json: r#"{"mcpServers":{"local":{}}}"#.into(),
+            ..InstanceConfig::default()
+        };
+
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(
+            &command,
+            "--mcp-servers-config",
+            "C:/config/mcp.json"
+        ));
+        assert!(has_flag_value(
+            &command,
+            "--mcp-servers-json",
+            r#"{"mcpServers":{"local":{}}}"#
+        ));
     }
 
     #[test]
