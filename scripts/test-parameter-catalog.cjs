@@ -61,7 +61,9 @@ assert.doesNotMatch(sections, /--n-gpu-layers-draft/, 'obsolete draft GPU flag s
 assert.match(sections, /<IntentNum[\s\S]*gpu_layers/, 'automatic GPU layers must expose inherited/manual intent')
 assert.match(sections, /<IntentNum[\s\S]*ctx_size/, 'automatic context size must expose inherited/manual intent')
 assert.match(sections, /value=\{hasExplicitOverride\(local, 'perf'\) \? local\.perf : true\}/, 'inherited performance timing must display the source-verified effective enabled state')
-assert.match(catalog, /!!config\.mmproj_path\.trim\(\)[\s\S]*!!config\.mmproj_url\.trim\(\)/, 'an explicitly selected projector must keep projector-offload controls active even when auto discovery is off')
+assert.match(catalog, /projectorEnabled\(config, isEmbedding\)/, 'projector-dependent controls must use the shared effective-projector semantics')
+assert.match(catalog, /lookup_cache_static:[\s\S]*dependency: ngramCacheEnabled/, 'lookup-cache files must activate only for the exact ngram-cache mode')
+assert.match(catalog, /backend_sampling:[\s\S]*dependency: backendSamplingCompatible/, 'backend sampling must expose known runtime incompatibilities as inactive dependencies')
 
 for (const staleClaim of [
   /20-30[^'\n]*token/i,

@@ -40,6 +40,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
     let mut context_length: Option<u32> = None;
     let mut file_type: Option<u32> = None;
     let mut mtp_layers: Option<u32> = None;
+    let mut has_swa: Option<bool> = None;
     let mut general_type: Option<String> = None;
     let mut model_name: Option<String> = None;
     let mut model_basename: Option<String> = None;
@@ -61,6 +62,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
         let key = read_gguf_string(&mut file)?;
         let key_lower = key.to_lowercase();
         let value_type = read_u32(&mut file)?;
+        let is_swa_key = key_lower.ends_with("attention.sliding_window");
 
         if key_lower.contains("vision")
             || key_lower.contains("image")
@@ -125,6 +127,9 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                 if key_lower.contains("nextn_predict_layers") && value > 0 {
                     mtp_layers = Some(value);
                 }
+                if is_swa_key {
+                    has_swa = Some(value > 0);
+                }
             }
             5 => {
                 let value = read_i32(&mut file)?;
@@ -133,6 +138,9 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                 }
                 if key_lower.contains("nextn_predict_layers") && value > 0 {
                     mtp_layers = Some(value as u32);
+                }
+                if is_swa_key {
+                    has_swa = Some(value > 0);
                 }
             }
             10 => {
@@ -143,6 +151,9 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                 if key_lower.contains("nextn_predict_layers") && value > 0 {
                     mtp_layers = Some(value as u32);
                 }
+                if is_swa_key {
+                    has_swa = Some(value > 0);
+                }
             }
             11 => {
                 let value = read_i64(&mut file)?;
@@ -151,6 +162,9 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
                 }
                 if key_lower.contains("nextn_predict_layers") && value > 0 {
                     mtp_layers = Some(value as u32);
+                }
+                if is_swa_key {
+                    has_swa = Some(value > 0);
                 }
             }
             _ => skip_gguf_value(&mut file, value_type)?,
@@ -216,6 +230,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
             is_reranker_model: Some(workload == ModelWorkload::Reranker),
             has_builtin_mtp: mtp_layers.unwrap_or(0) > 0,
             mtp_layers,
+            has_swa,
             is_vision_model,
             vision_status: Some(
                 if is_vision_model {
@@ -764,6 +779,7 @@ mod tests {
     enum TestMetadataValue<'a> {
         String(&'a str),
         Bool(bool),
+        U32(u32),
         Strings(&'a [&'a str]),
     }
 
@@ -788,6 +804,10 @@ mod tests {
                 TestMetadataValue::Bool(value) => {
                     bytes.extend_from_slice(&7_u32.to_le_bytes());
                     bytes.push(u8::from(*value));
+                }
+                TestMetadataValue::U32(value) => {
+                    bytes.extend_from_slice(&4_u32.to_le_bytes());
+                    bytes.extend_from_slice(&value.to_le_bytes());
                 }
                 TestMetadataValue::Strings(values) => {
                     bytes.extend_from_slice(&9_u32.to_le_bytes());
@@ -1140,6 +1160,39 @@ mod tests {
             Some("unknown")
         );
         assert!(summary.capabilities.vision_evidence.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parsed_metadata_reports_sliding_window_attention_capability() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-swa-capability-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let swa_path = dir.join("swa.gguf");
+        let dense_path = dir.join("dense.gguf");
+        write_test_gguf(
+            &swa_path,
+            &[(
+                "llama.attention.sliding_window",
+                TestMetadataValue::U32(4096),
+            )],
+        );
+        write_test_gguf(
+            &dense_path,
+            &[("llama.attention.sliding_window", TestMetadataValue::U32(0))],
+        );
+
+        assert_eq!(
+            parse_gguf_metadata(&swa_path).unwrap().capabilities.has_swa,
+            Some(true)
+        );
+        assert_eq!(
+            parse_gguf_metadata(&dense_path)
+                .unwrap()
+                .capabilities
+                .has_swa,
+            Some(false)
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

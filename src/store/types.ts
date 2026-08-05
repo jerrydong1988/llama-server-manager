@@ -4,6 +4,7 @@ export interface ModelCapabilities {
   is_reranker_model?: boolean
   has_builtin_mtp?: boolean
   mtp_layers?: number
+  has_swa?: boolean
   is_vision_model?: boolean
   vision_status?: 'confirmed' | 'text-only' | 'unknown'
   vision_evidence?: string[]
@@ -115,6 +116,7 @@ export interface InstanceConfig {
   ssl_key_file: string; ssl_cert_file: string; path_prefix: string; api_prefix: string;
   cors_origins: string; cors_methods: string; cors_headers: string; cors_credentials: string;
   no_ui: boolean; offline: boolean; ui_config_file: string; ui_config: string; ui_mcp_proxy: boolean; agent: boolean;
+  mcp_servers_config: string; mcp_servers_json: string;
   embedding: boolean; pooling: string; embd_normalize: number; reranking: boolean;
   metrics: boolean; props: boolean; slots_enabled: boolean;
   slot_save_path: string; log_prompts_dir: string; slot_prompt_similarity: number; prefill_assistant: boolean;
