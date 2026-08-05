@@ -545,6 +545,7 @@ declare global {
 }
 
 let releasePendingStart: (() => void) | null = null
+let delayedInventoryCacheLoaded = false
 
 const control: BrowserTestControl = {
   marker: BROWSER_TEST_MARKER,
@@ -823,12 +824,35 @@ mockIPC((command, payload) => {
       return buttons?.OkCancelCustom?.[0] ?? buttons?.OkCustom ?? 'Ok'
     }
     case 'get_startup_elapsed': return 1
-    case 'get_cached_scan': return [clone(models), clone(engines)]
+    case 'get_cached_scan':
+      if (BROWSER_SCENARIO === 'delayed-inventory-cache') {
+        return new Promise((resolve) => {
+          window.setTimeout(() => {
+            delayedInventoryCacheLoaded = true
+            resolve([clone(models), clone(engines)])
+          }, 250)
+        })
+      }
+      return [clone(models), clone(engines)]
     case 'load_config': return clone(control.state)
     case 'scan_models':
-    case 'get_models': return clone(models)
+      if (BROWSER_SCENARIO === 'delayed-inventory-cache') {
+        return new Promise((resolve) => window.setTimeout(() => resolve(clone(models)), 3_000))
+      }
+      return clone(models)
+    case 'get_models':
+      return BROWSER_SCENARIO === 'delayed-inventory-cache' && !delayedInventoryCacheLoaded
+        ? []
+        : clone(models)
     case 'scan_engines':
-    case 'get_engines': return clone(engines)
+      if (BROWSER_SCENARIO === 'delayed-inventory-cache') {
+        return new Promise((resolve) => window.setTimeout(() => resolve(clone(engines)), 3_000))
+      }
+      return clone(engines)
+    case 'get_engines':
+      return BROWSER_SCENARIO === 'delayed-inventory-cache' && !delayedInventoryCacheLoaded
+        ? []
+        : clone(engines)
     case 'probe_engine_capabilities': return clone(engine)
     case 'get_download_manager_snapshot':
       if (IS_DOCS_SCENARIO) {

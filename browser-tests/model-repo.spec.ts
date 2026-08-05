@@ -23,6 +23,22 @@ test('a fresh configuration exposes the default model root and its scanned tree'
   ).toBeVisible()
 })
 
+test('a delayed compatible cache hydrates before the background inventory refresh', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'model-repo')
+  })
+  await page.goto('/?scenario=delayed-inventory-cache')
+
+  const explorer = page.locator('[data-guide="model-search"]')
+  await expect(
+    explorer.getByText('Qwen Browser Test Q8_0.gguf', { exact: true }),
+  ).toBeVisible({ timeout: 1_500 })
+
+  await page.getByRole('button', { name: '引擎管理', exact: true }).click()
+  await expect(page.getByText('Browser Test Engine', { exact: true }).first()).toBeVisible({ timeout: 1_000 })
+})
+
 test('an empty legacy root list is repaired before a manual scan', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
