@@ -191,7 +191,7 @@ export function getProxyLabels(lang: string) {
     title: zh ? '实例路由' : 'Instance Routing',
     subtitle: zh ? '生产级 OpenAI / Anthropic 兼容入口，提供严格模型路由、健康探测、熔断、限流与可观测性。' : 'A production-grade OpenAI / Anthropic-compatible gateway with strict model routing, health probes, circuit breaking, rate limits, and observability.',
     notReady: zh ? '后端路由命令暂时不可用，请先检查编译版本。' : 'Routing commands are unavailable in this build. Check the compiled version first.',
-    refresh: zh ? '刷新' : 'Refresh', save: zh ? '保存' : 'Save', start: zh ? '启动' : 'Start', stop: zh ? '停止' : 'Stop',
+    refresh: zh ? '刷新' : 'Refresh', save: zh ? '保存' : 'Save', saving: zh ? '保存中…' : 'Saving…', start: zh ? '启动' : 'Start', stop: zh ? '停止' : 'Stop',
     endpoint: zh ? 'API 入口' : 'API Endpoint', status: zh ? '状态' : 'Status', running: zh ? '运行中' : 'Running',
     stopped: zh ? '已停止' : 'Stopped', requests: zh ? '累计请求' : 'Total Requests', inFlightRequests: zh ? '处理中请求' : 'In-flight Requests', healthyRoutes: zh ? '健康路由' : 'Healthy Routes', connections: zh ? '已登记目标' : 'Targets',
     listen: zh ? '监听地址' : 'Listen Address', host: zh ? '主机' : 'Host', port: zh ? '端口' : 'Port',
