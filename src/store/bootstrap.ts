@@ -317,30 +317,37 @@ export async function loadAppBootstrap(
 
     const cachedModelScanRequest = beginModelInventoryRequest()
     const cachedEngineScanRequest = beginEngineInventoryRequest()
-    invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan')
-      .then((data) => {
-        if (data) {
-          startTransition(() => {
-            applyModelInventory(data[0], get, set, {}, cachedModelScanRequest)
-            applyEngineInventory(data[1], set, {}, cachedEngineScanRequest)
-          })
-        }
-      })
+    const cachedScanPromise = invoke<[ModelInfo[], EngineInfo[]] | null>('get_cached_scan')
       .catch((error) => {
         get().addRuntimeWarning(`cached scan failed: ${errorMessage(error)}`)
+        return null
       })
 
     const injected = window.__INITIAL_CONFIG__
+    let configPromise: Promise<GlobalConfigShape>
     if (injected) {
       window.__INITIAL_CONFIG__ = null
       startupTimings.push({ name: 'config-source', ms: 0 })
-      await processConfig(injected, get, set)
+      configPromise = Promise.resolve(injected)
     } else {
       const ipcStartedAt = performance.now()
-      const global = await invoke<GlobalConfigShape>('load_config')
-      startupTimings.push({ name: 'config-source', ms: Math.round(performance.now() - ipcStartedAt) })
-      await processConfig(global, get, set)
+      configPromise = invoke<GlobalConfigShape>('load_config').then((global) => {
+        startupTimings.push({ name: 'config-source', ms: Math.round(performance.now() - ipcStartedAt) })
+        return global
+      })
     }
+
+    // Read the config and cached inventory concurrently, but always hydrate the cache before
+    // processConfig starts its newer background scans. Otherwise the scan generation can advance
+    // first and discard a perfectly valid cache response, leaving the UI blank until the scan ends.
+    const [cachedScan, global] = await Promise.all([cachedScanPromise, configPromise])
+    if (cachedScan) {
+      startTransition(() => {
+        applyModelInventory(cachedScan[0], get, set, {}, cachedModelScanRequest)
+        applyEngineInventory(cachedScan[1], set, {}, cachedEngineScanRequest)
+      })
+    }
+    await processConfig(global, get, set)
   } catch (error) {
     console.error('load_config error:', error)
     get().addRuntimeWarning(`bootstrap failed: ${errorMessage(error)}`)

@@ -7,8 +7,30 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 5;
+// Cache version 4 has the same persisted row shape as version 5. Version 5 only
+// adds metadata that can safely remain unknown until the background refresh
+// reparses the file. Keep compatible rows visible during that refresh so an
+// application update never turns an existing inventory into a blank screen.
+const MIN_DISPLAYABLE_INVENTORY_CACHE_VERSION: i64 = 4;
 static INVENTORY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 static INVENTORY_SCHEMA_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Clone, Copy)]
+enum InventoryCacheReadMode {
+    Current,
+    DisplayCompatible,
+}
+
+impl InventoryCacheReadMode {
+    fn accepts(self, cache_version: i64) -> bool {
+        match self {
+            Self::Current => cache_version == MODEL_INVENTORY_SCHEMA_VERSION,
+            Self::DisplayCompatible => (MIN_DISPLAYABLE_INVENTORY_CACHE_VERSION
+                ..=MODEL_INVENTORY_SCHEMA_VERSION)
+                .contains(&cache_version),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct InventoryModelRecord {
@@ -387,13 +409,9 @@ fn prune_absent_directories_in_connection(
     Ok(())
 }
 
-pub fn load_model_index() -> Result<HashMap<String, InventoryModelRecord>, String> {
-    let conn = open_connection()?;
-    load_model_index_from_connection(&conn)
-}
-
 fn load_model_index_from_connection(
     conn: &Connection,
+    read_mode: InventoryCacheReadMode,
 ) -> Result<HashMap<String, InventoryModelRecord>, String> {
     let mut stmt = conn
         .prepare(
@@ -412,7 +430,7 @@ fn load_model_index_from_connection(
         .map_err(|e| format!("failed to read model inventory row: {}", e))?;
     Ok(rows
         .into_iter()
-        .filter(|record| record.cache_version == MODEL_INVENTORY_SCHEMA_VERSION)
+        .filter(|record| read_mode.accepts(record.cache_version))
         .filter(|record| std::path::Path::new(&record.path).is_file())
         .map(|record| (record.path.clone(), record))
         .collect())
@@ -421,13 +439,17 @@ fn load_model_index_from_connection(
 pub fn load_model_scan_indexes() -> Result<ModelScanIndexes, String> {
     let conn = open_connection()?;
     Ok((
-        load_model_index_from_connection(&conn)?,
+        load_model_index_from_connection(&conn, InventoryCacheReadMode::Current)?,
         load_directory_index_from_connection(&conn, "model")?,
     ))
 }
 
 pub fn list_cached_models() -> Result<Vec<ModelInfo>, String> {
-    let mut records = load_model_index()?.into_values().collect::<Vec<_>>();
+    let conn = open_connection()?;
+    let mut records =
+        load_model_index_from_connection(&conn, InventoryCacheReadMode::DisplayCompatible)?
+            .into_values()
+            .collect::<Vec<_>>();
     records.sort_by_key(|record| record.name.to_lowercase());
     Ok(records
         .into_iter()
@@ -554,13 +576,9 @@ pub fn delete_model(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn load_engine_index() -> Result<HashMap<String, InventoryEngineRecord>, String> {
-    let conn = open_connection()?;
-    load_engine_index_from_connection(&conn)
-}
-
 fn load_engine_index_from_connection(
     conn: &Connection,
+    read_mode: InventoryCacheReadMode,
 ) -> Result<HashMap<String, InventoryEngineRecord>, String> {
     let mut stmt = conn
         .prepare(
@@ -578,7 +596,7 @@ fn load_engine_index_from_connection(
         .map_err(|e| format!("failed to read engine inventory row: {}", e))?;
     Ok(rows
         .into_iter()
-        .filter(|record| record.cache_version == MODEL_INVENTORY_SCHEMA_VERSION)
+        .filter(|record| read_mode.accepts(record.cache_version))
         .filter(|record| std::path::Path::new(&record.exe).is_file())
         .map(|record| (record.id.clone(), record))
         .collect())
@@ -587,13 +605,17 @@ fn load_engine_index_from_connection(
 pub fn load_engine_scan_indexes() -> Result<EngineScanIndexes, String> {
     let conn = open_connection()?;
     Ok((
-        load_engine_index_from_connection(&conn)?,
+        load_engine_index_from_connection(&conn, InventoryCacheReadMode::Current)?,
         load_directory_index_from_connection(&conn, "engine")?,
     ))
 }
 
 pub fn list_cached_engines() -> Result<Vec<EngineInfo>, String> {
-    let mut records = load_engine_index()?.into_values().collect::<Vec<_>>();
+    let conn = open_connection()?;
+    let mut records =
+        load_engine_index_from_connection(&conn, InventoryCacheReadMode::DisplayCompatible)?
+            .into_values()
+            .collect::<Vec<_>>();
     records.sort_by_key(|record| record.name.to_lowercase());
     Ok(records
         .into_iter()
@@ -834,5 +856,90 @@ mod tests {
         let capabilities = serde_json::from_str::<EngineCapabilities>("{}").unwrap();
         assert_eq!(capabilities.status, "unprobed");
         assert!(capabilities.supported_flags.is_empty());
+    }
+
+    #[test]
+    fn display_cache_accepts_compatible_previous_version_while_scan_indexes_do_not() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-compatible-inventory-cache-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let engine_dir = dir.join("engine");
+        std::fs::create_dir_all(&engine_dir).unwrap();
+        let model_path = dir.join("model.gguf");
+        let engine_path = engine_dir.join("llama-server-test");
+        std::fs::write(&model_path, b"gguf").unwrap();
+        std::fs::write(&engine_path, b"engine").unwrap();
+
+        let model_path = model_path.to_string_lossy().to_string();
+        let engine_dir = engine_dir.to_string_lossy().to_string();
+        let engine_path = engine_path.to_string_lossy().to_string();
+        let scan_root = dir.to_string_lossy().to_string();
+        let previous_version = MODEL_INVENTORY_SCHEMA_VERSION - 1;
+
+        conn.execute(
+            r#"
+            INSERT INTO model_inventory (
+                path, id, display_path, name, scan_root, size, mtime,
+                architecture, context_length, quant_type, has_mtp_head,
+                capabilities_json, file_type, is_shard, last_seen, cache_version
+            ) VALUES (?1, 'model', ?1, 'model.gguf', ?2, 4, 0,
+                      NULL, NULL, NULL, 0, ?3, 'gguf', 0, 0, ?4)
+            "#,
+            params![
+                model_path,
+                scan_root,
+                r#"{"metadata_complete":true}"#,
+                previous_version,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            r#"
+            INSERT INTO engine_inventory (
+                id, name, dir, exe, version, backend, capabilities_json,
+                exe_mtime, scan_root, last_seen, cache_version
+            ) VALUES (?1, 'engine', ?2, ?1, 'old', 'CPU', ?3, 0, ?4, 0, ?5)
+            "#,
+            params![engine_path, engine_dir, "{}", scan_root, previous_version,],
+        )
+        .unwrap();
+
+        assert!(
+            load_model_index_from_connection(&conn, InventoryCacheReadMode::Current)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            load_engine_index_from_connection(&conn, InventoryCacheReadMode::Current)
+                .unwrap()
+                .is_empty()
+        );
+
+        let display_models =
+            load_model_index_from_connection(&conn, InventoryCacheReadMode::DisplayCompatible)
+                .unwrap();
+        let display_engines =
+            load_engine_index_from_connection(&conn, InventoryCacheReadMode::DisplayCompatible)
+                .unwrap();
+        assert_eq!(display_models.len(), 1);
+        assert_eq!(display_engines.len(), 1);
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn display_cache_rejects_unknown_older_and_future_versions() {
+        assert!(!InventoryCacheReadMode::DisplayCompatible
+            .accepts(MIN_DISPLAYABLE_INVENTORY_CACHE_VERSION - 1));
+        assert!(
+            !InventoryCacheReadMode::DisplayCompatible.accepts(MODEL_INVENTORY_SCHEMA_VERSION + 1)
+        );
+        assert!(InventoryCacheReadMode::DisplayCompatible
+            .accepts(MIN_DISPLAYABLE_INVENTORY_CACHE_VERSION));
+        assert!(InventoryCacheReadMode::DisplayCompatible.accepts(MODEL_INVENTORY_SCHEMA_VERSION));
     }
 }

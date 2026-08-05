@@ -441,10 +441,15 @@ const bootstrapSource = readSource('src', 'store', 'bootstrap.ts')
 const reconcileSource = section(bootstrapSource, 'export function reconcileInstancesWithModels', 'export function applyModelInventory')
 assert.match(reconcileSource, /new Map<string, ModelInfo>\(\)/, 'instance reconciliation must index models once per batch')
 assert.doesNotMatch(reconcileSource, /models\.find\(/, 'instance reconciliation must not scan the full model list per instance')
-const cachedScanSource = section(bootstrapSource, 'const cachedModelScanRequest', 'const injected')
+const cachedScanSource = section(bootstrapSource, 'const cachedModelScanRequest', "startupTimings.push({ name: 'loadConfig'")
 const initialScanSource = section(bootstrapSource, 'const modelScanRequest', "invoke<EngineInfo[]>('scan_engines'")
 assert.match(cachedScanSource, /applyModelInventory\(/, 'cached model inventory must reconcile instances')
 assert.match(cachedScanSource, /beginModelInventoryRequest\(/, 'cached inventory must claim a request generation')
+assert.match(cachedScanSource, /const \[cachedScan, global\] = await Promise\.all\(/, 'bootstrap must await cache and config together')
+assert.ok(
+  cachedScanSource.indexOf('applyModelInventory(cachedScan[0]') < cachedScanSource.indexOf('await processConfig(global'),
+  'cached inventory must hydrate before processConfig starts a superseding background scan',
+)
 assert.match(initialScanSource, /applyModelInventory\(/, 'initial async model scan must reconcile instances')
 assert.match(initialScanSource, /beginModelInventoryRequest\(/, 'initial scan must supersede older inventory requests')
 
