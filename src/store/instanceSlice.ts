@@ -7,11 +7,12 @@ import {
 } from './bootstrap'
 import { createLatestSaveCoordinator } from './configSaveCoordinator'
 import type { AppStoreGet, AppStoreSet } from './helpers'
-import { runInstanceStart } from './instanceLifecycleCoordinator'
+import { runInstanceStart, runInstanceStop } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
 import type { AppState, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
 import { resolveEffectiveEngine } from './engineResolution'
 import { pathsEqual } from '../utils/path'
+import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
 
 const MAX_LOG_ENTRIES = 1000
 const MAX_RECENT_LOG_ENTRIES = 2000
@@ -184,21 +185,29 @@ export function createInstanceSlice(
       }
     },
     startInstance: (id) => runInstanceStart(id, async () => {
+      const timing = beginOperationTiming('instance.start')
+      let outcome: OperationOutcome = 'failure'
+      set(state => ({
+        instanceLifecycle: { ...state.instanceLifecycle, [id]: 'starting' },
+      }))
       try {
         const { instances, models, engines, defaultEngineId } = get()
         const instance = instances.find((item) => item.id === id)
         if (!instance) {
           message('Instance not found.', { title: 'Error', kind: 'error' })
+          outcome = 'cancelled'
           return
         }
 
         const normalized = normalizeStoredConfig(instance.config, models)
         const engine = resolveEffectiveEngine(normalized.config, engines, defaultEngineId)
+        timing.mark('prepare')
 
         if (!engine) {
           message(normalized.config.engine_id
             ? 'The configured llama-server engine is no longer available. Select another engine before starting.'
             : 'No llama-server engine available.\n\nPlease scan engines first.', { title: 'Error', kind: 'error' })
+          outcome = 'cancelled'
           return
         }
         if (!normalized.config.engine_id) {
@@ -212,7 +221,9 @@ export function createInstanceSlice(
           }))
           await get().saveConfig()
         }
+        timing.mark('normalize-and-save')
         await configSaveCoordinator.waitForIdle()
+        timing.mark('save-queue')
 
         await invoke('start_server', {
           instanceId: id,
@@ -220,7 +231,9 @@ export function createInstanceSlice(
           engineExe: engine.exe,
           engineBackend: engine.backend,
         })
+        timing.mark('backend-start')
         get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
+        outcome = 'success'
       } catch (error) {
         if (isStaleEngineCapabilityError(error)) {
           const state = get()
@@ -233,18 +246,41 @@ export function createInstanceSlice(
         console.error('start_server error:', error)
         get().addRuntimeWarning(`\u5b9e\u4f8b\u542f\u52a8\u5931\u8d25\uff1a${String(error)}`)
         throw error
+      } finally {
+        set(state => {
+          if (state.instanceLifecycle[id] !== 'starting') return state
+          const instanceLifecycle = { ...state.instanceLifecycle }
+          delete instanceLifecycle[id]
+          return { instanceLifecycle }
+        })
+        timing.finish(outcome)
       }
     }),
-    stopInstance: async (id) => {
+    stopInstance: (id) => runInstanceStop(id, async () => {
+      const timing = beginOperationTiming('instance.stop')
+      let outcome: OperationOutcome = 'failure'
+      set(state => ({
+        instanceLifecycle: { ...state.instanceLifecycle, [id]: 'stopping' },
+      }))
       try {
         await invoke('stop_server', { instanceId: id })
+        timing.mark('backend-stop')
         get().updateInstance(id, { status: 'stopped', healthCheck: 'pending' })
+        outcome = 'success'
       } catch (error) {
         console.error('stop_server error:', error)
         get().addRuntimeWarning(`\u5b9e\u4f8b\u505c\u6b62\u5931\u8d25\uff1a${String(error)}`)
         throw error
+      } finally {
+        set(state => {
+          if (state.instanceLifecycle[id] !== 'stopping') return state
+          const instanceLifecycle = { ...state.instanceLifecycle }
+          delete instanceLifecycle[id]
+          return { instanceLifecycle }
+        })
+        timing.finish(outcome)
       }
-    },
+    }),
     openBrowser: async (instanceId, host, port, useTls = false, apiPrefix = '') => {
       await invoke('open_browser', { instanceId, host, port, useTls, apiPrefix })
     },

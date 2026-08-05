@@ -3,6 +3,7 @@
 mod commands;
 mod error;
 mod models;
+mod operation_timing;
 mod path_utils;
 mod persistence;
 mod runtime_service;
@@ -801,6 +802,8 @@ mod tests {
         c.ui_config = "{}".into();
         c.ui_mcp_proxy = true;
         c.agent = true;
+        c.mcp_servers_config = "/test/mcp.json".into();
+        c.mcp_servers_json = r#"{"mcpServers":{}}"#.into();
         c.slot_save_path = "/test/slots".into();
         c.models_dir = "/test/models".into();
         c.models_preset = "preset".into();
@@ -832,6 +835,8 @@ mod tests {
             "--ui-config",
             "--ui-mcp-proxy",
             "--agent",
+            "--mcp-servers-config",
+            "--mcp-servers-json",
             "--slot-save-path",
             "--tools",
             "-sps",

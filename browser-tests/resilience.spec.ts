@@ -21,6 +21,24 @@ test('automatic instance startup preserves the configured stagger without duplic
   expect(starts[1].at - starts[0].at).toBeGreaterThanOrEqual(2_900)
 })
 
+test('instance start reports an immediate transient state while the backend is pending', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/?scenario=delayed-instance-start')
+
+  const start = page.getByRole('button', { name: '启动', exact: true }).first()
+  await start.click()
+  await expect(page.getByRole('button', { name: '启动中...', exact: true }).first()).toBeDisabled()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'start_server').length
+  ))).toBe(1)
+
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.releaseStart())
+  await expect(page.getByRole('button', { name: '停止', exact: true }).first()).toBeEnabled()
+})
+
 test('a transient updater failure is visible and a manual retry discovers the update', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('lang', 'zh-CN'))
   await page.goto('/?scenario=updater-retry')

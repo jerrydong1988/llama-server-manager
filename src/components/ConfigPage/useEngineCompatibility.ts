@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useAppStore, type EngineInfo, type InstanceConfig } from '../../store'
 import type { GeneratedServerCommand } from '../../store/types'
 import { normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../../engineCapabilities'
+import { createConfigPreflightKey } from './configPreflight'
 
 type CompatibilityInput = {
   local: InstanceConfig | null
@@ -14,12 +15,14 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
   const probeEngineCapabilities = useAppStore(state => state.probeEngineCapabilities)
   const [unsupportedEngineFlags, setUnsupportedEngineFlags] = useState<string[]>([])
   const [commandPreview, setCommandPreview] = useState<GeneratedServerCommand | null>(null)
+  const [commandPreviewKey, setCommandPreviewKey] = useState<string | null>(null)
   const [previewingCommand, setPreviewingCommand] = useState(false)
   const [probingEngineCompatibility, setProbingEngineCompatibility] = useState(false)
   const [autoProbeFailedFor, setAutoProbeFailedFor] = useState<string | null>(null)
   const mountedRef = useRef(true)
   const probeTargetRef = useRef<string | null>(null)
   const probeInFlightRef = useRef<Set<string>>(new Set())
+  const previewCacheRef = useRef<{ key: string; result: GeneratedServerCommand } | null>(null)
 
   useEffect(() => {
     mountedRef.current = true
@@ -72,11 +75,23 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
     if (!local || local.launch_mode === 'manual' || !currentEngine || status !== 'detected') {
       setUnsupportedEngineFlags([])
       setCommandPreview(null)
+      setCommandPreviewKey(null)
+      previewCacheRef.current = null
       setPreviewingCommand(false)
       return
     }
     let cancelled = false
+    const previewKey = createConfigPreflightKey(local, currentEngine.exe)
+    const cached = previewCacheRef.current
+    if (cached?.key === previewKey) {
+      setUnsupportedEngineFlags(cached.result.unsupportedFlags)
+      setCommandPreview(cached.result)
+      setCommandPreviewKey(previewKey)
+      setPreviewingCommand(false)
+      return
+    }
     setCommandPreview(null)
+    setCommandPreviewKey(null)
     setPreviewingCommand(true)
     const timer = setTimeout(() => {
       void generateCommand(local, currentEngine.exe)
@@ -84,12 +99,16 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
           if (!cancelled) {
             setUnsupportedEngineFlags(result.unsupportedFlags)
             setCommandPreview(result)
+            setCommandPreviewKey(previewKey)
+            previewCacheRef.current = { key: previewKey, result }
           }
         })
         .catch(() => {
           if (!cancelled) {
             setUnsupportedEngineFlags([])
             setCommandPreview(null)
+            setCommandPreviewKey(null)
+            previewCacheRef.current = null
           }
         })
         .finally(() => {
@@ -106,6 +125,7 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
     unsupportedEngineFlags,
     setUnsupportedEngineFlags,
     commandPreview,
+    commandPreviewKey,
     previewingCommand,
     probingEngineCompatibility,
     capabilityProbeRequired,

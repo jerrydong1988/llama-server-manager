@@ -1,4 +1,10 @@
 import type { EngineCapabilities, InstanceConfig } from './store'
+import {
+  ngramCacheEnabled,
+  projectorEnabled,
+  reasoningBudgetEnabled,
+  speculativeEnabled,
+} from './configSemantics'
 
 export type ParameterSource = 'inherited' | 'explicit' | 'managed' | 'inactive' | 'unsupported'
 export type ParameterDefaultKind = 'engine' | 'model' | 'automatic' | 'application'
@@ -15,15 +21,20 @@ export type ParameterDefinition = {
 
 const text = (zh: string, en: string): LocalizedText => ({ zh, en })
 const specEnabled = (config: InstanceConfig, isEmbedding: boolean) => (
-  !isEmbedding && !!config.spec_type && config.spec_type !== 'none'
+  speculativeEnabled(config, isEmbedding)
 )
 const fitEnabled = (config: InstanceConfig) => (config.fit_mode || (config.fit ? 'on' : '')) === 'on'
 const multimodalEnabled = (config: InstanceConfig, isEmbedding: boolean) => (
-  !isEmbedding && (
-    !!config.mmproj_path.trim()
-    || !!config.mmproj_url.trim()
-    || (config.mmproj_mode || (config.no_mmproj ? 'off' : config.mmproj_auto ? 'on' : '')) !== 'off'
-  )
+  projectorEnabled(config, isEmbedding)
+)
+const backendSamplingCompatible = (config: InstanceConfig, isEmbedding: boolean) => (
+  !isEmbedding
+  && !speculativeEnabled(config, isEmbedding)
+  && !reasoningBudgetEnabled(config)
+  && !config.grammar.trim()
+  && !config.grammar_file.trim()
+  && !config.json_schema.trim()
+  && !config.json_schema_file.trim()
 )
 
 const b10068 = (zh: string, en: string) => ({ 10068: text(zh, en) })
@@ -64,10 +75,22 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
   cache_prompt: { flags: ['--cache-prompt', '--no-cache-prompt'], verifiedDefaults: b10068('开启', 'enabled') },
   warmup: { flags: ['--warmup', '--no-warmup'], verifiedDefaults: b10068('开启', 'enabled') },
   jinja: { flags: ['--jinja', '--no-jinja'], verifiedDefaults: b10068('开启', 'enabled') },
-  cache_idle_slots: { flags: ['--cache-idle-slots', '--no-cache-idle-slots'], verifiedDefaults: b10068('开启', 'enabled') },
+  cache_idle_slots: {
+    flags: ['--cache-idle-slots', '--no-cache-idle-slots'],
+    verifiedDefaults: b10068('开启', 'enabled'),
+    dependency: config => config.cache_ram !== 0,
+  },
   prefill_assistant: { flags: ['--prefill-assistant', '--no-prefill-assistant'], verifiedDefaults: b10068('开启', 'enabled') },
   models_autoload: { flags: ['--models-autoload', '--no-models-autoload'], verifiedDefaults: b10068('开启', 'enabled') },
-  context_shift: { flags: ['--context-shift', '--no-context-shift'], verifiedDefaults: b10068('关闭', 'disabled') },
+  context_shift: {
+    flags: ['--context-shift', '--no-context-shift'],
+    verifiedDefaults: b10068('关闭', 'disabled'),
+    dependency: (config, isEmbedding) => !isEmbedding && !projectorEnabled(config, isEmbedding),
+  },
+  cache_reuse: {
+    flags: ['--cache-reuse'],
+    dependency: (config, isEmbedding) => !isEmbedding && config.cache_prompt && !projectorEnabled(config, isEmbedding),
+  },
   perf: { flags: ['--perf', '--no-perf'], verifiedDefaults: b10068('开启（已按源码核验）', 'enabled (source-verified)') },
 
   load_mode: { flags: ['--load-mode', '-lm'], verifiedDefaults: b10105('mmap', 'mmap') },
@@ -103,8 +126,8 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
   spec_draft_backend_sampling: { flags: ['--spec-draft-backend-sampling', '--no-spec-draft-backend-sampling'], dependency: specEnabled },
   spec_draft_threads: { flags: ['--spec-draft-threads', '-td'], dependency: specEnabled },
   spec_draft_threads_batch: { flags: ['--spec-draft-threads-batch', '-tbd'], dependency: specEnabled },
-  lookup_cache_static: { flags: ['--lookup-cache-static', '-lcs'], dependency: specEnabled },
-  lookup_cache_dynamic: { flags: ['--lookup-cache-dynamic', '-lcd'], dependency: specEnabled },
+  lookup_cache_static: { flags: ['--lookup-cache-static', '-lcs'], dependency: ngramCacheEnabled },
+  lookup_cache_dynamic: { flags: ['--lookup-cache-dynamic', '-lcd'], dependency: ngramCacheEnabled },
 
   mirostat_lr: { flags: ['--mirostat-lr'], dependency: config => config.mirostat > 0 },
   mirostat_ent: { flags: ['--mirostat-ent'], dependency: config => config.mirostat > 0 },
@@ -118,18 +141,22 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
   fit_target: { flags: ['--fit-target', '-fitt'], dependency: config => fitEnabled(config) },
   fit_ctx: { flags: ['--fit-ctx', '-fitc'], dependency: config => fitEnabled(config) },
 
-  backend_sampling: { flags: ['--backend-sampling', '-bs'] },
+  backend_sampling: { flags: ['--backend-sampling', '-bs'], dependency: backendSamplingCompatible },
+  tools: { flags: ['--tools'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja },
+  agent: { flags: ['--agent', '--no-agent', '-ag', '-no-ag'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja },
+  mcp_servers_config: { flags: ['--mcp-servers-config'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja },
+  mcp_servers_json: { flags: ['--mcp-servers-json'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja },
   image_min_tokens: {
     flags: ['--image-min-tokens'],
     defaultKind: 'model',
     verifiedDefaults: b10068('从模型元数据读取', 'read from model metadata'),
-    dependency: (_config, isEmbedding) => !isEmbedding,
+    dependency: multimodalEnabled,
   },
   image_max_tokens: {
     flags: ['--image-max-tokens'],
     defaultKind: 'model',
     verifiedDefaults: b10068('从模型元数据读取', 'read from model metadata'),
-    dependency: (_config, isEmbedding) => !isEmbedding,
+    dependency: multimodalEnabled,
   },
 }
 

@@ -308,6 +308,7 @@ async function main() {
       || status.reply.payload?.protocol_version !== 1
       || status.reply.payload?.service_pid <= 0
       || !status.reply.payload?.capabilities?.includes('background_detach_v1')
+      || !status.reply.payload?.capabilities?.includes('config_sync_ack_v1')
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')) {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }
@@ -362,7 +363,7 @@ async function main() {
       },
       'sync-config',
     )
-    if (synced.reply?.result !== 'status') {
+    if (synced.reply?.result !== 'ack') {
       throw new Error(`runtime configuration sync failed: ${JSON.stringify(synced)}`)
     }
 

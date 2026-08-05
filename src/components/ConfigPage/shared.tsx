@@ -646,6 +646,7 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     slots_enabled: true, metrics: false, props: false,
     slot_save_path: '', log_prompts_dir: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
     ui_config_file: '', ui_config: '', ui_mcp_proxy: false, agent: false,
+    mcp_servers_config: '', mcp_servers_json: '',
     rpc_servers: '', sse_ping_interval: 30, reuse_port: false,
   },
   advancedMulti: {

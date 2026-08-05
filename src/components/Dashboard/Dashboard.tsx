@@ -12,6 +12,7 @@ import {
   HardDrive,
   Package,
   Play,
+  LoaderCircle,
   RefreshCw,
   Search,
   Server,
@@ -196,6 +197,7 @@ export default function Dashboard() {
   const setActiveTab = useAppStore(state => state.setActiveTab)
   const startInstance = useAppStore(state => state.startInstance)
   const stopInstance = useAppStore(state => state.stopInstance)
+  const instanceLifecycle = useAppStore(state => state.instanceLifecycle)
   const openBrowser = useAppStore(state => state.openBrowser)
   const setActiveConfigInstanceId = useAppStore(state => state.setActiveConfigInstanceId)
   const downloadTasks = useAppStore(state => state.downloadTasks)
@@ -579,6 +581,8 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                   {filteredInstances.map(instance => {
                     const isRunning = instance.status === 'running'
+                    const lifecyclePhase = instanceLifecycle[instance.id]
+                    const isLifecycleBusy = Boolean(lifecyclePhase)
                     const endpoint = formatHostPort(instance.config.host, instance.config.port)
                     const engineName = engineNameFor(instance)
 
@@ -594,8 +598,12 @@ export default function Dashboard() {
                           <div className="truncate text-slate-600 dark:text-slate-400" title={engineName}>{engineName}</div>
                         </td>
                         <td className="px-5 py-3 align-middle">
-                          <Badge tone={statusTone(instance)}>
-                            {isRunning ? t.instance.running : instance.status === 'stopped' ? t.instance.stopped : t.instance.error}
+                          <Badge tone={isLifecycleBusy ? 'blue' : statusTone(instance)}>
+                            {lifecyclePhase === 'starting'
+                              ? t.instance.starting
+                              : lifecyclePhase === 'stopping'
+                                ? t.instance.stopping
+                                : isRunning ? t.instance.running : instance.status === 'stopped' ? t.instance.stopped : t.instance.error}
                           </Badge>
                         </td>
                         <td className="px-5 py-3 align-middle">
@@ -612,22 +620,24 @@ export default function Dashboard() {
                             {isRunning ? (
                               <Button
                                 onClick={() => void stopInstance(instance.id).catch(() => {})}
+                                disabled={isLifecycleBusy}
                                 variant="danger"
                                 size="sm"
                                 className="h-8 whitespace-nowrap px-2"
-                                icon={<Square className="h-3.5 w-3.5" />}
+                                icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
                               >
-                                {t.instance.stop}
+                                {lifecyclePhase === 'stopping' ? t.instance.stopping : t.instance.stop}
                               </Button>
                             ) : (
                               <Button
                                 onClick={() => void startInstance(instance.id).catch(() => {})}
+                                disabled={isLifecycleBusy}
                                 variant="primary"
                                 size="sm"
                                 className="h-8 whitespace-nowrap px-2"
-                                icon={<Play className="h-3.5 w-3.5" />}
+                                icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                               >
-                                {t.instance.start}
+                                {lifecyclePhase === 'starting' ? t.instance.starting : t.instance.start}
                               </Button>
                             )}
                             <ActionIconButton

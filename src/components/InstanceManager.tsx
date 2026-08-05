@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
-import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal } from 'lucide-react'
+import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal, LoaderCircle } from 'lucide-react'
 import { useAppStore, defaultInstanceConfig, formatStartupCommand, maskStartupCommandSecrets } from '../store'
 import { invokeApp as invoke } from '../lib/ipc'
 import { confirm } from '@tauri-apps/plugin-dialog'
@@ -22,6 +22,7 @@ const InstanceManager = () => {
   const deleteInstance = useAppStore(s => s.deleteInstance)
   const startInstance = useAppStore(s => s.startInstance)
   const stopInstance = useAppStore(s => s.stopInstance)
+  const instanceLifecycle = useAppStore(s => s.instanceLifecycle)
   const openBrowser = useAppStore(s => s.openBrowser)
   const generateCommand = useAppStore(s => s.generateCommand)
   const models = useAppStore(s => s.models)
@@ -81,8 +82,12 @@ const InstanceManager = () => {
   const engineNameFor = useCallback((inst: Instance) => resolveEffectiveEngine(inst.config, engines, defaultEngineId)?.name
     || (engineMissingFor(inst) ? labels.configuredEngineMissing : t.instance.sysPath), [defaultEngineId, engineMissingFor, engines, labels.configuredEngineMissing, t.instance.sysPath])
 
-  const statusText = (inst: Instance) =>
-    inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error
+  const statusText = (inst: Instance) => {
+    const phase = instanceLifecycle[inst.id]
+    if (phase === 'starting') return t.instance.starting
+    if (phase === 'stopping') return t.instance.stopping
+    return inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error
+  }
 
   const healthText = (inst: Instance) => {
     if (inst.status === 'stopped') return labels.offline
@@ -384,6 +389,8 @@ const InstanceManager = () => {
               {filteredInstances.map((inst, index) => {
                 const selected = selectedInstance?.id === inst.id
                 const isRunning = inst.status === 'running'
+                const lifecyclePhase = instanceLifecycle[inst.id]
+                const isLifecycleBusy = Boolean(lifecyclePhase)
                 return (
                   <div
                     key={inst.id}
@@ -402,7 +409,7 @@ const InstanceManager = () => {
                     }`}
                   >
                     <div className="flex min-w-0 items-center gap-3">
-                      <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${inst.status === 'running' ? 'bg-emerald-500' : inst.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'}`} />
+                      <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${isLifecycleBusy ? 'animate-pulse bg-blue-500' : inst.status === 'running' ? 'bg-emerald-500' : inst.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'}`} />
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-2">
                           {editingId === inst.id ? (
@@ -462,7 +469,7 @@ const InstanceManager = () => {
                       >
                         <span className="min-w-0 truncate">{engineNameFor(inst)}</span>
                       </Button>
-                      <Badge tone={inst.status === 'running' ? 'emerald' : inst.status === 'error' ? 'red' : 'slate'}>
+                      <Badge tone={isLifecycleBusy ? 'blue' : inst.status === 'running' ? 'emerald' : inst.status === 'error' ? 'red' : 'slate'}>
                         {statusText(inst)}
                       </Badge>
                       <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
@@ -490,22 +497,24 @@ const InstanceManager = () => {
                       {isRunning ? (
                         <Button
                           onClick={() => void stopInstance(inst.id).catch(() => {})}
+                          disabled={isLifecycleBusy}
                           variant="danger"
                           size="sm"
                           className="h-8 w-[70px]"
-                          icon={<Square className="h-3.5 w-3.5" />}
+                          icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
                         >
-                          <span>{t.instance.stop}</span>
+                          <span>{lifecyclePhase === 'stopping' ? t.instance.stopping : t.instance.stop}</span>
                         </Button>
                       ) : (
                         <Button
                           onClick={() => void startInstance(inst.id).catch(() => {})}
+                          disabled={isLifecycleBusy}
                           variant="success"
                           size="sm"
                           className="h-8 w-[70px]"
-                          icon={<Play className="h-3.5 w-3.5" />}
+                          icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                         >
-                          <span>{t.instance.start}</span>
+                          <span>{lifecyclePhase === 'starting' ? t.instance.starting : t.instance.start}</span>
                         </Button>
                       )}
                       <Button
@@ -613,7 +622,7 @@ const InstanceManager = () => {
                     </div>
                     <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-300">{selectedInstance.config.host}:{selectedInstance.config.port}</p>
                   </div>
-                  <Badge tone={selectedInstance.status === 'running' ? 'emerald' : selectedInstance.status === 'error' ? 'red' : 'slate'}>
+                  <Badge tone={instanceLifecycle[selectedInstance.id] ? 'blue' : selectedInstance.status === 'running' ? 'emerald' : selectedInstance.status === 'error' ? 'red' : 'slate'}>
                     {statusText(selectedInstance)}
                   </Badge>
                 </div>
@@ -663,9 +672,19 @@ const InstanceManager = () => {
                 <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{labels.primaryActions}</div>
                 <div className="grid grid-cols-2 gap-2">
                   {selectedInstance.status === 'running' ? (
-                    <Button onClick={() => void stopInstance(selectedInstance.id).catch(() => {})} variant="danger" icon={<Square className="h-4 w-4" />}>{t.instance.stop}</Button>
+                    <Button onClick={() => void stopInstance(selectedInstance.id).catch(() => {})} disabled={Boolean(instanceLifecycle[selectedInstance.id])}
+                      variant="danger"
+                      icon={instanceLifecycle[selectedInstance.id] ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
+                    >
+                      {instanceLifecycle[selectedInstance.id] === 'stopping' ? t.instance.stopping : t.instance.stop}
+                    </Button>
                   ) : (
-                    <Button onClick={() => void startInstance(selectedInstance.id).catch(() => {})} variant="success" icon={<Play className="h-4 w-4" />}>{t.instance.start}</Button>
+                    <Button onClick={() => void startInstance(selectedInstance.id).catch(() => {})} disabled={Boolean(instanceLifecycle[selectedInstance.id])}
+                      variant="success"
+                      icon={instanceLifecycle[selectedInstance.id] ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                    >
+                      {instanceLifecycle[selectedInstance.id] === 'starting' ? t.instance.starting : t.instance.start}
+                    </Button>
                   )}
                   <Button onClick={() => openBrowser(selectedInstance.id, selectedInstance.config.host, selectedInstance.config.port, Boolean(selectedInstance.config.ssl_key_file && selectedInstance.config.ssl_cert_file), selectedInstance.config.api_prefix)} disabled={selectedInstance.status !== 'running'} icon={<Globe className="h-4 w-4" />}>{t.instance.openBrowser}</Button>
                 </div>

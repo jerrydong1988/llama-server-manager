@@ -18,6 +18,8 @@ pub struct ModelCapabilities {
     pub has_builtin_mtp: bool,
     #[serde(default)]
     pub mtp_layers: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_swa: Option<bool>,
     #[serde(default)]
     pub is_vision_model: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,6 +477,10 @@ pub struct InstanceConfig {
     pub ui_mcp_proxy: bool,
     #[serde(default)]
     pub agent: bool,
+    #[serde(default)]
+    pub mcp_servers_config: String,
+    #[serde(default)]
+    pub mcp_servers_json: String,
     pub embedding: bool,
     pub pooling: String,
     #[serde(default = "default_embd_normalize")]
@@ -813,6 +819,8 @@ impl Default for InstanceConfig {
             ui_config: String::new(),
             ui_mcp_proxy: false,
             agent: false,
+            mcp_servers_config: String::new(),
+            mcp_servers_json: String::new(),
             embedding: false,
             pooling: String::new(),
             embd_normalize: 2,
@@ -981,7 +989,7 @@ pub struct Usb4Adapter {
     pub ip: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProxyRoute {
     pub id: String,
@@ -1009,7 +1017,7 @@ impl Default for ProxyRoute {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProxyApiKey {
     pub id: String,
@@ -1035,7 +1043,7 @@ impl Default for ProxyApiKey {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProxyConfig {
     pub enabled: bool,

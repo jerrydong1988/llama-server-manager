@@ -334,6 +334,7 @@ pub async fn save_config(
     dark_mode: bool,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<HashMap<String, InstanceConfig>> {
+    let mut timing = crate::operation_timing::OperationTiming::new("save_config");
     let normalized = normalize_instances_for_save(instances);
     let instances = normalized.all;
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -346,6 +347,7 @@ pub async fn save_config(
         last_tab,
         dark_mode,
     };
+    timing.mark("normalize");
     std::fs::create_dir_all(&config_dir).map_err(|error| {
         AppError::new("CONFIG_DIRECTORY_WRITE", error.to_string(), true)
             .with_context("path", config_dir.display().to_string())
@@ -370,17 +372,19 @@ pub async fn save_config(
             )
         })?;
     }
+    timing.mark("persist-main");
     {
         let mut stored = state.instances.lock().unwrap();
         *stored = instances.clone();
     }
     if crate::runtime_service::manages_instances() {
-        let sync_generation = crate::runtime_service::mark_config_sync_pending();
-        crate::runtime_service::sync_app_config(&state)
-            .await
-            .map_err(|error| AppError::new("RUNTIME_CONFIG_SYNC_FAILED", error, true))?;
-        crate::runtime_service::mark_config_sync_complete(sync_generation);
+        // instances.json is the durable source of truth for this operation. The app bridge
+        // coalesces rapid edits and reliably retries delivery to the runtime service, so a
+        // routine parameter save does not wait for daemon discovery or startup.
+        crate::runtime_service::mark_config_sync_pending();
     }
+    timing.mark("queue-runtime-sync");
+    timing.finish("success");
     Ok(normalized.changed)
 }
 

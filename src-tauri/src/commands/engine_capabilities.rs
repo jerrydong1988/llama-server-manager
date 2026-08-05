@@ -658,6 +658,8 @@ fn known_flag_value_count(flag: &str) -> Option<usize> {
         | "--tags"
         | "--media-path"
         | "--tools"
+        | "--mcp-servers-config"
+        | "--mcp-servers-json"
         | "--image-min-tokens"
         | "--image-max-tokens"
         | "--mtmd-batch-max-tokens" => 1,
