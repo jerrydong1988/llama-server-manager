@@ -39,7 +39,7 @@ assert.match(
 )
 assert.match(
   configPageSource,
-  /const targetIsActive = \(\) => mountedRef\.current[\s\S]*if \(!targetIsActive\(\)\) return[\s\S]*setSaved\(true\)/,
+  /const targetIsActive = \(\) => mountedRef\.current[\s\S]*if \(!targetIsActive\(\)\) \{[\s\S]*return[\s\S]*setSaved\(true\)/,
   'a completed save must not update feedback for another instance',
 )
 const saveDisabledLine = configPageSource
@@ -61,7 +61,9 @@ assert.equal(
   2,
   'the top and floating save actions must share the same disabled state',
 )
-assert.match(configPageSource, /saving \? t\.configPage\.saving :/)
+assert.match(configPageSource, /saving \? savingLabel :/)
+assert.match(configPageSource, /preflight-reused/)
+assert.match(configPageSource, /setSaveStage\('validating'\)[\s\S]*setSaveStage\('persisting'\)/)
 assert.match(configPageSource, /const editRevisionRef = useRef\(0\)/)
 assert.match(configPageSource, /const saveInFlightRef = useRef\(false\)/)
 assert.match(
@@ -82,6 +84,8 @@ assert.ok(
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {
   const localeSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'i18n', locale), 'utf8')
   assert.match(localeSource, /saving:/, `${locale} must label the in-progress save state`)
+  assert.match(localeSource, /validating:/, `${locale} must label compatibility validation`)
+  assert.match(localeSource, /persisting:/, `${locale} must label durable persistence`)
 }
 
 const instanceSliceSource = fs.readFileSync(
@@ -102,6 +106,23 @@ assert.match(
 assert.match(instanceSliceSource, /synchronizeInstanceSummary/)
 assert.doesNotMatch(instanceSliceSource, /configSaveQueue/)
 
+assert.match(saveConfigBackend, /mark_config_sync_pending\(\)/)
+assert.doesNotMatch(
+  saveConfigBackend,
+  /sync_app_config\(&state\)\s*\.await/,
+  'ordinary parameter saves must not wait for runtime service discovery or startup',
+)
+
+const runtimeEventsSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src', 'store', 'runtimeEvents.ts'),
+  'utf8',
+)
+assert.doesNotMatch(
+  runtimeEventsSource,
+  /state\.saveConfig\(\)/,
+  'runtime events must not trigger redundant frontend configuration writes',
+)
+
 assert.match(
   configPageSource,
   /await saveConfig\(\)[\s\S]*useAppStore\.getState\(\)\.instances[\s\S]*setBaseline\(persistedConfig\)/,
@@ -117,8 +138,14 @@ const entry = `
   import assert from 'node:assert/strict'
   import { createLatestSaveCoordinator } from './src/store/configSaveCoordinator'
   import { runRevisionGuarded } from './src/components/ConfigPage/configSaveGuard'
+  import { canReuseConfigPreflight, createConfigPreflightKey } from './src/components/ConfigPage/configPreflight'
 
   async function run() {
+
+  const cachedConfig = { name: 'cached', port: 8080 } as any
+  const cachedKey = createConfigPreflightKey(cachedConfig, 'llama-server')
+  assert.equal(canReuseConfigPreflight(cachedKey, createConfigPreflightKey(cachedConfig, 'llama-server')), true)
+  assert.equal(canReuseConfigPreflight(cachedKey, createConfigPreflightKey({ ...cachedConfig, port: 8081 }, 'llama-server')), false)
 
   const deferred = () => {
     let resolve

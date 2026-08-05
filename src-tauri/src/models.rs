@@ -981,7 +981,7 @@ pub struct Usb4Adapter {
     pub ip: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProxyRoute {
     pub id: String,
@@ -1009,7 +1009,7 @@ impl Default for ProxyRoute {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProxyApiKey {
     pub id: String,
@@ -1035,7 +1035,7 @@ impl Default for ProxyApiKey {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProxyConfig {
     pub enabled: bool,

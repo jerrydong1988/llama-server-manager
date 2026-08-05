@@ -535,6 +535,7 @@ type BrowserTestControl = {
   updaterCheckCount: number
   state: GlobalConfigShape
   emitEvent: (event: string, payload?: unknown) => Promise<void>
+  releaseStart: () => void
 }
 
 declare global {
@@ -542,6 +543,8 @@ declare global {
     __TAURI_BROWSER_TEST__: BrowserTestControl
   }
 }
+
+let releasePendingStart: (() => void) | null = null
 
 const control: BrowserTestControl = {
   marker: BROWSER_TEST_MARKER,
@@ -555,6 +558,7 @@ const control: BrowserTestControl = {
   updaterCheckCount: 0,
   state,
   emitEvent: (event, payload) => emit(event, payload),
+  releaseStart: () => releasePendingStart?.(),
 }
 
 const syncAutomationProbe = () => {
@@ -1040,13 +1044,25 @@ mockIPC((command, payload) => {
     case 'start_server': {
       const instanceId = String(args.instanceId ?? '')
       const config = args.config as InstanceConfig
-      control.state.running[instanceId] = {
-        instance_id: instanceId,
-        pid: 5000 + Object.keys(control.state.running).length,
-        port: config.port,
-        host: config.host,
-        start_time: Math.floor(Date.now() / 1000),
+      const completeStart = () => {
+        control.state.running[instanceId] = {
+          instance_id: instanceId,
+          pid: 5000 + Object.keys(control.state.running).length,
+          port: config.port,
+          host: config.host,
+          start_time: Math.floor(Date.now() / 1000),
+        }
       }
+      if (BROWSER_SCENARIO === 'delayed-instance-start') {
+        return new Promise(resolve => {
+          releasePendingStart = () => {
+            releasePendingStart = null
+            completeStart()
+            resolve(null)
+          }
+        })
+      }
+      completeStart()
       return null
     }
     case 'get_download_resume_policy': return IS_DOCS_SCENARIO ? 'auto_on_launch' : 'manual'

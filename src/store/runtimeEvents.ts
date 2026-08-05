@@ -141,11 +141,6 @@ function warnListenerFailure(store: StoreLike, eventName: string, error: unknown
   store.getState().addRuntimeWarning(`listener "${eventName}" failed to register: ${message}`)
 }
 
-function warnAsyncFailure(store: StoreLike, operation: string, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error)
-  store.getState().addRuntimeWarning(`${operation} failed: ${message}`)
-}
-
 const LISTENER_RETRY_DELAYS = [250, 1_000, 3_000, 10_000, 30_000]
 
 function registerListener<T>(
@@ -292,7 +287,6 @@ export function registerGlobalStoreListeners(
       text: `${formatStartupCommand(event.payload.command)}\n-- PID: ${event.payload.pid} | Port: ${event.payload.port}`,
       timestamp: Date.now(),
     })
-    void state.saveConfig().catch(error => warnAsyncFailure(store, 'runtime config save', error))
   })
 
   registerListener<{ instanceId: string; expected?: boolean; reason?: string; exitCode?: number | null }>(store, 'server-stopped', (event) => {
@@ -308,7 +302,6 @@ export function registerGlobalStoreListeners(
     if (event.payload.expected !== true) {
       state.addRuntimeWarning(`Instance exited unexpectedly (${event.payload.reason || 'process-exited'}, code ${event.payload.exitCode ?? 'unknown'})`)
     }
-    void state.saveConfig().catch(error => warnAsyncFailure(store, 'runtime config save', error))
   })
 
   registerListener<{ instanceId: string; error: string }>(store, 'server-error', (event) => {
@@ -317,7 +310,6 @@ export function registerGlobalStoreListeners(
       status: 'error',
       healthCheck: 'fail',
     })
-    void state.saveConfig().catch(error => warnAsyncFailure(store, 'runtime config save', error))
   })
 
   registerListener<{ instanceId: string; status: string }>(store, 'health-status', (event) => {

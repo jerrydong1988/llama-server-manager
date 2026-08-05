@@ -1,19 +1,50 @@
-const activeStarts = new Map<string, Promise<void>>()
+type LifecycleOperation = 'start' | 'stop'
+
+type ActiveLifecycleOperation = {
+  kind: LifecycleOperation
+  promise: Promise<void>
+}
+
+const activeOperations = new Map<string, ActiveLifecycleOperation>()
+
+function runInstanceLifecycleOperation(
+  instanceId: string,
+  kind: LifecycleOperation,
+  operation: () => Promise<void>,
+): Promise<void> {
+  const active = activeOperations.get(instanceId)
+  if (active?.kind === kind) return active.promise
+
+  let current: Promise<void>
+  current = (async () => {
+    if (active) {
+      try {
+        await active.promise
+      } catch {
+        // An opposite lifecycle operation still gets its turn after a failure.
+      }
+    }
+    await operation()
+  })().finally(() => {
+    if (activeOperations.get(instanceId)?.promise === current) {
+      activeOperations.delete(instanceId)
+    }
+  })
+
+  activeOperations.set(instanceId, { kind, promise: current })
+  return current
+}
 
 export function runInstanceStart(
   instanceId: string,
   operation: () => Promise<void>,
 ): Promise<void> {
-  const active = activeStarts.get(instanceId)
-  if (active) return active
+  return runInstanceLifecycleOperation(instanceId, 'start', operation)
+}
 
-  const current = (async () => {
-    try {
-      await operation()
-    } finally {
-      activeStarts.delete(instanceId)
-    }
-  })()
-  activeStarts.set(instanceId, current)
-  return current
+export function runInstanceStop(
+  instanceId: string,
+  operation: () => Promise<void>,
+): Promise<void> {
+  return runInstanceLifecycleOperation(instanceId, 'stop', operation)
 }

@@ -1,7 +1,7 @@
 use super::protocol::{
     PersistedRuntimeState, RuntimeCommand, RuntimeLaunchSpec, RuntimeReply, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
-    RUNTIME_STATE_SCHEMA_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
+    RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
 use crate::commands::proxy::{
@@ -194,6 +194,14 @@ fn gui_owner_is_alive(owner: &GuiOwner) -> bool {
     })
 }
 
+fn runtime_config_matches(
+    state: &PersistedRuntimeState,
+    proxy_config: &crate::models::ProxyConfig,
+    instances: &HashMap<String, crate::models::InstanceConfig>,
+) -> bool {
+    state.proxy_config == *proxy_config && state.instances == *instances
+}
+
 struct RuntimeProxy {
     shutdown: tokio::sync::oneshot::Sender<()>,
     task: tokio::task::JoinHandle<()>,
@@ -277,6 +285,7 @@ impl RuntimeSupervisor {
             service_pid: std::process::id(),
             capabilities: vec![
                 BACKGROUND_DETACH_CAPABILITY.to_string(),
+                CONFIG_SYNC_ACK_CAPABILITY.to_string(),
                 RUNTIME_ERROR_ACK_CAPABILITY.to_string(),
             ],
             config_revision,
@@ -330,6 +339,12 @@ impl RuntimeSupervisor {
         let proxy_config = normalize_and_validate_proxy_config(proxy_config, &instances)?;
         let _proxy_transition = self.proxy_runtime.lock().await;
         let _instance_transition = self.instance_lifecycle.lock().unwrap();
+        {
+            let state = self.state.lock().unwrap();
+            if runtime_config_matches(&state, &proxy_config, &instances) {
+                return Ok(());
+            }
+        }
         let requested_addr =
             crate::utils::format_host_port(proxy_config.host.trim(), proxy_config.port);
         {
@@ -389,6 +404,9 @@ impl RuntimeSupervisor {
         let previous = {
             let mut state = self.state.lock().unwrap();
             let previous = state.background_enabled;
+            if previous == enabled {
+                return Ok(());
+            }
             state.background_enabled = enabled;
             previous
         };
@@ -1293,9 +1311,7 @@ impl RuntimeSupervisor {
                 instances,
             } => {
                 self.sync_config(revision, proxy_config, instances).await?;
-                Ok(RuntimeReply::Status(Box::new(
-                    self.status(registered_for_login),
-                )))
+                Ok(RuntimeReply::Ack)
             }
             RuntimeCommand::PrepareBackgroundDetach {
                 revision,
@@ -1427,8 +1443,9 @@ fn should_stop_for_missing_gui(background_enabled: bool, heartbeat_expired: bool
 #[cfg(test)]
 mod tests {
     use super::{
-        gui_owner_is_alive, is_instance_exit_error, should_stop_for_missing_gui,
-        validate_background_detach_inventory, validate_runtime_state, GuiOwner,
+        gui_owner_is_alive, is_instance_exit_error, runtime_config_matches,
+        should_stop_for_missing_gui, validate_background_detach_inventory, validate_runtime_state,
+        GuiOwner,
     };
     use crate::commands::server::read_process_identity;
     use crate::models::{InstanceConfig, RunningInstance};
@@ -1469,6 +1486,21 @@ mod tests {
         assert!(should_stop_for_missing_gui(false, true));
         assert!(!should_stop_for_missing_gui(true, false));
         assert!(!should_stop_for_missing_gui(true, true));
+    }
+
+    #[test]
+    fn identical_runtime_config_is_recognized_as_a_noop() {
+        let state = PersistedRuntimeState::default();
+        let instances = HashMap::new();
+        assert!(runtime_config_matches(
+            &state,
+            &state.proxy_config,
+            &instances
+        ));
+
+        let mut changed = state.proxy_config.clone();
+        changed.port = changed.port.saturating_add(1);
+        assert!(!runtime_config_matches(&state, &changed, &instances));
     }
 
     #[test]

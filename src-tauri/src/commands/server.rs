@@ -1839,12 +1839,15 @@ pub async fn generate_server_command(
     engine_exe: String,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<GeneratedServerCommand> {
+    let mut timing = crate::operation_timing::OperationTiming::new("generate_server_command");
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
     let manual = uses_manual_command(&config);
     let (config, _, command) = prepare_launch_checked(config, &engine_exe)?;
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
+    timing.mark("prepare");
     if manual {
+        timing.finish("success");
         return Ok(GeneratedServerCommand {
             command,
             unsupported_flags: Vec::new(),
@@ -1856,6 +1859,7 @@ pub async fn generate_server_command(
         EngineCapabilityResolution::Missing => None,
         EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
     };
+    timing.mark("capabilities");
     validate_custom_argument_capabilities(&config, capabilities.as_deref())?;
     let command = adapt_load_mode_for_capabilities(&command, capabilities.as_deref());
     let unsupported_flags = capabilities
@@ -1876,6 +1880,7 @@ pub async fn generate_server_command(
     let command = command_for_capabilities(&command, capabilities.as_deref());
     let emitted_override_keys =
         emitted_override_keys(&config, &engine_exe, capabilities.as_deref(), &command);
+    timing.finish("success");
     Ok(GeneratedServerCommand {
         command,
         unsupported_flags,
@@ -1892,6 +1897,7 @@ pub async fn start_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> AppResult<()> {
+    let mut timing = crate::operation_timing::OperationTiming::new("start_server");
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
     validate_instance_id(&instance_id)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
@@ -1938,6 +1944,7 @@ pub async fn start_server(
         command_for_capabilities(&generated_cmd, engine_capabilities.as_deref())
     };
     let cmd_display = format_command_for_display(&cmd);
+    timing.mark("preflight");
 
     if crate::runtime_service::manages_instances() {
         let running =
@@ -1954,6 +1961,7 @@ pub async fn start_server(
             })
             .await
             .map_err(AppError::from)?;
+        timing.mark("runtime-start");
 
         let previous_instance = {
             state
@@ -2001,6 +2009,7 @@ pub async fn start_server(
                 true,
             ));
         }
+        timing.mark("persist-main");
 
         app.emit(
             "server-started",
@@ -2032,6 +2041,7 @@ pub async fn start_server(
         if register_restored_runtime_instance(&app, &running.instance_id, running.pid) {
             reconnect_runtime_instance_logs(&running.instance_id, running.pid, &config_dir, app);
         }
+        timing.finish("success");
         return Ok(());
     }
 
@@ -2742,9 +2752,12 @@ pub async fn stop_server(
     if ri.is_none() {
         return Ok(());
     }
-    if crate::runtime_service::manages_instances()
-        && crate::runtime_service::is_instance_managed(&instance_id).await?
-    {
+    let runtime_managed = state
+        .runtime_managed_instances
+        .lock()
+        .unwrap()
+        .contains(&instance_id);
+    if crate::runtime_service::manages_instances() && runtime_managed {
         crate::runtime_service::stop_instance(instance_id.clone()).await?;
         let removed = state.running.lock().unwrap().remove(&instance_id);
         state
@@ -2878,11 +2891,60 @@ fn is_recorded_process_alive(pid: u32) -> bool {
 }
 
 pub(crate) fn read_process_identity(pid: u32) -> Option<(u64, std::path::PathBuf)> {
-    let pid = Pid::from_u32(pid);
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-    let process = system.process(pid)?;
-    Some((process.start_time(), process.exe()?.to_path_buf()))
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+        use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+        use windows_sys::Win32::System::Threading::{
+            GetProcessTimes, OpenProcess, QueryFullProcessImageNameW,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return None;
+            }
+
+            let mut creation_time = FILETIME::default();
+            let mut exit_time = FILETIME::default();
+            let mut kernel_time = FILETIME::default();
+            let mut user_time = FILETIME::default();
+            let times_ok = GetProcessTimes(
+                handle,
+                &mut creation_time,
+                &mut exit_time,
+                &mut kernel_time,
+                &mut user_time,
+            ) != 0;
+            let mut path_buffer = vec![0_u16; 32_768];
+            let mut path_len = path_buffer.len() as u32;
+            let path_ok =
+                QueryFullProcessImageNameW(handle, 0, path_buffer.as_mut_ptr(), &mut path_len) != 0;
+            CloseHandle(handle);
+            if !times_ok || !path_ok || path_len == 0 {
+                return None;
+            }
+
+            let windows_ticks =
+                ((creation_time.dwHighDateTime as u64) << 32) | creation_time.dwLowDateTime as u64;
+            const WINDOWS_TO_UNIX_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
+            let start_time = windows_ticks.saturating_sub(WINDOWS_TO_UNIX_EPOCH_TICKS) / 10_000_000;
+            let executable =
+                std::path::PathBuf::from(OsString::from_wide(&path_buffer[..path_len as usize]));
+            Some((start_time, executable))
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let pid = Pid::from_u32(pid);
+        let mut system = System::new();
+        system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
+        let process = system.process(pid)?;
+        Some((process.start_time(), process.exe()?.to_path_buf()))
+    }
 }
 
 fn normalized_executable_path(path: &std::path::Path) -> String {
@@ -4409,6 +4471,14 @@ fn split_args_checked(input: &str) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod perf_parser_tests {
     use super::*;
+
+    #[test]
+    fn current_process_identity_is_available() {
+        let (start_time, executable) = read_process_identity(std::process::id())
+            .expect("current process identity should be readable");
+        assert!(start_time > 0);
+        assert!(executable.is_absolute());
+    }
 
     fn collect_vector_events(workload: ModelWorkload, lines: &[&str]) -> Vec<VectorTaskEvent> {
         let parser = PerfParser::new(workload);
