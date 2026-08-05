@@ -48,9 +48,18 @@ test('search navigation, change review, emission preview, and save use the mock 
   const modelsAutoload = page.locator('[data-config-field="models_autoload"]')
   await expect(modelsAutoload.getByRole('switch')).toHaveAttribute('aria-checked', 'false')
   await expect(modelsAutoload).toHaveAttribute('data-config-emitted', 'true')
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.lastGenerated?.command.join(' ') ?? ''
+  ))).toContain('--temp 0.7')
 
+  const preflightCalls = await page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'generate_server_command').length
+  ))
   await page.getByRole('button', { name: '保存配置', exact: true }).click()
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'generate_server_command').length
+  ))).toBe(preflightCalls)
 
   const generated = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated)
   expect(generated?.command).toContain('--temp')

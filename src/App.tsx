@@ -245,10 +245,10 @@ function AppInner() {
       if (!e.ctrlKey) return
       if (e.key === 'Enter') {
         e.preventDefault()
-        const { instances, startInstance, stopInstance } = useAppStore.getState()
+        const { instances, instanceLifecycle, startInstance, stopInstance } = useAppStore.getState()
         if (instances.length > 0) {
-          const running = instances.find(i => i.status === 'running')
-          const stopped = instances.find(i => i.status !== 'running')
+          const running = instances.find(i => i.status === 'running' && !instanceLifecycle[i.id])
+          const stopped = instances.find(i => i.status !== 'running' && !instanceLifecycle[i.id])
           if (running) void stopInstance(running.id).catch(() => {})
           else if (stopped) void startInstance(stopped.id).catch(() => {})
         }

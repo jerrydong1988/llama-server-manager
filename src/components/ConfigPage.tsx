@@ -28,6 +28,8 @@ import { ConfigChangePanel } from './ConfigPage/ConfigChangePanel'
 import { ConfigFloatingActions } from './ConfigPage/ConfigFloatingActions'
 import { ModelAssetPicker, type ModelAssetPickerTarget } from './ConfigPage/ModelAssetPicker'
 import { FieldRuntimeProvider } from './ConfigPage/shared'
+import { canReuseConfigPreflight, configForPreflight, createConfigPreflightKey } from './ConfigPage/configPreflight'
+import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -49,6 +51,7 @@ const ConfigPage = () => {
   const [baseline, setBaseline] = useState<InstanceConfig | null>(null)
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [saveStage, setSaveStage] = useState<'validating' | 'persisting' | null>(null)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<ModelAssetPickerTarget>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
@@ -141,8 +144,11 @@ const ConfigPage = () => {
   const currentEngine = useMemo(() => {
     return local ? resolveEffectiveEngine(local, engines, defaultEngineId) : null
   }, [defaultEngineId, engines, local])
+  const compatibilityConfig = useMemo(() => local
+    ? configForPreflight(local, currentModel, committedModelPathRef.current)
+    : null, [currentModel, local])
   const trustedEngineId = local?.engine_id || defaultEngineId || ''
-  const { unsupportedEngineFlags, setUnsupportedEngineFlags, commandPreview, previewingCommand, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local, currentEngine, trustedEngineId })
+  const { unsupportedEngineFlags, setUnsupportedEngineFlags, commandPreview, commandPreviewKey, previewingCommand, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local: compatibilityConfig, currentEngine, trustedEngineId })
 
   if (!local) {
     return (
@@ -207,6 +213,9 @@ const ConfigPage = () => {
 
     saveInFlightRef.current = true
     setSaving(true); setSaved(false)
+    setSaveStage('validating')
+    const timing = beginOperationTiming('config.save')
+    let outcome: OperationOutcome = 'failure'
     if (saveFeedbackTimerRef.current !== null) {
       clearTimeout(saveFeedbackTimerRef.current)
       saveFeedbackTimerRef.current = null
@@ -224,25 +233,43 @@ const ConfigPage = () => {
       : modelPathChanged
         ? normalizeConfigForSelectedModel(localSnapshot, currentModel)
         : normalizeInstanceConfig(localSnapshot, currentModel)
+    timing.mark('normalize')
 
     try {
       if (engine) {
-        const preflight = await runRevisionGuarded(saveRevision, () => editRevisionRef.current, () => generateCommand(normalized.config, engine.exe))
-        if (preflight.stale || !saveIsCurrent()) return
+        const expectedPreflightKey = createConfigPreflightKey(normalized.config, engine.exe)
+        const cachedPreflight = commandPreview && canReuseConfigPreflight(commandPreviewKey, expectedPreflightKey) ? commandPreview : null
+        const preflight = cachedPreflight
+          ? { stale: false as const, value: cachedPreflight }
+          : await runRevisionGuarded(saveRevision, () => editRevisionRef.current, () => generateCommand(normalized.config, engine.exe))
+        timing.mark(cachedPreflight ? 'preflight-reused' : 'preflight')
+        if (preflight.stale || !saveIsCurrent()) {
+          outcome = 'cancelled'
+          return
+        }
         const unsupported = preflight.value.unsupportedFlags
         setUnsupportedEngineFlags(unsupported)
         if (unsupported.length > 0) {
+          outcome = 'cancelled'
           return
         }
       }
 
-      if (!saveIsCurrent()) return
+      if (!saveIsCurrent()) {
+        outcome = 'cancelled'
+        return
+      }
 
+      setSaveStage('persisting')
       committedModelPathRef.current = normalizeModelPath(normalized.config.model_path)
       setLocal(normalized.config)
       updateInstance(targetInstanceId, { config: normalized.config })
       await saveConfig()
-      if (!targetIsActive()) return
+      timing.mark('persist')
+      if (!targetIsActive()) {
+        outcome = 'cancelled'
+        return
+      }
       const persistedConfig = useAppStore.getState().instances
         .find(item => item.id === targetInstanceId)?.config ?? normalized.config
       setBaseline(persistedConfig)
@@ -268,6 +295,7 @@ const ConfigPage = () => {
         }
         saveFeedbackTimerRef.current = null
       }, 6000)
+      outcome = 'success'
     } catch (error) {
       updateInstance(targetInstanceId, { config: previousSave.config })
       if (saveIsCurrent()) { committedModelPathRef.current = previousSave.committedModelPath; setLocal(localSnapshot) }
@@ -279,7 +307,8 @@ const ConfigPage = () => {
       return
     } finally {
       saveInFlightRef.current = false
-      if (mountedRef.current) setSaving(false)
+      if (mountedRef.current) { setSaving(false); setSaveStage(null) }
+      timing.finish(outcome)
     }
   }
 
@@ -443,6 +472,7 @@ const ConfigPage = () => {
     },
   ]
   const saveDisabled = !inst || saving || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))
+  const savingLabel = saveStage === 'validating' ? t.configPage.validating : saveStage === 'persisting' ? t.configPage.persisting : t.configPage.saving
 
   return (
     <div className="space-y-5">
@@ -475,7 +505,7 @@ const ConfigPage = () => {
               icon={saving ? <LoaderCircle className="h-4 w-4 animate-spin" /> : saved ? <CheckCircle2 className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
               className="shrink-0"
             >
-              {saving ? t.configPage.saving : saved ? t.configPage.saved : t.configPage.save}
+              {saving ? savingLabel : saved ? t.configPage.saved : t.configPage.save}
             </Button>
           </div>
         </div>
@@ -762,7 +792,7 @@ const ConfigPage = () => {
         topTargetId="config-page-actions"
         saveLabel={t.configPage.save}
         floatingSaveLabel={labels.floatingSave}
-        savingLabel={t.configPage.saving}
+        savingLabel={savingLabel}
         savedLabel={t.configPage.saved}
         backToTopLabel={labels.backToTop}
         saving={saving}

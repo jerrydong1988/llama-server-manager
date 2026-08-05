@@ -6,7 +6,8 @@ mod transport;
 use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
+    RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -20,19 +21,25 @@ pub use protocol::RuntimeLaunchSpec;
 static CONFIG_REVISION: AtomicU64 = AtomicU64::new(0);
 static CONFIG_CHANGE_GENERATION: AtomicU64 = AtomicU64::new(1);
 static CONFIG_SYNCED_GENERATION: AtomicU64 = AtomicU64::new(0);
+static CONFIG_SYNC_NOTIFY: tokio::sync::Notify = tokio::sync::Notify::const_new();
+static RUNTIME_READY: AtomicBool = AtomicBool::new(false);
 static RUNTIME_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static APP_CONFIG_SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const MAX_RUNTIME_SERVICE_LOG_BYTES: u64 = 4 * 1024 * 1024;
 
 fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
-    [BACKGROUND_DETACH_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY]
-        .iter()
-        .all(|required| {
-            status
-                .capabilities
-                .iter()
-                .any(|capability| capability.as_str() == *required)
-        })
+    [
+        BACKGROUND_DETACH_CAPABILITY,
+        CONFIG_SYNC_ACK_CAPABILITY,
+        RUNTIME_ERROR_ACK_CAPABILITY,
+    ]
+    .iter()
+    .all(|required| {
+        status
+            .capabilities
+            .iter()
+            .any(|capability| capability.as_str() == *required)
+    })
 }
 
 pub fn next_config_revision() -> u64 {
@@ -51,7 +58,9 @@ pub fn next_config_revision() -> u64 {
 }
 
 pub fn mark_config_sync_pending() -> u64 {
-    CONFIG_CHANGE_GENERATION.fetch_add(1, Ordering::AcqRel) + 1
+    let generation = CONFIG_CHANGE_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    CONFIG_SYNC_NOTIFY.notify_one();
+    generation
 }
 
 pub fn mark_config_sync_complete(generation: u64) {
@@ -89,8 +98,7 @@ pub fn persisted_managed_instance_ids() -> std::collections::HashSet<String> {
 pub async fn start_instance(
     spec: RuntimeLaunchSpec,
 ) -> Result<crate::models::RunningInstance, String> {
-    ensure_runtime_service().await?;
-    match call(RuntimeCommand::StartInstance {
+    match call_recovering(RuntimeCommand::StartInstance {
         spec: Box::new(spec),
     })
     .await?
@@ -101,46 +109,35 @@ pub async fn start_instance(
 }
 
 pub async fn stop_instance(instance_id: String) -> Result<(), String> {
-    ensure_runtime_service().await?;
-    match call(RuntimeCommand::StopInstance { instance_id }).await? {
+    match call_recovering(RuntimeCommand::StopInstance { instance_id }).await? {
         RuntimeReply::Ack => Ok(()),
         _ => Err("runtime service returned an unexpected stop response".into()),
     }
 }
 
 pub async fn clear_last_error() -> Result<(), String> {
-    ensure_runtime_service().await?;
-    match call(RuntimeCommand::ClearLastError).await? {
+    match call_recovering(RuntimeCommand::ClearLastError).await? {
         RuntimeReply::Ack => Ok(()),
         _ => Err("runtime service returned an unexpected error acknowledgement response".into()),
     }
 }
 
-pub async fn is_instance_managed(instance_id: &str) -> Result<bool, String> {
-    ensure_runtime_service()
-        .await
-        .map(|status| status.running.contains_key(instance_id))
-}
-
 pub async fn start_proxy() -> Result<crate::models::ProxyStatus, String> {
-    ensure_runtime_service().await?;
-    match call(RuntimeCommand::StartProxy).await? {
+    match call_recovering(RuntimeCommand::StartProxy).await? {
         RuntimeReply::ProxyStatus(status) => Ok(status),
         _ => Err("runtime service returned an unexpected proxy response".into()),
     }
 }
 
 pub async fn stop_proxy() -> Result<crate::models::ProxyStatus, String> {
-    ensure_runtime_service().await?;
-    match call(RuntimeCommand::StopProxy).await? {
+    match call_recovering(RuntimeCommand::StopProxy).await? {
         RuntimeReply::ProxyStatus(status) => Ok(status),
         _ => Err("runtime service returned an unexpected proxy response".into()),
     }
 }
 
 pub async fn set_background_enabled(enabled: bool) -> Result<RuntimeServiceStatus, String> {
-    ensure_runtime_service().await?;
-    match call(RuntimeCommand::SetBackgroundEnabled { enabled }).await? {
+    match call_recovering(RuntimeCommand::SetBackgroundEnabled { enabled }).await? {
         RuntimeReply::Status(status) => Ok(*status),
         _ => Err("runtime service returned an unexpected background response".into()),
     }
@@ -150,24 +147,35 @@ pub async fn sync_config(
     revision: u64,
     proxy_config: crate::models::ProxyConfig,
     instances: std::collections::HashMap<String, crate::models::InstanceConfig>,
-) -> Result<RuntimeServiceStatus, String> {
-    let current = ensure_runtime_service().await?;
-    let revision = revision.max(current.config_revision.saturating_add(1));
-    match call(RuntimeCommand::SyncConfig {
+) -> Result<(), String> {
+    let command = RuntimeCommand::SyncConfig {
         revision,
-        proxy_config,
-        instances,
-    })
-    .await?
-    {
-        RuntimeReply::Status(status) => Ok(*status),
+        proxy_config: proxy_config.clone(),
+        instances: instances.clone(),
+    };
+    let reply = match call_recovering(command).await {
+        Ok(reply) => reply,
+        Err(error) if error.contains("stale runtime configuration revision") => {
+            let status = match call_recovering(RuntimeCommand::GetStatus).await? {
+                RuntimeReply::Status(status) => *status,
+                _ => return Err("runtime service returned an unexpected status response".into()),
+            };
+            call_recovering(RuntimeCommand::SyncConfig {
+                revision: next_config_revision().max(status.config_revision.saturating_add(1)),
+                proxy_config,
+                instances,
+            })
+            .await?
+        }
+        Err(error) => return Err(error),
+    };
+    match reply {
+        RuntimeReply::Ack => Ok(()),
         _ => Err("runtime service returned an unexpected configuration response".into()),
     }
 }
 
-pub async fn sync_app_config(
-    state: &crate::models::AppState,
-) -> Result<RuntimeServiceStatus, String> {
+pub async fn sync_app_config(state: &crate::models::AppState) -> Result<(), String> {
     let _sync = APP_CONFIG_SYNC_LOCK.lock().await;
     let proxy_config = state.proxy_config.lock().unwrap().clone();
     let instances = state.instances.lock().unwrap().clone();
@@ -194,7 +202,7 @@ pub async fn prepare_background_detach(
     let proxy_config = state.proxy_config.lock().unwrap().clone();
     let instances = state.instances.lock().unwrap().clone();
     let revision = next_config_revision().max(current.config_revision.saturating_add(1));
-    match call(RuntimeCommand::PrepareBackgroundDetach {
+    match call_recovering(RuntimeCommand::PrepareBackgroundDetach {
         revision,
         proxy_config,
         instances,
@@ -222,7 +230,10 @@ pub async fn heartbeat() -> Result<RuntimeServiceStatus, String> {
 
 pub async fn shutdown(stop_instances: bool) -> Result<(), String> {
     match call(RuntimeCommand::Shutdown { stop_instances }).await? {
-        RuntimeReply::Ack => Ok(()),
+        RuntimeReply::Ack => {
+            RUNTIME_READY.store(false, Ordering::Release);
+            Ok(())
+        }
         _ => Err("runtime service returned an unexpected shutdown response".into()),
     }
 }
@@ -387,6 +398,33 @@ pub async fn call(command: RuntimeCommand) -> Result<RuntimeReply, String> {
     call_with_token(load_control_token()?, command).await
 }
 
+async fn call_recovering(command: RuntimeCommand) -> Result<RuntimeReply, String> {
+    if !RUNTIME_READY.load(Ordering::Acquire) {
+        ensure_runtime_service().await?;
+    }
+
+    match call(command.clone()).await {
+        Ok(reply) => Ok(reply),
+        Err(first_error) => {
+            let service_is_reachable = match load_control_token() {
+                Ok(token) => ping_with_token(token).await,
+                Err(_) => false,
+            };
+            if service_is_reachable {
+                return Err(first_error);
+            }
+
+            RUNTIME_READY.store(false, Ordering::Release);
+            ensure_runtime_service().await?;
+            call(command).await.map_err(|retry_error| {
+                format!(
+                    "runtime request failed ({first_error}); recovery retry failed: {retry_error}"
+                )
+            })
+        }
+    }
+}
+
 pub async fn runtime_status() -> Result<RuntimeServiceStatus, String> {
     match call(RuntimeCommand::GetStatus).await? {
         RuntimeReply::Status(status) => Ok(*status),
@@ -497,6 +535,17 @@ fn append_runtime_startup_failure(error: &str) {
 
 pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
     let _transition = RUNTIME_START_LOCK.lock().await;
+    if RUNTIME_READY.load(Ordering::Acquire) {
+        match runtime_status().await {
+            Ok(status)
+                if status.service_version == env!("CARGO_PKG_VERSION")
+                    && has_required_runtime_capabilities(&status) =>
+            {
+                return Ok(status);
+            }
+            _ => RUNTIME_READY.store(false, Ordering::Release),
+        }
+    }
     let mut token = load_or_create_control_token()?;
     let runtime_lock_probe = transport::acquire_runtime_lock()?;
     if runtime_lock_probe.is_none() {
@@ -517,8 +566,10 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
         if status.service_version == env!("CARGO_PKG_VERSION")
             && has_required_runtime_capabilities(&status)
         {
+            RUNTIME_READY.store(true, Ordering::Release);
             return Ok(status);
         }
+        RUNTIME_READY.store(false, Ordering::Release);
         shutdown(false).await?;
         if !transport::wait_until_stopped(&token, Duration::from_secs(6)).await {
             return Err(format!(
@@ -545,6 +596,7 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
     if !has_required_runtime_capabilities(&status) {
         return Err("runtime service started without required capabilities".into());
     }
+    RUNTIME_READY.store(true, Ordering::Release);
     Ok(status)
 }
 
@@ -603,8 +655,7 @@ pub fn run_runtime_service() -> Result<(), String> {
                             }
                             let refresh_registration = matches!(
                                 &request.command,
-                                RuntimeCommand::SyncConfig { .. }
-                                    | RuntimeCommand::PrepareBackgroundDetach { .. }
+                                RuntimeCommand::PrepareBackgroundDetach { .. }
                                     | RuntimeCommand::SetBackgroundEnabled { .. }
                             );
                             let registered = if refresh_registration {
@@ -812,7 +863,10 @@ pub fn start_app_bridge(app: tauri::AppHandle) {
                     );
                 }
             }
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(3)) => {}
+                _ = CONFIG_SYNC_NOTIFY.notified() => {}
+            }
         }
     });
 }
@@ -841,6 +895,7 @@ mod tests {
             service_pid: 1,
             capabilities: vec![
                 BACKGROUND_DETACH_CAPABILITY.into(),
+                CONFIG_SYNC_ACK_CAPABILITY.into(),
                 RUNTIME_ERROR_ACK_CAPABILITY.into(),
             ],
             config_revision: 1,

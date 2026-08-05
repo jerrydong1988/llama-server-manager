@@ -5,7 +5,7 @@ export const enUS = {
     name: 'Instance Name', namePlaceholder: 'e.g. Llama-3-8B',
     selectModel: 'Select Model', selectModelPlaceholder: 'Click button to select a model',
     selectEngine: 'Select Engine', port: 'Port',
-    running: 'Running', stopped: 'Stopped', error: 'Error',
+    running: 'Running', stopped: 'Stopped', starting: 'Starting...', stopping: 'Stopping...', error: 'Error',
     model: 'Model', engine: 'Engine',
     start: 'Start', stop: 'Stop', delete: 'Delete Instance',
     confirmDelete: 'Are you sure you want to delete this instance?',
@@ -48,7 +48,7 @@ export const enUS = {
     dirs: 'Added Engine Directories (auto-scan subdirectories):', addDirTitle: 'Select a parent directory containing llama-server (subdirectories will be auto-scanned)',
   },
   configPage: {
-    title: 'Instance Config', saved: '\u2713 Saved', saving: 'Saving...', save: 'Save Config',
+    title: 'Instance Config', saved: '\u2713 Saved', saving: 'Saving...', validating: 'Validating...', persisting: 'Writing...', save: 'Save Config',
     savedMsg: 'Config saved to', savedHint: 'Return to Instances and click Start to apply the new config.',
     noInstance: 'Click the \u2699\uFE0F button on an instance card in Instances to configure it.',
     basic: 'Basic', reasoning: 'Reasoning & Generation', generation: 'Generation', advancedSampling: 'Advanced Sampling',
