@@ -3,6 +3,7 @@
 mod commands;
 mod error;
 mod models;
+mod operation_timing;
 mod path_utils;
 mod persistence;
 mod runtime_service;

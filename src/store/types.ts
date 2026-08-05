@@ -157,6 +157,8 @@ export interface Instance {
   config: InstanceConfig
 }
 
+export type InstanceLifecyclePhase = 'starting' | 'stopping'
+
 export interface LogEntry {
   instanceId: string
   text: string
@@ -497,6 +499,7 @@ export interface AppState {
   models: ModelInfo[]
   engines: EngineInfo[]
   instances: Instance[]
+  instanceLifecycle: Record<string, InstanceLifecyclePhase>
   logs: Record<string, LogEntry[]>
   recentLogs: LogEntry[]
   isLoading: boolean

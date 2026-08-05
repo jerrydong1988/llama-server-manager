@@ -13,6 +13,7 @@ export function useCommandCenterModel() {
   const loadInitialData = useAppStore(state => state.loadInitialData)
   const startInstance = useAppStore(state => state.startInstance)
   const stopInstance = useAppStore(state => state.stopInstance)
+  const instanceLifecycle = useAppStore(state => state.instanceLifecycle)
   const { t } = useI18n()
   const copy = t.commandCenter
   const actionsCopy = copy.actions
@@ -53,12 +54,12 @@ export function useCommandCenterModel() {
       { id: 'logs', title: actionsCopy.logsTitle, description: actionsCopy.logsDescription, group: actionsCopy.groupDiagnostics, icon: <Terminal className="h-4 w-4" />, action: go('logs') },
       { id: 'refresh', title: actionsCopy.refreshTitle, description: actionsCopy.refreshDescription, group: actionsCopy.groupMaintenance, icon: <RefreshCw className="h-4 w-4" />, action: () => void loadInitialData() },
     ]
-    const firstStopped = instances.find(instance => instance.status !== 'running')
-    const firstRunning = instances.find(instance => instance.status === 'running')
+    const firstStopped = instances.find(instance => instance.status !== 'running' && !instanceLifecycle[instance.id])
+    const firstRunning = instances.find(instance => instance.status === 'running' && !instanceLifecycle[instance.id])
     if (firstStopped) actions.push({ id: 'start-first', title: `${actionsCopy.startPrefix} ${firstStopped.name}`, description: actionsCopy.startDescription, group: actionsCopy.groupRuntime, icon: <Play className="h-4 w-4" />, action: () => void startInstance(firstStopped.id).catch(() => {}) })
     if (firstRunning) actions.push({ id: 'stop-first', title: `${actionsCopy.stopPrefix} ${firstRunning.name}`, description: actionsCopy.stopDescription, group: actionsCopy.groupRuntime, icon: <Square className="h-4 w-4" />, action: () => void stopInstance(firstRunning.id).catch(() => {}) })
     return actions
-  }, [actionsCopy, instances, loadInitialData, setActiveTab, startInstance, stopInstance])
+  }, [actionsCopy, instanceLifecycle, instances, loadInitialData, setActiveTab, startInstance, stopInstance])
 
   return { productIssues, commandActions }
 }

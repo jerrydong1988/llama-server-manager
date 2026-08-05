@@ -50,10 +50,29 @@ assert.ok(
   startServerSource.indexOf('reserve_instance_start') < startServerSource.indexOf('CappedLogWriter::new'),
   'backend start reservation must happen before the log is opened or a process is spawned',
 )
+const runtimeServiceSource = fs.readFileSync(
+  path.join(__dirname, '..', 'src-tauri', 'src', 'runtime_service', 'mod.rs'),
+  'utf8',
+)
+const runtimeStartSection = runtimeServiceSource.slice(
+  runtimeServiceSource.indexOf('pub async fn start_instance'),
+  runtimeServiceSource.indexOf('pub async fn stop_instance'),
+)
+assert.match(runtimeStartSection, /call_recovering\(RuntimeCommand::StartInstance/)
+assert.doesNotMatch(
+  runtimeStartSection,
+  /ensure_runtime_service\(\)\.await/,
+  'warm starts must issue the requested runtime command without a redundant status preflight',
+)
+assert.doesNotMatch(
+  stopSection,
+  /is_instance_managed/,
+  'stops must use the locally reconciled ownership set instead of an extra daemon status round trip',
+)
 
 const entry = `
   import assert from 'node:assert/strict'
-  import { runInstanceStart } from './src/store/instanceLifecycleCoordinator'
+  import { runInstanceStart, runInstanceStop } from './src/store/instanceLifecycleCoordinator'
 
   async function run() {
     let calls = 0
@@ -80,6 +99,20 @@ const entry = `
     )
     await runInstanceStart('instance-b', async () => { attempts += 1 })
     assert.equal(attempts, 2, 'a failed start must release its single-flight slot')
+
+    const order = []
+    let releaseStart
+    const start = runInstanceStart('instance-c', async () => {
+      order.push('start-begin')
+      await new Promise(resolve => { releaseStart = resolve })
+      order.push('start-end')
+    })
+    const stop = runInstanceStop('instance-c', async () => { order.push('stop') })
+    await Promise.resolve()
+    assert.deepEqual(order, ['start-begin'], 'opposite lifecycle operations must not overlap')
+    releaseStart()
+    await Promise.all([start, stop])
+    assert.deepEqual(order, ['start-begin', 'start-end', 'stop'])
   }
 
   module.exports = run()
