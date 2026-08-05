@@ -1,7 +1,10 @@
 import type { ButtonHTMLAttributes, CSSProperties, HTMLAttributes, InputHTMLAttributes, ReactNode, SelectHTMLAttributes } from 'react'
 import { formatPathForDisplay } from '../utils/path'
 
-export const surfaceClassName = 'rounded-lg border border-slate-200 bg-white text-slate-900 shadow-[0_16px_40px_rgba(15,23,42,0.08)] backdrop-blur dark:border-slate-800/80 dark:bg-slate-900/70 dark:text-slate-100 dark:shadow-[0_16px_48px_rgba(15,23,42,0.28)]'
+// Content panels are intentionally opaque. Applying backdrop-filter to every panel
+// creates many compositor layers and can leave off-screen panels temporarily
+// unrasterized after a long scroll in WebView2.
+export const surfaceClassName = 'rounded-lg border border-slate-200 bg-white text-slate-900 shadow-[0_16px_40px_rgba(15,23,42,0.08)] dark:border-slate-800/80 dark:bg-slate-900 dark:text-slate-100 dark:shadow-[0_16px_48px_rgba(15,23,42,0.28)]'
 export const insetSurfaceClassName = 'rounded-lg border border-slate-200 bg-slate-50 text-slate-900 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-100'
 export const controlClassName = 'rounded-lg border border-slate-300 bg-white text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:placeholder:text-slate-500'
 

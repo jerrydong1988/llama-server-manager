@@ -43,18 +43,18 @@ test('route switches expose current state and saving refreshes runtime health', 
   await expect(routeSection.getByText('已启用', { exact: true })).toBeVisible()
   await expect(routeSection.getByText('待保存', { exact: true })).toBeVisible()
   await expect(routeSection.getByRole('combobox', { name: '目标' })).toHaveValue('browser-test-instance')
-  await expect(page.getByRole('button', { name: '保存' })).toBeDisabled()
+  await expect(page.getByTestId('proxy-header-save')).toBeDisabled()
   await expect(routeSection.getByRole('button', { name: '测试路由' })).toBeDisabled()
 
   await routeSwitch.click()
   await expect(routeSwitch).not.toBeChecked()
   await expect(routeSection.getByText('已禁用', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '保存' })).toBeEnabled()
+  await expect(page.getByTestId('proxy-header-save')).toBeEnabled()
 
   await routeSwitch.click()
   await routeSection.getByRole('textbox', { name: '对外模型名' }).fill('public-browser-model')
-  await expect(page.getByRole('button', { name: '保存' })).toBeEnabled()
-  await page.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByTestId('proxy-header-save')).toBeEnabled()
+  await page.getByTestId('proxy-floating-save-button').click()
 
   await expect(page.getByText('代理配置已保存并生效')).toBeVisible()
   await expect(healthyMetric.locator('p').nth(1)).toHaveText('1/1')
@@ -129,7 +129,7 @@ test('production scheduling and scoped API keys round-trip through the settings 
     expect(Math.abs(box.y + box.height / 2 - keyCenterY), `${control} control should share the input centerline`).toBeLessThanOrEqual(1)
   }
   await page.getByRole('textbox', { name: /允许的 CORS Origin/ }).fill('https://app.example.com')
-  await page.getByRole('button', { name: '保存' }).click()
+  await page.getByTestId('proxy-floating-save-button').click()
 
   await expect(page.getByText('已不可逆哈希保存，无法显示原文；如已遗失，请输入新值轮换。')).toBeVisible()
   await expect(page.getByRole('button', { name: '显示新 API Key（10 秒）' })).toHaveCount(0)
@@ -213,7 +213,7 @@ test('legacy empty route ids are repaired before row operations and save', async
   await switches.nth(0).click()
   await expect(switches.nth(0)).not.toBeChecked()
   await expect(switches.nth(1)).toBeChecked()
-  await page.getByRole('button', { name: '保存' }).click()
+  await page.getByTestId('proxy-floating-save-button').click()
 
   const ids = await page.evaluate(() => {
     const call = [...window.__TAURI_BROWSER_TEST__.calls].reverse().find(item => item.command === 'save_proxy_config')
@@ -223,4 +223,39 @@ test('legacy empty route ids are repaired before row operations and save', async
   expect(ids).toHaveLength(2)
   expect(ids.every(Boolean)).toBe(true)
   expect(new Set(ids).size).toBe(2)
+})
+
+test('long routing edits keep a stable visible save action without relying on a repaint notice', async ({ page }) => {
+  await page.clock.install()
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'proxy')
+  })
+  await page.goto('/?scenario=proxy-routing')
+
+  const overview = page.locator('[data-guide="proxy-overview"]')
+  await expect(overview).toContainText('实例路由')
+  await expect(overview.getByTestId('proxy-header-save')).toBeVisible()
+  expect(await overview.evaluate(element => getComputedStyle(element).backdropFilter)).toBe('none')
+
+  const accessControl = page.getByRole('heading', { name: '访问控制与浏览器安全' }).locator('xpath=ancestor::section[1]')
+  await accessControl.scrollIntoViewIfNeeded()
+  await accessControl.getByRole('button', { name: '添加 API Key' }).click()
+
+  const floatingSave = page.getByTestId('proxy-floating-save')
+  await expect(floatingSave).toBeVisible()
+  await expect(floatingSave).toContainText('未保存')
+  await expect(page.getByTestId('proxy-floating-save-button')).toBeEnabled()
+
+  await page.clock.fastForward(120_000)
+  await expect(floatingSave).toBeVisible()
+  await expect(page.getByTestId('proxy-floating-save-button')).toBeEnabled()
+
+  await overview.scrollIntoViewIfNeeded()
+  await expect(overview).toContainText('实例路由')
+  await expect(overview.getByTestId('proxy-header-save')).toBeVisible()
+
+  await page.getByTestId('proxy-floating-save-button').click()
+  await expect(page.getByText('代理配置已保存并生效')).toBeVisible()
+  await expect(floatingSave).toHaveCount(0)
 })
