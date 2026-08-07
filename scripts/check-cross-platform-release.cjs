@@ -2,6 +2,7 @@ const fs = require('node:fs')
 
 const workflow = fs.readFileSync('.github/workflows/build.yml', 'utf8')
 const manualDownloadsWorkflow = fs.readFileSync('.github/workflows/publish-release-downloads.yml', 'utf8')
+const dependencyReviewWorkflow = fs.readFileSync('.github/workflows/dependency-review.yml', 'utf8')
 const tauriConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
 const updaterBuildConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.updater.conf.json', 'utf8'))
 const readme = fs.readFileSync('README.md', 'utf8')
@@ -10,7 +11,17 @@ const privacyPolicy = fs.readFileSync('PRIVACY.md', 'utf8')
 const signingGuide = fs.readFileSync('docs/RELEASE_SIGNING.md', 'utf8')
 const failures = []
 const rustsecNode24Commit = '858dc40f52ca2b8570b7a997c1c4e35c6fc9a432'
-const releaseNode24Commit = '3d0d9888cb7fd7b750713d6e236d1fcb99157228'
+const reviewedActionPins = new Map([
+  ['actions/checkout', new Set(['3d3c42e5aac5ba805825da76410c181273ba90b1', '11d5960a326750d5838078e36cf38b85af677262'])],
+  ['actions/dependency-review-action', new Set(['2031cfc080254a8a887f58cffee85186f0e49e48'])],
+  ['actions/download-artifact', new Set(['3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'])],
+  ['actions/setup-node', new Set(['249970729cb0ef3589644e2896645e5dc5ba9c38', '49933ea5288caeca8642d1e84afbd3f7d6820020'])],
+  ['actions/upload-artifact', new Set(['043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'])],
+  ['dtolnay/rust-toolchain', new Set(['4360b52568e2003a75bf9bc1d59f33a8e3fc893c'])],
+  ['RustSec/audit-check', new Set([rustsecNode24Commit])],
+  ['signpath/github-action-submit-signing-request', new Set(['b9d91eadd323de506c0c81cf0c7fe7438f3360fd'])],
+  ['Swatinem/rust-cache', new Set(['6323deb102c322ba6fcbdcafc7e3dddab59af2b6'])],
+])
 const approvedRustsecAdvisories = [
   'RUSTSEC-2024-0370',
   'RUSTSEC-2024-0411',
@@ -40,6 +51,22 @@ function jobBody(name) {
   return next < 0 ? rest : rest.slice(0, next)
 }
 
+const workflowDirectory = '.github/workflows'
+for (const file of fs.readdirSync(workflowDirectory).filter(name => /\.ya?ml$/i.test(name))) {
+  const contents = fs.readFileSync(`${workflowDirectory}/${file}`, 'utf8')
+  for (const match of contents.matchAll(/uses:\s*([^\s#]+)@([^\s#]+)/g)) {
+    const [, action, reference] = match
+    if (!/^[0-9a-f]{40}$/.test(reference)) {
+      failures.push(`${file} uses mutable action reference ${action}@${reference}`)
+      continue
+    }
+    const approved = reviewedActionPins.get(action)
+    if (!approved?.has(reference)) {
+      failures.push(`${file} uses unreviewed action commit ${action}@${reference}`)
+    }
+  }
+}
+
 for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-arm64']) {
   const body = jobBody(job)
   if (!body) {
@@ -47,6 +74,21 @@ for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-a
     continue
   }
   if (!body.includes('components: clippy')) failures.push(`${job} does not install Clippy`)
+  if (!body.includes('contents: read') || body.includes('contents: write')) {
+    failures.push(`${job} must build with read-only repository contents permission`)
+  }
+  const supplyChainIndex = body.indexOf('node scripts/check-npm-supply-chain.cjs')
+  const dependencyInstallIndex = body.indexOf('npm ci --ignore-scripts')
+  if (supplyChainIndex < 0 || dependencyInstallIndex < 0 || supplyChainIndex > dependencyInstallIndex) {
+    failures.push(`${job} does not run the npm malware gate before installation`)
+  }
+  if (!body.includes('npm rebuild esbuild')) failures.push(`${job} does not rebuild only the reviewed esbuild lifecycle script`)
+  if (!body.includes('check-npm-supply-chain.cjs --installed-only')) {
+    failures.push(`${job} does not scan installed npm content for ChainDrop indicators`)
+  }
+  if (body.includes('softprops/action-gh-release') || body.includes('gh release upload')) {
+    failures.push(`${job} must not publish while build dependencies are present`)
+  }
   if (!body.includes('cargo test --manifest-path src-tauri/Cargo.toml --locked')) failures.push(`${job} does not run Rust tests`)
   const frontendBuildIndex = body.indexOf('run: npm run build')
   const rustTestIndex = body.indexOf('cargo test --manifest-path src-tauri/Cargo.toml --locked')
@@ -59,6 +101,18 @@ for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-a
 }
 
 const qualityJob = jobBody('quality')
+if (!qualityJob.includes('node scripts/check-npm-supply-chain.cjs')) {
+  failures.push('quality job does not run the npm malware gate')
+}
+if (!qualityJob.includes('npm ci --ignore-scripts') || !qualityJob.includes('npm rebuild esbuild')) {
+  failures.push('quality job does not enforce reviewed npm lifecycle scripts')
+}
+if (!qualityJob.includes('check-npm-supply-chain.cjs --installed-only')) {
+  failures.push('quality job does not scan installed npm content for ChainDrop indicators')
+}
+if (!qualityJob.includes('node node_modules/playwright/cli.js install chromium') || qualityJob.includes('npx playwright')) {
+  failures.push('quality job may fetch an undeclared Playwright package')
+}
 if (!qualityJob.includes(`RustSec/audit-check@${rustsecNode24Commit}`)) {
   failures.push('quality job does not pin the reviewed Node 24 RustSec action commit')
 }
@@ -85,14 +139,8 @@ for (const forbidden of [
   if (workflow.includes(forbidden)) failures.push(`RustSec workflow contains forbidden broad bypass ${forbidden}`)
 }
 
-const releaseUploadMatches = [...workflow.matchAll(/uses:\s*softprops\/action-gh-release@([^\s]+)/g)]
-if (releaseUploadMatches.length !== 6) {
-  failures.push(`release workflow must contain exactly 6 release upload steps, found ${releaseUploadMatches.length}`)
-}
-for (const match of releaseUploadMatches) {
-  if (match[1] !== releaseNode24Commit) {
-    failures.push(`release upload does not pin the reviewed Node 24 action commit: ${match[1]}`)
-  }
+if (workflow.includes('softprops/action-gh-release')) {
+  failures.push('build workflow still delegates release publication to package build jobs')
 }
 if (workflow.includes('::warning::')) {
   failures.push('expected code-signing fallbacks must not emit warning annotations')
@@ -115,6 +163,11 @@ const updaterJob = jobBody('publish-updater')
 for (const token of [
   'environment: release-r2',
   'Validate protected updater secrets',
+  'Install integrity-verified Tauri signer only',
+  'install-tauri-signer.cjs "$RUNNER_TEMP/tauri-signer"',
+  'check-npm-supply-chain.cjs --installed-only --node-modules "$RUNNER_TEMP/tauri-signer/node_modules"',
+  'node "$RUNNER_TEMP/tauri-signer/node_modules/@tauri-apps/cli/tauri.js" signer sign',
+  'Remove temporary Tauri signer',
   'TAURI_SIGNING_PRIVATE_KEY',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
   'R2_ACCESS_KEY_ID',
@@ -123,6 +176,9 @@ for (const token of [
   'R2_BUCKET',
   'R2_PUBLIC_BASE_URL',
   'Ensure release notes are present before manifest generation',
+  'Ensure GitHub Release exists',
+  'Upload exact platform packages to GitHub Release',
+  'Expected exactly seven GitHub release packages',
   'Sign exact updater payloads',
   'prepare-updater-release.mjs --manifest',
   'Stage manual download packages',
@@ -138,6 +194,12 @@ for (const token of [
   'cmp updater-publish/latest.json "$remote_manifest"',
 ]) {
   if (!updaterJob.includes(token)) failures.push(`protected updater publication is missing ${token}`)
+}
+if (updaterJob.includes('npm ci') || updaterJob.includes('npm install') || updaterJob.includes('npm run tauri')) {
+  failures.push('protected updater publication installs or runs the full npm dependency tree')
+}
+if (!updaterJob.includes('persist-credentials: false')) {
+  failures.push('protected updater publication persists checkout credentials')
 }
 if (
   updaterJob.indexOf('Ensure release notes are present before manifest generation')
@@ -168,14 +230,13 @@ for (const token of [
   'Detect SignPath configuration',
   'Upload unsigned Windows installers for signing',
   'Submit Windows installers to SignPath',
-  'signpath/github-action-submit-signing-request@v2',
+  'signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd',
   'SIGNPATH_API_TOKEN',
   'SIGNPATH_ORGANIZATION_ID',
   'SIGNPATH_PROJECT_SLUG',
   'SIGNPATH_SIGNING_POLICY_SLUG',
   'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG',
-  'Prepare clearly labeled unsigned Windows release assets',
-  '-unsigned$extension',
+  '-unsigned$([IO.Path]::GetExtension($name))',
   'Generate ephemeral updater packaging key',
   'Prepare exact Windows updater payload',
   'updater-windows',
@@ -216,6 +277,17 @@ if (macJob.includes('Validate macOS signing secrets')) {
 }
 if (!macJob.includes('building an ad-hoc signed macOS package')) {
   failures.push('macOS workflow does not explain the unsigned release fallback')
+}
+if (!macJob.includes('Prepare exact macOS GitHub release asset') || !macJob.includes('release-macos')) {
+  failures.push('macOS build does not stage an isolated GitHub release artifact')
+}
+
+for (const token of [
+  'actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48',
+  'fail-on-severity: low',
+  'persist-credentials: false',
+]) {
+  if (!dependencyReviewWorkflow.includes(token)) failures.push(`dependency review workflow is missing ${token}`)
 }
 
 for (const link of ['PRIVACY.md', 'CODE_SIGNING_POLICY.md', 'docs/RELEASE_SIGNING.md', 'docs/DEPENDENCY_AUDIT.md']) {
