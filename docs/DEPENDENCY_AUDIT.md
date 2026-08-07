@@ -1,8 +1,24 @@
 # 依赖安全审计说明
 
-> 最近复核：2026-07-14，适用于 v2.9.25
+> 最近复核：2026-08-07，基线为 v2.9.41
 
-发布前使用 RustSec `cargo-audit 0.22.2` 扫描 `src-tauri/Cargo.lock`，结果为 0 个已知安全漏洞。CI 的质量检查也会运行 `rustsec/audit-check@v2.0.0`；以后新增的 RustSec 漏洞会阻止构建。
+## npm / GitHub Actions 供应链
+
+CI 在每次 `npm ci` **之前**运行 `scripts/check-npm-supply-chain.cjs`：
+
+- 从 `package-lock.json` 提取所有精确的 npm 包名和版本，查询 OSV 的 npm 恶意软件通告；任何 `MAL-*` 命中都会阻止构建，OSV 不可用或响应异常时也会失败关闭。
+- 内置 [Aikido ChainDrop 披露](https://www.aikido.dev/blog/keyv-and-friends-compromised-in-npm-supply-chain-attack)中首批恶意版本的本地拒绝列表，避免仅依赖在线通告。
+- 审核所有 `hasInstallScript` 锁文件条目。CI 使用 `npm ci --ignore-scripts`，随后只显式重建已复核的 `esbuild`；可选的 `fsevents` 安装脚本保持禁用。
+- 安装完成后、构建开始前扫描 `node_modules`，阻断 ChainDrop 已披露的恶意脚本文件名和下载域名 IOC。
+- Pull Request 通过固定提交 SHA 的 GitHub Dependency Review 检查新增依赖风险；所有工作流 Action 同样固定到完整提交 SHA，checkout 不持久化凭据。
+
+平台编译任务只拥有 `contents: read` 权限，不能直接修改 GitHub Release。受保护的更新发布任务不再安装完整 npm 依赖树；它只从 npm 官方注册表下载锁文件指定的 Tauri CLI 包和当前平台二进制包，校验锁文件中的 SHA-512 完整性后用于签名。
+
+本地发布检查 `npm run check:release` 也包含同一 npm 供应链门禁。更新任何带生命周期脚本的依赖时，必须单独复核并同步更新门禁白名单，不能用宽泛的脚本放行替代。
+
+## Rust / Tauri 依赖
+
+CI 的质量检查使用固定提交 SHA 的 `RustSec/audit-check` 扫描 `src-tauri/Cargo.lock`。允许项必须与 `.github/rustsec-allowlist.json` 中带到期日期的精确清单一致；新增 RustSec 漏洞会阻止构建。
 
 本次已将直接依赖 `reqwest` 从 0.11 升级到 0.12，并移除不再维护的 `rustls-pemfile 1.x` 依赖链；`mdns-sd` 也从 0.11 升级到当前兼容的 0.20。
 

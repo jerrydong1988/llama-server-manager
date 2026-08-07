@@ -17,23 +17,31 @@ jobs:
       checks: write
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable, reviewed 2026-08-07
         with:
           components: clippy
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
-      - name: Install dependencies
-        run: npm ci
+      - name: Verify npm dependency supply chain
+        run: node scripts/check-npm-supply-chain.cjs
+      - name: Install reviewed dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+      - name: Scan installed dependencies for ChainDrop indicators
+        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Install browser regression runtime
-        run: npx playwright install chromium
+        run: node node_modules/playwright/cli.js install chromium
       - name: Validate release
         run: npm run check:release
       - name: Build frontend
@@ -61,23 +69,31 @@ jobs:
     runs-on: windows-latest
     permissions:
       actions: read
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable, reviewed 2026-08-07
         with:
           components: clippy
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
-      - name: Install dependencies
-        run: npm ci
+      - name: Verify npm dependency supply chain
+        run: node scripts/check-npm-supply-chain.cjs
+      - name: Install reviewed dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+      - name: Scan installed dependencies for ChainDrop indicators
+        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Windows
@@ -129,7 +145,7 @@ jobs:
       - name: Upload unsigned Windows installers for signing
         id: upload-unsigned-windows
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: windows-installer-unsigned
           path: |
@@ -138,7 +154,7 @@ jobs:
           if-no-files-found: error
       - name: Submit Windows installers to SignPath
         if: startsWith(github.ref, 'refs/tags/v') && steps.signpath.outputs.enabled == 'true'
-        uses: signpath/github-action-submit-signing-request@v2
+        uses: signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd # v2
         with:
           api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
           organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
@@ -178,65 +194,47 @@ jobs:
           }
       - name: Upload Windows updater input
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: updater-windows
           path: ${{ runner.temp }}/updater-windows/
           if-no-files-found: error
           retention-days: 7
       - name: Upload Windows build artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: windows-installer
           path: src-tauri/target/release/bundle/
-      - name: Upload signed Windows installers to Release
-        if: startsWith(github.ref, 'refs/tags/v') && steps.signpath.outputs.enabled == 'true'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
-        with:
-          files: |
-            ${{ runner.temp }}/signed-windows/**/*.exe
-            ${{ runner.temp }}/signed-windows/**/*.msi
-      - name: Prepare clearly labeled unsigned Windows release assets
-        if: startsWith(github.ref, 'refs/tags/v') && steps.signpath.outputs.enabled != 'true'
-        shell: pwsh
-        run: |
-          $destination = Join-Path $env:RUNNER_TEMP 'unsigned-windows'
-          New-Item -ItemType Directory -Path $destination -Force | Out-Null
-          $installers = Get-ChildItem -Path 'src-tauri/target/release/bundle/nsis/*.exe','src-tauri/target/release/bundle/msi/*.msi'
-          foreach ($installer in $installers) {
-            $base = [IO.Path]::GetFileNameWithoutExtension($installer.Name)
-            $extension = $installer.Extension
-            Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $destination "$base-unsigned$extension")
-          }
-      - name: Upload unsigned Windows installers to Release
-        if: startsWith(github.ref, 'refs/tags/v') && steps.signpath.outputs.enabled != 'true'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
-        with:
-          files: |
-            ${{ runner.temp }}/unsigned-windows/*.exe
-            ${{ runner.temp }}/unsigned-windows/*.msi
 
   build-macos:
     needs: quality
     runs-on: macos-15
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable, reviewed 2026-08-07
         with:
           components: clippy
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
-      - name: Install dependencies
-        run: npm ci
+      - name: Verify npm dependency supply chain
+        run: node scripts/check-npm-supply-chain.cjs
+      - name: Install reviewed dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+      - name: Scan installed dependencies for ChainDrop indicators
+        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on macOS
@@ -329,36 +327,42 @@ jobs:
           esac
       - name: Upload macOS updater input
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: updater-macos
           path: ${{ runner.temp }}/updater-macos/
           if-no-files-found: error
           retention-days: 7
+      - name: Prepare exact macOS GitHub release asset
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          destination="$RUNNER_TEMP/release-macos"
+          mkdir -p "$destination"
+          package_count="$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | wc -l | tr -d '[:space:]')"
+          if [ "$package_count" -ne 1 ]; then
+            echo "Expected exactly one macOS DMG, found $package_count" >&2
+            exit 1
+          fi
+          package="$(find src-tauri/target/release/bundle/dmg -maxdepth 1 -type f -name '*.dmg' | head -n 1)"
+          if [ '${{ steps.apple-signing.outputs.enabled }}' = 'true' ]; then
+            cp "$package" "$destination/"
+          else
+            base="$(basename "$package" .dmg)"
+            cp "$package" "$destination/$base-adhoc.dmg"
+          fi
+      - name: Upload macOS GitHub release input
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-macos
+          path: ${{ runner.temp }}/release-macos/
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: macos-app
           path: src-tauri/target/release/bundle/
-      - name: Upload notarized macOS package to Release
-        if: startsWith(github.ref, 'refs/tags/v') && steps.apple-signing.outputs.enabled == 'true'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
-        with:
-          files: src-tauri/target/release/bundle/dmg/*.dmg
-      - name: Prepare clearly labeled ad-hoc macOS release asset
-        if: startsWith(github.ref, 'refs/tags/v') && steps.apple-signing.outputs.enabled != 'true'
-        run: |
-          destination="$RUNNER_TEMP/macos-release"
-          mkdir -p "$destination"
-          for file in src-tauri/target/release/bundle/dmg/*.dmg; do
-            base="$(basename "$file" .dmg)"
-            cp "$file" "$destination/$base-adhoc.dmg"
-          done
-      - name: Upload ad-hoc macOS package to Release
-        if: startsWith(github.ref, 'refs/tags/v') && steps.apple-signing.outputs.enabled != 'true'
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
-        with:
-          files: ${{ runner.temp }}/macos-release/*-adhoc.dmg
       - name: Remove temporary Apple signing keychain
         if: always() && startsWith(github.ref, 'refs/tags/v') && steps.apple-signing.outputs.enabled == 'true'
         run: |
@@ -369,19 +373,21 @@ jobs:
     needs: quality
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable, reviewed 2026-08-07
         with:
           components: clippy
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
       - name: Install system dependencies
@@ -390,8 +396,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf || \
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf || \
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - name: Install dependencies
-        run: npm ci
+      - name: Verify npm dependency supply chain
+        run: node scripts/check-npm-supply-chain.cjs
+      - name: Install reviewed dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+      - name: Scan installed dependencies for ChainDrop indicators
+        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Linux x64
@@ -430,50 +442,61 @@ jobs:
           cp "${payloads[0]}" "$destination/"
       - name: Upload Linux x86_64 updater input
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: updater-linux-x86_64
           path: ${{ runner.temp }}/updater-linux-x86_64/
           if-no-files-found: error
           retention-days: 7
+      - name: Upload Linux x86_64 GitHub release input
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-linux-x86_64
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: linux-packages
           path: src-tauri/target/release/bundle/
-      - name: Upload to Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
-        with:
-          files: |
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
 
   build-linux-arm64:
     needs: quality
     runs-on: ubuntu-24.04-arm
     permissions:
-      contents: write
+      contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '20.19.0'
           cache: 'npm'
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable, reviewed 2026-08-07
         with:
           components: clippy
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - name: Install dependencies
-        run: npm ci
+      - name: Verify npm dependency supply chain
+        run: node scripts/check-npm-supply-chain.cjs
+      - name: Install reviewed dependencies
+        run: |
+          npm ci --ignore-scripts
+          npm rebuild esbuild
+      - name: Scan installed dependencies for ChainDrop indicators
+        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Linux ARM64
@@ -512,24 +535,27 @@ jobs:
           cp "${payloads[0]}" "$destination/"
       - name: Upload Linux ARM64 updater input
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: updater-linux-aarch64
           path: ${{ runner.temp }}/updater-linux-aarch64/
           if-no-files-found: error
           retention-days: 7
+      - name: Upload Linux ARM64 GitHub release input
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: release-linux-aarch64
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 7
       - name: Upload artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: linux-arm64-packages
           path: src-tauri/target/release/bundle/
-      - name: Upload to Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
-        with:
-          files: |
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
 
   publish-updater:
     if: startsWith(github.ref, 'refs/tags/v')
@@ -539,33 +565,53 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '20.19.0'
-          cache: 'npm'
-      - name: Install dependencies
-        run: npm ci
+      - name: Verify npm dependency supply chain
+        run: node scripts/check-npm-supply-chain.cjs
+      - name: Install integrity-verified Tauri signer only
+        run: node scripts/install-tauri-signer.cjs "$RUNNER_TEMP/tauri-signer"
+      - name: Scan Tauri signer for ChainDrop indicators
+        run: node scripts/check-npm-supply-chain.cjs --installed-only --node-modules "$RUNNER_TEMP/tauri-signer/node_modules"
       - name: Download Windows updater input
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: updater-windows
           path: updater-input/windows
       - name: Download macOS updater input
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: updater-macos
           path: updater-input/macos
       - name: Download Linux x86_64 updater input
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: updater-linux-x86_64
           path: updater-input/linux-x86_64
       - name: Download Linux ARM64 updater input
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: updater-linux-aarch64
           path: updater-input/linux-aarch64
+      - name: Download macOS GitHub release input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-macos
+          path: release-input/macos
+      - name: Download Linux x86_64 GitHub release input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-linux-x86_64
+          path: release-input/linux-x86_64
+      - name: Download Linux ARM64 GitHub release input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: release-linux-aarch64
+          path: release-input/linux-aarch64
       - name: Validate protected updater secrets
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -583,6 +629,15 @@ jobs:
           if [ "${#missing[@]}" -ne 0 ]; then
             echo "Missing protected release-r2 secret(s): ${missing[*]}" >&2
             exit 1
+          fi
+      - name: Ensure GitHub Release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "GitHub Release already exists."
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" --notes ''
           fi
       - name: Ensure release notes are present before manifest generation
         env:
@@ -611,9 +666,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           while IFS= read -r -d '' payload; do
-            npm run tauri signer sign -- "$payload"
+            node "$RUNNER_TEMP/tauri-signer/node_modules/@tauri-apps/cli/tauri.js" signer sign -- "$payload"
             test -s "$payload.sig"
           done < <(find "updater-publish/releases/$GITHUB_REF_NAME" -maxdepth 1 -type f ! -name '*.sig' -print0)
+      - name: Remove temporary Tauri signer
+        if: always()
+        run: rm -rf -- "$RUNNER_TEMP/tauri-signer"
       - name: Create signed updater manifest
         env:
           R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
@@ -625,6 +683,18 @@ jobs:
         run: |
           mapfile -d '' assets < <(find "updater-publish/releases/$GITHUB_REF_NAME" -maxdepth 1 -type f -print0)
           assets+=("updater-publish/latest.json")
+          gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Upload exact platform packages to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -d '' assets < <(find updater-input/windows release-input -type f \
+            \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \) -print0)
+          if [ "${#assets[@]}" -ne 7 ]; then
+            echo "Expected exactly seven GitHub release packages, found ${#assets[@]}" >&2
+            printf '  %s\n' "${assets[@]}" >&2
+            exit 1
+          fi
           gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
       - name: Stage manual download packages
         env:
