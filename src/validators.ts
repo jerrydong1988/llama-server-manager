@@ -58,7 +58,7 @@ export const KNOWN_FLAGS = new Set([
   '--cors-credentials', '--no-cors-credentials', '--ui', '--webui', '--no-ui', '--no-webui', '--offline',
   '--ui-config-file', '--webui-config-file', '--ui-config', '--webui-config',
   '--ui-mcp-proxy', '--webui-mcp-proxy', '--no-ui-mcp-proxy', '--no-webui-mcp-proxy',
-  '--mcp-servers-config', '--mcp-servers-json',
+  '--tools-runtime', '--mcp-servers-config', '--mcp-servers-json',
   '-ag', '--agent', '-no-ag', '--no-agent',
   // Embedding and server features
   '--embedding', '--embeddings', '--pooling', '--embd-normalize', '--rerank', '--reranking',
@@ -129,6 +129,12 @@ function isValidJson(value: string): boolean {
   } catch {
     return false
   }
+}
+
+function isValidToolsRuntime(value: string): boolean {
+  const normalized = value.trim()
+  if (!normalized) return true
+  return /^(?:docker|podman|docker-container|podman-container|ssh):\S+$/.test(normalized)
 }
 
 type CustomArgToken = { value: string; quoted: boolean }
@@ -407,6 +413,9 @@ export function validateConfig(
   }
   if (!isValidJson(config.mcp_servers_json)) {
     warnings.push({ field: 'mcp_servers_json', severity: 'high', key: 'warnMcpServersJsonInvalid' })
+  }
+  if (!isValidToolsRuntime(config.tools_runtime)) {
+    warnings.push({ field: 'tools_runtime', severity: 'high', key: 'warnToolsRuntimeInvalid' })
   }
   if (privilegedToolsEnabled && (!isLoopbackHost(config.host) || hasWildcardCorsOrigin(config.cors_origins))) {
     warnings.push({ field: 'host', severity: 'high', key: 'warnPrivilegedToolsExposure' })

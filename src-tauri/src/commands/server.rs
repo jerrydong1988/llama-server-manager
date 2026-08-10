@@ -1002,6 +1002,11 @@ fn append_network_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Str
         if should_emit(config, "agent", config.agent) && config.agent {
             cmd.push("--agent".into());
         }
+        if should_emit(config, "tools_runtime", !config.tools_runtime.is_empty())
+            && !config.tools_runtime.is_empty()
+        {
+            cmd.extend_from_slice(&["--tools-runtime".into(), config.tools_runtime.clone()]);
+        }
         if should_emit(
             config,
             "mcp_servers_config",
@@ -4816,15 +4821,21 @@ mod perf_parser_tests {
     }
 
     #[test]
-    fn mcp_server_sources_are_emitted_as_distinct_arguments() {
+    fn tool_runtime_and_mcp_sources_are_emitted_as_distinct_arguments() {
         let config = InstanceConfig {
             model_path: "model.gguf".into(),
+            tools_runtime: "docker:ubuntu:24.04".into(),
             mcp_servers_config: "C:/config/mcp.json".into(),
             mcp_servers_json: r#"{"mcpServers":{"local":{}}}"#.into(),
             ..InstanceConfig::default()
         };
 
         let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(
+            &command,
+            "--tools-runtime",
+            "docker:ubuntu:24.04"
+        ));
         assert!(has_flag_value(
             &command,
             "--mcp-servers-config",

@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-08-05",
+  "verifiedAt": "2026-08-10",
   "source": "https://github.com/ggerganov/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10276",
-  "upstreamCommit": "6ea215d171fd31df943bf1ac8227129f2b963160",
-  "upstreamMasterChecked": "3e3a7a416d6588597523c792fc5874a543d59ed9",
+  "upstreamRelease": "b10354",
+  "upstreamCommit": "d2f83055d6e3b379b5d34c4837122a918cf402c2",
+  "upstreamMasterChecked": "030ebb558a5820b444a8f836ed5cdd46c9b4bd7a",
   "releaseSnapshot": {
-    "ref": "b10276",
-    "commit": "6ea215d171fd31df943bf1ac8227129f2b963160",
-    "parameterCount": 250,
-    "snapshotHash": "cd136310580885b008a87da182718bd5f71710e2d1e74d816e09495b41b198f7",
+    "ref": "b10354",
+    "commit": "d2f83055d6e3b379b5d34c4837122a918cf402c2",
+    "parameterCount": 247,
+    "snapshotHash": "2f4486dd85f4464d8ade5bc98fc98a9ad1190adc36bd1223ac08d8cdf8a68fa5",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -664,15 +664,6 @@
         "descriptionHash": "0ec19872f3f08ddca671da0b9c6297155804d8f706d5387779d818410fd20525"
       },
       {
-        "canonical": "--hf-file-v",
-        "aliases": [
-          "--hf-file-v",
-          "-hffv"
-        ],
-        "synopsisHash": "c5dc5573c8f3790e833db94e60bb7557b7cc51d83f9aac00edbfa0eec6959fd4",
-        "descriptionHash": "e2c4cd07d76ad194d9a96384ff6c362bf47aacb94d25c36ba19e286a10467927"
-      },
-      {
         "canonical": "--hf-repo",
         "aliases": [
           "--hf-repo",
@@ -681,16 +672,6 @@
         ],
         "synopsisHash": "108b4677b7d22743ffaa6dd9624974faa8e437e085ffb84695a2628abd748d05",
         "descriptionHash": "61135ccd14e8fe81af65d6fcef8c84ee201610c17a5af3fa625ecadbd7650b17"
-      },
-      {
-        "canonical": "--hf-repo-v",
-        "aliases": [
-          "--hf-repo-v",
-          "-hfrv",
-          "-hfv"
-        ],
-        "synopsisHash": "86230976b8c8e44c3e1984e23290fb5d6bedc12fcf24cead3f2e08fbe11b7a7c",
-        "descriptionHash": "95ee4e30d7b17197941999e9338db5f40f9226fb238c518584bcd9a05bc5f52d"
       },
       {
         "canonical": "--hf-token",
@@ -1052,15 +1033,6 @@
         ],
         "synopsisHash": "0ce008f9909c3124c0e00495a2e837a0b689c257192ca39dd2787e2b911e61bd",
         "descriptionHash": "2fd919e8a1415967ef0ca84e0b5da851d362e621614b427fd15e8c11bc8e1b68"
-      },
-      {
-        "canonical": "--model-vocoder",
-        "aliases": [
-          "--model-vocoder",
-          "-mv"
-        ],
-        "synopsisHash": "ca9bc2294deb62da3d063fe7428fca5e905bda3f4427fdf8a0893b1114d3181d",
-        "descriptionHash": "fef469261661ce2a2712b8e27b91be67302c72628e66002c8c441a458cea3d1f"
       },
       {
         "canonical": "--models-autoload",
@@ -1978,6 +1950,14 @@
         "descriptionHash": "8f450cbd74c44e3b04b27949ec476fb890cab9cbf9cf90be9c28583570aeceb5"
       },
       {
+        "canonical": "--tools-runtime",
+        "aliases": [
+          "--tools-runtime"
+        ],
+        "synopsisHash": "5d6a06c4b948b49979a3e3aa044fd8ab3f0adfc92a77c179511891ea51fd58c1",
+        "descriptionHash": "e06c69f81bcc590fe8d814d87354361162ad3edfef43774f64fc936c5b4a87aa"
+      },
+      {
         "canonical": "--top-k",
         "aliases": [
           "--top-k"
@@ -2001,14 +1981,6 @@
         ],
         "synopsisHash": "b3bacf3c5ef9eb05088e8cefe2282e7de327fd78e2ef57fe6993cc83c871fe87",
         "descriptionHash": "8d9ade7ab494eefae0aba7ccab451a6f3e51a02099dee4e243f32432540e7aa4"
-      },
-      {
-        "canonical": "--tts-use-guide-tokens",
-        "aliases": [
-          "--tts-use-guide-tokens"
-        ],
-        "synopsisHash": "b6e2617de17eeebc78dfc8519a79df9bcc4483187e9f329a69690c6cc21343a1",
-        "descriptionHash": "c159f97d0325bd6ad7c38744a271ff928dd2daa2cc1930595d177f8e96dd6eb6"
       },
       {
         "canonical": "--typical",
@@ -2181,9 +2153,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "3e3a7a416d6588597523c792fc5874a543d59ed9",
-    "parameterCount": 250,
-    "snapshotHash": "cd136310580885b008a87da182718bd5f71710e2d1e74d816e09495b41b198f7",
+    "commit": "030ebb558a5820b444a8f836ed5cdd46c9b4bd7a",
+    "parameterCount": 247,
+    "snapshotHash": "2f4486dd85f4464d8ade5bc98fc98a9ad1190adc36bd1223ac08d8cdf8a68fa5",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2833,15 +2805,6 @@
         "descriptionHash": "0ec19872f3f08ddca671da0b9c6297155804d8f706d5387779d818410fd20525"
       },
       {
-        "canonical": "--hf-file-v",
-        "aliases": [
-          "--hf-file-v",
-          "-hffv"
-        ],
-        "synopsisHash": "c5dc5573c8f3790e833db94e60bb7557b7cc51d83f9aac00edbfa0eec6959fd4",
-        "descriptionHash": "e2c4cd07d76ad194d9a96384ff6c362bf47aacb94d25c36ba19e286a10467927"
-      },
-      {
         "canonical": "--hf-repo",
         "aliases": [
           "--hf-repo",
@@ -2850,16 +2813,6 @@
         ],
         "synopsisHash": "108b4677b7d22743ffaa6dd9624974faa8e437e085ffb84695a2628abd748d05",
         "descriptionHash": "61135ccd14e8fe81af65d6fcef8c84ee201610c17a5af3fa625ecadbd7650b17"
-      },
-      {
-        "canonical": "--hf-repo-v",
-        "aliases": [
-          "--hf-repo-v",
-          "-hfrv",
-          "-hfv"
-        ],
-        "synopsisHash": "86230976b8c8e44c3e1984e23290fb5d6bedc12fcf24cead3f2e08fbe11b7a7c",
-        "descriptionHash": "95ee4e30d7b17197941999e9338db5f40f9226fb238c518584bcd9a05bc5f52d"
       },
       {
         "canonical": "--hf-token",
@@ -3221,15 +3174,6 @@
         ],
         "synopsisHash": "0ce008f9909c3124c0e00495a2e837a0b689c257192ca39dd2787e2b911e61bd",
         "descriptionHash": "2fd919e8a1415967ef0ca84e0b5da851d362e621614b427fd15e8c11bc8e1b68"
-      },
-      {
-        "canonical": "--model-vocoder",
-        "aliases": [
-          "--model-vocoder",
-          "-mv"
-        ],
-        "synopsisHash": "ca9bc2294deb62da3d063fe7428fca5e905bda3f4427fdf8a0893b1114d3181d",
-        "descriptionHash": "fef469261661ce2a2712b8e27b91be67302c72628e66002c8c441a458cea3d1f"
       },
       {
         "canonical": "--models-autoload",
@@ -4147,6 +4091,14 @@
         "descriptionHash": "8f450cbd74c44e3b04b27949ec476fb890cab9cbf9cf90be9c28583570aeceb5"
       },
       {
+        "canonical": "--tools-runtime",
+        "aliases": [
+          "--tools-runtime"
+        ],
+        "synopsisHash": "5d6a06c4b948b49979a3e3aa044fd8ab3f0adfc92a77c179511891ea51fd58c1",
+        "descriptionHash": "e06c69f81bcc590fe8d814d87354361162ad3edfef43774f64fc936c5b4a87aa"
+      },
+      {
         "canonical": "--top-k",
         "aliases": [
           "--top-k"
@@ -4170,14 +4122,6 @@
         ],
         "synopsisHash": "b3bacf3c5ef9eb05088e8cefe2282e7de327fd78e2ef57fe6993cc83c871fe87",
         "descriptionHash": "8d9ade7ab494eefae0aba7ccab451a6f3e51a02099dee4e243f32432540e7aa4"
-      },
-      {
-        "canonical": "--tts-use-guide-tokens",
-        "aliases": [
-          "--tts-use-guide-tokens"
-        ],
-        "synopsisHash": "b6e2617de17eeebc78dfc8519a79df9bcc4483187e9f329a69690c6cc21343a1",
-        "descriptionHash": "c159f97d0325bd6ad7c38744a271ff928dd2daa2cc1930595d177f8e96dd6eb6"
       },
       {
         "canonical": "--typical",
@@ -4359,7 +4303,8 @@
     "--mcp-servers-json",
     "--reasoning-preserve",
     "--no-reasoning-preserve",
-    "--log-prompts-dir"
+    "--log-prompts-dir",
+    "--tools-runtime"
   ],
   "defaultTrueNegativeFlags": [
     "--no-cont-batching",
@@ -4395,7 +4340,6 @@
       "--control-vector-layer-range"
     ],
     "specializedPresets": [
-      "--tts-use-guide-tokens",
       "--vocoder",
       "--fim-qwen-7b-default"
     ]

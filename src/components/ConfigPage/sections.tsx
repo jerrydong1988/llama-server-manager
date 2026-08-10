@@ -603,6 +603,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Input label={`${t.configPage.uiConfig} (--ui-config)`} value={local.ui_config} onChange={v => set('ui_config', v)} title={t.configPage.uiConfigTip}  fieldKey={a('ui_config')} />
             <Switch label={`${t.configPage.uiMcpProxy} (--ui-mcp-proxy)`} value={local.ui_mcp_proxy} onChange={v => set('ui_mcp_proxy', v)} title={t.configPage.uiMcpProxyTip}  fieldKey={a('ui_mcp_proxy')} />
             <Switch label={`${t.configPage.agent} (--agent)`} value={local.agent} onChange={v => set('agent', v)} title={t.configPage.agentTip}  fieldKey={a('agent')} />
+            <Input label={`${t.configPage.toolsRuntime} (--tools-runtime)`} value={local.tools_runtime} onChange={v => set('tools_runtime', v)} title={t.configPage.toolsRuntimeTip} fieldKey={a('tools_runtime')} />
             <Input label={`${t.configPage.mcpServersConfig} (--mcp-servers-config)`} value={formatPathForDisplay(local.mcp_servers_config)} onChange={v => set('mcp_servers_config', v)} title={t.configPage.mcpServersConfigTip} fieldKey={a('mcp_servers_config')} />
             <Input label={`${t.configPage.mcpServersJson} (--mcp-servers-json)`} value={local.mcp_servers_json} onChange={v => set('mcp_servers_json', v)} title={t.configPage.mcpServersJsonTip} fieldKey={a('mcp_servers_json')} />
             </>)}
