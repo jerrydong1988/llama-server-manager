@@ -35,7 +35,7 @@ export function defaultInstanceConfig(): InstanceConfig {
     ssl_key_file: '', ssl_cert_file: '', path_prefix: '', api_prefix: '',
     cors_origins: '', cors_methods: '', cors_headers: '', cors_credentials: '',
     no_ui: false, offline: false, ui_config_file: '', ui_config: '', ui_mcp_proxy: false, agent: false,
-    mcp_servers_config: '', mcp_servers_json: '',
+    tools_runtime: '', mcp_servers_config: '', mcp_servers_json: '',
     embedding: false, pooling: '', embd_normalize: 2, reranking: false,
     metrics: true, props: true, slots_enabled: true,
     slot_save_path: '', log_prompts_dir: '', slot_prompt_similarity: 0.1, prefill_assistant: true,

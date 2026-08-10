@@ -36,6 +36,12 @@ const backendSamplingCompatible = (config: InstanceConfig, isEmbedding: boolean)
   && !config.json_schema.trim()
   && !config.json_schema_file.trim()
 )
+const toolsEnabled = (config: InstanceConfig) => Boolean(
+  config.tools.trim()
+  || config.agent
+  || config.mcp_servers_config.trim()
+  || config.mcp_servers_json.trim()
+)
 
 const b10068 = (zh: string, en: string) => ({ 10068: text(zh, en) })
 const b10105 = (zh: string, en: string) => ({ 10105: text(zh, en) })
@@ -144,6 +150,7 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
   backend_sampling: { flags: ['--backend-sampling', '-bs'], dependency: backendSamplingCompatible },
   tools: { flags: ['--tools'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja },
   agent: { flags: ['--agent', '--no-agent', '-ag', '-no-ag'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja },
+  tools_runtime: { flags: ['--tools-runtime'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja && toolsEnabled(config) },
   mcp_servers_config: { flags: ['--mcp-servers-config'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja },
   mcp_servers_json: { flags: ['--mcp-servers-json'], dependency: (config, isEmbedding) => !isEmbedding && config.jinja },
   image_min_tokens: {

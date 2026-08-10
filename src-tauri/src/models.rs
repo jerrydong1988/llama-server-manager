@@ -478,6 +478,8 @@ pub struct InstanceConfig {
     #[serde(default)]
     pub agent: bool,
     #[serde(default)]
+    pub tools_runtime: String,
+    #[serde(default)]
     pub mcp_servers_config: String,
     #[serde(default)]
     pub mcp_servers_json: String,
@@ -819,6 +821,7 @@ impl Default for InstanceConfig {
             ui_config: String::new(),
             ui_mcp_proxy: false,
             agent: false,
+            tools_runtime: String::new(),
             mcp_servers_config: String::new(),
             mcp_servers_json: String::new(),
             embedding: false,

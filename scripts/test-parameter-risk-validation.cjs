@@ -86,6 +86,8 @@ const entry = `
   assert.equal(has('warnToolsRequireJinja', { mcp_servers_config: 'mcp.json', jinja: false }), true)
   assert.equal(has('warnMcpServersJsonInvalid', { mcp_servers_json: '{bad json' }), true)
   assert.equal(has('warnMcpServersJsonInvalid', { mcp_servers_json: '{"mcpServers":{}}' }), false)
+  assert.equal(has('warnToolsRuntimeInvalid', { tools_runtime: 'process:host' }), true)
+  assert.equal(has('warnToolsRuntimeInvalid', { tools_runtime: 'docker:ubuntu:24.04' }), false)
   assert.equal(has('warnPrivilegedToolsExposure', { tools: 'all', host: '0.0.0.0' }), true)
   assert.equal(has('warnPrivilegedToolsExposure', { agent: true, cors_origins: '*' }), true)
   assert.equal(has('warnPrivilegedToolsExposure', { mcp_servers_config: 'mcp.json' }), false)
@@ -128,6 +130,8 @@ const entry = `
   assert.equal(parameterDependencyActive('lookup_cache_static', config({ spec_type: 'ngram-simple' }), false), false)
   assert.equal(parameterDependencyActive('lookup_cache_static', config({ spec_type: 'ngram-cache' }), false), true)
   assert.equal(parameterDependencyActive('tools', config({ tools: 'all', jinja: false }), false), false)
+  assert.equal(parameterDependencyActive('tools_runtime', config({ tools: 'all', tools_runtime: 'docker:ubuntu', jinja: true }), false), true)
+  assert.equal(parameterDependencyActive('tools_runtime', config({ tools_runtime: 'docker:ubuntu', jinja: true }), false), false)
   assert.equal(parameterDependencyActive('mcp_servers_config', config({ mcp_servers_config: 'mcp.json', jinja: true }), false), true)
   assert.equal(parameterDependencyActive('mcp_servers_json', config({ mcp_servers_json: '{}', jinja: false }), false), false)
 

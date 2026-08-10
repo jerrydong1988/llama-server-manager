@@ -195,6 +195,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
    if (config.ui_config) a.add('ui_config')
     if (config.ui_mcp_proxy) a.add('ui_mcp_proxy')
     if (config.agent) a.add('agent')
+    if (config.tools_runtime) a.add('tools_runtime')
     if (config.mcp_servers_config) a.add('mcp_servers_config')
     if (config.mcp_servers_json) a.add('mcp_servers_json')
    // New server params

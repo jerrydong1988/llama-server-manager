@@ -1,6 +1,6 @@
 # Llama Server Manager 使用说明 / User Guide
 
-> v2.9.41 · Windows / macOS / Linux
+> v2.9.42 · Windows / macOS / Linux
 
 本说明按实际操作顺序介绍模型、引擎、实例、路由和监控功能。应用内“使用说明”页面会随安装包离线提供同一份内容和图片。
 
@@ -382,9 +382,13 @@ Instance Routing exposes native OpenAI and Anthropic formats on one listener, ro
 
 Anthropic 路径支持文本、图片、thinking、工具调用、工具结果和流式事件。工具调用要求目标实例启用 `--jinja`。Claude Code 应把 `ANTHROPIC_BASE_URL` 指向统一路由根地址（不要附加 `/v1`），并将 `ANTHROPIC_MODEL` 设为已配置的公开模型名；配置代理密钥时同时设置 `ANTHROPIC_AUTH_TOKEN`。
 
+从 llama.cpp `b10354` 起，可在实例参数的服务扩展区域配置 `--tools-runtime`，把内置工具放入 Docker、Podman、已有容器或 SSH 目标中执行；留空时工具直接使用主机环境。该隔离能力仍为实验性功能，配置远程或容器运行时时仍需限制监听地址、CORS Origin 和 API Key。
+
 `/v1/messages` 与 `/v1/messages/count_tokens` 必须携带 `anthropic-version: 2023-06-01`。官方 Anthropic SDK 会自动发送；自定义 HTTP 客户端缺失或发送其他版本时，路由器返回 `400 invalid_request_error`。
 
 Anthropic routes support text, images, thinking, tool calls, tool results, and streaming events. Tool use requires `--jinja` on the target instance. Point Claude Code's `ANTHROPIC_BASE_URL` at the routing root without `/v1`, set `ANTHROPIC_MODEL` to a configured public model name, and set `ANTHROPIC_AUTH_TOKEN` when the proxy uses authentication.
+
+Starting with llama.cpp `b10354`, configure `--tools-runtime` in the instance server-extension parameters to run built-in tools in Docker, Podman, an existing container, or an SSH target. An empty value uses the host environment. This isolation remains experimental, and remote/container runtimes still require restricted bind addresses, CORS origins, and API keys.
 
 `/v1/messages` and `/v1/messages/count_tokens` require `anthropic-version: 2023-06-01`. Official Anthropic SDKs send it automatically; custom HTTP clients receive `400 invalid_request_error` when the header is missing or unsupported.
 
