@@ -402,12 +402,13 @@ const InstanceManager = () => {
                     }}
                     aria-selected={selected}
                     aria-current={selected ? 'true' : undefined}
-                    className={`relative grid min-w-0 gap-3 border-l-4 px-4 py-4 text-left transition lg:grid-cols-[minmax(280px,1fr)_minmax(210px,0.72fr)_minmax(150px,0.42fr)_minmax(166px,auto)] lg:items-center ${
+                    className={`relative grid min-w-0 gap-3 px-5 py-4 text-left transition lg:grid-cols-[minmax(280px,1fr)_minmax(210px,0.72fr)_minmax(150px,0.42fr)_minmax(166px,auto)] lg:items-center ${
                       selected
-                        ? 'border-l-blue-500 bg-blue-50/95 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.24)] dark:border-l-blue-400 dark:bg-blue-500/15 dark:shadow-[inset_0_0_0_1px_rgba(96,165,250,0.32)]'
-                        : 'border-l-transparent hover:bg-slate-50 dark:hover:bg-slate-900/60'
+                        ? 'bg-blue-50/95 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.24)] dark:bg-blue-500/15 dark:shadow-[inset_0_0_0_1px_rgba(96,165,250,0.32)]'
+                        : 'hover:bg-slate-50 dark:hover:bg-slate-900/60'
                     }`}
                   >
+                    {selected && <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1 bg-blue-500 dark:bg-blue-400" />}
                     <div className="flex min-w-0 items-center gap-3">
                       <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${isLifecycleBusy ? 'animate-pulse bg-blue-500' : inst.status === 'running' ? 'bg-emerald-500' : inst.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'}`} />
                       <div className="min-w-0 flex-1">
