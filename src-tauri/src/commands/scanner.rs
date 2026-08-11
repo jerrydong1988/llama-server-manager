@@ -229,8 +229,8 @@ fn reuse_cached_engines_for_root(
 
 #[allow(clippy::too_many_arguments)]
 fn try_reuse_engine_root(
-    root: &Path,
     scan_root_key: &str,
+    signature: &str,
     inventory: &HashMap<String, InventoryEngineRecord>,
     directory_inventory: &HashMap<String, InventoryDirectoryRecord>,
     seen_directory_keys: &mut HashSet<String>,
@@ -239,13 +239,12 @@ fn try_reuse_engine_root(
     engines: &mut Vec<EngineInfo>,
     engine_records: &mut Vec<InventoryEngineRecord>,
 ) -> Result<bool, String> {
-    let signature = read_directory_tree_signature(root, 2)?;
     seen_directory_keys.insert(scan_root_key.to_string());
     directory_records.push(InventoryDirectoryRecord::new(
         "engine",
         scan_root_key.to_string(),
         scan_root_key.to_string(),
-        signature.clone(),
+        signature.to_string(),
     ));
 
     let reusable = directory_inventory
@@ -525,6 +524,101 @@ fn mark_sharded_models(models: &mut [ModelInfo]) {
 const ENGINE_EXE_NAME: &str = "llama-server.exe";
 #[cfg(not(target_os = "windows"))]
 const ENGINE_EXE_NAME: &str = "llama-server";
+
+// Engine packages commonly add vendor/backend/bin directories below the selected root.
+// Keep traversal bounded so accidentally selecting a broad directory cannot recurse forever.
+const MAX_ENGINE_SCAN_DEPTH: usize = 8;
+
+#[derive(Debug)]
+struct EngineTreeInspection {
+    signature: String,
+    executables: Vec<(PathBuf, PathBuf)>,
+}
+
+fn inspect_engine_tree(root: &Path, max_depth: usize) -> Result<EngineTreeInspection, String> {
+    // The marker guarantees that inventory created by the former two-level algorithm is not
+    // reused after upgrading to recursive engine discovery.
+    let mut signature_parts = vec!["engine-tree-signature-v2".to_string()];
+    let mut executables = Vec::new();
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    let mut visited = HashSet::new();
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+
+    while let Some((dir, depth)) = pending.pop() {
+        let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !paths_equal(&canonical_dir, &canonical_root)
+            && !path_is_within(&canonical_dir, &canonical_root)
+        {
+            continue;
+        }
+        let identity = path_identity_key(&canonical_dir);
+        if !visited.insert(identity.clone()) {
+            continue;
+        }
+        signature_parts.push(format!("dir|{identity}"));
+
+        let exe = dir.join(ENGINE_EXE_NAME);
+        if let Ok(metadata) = exe.metadata() {
+            if metadata.is_file() {
+                let canonical_exe = std::fs::canonicalize(&exe).unwrap_or_else(|_| exe.clone());
+                if path_is_within(&canonical_exe, &canonical_root) {
+                    let modified_ns = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or(0);
+                    signature_parts.push(format!(
+                        "exe|{}|{}|{}",
+                        canonical_key(&canonical_exe),
+                        metadata.len(),
+                        modified_ns
+                    ));
+                    executables.push((dir.clone(), exe));
+                }
+            }
+        }
+
+        if depth >= max_depth {
+            continue;
+        }
+
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if depth == 0 => {
+                return Err(format!("failed to read {}: {}", dir.display(), error));
+            }
+            Err(_) => {
+                signature_parts.push(format!("unreadable|{identity}"));
+                continue;
+            }
+        };
+        let mut children = Vec::new();
+        for entry in entries {
+            let Ok(entry) = entry else {
+                signature_parts.push(format!("entry-error|{identity}"));
+                continue;
+            };
+            let Ok(file_type) = entry.file_type() else {
+                signature_parts.push(format!("type-error|{}", path_identity_key(&entry.path())));
+                continue;
+            };
+            if file_type.is_dir() && !file_type.is_symlink() {
+                let child = entry.path();
+                signature_parts.push(format!("child|{}", engine_path_identity(&child)));
+                children.push(child);
+            }
+        }
+        children.sort();
+        pending.extend(children.into_iter().rev().map(|child| (child, depth + 1)));
+    }
+
+    signature_parts.sort();
+    Ok(EngineTreeInspection {
+        signature: stable_hash(&signature_parts),
+        executables,
+    })
+}
 
 // Engine info construction.
 pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<EngineInfo> {
@@ -926,9 +1020,10 @@ pub async fn scan_engines(
         if engines_dir.exists() {
             let scan_root_key = canonical_key(&engines_dir);
             scan_root_keys.insert(scan_root_key.clone());
+            let inspection = inspect_engine_tree(&engines_dir, MAX_ENGINE_SCAN_DEPTH)?;
             if try_reuse_engine_root(
-                &engines_dir,
                 &scan_root_key,
+                &inspection.signature,
                 &inventory,
                 &directory_inventory,
                 &mut seen_directory_keys,
@@ -939,28 +1034,18 @@ pub async fn scan_engines(
             )? {
                 // Cached entries for this unchanged root have already been appended.
             } else {
-                for entry in std::fs::read_dir(&engines_dir)
-                    .map_err(|e| format!("{}", e))?
-                    .flatten()
-                {
-                    let dir = entry.path();
-                    if !dir.is_dir() {
-                        continue;
-                    }
-                    let exe = dir.join(ENGINE_EXE_NAME);
-                    if exe.exists() {
-                        let norm = engine_path_identity(&dir);
-                        if seen.insert(norm) {
-                            push_indexed_engine(
-                                &dir,
-                                &exe,
-                                &scan_root_key,
-                                &inventory,
-                                &mut seen_inventory_ids,
-                                &mut engines,
-                                &mut engine_records,
-                            );
-                        }
+                for (dir, exe) in inspection.executables {
+                    let norm = engine_path_identity(&dir);
+                    if seen.insert(norm) {
+                        push_indexed_engine(
+                            &dir,
+                            &exe,
+                            &scan_root_key,
+                            &inventory,
+                            &mut seen_inventory_ids,
+                            &mut engines,
+                            &mut engine_records,
+                        );
                     }
                 }
             }
@@ -973,9 +1058,10 @@ pub async fn scan_engines(
             }
             let scan_root_key = canonical_key(&root);
             scan_root_keys.insert(scan_root_key.clone());
+            let inspection = inspect_engine_tree(&root, MAX_ENGINE_SCAN_DEPTH)?;
             if try_reuse_engine_root(
-                &root,
                 &scan_root_key,
+                &inspection.signature,
                 &inventory,
                 &directory_inventory,
                 &mut seen_directory_keys,
@@ -986,65 +1072,18 @@ pub async fn scan_engines(
             )? {
                 continue;
             }
-            let direct_exe = root.join(ENGINE_EXE_NAME);
-            if direct_exe.exists() {
-                let norm = engine_path_identity(&root);
+            for (dir, exe) in inspection.executables {
+                let norm = engine_path_identity(&dir);
                 if seen.insert(norm) {
                     push_indexed_engine(
-                        &root,
-                        &direct_exe,
+                        &dir,
+                        &exe,
                         &scan_root_key,
                         &inventory,
                         &mut seen_inventory_ids,
                         &mut engines,
                         &mut engine_records,
                     );
-                }
-            }
-            if let Ok(entries) = std::fs::read_dir(&root) {
-                for entry in entries.flatten() {
-                    let sub = entry.path();
-                    if !sub.is_dir() {
-                        continue;
-                    }
-                    let exe = sub.join(ENGINE_EXE_NAME);
-                    if exe.exists() {
-                        let norm = engine_path_identity(&sub);
-                        if seen.insert(norm) {
-                            push_indexed_engine(
-                                &sub,
-                                &exe,
-                                &scan_root_key,
-                                &inventory,
-                                &mut seen_inventory_ids,
-                                &mut engines,
-                                &mut engine_records,
-                            );
-                        }
-                    }
-                    if let Ok(sub_entries) = std::fs::read_dir(&sub) {
-                        for se in sub_entries.flatten() {
-                            let sub2 = se.path();
-                            if !sub2.is_dir() {
-                                continue;
-                            }
-                            let exe2 = sub2.join(ENGINE_EXE_NAME);
-                            if exe2.exists() {
-                                let norm = engine_path_identity(&sub2);
-                                if seen.insert(norm) {
-                                    push_indexed_engine(
-                                        &sub2,
-                                        &exe2,
-                                        &scan_root_key,
-                                        &inventory,
-                                        &mut seen_inventory_ids,
-                                        &mut engines,
-                                        &mut engine_records,
-                                    );
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -1171,14 +1210,63 @@ mod incremental_scan_tests {
     #[test]
     fn tree_signature_changes_for_nested_engine_file() {
         let dir = temp_test_dir("engine-tree");
-        let nested = dir.join("backend").join("bin");
+        let nested = dir.join("vendor").join("backend").join("bin");
         std::fs::create_dir_all(&nested).unwrap();
-        let initial = read_directory_tree_signature(&dir, 2).unwrap();
+        let initial = inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH)
+            .unwrap()
+            .signature;
 
         std::fs::write(nested.join(ENGINE_EXE_NAME), b"exe").unwrap();
 
-        let updated = read_directory_tree_signature(&dir, 2).unwrap();
+        let updated = inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH)
+            .unwrap()
+            .signature;
         assert_ne!(initial, updated);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn engine_scan_discovers_nested_vendor_backend_layouts() {
+        let dir = temp_test_dir("engine-depth");
+        let atomic = dir.join("atomic");
+        let hip = dir.join("poolside").join("hip-rocm714").join("bin");
+        let vulkan = dir.join("poolside").join("vulkan").join("bin");
+        for engine_dir in [&atomic, &hip, &vulkan] {
+            std::fs::create_dir_all(engine_dir).unwrap();
+            std::fs::write(engine_dir.join(ENGINE_EXE_NAME), b"exe").unwrap();
+        }
+
+        let discovered = inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH)
+            .unwrap()
+            .executables;
+        let discovered_dirs = discovered
+            .iter()
+            .map(|(engine_dir, _)| engine_path_identity(engine_dir))
+            .collect::<HashSet<_>>();
+
+        assert_eq!(discovered.len(), 3);
+        assert!(discovered_dirs.contains(&engine_path_identity(&atomic)));
+        assert!(discovered_dirs.contains(&engine_path_identity(&hip)));
+        assert!(discovered_dirs.contains(&engine_path_identity(&vulkan)));
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn engine_scan_stops_at_the_configured_depth_limit() {
+        let dir = temp_test_dir("engine-depth-limit");
+        let mut too_deep = dir.clone();
+        for depth in 0..=MAX_ENGINE_SCAN_DEPTH {
+            too_deep = too_deep.join(format!("level-{depth}"));
+        }
+        std::fs::create_dir_all(&too_deep).unwrap();
+        std::fs::write(too_deep.join(ENGINE_EXE_NAME), b"exe").unwrap();
+
+        assert!(inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH)
+            .unwrap()
+            .executables
+            .is_empty());
 
         let _ = std::fs::remove_dir_all(dir);
     }
