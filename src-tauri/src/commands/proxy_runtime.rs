@@ -124,6 +124,7 @@ pub(crate) struct RouterRuntime {
     targets: Mutex<HashMap<String, TargetRuntime>>,
     scheduling_counters: Mutex<HashMap<String, u64>>,
     limiter: DynamicConcurrencyLimiter,
+    in_flight_body_bytes: AtomicUsize,
     rate_buckets: Mutex<HashMap<String, RateBucket>>,
     metrics: RouterMetrics,
 }
@@ -135,6 +136,7 @@ impl Default for RouterRuntime {
             targets: Mutex::new(HashMap::new()),
             scheduling_counters: Mutex::new(HashMap::new()),
             limiter: DynamicConcurrencyLimiter::default(),
+            in_flight_body_bytes: AtomicUsize::new(0),
             rate_buckets: Mutex::new(HashMap::new()),
             metrics: RouterMetrics::default(),
         }
@@ -143,6 +145,19 @@ impl Default for RouterRuntime {
 
 pub(crate) struct GlobalRequestPermit {
     runtime: Arc<RouterRuntime>,
+}
+
+pub(crate) struct InFlightBodyPermit {
+    runtime: Arc<RouterRuntime>,
+    bytes: usize,
+}
+
+impl Drop for InFlightBodyPermit {
+    fn drop(&mut self) {
+        self.runtime
+            .in_flight_body_bytes
+            .fetch_sub(self.bytes, Ordering::AcqRel);
+    }
 }
 
 impl Drop for GlobalRequestPermit {
@@ -217,6 +232,34 @@ impl RouterRuntime {
 
     pub(crate) fn in_flight_requests(&self) -> usize {
         self.limiter.active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn try_acquire_body_bytes(
+        self: &Arc<Self>,
+        bytes: usize,
+        limit: usize,
+    ) -> Option<InFlightBodyPermit> {
+        loop {
+            let active = self.in_flight_body_bytes.load(Ordering::Acquire);
+            let next = active.checked_add(bytes)?;
+            if next > limit {
+                return None;
+            }
+            if self
+                .in_flight_body_bytes
+                .compare_exchange_weak(active, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(InFlightBodyPermit {
+                    runtime: self.clone(),
+                    bytes,
+                });
+            }
+        }
+    }
+
+    pub(crate) fn in_flight_body_bytes(&self) -> usize {
+        self.in_flight_body_bytes.load(Ordering::Acquire)
     }
 
     pub(crate) fn total_requests(&self) -> u64 {
@@ -530,6 +573,11 @@ impl RouterRuntime {
             "lsm_router_in_flight_requests {}\n",
             self.in_flight_requests()
         ));
+        output.push_str("# TYPE lsm_router_in_flight_request_body_bytes gauge\n");
+        output.push_str(&format!(
+            "lsm_router_in_flight_request_body_bytes {}\n",
+            self.in_flight_body_bytes()
+        ));
         output.push_str("# TYPE lsm_router_request_duration_milliseconds histogram\n");
         let mut cumulative = 0u64;
         for (index, upper) in LATENCY_BUCKETS_MS.iter().enumerate() {
@@ -719,5 +767,19 @@ mod tests {
         assert!(runtime.acquire_target(&limited).is_none());
         drop(target);
         assert!(runtime.acquire_target(&limited).is_some());
+    }
+
+    #[test]
+    fn in_flight_body_budget_is_aggregate_and_releases_cleanly() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let first = runtime.try_acquire_body_bytes(60, 100).unwrap();
+        assert_eq!(runtime.in_flight_body_bytes(), 60);
+        assert!(runtime.try_acquire_body_bytes(41, 100).is_none());
+        let second = runtime.try_acquire_body_bytes(40, 100).unwrap();
+        assert_eq!(runtime.in_flight_body_bytes(), 100);
+        drop(first);
+        assert_eq!(runtime.in_flight_body_bytes(), 40);
+        drop(second);
+        assert_eq!(runtime.in_flight_body_bytes(), 0);
     }
 }

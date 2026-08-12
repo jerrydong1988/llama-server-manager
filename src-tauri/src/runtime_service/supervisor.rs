@@ -635,6 +635,8 @@ impl RuntimeSupervisor {
         if spec.command.is_empty() || spec.command[0].trim().is_empty() {
             return Err("runtime launch command is empty".into());
         }
+        crate::commands::server::validate_effective_launch_security(&spec.config, &spec.command)
+            .map_err(|error| error.to_string())?;
         {
             let state = self.state.lock().unwrap();
             if state

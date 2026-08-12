@@ -1666,8 +1666,85 @@ fn prepare_launch_checked(
     if uses_manual_command(&config) {
         prepare_manual_launch(config, engine_path)
     } else {
+        validate_managed_custom_argument_security(&config)?;
         Ok(prepare_launch(config, engine_path))
     }
+}
+
+const SECURITY_SENSITIVE_CUSTOM_FLAGS: &[&str] = &[
+    "--host",
+    "--port",
+    "--api-key",
+    "--api-key-file",
+    "--ssl-key-file",
+    "--ssl-cert-file",
+    "--path",
+    "--api-prefix",
+    "--cors-origins",
+    "--cors-methods",
+    "--cors-headers",
+    "--cors-credentials",
+    "--no-cors-credentials",
+];
+
+fn validate_managed_custom_argument_security(config: &InstanceConfig) -> AppResult<()> {
+    for row in &config.custom_args {
+        let arguments = split_args_checked(row.trim()).map_err(|message| {
+            AppError::new(
+                "INVALID_CUSTOM_ARGUMENTS",
+                format!("用户自定义参数无法解析：{message}"),
+                false,
+            )
+        })?;
+        for argument in arguments {
+            let flag = argument
+                .split_once('=')
+                .map_or(argument.as_str(), |(flag, _)| flag);
+            if SECURITY_SENSITIVE_CUSTOM_FLAGS.contains(&flag) {
+                return Err(AppError::new(
+                    "CUSTOM_ARGUMENT_SECURITY_FLAG_RESERVED",
+                    format!(
+                        "托管启动模式不允许在用户自定义参数中覆盖安全相关参数 {flag}。请使用对应的配置项；如需完全控制命令，请改用手动命令模式。"
+                    ),
+                    false,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_effective_launch_security(
+    config: &InstanceConfig,
+    command: &[String],
+) -> AppResult<()> {
+    let mut effective = config.clone();
+    if let Some(host) = manual_option_value(command, &["--host"])? {
+        effective.host = host;
+    }
+    if let Some(port) = manual_option_value(command, &["--port"])? {
+        effective.port = port.parse::<u16>().map_err(|_| {
+            AppError::new(
+                "INVALID_EFFECTIVE_SERVER_PORT",
+                "最终启动命令中的端口必须为 1 到 65535。",
+                false,
+            )
+        })?;
+        if effective.port == 0 {
+            return Err(AppError::new(
+                "INVALID_EFFECTIVE_SERVER_PORT",
+                "最终启动命令中的端口必须为 1 到 65535。",
+                false,
+            ));
+        }
+    }
+    effective.api_key = manual_option_value(command, &["--api-key"])?.unwrap_or_default();
+    effective.api_key_file = manual_option_value(command, &["--api-key-file"])?.unwrap_or_default();
+    effective.ssl_key_file = manual_option_value(command, &["--ssl-key-file"])?.unwrap_or_default();
+    effective.ssl_cert_file =
+        manual_option_value(command, &["--ssl-cert-file"])?.unwrap_or_default();
+    validate_tls_configuration(&effective)?;
+    validate_public_bind_auth(&effective)
 }
 
 enum EngineCapabilityResolution {
@@ -1906,6 +1983,7 @@ pub async fn generate_server_command(
         ));
     }
     let command = command_for_capabilities(&command, capabilities.as_deref());
+    validate_effective_launch_security(&config, &command)?;
     let emitted_override_keys =
         emitted_override_keys(&config, &engine_exe, capabilities.as_deref(), &command);
     timing.finish("success");
@@ -1971,6 +2049,7 @@ pub async fn start_server(
         }
         command_for_capabilities(&generated_cmd, engine_capabilities.as_deref())
     };
+    validate_effective_launch_security(&config, &cmd)?;
     let cmd_display = format_command_for_display(&cmd);
     timing.mark("preflight");
 
@@ -4882,6 +4961,53 @@ mod perf_parser_tests {
         assert!(validate_custom_argument_capabilities(&config, None).is_err());
         assert!(validate_custom_argument_capabilities(&config, Some(&partial)).is_err());
         assert!(validate_custom_argument_capabilities(&config, Some(&detected)).is_ok());
+    }
+
+    #[test]
+    fn security_regression_managed_custom_arguments_cannot_override_network_or_auth() {
+        for custom_argument in [
+            "--host 0.0.0.0",
+            "--host=0.0.0.0",
+            "--api-key-file C:/outside/key.txt",
+            "--ssl-key-file=key.pem",
+            "--path /shadow",
+        ] {
+            let config = InstanceConfig {
+                model_path: "model.gguf".into(),
+                custom_args: vec![custom_argument.into()],
+                ..InstanceConfig::default()
+            };
+            assert!(
+                prepare_launch_checked(config, "llama-server").is_err(),
+                "managed custom argument must not override security-sensitive settings: {custom_argument}"
+            );
+        }
+
+        let safe = InstanceConfig {
+            model_path: "model.gguf".into(),
+            custom_args: vec!["--verbose".into()],
+            ..InstanceConfig::default()
+        };
+        assert!(prepare_launch_checked(safe, "llama-server").is_ok());
+    }
+
+    #[test]
+    fn security_regression_effective_argv_is_revalidated_for_runtime_launches() {
+        let config = InstanceConfig {
+            host: "127.0.0.1".into(),
+            ..InstanceConfig::default()
+        };
+        let unsafe_command = vec![
+            "llama-server".into(),
+            "--host".into(),
+            "127.0.0.1".into(),
+            "--host=0.0.0.0".into(),
+        ];
+        assert!(validate_effective_launch_security(&config, &unsafe_command).is_err());
+
+        let mut authenticated = unsafe_command;
+        authenticated.extend(["--api-key".into(), "secret".into()]);
+        assert!(validate_effective_launch_security(&config, &authenticated).is_ok());
     }
 
     #[test]

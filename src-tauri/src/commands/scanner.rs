@@ -739,59 +739,60 @@ pub async fn scan_models(
         }
 
         if !fresh_files.is_empty() {
-            let chunk_size = (fresh_files.len()
-                / std::thread::available_parallelism()
-                    .map(|n| n.get())
-                    .unwrap_or(4)
-                    .max(1))
-            .max(1);
+            const MAX_GGUF_PARSE_WORKERS: usize = 4;
+            let worker_count = std::thread::available_parallelism()
+                .map(|value| value.get())
+                .unwrap_or(MAX_GGUF_PARSE_WORKERS)
+                .clamp(1, MAX_GGUF_PARSE_WORKERS)
+                .min(fresh_files.len());
+            let chunk_size = fresh_files.len().div_ceil(worker_count);
             type MetadataParseResult = (
                 usize,
                 PathBuf,
                 Result<crate::models::GgufMetadataSummary, String>,
             );
-            let results: Vec<Vec<MetadataParseResult>> = std::thread::scope(|s| {
-                let mut handles = Vec::new();
+            std::thread::scope(|scope| {
+                let (sender, receiver) =
+                    std::sync::mpsc::sync_channel::<MetadataParseResult>(worker_count);
                 for chunk in fresh_files.chunks(chunk_size) {
                     let chunk: Vec<_> = chunk.to_vec();
-                    handles.push(s.spawn(move || {
-                        chunk
-                            .iter()
-                            .map(|(model_idx, path)| {
-                                (*model_idx, path.clone(), utils::parse_gguf_metadata(path))
-                            })
-                            .collect::<Vec<_>>()
-                    }));
-                }
-                handles
-                    .into_iter()
-                    .map(|h| h.join().unwrap_or_default())
-                    .collect()
-            });
-
-            for chunk_results in results {
-                for (model_idx, path, summary_result) in chunk_results {
-                    if model_idx < models.len() {
-                        let summary = match summary_result {
-                            Ok(summary) => summary,
-                            Err(err) => {
-                                errors.push(format!(
-                                    "{} metadata parse failed: {}",
-                                    path.display(),
-                                    err
-                                ));
-                                continue;
+                    let sender = sender.clone();
+                    scope.spawn(move || {
+                        for (model_idx, path) in chunk {
+                            if sender
+                                .send((model_idx, path.clone(), utils::parse_gguf_metadata(&path)))
+                                .is_err()
+                            {
+                                break;
                             }
-                        };
-                        let model = &mut models[model_idx];
-                        model.architecture = summary.architecture;
-                        model.context_length = summary.context_length;
-                        model.quant_type = summary.quant_type;
-                        model.has_mtp_head = summary.capabilities.has_builtin_mtp;
-                        model.capabilities = summary.capabilities;
-                    }
+                        }
+                    });
                 }
-            }
+                drop(sender);
+
+                for (model_idx, path, summary_result) in receiver {
+                    if model_idx >= models.len() {
+                        continue;
+                    }
+                    let summary = match summary_result {
+                        Ok(summary) => summary,
+                        Err(err) => {
+                            errors.push(format!(
+                                "{} metadata parse failed: {}",
+                                path.display(),
+                                err
+                            ));
+                            continue;
+                        }
+                    };
+                    let model = &mut models[model_idx];
+                    model.architecture = summary.architecture;
+                    model.context_length = summary.context_length;
+                    model.quant_type = summary.quant_type;
+                    model.has_mtp_head = summary.capabilities.has_builtin_mtp;
+                    model.capabilities = summary.capabilities;
+                }
+            });
         }
 
         mark_sharded_models(&mut models);
@@ -1287,6 +1288,70 @@ mod incremental_scan_tests {
         let updated = read_directory_tree_signature(&dir, MAX_MODEL_SCAN_DEPTH).unwrap();
         assert_ne!(initial, updated);
 
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn unchanged_failed_metadata_record_is_reused_without_reparsing() {
+        let dir = temp_test_dir("malformed-model-cache");
+        std::fs::write(dir.join("malformed.gguf"), b"not-a-gguf").unwrap();
+        let scan_root_key = canonical_key(&dir);
+        let mut models = Vec::new();
+        let mut seen_display_paths = HashSet::new();
+        let mut seen_inventory_paths = HashSet::new();
+        let mut seen_directory_keys = HashSet::new();
+        let mut inventory_meta = HashMap::new();
+        let mut fresh_files = Vec::new();
+        let mut directory_records = Vec::new();
+        let mut errors = Vec::new();
+
+        scan_model_directory_incremental(
+            &dir,
+            &scan_root_key,
+            0,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut models,
+            &mut seen_display_paths,
+            &mut seen_inventory_paths,
+            &mut seen_directory_keys,
+            &mut inventory_meta,
+            &mut fresh_files,
+            &mut directory_records,
+            &mut errors,
+        );
+        assert_eq!(fresh_files.len(), 1);
+        let (cache_key, stored_root, mtime) = inventory_meta.get(&0).unwrap().clone();
+        let cached =
+            InventoryModelRecord::from_model(&models[0], cache_key.clone(), stored_root, mtime);
+        let inventory = HashMap::from([(cache_key, cached)]);
+
+        models.clear();
+        seen_display_paths.clear();
+        seen_inventory_paths.clear();
+        seen_directory_keys.clear();
+        inventory_meta.clear();
+        fresh_files.clear();
+        directory_records.clear();
+        errors.clear();
+        scan_model_directory_incremental(
+            &dir,
+            &scan_root_key,
+            0,
+            &inventory,
+            &HashMap::new(),
+            &mut models,
+            &mut seen_display_paths,
+            &mut seen_inventory_paths,
+            &mut seen_directory_keys,
+            &mut inventory_meta,
+            &mut fresh_files,
+            &mut directory_records,
+            &mut errors,
+        );
+
+        assert_eq!(models.len(), 1);
+        assert!(fresh_files.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

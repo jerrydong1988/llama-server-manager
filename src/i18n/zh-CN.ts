@@ -316,7 +316,7 @@
     warnC4: '模型已包含内置 MTP 头，外部草稿模型会改变默认草稿来源；仅在明确需要覆盖时保留',
     warnC5: '当前主模型路径选中的是多模态投影器文件，请选择文本/视觉主模型作为 model_path',
     warnC3: '\u65E0\u9650\u751F\u6210\uFF08n_predict=-1\uFF09\u4E14\u5FFD\u7565\u7ED3\u675F\u7B26=on\u2014\u751F\u6210\u53EF\u80FD\u6C38\u8FDC\u4E0D\u505C\u6B62',
-    warnD1: '自定义参数包含配置界面已管理的参数（包括别名或 --flag=value 形式）；它会在命令末尾覆盖界面设置',
+    warnD1: '自定义参数包含配置界面已管理的参数（包括别名或 --flag=value 形式）；网络、认证、TLS、CORS 与路径参数在托管模式下禁止覆盖，其余重复参数仍以末尾值为准',
   },
   perfBlock: {
     noRunning: '\u6682\u65E0\u8FD0\u884C\u4E2D\u5B9E\u4F8B\uFF0C\u542F\u52A8\u5B9E\u4F8B\u540E\u5F00\u59CB\u76D1\u63A7\u3002',
