@@ -1,6 +1,6 @@
 use axum::{
     body::{Body, Bytes},
-    extract::{rejection::BytesRejection, DefaultBodyLimit, Path, Request, State},
+    extract::{rejection::BytesRejection, DefaultBodyLimit, Extension, Path, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -25,8 +25,8 @@ use crate::commands::proxy_protocol::{
     request_format, response_request_id, rewrite_json_response, rewrite_sse_line, ProxyApiFormat,
 };
 use crate::commands::proxy_runtime::{
-    GlobalRequestPermit, RouterRuntime, RoutingCandidate, TargetCapabilities, TargetHealthSnapshot,
-    TargetRequestPermit,
+    GlobalRequestPermit, InFlightBodyPermit, RouterRuntime, RoutingCandidate, TargetCapabilities,
+    TargetHealthSnapshot, TargetRequestPermit,
 };
 use crate::commands::server::{effective_api_key, effective_server_scheme};
 use crate::commands::telemetry::{
@@ -50,6 +50,7 @@ const MAX_TOKEN_COUNT_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_COMPLETION_PREFLIGHT_PROMPTS: usize = 16;
 const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
 const MAX_ANTHROPIC_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
+const MAX_PROXY_IN_FLIGHT_BODY_BYTES: usize = 256 * 1024 * 1024;
 const TARGET_CAPABILITY_MAX_AGE: Duration = Duration::from_secs(60);
 const PROXY_API_KEY_HASH_PREFIX: &str = "sha256:";
 const SUPPORTED_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -314,7 +315,29 @@ struct ProxyTelemetryGuard {
     recorded: bool,
     runtime: Arc<RouterRuntime>,
     _global_permit: Option<GlobalRequestPermit>,
+    _body_permit: Option<InFlightBodyPermit>,
     _target_permit: Option<TargetRequestPermit>,
+}
+
+struct ProxyAdmissionGuards {
+    global: GlobalRequestPermit,
+    body: InFlightBodyPermit,
+}
+
+#[derive(Clone)]
+struct ProxyAdmissionPermit(Arc<Mutex<Option<ProxyAdmissionGuards>>>);
+
+impl ProxyAdmissionPermit {
+    fn new(global: GlobalRequestPermit, body: InFlightBodyPermit) -> Self {
+        Self(Arc::new(Mutex::new(Some(ProxyAdmissionGuards {
+            global,
+            body,
+        }))))
+    }
+
+    fn take(&self) -> Option<ProxyAdmissionGuards> {
+        self.0.lock().ok()?.take()
+    }
 }
 
 struct ProxyTelemetryRecord {
@@ -1420,6 +1443,31 @@ fn validate_anthropic_version(path: &str, headers: &HeaderMap) -> Result<(), Str
     Ok(())
 }
 
+fn request_body_limit(path: &str) -> usize {
+    if matches!(path, "/v1/messages" | "/v1/messages/count_tokens") {
+        MAX_ANTHROPIC_REQUEST_BODY_BYTES
+    } else {
+        MAX_PROXY_REQUEST_BODY_BYTES
+    }
+}
+
+fn request_body_reservation(path: &str, headers: &HeaderMap) -> Result<usize, String> {
+    let limit = request_body_limit(path);
+    let Some(value) = headers.get("content-length") else {
+        return Ok(limit);
+    };
+    let declared = value
+        .to_str()
+        .map_err(|_| "content-length header must be valid ASCII".to_string())?
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| "content-length header must be a non-negative integer".to_string())?;
+    if declared > limit {
+        return Err(format!("request body exceeds the {limit} byte limit"));
+    }
+    Ok(declared)
+}
+
 async fn proxy_security_middleware(
     State(router_state): State<ProxyRouterState>,
     mut request: Request,
@@ -1473,6 +1521,66 @@ async fn proxy_security_middleware(
         apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
         apply_cors_headers(&mut response, origin.as_deref());
         return response;
+    }
+    if request.method() == Method::POST && request_scope(request.uri().path()) == "inference" {
+        let Some(permit) = router_state
+            .runtime
+            .acquire_global(
+                config.max_concurrent_requests,
+                Duration::from_millis(config.queue_timeout_ms),
+            )
+            .await
+        else {
+            let mut response = error_response(
+                format,
+                StatusCode::TOO_MANY_REQUESTS,
+                "router concurrency limit exceeded",
+            );
+            if let Ok(value) = HeaderValue::from_str(
+                &config
+                    .queue_timeout_ms
+                    .saturating_add(999)
+                    .div_ceil(1_000)
+                    .to_string(),
+            ) {
+                response.headers_mut().insert("retry-after", value);
+            }
+            ensure_request_id_header(&mut response, format);
+            apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
+            apply_cors_headers(&mut response, origin.as_deref());
+            return response;
+        };
+        let reservation = match request_body_reservation(request.uri().path(), request.headers()) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let mut response = error_response(format, StatusCode::PAYLOAD_TOO_LARGE, &error);
+                ensure_request_id_header(&mut response, format);
+                apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
+                apply_cors_headers(&mut response, origin.as_deref());
+                return response;
+            }
+        };
+        let Some(body_permit) = router_state
+            .runtime
+            .try_acquire_body_bytes(reservation, MAX_PROXY_IN_FLIGHT_BODY_BYTES)
+        else {
+            router_state.runtime.record_rejected();
+            let mut response = error_response(
+                format,
+                StatusCode::TOO_MANY_REQUESTS,
+                "router in-flight request body budget exceeded",
+            );
+            response
+                .headers_mut()
+                .insert("retry-after", HeaderValue::from_static("1"));
+            ensure_request_id_header(&mut response, format);
+            apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
+            apply_cors_headers(&mut response, origin.as_deref());
+            return response;
+        };
+        request
+            .extensions_mut()
+            .insert(ProxyAdmissionPermit::new(permit, body_permit));
     }
     request.headers_mut().remove("authorization");
     request.headers_mut().remove("x-api-key");
@@ -2353,12 +2461,24 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
 
 async fn proxy_upstream(
     State(router_state): State<ProxyRouterState>,
+    Extension(admission): Extension<ProxyAdmissionPermit>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
     let api_format = ProxyApiFormat::from_path(uri.path());
+    let Some(admission_guards) = admission.take() else {
+        return error_response(
+            api_format,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "router admission permit is unavailable",
+        );
+    };
+    let ProxyAdmissionGuards {
+        global: global_permit,
+        body: body_permit,
+    } = admission_guards;
     if api_format.is_anthropic() && method != Method::POST {
         return error_response(
             api_format,
@@ -2392,33 +2512,6 @@ async fn proxy_upstream(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
     let proxy_config = resolution.config;
-    let global_permit = match router_state
-        .runtime
-        .acquire_global(
-            proxy_config.max_concurrent_requests,
-            Duration::from_millis(proxy_config.queue_timeout_ms),
-        )
-        .await
-    {
-        Some(permit) => permit,
-        None => {
-            let mut response = error_response(
-                api_format,
-                StatusCode::TOO_MANY_REQUESTS,
-                "router concurrency limit exceeded",
-            );
-            if let Ok(value) = HeaderValue::from_str(
-                &proxy_config
-                    .queue_timeout_ms
-                    .saturating_add(999)
-                    .div_ceil(1_000)
-                    .to_string(),
-            ) {
-                response.headers_mut().insert("retry-after", value);
-            }
-            return response;
-        }
-    };
     let mut candidates = resolution.candidates;
     let routing_key = routing_group_key(
         requested_model.as_deref(),
@@ -2651,6 +2744,7 @@ async fn proxy_upstream(
         recorded: false,
         runtime: router_state.runtime.clone(),
         _global_permit: Some(global_permit),
+        _body_permit: Some(body_permit),
         _target_permit: Some(target_permit),
     };
     if (response_is_json && !response_is_sse) || (api_format.is_anthropic() && !status_success) {
@@ -4164,6 +4258,71 @@ mod tests {
         assert_eq!(rejected_status, StatusCode::PAYLOAD_TOO_LARGE);
 
         task.abort();
+    }
+
+    #[tokio::test]
+    async fn security_regression_global_permit_is_acquired_before_request_body_buffering() {
+        use futures_util::StreamExt;
+
+        let snapshot = super::ProxyRuntimeSnapshot {
+            config: ProxyConfig {
+                max_concurrent_requests: 1,
+                queue_timeout_ms: 50,
+                ..ProxyConfig::default()
+            },
+            instances: HashMap::new(),
+            running: HashMap::new(),
+            bound_addr: String::new(),
+            last_error: None,
+        };
+        let runtime = Arc::new(super::RouterRuntime::default());
+        let router = super::proxy_router_from_source_with_runtime_and_limits(
+            Arc::new(TestProxySource { snapshot }),
+            runtime.clone(),
+            super::MAX_PROXY_REQUEST_BODY_BYTES,
+            super::MAX_ANTHROPIC_REQUEST_BODY_BYTES,
+        );
+        let (address, server_task) = spawn_test_router(router).await;
+        let body_stream = futures_util::stream::once(async {
+            Ok::<Bytes, std::io::Error>(Bytes::from_static(b"{"))
+        })
+        .chain(futures_util::stream::pending::<Result<Bytes, std::io::Error>>());
+        let request_task = tokio::spawn(async move {
+            reqwest::Client::new()
+                .post(format!("http://{address}/v1/embeddings"))
+                .header("content-type", "application/json")
+                .body(reqwest::Body::wrap_stream(body_stream))
+                .send()
+                .await
+        });
+
+        let mut observed_admission = false;
+        for _ in 0..50 {
+            if runtime.in_flight_requests() == 1 {
+                observed_admission = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        request_task.abort();
+        server_task.abort();
+        for _ in 0..50 {
+            if runtime.in_flight_requests() == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+
+        assert!(
+            observed_admission,
+            "the concurrency budget must cover clients while their request bodies are still arriving"
+        );
+        assert_eq!(
+            runtime.in_flight_requests(),
+            0,
+            "cancelling a partially uploaded request must release its permit"
+        );
     }
 
     #[tokio::test]

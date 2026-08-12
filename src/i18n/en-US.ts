@@ -313,7 +313,7 @@ export const enUS = {
     warnC4: 'The model already has built-in MTP heads; an external draft model changes the default draft source, so keep it only as an intentional override',
     warnC5: 'The primary model path points to a multimodal projector file; select the text/vision model file as model_path',
     warnC3: 'Unlimited generation (n_predict=-1) with ignore_eos=true — generation may never stop',
-    warnD1: 'Custom args repeat a UI-managed flag, including an alias or --flag=value form; the trailing custom flag will override the UI value',
+    warnD1: 'Custom args repeat a UI-managed flag, including aliases and --flag=value forms; managed mode rejects network, authentication, TLS, CORS, and path overrides, while other duplicates still use the trailing value',
   },
   perfBlock: {
     noRunning: 'No running instances. Start an instance to monitor performance.',

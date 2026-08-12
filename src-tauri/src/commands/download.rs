@@ -228,6 +228,7 @@ fn remote_parent_dir(root: &Path, remote_path: &str) -> Result<PathBuf, String> 
         }
     }
     crate::security::ensure_download_path_within_root(&destination, root)?;
+    crate::security::ensure_existing_download_ancestors_within_root(&destination, root)?;
     Ok(destination)
 }
 
@@ -398,6 +399,115 @@ fn build_download_paths(save_dir: &Path, file_name: &str) -> (PathBuf, PathBuf, 
     let temp_path = save_dir.join(format!("{}.part", file_name));
     let metadata_path = save_dir.join(format!("{}.part.json", file_name));
     (final_path, temp_path, metadata_path)
+}
+
+fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+    #[cfg(not(windows))]
+    false
+}
+
+fn validate_download_file_candidate(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata_is_link_like(&metadata) {
+                return Err(format!(
+                    "Download artifact must not be a symbolic link or reparse point: {}",
+                    path.display()
+                ));
+            }
+            if !metadata.is_file() {
+                return Err(format!(
+                    "Download artifact is not a file: {}",
+                    path.display()
+                ));
+            }
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Failed to inspect download artifact {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn validate_download_artifact_paths(
+    save_dir: &Path,
+    final_path: &Path,
+    temp_path: &Path,
+    metadata_path: &Path,
+) -> Result<(), String> {
+    let canonical_save_dir = std::fs::canonicalize(save_dir)
+        .map_err(|error| format!("Failed to resolve download directory: {error}"))?;
+    for path in [final_path, temp_path, metadata_path] {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "Download artifact has no parent directory".to_string())?;
+        let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+            format!(
+                "Failed to resolve download artifact parent {}: {error}",
+                parent.display()
+            )
+        })?;
+        if path_identity_key(&canonical_parent) != path_identity_key(&canonical_save_dir) {
+            return Err(format!(
+                "Download artifact parent {} escaped its managed directory {}",
+                canonical_parent.display(),
+                canonical_save_dir.display()
+            ));
+        }
+        validate_download_file_candidate(path)?;
+    }
+    Ok(())
+}
+
+fn open_download_temp_file(
+    save_dir: &Path,
+    final_path: &Path,
+    temp_path: &Path,
+    metadata_path: &Path,
+    append: bool,
+) -> Result<std::fs::File, String> {
+    validate_download_artifact_paths(save_dir, final_path, temp_path, metadata_path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options
+        .create(true)
+        .append(append)
+        .truncate(!append)
+        .write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    options
+        .open(temp_path)
+        .map_err(|error| format!("File create/write failed: {error}"))
+}
+
+fn replace_download_artifact(
+    save_dir: &Path,
+    source: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let metadata_path = artifact_state_path(source);
+    validate_download_artifact_paths(save_dir, destination, source, &metadata_path)?;
+    crate::persistence::replace_artifact_file(source, destination)
 }
 
 fn artifact_state_path(temp_path: &Path) -> PathBuf {
@@ -727,11 +837,19 @@ fn resolve_repo_save_path(
     let config_dir = managed.config_dir.lock().unwrap();
     let app_data_root = config_dir.parent().unwrap_or(Path::new("."));
     let base_path = crate::security::resolve_authorized_download_root(app_data_root, save_dir)?;
+    let base_path = if Path::new(save_dir.trim()).is_relative() {
+        let canonical_app_data = std::fs::canonicalize(app_data_root)
+            .map_err(|error| format!("Failed to resolve app data directory: {error}"))?;
+        let canonical_base = canonical_app_data.join(save_dir.trim());
+        crate::security::create_download_directory_within_root(
+            &canonical_app_data,
+            &canonical_base,
+        )?
+    } else {
+        base_path
+    };
     let save_path = base_path.join(repo_id.replace('/', std::path::MAIN_SEPARATOR_STR));
-    crate::security::ensure_download_path_within_root(&save_path, &base_path)?;
-    std::fs::create_dir_all(&save_path)
-        .map_err(|e| format!("Failed to create download directory: {}", e))?;
-    Ok(save_path)
+    crate::security::create_download_directory_within_root(&base_path, &save_path)
 }
 
 fn clear_control_flags_for_files(state: &AppState, files: &[MsFileEntry]) {
@@ -780,6 +898,19 @@ async fn download_single_file(
         }
     };
     let (final_path, temp_path, _metadata_path) = build_download_paths(&save_path, &file_name);
+    let metadata_path = artifact_state_path(&temp_path);
+    if let Err(error) =
+        validate_download_artifact_paths(&save_path, &final_path, &temp_path, &metadata_path)
+    {
+        has_error.store(true, Ordering::SeqCst);
+        has_non_retryable_error.store(true, Ordering::SeqCst);
+        ctx.emit(
+            &app,
+            "download-error",
+            serde_json::json!({ "error": error, "retryable": false }),
+        );
+        return;
+    }
     let shared = app.state::<AppState>();
     let path_key = normalized_destination_key(&final_path);
 
@@ -1010,7 +1141,7 @@ async fn download_single_file(
         let remote_size = response_content_range(resp.headers()).and_then(|range| range.total);
         let exact_size = unsatisfied_range_is_complete(part_size, file_size, remote_size);
         if exact_size {
-            if let Err(error) = crate::persistence::replace_artifact_file(&temp_path, &final_path) {
+            if let Err(error) = replace_download_artifact(&save_path, &temp_path, &final_path) {
                 has_error.store(true, Ordering::SeqCst);
                 update_manager_file_state(
                     &shared,
@@ -1272,13 +1403,13 @@ async fn download_single_file(
     let mut last_artifact_save = std::time::Instant::now() - std::time::Duration::from_secs(2);
 
     use std::io::Write;
-    let mut file = match std::fs::OpenOptions::new()
-        .create(true)
-        .append(is_partial)
-        .truncate(!is_partial)
-        .write(true)
-        .open(&temp_path)
-    {
+    let mut file = match open_download_temp_file(
+        &save_path,
+        &final_path,
+        &temp_path,
+        &metadata_path,
+        is_partial,
+    ) {
         Ok(f) => f,
         Err(e) => {
             save_artifact_state(
@@ -1307,13 +1438,13 @@ async fn download_single_file(
                     size: Some(total),
                     version: Some(ctx.version),
                     status: Some("error".into()),
-                    error: Some(Some(format!("File create/write failed: {}", e))),
+                    error: Some(Some(e.clone())),
                     ..Default::default()
                 },
             );
             has_error.store(true, Ordering::SeqCst);
             let _ = app.emit("download-error", serde_json::json!({
-                "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "error": format!("File create/write failed: {}", e),
+                "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "error": e,
                 "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
                 "retryable": false,
             }));
@@ -1637,7 +1768,7 @@ async fn download_single_file(
         return;
     }
 
-    if let Err(e) = crate::persistence::replace_artifact_file(&temp_path, &final_path) {
+    if let Err(e) = replace_download_artifact(&save_path, &temp_path, &final_path) {
         save_artifact_state(
             &DownloadArtifactState {
                 task_id: task_id.clone(),
@@ -1781,9 +1912,8 @@ pub async fn download_modelscope_files(
             repo_id, encoded_path
         );
         let dest_dir = remote_parent_dir(&save_path, &file.path)?;
-        tokio::fs::create_dir_all(&dest_dir)
-            .await
-            .map_err(|error| format!("Failed to create remote file directory: {error}"))?;
+        let dest_dir =
+            crate::security::create_download_directory_within_root(&save_path, &dest_dir)?;
         let ctx = build_task_context(&file, &repo_id, "modelscope");
         let has_error = Arc::clone(&has_error);
         let has_non_retryable_error = Arc::clone(&has_non_retryable_error);
@@ -2005,9 +2135,8 @@ pub async fn download_huggingface_files(
             repo_id, encoded_path
         );
         let dest_dir = remote_parent_dir(&save_path, &file.path)?;
-        tokio::fs::create_dir_all(&dest_dir)
-            .await
-            .map_err(|error| format!("Failed to create remote file directory: {error}"))?;
+        let dest_dir =
+            crate::security::create_download_directory_within_root(&save_path, &dest_dir)?;
         let ctx = build_task_context(&file, &repo_id, "huggingface");
         let has_error = Arc::clone(&has_error);
         let has_non_retryable_error = Arc::clone(&has_non_retryable_error);
@@ -3786,6 +3915,108 @@ mod audit_remediation_tests {
         ] {
             assert!(remote_parent_dir(root, unsafe_path).is_err());
         }
+    }
+
+    #[test]
+    fn security_regression_remote_parent_rejects_existing_directory_link_escape() {
+        let nonce = uuid::Uuid::new_v4();
+        let base = std::env::temp_dir().join(format!("lsm-download-link-{nonce}"));
+        let root = base.join("managed");
+        let outside = base.join("outside");
+        let linked = root.join("linked");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &linked).unwrap();
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&linked)
+                .arg(&outside)
+                .status()
+                .unwrap();
+            assert!(status.success(), "failed to create test directory junction");
+        }
+
+        let result = remote_parent_dir(&root, "linked/model.gguf");
+
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&linked);
+        #[cfg(windows)]
+        let _ = std::fs::remove_dir(&linked);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(
+            result.is_err(),
+            "an existing directory link must not redirect a managed download outside its root"
+        );
+    }
+
+    #[test]
+    fn security_regression_part_and_final_artifact_links_are_rejected() {
+        let base = std::env::temp_dir().join(format!(
+            "lsm-download-artifact-link-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let save_dir = base.join("managed");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&save_dir).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let (final_path, temp_path, metadata_path) = build_download_paths(&save_dir, "model.gguf");
+
+        #[cfg(unix)]
+        {
+            let outside_file = outside.join("target");
+            std::fs::write(&outside_file, b"outside").unwrap();
+            std::os::unix::fs::symlink(&outside_file, &temp_path).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&temp_path)
+                .arg(&outside)
+                .status()
+                .unwrap();
+            assert!(status.success(), "failed to create test artifact junction");
+        }
+
+        let part_result =
+            validate_download_artifact_paths(&save_dir, &final_path, &temp_path, &metadata_path);
+
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&temp_path);
+        #[cfg(windows)]
+        let _ = std::fs::remove_dir(&temp_path);
+
+        #[cfg(unix)]
+        {
+            let outside_file = outside.join("target");
+            std::os::unix::fs::symlink(&outside_file, &final_path).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&final_path)
+                .arg(&outside)
+                .status()
+                .unwrap();
+            assert!(status.success(), "failed to create test final junction");
+        }
+        let final_result =
+            validate_download_artifact_paths(&save_dir, &final_path, &temp_path, &metadata_path);
+
+        #[cfg(unix)]
+        let _ = std::fs::remove_file(&final_path);
+        #[cfg(windows)]
+        let _ = std::fs::remove_dir(&final_path);
+        let _ = std::fs::remove_dir_all(&base);
+
+        assert!(part_result.is_err());
+        assert!(final_result.is_err());
     }
 
     #[test]

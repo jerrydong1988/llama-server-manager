@@ -88,6 +88,12 @@ export const KNOWN_FLAGS = new Set([
   '-to', '--timeout', '--sleep-idle-seconds', '-v', '--verbose', '--log-verbose',
 ])
 
+export const SECURITY_SENSITIVE_CUSTOM_FLAGS = new Set([
+  '--host', '--port', '--api-key', '--api-key-file', '--ssl-key-file', '--ssl-cert-file',
+  '--path', '--api-prefix', '--cors-origins', '--cors-methods', '--cors-headers',
+  '--cors-credentials', '--no-cors-credentials',
+])
+
 for (const definition of Object.values(PARAMETER_CATALOG)) {
   for (const flag of definition?.flags ?? []) KNOWN_FLAGS.add(flag)
 }
@@ -453,7 +459,9 @@ export function validateConfig(
     warnings.push({ field: 'draft_model_path', severity: 'low', key: 'warnC4' })
   }
 
-  if ([...flags].some(flag => KNOWN_FLAGS.has(flag))) {
+  if ([...flags].some(flag => SECURITY_SENSITIVE_CUSTOM_FLAGS.has(flag))) {
+    warnings.push({ field: 'custom_args', severity: 'high', key: 'warnD1' })
+  } else if ([...flags].some(flag => KNOWN_FLAGS.has(flag))) {
     warnings.push({ field: 'custom_args', severity: 'medium', key: 'warnD1' })
   }
 

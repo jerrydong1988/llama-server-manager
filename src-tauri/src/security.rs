@@ -266,6 +266,101 @@ pub fn ensure_download_path_within_root(path: &Path, root: &Path) -> Result<(), 
     }
 }
 
+pub fn ensure_existing_download_ancestors_within_root(
+    path: &Path,
+    root: &Path,
+) -> Result<(), String> {
+    ensure_download_path_within_root(path, root)?;
+    if !root.exists() {
+        return Ok(());
+    }
+    let canonical_root = canonical_directory(root)?;
+    let mut existing = path;
+    while !existing.exists() {
+        existing = existing
+            .parent()
+            .ok_or_else(|| "下载目标没有可验证的父目录".to_string())?;
+    }
+    let canonical_existing = std::fs::canonicalize(existing)
+        .map_err(|error| format!("无法解析下载目标父目录 {}: {error}", existing.display()))?;
+    if path_is_within(&canonical_existing, &canonical_root) {
+        Ok(())
+    } else {
+        Err("下载目标的现有符号链接或目录联接越过了已授权目录边界".to_string())
+    }
+}
+
+pub fn create_download_directory_within_root(
+    root: &Path,
+    destination: &Path,
+) -> Result<PathBuf, String> {
+    ensure_download_path_within_root(destination, root)?;
+    let canonical_root = canonical_directory(root)?;
+    let relative = destination.strip_prefix(root).map_err(|_| {
+        format!(
+            "下载目录 {} 无法相对于授权根 {} 解析",
+            destination.display(),
+            root.display()
+        )
+    })?;
+    let mut current = canonical_root.clone();
+    for component in relative.components() {
+        let Component::Normal(segment) = component else {
+            continue;
+        };
+        current.push(segment);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "下载目录包含不允许的符号链接: {}",
+                        current.display()
+                    ));
+                }
+                let canonical = std::fs::canonicalize(&current)
+                    .map_err(|error| format!("无法解析下载目录 {}: {error}", current.display()))?;
+                if !path_is_within(&canonical, &canonical_root) {
+                    return Err(format!(
+                        "下载目录 {} 越过了已授权目录 {}",
+                        canonical.display(),
+                        canonical_root.display()
+                    ));
+                }
+                if !std::fs::metadata(&canonical)
+                    .map_err(|error| format!("无法访问下载目录 {}: {error}", canonical.display()))?
+                    .is_dir()
+                {
+                    return Err(format!("下载路径不是目录: {}", canonical.display()));
+                }
+                current = canonical;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir(&current).map_err(|create_error| {
+                    format!("无法创建下载目录 {}: {create_error}", current.display())
+                })?;
+                let canonical = std::fs::canonicalize(&current).map_err(|canonical_error| {
+                    format!(
+                        "无法解析新建下载目录 {}: {canonical_error}",
+                        current.display()
+                    )
+                })?;
+                if !path_is_within(&canonical, &canonical_root) {
+                    return Err(format!(
+                        "新建下载目录 {} 越过了已授权目录 {}",
+                        canonical.display(),
+                        canonical_root.display()
+                    ));
+                }
+                current = canonical;
+            }
+            Err(error) => {
+                return Err(format!("无法检查下载目录 {}: {error}", current.display()));
+            }
+        }
+    }
+    Ok(current)
+}
+
 #[tauri::command]
 pub async fn pick_authorized_directory(
     purpose: String,
