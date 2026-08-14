@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-08-10",
+  "verifiedAt": "2026-08-14",
   "source": "https://github.com/ggerganov/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10354",
-  "upstreamCommit": "d2f83055d6e3b379b5d34c4837122a918cf402c2",
-  "upstreamMasterChecked": "030ebb558a5820b444a8f836ed5cdd46c9b4bd7a",
+  "upstreamRelease": "b10430",
+  "upstreamCommit": "4c1a0af40d88c7fbb3b15c85bf2e8016d1d5b64c",
+  "upstreamMasterChecked": "4c1a0af40d88c7fbb3b15c85bf2e8016d1d5b64c",
   "releaseSnapshot": {
-    "ref": "b10354",
-    "commit": "d2f83055d6e3b379b5d34c4837122a918cf402c2",
+    "ref": "b10430",
+    "commit": "4c1a0af40d88c7fbb3b15c85bf2e8016d1d5b64c",
     "parameterCount": 247,
-    "snapshotHash": "2f4486dd85f4464d8ade5bc98fc98a9ad1190adc36bd1223ac08d8cdf8a68fa5",
+    "snapshotHash": "7f30d86334b89001a4e1504b155976c01a597db35d2294204eb3c49bd4ded358",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -786,7 +786,7 @@
           "-lm"
         ],
         "synopsisHash": "c8e1f920d7ad098034fbccc303ff69d74e3e4ea5610ddef6bd5efcfc22a5f0d3",
-        "descriptionHash": "75da85e2e2318df841273bc3a56f50523bd2d6d01156c76aebac49e2986ef70d"
+        "descriptionHash": "76ff82cd2685a79b72f4677c03225a0637b9b2bb808046f0d075a4fbaf5857be"
       },
       {
         "canonical": "--log-colors",
@@ -2153,9 +2153,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "030ebb558a5820b444a8f836ed5cdd46c9b4bd7a",
+    "commit": "4c1a0af40d88c7fbb3b15c85bf2e8016d1d5b64c",
     "parameterCount": 247,
-    "snapshotHash": "2f4486dd85f4464d8ade5bc98fc98a9ad1190adc36bd1223ac08d8cdf8a68fa5",
+    "snapshotHash": "7f30d86334b89001a4e1504b155976c01a597db35d2294204eb3c49bd4ded358",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2927,7 +2927,7 @@
           "-lm"
         ],
         "synopsisHash": "c8e1f920d7ad098034fbccc303ff69d74e3e4ea5610ddef6bd5efcfc22a5f0d3",
-        "descriptionHash": "75da85e2e2318df841273bc3a56f50523bd2d6d01156c76aebac49e2986ef70d"
+        "descriptionHash": "76ff82cd2685a79b72f4677c03225a0637b9b2bb808046f0d075a4fbaf5857be"
       },
       {
         "canonical": "--log-colors",

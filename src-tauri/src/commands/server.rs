@@ -678,7 +678,7 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     }
     let load_mode = config.load_mode.trim().to_ascii_lowercase();
     if should_emit(config, "load_mode", !load_mode.is_empty())
-        && matches!(load_mode.as_str(), "none" | "mmap" | "mlock" | "dio")
+        && matches!(load_mode.as_str(), "auto" | "none" | "mmap" | "mlock" | "dio")
     {
         cmd.extend_from_slice(&["--load-mode".into(), load_mode]);
     }
@@ -4791,6 +4791,18 @@ mod perf_parser_tests {
                 "missing inverse pin {flag}: {negative_command:?}"
             );
         }
+    }
+
+    #[test]
+    fn load_mode_auto_emits_the_b10423_default_mode() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            load_mode: "auto".into(),
+            explicit_overrides: Some(vec!["load_mode".into()]),
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(&command, "--load-mode", "auto"));
     }
 
     #[test]
