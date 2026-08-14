@@ -71,6 +71,7 @@ assert.match(shared, /onInherit\(reviewFieldKeys\(fieldKey\)\)/, 'field help res
 assert.match(sections, /inherited=\{!hasExplicitOverride\(local, 'threads'\)\}/, 'zero-valued automatic fields must use explicit intent instead of magic-number styling')
 assert.match(sections, /--load-mode/, 'mutually exclusive loading flags must be presented as one loading-mode selector')
 assert.match(sections, /'mmap\+mlock'/, 'the loading-mode selector must expose the b10178 combined mmap and mlock mode')
+assert.match(sections, /options=\{\['', 'none', 'auto', 'mmap', 'mlock', 'mmap\+mlock', 'dio'\]\}/, 'the loading-mode selector must expose the b10423 auto default mode')
 assert.match(shared, /'draft-dspark'/, 'the speculative decoding selector must expose the b10178 DSpark mode')
 assert.match(panel, /'changes' \| 'emitted'/, 'review panel must separate draft changes from emitted parameters')
 assert.match(panel, /onLocate/, 'review rows must support locating their field')
