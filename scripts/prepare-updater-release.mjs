@@ -53,7 +53,7 @@ function canonicalFileName(platform, sourceName) {
   if (platform.startsWith('darwin-')) {
     return `LlamaServerManager_${version}_${platform}.app.tar.gz`
   }
-  return `LlamaServerManager_${version}_${platform}.AppImage`
+  throw new Error(`unsupported updater platform: ${platform}`)
 }
 
 function stageRelease() {
@@ -82,22 +82,6 @@ function stageRelease() {
         macDirectory,
         name => name.endsWith('.app.tar.gz'),
         'macOS updater input',
-      ),
-    },
-    {
-      platform: 'linux-x86_64',
-      file: requireSingleFile(
-        path.join(inputRoot, 'linux-x86_64'),
-        name => name.endsWith('.AppImage'),
-        'Linux x86_64 updater input',
-      ),
-    },
-    {
-      platform: 'linux-aarch64',
-      file: requireSingleFile(
-        path.join(inputRoot, 'linux-aarch64'),
-        name => name.endsWith('.AppImage'),
-        'Linux aarch64 updater input',
       ),
     },
   ]

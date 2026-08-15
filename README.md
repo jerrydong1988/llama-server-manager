@@ -18,12 +18,11 @@ Use the [Download Center](https://download.cnzone.net/) for the recommended plat
 |---|---|---|
 | Windows x64 | NSIS、MSI | `v2.9.36+` 支持应用内更新 / In-app updates from `v2.9.36+` |
 | macOS Apple Silicon | DMG | `v2.9.36+` 支持应用内更新 / In-app updates from `v2.9.36+` |
-| Linux x64 / ARM64 | AppImage | 支持应用内更新 / In-app updates supported |
-| Linux x64 / ARM64 | DEB | 从下载中心手动更新 / Manual updates from the Download Center |
+| Linux x64 / ARM64 | DEB | 推荐；从下载中心手动更新 / Recommended; update manually from the Download Center |
 
-`v2.9.35` 及更早版本尚未内置 Tauri Updater，需要先手动安装 `v2.9.36` 或更新版本。应用内更新由 Cloudflare R2 分发，并在安装前执行项目专用的 Tauri 签名校验。
+`v2.9.35` 及更早版本尚未内置 Tauri Updater，需要先手动安装 `v2.9.36` 或更新版本。应用内更新由 Cloudflare R2 分发，并在安装前执行项目专用的 Tauri 签名校验。自 `v2.9.43` 起，Linux 暂停发布 AppImage，以避免其内置 GLib/Wayland 与新系统图形栈混用导致空白窗口；请使用 DEB，Linux 暂不提供应用内更新。
 
-`v2.9.35` and earlier do not include Tauri Updater and must first be upgraded manually to `v2.9.36` or later. In-app updates are distributed through Cloudflare R2 and verified with the project-specific Tauri signature before installation.
+`v2.9.35` and earlier do not include Tauri Updater and must first be upgraded manually to `v2.9.36` or later. In-app updates are distributed through Cloudflare R2 and verified with the project-specific Tauri signature before installation. Starting with `v2.9.43`, Linux AppImage distribution is suspended because mixing bundled GLib/Wayland libraries with newer system graphics stacks can produce a blank window. Use the DEB package; in-app updates are temporarily unavailable on Linux.
 
 ## 快速开始 / Quick Start
 

@@ -416,46 +416,14 @@ jobs:
         run: npm run test:runtime-service
       - name: Validate user guide
         run: npm run check:guide
-      - name: Generate ephemeral updater packaging key
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          key_path="$RUNNER_TEMP/updater-packaging.key"
-          npm run tauri signer generate -- --ci --force --password ephemeral-updater-packaging-key --write-keys "$key_path" >/dev/null
-          echo "TAURI_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
-          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=ephemeral-updater-packaging-key" >> "$GITHUB_ENV"
-      - name: Build Tauri
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        run: npm run tauri build
-      - name: Build Tauri release and updater payload
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: npm run tauri build -- --config src-tauri/tauri.updater.conf.json
-      - name: Prepare exact Linux x86_64 updater payload
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          destination="$RUNNER_TEMP/updater-linux-x86_64"
-          mkdir -p "$destination"
-          mapfile -t payloads < <(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage')
-          if [ "${#payloads[@]}" -ne 1 ]; then
-            echo "Expected exactly one Linux x86_64 updater payload, found ${#payloads[@]}" >&2
-            exit 1
-          fi
-          cp "${payloads[0]}" "$destination/"
-      - name: Upload Linux x86_64 updater input
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: updater-linux-x86_64
-          path: ${{ runner.temp }}/updater-linux-x86_64/
-          if-no-files-found: error
-          retention-days: 7
+      - name: Build Linux x86_64 DEB package
+        run: npm run tauri build -- --bundles deb
       - name: Upload Linux x86_64 GitHub release input
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-linux-x86_64
-          path: |
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
+          path: src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
           retention-days: 7
       - name: Upload artifacts
@@ -509,46 +477,14 @@ jobs:
         run: npm run test:runtime-service
       - name: Validate user guide
         run: npm run check:guide
-      - name: Generate ephemeral updater packaging key
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          key_path="$RUNNER_TEMP/updater-packaging.key"
-          npm run tauri signer generate -- --ci --force --password ephemeral-updater-packaging-key --write-keys "$key_path" >/dev/null
-          echo "TAURI_SIGNING_PRIVATE_KEY=$key_path" >> "$GITHUB_ENV"
-          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=ephemeral-updater-packaging-key" >> "$GITHUB_ENV"
-      - name: Build Tauri
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        run: npm run tauri build
-      - name: Build Tauri release and updater payload
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: npm run tauri build -- --config src-tauri/tauri.updater.conf.json
-      - name: Prepare exact Linux ARM64 updater payload
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          destination="$RUNNER_TEMP/updater-linux-aarch64"
-          mkdir -p "$destination"
-          mapfile -t payloads < <(find src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage')
-          if [ "${#payloads[@]}" -ne 1 ]; then
-            echo "Expected exactly one Linux ARM64 updater payload, found ${#payloads[@]}" >&2
-            exit 1
-          fi
-          cp "${payloads[0]}" "$destination/"
-      - name: Upload Linux ARM64 updater input
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: updater-linux-aarch64
-          path: ${{ runner.temp }}/updater-linux-aarch64/
-          if-no-files-found: error
-          retention-days: 7
+      - name: Build Linux ARM64 DEB package
+        run: npm run tauri build -- --bundles deb
       - name: Upload Linux ARM64 GitHub release input
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: release-linux-aarch64
-          path: |
-            src-tauri/target/release/bundle/appimage/*.AppImage
-            src-tauri/target/release/bundle/deb/*.deb
+          path: src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
           retention-days: 7
       - name: Upload artifacts
@@ -587,16 +523,6 @@ jobs:
         with:
           name: updater-macos
           path: updater-input/macos
-      - name: Download Linux x86_64 updater input
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: updater-linux-x86_64
-          path: updater-input/linux-x86_64
-      - name: Download Linux ARM64 updater input
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          name: updater-linux-aarch64
-          path: updater-input/linux-aarch64
       - name: Download macOS GitHub release input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -689,9 +615,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mapfile -d '' assets < <(find updater-input/windows release-input -type f \
-            \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' \) -print0)
-          if [ "${#assets[@]}" -ne 7 ]; then
-            echo "Expected exactly seven GitHub release packages, found ${#assets[@]}" >&2
+            \( -name '*.exe' -o -name '*.msi' -o -name '*.dmg' -o -name '*.deb' \) -print0)
+          if [ "${#assets[@]}" -ne 5 ]; then
+            echo "Expected exactly five GitHub release packages, found ${#assets[@]}" >&2
             printf '  %s\n' "${assets[@]}" >&2
             exit 1
           fi

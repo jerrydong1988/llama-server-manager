@@ -15,8 +15,6 @@ try {
     ['windows', 'fixture-unsigned.exe'],
     ['windows', 'fixture-unsigned.msi'],
     ['macos', 'fixture.app.tar.gz'],
-    ['linux-x86_64', 'fixture.AppImage'],
-    ['linux-aarch64', 'fixture.AppImage'],
   ]
   for (const [directory, fileName] of fixtures) {
     const target = path.join(inputRoot, directory)
@@ -41,7 +39,7 @@ try {
 
   const releaseRoot = path.join(outputRoot, 'releases', `v${version}`)
   const payloads = fs.readdirSync(releaseRoot)
-  assert.equal(payloads.length, 5)
+  assert.equal(payloads.length, 3)
   for (const payload of payloads) {
     fs.writeFileSync(path.join(releaseRoot, `${payload}.sig`), `signature-${payload}\n`)
   }
@@ -57,7 +55,7 @@ try {
   assert.equal(manifest.version, version)
   assert.deepEqual(
     Object.keys(manifest.platforms).sort(),
-    ['darwin-aarch64', 'linux-aarch64', 'linux-x86_64', 'windows-x86_64-msi', 'windows-x86_64-nsis'],
+    ['darwin-aarch64', 'windows-x86_64-msi', 'windows-x86_64-nsis'],
   )
   assert.match(manifest.platforms['windows-x86_64-nsis'].url, /-unsigned-setup\.exe$/)
   assert.match(manifest.platforms['windows-x86_64-msi'].url, /-unsigned\.msi$/)
