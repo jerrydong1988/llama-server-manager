@@ -27,7 +27,7 @@ export const KNOWN_FLAGS = new Set([
   '-mm', '--mmproj', '-mmu', '--mmproj-url', '--mmproj-auto', '--no-mmproj', '--no-mmproj-auto',
   '--mmproj-offload', '--no-mmproj-offload',
   '--chat-template', '--chat-template-file', '--skip-chat-parsing',
-  '--reasoning-format', '-rea', '--reasoning', '--reasoning-budget', '--reasoning-budget-message',
+  '--reasoning-format', '-rea', '--reasoning', '--reasoning-effort', '--reasoning-budget', '--reasoning-budget-message',
   '--reasoning-preserve', '--no-reasoning-preserve', '--chat-template-kwargs',
   '--jinja', '--no-jinja', '--grammar-file', '--grammar',
   // Performance and context

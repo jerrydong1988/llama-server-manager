@@ -505,7 +505,7 @@ fn append_basic_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<Strin
             !config.reasoning_effort.is_empty(),
         ) && !config.reasoning_effort.is_empty()
         {
-            let re = format!("{{\"reasoning_effort\": \"{}\"}}", config.reasoning_effort);
+            let re = serde_json::json!({ "reasoning_effort": config.reasoning_effort }).to_string();
             cmd.extend_from_slice(&["--chat-template-kwargs".into(), re]);
         }
         if should_emit(config, "jinja", true) {
@@ -678,7 +678,10 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     }
     let load_mode = config.load_mode.trim().to_ascii_lowercase();
     if should_emit(config, "load_mode", !load_mode.is_empty())
-        && matches!(load_mode.as_str(), "auto" | "none" | "mmap" | "mlock" | "dio")
+        && matches!(
+            load_mode.as_str(),
+            "auto" | "none" | "mmap" | "mlock" | "mmap+mlock" | "dio"
+        )
     {
         cmd.extend_from_slice(&["--load-mode".into(), load_mode]);
     }
@@ -1411,6 +1414,25 @@ fn canonical_override_key(key: &str) -> &str {
     }
 }
 
+fn engine_build_from_capabilities(capabilities: &EngineCapabilities) -> Option<u32> {
+    if capabilities.version_status != "detected" {
+        return None;
+    }
+    let detail = capabilities.version_probe_detail.as_deref()?;
+    let lowercase = detail.to_ascii_lowercase();
+    let payload = lowercase
+        .split_once("version:")
+        .or_else(|| lowercase.split_once("llama-server version"))?
+        .1
+        .trim_start()
+        .trim_start_matches('b');
+    let digits = payload
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    (digits.len() >= 4).then(|| digits.parse().ok()).flatten()
+}
+
 fn adapt_load_mode_for_capabilities(
     command: &[String],
     capabilities: Option<&EngineCapabilities>,
@@ -1424,19 +1446,29 @@ fn adapt_load_mode_for_capabilities(
         .find(|flag| matches!(flag.as_str(), "--load-mode" | "-lm"))
         .map(String::as_str);
     if let Some(native_flag) = native_flag {
-        if native_flag == "--load-mode" {
-            return command.to_vec();
-        }
-        return command
-            .iter()
-            .map(|argument| {
-                if argument == "--load-mode" {
-                    native_flag.to_string()
-                } else {
-                    argument.clone()
+        let legacy_auto =
+            engine_build_from_capabilities(capabilities).is_some_and(|build| build < 10423);
+        let mut adapted = Vec::with_capacity(command.len());
+        let mut index = 0;
+        while index < command.len() {
+            if command[index] == "--load-mode" {
+                adapted.push(native_flag.to_string());
+                if let Some(mode) = command.get(index + 1) {
+                    adapted.push(if legacy_auto && mode == "auto" {
+                        "mmap".to_string()
+                    } else {
+                        mode.clone()
+                    });
+                    index += 2;
+                    continue;
                 }
-            })
-            .collect();
+                index += 1;
+                continue;
+            }
+            adapted.push(command[index].clone());
+            index += 1;
+        }
+        return adapted;
     }
 
     let supported = capabilities
@@ -1453,7 +1485,15 @@ fn adapt_load_mode_for_capabilities(
                 index += 1;
                 continue;
             };
+            if mode == "mmap+mlock" && supported.contains("--mmap") && supported.contains("--mlock")
+            {
+                adapted.push("--mmap".to_string());
+                adapted.push("--mlock".to_string());
+                index += 2;
+                continue;
+            }
             let legacy = match mode.as_str() {
+                "auto" => "--mmap",
                 "none" => "--no-mmap",
                 "mmap" => "--mmap",
                 "mlock" => "--mlock",
@@ -1475,11 +1515,60 @@ fn adapt_load_mode_for_capabilities(
     adapted
 }
 
-fn command_for_engine_capabilities(
+fn adapt_reasoning_effort_for_capabilities(
+    command: &[String],
+    capabilities: Option<&EngineCapabilities>,
+) -> Vec<String> {
+    let supports_native = capabilities.is_some_and(|value| {
+        value
+            .supported_flags
+            .iter()
+            .any(|flag| flag == "--reasoning-effort")
+    });
+    if !supports_native {
+        return command.to_vec();
+    }
+
+    let mut adapted = Vec::with_capacity(command.len());
+    let mut index = 0;
+    while index < command.len() {
+        if command[index] == "--chat-template-kwargs" {
+            if let Some(payload) = command.get(index + 1) {
+                let effort = serde_json::from_str::<serde_json::Value>(payload)
+                    .ok()
+                    .and_then(|value| {
+                        let object = value.as_object()?;
+                        (object.len() == 1)
+                            .then(|| object.get("reasoning_effort")?.as_str().map(str::to_string))
+                            .flatten()
+                    });
+                if let Some(effort) = effort {
+                    adapted.push("--reasoning-effort".to_string());
+                    adapted.push(effort);
+                    index += 2;
+                    continue;
+                }
+            }
+        }
+        adapted.push(command[index].clone());
+        index += 1;
+    }
+    adapted
+}
+
+fn adapt_managed_arguments_for_capabilities(
     command: &[String],
     capabilities: Option<&EngineCapabilities>,
 ) -> Vec<String> {
     let adapted = adapt_load_mode_for_capabilities(command, capabilities);
+    adapt_reasoning_effort_for_capabilities(&adapted, capabilities)
+}
+
+fn command_for_engine_capabilities(
+    command: &[String],
+    capabilities: Option<&EngineCapabilities>,
+) -> Vec<String> {
+    let adapted = adapt_managed_arguments_for_capabilities(command, capabilities);
     command_for_capabilities(&adapted, capabilities)
 }
 
@@ -1966,7 +2055,7 @@ pub async fn generate_server_command(
     };
     timing.mark("capabilities");
     validate_custom_argument_capabilities(&config, capabilities.as_deref())?;
-    let command = adapt_load_mode_for_capabilities(&command, capabilities.as_deref());
+    let command = adapt_managed_arguments_for_capabilities(&command, capabilities.as_deref());
     let unsupported_flags = capabilities
         .as_deref()
         .map(|value| unsupported_command_flags(&command, value))
@@ -2021,8 +2110,10 @@ pub async fn start_server(
                 EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
             };
         validate_custom_argument_capabilities(&config, engine_capabilities.as_deref())?;
-        let generated_cmd =
-            adapt_load_mode_for_capabilities(&generated_cmd, engine_capabilities.as_deref());
+        let generated_cmd = adapt_managed_arguments_for_capabilities(
+            &generated_cmd,
+            engine_capabilities.as_deref(),
+        );
         if let Some(capabilities) = engine_capabilities.as_deref() {
             let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
             if !unsupported.is_empty() {
@@ -4806,6 +4897,30 @@ mod perf_parser_tests {
     }
 
     #[test]
+    fn load_mode_auto_adapts_to_mmap_for_pre_b10423_engines() {
+        let command = vec![
+            "llama-server".to_string(),
+            "--load-mode".to_string(),
+            "auto".to_string(),
+        ];
+        let legacy_native = EngineCapabilities {
+            status: "detected".into(),
+            version_status: "detected".into(),
+            version_probe_detail: Some("version: 10354 (d2f83055d)".into()),
+            supported_flags: vec!["--load-mode".into()],
+            ..EngineCapabilities::default()
+        };
+        assert_eq!(
+            adapt_load_mode_for_capabilities(&command, Some(&legacy_native)),
+            vec![
+                "llama-server".to_string(),
+                "--load-mode".to_string(),
+                "mmap".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn load_mode_uses_the_native_flag_or_one_legacy_equivalent() {
         let command = vec![
             "llama-server".to_string(),
@@ -4846,6 +4961,7 @@ mod perf_parser_tests {
             ..EngineCapabilities::default()
         };
         for (mode, flag) in [
+            ("auto", "--mmap"),
             ("none", "--no-mmap"),
             ("mmap", "--mmap"),
             ("mlock", "--mlock"),
@@ -4861,6 +4977,57 @@ mod perf_parser_tests {
                 vec!["llama-server".to_string(), flag.to_string()]
             );
         }
+
+        let combined = vec![
+            "llama-server".to_string(),
+            "--load-mode".to_string(),
+            "mmap+mlock".to_string(),
+        ];
+        assert_eq!(
+            adapt_load_mode_for_capabilities(&combined, Some(&legacy)),
+            vec![
+                "llama-server".to_string(),
+                "--mmap".to_string(),
+                "--mlock".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn reasoning_effort_prefers_the_native_b10435_flag_with_a_legacy_fallback() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            reasoning_effort: "xhigh".into(),
+            explicit_overrides: Some(vec!["reasoning_effort".into()]),
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(
+            &command,
+            "--chat-template-kwargs",
+            r#"{"reasoning_effort":"xhigh"}"#
+        ));
+
+        let modern = EngineCapabilities {
+            status: "detected".into(),
+            supported_flags: vec!["--reasoning-effort".into(), "--chat-template-kwargs".into()],
+            ..EngineCapabilities::default()
+        };
+        let adapted = adapt_reasoning_effort_for_capabilities(&command, Some(&modern));
+        assert!(has_flag_value(&adapted, "--reasoning-effort", "xhigh"));
+        assert!(!adapted
+            .iter()
+            .any(|argument| argument == "--chat-template-kwargs"));
+
+        let legacy = EngineCapabilities {
+            status: "detected".into(),
+            supported_flags: vec!["--chat-template-kwargs".into()],
+            ..EngineCapabilities::default()
+        };
+        assert_eq!(
+            adapt_reasoning_effort_for_capabilities(&command, Some(&legacy)),
+            command
+        );
     }
 
     #[test]

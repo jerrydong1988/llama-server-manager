@@ -82,6 +82,7 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
   cache_prompt: { flags: ['--cache-prompt', '--no-cache-prompt'], verifiedDefaults: b10068('开启', 'enabled') },
   warmup: { flags: ['--warmup', '--no-warmup'], verifiedDefaults: b10068('开启', 'enabled') },
   jinja: { flags: ['--jinja', '--no-jinja'], verifiedDefaults: b10068('开启', 'enabled') },
+  reasoning_effort: { flags: ['--reasoning-effort', '--chat-template-kwargs'] },
   cache_idle_slots: {
     flags: ['--cache-idle-slots', '--no-cache-idle-slots'],
     verifiedDefaults: b10068('开启', 'enabled'),

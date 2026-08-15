@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-08-14",
+  "verifiedAt": "2026-08-15",
   "source": "https://github.com/ggerganov/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10430",
-  "upstreamCommit": "4c1a0af40d88c7fbb3b15c85bf2e8016d1d5b64c",
-  "upstreamMasterChecked": "4c1a0af40d88c7fbb3b15c85bf2e8016d1d5b64c",
+  "upstreamRelease": "b10441",
+  "upstreamCommit": "0177dcc7300bad8914bb838baabce87899812491",
+  "upstreamMasterChecked": "adb55e5148dc93bcdca7212a2d1df3ccc422959a",
   "releaseSnapshot": {
-    "ref": "b10430",
-    "commit": "4c1a0af40d88c7fbb3b15c85bf2e8016d1d5b64c",
-    "parameterCount": 247,
-    "snapshotHash": "7f30d86334b89001a4e1504b155976c01a597db35d2294204eb3c49bd4ded358",
+    "ref": "b10441",
+    "commit": "0177dcc7300bad8914bb838baabce87899812491",
+    "parameterCount": 248,
+    "snapshotHash": "276a7f49af2b5cdfc1ea243cd03fdf6370ffb75edcf06cca0eebf5bd52b5a493",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -1267,6 +1267,14 @@
         ],
         "synopsisHash": "7570943378454a1d168b7f012313e6e4fd4998fbc1f49ecf031cec9f94e787e5",
         "descriptionHash": "16c62d38f05c7457b18cb984f59818c8ff084f533dc958099ab9641a6eb2ad85"
+      },
+      {
+        "canonical": "--reasoning-effort",
+        "aliases": [
+          "--reasoning-effort"
+        ],
+        "synopsisHash": "d9ee694196024dc43e27bdfacd8d8bb6256a7ee03b2894ad630d931fb57a97fc",
+        "descriptionHash": "681358d484cbbbe2fd9c0881231a47a95a34d74598a9e04b3b4129ebaa77bc91"
       },
       {
         "canonical": "--reasoning-format",
@@ -2153,9 +2161,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "4c1a0af40d88c7fbb3b15c85bf2e8016d1d5b64c",
-    "parameterCount": 247,
-    "snapshotHash": "7f30d86334b89001a4e1504b155976c01a597db35d2294204eb3c49bd4ded358",
+    "commit": "adb55e5148dc93bcdca7212a2d1df3ccc422959a",
+    "parameterCount": 248,
+    "snapshotHash": "276a7f49af2b5cdfc1ea243cd03fdf6370ffb75edcf06cca0eebf5bd52b5a493",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -3408,6 +3416,14 @@
         ],
         "synopsisHash": "7570943378454a1d168b7f012313e6e4fd4998fbc1f49ecf031cec9f94e787e5",
         "descriptionHash": "16c62d38f05c7457b18cb984f59818c8ff084f533dc958099ab9641a6eb2ad85"
+      },
+      {
+        "canonical": "--reasoning-effort",
+        "aliases": [
+          "--reasoning-effort"
+        ],
+        "synopsisHash": "d9ee694196024dc43e27bdfacd8d8bb6256a7ee03b2894ad630d931fb57a97fc",
+        "descriptionHash": "681358d484cbbbe2fd9c0881231a47a95a34d74598a9e04b3b4129ebaa77bc91"
       },
       {
         "canonical": "--reasoning-format",
