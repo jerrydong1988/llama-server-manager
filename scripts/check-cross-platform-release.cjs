@@ -178,7 +178,7 @@ for (const token of [
   'Ensure release notes are present before manifest generation',
   'Ensure GitHub Release exists',
   'Upload exact platform packages to GitHub Release',
-  'Expected exactly seven GitHub release packages',
+  'Expected exactly five GitHub release packages',
   'Sign exact updater payloads',
   'prepare-updater-release.mjs --manifest',
   'Stage manual download packages',
@@ -315,6 +315,26 @@ if (updaterBuildConfig.bundle?.createUpdaterArtifacts !== true) {
 const updaterTargets = updaterBuildConfig.bundle?.targets
 if (!Array.isArray(updaterTargets) || !updaterTargets.includes('app')) {
   failures.push('release builds must include the macOS app target required for updater artifacts')
+}
+if (tauriConfig.bundle?.targets?.includes('appimage') || tauriConfig.bundle?.linux?.appimage) {
+  failures.push('ordinary Linux builds must not produce the suspended AppImage package')
+}
+if (updaterTargets?.includes('appimage') || updaterTargets?.includes('deb')) {
+  failures.push('Linux packages must not enter the signed updater artifact build')
+}
+for (const job of ['build-linux', 'build-linux-arm64']) {
+  const body = jobBody(job)
+  if (!body.includes('npm run tauri build -- --bundles deb')) {
+    failures.push(`${job} must build only the DEB package`)
+  }
+  for (const forbidden of ['AppImage', 'updater-linux-', 'src-tauri/tauri.updater.conf.json']) {
+    if (body.includes(forbidden)) failures.push(`${job} still contains suspended Linux updater token ${forbidden}`)
+  }
+}
+for (const forbidden of ['AppImage', 'updater-linux-x86_64', 'updater-linux-aarch64']) {
+  if (updaterJob.includes(forbidden)) {
+    failures.push(`protected updater publication still contains suspended Linux updater token ${forbidden}`)
+  }
 }
 if (!workflow.includes('npm run tauri build -- --config src-tauri/tauri.updater.conf.json')) {
   failures.push('tag builds do not use the shell-safe updater build config')

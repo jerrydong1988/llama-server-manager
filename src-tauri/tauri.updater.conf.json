@@ -1,6 +1,6 @@
 {
   "bundle": {
     "createUpdaterArtifacts": true,
-    "targets": ["nsis", "msi", "dmg", "app", "deb", "appimage"]
+    "targets": ["nsis", "msi", "dmg", "app"]
   }
 }

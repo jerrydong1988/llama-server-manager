@@ -69,15 +69,15 @@ openssl base64 -A -in certificate.p12
 发布顺序固定为：
 
 1. 构建并完成可选的 Windows SignPath、macOS Developer ID 与公证流程。
-2. 收集 Windows NSIS、Windows MSI、macOS `.app.tar.gz`、Linux x64 AppImage 和 Linux ARM64 AppImage。
-3. 对最终字节重新生成 Tauri `.sig`，再构造包含全部平台条目的 `latest.json`。
+2. 收集 Windows NSIS、Windows MSI 和 macOS `.app.tar.gz` 作为更新载荷；Linux x64/ARM64 仅发布 DEB 安装包。
+3. 对最终更新载荷重新生成 Tauri `.sig`，再构造仅包含 Windows 与 macOS 平台条目的 `latest.json`。
 4. 先将版本化产物上传到 R2 的 `releases/v<version>/`，使用长期不可变缓存。
 5. 将 `latest.json` 最后上传并设置为必须重新验证；随后从公开自定义域下载并逐字节核对。
 6. 相同 Updater 产物和清单同时附加到 GitHub Release 作为备份。
 
 Tauri 私钥或密码一旦丢失，已安装版本将无法验证后续更新。私钥不得提交到仓库；维护机的恢复副本应放在仓库外，并另做离线备份。更换 R2 写入凭据不影响客户端，因为客户端只访问公开下载域名，不持有任何 R2 密钥。
 
-`v2.9.35` 及更早版本没有 Updater，首个启用版本必须手动安装。Linux DEB 不执行应用内更新，AppImage 才进入自动更新路径。
+`v2.9.35` 及更早版本没有 Updater，首个启用版本必须手动安装。自 `v2.9.43` 起，Linux AppImage 因新系统图形栈兼容性问题暂停发布；Linux DEB 不执行应用内更新，必须从下载中心手动安装新版本。
 
 ## 发布前核对
 
