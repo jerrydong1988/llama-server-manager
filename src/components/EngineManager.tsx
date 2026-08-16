@@ -155,6 +155,14 @@ const EngineManager = () => {
     setEditingId(null)
   }
 
+  const startRename = (engine: EngineInfo) => {
+    // A focused input may be removed before WebKit emits blur after Escape. Always clear the
+    // cancellation guard when a new edit begins so it cannot swallow the next blur commit.
+    editingCanceledRef.current = false
+    setEditingId(engine.id)
+    setEditName(engine.name)
+  }
+
   const handleProbe = async (id: string) => {
     if (probingEngineId) return
     setProbingEngineId(id)
@@ -357,6 +365,9 @@ const EngineManager = () => {
                               onChange={event => setEditName(event.target.value)}
                               onClick={event => event.stopPropagation()}
                               onKeyDown={event => {
+                                // Enter confirms an active IME composition on Linux. Let the IME
+                                // finish updating the controlled input before treating Enter as save.
+                                if (event.nativeEvent.isComposing) return
                                 if (event.key === 'Enter') commitRename(engine.id)
                                 if (event.key === 'Escape') {
                                   editingCanceledRef.current = true
@@ -371,6 +382,7 @@ const EngineManager = () => {
                                 commitRename(engine.id)
                               }}
                               autoFocus
+                              aria-label={labels.rename}
                               className="h-8 w-full rounded-lg border border-blue-500/50 bg-slate-950 px-3 text-sm text-slate-100 outline-none"
                             />
                           ) : (
@@ -379,8 +391,7 @@ const EngineManager = () => {
                               <button
                                 onClick={event => {
                                   event.stopPropagation()
-                                  setEditingId(engine.id)
-                                  setEditName(engine.name)
+                                  startRename(engine)
                                 }}
                                 className="shrink-0 rounded-md p-1 text-slate-500 transition hover:bg-slate-800 hover:text-slate-200"
                                 title={labels.rename}

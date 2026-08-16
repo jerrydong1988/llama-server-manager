@@ -853,6 +853,15 @@ mockIPC((command, payload) => {
       return BROWSER_SCENARIO === 'delayed-inventory-cache' && !delayedInventoryCacheLoaded
         ? []
         : clone(engines)
+    case 'rename_engine': {
+      const engineId = String(args.id ?? '')
+      const name = String(args.name ?? '')
+      const target = engines.find(candidate => candidate.id === engineId)
+      if (!target) throw new Error(`browser test engine not found: ${engineId}`)
+      target.name = name
+      target.custom_name = name
+      return null
+    }
     case 'probe_engine_capabilities': return clone(engine)
     case 'get_download_manager_snapshot':
       if (IS_DOCS_SCENARIO) {
