@@ -1,7 +1,62 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
+
+async function openEngineManager(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'engine')
+  })
+  await page.goto('/')
+  await expect(page.locator('html')).toHaveAttribute(
+    'data-tauri-browser-test',
+    '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__',
+  )
+}
 
 test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
+})
+
+test('engine rename commits after a prior Escape cancellation', async ({ page }) => {
+  await openEngineManager(page)
+
+  const renameButton = page.getByTitle('重命名引擎')
+  await renameButton.click()
+  await page.getByRole('textbox', { name: '重命名引擎' }).press('Escape')
+  await expect(page.getByRole('textbox', { name: '重命名引擎' })).toBeHidden()
+
+  await renameButton.click()
+  const input = page.getByRole('textbox', { name: '重命名引擎' })
+  await input.fill('Linux Engine Renamed')
+  await page.getByText('Vulkan', { exact: true }).last().click()
+
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls
+      .filter(call => call.command === 'rename_engine')
+      .map(call => call.payload)
+  ))).toEqual([{ id: 'browser-test-engine', name: 'Linux Engine Renamed' }])
+  await expect(page.getByText('Linux Engine Renamed', { exact: true }).first()).toBeVisible()
+})
+
+test('engine rename waits for Linux IME composition before Enter commits', async ({ page }) => {
+  await openEngineManager(page)
+
+  await page.getByTitle('重命名引擎').click()
+  const input = page.getByRole('textbox', { name: '重命名引擎' })
+  await input.fill('中文引擎')
+  await input.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true })
+
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'rename_engine').length
+  ))).toBe(0)
+  await expect(input).toBeVisible()
+
+  await input.press('Enter')
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls
+      .filter(call => call.command === 'rename_engine')
+      .map(call => call.payload)
+  ))).toEqual([{ id: 'browser-test-engine', name: '中文引擎' }])
+  await expect(page.getByText('中文引擎', { exact: true }).first()).toBeVisible()
 })
 
 test('automatic instance startup preserves the configured stagger without duplicates', async ({ page }) => {
