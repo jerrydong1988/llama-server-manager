@@ -6,9 +6,11 @@ import type {
   EngineInfo,
   GeneratedServerCommand,
   InstanceConfig,
+  MsFileEntry,
   ModelInfo,
   MonitoringFrame,
   SystemMetrics,
+  WorkerInfo,
 } from '../src/store/types'
 
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
@@ -522,6 +524,35 @@ if (BROWSER_SCENARIO === 'monitoring') {
     start_time: Math.floor(Date.now() / 1000) - 120,
   }
 }
+if (BROWSER_SCENARIO === 'instance-order-filter') {
+  const hiddenId = 'browser-hidden-instance'
+  const betaId = 'browser-group-beta'
+  state.instances[INSTANCE_ID].name = 'Group Alpha'
+  state.instances[hiddenId] = {
+    ...clone(instanceConfig),
+    id: hiddenId,
+    name: 'Unrelated Hidden Instance',
+    alias: 'unrelated-hidden-instance',
+    port: 18082,
+  }
+  state.instances[betaId] = {
+    ...clone(instanceConfig),
+    id: betaId,
+    name: 'Group Beta',
+    alias: 'group-beta',
+    port: 18083,
+  }
+  state.instance_order = [INSTANCE_ID, hiddenId, betaId]
+}
+if (BROWSER_SCENARIO === 'instance-connection') {
+  state.running[INSTANCE_ID] = {
+    instance_id: INSTANCE_ID,
+    pid: 4243,
+    port: instanceConfig.port,
+    host: instanceConfig.host,
+    start_time: Math.floor(Date.now() / 1000) - 120,
+  }
+}
 
 type BrowserTestControl = {
   marker: string
@@ -535,7 +566,10 @@ type BrowserTestControl = {
   updaterCheckCount: number
   state: GlobalConfigShape
   emitEvent: (event: string, payload?: unknown) => Promise<void>
+  releaseBrowse: (repoId: string, files: MsFileEntry[]) => void
+  releasePortCheck: (port: number, available: boolean) => void
   releaseStart: () => void
+  releaseWorkerScan: (workers: WorkerInfo[]) => void
 }
 
 declare global {
@@ -546,6 +580,21 @@ declare global {
 
 let releasePendingStart: (() => void) | null = null
 let delayedInventoryCacheLoaded = false
+const pendingBrowses: Array<{ repoId: string; resolve: (files: MsFileEntry[]) => void }> = []
+const pendingPortChecks: Array<{ port: number; resolve: (available: boolean) => void }> = []
+const pendingWorkerScans: Array<(workers: WorkerInfo[]) => void> = []
+const clusterWorkers: WorkerInfo[] = BROWSER_SCENARIO === 'cluster-worker'
+  ? [{
+      id: 'browser-cluster-worker',
+      host: '192.168.50.10',
+      port: 50052,
+      name: 'Browser Cluster Worker',
+      origin: 'manual',
+      devices: [{ device_type: 'Vulkan', name: 'Browser GPU', vram_mb: 16_384, free_mb: 12_288 }],
+      status: 'Offline',
+      auto_discovered: false,
+    }]
+  : []
 
 const control: BrowserTestControl = {
   marker: BROWSER_TEST_MARKER,
@@ -559,7 +608,24 @@ const control: BrowserTestControl = {
   updaterCheckCount: 0,
   state,
   emitEvent: (event, payload) => emit(event, payload),
+  releaseBrowse: (repoId, files) => {
+    const index = pendingBrowses.findIndex(item => item.repoId === repoId)
+    if (index < 0) throw new Error(`No pending browser-test browse for ${repoId}`)
+    const [{ resolve }] = pendingBrowses.splice(index, 1)
+    resolve(clone(files))
+  },
+  releasePortCheck: (port, available) => {
+    const index = pendingPortChecks.findIndex(item => item.port === port)
+    if (index < 0) throw new Error(`No pending browser-test port check for ${port}`)
+    const [{ resolve }] = pendingPortChecks.splice(index, 1)
+    resolve(available)
+  },
   releaseStart: () => releasePendingStart?.(),
+  releaseWorkerScan: (workers) => {
+    const resolve = pendingWorkerScans.shift()
+    if (!resolve) throw new Error('No pending browser-test worker scan')
+    resolve(clone(workers))
+  },
 }
 
 const syncAutomationProbe = () => {
@@ -840,6 +906,15 @@ mockIPC((command, payload) => {
         return new Promise((resolve) => window.setTimeout(() => resolve(clone(models)), 3_000))
       }
       return clone(models)
+    case 'browse_modelscope':
+    case 'browse_huggingface': {
+      const repoId = String(args.repoId ?? '')
+      if (BROWSER_SCENARIO === 'download-browse-race') {
+        return new Promise<MsFileEntry[]>((resolve) => pendingBrowses.push({ repoId, resolve }))
+      }
+      return []
+    }
+    case 'check_local_file': return null
     case 'get_models':
       return BROWSER_SCENARIO === 'delayed-inventory-cache' && !delayedInventoryCacheLoaded
         ? []
@@ -969,6 +1044,30 @@ mockIPC((command, payload) => {
         diagnostics: [],
       }
     case 'list_inference_requests': return []
+    case 'scan_workers_tcp':
+      if (BROWSER_SCENARIO === 'cluster-scan-race') {
+        return new Promise<WorkerInfo[]>((resolve) => pendingWorkerScans.push(resolve))
+      }
+      return clone(clusterWorkers)
+    case 'add_worker': {
+      const host = String(args.host ?? '')
+      const port = Number(args.port ?? 50052)
+      const name = String(args.name ?? '') || host
+      const existing = clusterWorkers.find(worker => worker.host === host && worker.port === port)
+      if (!existing) {
+        clusterWorkers.push({
+          id: `browser-worker-${clusterWorkers.length + 1}`,
+          host,
+          port,
+          name,
+          origin: 'manual',
+          devices: [],
+          status: 'Offline',
+          auto_discovered: false,
+        })
+      }
+      return null
+    }
     case 'get_workers':
       return IS_DOCS_SCENARIO
         ? [
@@ -994,20 +1093,17 @@ mockIPC((command, payload) => {
               auto_discovered: false,
             },
           ]
-        : BROWSER_SCENARIO === 'cluster-worker'
-        ? [{
-            id: 'browser-cluster-worker',
-            host: '192.168.50.10',
-            port: 50052,
-            name: 'Browser Cluster Worker',
-            origin: 'manual',
-            devices: [{ device_type: 'Vulkan', name: 'Browser GPU', vram_mb: 16_384, free_mb: 12_288 }],
-            status: 'Offline',
-            auto_discovered: false,
-          }]
-        : []
+        : clone(clusterWorkers)
     case 'is_local_host': return false
     case 'test_worker': return { ok: true, latency_ms: 12, devices: [] }
+    case 'check_port':
+      if (BROWSER_SCENARIO === 'port-check-race') {
+        const port = Number(args.port ?? 0)
+        return new Promise<boolean>((resolve) => pendingPortChecks.push({ port, resolve }))
+      }
+      return true
+    case 'test_connection': return 'HTTP 200'
+    case 'process_download_queue': return null
     case 'get_proxy_config': return clone(proxyConfig)
     case 'get_proxy_status':
       if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')

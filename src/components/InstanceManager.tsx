@@ -13,6 +13,7 @@ import { CommandFeedbackModal, MissingEngineBanner } from './InstanceManager/Com
 import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engineResolution'
 import { markExplicitOverride } from '../parameterIntent'
 import { pathsEqual } from '../utils/path'
+import { usePortAvailability } from './InstanceManager/usePortAvailability'
 
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
@@ -35,6 +36,7 @@ const InstanceManager = () => {
   const renameInstance = useAppStore(s => s.renameInstance)
   const { t } = useI18n()
   const labels = t.instanceWorkspace
+  const { portStatus, setPortStatus, schedulePortCheck } = usePortAvailability(labels)
 
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showCmdModal, setShowCmdModal] = useState('')
@@ -50,18 +52,16 @@ const InstanceManager = () => {
   const [editName, setEditName] = useState('')
   const editingCanceledRef = useRef(false)
   const [enginePickerForId, setEnginePickerForId] = useState('')
-  const [portStatus, setPortStatus] = useState('')
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'stopped'>('all')
   const [engineFilter, setEngineFilter] = useState('all')
   const [selectedInstanceId, setSelectedInstanceId] = useState('')
-  const portCheckTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const mountedRef = useRef(true)
 
   useEffect(() => {
+    mountedRef.current = true
     return () => {
       mountedRef.current = false
-      if (portCheckTimerRef.current) clearTimeout(portCheckTimerRef.current)
     }
   }, [])
 
@@ -126,20 +126,11 @@ const InstanceManager = () => {
   const missingEngineInstances = useMemo(() => instances.filter(engineMissingFor), [engineMissingFor, instances])
   const selectedInstance = filteredInstances.find(inst => inst.id === selectedInstanceId) || filteredInstances[0] || null
   const selectedIndex = selectedInstance ? filteredInstances.findIndex(inst => inst.id === selectedInstance.id) : -1
+  const filteredInstanceIds = useMemo(() => filteredInstances.map(inst => inst.id), [filteredInstances])
   useEffect(() => {
     if (selectedInstanceId && filteredInstances.some(inst => inst.id === selectedInstanceId)) return
     setSelectedInstanceId(filteredInstances[0]?.id || '')
   }, [filteredInstances, selectedInstanceId])
-
-  const schedulePortCheck = (port: number) => {
-    if (portCheckTimerRef.current) clearTimeout(portCheckTimerRef.current)
-    setPortStatus(labels.checkingPort)
-    portCheckTimerRef.current = setTimeout(() => {
-      invoke<boolean>('check_port', { port, host: '127.0.0.1' })
-        .then(free => setPortStatus(free ? labels.portAvailable : labels.portInUse))
-        .catch(error => { setPortStatus(labels.portCheckFailed); useAppStore.getState().addRuntimeWarning(`${labels.portCheckFailed}: ${String(error)}`) })
-    }, 300)
-  }
 
   const handleCreate = async () => {
     const model = models.find(m => m.id === newInst.modelId)
@@ -416,10 +407,12 @@ const InstanceManager = () => {
                           {editingId === inst.id ? (
                             <input
                               type="text"
+                              aria-label={labels.rename}
                               value={editName}
                               onClick={e => e.stopPropagation()}
                               onChange={e => setEditName(e.target.value)}
                               onKeyDown={e => {
+                                if (e.nativeEvent.isComposing) return
                                 if (e.key === 'Enter') commitRename(inst)
                                 if (e.key === 'Escape') { editingCanceledRef.current = true; setEditingId('') }
                               }}
@@ -442,7 +435,7 @@ const InstanceManager = () => {
                                 </Badge>
                               )}
                               <Button
-                                onClick={e => { e.stopPropagation(); setEditingId(inst.id); setEditName(inst.name) }}
+                                onClick={e => { e.stopPropagation(); editingCanceledRef.current = false; setEditingId(inst.id); setEditName(inst.name) }}
                                 variant="subtle"
                                 size="icon"
                                 className="h-7 w-7 shrink-0 rounded-md"
@@ -564,7 +557,7 @@ const InstanceManager = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => moveInstance(inst.id, 'up')}
+                            onClick={() => moveInstance(inst.id, 'up', filteredInstanceIds)}
                             disabled={index === 0}
                             className="flex w-full items-center gap-2 border-t border-slate-200 px-3 py-2 text-left text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45 dark:border-slate-800 dark:text-slate-300 dark:hover:bg-slate-800"
                           >
@@ -573,7 +566,7 @@ const InstanceManager = () => {
                           </button>
                           <button
                             type="button"
-                            onClick={() => moveInstance(inst.id, 'down')}
+                            onClick={() => moveInstance(inst.id, 'down', filteredInstanceIds)}
                             disabled={index === filteredInstances.length - 1}
                             className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-45 dark:text-slate-300 dark:hover:bg-slate-800"
                           >
@@ -726,8 +719,8 @@ const InstanceManager = () => {
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-2 pt-2">
-                  <Button onClick={() => moveInstance(selectedInstance.id, 'up')} disabled={selectedIndex <= 0} variant="subtle" icon={<ArrowUp className="h-4 w-4" />}>{labels.moveUp}</Button>
-                  <Button onClick={() => moveInstance(selectedInstance.id, 'down')} disabled={selectedIndex < 0 || selectedIndex === filteredInstances.length - 1} variant="subtle" icon={<ArrowDown className="h-4 w-4" />}>{labels.moveDown}</Button>
+                  <Button onClick={() => moveInstance(selectedInstance.id, 'up', filteredInstanceIds)} disabled={selectedIndex <= 0} variant="subtle" icon={<ArrowUp className="h-4 w-4" />}>{labels.moveUp}</Button>
+                  <Button onClick={() => moveInstance(selectedInstance.id, 'down', filteredInstanceIds)} disabled={selectedIndex < 0 || selectedIndex === filteredInstances.length - 1} variant="subtle" icon={<ArrowDown className="h-4 w-4" />}>{labels.moveDown}</Button>
                 </div>
               </div>
             </div>

@@ -136,14 +136,15 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         const pathsChanged = effectivePaths.length !== paths.length
           || effectivePaths.some((path, index) => !pathsEqual(path, paths[index] ?? ''))
         const models = await invoke<ModelInfo[]>('scan_models', { paths: effectivePaths })
-        const applied = applyModelInventory(
+        if (!isCurrentModelInventoryRequest(requestGeneration)) return null
+        applyModelInventory(
           models,
           get,
           set,
           { modelDirs: effectivePaths, isLoading: false },
           requestGeneration,
         )
-        if (applied && pathsChanged) {
+        if (pathsChanged) {
           await get().saveConfig()
         }
         return null

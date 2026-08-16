@@ -538,7 +538,7 @@ export interface AppState {
   addInstance: (instance: Instance) => void
   updateInstance: (id: string, partial: Partial<Instance>) => void
   deleteInstance: (id: string) => void
-  moveInstance: (id: string, direction: 'up' | 'down') => void
+  moveInstance: (id: string, direction: 'up' | 'down', orderedIds?: string[]) => void
   renameInstance: (id: string, name: string) => void
   addLog: (entry: LogEntry) => void
   addLogs: (entries: LogEntry[]) => void

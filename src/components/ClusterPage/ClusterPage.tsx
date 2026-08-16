@@ -48,8 +48,12 @@ export default function ClusterPage() {
   const [localPort, setLocalPort] = useState(50052)
   const [localEngine, setLocalEngine] = useState('')
   const [localMode, setLocalMode] = useState<'engine' | 'custom'>('engine')
-  const scanCancelled = useRef(false)
+  const scanGenerationRef = useRef(0)
   const dialogRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => () => {
+    scanGenerationRef.current += 1
+  }, [])
 
   useEffect(() => {
     if (!showAddDialog && !showLaunchWizard && !showLocalLaunch) return
@@ -128,25 +132,25 @@ export default function ClusterPage() {
   }, [addRuntimeWarning, labels.workerLoadFailed, setWorkers])
 
   const handleScan = async () => {
-    scanCancelled.current = false
+    const generation = ++scanGenerationRef.current
     setClusterScanning(true)
     try {
       const discovered: WorkerInfo[] = await invoke('scan_workers_tcp')
-      if (!scanCancelled.current) {
+      if (generation === scanGenerationRef.current) {
         setWorkers(discovered)
       }
     } catch (error) {
-      if (!scanCancelled.current) {
+      if (generation === scanGenerationRef.current) {
         console.error('Scan failed:', error)
         addRuntimeWarning(`${labels.workerScanFailed}: ${errorMessage(error)}`)
       }
     } finally {
-      setClusterScanning(false)
+      if (generation === scanGenerationRef.current) setClusterScanning(false)
     }
   }
 
   const handleCancelScan = () => {
-    scanCancelled.current = true
+    scanGenerationRef.current += 1
     setClusterScanning(false)
   }
 
@@ -262,11 +266,8 @@ export default function ClusterPage() {
     }
   }
 
-  const handleTest = async (host: string, port: number) => {
-    const worker = workers.find(item => item.host === host && item.port === port)
-    if (!worker) {
-      return
-    }
+  const handleTest = async (worker: WorkerInfo) => {
+    const { host, port } = worker
     updateWorker(worker.id, { status: 'Testing' })
     try {
       const result = await invoke<WorkerTestResult>('test_worker', { host, port })
@@ -285,7 +286,8 @@ export default function ClusterPage() {
       const all: WorkerInfo[] = await invoke('get_workers')
       setWorkers(all)
       setShowAddDialog(false)
-      await handleTest(formData.host, formData.port)
+      const added = all.find(worker => worker.host === formData.host && worker.port === formData.port)
+      if (added) await handleTest(added)
     } catch (error) {
       console.error('Failed to add worker:', error)
     }
@@ -525,7 +527,7 @@ export default function ClusterPage() {
                           </Button>
                         )}
                         <Button
-                          onClick={() => void handleTest(worker.host, worker.port)}
+                          onClick={() => void handleTest(worker)}
                           variant="primary"
                           size="sm"
                           className="w-[108px] shrink-0 whitespace-nowrap"

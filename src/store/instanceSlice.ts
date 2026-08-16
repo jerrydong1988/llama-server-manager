@@ -118,12 +118,17 @@ export function createInstanceSlice(
     deleteInstance: (id) => set((state) => ({
       instances: state.instances.filter((instance) => instance.id !== id),
     })),
-    moveInstance: (id, direction) => {
+    moveInstance: (id, direction, orderedIds) => {
       const state = get()
       const index = state.instances.findIndex((instance) => instance.id === id)
       if (index < 0) return
 
-      const target = direction === 'up' ? index - 1 : index + 1
+      const order = orderedIds?.filter(candidateId => state.instances.some(instance => instance.id === candidateId))
+        ?? state.instances.map(instance => instance.id)
+      const visibleIndex = order.indexOf(id)
+      if (visibleIndex < 0) return
+      const targetId = order[direction === 'up' ? visibleIndex - 1 : visibleIndex + 1]
+      const target = state.instances.findIndex(instance => instance.id === targetId)
       if (target < 0 || target >= state.instances.length) return
 
       const next = [...state.instances]

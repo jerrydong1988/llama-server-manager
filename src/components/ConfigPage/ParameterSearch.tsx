@@ -63,6 +63,7 @@ export function ParameterSearch({ query, onQueryChange, labels }: { query: strin
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.nativeEvent.isComposing) return
     if (event.key === 'Enter') {
       event.preventDefault()
       navigate(event.shiftKey ? -1 : 1)

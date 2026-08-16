@@ -69,6 +69,53 @@ test('search navigation, change review, emission preview, and save use the mock 
   expect(generated?.emittedOverrideKeys).toContain('models_autoload')
 })
 
+test('Ctrl+S persists the active configuration draft through the validated save path', async ({ page }) => {
+  await openConfiguration(page)
+
+  const temperatureInput = page.locator('[data-config-field="temp"] input')
+  await temperatureInput.fill('0.7')
+  await temperatureInput.press('Control+s')
+
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance']?.temp
+  ))).toBe(0.7)
+})
+
+test('Ctrl+Enter does not start an instance while a configuration input is focused', async ({ page }) => {
+  await openConfiguration(page)
+
+  const temperatureInput = page.locator('[data-config-field="temp"] input')
+  await temperatureInput.focus()
+  await temperatureInput.press('Control+Enter')
+
+  expect(await page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'start_server').length
+  ))).toBe(0)
+})
+
+test('configuration search and custom arguments wait for IME composition to finish', async ({ page }) => {
+  await openConfiguration(page)
+
+  const search = page.getByRole('textbox', { name: '参数搜索' })
+  await search.fill('--temp')
+  await search.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true })
+  await expect(page.locator('[data-config-search-current="true"]')).toHaveCount(0)
+  await expect(search).toBeFocused()
+  await search.press('Enter')
+  await expect(page.locator('[data-config-field="temp"]')).toHaveAttribute('data-config-search-current', 'true')
+
+  const customArgs = page.locator('[data-config-field="custom_args"]')
+  await customArgs.scrollIntoViewIfNeeded()
+  const nameInput = customArgs.getByPlaceholder('参数名称')
+  await nameInput.fill('--custom-中文')
+  await nameInput.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', isComposing: true })
+  await expect(nameInput).toHaveValue('--custom-中文')
+  await expect(customArgs.getByText('--custom-中文', { exact: true })).toHaveCount(0)
+  await nameInput.press('Enter')
+  await expect(customArgs.getByText('--custom-中文', { exact: true })).toBeVisible()
+})
+
 test('floating config actions save without a long scroll and return to the top', async ({ page }) => {
   await openConfiguration(page)
 

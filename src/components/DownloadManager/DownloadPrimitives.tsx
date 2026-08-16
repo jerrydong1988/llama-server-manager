@@ -44,16 +44,16 @@ export function SectionPanel({ title, count, collapsed, onToggle, extra, childre
 }) {
   return (
     <section className={`${surfaceClassName} min-w-0 overflow-hidden`}>
-      <button type="button" onClick={onToggle} className="flex w-full items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 text-left dark:border-slate-800">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</span>
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">{count}</span>
-        </div>
-        <div className="flex shrink-0 items-center gap-2" onClick={event => event.stopPropagation()}>
-          {extra}
+      <div className="flex w-full items-center gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+        <button type="button" onClick={onToggle} className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</span>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-500 dark:bg-slate-800 dark:text-slate-400">{count}</span>
+          </div>
           {collapsed ? <ChevronDown className="h-4 w-4 text-slate-400" /> : <ChevronUp className="h-4 w-4 text-slate-400" />}
-        </div>
-      </button>
+        </button>
+        {extra && <div className="flex shrink-0 items-center gap-2">{extra}</div>}
+      </div>
       {!collapsed && children}
     </section>
   )

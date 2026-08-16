@@ -35,18 +35,18 @@ Visit the [documentation site](https://docs.cnzone.net/docs) for the latest onli
 ### 安装 / Install
 
 1. 从[下载中心](https://download.cnzone.net/)下载对应平台安装包；无法访问时可使用 [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) 备用源。
-2. Windows 使用 MSI 或 NSIS 安装包；macOS 使用 DMG；Linux 使用 DEB 或 AppImage。
+2. Windows 使用 MSI 或 NSIS 安装包；macOS 使用 DMG；Linux 使用 DEB。自 `v2.9.43` 起暂停发布 AppImage，以避免旧版内置 GLib/Wayland 与新系统图形栈混用造成空白窗口。
 3. 准备与本机后端匹配的 `llama-server`，例如 CUDA、ROCm、Vulkan 或 CPU 构建。
 4. 准备本地 GGUF 模型，或稍后从 ModelScope / HuggingFace 下载。
 
 1. Download the package for your platform from the [Download Center](https://download.cnzone.net/), with [GitHub Releases](https://github.com/jerrydong1988/llama-server-manager/releases/latest) available as an alternative source.
-2. Use MSI or NSIS on Windows, DMG on macOS, and DEB or AppImage on Linux.
+2. Use MSI or NSIS on Windows, DMG on macOS, and DEB on Linux. AppImage distribution is suspended starting with `v2.9.43` because mixing older bundled GLib/Wayland libraries with newer system graphics stacks can produce a blank window.
 3. Prepare a `llama-server` build for your backend, such as CUDA, ROCm, Vulkan, or CPU.
 4. Prepare a local GGUF model, or download one later from ModelScope or HuggingFace.
 
-Linux AppImage 的“开机自启动”会记录 AppImage 原始文件位置；启用后不要移动或删除该文件。正式标签构建在配置证书时执行 Windows 签名与 macOS 签名和公证；未配置时仍会发布文件名带 `-unsigned` 的 Windows 安装包和带 `-adhoc` 的 macOS DMG。普通 CI 产物仅用于测试。
+Linux DEB 安装后可正常配置“开机自启动”，版本更新需要从下载中心或 GitHub Releases 手动安装。正式标签构建在配置证书时执行 Windows 签名与 macOS 签名和公证；未配置时仍会发布文件名带 `-unsigned` 的 Windows 安装包和带 `-adhoc` 的 macOS DMG。普通 CI 产物仅用于测试。
 
-AppImage autostart records the original AppImage location; do not move or delete that file after enabling it. Tagged builds use formal Windows signing and macOS signing or notarization only when credentials are configured; otherwise the release publishes clearly labeled `-unsigned` Windows installers and `-adhoc` macOS DMGs. Regular CI artifacts are for testing only.
+Linux DEB installations can use autostart normally, while version updates must be installed manually from the Download Center or GitHub Releases. Tagged builds use formal Windows signing and macOS signing or notarization only when credentials are configured; otherwise the release publishes clearly labeled `-unsigned` Windows installers and `-adhoc` macOS DMGs. Regular CI artifacts are for testing only.
 
 ### 应用更新 / Application Updates
 
@@ -54,9 +54,9 @@ AppImage autostart records the original AppImage location; do not move or delete
 
 The app checks the project's Cloudflare R2 update service at startup. When an update is available, a version button appears in the header. The signed package is downloaded, installed, and followed by a restart only after confirmation. If instances or routing are active, the confirmation warns that current work may be interrupted.
 
-`v2.9.35` 及更早版本没有内置 Tauri Updater，因此必须先手动安装 `v2.9.36` 或更新版本；之后才能使用应用内更新。Linux 自动更新仅支持 AppImage，DEB 用户继续从下载中心或 GitHub Releases 手动安装。
+`v2.9.35` 及更早版本没有内置 Tauri Updater，因此必须先手动安装 `v2.9.36` 或更新版本；之后 Windows 与 macOS 才能使用应用内更新。Linux 当前仅发布 DEB，暂不提供应用内更新，请从下载中心或 GitHub Releases 手动安装。
 
-`v2.9.35` and earlier do not contain Tauri Updater, so `v2.9.36` or later must first be installed manually. In-app updates work for later releases. Linux in-app updates are available for AppImage; DEB users continue to install updates manually from the Download Center or GitHub Releases.
+`v2.9.35` and earlier do not contain Tauri Updater, so `v2.9.36` or later must first be installed manually before Windows and macOS can use in-app updates. Linux currently ships only DEB packages and does not provide in-app updates; install updates manually from the Download Center or GitHub Releases.
 
 ### 首次运行的五个步骤 / Five First-Run Steps
 

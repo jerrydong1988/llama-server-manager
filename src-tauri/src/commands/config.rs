@@ -119,6 +119,35 @@ where
     persist_global_config_unlocked(&config_dir, &global).map(|_| ())
 }
 
+/// Persists an engine-name snapshot before publishing it to shared memory. Keeping both
+/// operations under the config write lock prevents a concurrent save_config from restoring
+/// the previous names between the disk write and the in-memory commit.
+fn publish_engine_names_after_persist<F>(
+    shared_engine_names: &Mutex<HashMap<String, String>>,
+    engine_names: HashMap<String, String>,
+    persist: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&HashMap<String, String>) -> Result<(), String>,
+{
+    persist(&engine_names)?;
+    *shared_engine_names.lock().unwrap() = engine_names;
+    Ok(())
+}
+
+pub fn replace_engine_names_and_persist(
+    state: &AppState,
+    engine_names: HashMap<String, String>,
+) -> Result<(), String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&config_dir)?;
+    publish_engine_names_after_persist(&state.engine_names, engine_names, |names| {
+        global.engine_names = names.clone();
+        persist_global_config_unlocked(&config_dir, &global).map(|_| ())
+    })
+}
+
 // Config persistence.
 
 fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
@@ -538,6 +567,35 @@ pub fn resolve_path(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_names_are_not_published_when_persistence_fails() {
+        let shared = Mutex::new(HashMap::from([("engine".to_string(), "Old".to_string())]));
+        let next = HashMap::from([("engine".to_string(), "New".to_string())]);
+
+        let result = publish_engine_names_after_persist(&shared, next, |_| {
+            Err("disk unavailable".to_string())
+        });
+
+        assert_eq!(result, Err("disk unavailable".to_string()));
+        assert_eq!(
+            shared.lock().unwrap().get("engine").map(String::as_str),
+            Some("Old")
+        );
+    }
+
+    #[test]
+    fn engine_names_publish_after_persistence_succeeds() {
+        let shared = Mutex::new(HashMap::from([("engine".to_string(), "Old".to_string())]));
+        let next = HashMap::from([("engine".to_string(), "New".to_string())]);
+
+        publish_engine_names_after_persist(&shared, next, |_| Ok(())).unwrap();
+
+        assert_eq!(
+            shared.lock().unwrap().get("engine").map(String::as_str),
+            Some("New")
+        );
+    }
 
     #[test]
     fn save_config_normalizes_vector_instances_before_storage() {

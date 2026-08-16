@@ -244,6 +244,14 @@ function AppInner() {
     const handler = (e: KeyboardEvent) => {
       if (!e.ctrlKey) return
       if (e.key === 'Enter') {
+        if (e.isComposing) return
+        const target = e.target
+        if (
+          target instanceof HTMLInputElement
+          || target instanceof HTMLTextAreaElement
+          || target instanceof HTMLSelectElement
+          || (target instanceof HTMLElement && target.isContentEditable)
+        ) return
         e.preventDefault()
         const { instances, instanceLifecycle, startInstance, stopInstance } = useAppStore.getState()
         if (instances.length > 0) {
@@ -254,6 +262,8 @@ function AppInner() {
         }
       }
       if (e.key === 's' || e.key === 'S') {
+        if (e.isComposing) return
+        if (useAppStore.getState().activeTab === 'config') return
         e.preventDefault()
         void useAppStore.getState().saveConfig().catch(() => {})
       }
