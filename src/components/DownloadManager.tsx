@@ -4,18 +4,17 @@ import { useAppStore, type MsFileEntry } from '../store'
 import type { DownloadProgress } from '../store/types'
 import { formatMessage, useI18n } from '../i18n'
 import { invokeApp as invoke } from '../lib/ipc'
-import { formatPathForDisplay, pathJoin, pathsEqual } from '../utils/path'
-import { forEachConcurrent } from '../utils/async'
+import { dedupePaths, formatPathForDisplay, pathJoin } from '../utils/path'
 import { formatSize, formatSpeed, formatETA } from '../utils/format'
 import { PathText, surfaceClassName } from './ui'
 import { MetricTile, SectionPanel, StatusBadge } from './DownloadManager/DownloadPrimitives'
-import { DEFAULT_BANDWIDTH_LIMIT, DEFAULT_BANDWIDTH_UNIT, DEFAULT_SAVE_DIR, LOCAL_FILE_CHECK_CONCURRENCY, bandwidthToBytes, bytesToBandwidth, clampConcurrency, downloadFileKey, normalizeResumePolicy, preferredBandwidthDisplay } from './DownloadManager/downloadPolicy'
+import { DEFAULT_BANDWIDTH_LIMIT, DEFAULT_BANDWIDTH_UNIT, DEFAULT_SAVE_DIR, bandwidthToBytes, bytesToBandwidth, clampConcurrency, downloadFileKey, normalizeResumePolicy, preferredBandwidthDisplay } from './DownloadManager/downloadPolicy'
+import { useDownloadBrowse } from './DownloadManager/useDownloadBrowse'
 import {
   DownloadSettingsPanel,
   type DownloadBandwidthUnit as BandwidthUnit,
   type DownloadResumePolicy as ResumePolicy,
 } from './DownloadManager/DownloadSettingsPanel'
-type DownloadSource = 'modelscope' | 'huggingface'
 type Section = 'queue' | 'active' | 'paused' | 'failed' | 'completed'
 export default function DownloadManager() {
   const { t } = useI18n()
@@ -26,8 +25,6 @@ export default function DownloadManager() {
   const cancelAndCleanupDownload = useAppStore(s => s.cancelAndCleanupDownload)
   const removeFromDownloadQueue = useAppStore(s => s.removeFromDownloadQueue)
   const addToDownloadQueue = useAppStore(s => s.addToDownloadQueue)
-  const browseModelscope = useAppStore(s => s.browseModelscope)
-  const browseHuggingface = useAppStore(s => s.browseHuggingface)
   const pauseFileDownload = useAppStore(s => s.pauseFileDownload)
   const resumeDownloadTask = useAppStore(s => s.resumeDownloadTask)
   const resumeAllDownloads = useAppStore(s => s.resumeAllDownloads)
@@ -40,12 +37,6 @@ export default function DownloadManager() {
   const moveQueueEntry = useAppStore(s => s.moveQueueEntry)
   const scanModels = useAppStore(s => s.scanModels)
   const openModelFolder = useAppStore(s => s.openModelFolder)
-  const [source, setSource] = useState<DownloadSource>('modelscope')
-  const [repoId, setRepoId] = useState('')
-  const [files, setFiles] = useState<MsFileEntry[]>([])
-  const [status, setStatus] = useState('')
-  const [browsing, setBrowsing] = useState(false)
-  const [browsedRepoId, setBrowsedRepoId] = useState('')
   const [collapsed, setCollapsed] = useState<Record<Section, boolean>>({
     queue: false,
     active: false,
@@ -60,6 +51,13 @@ export default function DownloadManager() {
       return DEFAULT_SAVE_DIR
     }
   })
+  const {
+    source, repoId, files, status, browsing, browsedRepoId,
+    selectSource: handleSourceChange,
+    changeRepoId: handleRepoIdChange,
+    resetBrowse,
+    browse: handleBrowse,
+  } = useDownloadBrowse(saveDir)
   const [initialLoading, setInitialLoading] = useState(true)
   const [dlSettingsOpen, setDlSettingsOpen] = useState(true)
   const [resumePolicy, setResumePolicy] = useState<ResumePolicy>('manual')
@@ -222,101 +220,8 @@ export default function DownloadManager() {
     }
   }
 
-  const handleBrowse = async () => {
-    if (!repoId.trim()) {
-      setStatus(t.modelRepo.inputRepoId)
-      return
-    }
-
-    const browseStartedAt = Date.now()
-    setBrowsing(true)
-    setStatus(t.modelRepo.querying)
-
-    try {
-      const trimmedRepoId = repoId.trim()
-      const result = source === 'modelscope'
-        ? await browseModelscope(trimmedRepoId)
-        : await browseHuggingface(trimmedRepoId)
-
-      setFiles(result)
-      setBrowsedRepoId(trimmedRepoId)
-      setStatus(result.length === 0 ? t.modelRepo.notFound : `${t.modelRepo.found} ${result.length} ${t.modelRepo.files}`)
-
-      const allTasks = useAppStore.getState().downloadTasks
-      const completedTasks: DownloadProgress[] = []
-
-      const resolvedDir = await invoke<string>('resolve_path', { path: saveDir })
-      await forEachConcurrent(result, LOCAL_FILE_CHECK_CONCURRENCY, async file => {
-        const localPath = pathJoin(resolvedDir, trimmedRepoId, file.path || file.name)
-        try {
-          const actualSize = await invoke<number | null>('check_local_file', { path: localPath })
-          if (file.size > 0 && actualSize === file.size) {
-            const existing = Object.values(allTasks).find(task =>
-              task.source === source &&
-              task.repoId === trimmedRepoId &&
-              task.remotePath === (file.path || file.name) &&
-              pathsEqual(task.saveDir, saveDir),
-            )
-            const id = existing?.id || crypto.randomUUID()
-            const completedAt = Date.now()
-            completedTasks.push({
-              id,
-              fileName: file.name,
-              remotePath: file.path || file.name,
-              fileType: file.file_type,
-              saveDir,
-              repoId: trimmedRepoId,
-              source,
-              downloaded: actualSize,
-              total: file.size,
-              speed: 0,
-              status: 'completed',
-              path: localPath,
-              version: existing?.version ?? 0,
-              createdAt: existing?.createdAt ?? completedAt,
-              updatedAt: completedAt,
-              completedAt: existing?.completedAt ?? completedAt,
-            })
-          }
-        } catch {
-          // file not found
-        }
-      })
-
-      useAppStore.setState(state => {
-        const tasks = { ...state.downloadTasks }
-        for (const completed of completedTasks) {
-          const latest = Object.values(tasks).find(task =>
-            task.source === completed.source
-            && task.repoId === completed.repoId
-            && task.remotePath === completed.remotePath
-            && pathsEqual(task.saveDir, completed.saveDir),
-          )
-          if ((latest?.version ?? 0) > (completed.version ?? 0)) continue
-          if (
-            latest
-            && (latest.updatedAt ?? 0) > browseStartedAt
-            && latest.status !== 'completed'
-          ) continue
-          if (latest && ['active', 'queued', 'pausing'].includes(latest.status)) continue
-          const id = latest?.id || completed.id
-          tasks[id] = {
-            ...latest,
-            ...completed,
-            id,
-            version: Math.max(latest?.version ?? 0, completed.version ?? 0),
-          }
-        }
-        return { downloadTasks: tasks }
-      })
-    } catch (error: any) {
-      setStatus(`${t.modelRepo.queryFailed}${typeof error === 'string' ? error : t.modelRepo.networkError}`)
-    } finally {
-      setBrowsing(false)
-    }
-  }
-
   const saveDirPersist = (dir: string) => {
+    resetBrowse()
     setSaveDir(dir)
     try {
       localStorage.setItem('downloadSaveDir', dir)
@@ -414,7 +319,10 @@ export default function DownloadManager() {
   }
 
   const handleImportCompletedTask = async (task: DownloadProgress) => {
-    const error = await scanModels([task.saveDir])
+    const { modelDirs: currentModelDirs, setModelDirs } = useAppStore.getState()
+    const nextModelDirs = dedupePaths([...currentModelDirs, task.saveDir])
+    setModelDirs(nextModelDirs)
+    const error = await scanModels(nextModelDirs)
     const message = error ? `${ui.importFailed}: ${error}` : ui.importedToRepo
     setModelImportStatuses(statuses => ({ ...statuses, [task.id]: message }))
   }
@@ -978,13 +886,13 @@ export default function DownloadManager() {
                   </div>
                   <div className="inline-flex max-w-full shrink-0 rounded-lg bg-slate-200/70 p-1 dark:bg-slate-800" data-guide="download-source">
                     <button
-                      onClick={() => { setSource('modelscope'); setFiles([]); setStatus('') }}
+                      onClick={() => handleSourceChange('modelscope')}
                       className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'modelscope' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
                     >
                       ModelScope
                     </button>
                     <button
-                      onClick={() => { setSource('huggingface'); setFiles([]); setStatus('') }}
+                      onClick={() => handleSourceChange('huggingface')}
                       className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'huggingface' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
                     >
                       HuggingFace
@@ -996,8 +904,11 @@ export default function DownloadManager() {
                   <input
                     type="text"
                     value={repoId}
-                    onChange={e => setRepoId(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleBrowse()}
+                    onChange={e => handleRepoIdChange(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.nativeEvent.isComposing) return
+                      if (e.key === 'Enter') void handleBrowse()
+                    }}
                     placeholder={source === 'modelscope' ? t.modelRepo.repoIdPlaceholder : t.modelRepo.hfRepoIdPlaceholder}
                     className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
                   />

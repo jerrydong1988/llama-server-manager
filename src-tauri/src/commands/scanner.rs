@@ -1441,26 +1441,25 @@ pub async fn rename_engine(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let mut engines = state.engines.lock().unwrap();
-    let Some(engine) = engines
-        .iter_mut()
-        .find(|engine| paths_equal(Path::new(&engine.id), Path::new(&id)))
+    let Some(engine_index) = engines
+        .iter()
+        .position(|engine| paths_equal(Path::new(&engine.id), Path::new(&id)))
     else {
         return Err("未找到要重命名的引擎".to_string());
     };
-    let stored_id = engine.id.clone();
-    {
-        engine.custom_name = Some(name.clone());
-        engine.name = name.clone();
-    }
-    drop(engines);
-    let mut engine_names = state.engine_names.lock().unwrap();
-    engine_names.retain(|saved_id, _| !paths_equal(Path::new(saved_id), Path::new(&stored_id)));
-    engine_names.insert(stored_id, name);
-    drop(engine_names);
-    // Persist engine names immediately using unified atomic writes to avoid race conditions.
-    crate::commands::config::update_and_persist(&state, |global| {
-        global.engine_names = state.engine_names.lock().unwrap().clone();
-    })?;
+    let stored_id = engines[engine_index].id.clone();
+    let mut next_engine_names = state.engine_names.lock().unwrap().clone();
+    next_engine_names
+        .retain(|saved_id, _| !paths_equal(Path::new(saved_id), Path::new(&stored_id)));
+    next_engine_names.insert(stored_id, name.clone());
+
+    // Do not publish either in-memory name until the atomic config write succeeds.
+    crate::commands::config::replace_engine_names_and_persist(&state, next_engine_names)?;
+    let engine = engines
+        .get_mut(engine_index)
+        .ok_or_else(|| "未找到要重命名的引擎".to_string())?;
+    engine.custom_name = Some(name.clone());
+    engine.name = name;
     Ok(())
 }
 

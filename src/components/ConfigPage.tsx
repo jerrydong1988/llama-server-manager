@@ -30,6 +30,7 @@ import { ModelAssetPicker, type ModelAssetPickerTarget } from './ConfigPage/Mode
 import { FieldRuntimeProvider } from './ConfigPage/shared'
 import { canReuseConfigPreflight, configForPreflight, createConfigPreflightKey } from './ConfigPage/configPreflight'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
+import { useConfigSaveShortcut } from './ConfigPage/useConfigSaveShortcut'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -66,6 +67,7 @@ const ConfigPage = () => {
   const committedModelPathRef = useRef('')
   const editRevisionRef = useRef(0)
   const saveInFlightRef = useRef(false)
+  const saveShortcutRef = useConfigSaveShortcut()
   const saveFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -150,13 +152,8 @@ const ConfigPage = () => {
   const trustedEngineId = local?.engine_id || defaultEngineId || ''
   const { unsupportedEngineFlags, setUnsupportedEngineFlags, commandPreview, commandPreviewKey, previewingCommand, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local: compatibilityConfig, currentEngine, trustedEngineId })
 
-  if (!local) {
-    return (
-      <div className="space-y-5">
-        <EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} />
-      </div>
-    )
-  }
+  saveShortcutRef.current = async () => {}
+  if (!local) return <div className="space-y-5"><EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} /></div>
 
   const overrideKeys = explicitOverrideKeys(local)
   const reviewOverrideKeys = canonicalConfigFields(overrideKeys)
@@ -311,6 +308,8 @@ const ConfigPage = () => {
       timing.finish(outcome)
     }
   }
+
+  saveShortcutRef.current = save
 
   const vectorCleanupGroups: Array<{ group: VectorCleanupChange['group']; label: string }> = [
     { group: 'speculative', label: t.configPage.vectorCleanupSpeculative },

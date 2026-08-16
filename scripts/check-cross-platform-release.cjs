@@ -6,6 +6,7 @@ const dependencyReviewWorkflow = fs.readFileSync('.github/workflows/dependency-r
 const tauriConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
 const updaterBuildConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.updater.conf.json', 'utf8'))
 const readme = fs.readFileSync('README.md', 'utf8')
+const guide = fs.readFileSync('GUIDE.md', 'utf8')
 const signingPolicy = fs.readFileSync('CODE_SIGNING_POLICY.md', 'utf8')
 const privacyPolicy = fs.readFileSync('PRIVACY.md', 'utf8')
 const signingGuide = fs.readFileSync('docs/RELEASE_SIGNING.md', 'utf8')
@@ -318,6 +319,18 @@ if (!Array.isArray(updaterTargets) || !updaterTargets.includes('app')) {
 }
 if (tauriConfig.bundle?.targets?.includes('appimage') || tauriConfig.bundle?.linux?.appimage) {
   failures.push('ordinary Linux builds must not produce the suspended AppImage package')
+}
+for (const staleGuideClaim of [
+  'DEB 或 AppImage',
+  'DEB or AppImage',
+  'AppImage autostart records',
+  'Linux 自动更新仅支持 AppImage',
+  'Linux in-app updates are available for AppImage',
+]) {
+  if (guide.includes(staleGuideClaim)) failures.push(`GUIDE.md still contains suspended AppImage guidance: ${staleGuideClaim}`)
+}
+for (const currentGuideClaim of ['暂停发布 AppImage', 'AppImage distribution is suspended']) {
+  if (!guide.includes(currentGuideClaim)) failures.push(`GUIDE.md is missing current Linux packaging guidance: ${currentGuideClaim}`)
 }
 if (updaterTargets?.includes('appimage') || updaterTargets?.includes('deb')) {
   failures.push('Linux packages must not enter the signed updater artifact build')

@@ -696,7 +696,10 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
                 type="text"
                 value={newName}
                 onChange={e => setNewName(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') addEntry() }}
+                onKeyDown={e => {
+                  if (e.nativeEvent.isComposing) return
+                  if (e.key === 'Enter') addEntry()
+                }}
                 placeholder={t.configPage.customArgName}
                 className="h-9 flex-1 text-xs"
               />
@@ -704,7 +707,10 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
                 type="text"
                 value={newVal}
                 onChange={e => setNewVal(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') addEntry() }}
+                onKeyDown={e => {
+                  if (e.nativeEvent.isComposing) return
+                  if (e.key === 'Enter') addEntry()
+                }}
                 placeholder={t.configPage.customArgValue}
                 className="h-9 flex-1 text-xs"
               />
