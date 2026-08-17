@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-08-16",
+  "verifiedAt": "2026-08-17",
   "source": "https://github.com/ggerganov/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10451",
-  "upstreamCommit": "10bf611e533d81f739128304991c5e133c6aebd8",
-  "upstreamMasterChecked": "10bf611e533d81f739128304991c5e133c6aebd8",
+  "upstreamRelease": "b10470",
+  "upstreamCommit": "34af94cd9ab277632e27caeec2d41de2fd091b31",
+  "upstreamMasterChecked": "34af94cd9ab277632e27caeec2d41de2fd091b31",
   "releaseSnapshot": {
-    "ref": "b10451",
-    "commit": "10bf611e533d81f739128304991c5e133c6aebd8",
+    "ref": "b10470",
+    "commit": "34af94cd9ab277632e27caeec2d41de2fd091b31",
     "parameterCount": 248,
-    "snapshotHash": "276a7f49af2b5cdfc1ea243cd03fdf6370ffb75edcf06cca0eebf5bd52b5a493",
+    "snapshotHash": "a0c45fa9b3791ac6ae8c30258658b618cc96c7129f8c3d4988b80984fa0bdd22",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -1955,7 +1955,7 @@
           "--tools"
         ],
         "synopsisHash": "de9d3b68eb5cb89492a1812a8940cd94b9b737d767fc90889fbb74ae8fdc6ed5",
-        "descriptionHash": "8f450cbd74c44e3b04b27949ec476fb890cab9cbf9cf90be9c28583570aeceb5"
+        "descriptionHash": "453043ce96263f3a1a1d93baeeb899f023bbf316641b568a163caa8e2db4b465"
       },
       {
         "canonical": "--tools-runtime",
@@ -2161,9 +2161,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "10bf611e533d81f739128304991c5e133c6aebd8",
+    "commit": "34af94cd9ab277632e27caeec2d41de2fd091b31",
     "parameterCount": 248,
-    "snapshotHash": "276a7f49af2b5cdfc1ea243cd03fdf6370ffb75edcf06cca0eebf5bd52b5a493",
+    "snapshotHash": "a0c45fa9b3791ac6ae8c30258658b618cc96c7129f8c3d4988b80984fa0bdd22",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -4104,7 +4104,7 @@
           "--tools"
         ],
         "synopsisHash": "de9d3b68eb5cb89492a1812a8940cd94b9b737d767fc90889fbb74ae8fdc6ed5",
-        "descriptionHash": "8f450cbd74c44e3b04b27949ec476fb890cab9cbf9cf90be9c28583570aeceb5"
+        "descriptionHash": "453043ce96263f3a1a1d93baeeb899f023bbf316641b568a163caa8e2db4b465"
       },
       {
         "canonical": "--tools-runtime",
