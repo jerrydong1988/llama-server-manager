@@ -166,9 +166,9 @@ function recoverOnceLaunchSpec(dataDir, backendPort) {
         '/D',
         '/S',
         '/C',
-        `if exist ${marker} (ping -n 120 127.0.0.1 >NUL) else (type NUL > ${marker} & exit /B 1)`,
+        `if exist ${marker} (ping -n 120 127.0.0.1 >NUL) else (type NUL > ${marker} & ping -n 2 127.0.0.1 >NUL & exit /B 1)`,
       ]
-    : ['/bin/sh', '-c', `if [ -f ${marker} ]; then sleep 120; else : > ${marker}; exit 1; fi`]
+    : ['/bin/sh', '-c', `if [ -f ${marker} ]; then sleep 120; else : > ${marker}; sleep 0.2; exit 1; fi`]
   const spec = testLaunchSpec(dataDir, backendPort)
   return {
     ...spec,
