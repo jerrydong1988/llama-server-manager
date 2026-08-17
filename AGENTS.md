@@ -21,6 +21,17 @@ These rules apply to every change in this repository.
    - `build-linux-arm64`
 4. Merge through GitHub. Do not bypass or disable the ruleset for routine work.
 
+## Product roadmap governance
+
+- `docs/PRODUCT_ROADMAP.md` is the source of truth for product direction, current phase, phase order, and phase exit gates.
+- Read the roadmap and the active phase tracking issue before scoping product work.
+- Every product feature pull request must name its phase, tracking issue, workstream or exit criterion, explicit non-goals, and validation evidence.
+- Work on the current phase only. Record later-phase ideas in the relevant tracker or a linked issue instead of implementing them opportunistically.
+- Keep defects, security fixes, compatibility work, releases, and maintenance unblocked, but explain their roadmap relationship in the pull request.
+- Change phase scope, order, status, or exit gates only through a dedicated roadmap pull request with rationale and dependency impact.
+- Transition phases only after the current tracker contains exit evidence, required checks pass, and a dedicated roadmap pull request marks the next phase current.
+- A Codex Goal is one bounded execution package. It must reference the roadmap and tracker, define proof and a stopping condition, and must not automatically start the next package.
+
 ## Releases
 
 - Create release commits through the same pull request flow.

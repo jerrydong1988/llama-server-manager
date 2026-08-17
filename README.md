@@ -174,6 +174,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [下载中心 / Download Center](https://download.cnzone.net/)
 - [在线版本说明 / Online Release Notes](https://docs.cnzone.net/release-notes)
 - [仓库版离线图文说明 / Repository Offline Guide](GUIDE.md)
+- [产品路线图 / Product Roadmap](docs/PRODUCT_ROADMAP.md)
 - [隐私政策 / Privacy Policy](PRIVACY.md)
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)
