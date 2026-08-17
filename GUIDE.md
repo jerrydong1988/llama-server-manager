@@ -247,18 +247,38 @@ An instance combines a model, engine, port, and independent configuration into a
 ### 运行控制 / Runtime Controls
 
 - 启动前会生成命令、检查端口和必要路径。
-- 状态依次可能为已停止、启动中、运行中或错误。
+- 状态可能为已停止、启动中、运行中、正在自愈、错误或崩溃循环。
 - “测试连接”使用实例鉴权设置检查健康或模型接口。
 - “打开 API 页面”会把通配监听地址转换为本机可访问地址。
 - 命令预览可复制完整启动参数，便于复现问题。
 - 可重命名、排序或删除实例；删除前会原生确认。
 
 - Startup generates the command and validates ports and required paths.
-- Status may be stopped, starting, running, or error.
+- Status may be stopped, starting, running, recovering, error, or Crash Loop.
 - Test Connection checks health or model endpoints using the instance authentication settings.
 - Open API maps wildcard bind hosts to a local browser address.
 - Command Preview copies the complete launch command for diagnosis.
 - Instances can be renamed, reordered, or deleted with confirmation.
+
+### 故障自愈与崩溃循环 / Failure Recovery and Crash Loop
+
+在实例详情中启用“故障自愈”后，启动失败或意外退出会按 2 秒、10 秒、30 秒退避自动重启，最多三次。第三次自动尝试仍失败时进入“崩溃循环”，不会继续自动启动。自动启动不会绕过正在处理的故障或崩溃循环。
+
+The Failure Recovery switch retries a startup failure or unexpected exit after 2, 10, and 30 seconds, with at most three automatic attempts. A failed third attempt enters Crash Loop and stops automatic starts. Auto Start never bypasses an active incident or Crash Loop.
+
+- “取消自愈”执行预期停止并取消计划中的重试。
+- “立即重试”重置自动尝试预算，但保留当前事件的起始故障证据。
+- 起始故障与最新故障会分别显示；完整进程输出仍保留在服务器日志中。
+- 实例连续运行至少五分钟后，之后发生的故障才使用新的重试预算。
+
+- **Cancel Recovery** performs an expected stop and cancels a scheduled retry.
+- **Retry Now** resets the automatic-attempt budget while preserving the incident's originating failure.
+- The originating and latest failures remain separate; complete process output stays in Server Logs.
+- A later failure receives a fresh budget only after at least five minutes of continuous runtime.
+
+完整策略、持久化和排障说明见[实例故障自愈文档](docs/INSTANCE_RECOVERY.md)。
+
+See [Instance Recovery and Crash Loop Protection](docs/INSTANCE_RECOVERY.md) for the complete policy, persistence, and troubleshooting contract.
 
 ![启动、健康检查、性能和日志诊断流程 / Start, health, performance, and log diagnosis](public/docs/guide/flow-02-start-and-diagnose.png)
 

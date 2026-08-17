@@ -144,17 +144,35 @@ export interface InstanceConfig {
   // Server features (aligned with llama.cpp master)
   rpc_servers: string; sse_ping_interval: number; reuse_port: boolean;
   auto_start?: boolean;
+  restart_policy: 'never' | 'on-failure';
+}
+
+export interface RuntimeFailure {
+  kind: 'startup_failure' | 'unexpected_exit'
+  message: string
+  exit_code: number | null
+  occurred_at: number
+}
+
+export interface InstanceRecoveryStatus {
+  phase: 'failed' | 'waiting' | 'monitoring' | 'restoring' | 'crash_loop'
+  restart_attempts: number
+  max_restart_attempts: number
+  next_retry_at: number | null
+  origin_failure: RuntimeFailure
+  last_failure: RuntimeFailure
 }
 
 export interface Instance {
   id: string
   name: string
-  status: 'running' | 'stopped' | 'error'
+  status: 'running' | 'stopped' | 'error' | 'recovering' | 'crash_loop'
   model: string
   port: number
   healthCheck: 'ok' | 'fail' | 'pending'
   startTime?: number
   config: InstanceConfig
+  recovery?: InstanceRecoveryStatus
 }
 
 export type InstanceLifecyclePhase = 'starting' | 'stopping'
@@ -557,7 +575,7 @@ export interface AppState {
   openEngineFolder: (dir: string) => Promise<void>
 
   generateCommand: (config: InstanceConfig, engineExe: string) => Promise<GeneratedServerCommand>
-  startInstance: (id: string) => Promise<void>
+  startInstance: (id: string, manualRecovery?: boolean) => Promise<void>
   stopInstance: (id: string) => Promise<void>
   openBrowser: (instanceId: string, host: string, port: number, useTls?: boolean, apiPrefix?: string) => Promise<void>
 

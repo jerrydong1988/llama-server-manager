@@ -336,6 +336,15 @@ fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> N
     let mut changed = HashMap::new();
     for (id, mut config) in instances {
         migrate_legacy_load_mode(&mut config);
+        config.restart_policy = if config
+            .restart_policy
+            .trim()
+            .eq_ignore_ascii_case("on-failure")
+        {
+            "on-failure".into()
+        } else {
+            "never".into()
+        };
         let mut public_config = config.clone();
         ensure_managed_public_model_alias(&mut public_config);
         let normalized = if public_config.launch_mode.eq_ignore_ascii_case("manual") {
@@ -629,6 +638,26 @@ mod tests {
 
         assert_eq!(normalized.all["clean"], config);
         assert!(normalized.changed.is_empty());
+    }
+
+    #[test]
+    fn save_config_canonicalizes_the_manager_restart_policy() {
+        let enabled = InstanceConfig {
+            restart_policy: " ON-FAILURE ".into(),
+            ..InstanceConfig::default()
+        };
+        let invalid = InstanceConfig {
+            restart_policy: "always".into(),
+            ..InstanceConfig::default()
+        };
+
+        let normalized = normalize_instances_for_save(HashMap::from([
+            ("enabled".into(), enabled),
+            ("invalid".into(), invalid),
+        ]));
+
+        assert_eq!(normalized.all["enabled"].restart_policy, "on-failure");
+        assert_eq!(normalized.all["invalid"].restart_policy, "never");
     }
 
     fn temp_config_dir(name: &str) -> std::path::PathBuf {

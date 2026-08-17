@@ -2089,6 +2089,7 @@ pub async fn start_server(
     config: InstanceConfig,
     engine_exe: String,
     engine_backend: String,
+    manual_recovery: Option<bool>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> AppResult<()> {
@@ -2145,10 +2146,11 @@ pub async fn start_server(
     timing.mark("preflight");
 
     if crate::runtime_service::manages_instances() {
-        let running =
-            crate::runtime_service::start_instance(crate::runtime_service::RuntimeLaunchSpec {
+        let running = crate::runtime_service::start_instance(
+            crate::runtime_service::RuntimeLaunchSpec {
                 instance_id: instance_id.clone(),
                 config: config.clone(),
+                launch_config_stale: false,
                 engine_backend: engine_backend.clone(),
                 command: cmd.clone(),
                 command_display: cmd_display.clone(),
@@ -2156,9 +2158,11 @@ pub async fn start_server(
                 working_directory: std::env::current_dir()
                     .ok()
                     .map(|path| path.to_string_lossy().to_string()),
-            })
-            .await
-            .map_err(AppError::from)?;
+            },
+            manual_recovery.unwrap_or(true),
+        )
+        .await
+        .map_err(AppError::from)?;
         timing.mark("runtime-start");
 
         let previous_instance = {
@@ -2947,9 +2951,6 @@ pub async fn stop_server(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let ri = state.running.lock().unwrap().get(&instance_id).cloned();
-    if ri.is_none() {
-        return Ok(());
-    }
     let runtime_managed = state
         .runtime_managed_instances
         .lock()
@@ -2989,6 +2990,9 @@ pub async fn stop_server(
             }),
         )
         .ok();
+        return Ok(());
+    }
+    if ri.is_none() {
         return Ok(());
     }
     state

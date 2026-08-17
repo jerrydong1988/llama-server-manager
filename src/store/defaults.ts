@@ -57,5 +57,6 @@ export function defaultInstanceConfig(): InstanceConfig {
     logit_bias: '', samplers: '', sampler_seq: '',
     timeout: 3600, sleep_idle: -1, verbose: false, custom_args: [],
     rpc_servers: '', sse_ping_interval: 30, reuse_port: false, auto_start: false,
+    restart_policy: 'never',
   }
 }

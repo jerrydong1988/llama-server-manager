@@ -12,6 +12,7 @@ type PanelTab = 'changes' | 'emitted'
 const SYSTEM_MANAGED_KEYS = new Set<keyof InstanceConfig>([
   'model_path', 'host', 'port', 'api_key', 'api_key_file',
   'metrics', 'props', 'slots_enabled', 'embedding', 'pooling', 'reranking',
+  'restart_policy',
 ])
 
 export function ConfigChangePanel({

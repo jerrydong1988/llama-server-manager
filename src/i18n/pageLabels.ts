@@ -45,6 +45,8 @@ export function getBigScreenLabels(lang: string) {
     gpuUnavailable: zh ? '未检测到 GPU' : 'GPU unavailable',
     instanceStatus: zh ? '实例状态' : 'Instance Status',
     running: zh ? '运行中' : 'Running',
+    recovering: zh ? '正在自愈' : 'Recovering',
+    crashLoop: zh ? '崩溃循环' : 'Crash Loop',
     noInstances: zh ? '暂无实例' : 'No instances',
     downloadQueue: zh ? '下载队列' : 'Download Queue',
     active: zh ? '进行中' : 'Active',

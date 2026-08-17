@@ -488,7 +488,14 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
 
   instanceWorkspace: {
     instances: 'instances', running: 'running', runningTitle: 'Running', stoppedTitle: 'Stopped',
-    errored: 'Errored', autoStart: 'Auto Start', all: 'All', offline: 'Offline', healthy: 'Healthy',
+    errored: 'Errored', attention: 'Needs Attention', autoStart: 'Auto Start', all: 'All', offline: 'Offline', healthy: 'Healthy',
+    selfHealing: 'Failure Recovery', protected: 'Recovery Enabled',
+    selfHealingHint: 'Restart up to three times after a startup failure or unexpected exit, using 2s, 10s, and 30s backoff',
+    recovering: 'Recovering', crashLoop: 'Crash Loop', cancelRecovery: 'Cancel Recovery', retryNow: 'Retry Now',
+    recoveryStatus: 'Recovery Incident', recoveryAttempts: 'Automatic attempts: {current} / {max}',
+    nextRetry: 'Next retry: {time}', originFailure: 'Originating failure', latestFailure: 'Latest failure',
+    occurredAt: 'Occurred: {time}', exitCode: 'Exit code: {code}',
+    startupFailure: 'Startup failure', unexpectedExit: 'Unexpected exit',
     pending: 'Pending', checkingPort: 'Checking port...', portAvailable: 'Port is available',
     portInUse: 'Port is already in use', portCheckFailed: 'Port check failed. Please try again.',
     noEnginePrefix: 'No engine detected yet. Please open',

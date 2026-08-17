@@ -387,6 +387,15 @@ const entry = `
     'critical',
     'a running process with a failed health check must not appear healthy',
   )
+  assert.deepEqual(
+    buildServiceStatus({
+      instances: [{ id: 'recovering', status: 'recovering', healthCheck: 'pending' }],
+      downloads: [],
+      logs: [],
+    }),
+    { status: 'attention', alertCount: 1 },
+    'an active recovery incident must remain visible without being classified as critical',
+  )
   assert.equal(
     buildServiceStatus({ instances: [], downloads: [], logs: [], droppedWrites: 1 }).status,
     'critical',

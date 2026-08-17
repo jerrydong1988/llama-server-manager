@@ -158,6 +158,46 @@ function crashingLaunchSpec(dataDir, backendPort) {
   }
 }
 
+function recoverOnceLaunchSpec(dataDir, backendPort) {
+  const marker = 'runtime-recovery-once.marker'
+  const command = process.platform === 'win32'
+    ? [
+        process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe',
+        '/D',
+        '/S',
+        '/C',
+        `if exist ${marker} (ping -n 120 127.0.0.1 >NUL) else (type NUL > ${marker} & ping -n 2 127.0.0.1 >NUL & exit /B 1)`,
+      ]
+    : ['/bin/sh', '-c', `if [ -f ${marker} ]; then sleep 120; else : > ${marker}; sleep 0.2; exit 1; fi`]
+  const spec = testLaunchSpec(dataDir, backendPort)
+  return {
+    ...spec,
+    config: { ...spec.config, restart_policy: 'on-failure' },
+    command,
+    command_display: command.join(' '),
+  }
+}
+
+async function waitForAutomaticRecovery(endpoint, token, originalPid) {
+  let status
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    status = await request(
+      endpoint,
+      token,
+      { command: 'get_status' },
+      `automatic-recovery-status-${attempt}`,
+    )
+    const running = status.reply?.payload?.running?.['runtime-smoke-instance']
+    const recovery = status.reply?.payload?.recovery?.['runtime-smoke-instance']
+    if (running?.pid > 0 && running.pid !== originalPid
+      && recovery?.phase === 'monitoring' && recovery.restart_attempts === 1) {
+      return { running, recovery }
+    }
+    await sleep(50)
+  }
+  throw new Error(`runtime did not complete the scheduled recovery: ${JSON.stringify(status)}`)
+}
+
 async function waitForRuntimeError(endpoint, token, expectedError, requestPrefix) {
   let status
   for (let attempt = 0; attempt < 120; attempt += 1) {
@@ -593,6 +633,45 @@ async function main() {
     if (clearedStatus.reply?.payload?.last_error) {
       throw new Error(`runtime retained an acknowledged error: ${JSON.stringify(clearedStatus)}`)
     }
+
+    const recoveryMarker = path.join(dataDir, 'runtime-recovery-once.marker')
+    fs.rmSync(recoveryMarker, { force: true })
+    const recoverOnce = await request(
+      endpoint,
+      token,
+      { command: 'start_instance', payload: { spec: recoverOnceLaunchSpec(dataDir, backendPort) } },
+      'start-automatic-recovery',
+    )
+    if (recoverOnce.reply?.result !== 'instance' || recoverOnce.reply.payload?.pid <= 0) {
+      throw new Error(`automatic recovery fixture did not start: ${JSON.stringify(recoverOnce)}`)
+    }
+    launchedPids.add(recoverOnce.reply.payload.pid)
+    const recovered = await waitForAutomaticRecovery(endpoint, token, recoverOnce.reply.payload.pid)
+    launchedPids.delete(recoverOnce.reply.payload.pid)
+    launchedPids.add(recovered.running.pid)
+    if (recovered.recovery.origin_failure?.kind !== 'unexpected_exit') {
+      throw new Error(`automatic recovery lost its originating failure: ${JSON.stringify(recovered)}`)
+    }
+    const stopRecovered = await request(
+      endpoint,
+      token,
+      { command: 'stop_instance', payload: { instance_id: launchSpec.instance_id } },
+      'stop-automatically-recovered-instance',
+    )
+    if (stopRecovered.reply?.result !== 'ack') {
+      throw new Error(`automatically recovered instance stop failed: ${JSON.stringify(stopRecovered)}`)
+    }
+    launchedPids.delete(recovered.running.pid)
+    const stoppedRecoveryStatus = await request(
+      endpoint,
+      token,
+      { command: 'get_status' },
+      'status-after-recovery-stop',
+    )
+    if (stoppedRecoveryStatus.reply?.payload?.recovery?.[launchSpec.instance_id]) {
+      throw new Error(`expected stop retained a recovery incident: ${JSON.stringify(stoppedRecoveryStatus)}`)
+    }
+    await request(endpoint, token, { command: 'clear_last_error' }, 'clear-recovery-error')
 
     const enabled = await request(
       endpoint,
