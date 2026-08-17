@@ -27,6 +27,7 @@ const VECTOR_ALLOWED_FIELDS: &[&str] = &[
     "model_path",
     "alias",
     "auto_start",
+    "restart_policy",
     "ctx_size",
     "ctx_size_auto",
     "gpu_layers_auto",

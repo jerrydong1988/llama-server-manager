@@ -189,7 +189,7 @@ export function createInstanceSlice(
         throw error
       }
     },
-    startInstance: (id) => runInstanceStart(id, async () => {
+    startInstance: (id, manualRecovery = true) => runInstanceStart(id, async () => {
       const timing = beginOperationTiming('instance.start')
       let outcome: OperationOutcome = 'failure'
       set(state => ({
@@ -235,6 +235,7 @@ export function createInstanceSlice(
           config: normalized.config,
           engineExe: engine.exe,
           engineBackend: engine.backend,
+          manualRecovery,
         })
         timing.mark('backend-start')
         get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
@@ -270,7 +271,7 @@ export function createInstanceSlice(
       try {
         await invoke('stop_server', { instanceId: id })
         timing.mark('backend-stop')
-        get().updateInstance(id, { status: 'stopped', healthCheck: 'pending' })
+        get().updateInstance(id, { status: 'stopped', healthCheck: 'pending', recovery: undefined })
         outcome = 'success'
       } catch (error) {
         console.error('stop_server error:', error)

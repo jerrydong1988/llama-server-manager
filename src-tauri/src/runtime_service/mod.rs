@@ -6,8 +6,8 @@ mod transport;
 use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
-    RUNTIME_PROTOCOL_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, INSTANCE_RECOVERY_CAPABILITY,
+    RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -31,6 +31,7 @@ fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
     [
         BACKGROUND_DETACH_CAPABILITY,
         CONFIG_SYNC_ACK_CAPABILITY,
+        INSTANCE_RECOVERY_CAPABILITY,
         RUNTIME_ERROR_ACK_CAPABILITY,
     ]
     .iter()
@@ -97,9 +98,11 @@ pub fn persisted_managed_instance_ids() -> std::collections::HashSet<String> {
 
 pub async fn start_instance(
     spec: RuntimeLaunchSpec,
+    manual_recovery: bool,
 ) -> Result<crate::models::RunningInstance, String> {
     match call_recovering(RuntimeCommand::StartInstance {
         spec: Box::new(spec),
+        manual_recovery,
     })
     .await?
     {
@@ -712,6 +715,7 @@ fn runtime_status_payload(
         "proxy": status.proxy,
         "running": running,
         "health": status.health,
+        "recovery": status.recovery,
         "previouslyManaged": previously_managed
             .map(|ids| ids.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default(),
@@ -726,6 +730,7 @@ pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServ
     let next_managed = status
         .running
         .keys()
+        .chain(status.recovery.keys())
         .cloned()
         .collect::<std::collections::HashSet<_>>();
     let mut changed = false;
@@ -896,6 +901,7 @@ mod tests {
             capabilities: vec![
                 BACKGROUND_DETACH_CAPABILITY.into(),
                 CONFIG_SYNC_ACK_CAPABILITY.into(),
+                INSTANCE_RECOVERY_CAPABILITY.into(),
                 RUNTIME_ERROR_ACK_CAPABILITY.into(),
             ],
             config_revision: 1,
@@ -916,6 +922,7 @@ mod tests {
             health: Default::default(),
             monitoring: Default::default(),
             performance: Default::default(),
+            recovery: Default::default(),
         };
         let previously_managed = ["stale-instance".to_string()].into_iter().collect();
         let payload = runtime_status_payload(&status, Some(&previously_managed));

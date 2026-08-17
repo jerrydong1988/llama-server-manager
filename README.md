@@ -109,6 +109,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - 实例 API Key 与 API Key 文件支持；统一路由支持摘要持久化的多 Key、推理/发现权限、独立限流和精确 Origin CORS。
 - 同一统一路由原生支持 OpenAI Chat Completions / Responses 与 Anthropic Messages，并提供严格模型边界、健康探测、熔断、四种调度策略、安全 `/slots` 发现和 Prometheus 指标。
 - 独立后台运行时可在管理界面退出后继续托管实例与路由，并在当前用户登录后恢复。
+- 可选的实例故障自愈提供有界退避重启、持久化 Crash Loop 保护和原始故障诊断。
 - 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
 - 端口冲突、路径、配置规则和启动健康检查。
 - 系统托盘、实例自动启动，以及由 Cloudflare R2 分发、Tauri 签名校验的应用内更新。
@@ -175,6 +176,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [在线版本说明 / Online Release Notes](https://docs.cnzone.net/release-notes)
 - [仓库版离线图文说明 / Repository Offline Guide](GUIDE.md)
 - [产品路线图 / Product Roadmap](docs/PRODUCT_ROADMAP.md)
+- [实例故障自愈与 Crash Loop 保护 / Instance Recovery](docs/INSTANCE_RECOVERY.md)
 - [隐私政策 / Privacy Policy](PRIVACY.md)
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)

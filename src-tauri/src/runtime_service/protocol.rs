@@ -3,22 +3,72 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const RUNTIME_PROTOCOL_VERSION: u32 = 1;
-pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 1;
+pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 2;
 pub const MAX_RUNTIME_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
 pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
+pub const INSTANCE_RECOVERY_CAPABILITY: &str = "instance_recovery_v1";
+pub const INSTANCE_RECOVERY_MAX_ATTEMPTS: u32 = 3;
+pub const INSTANCE_RECOVERY_BACKOFF_SECS: [u64; 3] = [2, 10, 30];
+pub const INSTANCE_RECOVERY_STABLE_SECS: u64 = 5 * 60;
+
+fn default_manual_recovery() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLaunchSpec {
     pub instance_id: String,
     pub config: InstanceConfig,
+    /// The persisted command is an exact launch snapshot. A later configuration
+    /// edit must not make failure recovery start that stale command again.
+    #[serde(default)]
+    pub launch_config_stale: bool,
     pub engine_backend: String,
     pub command: Vec<String>,
     pub command_display: String,
     pub workload: String,
     #[serde(default)]
     pub working_directory: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeFailureKind {
+    StartupFailure,
+    UnexpectedExit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstanceRecoveryPhase {
+    Failed,
+    Waiting,
+    Monitoring,
+    Restoring,
+    CrashLoop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeFailure {
+    pub kind: RuntimeFailureKind,
+    pub message: String,
+    pub exit_code: Option<i32>,
+    pub occurred_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstanceRecoveryStatus {
+    pub phase: InstanceRecoveryPhase,
+    /// Number of automatic restart attempts already started for this incident.
+    pub restart_attempts: u32,
+    pub max_restart_attempts: u32,
+    pub next_retry_at: Option<u64>,
+    /// The first failure in the active incident is immutable across retries.
+    pub origin_failure: RuntimeFailure,
+    /// The most recent failure is kept separately for current diagnostics.
+    pub last_failure: RuntimeFailure,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +94,8 @@ pub struct RuntimeServiceStatus {
     pub monitoring: HashMap<String, crate::commands::monitoring::MonitoringFrame>,
     #[serde(default)]
     pub performance: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub recovery: HashMap<String, InstanceRecoveryStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +121,10 @@ pub enum RuntimeCommand {
     },
     StartInstance {
         spec: Box<RuntimeLaunchSpec>,
+        /// Older GUI clients only issued operator-triggered starts, so a
+        /// missing field must retain that behavior across an in-place upgrade.
+        #[serde(default = "default_manual_recovery")]
+        manual_recovery: bool,
     },
     StopInstance {
         instance_id: String,
@@ -140,6 +196,7 @@ pub struct PersistedRuntimeState {
     pub instances: HashMap<String, InstanceConfig>,
     pub desired_instances: HashMap<String, RuntimeLaunchSpec>,
     pub running: HashMap<String, RunningInstance>,
+    pub recovery: HashMap<String, InstanceRecoveryStatus>,
 }
 
 impl Default for PersistedRuntimeState {
@@ -152,6 +209,7 @@ impl Default for PersistedRuntimeState {
             instances: HashMap::new(),
             desired_instances: HashMap::new(),
             running: HashMap::new(),
+            recovery: HashMap::new(),
         }
     }
 }
@@ -193,11 +251,43 @@ mod tests {
     }
 
     #[test]
+    fn legacy_start_command_defaults_to_operator_recovery() {
+        let spec = RuntimeLaunchSpec {
+            instance_id: "instance-1".into(),
+            config: InstanceConfig::default(),
+            launch_config_stale: false,
+            engine_backend: "test".into(),
+            command: vec!["llama-server".into()],
+            command_display: "llama-server".into(),
+            workload: "inference".into(),
+            working_directory: None,
+        };
+        let request = serde_json::json!({
+            "protocol_version": RUNTIME_PROTOCOL_VERSION,
+            "request_id": "legacy-start",
+            "token": "secret",
+            "command": {
+                "command": "start_instance",
+                "payload": { "spec": spec }
+            }
+        });
+        let decoded: RuntimeRequest = serde_json::from_value(request).unwrap();
+        assert!(matches!(
+            decoded.command,
+            RuntimeCommand::StartInstance {
+                manual_recovery: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn persisted_state_accepts_missing_future_fields() {
         let state: PersistedRuntimeState = serde_json::from_str("{}").unwrap();
-        assert_eq!(state.schema_version, 1);
+        assert_eq!(state.schema_version, RUNTIME_STATE_SCHEMA_VERSION);
         assert!(!state.background_enabled);
         assert!(state.desired_instances.is_empty());
+        assert!(state.recovery.is_empty());
     }
 
     #[test]
@@ -227,6 +317,7 @@ mod tests {
         assert!(status.health.is_empty());
         assert!(status.monitoring.is_empty());
         assert!(status.performance.is_empty());
+        assert!(status.recovery.is_empty());
     }
 
     #[test]

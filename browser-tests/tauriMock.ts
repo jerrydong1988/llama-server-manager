@@ -1194,6 +1194,11 @@ mockIPC((command, payload) => {
       completeStart()
       return null
     }
+    case 'stop_server': {
+      const instanceId = String(args.instanceId ?? '')
+      delete control.state.running[instanceId]
+      return null
+    }
     case 'get_download_resume_policy': return IS_DOCS_SCENARIO ? 'auto_on_launch' : 'manual'
     case 'get_download_concurrency': return 3
     case 'get_download_bandwidth_limit': return 0

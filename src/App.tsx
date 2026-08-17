@@ -26,6 +26,7 @@ import { RuntimeExitDialogs } from './components/shell/RuntimeExitDialogs'
 import { useCommandCenterModel } from './components/shell/useCommandCenterModel'
 import { useAppUpdater } from './hooks/useAppUpdater'
 import { runAutoStartSequence } from './autoStartCoordinator'
+import { isAutoStartEligible } from './store/instanceRecovery'
 
 type ErrorBoundaryCopy = { title: string; description: string; unknown: string; reload: string }
 
@@ -210,7 +211,7 @@ function AppInner() {
   useEffect(() => {
     if (!configLoaded || autoStartSequenceStartedRef.current) return
     if (instances.length === 0) return
-    const toBoot = instances.filter(i => i.config.auto_start && i.status !== 'running')
+    const toBoot = instances.filter(isAutoStartEligible)
     if (toBoot.length === 0) {
       autoStartSequenceStartedRef.current = true
       return
@@ -227,7 +228,7 @@ function AppInner() {
           ? currentWorkers
           : invoke<WorkerInfo[]>('get_workers').catch(() => [])
       },
-      startInstance,
+      startInstance: id => startInstance(id, false),
       shouldCancel: () => appDisposedRef.current,
       onMissingWorker: instance => {
         console.warn(`Instance "${instance.name}" requires a cluster worker but no matching worker is available; skipping auto-start`)
@@ -256,7 +257,7 @@ function AppInner() {
         const { instances, instanceLifecycle, startInstance, stopInstance } = useAppStore.getState()
         if (instances.length > 0) {
           const running = instances.find(i => i.status === 'running' && !instanceLifecycle[i.id])
-          const stopped = instances.find(i => i.status !== 'running' && !instanceLifecycle[i.id])
+          const stopped = instances.find(i => i.status === 'stopped' && !instanceLifecycle[i.id])
           if (running) void stopInstance(running.id).catch(() => {})
           else if (stopped) void startInstance(stopped.id).catch(() => {})
         }

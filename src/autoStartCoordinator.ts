@@ -1,4 +1,5 @@
 import type { Instance, WorkerInfo } from './store'
+import { isAutoStartEligible } from './store/instanceRecovery'
 import { parseHostPort } from './utils/network'
 
 export const AUTO_START_STAGGER_MS = 3_000
@@ -41,7 +42,7 @@ export async function runAutoStartSequence({
   for (const instanceId of instanceIds) {
     if (shouldCancel()) return
     let instance = getInstance(instanceId)
-    if (!instance || !instance.config.auto_start || instance.status === 'running') continue
+    if (!instance || !isAutoStartEligible(instance)) continue
     if (!matchingWorkerIsOnline(instance, workers)) {
       onMissingWorker?.(instance)
       continue
@@ -51,7 +52,7 @@ export async function runAutoStartSequence({
       await wait(delayMs)
       if (shouldCancel()) return
       instance = getInstance(instanceId)
-      if (!instance || !instance.config.auto_start || instance.status === 'running') continue
+      if (!instance || !isAutoStartEligible(instance)) continue
       if (!matchingWorkerIsOnline(instance, workers)) {
         onMissingWorker?.(instance)
         continue

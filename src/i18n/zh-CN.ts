@@ -491,7 +491,14 @@
 
   instanceWorkspace: {
     instances: '\u5B9E\u4F8B', running: '\u8FD0\u884C\u4E2D', runningTitle: '\u8FD0\u884C\u4E2D', stoppedTitle: '\u5DF2\u505C\u6B62',
-    errored: '\u5F02\u5E38', autoStart: '\u81EA\u52A8\u542F\u52A8', all: '\u5168\u90E8', offline: '\u79BB\u7EBF', healthy: '\u6B63\u5E38',
+    errored: '\u5F02\u5E38', attention: '\u9700\u5173\u6CE8', autoStart: '\u81EA\u52A8\u542F\u52A8', all: '\u5168\u90E8', offline: '\u79BB\u7EBF', healthy: '\u6B63\u5E38',
+    selfHealing: '\u6545\u969C\u81EA\u6108', protected: '\u5DF2\u542F\u7528\u81EA\u6108',
+    selfHealingHint: '\u542F\u52A8\u5931\u8D25\u6216\u610F\u5916\u9000\u51FA\u540E\u6700\u591A\u91CD\u542F\u4E09\u6B21\uFF0C\u9000\u907F\u65F6\u95F4\u4E3A 2\u300110\u300130 \u79D2',
+    recovering: '\u6B63\u5728\u81EA\u6108', crashLoop: '\u5D29\u6E83\u5FAA\u73AF', cancelRecovery: '\u53D6\u6D88\u81EA\u6108', retryNow: '\u7ACB\u5373\u91CD\u8BD5',
+    recoveryStatus: '\u81EA\u6108\u4E8B\u4EF6', recoveryAttempts: '\u81EA\u52A8\u5C1D\u8BD5\uFF1A{current} / {max}',
+    nextRetry: '\u4E0B\u6B21\u91CD\u8BD5\uFF1A{time}', originFailure: '\u8D77\u59CB\u6545\u969C', latestFailure: '\u6700\u65B0\u6545\u969C',
+    occurredAt: '\u53D1\u751F\u65F6\u95F4\uFF1A{time}', exitCode: '\u9000\u51FA\u7801\uFF1A{code}',
+    startupFailure: '\u542F\u52A8\u5931\u8D25', unexpectedExit: '\u610F\u5916\u9000\u51FA',
     pending: '\u68C0\u67E5\u4E2D', checkingPort: '\u68C0\u67E5\u7AEF\u53E3\u4E2D...', portAvailable: '\u7AEF\u53E3\u53EF\u7528', portInUse: '\u7AEF\u53E3\u5DF2\u88AB\u5360\u7528',
     portCheckFailed: '\u7AEF\u53E3\u68C0\u67E5\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5',
     noEnginePrefix: '\u5C1A\u672A\u68C0\u6D4B\u5230\u5F15\u64CE\uFF0C\u8BF7\u5148\u524D\u5F80', noEngineSuffix: '\u5E76\u6DFB\u52A0 llama-server\u3002',

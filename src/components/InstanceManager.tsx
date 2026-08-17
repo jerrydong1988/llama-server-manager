@@ -14,8 +14,9 @@ import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engi
 import { markExplicitOverride } from '../parameterIntent'
 import { pathsEqual } from '../utils/path'
 import { usePortAvailability } from './InstanceManager/usePortAvailability'
+import { InstanceRecoveryPanel, InstanceRuntimePolicyControls } from './InstanceManager/InstanceRecoveryPanel'
+import { InstanceTestResult, type InstanceTestState } from './InstanceManager/InstanceTestResult'
 
-type TestState = 'checking' | `ok:${string}` | `error:${string}`
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
 const InstanceManager = () => {
   const instances = useAppStore(s => s.instances)
@@ -47,13 +48,13 @@ const InstanceManager = () => {
   const [showCreatePicker, setShowCreatePicker] = useState(false)
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
   const [newInst, setNewInst] = useState({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: 8080, engineId: '' })
-  const [testResults, setTestResults] = useState<Record<string, TestState>>({})
+  const [testResults, setTestResults] = useState<Record<string, InstanceTestState>>({})
   const [editingId, setEditingId] = useState('')
   const [editName, setEditName] = useState('')
   const editingCanceledRef = useRef(false)
   const [enginePickerForId, setEnginePickerForId] = useState('')
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'stopped'>('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'attention'>('all')
   const [engineFilter, setEngineFilter] = useState('all')
   const [selectedInstanceId, setSelectedInstanceId] = useState('')
   const mountedRef = useRef(true)
@@ -86,12 +87,17 @@ const InstanceManager = () => {
     const phase = instanceLifecycle[inst.id]
     if (phase === 'starting') return t.instance.starting
     if (phase === 'stopping') return t.instance.stopping
-    return inst.status === 'running' ? t.instance.running : inst.status === 'stopped' ? t.instance.stopped : t.instance.error
+    if (inst.status === 'running') return t.instance.running
+    if (inst.status === 'stopped') return t.instance.stopped
+    if (inst.status === 'recovering') return labels.recovering
+    if (inst.status === 'crash_loop') return labels.crashLoop
+    return t.instance.error
   }
 
   const healthText = (inst: Instance) => {
     if (inst.status === 'stopped') return labels.offline
-    if (inst.status === 'error') return t.instance.error
+    if (inst.status === 'error' || inst.status === 'crash_loop') return t.instance.error
+    if (inst.status === 'recovering') return labels.recovering
     if (inst.healthCheck === 'ok') return labels.healthy
     if (inst.healthCheck === 'fail') return t.downloadPage.failed
     return labels.pending
@@ -99,7 +105,8 @@ const InstanceManager = () => {
 
   const healthDotClass = (inst: Instance) => {
     if (inst.status === 'stopped') return 'bg-slate-400'
-    if (inst.status === 'error') return 'bg-rose-500'
+    if (inst.status === 'error' || inst.status === 'crash_loop') return 'bg-rose-500'
+    if (inst.status === 'recovering') return 'bg-amber-500'
     if (inst.healthCheck === 'ok') return 'bg-emerald-500'
     if (inst.healthCheck === 'fail') return 'bg-rose-500'
     return 'bg-amber-500'
@@ -109,7 +116,7 @@ const InstanceManager = () => {
     const query = search.trim().toLowerCase()
     return instances.filter(inst => {
       if (statusFilter === 'running' && inst.status !== 'running') return false
-      if (statusFilter === 'stopped' && inst.status === 'running') return false
+      if (statusFilter === 'attention' && !['error', 'recovering', 'crash_loop'].includes(inst.status)) return false
       if (engineFilter !== 'all' && !pathsEqual(inst.config.engine_id || defaultEngineId || '', engineFilter)) return false
       if (!query) return true
       return inst.name.toLowerCase().includes(query)
@@ -121,8 +128,8 @@ const InstanceManager = () => {
 
   const runningCount = instances.filter(inst => inst.status === 'running').length
   const stoppedCount = instances.filter(inst => inst.status === 'stopped').length
-  const erroredCount = instances.filter(inst => inst.status === 'error').length
-  const autoStartCount = instances.filter(inst => inst.config.auto_start).length
+  const attentionCount = instances.filter(inst => ['error', 'recovering', 'crash_loop'].includes(inst.status)).length
+  const recoveryEnabledCount = instances.filter(inst => inst.config.restart_policy === 'on-failure').length
   const missingEngineInstances = useMemo(() => instances.filter(engineMissingFor), [engineMissingFor, instances])
   const selectedInstance = filteredInstances.find(inst => inst.id === selectedInstanceId) || filteredInstances[0] || null
   const selectedIndex = selectedInstance ? filteredInstances.findIndex(inst => inst.id === selectedInstance.id) : -1
@@ -252,24 +259,26 @@ const InstanceManager = () => {
     void useAppStore.getState().saveConfig().catch(() => {})
   }
 
+  const toggleRestartPolicy = (inst: Instance) => {
+    const state = useAppStore.getState()
+    const idx = state.instances.findIndex(item => item.id === inst.id)
+    if (idx < 0) return
+    const next = [...state.instances]
+    next[idx] = {
+      ...next[idx],
+      config: {
+        ...next[idx].config,
+        restart_policy: inst.config.restart_policy === 'on-failure' ? 'never' : 'on-failure',
+      },
+    }
+    useAppStore.setState({ instances: next })
+    void useAppStore.getState().saveConfig().catch(() => {})
+  }
+
   const commitRename = (inst: Instance) => {
     const nextName = editName.trim()
     if (nextName && nextName !== inst.name) renameInstance(inst.id, nextName)
     setEditingId('')
-  }
-
-  const renderTestResult = (instId: string) => {
-    const status = testResults[instId]
-    if (!status) return null
-    if (status === 'checking') {
-      return <span className="max-w-[180px] truncate text-xs text-blue-500">{labels.checking}</span>
-    }
-    if (status.startsWith('ok:')) {
-      const text = status.slice(3)
-      return <span className="max-w-[180px] truncate text-xs text-emerald-500" title={text}>{text}</span>
-    }
-    const text = status.slice(6)
-    return <span className="max-w-[180px] truncate text-xs text-rose-500" title={text}>{text}</span>
   }
 
   return (
@@ -321,8 +330,8 @@ const InstanceManager = () => {
         {[
           { label: labels.runningTitle, value: runningCount, tone: 'text-emerald-700 bg-emerald-50 border-emerald-200 dark:text-emerald-300 dark:bg-emerald-500/10 dark:border-emerald-500/20' },
           { label: labels.stoppedTitle, value: stoppedCount, tone: 'text-slate-700 bg-slate-100 border-slate-200 dark:text-slate-300 dark:bg-slate-800 dark:border-slate-700' },
-          { label: labels.errored, value: erroredCount, tone: 'text-rose-700 bg-rose-50 border-rose-200 dark:text-rose-300 dark:bg-rose-500/10 dark:border-rose-500/20' },
-          { label: labels.autoStart, value: autoStartCount, tone: 'text-blue-700 bg-blue-50 border-blue-200 dark:text-blue-300 dark:bg-blue-500/10 dark:border-blue-500/20' },
+          { label: labels.attention, value: attentionCount, tone: 'text-rose-700 bg-rose-50 border-rose-200 dark:text-rose-300 dark:bg-rose-500/10 dark:border-rose-500/20' },
+          { label: labels.protected, value: recoveryEnabledCount, tone: 'text-blue-700 bg-blue-50 border-blue-200 dark:text-blue-300 dark:bg-blue-500/10 dark:border-blue-500/20' },
         ].map(card => (
           <MetricCard key={card.label} label={card.label} value={card.value} tone={card.tone} />
         ))}
@@ -340,14 +349,14 @@ const InstanceManager = () => {
               </div>
               <div className="flex flex-col gap-3 xl:items-end">
                 <div className="flex flex-wrap items-center gap-2">
-                  {(['all', 'running', 'stopped'] as const).map(filter => (
+                  {(['all', 'running', 'attention'] as const).map(filter => (
                     <Button
                       key={filter}
                       onClick={() => setStatusFilter(filter)}
                       variant={statusFilter === filter ? 'primary' : 'subtle'}
                       size="sm"
                     >
-                      {filter === 'all' ? labels.all : filter === 'running' ? t.instance.running : t.instance.stopped}
+                      {filter === 'all' ? labels.all : filter === 'running' ? t.instance.running : labels.attention}
                     </Button>
                   ))}
                 </div>
@@ -380,6 +389,7 @@ const InstanceManager = () => {
               {filteredInstances.map((inst, index) => {
                 const selected = selectedInstance?.id === inst.id
                 const isRunning = inst.status === 'running'
+                const isRecovering = inst.status === 'recovering'
                 const lifecyclePhase = instanceLifecycle[inst.id]
                 const isLifecycleBusy = Boolean(lifecyclePhase)
                 return (
@@ -401,7 +411,7 @@ const InstanceManager = () => {
                   >
                     {selected && <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1 bg-blue-500 dark:bg-blue-400" />}
                     <div className="flex min-w-0 items-center gap-3">
-                      <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${isLifecycleBusy ? 'animate-pulse bg-blue-500' : inst.status === 'running' ? 'bg-emerald-500' : inst.status === 'error' ? 'bg-rose-500' : 'bg-slate-400'}`} />
+                      <div className={`h-2.5 w-2.5 shrink-0 rounded-full ${isLifecycleBusy ? 'animate-pulse bg-blue-500' : inst.status === 'running' ? 'bg-emerald-500' : inst.status === 'recovering' ? 'animate-pulse bg-amber-500' : inst.status === 'error' || inst.status === 'crash_loop' ? 'bg-rose-500' : 'bg-slate-400'}`} />
                       <div className="min-w-0 flex-1">
                         <div className="flex min-w-0 items-center gap-2">
                           {editingId === inst.id ? (
@@ -448,7 +458,7 @@ const InstanceManager = () => {
                         </div>
                         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                           <span className="max-w-[320px] truncate" title={inst.model}>{inst.model}</span>
-                          {renderTestResult(inst.id)}
+                          <InstanceTestResult result={testResults[inst.id]} checkingLabel={labels.checking} />
                         </div>
                       </div>
                     </div>
@@ -463,7 +473,7 @@ const InstanceManager = () => {
                       >
                         <span className="min-w-0 truncate">{engineNameFor(inst)}</span>
                       </Button>
-                      <Badge tone={isLifecycleBusy ? 'blue' : inst.status === 'running' ? 'emerald' : inst.status === 'error' ? 'red' : 'slate'}>
+                      <Badge tone={isLifecycleBusy ? 'blue' : inst.status === 'running' ? 'emerald' : inst.status === 'recovering' ? 'amber' : inst.status === 'error' || inst.status === 'crash_loop' ? 'red' : 'slate'}>
                         {statusText(inst)}
                       </Badge>
                       <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-slate-600 dark:text-slate-400">
@@ -488,7 +498,7 @@ const InstanceManager = () => {
                       >
                         <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ${inst.config.auto_start ? 'translate-x-4' : 'translate-x-0'}`} />
                       </button>
-                      {isRunning ? (
+                      {isRunning || isRecovering ? (
                         <Button
                           onClick={() => void stopInstance(inst.id).catch(() => {})}
                           disabled={isLifecycleBusy}
@@ -497,7 +507,7 @@ const InstanceManager = () => {
                           className="h-8 w-[70px]"
                           icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
                         >
-                          <span>{lifecyclePhase === 'stopping' ? t.instance.stopping : t.instance.stop}</span>
+                          <span>{lifecyclePhase === 'stopping' ? t.instance.stopping : isRecovering ? labels.cancelRecovery : t.instance.stop}</span>
                         </Button>
                       ) : (
                         <Button
@@ -508,7 +518,7 @@ const InstanceManager = () => {
                           className="h-8 w-[70px]"
                           icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                         >
-                          <span>{lifecyclePhase === 'starting' ? t.instance.starting : t.instance.start}</span>
+                          <span>{lifecyclePhase === 'starting' ? t.instance.starting : inst.status === 'crash_loop' ? labels.retryNow : t.instance.start}</span>
                         </Button>
                       )}
                       <Button
@@ -616,7 +626,7 @@ const InstanceManager = () => {
                     </div>
                     <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-300">{selectedInstance.config.host}:{selectedInstance.config.port}</p>
                   </div>
-                  <Badge tone={instanceLifecycle[selectedInstance.id] ? 'blue' : selectedInstance.status === 'running' ? 'emerald' : selectedInstance.status === 'error' ? 'red' : 'slate'}>
+                  <Badge tone={instanceLifecycle[selectedInstance.id] ? 'blue' : selectedInstance.status === 'running' ? 'emerald' : selectedInstance.status === 'recovering' ? 'amber' : selectedInstance.status === 'error' || selectedInstance.status === 'crash_loop' ? 'red' : 'slate'}>
                     {statusText(selectedInstance)}
                   </Badge>
                 </div>
@@ -635,6 +645,13 @@ const InstanceManager = () => {
                   <div className="mt-1 text-sm font-medium text-slate-900 dark:text-slate-100">{selectedInstance.status === 'running' ? formatUptime(selectedInstance.startTime) : '--'}</div>
                 </div>
               </div>
+
+              <InstanceRecoveryPanel
+                instance={selectedInstance}
+                statusLabel={statusText(selectedInstance)}
+                lifecycleBusy={Boolean(instanceLifecycle[selectedInstance.id])}
+                onCancel={() => void stopInstance(selectedInstance.id).catch(() => {})}
+              />
 
               <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950/60">
                 <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] gap-3">
@@ -665,19 +682,19 @@ const InstanceManager = () => {
               <div className="space-y-2">
                 <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{labels.primaryActions}</div>
                 <div className="grid grid-cols-2 gap-2">
-                  {selectedInstance.status === 'running' ? (
+                  {selectedInstance.status === 'running' || selectedInstance.status === 'recovering' ? (
                     <Button onClick={() => void stopInstance(selectedInstance.id).catch(() => {})} disabled={Boolean(instanceLifecycle[selectedInstance.id])}
                       variant="danger"
                       icon={instanceLifecycle[selectedInstance.id] ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Square className="h-4 w-4" />}
                     >
-                      {instanceLifecycle[selectedInstance.id] === 'stopping' ? t.instance.stopping : t.instance.stop}
+                      {instanceLifecycle[selectedInstance.id] === 'stopping' ? t.instance.stopping : selectedInstance.status === 'recovering' ? labels.cancelRecovery : t.instance.stop}
                     </Button>
                   ) : (
                     <Button onClick={() => void startInstance(selectedInstance.id).catch(() => {})} disabled={Boolean(instanceLifecycle[selectedInstance.id])}
                       variant="success"
                       icon={instanceLifecycle[selectedInstance.id] ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
                     >
-                      {instanceLifecycle[selectedInstance.id] === 'starting' ? t.instance.starting : t.instance.start}
+                      {instanceLifecycle[selectedInstance.id] === 'starting' ? t.instance.starting : selectedInstance.status === 'crash_loop' ? labels.retryNow : t.instance.start}
                     </Button>
                   )}
                   <Button onClick={() => openBrowser(selectedInstance.id, selectedInstance.config.host, selectedInstance.config.port, Boolean(selectedInstance.config.ssl_key_file && selectedInstance.config.ssl_cert_file), selectedInstance.config.api_prefix)} disabled={selectedInstance.status !== 'running'} icon={<Globe className="h-4 w-4" />}>{t.instance.openBrowser}</Button>
@@ -701,28 +718,15 @@ const InstanceManager = () => {
                 </div>
               </div>
 
-              <div className="space-y-2 border-t border-slate-200 pt-4 dark:border-slate-800">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{labels.autoStart}</div>
-                    <div className="mt-1 text-[11px] text-slate-500 dark:text-slate-500">{labels.autoStartHint}</div>
-                  </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={!!selectedInstance.config.auto_start}
-                    onClick={() => toggleAutoStart(selectedInstance)}
-                    className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ${selectedInstance.config.auto_start ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}
-                    title={labels.autoStart}
-                  >
-                    <span className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ${selectedInstance.config.auto_start ? 'translate-x-5' : 'translate-x-0'}`} />
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-2 pt-2">
-                  <Button onClick={() => moveInstance(selectedInstance.id, 'up', filteredInstanceIds)} disabled={selectedIndex <= 0} variant="subtle" icon={<ArrowUp className="h-4 w-4" />}>{labels.moveUp}</Button>
-                  <Button onClick={() => moveInstance(selectedInstance.id, 'down', filteredInstanceIds)} disabled={selectedIndex < 0 || selectedIndex === filteredInstances.length - 1} variant="subtle" icon={<ArrowDown className="h-4 w-4" />}>{labels.moveDown}</Button>
-                </div>
-              </div>
+              <InstanceRuntimePolicyControls
+                instance={selectedInstance}
+                disableMoveUp={selectedIndex <= 0}
+                disableMoveDown={selectedIndex < 0 || selectedIndex === filteredInstances.length - 1}
+                onToggleAutoStart={() => toggleAutoStart(selectedInstance)}
+                onToggleRestartPolicy={() => toggleRestartPolicy(selectedInstance)}
+                onMoveUp={() => moveInstance(selectedInstance.id, 'up', filteredInstanceIds)}
+                onMoveDown={() => moveInstance(selectedInstance.id, 'down', filteredInstanceIds)}
+              />
             </div>
           ) : (
             <div className="flex min-h-[260px] flex-col items-center justify-center text-center">

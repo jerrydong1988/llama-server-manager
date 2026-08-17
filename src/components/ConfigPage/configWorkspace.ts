@@ -156,6 +156,7 @@ export const fieldLabel = (key: keyof InstanceConfig, t: Translations) => {
     chat_template: t.configPage.chatTemplate,
     host: t.configPage.host,
     port: t.configPage.portLabel,
+    restart_policy: t.instanceWorkspace.selfHealing,
     gpu_layers: t.configPage.gpuLayers,
     gpu_layers_auto: t.configPage.gpuLayersAuto,
     ctx_size: t.configPage.ctxSize,

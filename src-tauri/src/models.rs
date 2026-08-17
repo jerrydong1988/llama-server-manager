@@ -590,6 +590,9 @@ pub struct InstanceConfig {
     pub reuse_port: bool,
     #[serde(default)]
     pub auto_start: bool,
+    /// Manager-owned lifecycle policy. `never` preserves historical behavior;
+    /// `on-failure` enables the bounded runtime-service recovery coordinator.
+    pub restart_policy: String,
 }
 
 fn model_file_stem(value: &str) -> Option<String> {
@@ -894,6 +897,7 @@ impl Default for InstanceConfig {
             sse_ping_interval: 30,
             reuse_port: false,
             auto_start: false,
+            restart_policy: "never".into(),
         }
     }
 }

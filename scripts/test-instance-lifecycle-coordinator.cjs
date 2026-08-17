@@ -37,10 +37,19 @@ assert.ok(
   deleteSection.indexOf('await stopInstance(id)') < deleteSection.indexOf('deleteInstance(id)'),
   'deleting an instance must stop its backend process before removing the config',
 )
+const stopServerBackendSection = serverSource.slice(
+  serverSource.indexOf('pub async fn stop_server'),
+  serverSource.indexOf('fn is_recorded_process_alive'),
+)
+assert.ok(
+  stopServerBackendSection.indexOf('crate::runtime_service::stop_instance')
+    < stopServerBackendSection.indexOf('if ri.is_none()'),
+  'a managed recovery must be cancelled before an absent local process is treated as an idempotent stop',
+)
 assert.match(
-  serverSource,
-  /let ri = state\.running[\s\S]*if ri\.is_none\(\) \{\s*return Ok\(\(\)\)/,
-  'stop_server must be idempotent so deletion can always coordinate with the backend',
+  stopServerBackendSection,
+  /if ri\.is_none\(\) \{\s*return Ok\(\(\)\)/,
+  'unmanaged stops must remain idempotent when no process exists',
 )
 const startServerSource = serverSource.slice(
   serverSource.indexOf('pub async fn start_server'),
