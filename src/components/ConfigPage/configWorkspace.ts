@@ -143,9 +143,30 @@ export const formatValue = (value: unknown, labels: Record<string, string>) => {
   return String(value)
 }
 
+export const SENSITIVE_CONFIG_FIELDS = new Set<keyof InstanceConfig>([
+  'api_key',
+  'api_key_file',
+  'ssl_key_file',
+  'ssl_cert_file',
+  'manual_command',
+  'custom_args',
+  'mcp_servers_config',
+  'mcp_servers_json',
+  'ui_config',
+  'ui_config_file',
+])
+
+export const isSensitiveConfigField = (key: keyof InstanceConfig) => SENSITIVE_CONFIG_FIELDS.has(key)
+
+const hasConfigValue = (value: unknown) => (
+  Array.isArray(value) ? value.length > 0 : value !== '' && value !== null && value !== undefined
+)
+
 export const formatConfigValue = (key: keyof InstanceConfig, value: unknown, labels: Record<string, string>, t: Translations) => (
   key === 'custom_args'
     ? `${Array.isArray(value) ? value.length : 0} ${t.configPage.vectorCleanupItems}`
+    : isSensitiveConfigField(key)
+      ? (hasConfigValue(value) ? labels.redactedValue : labels.emptyValue)
     : formatValue(value, labels)
 )
 

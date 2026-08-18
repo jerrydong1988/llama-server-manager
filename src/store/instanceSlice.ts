@@ -9,7 +9,14 @@ import { createLatestSaveCoordinator } from './configSaveCoordinator'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import { runInstanceStart, runInstanceStop } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
-import type { AppState, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
+import type {
+  AppState,
+  ConfigRevisionHistory,
+  ConfigRevisionRollbackResponse,
+  GeneratedServerCommand,
+  InstanceConfig,
+  LogEntry,
+} from './types'
 import { resolveEffectiveEngine } from './engineResolution'
 import { pathsEqual } from '../utils/path'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
@@ -103,6 +110,9 @@ export function createInstanceSlice(
   | 'openBrowser'
   | 'saveConfig'
   | 'loadConfig'
+  | 'listConfigRevisions'
+  | 'markConfigRevisionKnownGood'
+  | 'rollbackConfigRevision'
 > {
   return {
     addInstance: (instance) => {
@@ -343,6 +353,49 @@ export function createInstanceSlice(
         () => get(),
         startupTimings,
       )
+    },
+    listConfigRevisions: async (instanceId) => {
+      await configSaveCoordinator.waitForIdle()
+      return invoke<ConfigRevisionHistory>('list_config_revisions', { instanceId })
+    },
+    markConfigRevisionKnownGood: async (instanceId, revisionId, expectedCurrentFingerprint) => {
+      await configSaveCoordinator.waitForIdle()
+      return invoke<ConfigRevisionHistory>('mark_config_revision_known_good', {
+        instanceId,
+        revisionId,
+        expectedCurrentFingerprint,
+      })
+    },
+    rollbackConfigRevision: async (instanceId, revisionId, expectedCurrentFingerprint) => {
+      await configSaveCoordinator.waitForIdle()
+      set(state => ({
+        instanceLifecycle: { ...state.instanceLifecycle, [instanceId]: 'rolling_back' },
+      }))
+      try {
+        const result = await invoke<ConfigRevisionRollbackResponse>('rollback_config_revision', {
+          instanceId,
+          revisionId,
+          expectedCurrentFingerprint,
+        })
+        set(state => ({
+          instances: state.instances.map(instance => (
+            instance.id === instanceId
+              ? synchronizeInstanceSummary({ ...instance, config: result.config })
+              : instance
+          )),
+        }))
+        return result
+      } catch (error) {
+        get().addRuntimeWarning(`配置回滚失败：${String(error)}`)
+        throw error
+      } finally {
+        set(state => {
+          if (state.instanceLifecycle[instanceId] !== 'rolling_back') return state
+          const instanceLifecycle = { ...state.instanceLifecycle }
+          delete instanceLifecycle[instanceId]
+          return { instanceLifecycle }
+        })
+      }
     },
   }
 }

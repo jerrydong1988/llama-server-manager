@@ -310,6 +310,20 @@ Configuration is stored per instance and covers structured options for models, g
 4. Review tooltips and the active-parameter summary.
 5. Save and address red, amber, or blue validation findings.
 
+### 配置修订与回滚 / Configuration Revisions and Rollback
+
+右侧“配置修订”面板按实例显示不可变历史和脱敏字段差异。部署配置发生实际变化时才创建修订；仅重命名实例不会创建修订。可把一个完整性有效的修订标记为“已知良好”，该标记只用于人工识别，不会自动发布或回滚。
+
+The Configuration Revisions panel shows immutable per-instance history and redacted field changes. A revision is created only for an effective deployment-configuration change; renaming an instance alone does not create one. One integrity-valid revision may be marked known good for operator reference, without automatic promotion or rollback.
+
+回滚前必须停止实例、取消故障自愈并等待启动或保存操作结束。确认后，管理器保留当前显示名称，先原子持久化恢复后的配置，再刷新界面并创建新的“回滚生成”修订；不会自动重启实例。遇到配置已变化提示时先刷新历史，完整性失败的修订不能回滚。
+
+Before rollback, stop the instance, cancel recovery, and wait for active start or save work to finish. Confirmation preserves the current display name, durably commits the restored configuration before refreshing the UI, and creates a new rollback revision; it does not restart the instance. Refresh after a stale-configuration warning, and never restore a revision that fails integrity validation.
+
+历史最多保留 50 个修订，同时保护当前与已知良好修订。历史快照不会发送到前端，但本机 `instances.json` 与备份仍包含精确恢复所需的敏感配置，应按敏感文件保护。完整操作与排障说明见[配置修订与回滚文档](docs/CONFIG_REVISIONS.md)。
+
+History retains at most 50 revisions while protecting the current and known-good entries. Raw snapshots never reach the frontend, but local configuration and backup files still contain sensitive data required for exact recovery. See [Configuration Revisions and Rollback](docs/CONFIG_REVISIONS.md) for the full privacy, safety, and troubleshooting contract.
+
 ### 关键配置 / Important Settings
 
 - 上下文越大，KV 缓存占用越高；显存紧张时优先降低上下文、批大小或 GPU 层数。

@@ -1223,6 +1223,58 @@ pub struct GlobalConfig {
     pub download_low_priority_throttle: bool,
     #[serde(default)]
     pub proxy_config: ProxyConfig,
+    #[serde(default = "crate::config_revision::default_config_revision_schema_version")]
+    pub config_revision_schema_version: u32,
+    #[serde(default)]
+    pub config_revisions: HashMap<String, Vec<crate::config_revision::ConfigRevisionRecord>>,
+    #[serde(default)]
+    pub known_good_config_revisions: HashMap<String, String>,
+    #[serde(default)]
+    pub config_revision_audit: Vec<crate::config_revision::ConfigRevisionAuditEvent>,
+}
+
+/// Frontend-safe view of the active configuration. Historical snapshots are
+/// deliberately absent so neither startup injection nor IPC can expose them.
+#[derive(Debug, serde::Serialize)]
+pub struct FrontendGlobalConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config_load_warning: Option<String>,
+    pub instances: HashMap<String, InstanceConfig>,
+    pub model_dirs: Vec<String>,
+    pub engine_dirs: Vec<String>,
+    pub default_engine_id: String,
+    pub running: HashMap<String, RunningInstance>,
+    pub instance_order: Vec<String>,
+    pub last_tab: String,
+    pub dark_mode: bool,
+    pub engine_names: HashMap<String, String>,
+    pub download_resume_policy: String,
+    pub download_max_concurrent: usize,
+    pub download_bandwidth_limit_bytes_per_sec: u64,
+    pub download_low_priority_throttle: bool,
+    pub proxy_config: ProxyConfig,
+}
+
+impl From<&GlobalConfig> for FrontendGlobalConfig {
+    fn from(config: &GlobalConfig) -> Self {
+        Self {
+            config_load_warning: config.config_load_warning.clone(),
+            instances: config.instances.clone(),
+            model_dirs: config.model_dirs.clone(),
+            engine_dirs: config.engine_dirs.clone(),
+            default_engine_id: config.default_engine_id.clone(),
+            running: config.running.clone(),
+            instance_order: config.instance_order.clone(),
+            last_tab: config.last_tab.clone(),
+            dark_mode: config.dark_mode,
+            engine_names: config.engine_names.clone(),
+            download_resume_policy: config.download_resume_policy.clone(),
+            download_max_concurrent: config.download_max_concurrent,
+            download_bandwidth_limit_bytes_per_sec: config.download_bandwidth_limit_bytes_per_sec,
+            download_low_priority_throttle: config.download_low_priority_throttle,
+            proxy_config: config.proxy_config.clone(),
+        }
+    }
 }
 
 // Window state.

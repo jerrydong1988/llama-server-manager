@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod config_revision;
 mod error;
 mod models;
 mod operation_timing;
@@ -55,6 +56,9 @@ use crate::commands::telemetry::{
     get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_detail,
     get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
     list_telemetry_sessions, prune_telemetry,
+};
+use crate::config_revision::{
+    list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
 };
 use crate::models::{AppState, WindowState, WorkerOrigin};
 use std::collections::HashMap;
@@ -514,7 +518,9 @@ fn main() {
             let data_dir = crate::utils::get_data_dir();
             let config_dir = data_dir.join("configs");
             let config = crate::commands::config::read_config_from_disk(&config_dir);
-            let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
+            let frontend_config = crate::models::FrontendGlobalConfig::from(&config);
+            let config_json =
+                serde_json::to_string(&frontend_config).unwrap_or_else(|_| "{}".to_string());
             timings.push(("setup-config-read".into(), now()));
 
             // Create the window programmatically and inject config data.
@@ -657,6 +663,7 @@ fn main() {
             load_app_data, get_cached_scan,
             generate_server_command, start_server, stop_server, open_browser,
             save_config, load_config,
+            list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file, delete_managed_local_file,
             enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue,

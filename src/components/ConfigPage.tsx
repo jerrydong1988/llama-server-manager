@@ -19,12 +19,14 @@ import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotic
 import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
 import { resolveEffectiveEngine } from '../store/engineResolution'
 import { findMatchingProjector } from '../modelProjector'
-import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface } from './ui'
+import { Badge, Button, EmptyState, InsetSurface, MetricCard, SectionHeader, Surface } from './ui'
 import { applyExplicitOverrides, explicitOverrideKeys, inheritParameters, markExplicitOverride, migrateParameterIntent } from '../parameterIntent'
 import { LaunchModePanel } from './ConfigPage/LaunchModePanel'
 import { ConfigDirectory } from './ConfigPage/ConfigDirectory'
 import { ParameterSearch } from './ConfigPage/ParameterSearch'
 import { ConfigChangePanel } from './ConfigPage/ConfigChangePanel'
+import { ConfigContextSummary } from './ConfigPage/ConfigContextSummary'
+import { ConfigRevisionPanel } from './ConfigPage/ConfigRevisionPanel'
 import { ConfigFloatingActions } from './ConfigPage/ConfigFloatingActions'
 import { ModelAssetPicker, type ModelAssetPickerTarget } from './ConfigPage/ModelAssetPicker'
 import { FieldRuntimeProvider } from './ConfigPage/shared'
@@ -44,6 +46,7 @@ const ConfigPage = () => {
   const setActiveTab = useAppStore(state => state.setActiveTab)
   const generateCommand = useAppStore(state => state.generateCommand)
   const addRuntimeWarning = useAppStore(state => state.addRuntimeWarning)
+  const instanceLifecycle = useAppStore(state => state.instanceLifecycle)
   const { t, lang } = useI18n()
   const inst = instances.find(instance => instance.id === activeConfigInstanceId)
   const configInstanceId = inst?.id
@@ -63,6 +66,7 @@ const ConfigPage = () => {
   const [showPresetAssistant, setShowPresetAssistant] = useState(false)
   const [selectedTemplateId, setSelectedTemplateId] = useState('safe-start')
   const [lastTemplateSnapshot, setLastTemplateSnapshot] = useState<TemplateSnapshot | null>(null)
+  const [revisionRefreshKey, setRevisionRefreshKey] = useState(0)
   const mountedRef = useRef(true)
   const committedModelPathRef = useRef('')
   const editRevisionRef = useRef(0)
@@ -270,6 +274,7 @@ const ConfigPage = () => {
       const persistedConfig = useAppStore.getState().instances
         .find(item => item.id === targetInstanceId)?.config ?? normalized.config
       setBaseline(persistedConfig)
+      setRevisionRefreshKey(value => value + 1)
       if (editRevisionRef.current === saveRevision) {
         committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
         setLocal(persistedConfig)
@@ -310,6 +315,19 @@ const ConfigPage = () => {
   }
 
   saveShortcutRef.current = save
+
+  const applyRollback = (restored: InstanceConfig) => {
+    const next = migrateParameterIntent(restored)
+    editRevisionRef.current = 0
+    committedModelPathRef.current = normalizeModelPath(next.model_path)
+    setLocal(next)
+    setBaseline(next)
+    setSaved(false)
+    setSaveWarnings([])
+    setVectorCleanupChanges([])
+    setAppliedTemplateId(null)
+    setLastTemplateSnapshot(null)
+  }
 
   const vectorCleanupGroups: Array<{ group: VectorCleanupChange['group']; label: string }> = [
     { group: 'speculative', label: t.configPage.vectorCleanupSpeculative },
@@ -666,94 +684,35 @@ const ConfigPage = () => {
           </div>
 
           <div className="grid gap-4 lg:grid-cols-3 2xl:block 2xl:space-y-4">
-            <InsetSurface className="p-4">
-              <div className="flex items-start gap-3">
-                <div className="rounded-lg border border-slate-200 bg-white p-3 text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                  <Settings className="h-5 w-5" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-slate-900 dark:text-slate-100" title={inst?.name}>{inst?.name}</p>
-                  <PathText value={endpoint} maxLength={36} className="mt-1 text-slate-500" />
-                </div>
-              </div>
-            </InsetSurface>
+            <ConfigContextSummary
+              instanceName={inst?.name}
+              endpoint={endpoint}
+              primaryModelPath={primaryModelPath}
+              draftModelPath={draftModelPath}
+              engineName={currentEngine?.name}
+              engineDir={currentEngine?.dir}
+              isEmbedding={isEmbedding}
+              modifiedCount={configChanges.length}
+              warningCounts={warningCounts}
+              checkMessages={checkMessages}
+              visibleWarnings={visibleWarnings}
+              labels={labels}
+              t={t}
+            />
 
-            <InsetSurface className="space-y-3 p-4">
-              {[
-                { label: labels.primaryModel, value: primaryModelPath || '--', path: !!primaryModelPath },
-                { label: labels.draftModel, value: draftModelPath || '--', path: !!draftModelPath },
-                { label: labels.engine, value: currentEngine?.name || '--' },
-                { label: labels.enginePath, value: currentEngine?.dir || '--', path: !!currentEngine?.dir },
-                { label: labels.endpoint, value: endpoint },
-                { label: labels.embeddingMode, value: isEmbedding ? labels.on : labels.off },
-                { label: labels.modifiedParams, value: String(configChanges.length) },
-              ].map(row => (
-                <div key={row.label} className="grid min-w-0 grid-cols-[96px_minmax(0,1fr)] items-start gap-3">
-                  <span className="truncate text-sm text-slate-500" title={row.label}>{row.label}</span>
-                  {row.path ? (
-                    <PathText value={row.value} maxLength={44} className="text-right text-slate-700 dark:text-slate-200" />
-                  ) : (
-                    <span className="min-w-0 truncate text-right text-sm text-slate-700 dark:text-slate-200" title={row.value}>
-                      {row.value}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </InsetSurface>
-
-            <InsetSurface className="p-4">
-              <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.validationSummary}</p>
-              <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-                {[
-                  [labels.high, warningCounts.high, 'text-red-300 border-red-500/20 bg-red-500/10'],
-                  [labels.medium, warningCounts.medium, 'text-amber-300 border-amber-500/20 bg-amber-500/10'],
-                  [labels.low, warningCounts.low, 'text-sky-300 border-sky-500/20 bg-sky-500/10'],
-                ].map(([label, count, tone]) => (
-                  <div key={label} className={`rounded-lg border px-2 py-3 ${tone}`}>
-                    <p className="text-lg font-semibold">{count}</p>
-                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em]">{label}</p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-4 space-y-2">
-                {checkMessages.length === 0 ? (
-                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
-                    {labels.checkPassed}
-                  </div>
-                ) : checkMessages.map((message, index) => (
-                  <div
-                    key={`${message.text}-${index}`}
-                    className={`rounded-lg px-3 py-2 text-sm ${
-                      message.tone === 'red' ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
-                        : message.tone === 'amber' ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
-                          : 'bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-200'
-                    }`}
-                  >
-                    {message.text}
-                  </div>
-                ))}
-              </div>
-
-              {visibleWarnings.length > 0 && (
-                <div className="mt-4 space-y-2">
-                  {visibleWarnings.slice(0, 6).map((warning, index) => (
-                    <div
-                      key={`${warning.key}-${index}`}
-                      className={`rounded-lg px-3 py-2 text-sm ${
-                        warning.severity === 'high'
-                          ? 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-200'
-                          : warning.severity === 'medium'
-                            ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-200'
-                            : 'bg-sky-500/10 text-sky-200'
-                      }`}
-                    >
-                      {t.configPage[warning.key] || warning.key}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </InsetSurface>
+            {inst && (
+              <ConfigRevisionPanel
+                key={inst.id}
+                instanceId={inst.id}
+                instanceStatus={inst.status}
+                lifecycle={instanceLifecycle[inst.id]}
+                refreshKey={revisionRefreshKey}
+                lang={lang}
+                labels={labels}
+                t={t}
+                onRollbackApplied={applyRollback}
+              />
+            )}
 
             {!manualMode && (
               <ConfigChangePanel
