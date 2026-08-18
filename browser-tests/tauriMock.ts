@@ -3,6 +3,8 @@ import { emit } from '@tauri-apps/api/event'
 import { defaultInstanceConfig } from '../src/store/defaults'
 import type { GlobalConfigShape } from '../src/store/bootstrap'
 import type {
+  ConfigRevisionHistory,
+  ConfigRevisionRollbackResponse,
   EngineInfo,
   GeneratedServerCommand,
   InstanceConfig,
@@ -554,6 +556,83 @@ if (BROWSER_SCENARIO === 'instance-connection') {
   }
 }
 
+const revisionHistories = new Map<string, ConfigRevisionHistory>()
+const revisionSnapshots = new Map<string, InstanceConfig>()
+
+const ensureRevisionHistory = (instanceId: string) => {
+  const existing = revisionHistories.get(instanceId)
+  if (existing) return existing
+  const currentConfig = state.instances[instanceId]
+  if (!currentConfig) throw new Error(`browser test revision instance not found: ${instanceId}`)
+  const baselineConfig = {
+    ...clone(currentConfig),
+    port: Math.max(1, currentConfig.port - 1),
+    temp: 0.5,
+    api_key: 'historical-browser-secret',
+    custom_args: ['--historical-secret', 'must-not-render'],
+  }
+  const baselineId = `revision-baseline-${instanceId}`
+  const currentId = `revision-current-${instanceId}`
+  revisionSnapshots.set(baselineId, baselineConfig)
+  revisionSnapshots.set(currentId, clone(currentConfig))
+  const history: ConfigRevisionHistory = {
+    instanceId,
+    currentFingerprint: `sha256:current-${instanceId}`,
+    currentRevisionId: currentId,
+    knownGoodRevisionId: null,
+    revisions: [
+      {
+        id: currentId,
+        fingerprint: `sha256:current-${instanceId}`,
+        parentRevisionId: baselineId,
+        createdAt: 1_787_000_100,
+        reason: 'save',
+        rollbackOf: null,
+        current: true,
+        knownGood: false,
+        integrityValid: true,
+        diffTruncated: false,
+        changes: [
+          {
+            field: 'port',
+            before: { state: 'value', value: String(baselineConfig.port) },
+            after: { state: 'value', value: String(currentConfig.port) },
+            redacted: false,
+          },
+          {
+            field: 'api_key',
+            before: { state: 'set' },
+            after: { state: currentConfig.api_key ? 'set' : 'empty' },
+            redacted: true,
+          },
+          {
+            field: 'custom_args',
+            before: { state: 'item_count', itemCount: 2 },
+            after: { state: 'item_count', itemCount: currentConfig.custom_args.length },
+            redacted: true,
+          },
+        ],
+      },
+      {
+        id: baselineId,
+        fingerprint: `sha256:baseline-${instanceId}`,
+        parentRevisionId: null,
+        createdAt: 1_787_000_000,
+        reason: 'migration',
+        rollbackOf: null,
+        current: false,
+        knownGood: false,
+        integrityValid: true,
+        diffTruncated: false,
+        changes: [],
+      },
+    ],
+    audit: [],
+  }
+  revisionHistories.set(instanceId, history)
+  return history
+}
+
 type BrowserTestControl = {
   marker: string
   calls: Array<{ command: string; payload: unknown; at: number }>
@@ -901,6 +980,85 @@ mockIPC((command, payload) => {
       }
       return [clone(models), clone(engines)]
     case 'load_config': return clone(control.state)
+    case 'list_config_revisions': {
+      const instanceId = String(args.instanceId ?? '')
+      return clone(ensureRevisionHistory(instanceId))
+    }
+    case 'mark_config_revision_known_good': {
+      const instanceId = String(args.instanceId ?? '')
+      const revisionId = String(args.revisionId ?? '')
+      const expectedFingerprint = String(args.expectedCurrentFingerprint ?? '')
+      const history = ensureRevisionHistory(instanceId)
+      if (history.currentFingerprint !== expectedFingerprint) {
+        throw new Error('CONFIG_REVISION_STALE: browser mock fingerprint changed')
+      }
+      const target = history.revisions.find(revision => revision.id === revisionId)
+      if (!target) throw new Error('CONFIG_REVISION_NOT_FOUND: browser mock revision missing')
+      const previousRevisionId = history.knownGoodRevisionId
+      history.knownGoodRevisionId = revisionId
+      history.revisions = history.revisions.map(revision => ({
+        ...revision,
+        knownGood: revision.id === revisionId,
+      }))
+      history.audit.unshift({
+        id: `audit-${history.audit.length + 1}`,
+        createdAt: 1_787_000_200 + history.audit.length,
+        action: 'known_good_set',
+        revisionId,
+        previousRevisionId,
+      })
+      return clone(history)
+    }
+    case 'rollback_config_revision': {
+      const instanceId = String(args.instanceId ?? '')
+      const revisionId = String(args.revisionId ?? '')
+      const expectedFingerprint = String(args.expectedCurrentFingerprint ?? '')
+      const history = ensureRevisionHistory(instanceId)
+      if (BROWSER_SCENARIO === 'config-revision-stale' || history.currentFingerprint !== expectedFingerprint) {
+        throw new Error('CONFIG_REVISION_STALE: browser mock fingerprint changed')
+      }
+      const target = history.revisions.find(revision => revision.id === revisionId)
+      const snapshot = revisionSnapshots.get(revisionId)
+      const current = state.instances[instanceId]
+      if (!target || !snapshot || !current) {
+        throw new Error('CONFIG_REVISION_NOT_FOUND: browser mock rollback target missing')
+      }
+      const restored = {
+        ...clone(snapshot),
+        id: current.id,
+        name: current.name,
+      }
+      const previousPort = current.port
+      state.instances[instanceId] = clone(restored)
+      const rollbackId = `revision-rollback-${instanceId}-${history.revisions.length}`
+      history.revisions = history.revisions.map(revision => ({ ...revision, current: false }))
+      history.revisions.unshift({
+        id: rollbackId,
+        fingerprint: target.fingerprint,
+        parentRevisionId: history.currentRevisionId,
+        createdAt: 1_787_000_300,
+        reason: 'rollback',
+        rollbackOf: revisionId,
+        current: true,
+        knownGood: false,
+        integrityValid: true,
+        diffTruncated: false,
+        changes: [{
+          field: 'port',
+          before: { state: 'value', value: String(previousPort) },
+          after: { state: 'value', value: String(restored.port) },
+          redacted: false,
+        }],
+      })
+      history.currentRevisionId = rollbackId
+      history.currentFingerprint = target.fingerprint
+      revisionSnapshots.set(rollbackId, clone(restored))
+      const response: ConfigRevisionRollbackResponse = {
+        config: clone(restored),
+        history: clone(history),
+      }
+      return response
+    }
     case 'scan_models':
       if (BROWSER_SCENARIO === 'delayed-inventory-cache') {
         return new Promise((resolve) => window.setTimeout(() => resolve(clone(models)), 3_000))

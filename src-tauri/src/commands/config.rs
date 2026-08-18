@@ -1,7 +1,7 @@
 use crate::error::{AppError, AppResult};
 use crate::models::{
-    ensure_managed_public_model_alias, migrate_legacy_load_mode, AppState, GlobalConfig,
-    InstanceConfig, ProxyConfig, WindowState,
+    ensure_managed_public_model_alias, migrate_legacy_load_mode, AppState, FrontendGlobalConfig,
+    GlobalConfig, InstanceConfig, ProxyConfig, WindowState,
 };
 use crate::vector_policy::normalize_for_launch;
 use std::collections::{HashMap, HashSet};
@@ -11,7 +11,7 @@ use tauri::Emitter;
 
 // Unified config write helpers.
 
-static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+pub(crate) static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn dedupe_path_dirs(directories: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -43,7 +43,7 @@ fn migrate_global_load_modes(global: &mut GlobalConfig) -> bool {
     changed
 }
 
-fn default_global_config() -> GlobalConfig {
+pub(crate) fn default_global_config() -> GlobalConfig {
     GlobalConfig {
         config_load_warning: None,
         instances: HashMap::new(),
@@ -60,10 +60,14 @@ fn default_global_config() -> GlobalConfig {
         download_bandwidth_limit_bytes_per_sec: 0,
         download_low_priority_throttle: false,
         proxy_config: ProxyConfig::default(),
+        config_revision_schema_version: crate::config_revision::CONFIG_REVISION_SCHEMA_VERSION,
+        config_revisions: HashMap::new(),
+        known_good_config_revisions: HashMap::new(),
+        config_revision_audit: Vec::new(),
     }
 }
 
-fn persist_global_config_unlocked(
+pub(crate) fn persist_global_config_unlocked(
     config_dir: &std::path::Path,
     global: &GlobalConfig,
 ) -> Result<bool, String> {
@@ -115,6 +119,7 @@ where
     let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
+    crate::config_revision::ensure_current_config_revisions(&mut global)?;
     update_fn(&mut global);
     persist_global_config_unlocked(&config_dir, &global).map(|_| ())
 }
@@ -142,6 +147,7 @@ pub fn replace_engine_names_and_persist(
     let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
+    crate::config_revision::ensure_current_config_revisions(&mut global)?;
     publish_engine_names_after_persist(&state.engine_names, engine_names, |names| {
         global.engine_names = names.clone();
         persist_global_config_unlocked(&config_dir, &global).map(|_| ())
@@ -200,10 +206,29 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
     config.model_dirs = normalize_model_dirs(config.model_dirs);
     config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
     migrate_global_load_modes(&mut config);
+    match crate::config_revision::ensure_current_config_revisions(&mut config) {
+        Ok(true) => {
+            if let Err(error) = persist_global_config(config_dir, &config) {
+                let warning = format!("配置修订迁移未能持久化：{error}");
+                config.config_load_warning = Some(match config.config_load_warning.take() {
+                    Some(existing) => format!("{existing}；{warning}"),
+                    None => warning,
+                });
+            }
+        }
+        Ok(false) => {}
+        Err(error) => {
+            let warning = format!("配置修订迁移失败：{error}");
+            config.config_load_warning = Some(match config.config_load_warning.take() {
+                Some(existing) => format!("{existing}；{warning}"),
+                None => warning,
+            });
+        }
+    }
     config
 }
 
-fn load_global_config_for_update_unlocked(
+pub(crate) fn load_global_config_for_update_unlocked(
     config_dir: &std::path::Path,
 ) -> Result<GlobalConfig, String> {
     let primary_path = config_dir.join("instances.json");
@@ -402,19 +427,42 @@ pub async fn save_config(
                 config_dir.join("instances.json").display().to_string(),
             )
         })?;
+        crate::config_revision::ensure_current_config_revisions(&mut global)
+            .map_err(|error| AppError::new("CONFIG_REVISION_MIGRATION_FAILED", error, false))?;
+        let previous_instances = global.instances.clone();
+        let changed_instance_ids = crate::config_revision::changed_deployment_instance_ids(
+            &previous_instances,
+            &instances,
+        )
+        .map_err(|error| AppError::new("CONFIG_REVISION_FINGERPRINT_FAILED", error, false))?;
+        let lifecycle_conflict = {
+            let reserved_instance_ids = state.starting.lock().unwrap();
+            crate::config_revision::first_reserved_deployment_change(
+                &changed_instance_ids,
+                &reserved_instance_ids,
+            )
+        };
+        if let Some(conflict) = lifecycle_conflict {
+            return Err(AppError::new(
+                "CONFIG_REVISION_LIFECYCLE_CONFLICT",
+                "deployment configuration cannot change while the instance is starting or rolling back",
+                true,
+            )
+            .with_context("instanceId", conflict));
+        }
         apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
+        crate::config_revision::record_saved_config_revisions(&mut global, &previous_instances)
+            .map_err(|error| AppError::new("CONFIG_REVISION_CREATE_FAILED", error, false))?;
         persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
             AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
                 "path",
                 config_dir.join("instances.json").display().to_string(),
             )
         })?;
-    }
-    timing.mark("persist-main");
-    {
         let mut stored = state.instances.lock().unwrap();
         *stored = instances.clone();
     }
+    timing.mark("persist-main");
     if crate::runtime_service::manages_instances() {
         // instances.json is the durable source of truth for this operation. The app bridge
         // coalesces rapid edits and reliably retries delivery to the runtime service, so a
@@ -429,7 +477,7 @@ pub async fn save_config(
 pub async fn load_config(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
-) -> Result<GlobalConfig, String> {
+) -> Result<FrontendGlobalConfig, String> {
     let t0 = std::time::Instant::now();
     let config_dir = state.config_dir.lock().unwrap().clone();
 
@@ -498,7 +546,7 @@ pub async fn load_config(
             "name": "load-config-rust", "ms": t_total
         }),
     );
-    Ok(global)
+    Ok(FrontendGlobalConfig::from(&global))
 }
 
 // Window state.
@@ -685,6 +733,10 @@ mod tests {
             download_bandwidth_limit_bytes_per_sec: 0,
             download_low_priority_throttle: false,
             proxy_config: ProxyConfig::default(),
+            config_revision_schema_version: crate::config_revision::CONFIG_REVISION_SCHEMA_VERSION,
+            config_revisions: HashMap::new(),
+            known_good_config_revisions: HashMap::new(),
+            config_revision_audit: Vec::new(),
         }
     }
 
@@ -726,6 +778,66 @@ mod tests {
     }
 
     #[test]
+    fn existing_instance_migrates_to_a_durable_revision_baseline() {
+        let dir = temp_config_dir("revision-baseline");
+        let mut config = sample_config();
+        let instance = InstanceConfig {
+            id: "baseline".into(),
+            name: "Baseline".into(),
+            port: 8123,
+            ..InstanceConfig::default()
+        };
+        config
+            .instances
+            .insert(instance.id.clone(), instance.clone());
+        std::fs::write(
+            dir.join("instances.json"),
+            serde_json::to_string_pretty(&config).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = read_config_from_disk(&dir);
+        let persisted: GlobalConfig =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("instances.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(loaded.instances["baseline"], instance);
+        assert_eq!(persisted.config_revisions["baseline"].len(), 1);
+        assert_eq!(
+            persisted.config_revisions["baseline"][0].fingerprint,
+            crate::config_revision::deployment_config_fingerprint(&instance).unwrap()
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn frontend_global_config_never_serializes_revision_snapshots() {
+        let mut config = sample_config();
+        let instance = InstanceConfig {
+            id: "private-history".into(),
+            name: "Private history".into(),
+            api_key: "historical-api-key-must-not-cross-ipc".into(),
+            ..InstanceConfig::default()
+        };
+        config.instances.insert(instance.id.clone(), instance);
+        crate::config_revision::ensure_current_config_revisions(&mut config).unwrap();
+        config
+            .instances
+            .get_mut("private-history")
+            .unwrap()
+            .api_key
+            .clear();
+
+        let public = FrontendGlobalConfig::from(&config);
+        let json = serde_json::to_string(&public).unwrap();
+
+        assert!(!json.contains("config_revisions"));
+        assert!(!json.contains("known_good_config_revisions"));
+        assert!(!json.contains("config_revision_audit"));
+        assert!(!json.contains("historical-api-key-must-not-cross-ipc"));
+    }
+
+    #[test]
     fn read_config_falls_back_to_backup_when_primary_json_is_corrupt() {
         let dir = temp_config_dir("backup-fallback");
         let expected = sample_config();
@@ -748,6 +860,52 @@ mod tests {
             loaded.download_max_concurrent,
             expected.download_max_concurrent
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn backup_recovery_preserves_revision_history_and_known_good_pointer() {
+        let dir = temp_config_dir("revision-backup-fallback");
+        let mut expected = sample_config();
+        let baseline = InstanceConfig {
+            id: "revision-backup".into(),
+            name: "Revision backup".into(),
+            port: 8111,
+            ..InstanceConfig::default()
+        };
+        expected
+            .instances
+            .insert(baseline.id.clone(), baseline.clone());
+        crate::config_revision::ensure_current_config_revisions(&mut expected).unwrap();
+        let baseline_revision_id = expected.config_revisions["revision-backup"][0].id.clone();
+        expected
+            .known_good_config_revisions
+            .insert("revision-backup".into(), baseline_revision_id.clone());
+        let previous = expected.instances.clone();
+        expected.instances.get_mut("revision-backup").unwrap().port = 8222;
+        crate::config_revision::record_saved_config_revisions(&mut expected, &previous).unwrap();
+        std::fs::write(dir.join("instances.json"), "{not-json").unwrap();
+        std::fs::write(
+            dir.join("instances.json.bak"),
+            serde_json::to_string_pretty(&expected).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = read_config_from_disk(&dir);
+
+        assert_eq!(loaded.instances["revision-backup"].port, 8222);
+        assert_eq!(loaded.config_revisions["revision-backup"].len(), 2);
+        assert_eq!(
+            loaded
+                .known_good_config_revisions
+                .get("revision-backup")
+                .map(String::as_str),
+            Some(baseline_revision_id.as_str())
+        );
+        assert!(loaded
+            .config_load_warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("已从备份恢复")));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -905,7 +1063,7 @@ pub mod ipc {
     pub async fn load_config(
         state: tauri::State<'_, AppState>,
         app: tauri::AppHandle,
-    ) -> crate::error::AppResult<GlobalConfig> {
+    ) -> crate::error::AppResult<FrontendGlobalConfig> {
         super::load_config(state, app)
             .await
             .map_err(crate::error::AppError::from)

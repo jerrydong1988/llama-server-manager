@@ -110,6 +110,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - 同一统一路由原生支持 OpenAI Chat Completions / Responses 与 Anthropic Messages，并提供严格模型边界、健康探测、熔断、四种调度策略、安全 `/slots` 发现和 Prometheus 指标。
 - 独立后台运行时可在管理界面退出后继续托管实例与路由，并在当前用户登录后恢复。
 - 可选的实例故障自愈提供有界退避重启、持久化 Crash Loop 保护和原始故障诊断。
+- 每个实例保留有界、脱敏的配置修订历史，支持已知良好标记和停止状态下的事务回滚。
 - 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
 - 端口冲突、路径、配置规则和启动健康检查。
 - 系统托盘、实例自动启动，以及由 Cloudflare R2 分发、Tauri 签名校验的应用内更新。
@@ -177,6 +178,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [仓库版离线图文说明 / Repository Offline Guide](GUIDE.md)
 - [产品路线图 / Product Roadmap](docs/PRODUCT_ROADMAP.md)
 - [实例故障自愈与 Crash Loop 保护 / Instance Recovery](docs/INSTANCE_RECOVERY.md)
+- [配置修订与回滚 / Configuration Revisions](docs/CONFIG_REVISIONS.md)
 - [隐私政策 / Privacy Policy](PRIVACY.md)
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)

@@ -147,6 +147,59 @@ export interface InstanceConfig {
   restart_policy: 'never' | 'on-failure';
 }
 
+export type ConfigRevisionReason = 'migration' | 'created' | 'save' | 'system' | 'rollback'
+export type ConfigRevisionAuditAction = 'known_good_set' | 'known_good_invalidated'
+export type ConfigValueSummaryState = 'empty' | 'value' | 'set' | 'item_count'
+
+export interface ConfigValueSummary {
+  state: ConfigValueSummaryState
+  value?: string
+  itemCount?: number
+}
+
+export interface ConfigFieldChangeSummary {
+  field: string
+  before: ConfigValueSummary
+  after: ConfigValueSummary
+  redacted: boolean
+}
+
+export interface ConfigRevisionSummary {
+  id: string
+  fingerprint: string
+  parentRevisionId: string | null
+  createdAt: number
+  reason: ConfigRevisionReason
+  rollbackOf: string | null
+  current: boolean
+  knownGood: boolean
+  integrityValid: boolean
+  diffTruncated: boolean
+  changes: ConfigFieldChangeSummary[]
+}
+
+export interface ConfigRevisionAuditSummary {
+  id: string
+  createdAt: number
+  action: ConfigRevisionAuditAction
+  revisionId: string | null
+  previousRevisionId: string | null
+}
+
+export interface ConfigRevisionHistory {
+  instanceId: string
+  currentFingerprint: string
+  currentRevisionId: string
+  knownGoodRevisionId: string | null
+  revisions: ConfigRevisionSummary[]
+  audit: ConfigRevisionAuditSummary[]
+}
+
+export interface ConfigRevisionRollbackResponse {
+  config: InstanceConfig
+  history: ConfigRevisionHistory
+}
+
 export interface RuntimeFailure {
   kind: 'startup_failure' | 'unexpected_exit'
   message: string
@@ -175,7 +228,7 @@ export interface Instance {
   recovery?: InstanceRecoveryStatus
 }
 
-export type InstanceLifecyclePhase = 'starting' | 'stopping'
+export type InstanceLifecyclePhase = 'starting' | 'stopping' | 'rolling_back'
 
 export interface LogEntry {
   instanceId: string
@@ -581,6 +634,9 @@ export interface AppState {
 
   saveConfig: () => Promise<void>
   loadConfig: () => Promise<void>
+  listConfigRevisions: (instanceId: string) => Promise<ConfigRevisionHistory>
+  markConfigRevisionKnownGood: (instanceId: string, revisionId: string, expectedCurrentFingerprint: string) => Promise<ConfigRevisionHistory>
+  rollbackConfigRevision: (instanceId: string, revisionId: string, expectedCurrentFingerprint: string) => Promise<ConfigRevisionRollbackResponse>
 
   browseModelscope: (repoId: string) => Promise<MsFileEntry[]>
   downloadModelscopeFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>

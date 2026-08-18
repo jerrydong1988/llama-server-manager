@@ -29,6 +29,66 @@ test('opening an instance config keeps React hook order stable (issue #5)', asyn
   expect(pageErrors).toEqual([])
 })
 
+test('configuration revisions expose redacted history, known-good audit, and transactional rollback', async ({ page }) => {
+  await openConfiguration(page)
+
+  const panel = page.getByTestId('config-revision-panel')
+  await expect(panel).toBeVisible()
+  await expect(panel.getByText('保存配置', { exact: true })).toBeVisible()
+  await expect(panel.getByText('已设置（内容已隐藏）', { exact: true })).toBeVisible()
+  await expect(panel).not.toContainText('historical-browser-secret')
+  await expect(panel).not.toContainText('must-not-render')
+
+  const baseline = panel.locator('[data-revision-id="revision-baseline-browser-test-instance"]')
+  const baselineToggle = baseline.locator('button[aria-expanded]')
+  await baseline.scrollIntoViewIfNeeded()
+  await baseline.getByText('迁移基线', { exact: true }).click()
+  await expect(baselineToggle).toHaveAttribute('aria-expanded', 'true')
+  await baseline.getByRole('button', { name: '标记为已知良好', exact: true }).click()
+  await expect(baseline.getByText('已知良好', { exact: true })).toBeVisible()
+  await expect(panel).toContainText('已标记新的已知良好修订')
+
+  await baseline.getByRole('button', { name: '回滚', exact: true }).click()
+  await expect(page.getByRole('alertdialog', { name: '确认配置回滚' })).toBeVisible()
+  await page.getByRole('button', { name: '确认回滚并创建新修订', exact: true }).click()
+
+  await expect(panel.getByText('回滚生成', { exact: true })).toBeVisible()
+  await expect(page.locator('[data-config-field="port"] input')).toHaveValue('18080')
+  await expect(page.getByText('Browser Parameter Regression', { exact: true }).first()).toBeVisible()
+})
+
+test('stale configuration rollback is rejected without refreshing the editor to a false success state', async ({ page }) => {
+  await openConfiguration(page, 'config-revision-stale')
+
+  const panel = page.getByTestId('config-revision-panel')
+  const baseline = panel.locator('[data-revision-id="revision-baseline-browser-test-instance"]')
+  const baselineToggle = baseline.locator('button[aria-expanded]')
+  await baseline.scrollIntoViewIfNeeded()
+  await baseline.getByText('迁移基线', { exact: true }).click()
+  await expect(baselineToggle).toHaveAttribute('aria-expanded', 'true')
+  await baseline.getByRole('button', { name: '回滚', exact: true }).click()
+  await page.getByRole('button', { name: '确认回滚并创建新修订', exact: true }).click()
+
+  await expect(panel).toContainText('CONFIG_REVISION_STALE')
+  await expect(page.locator('[data-config-field="port"] input')).toHaveValue('18081')
+  await expect(panel.getByText('回滚生成', { exact: true })).toHaveCount(0)
+})
+
+test('unsaved secret-bearing fields are redacted from the change review', async ({ page }) => {
+  await openConfiguration(page)
+
+  const secret = 'unsaved-browser-secret-must-not-render'
+  await page.getByRole('textbox', { name: '参数搜索' }).fill('api key')
+  const apiKey = page.locator('[data-config-field="api_key"] input')
+  await apiKey.scrollIntoViewIfNeeded()
+  await apiKey.fill(secret)
+
+  await expect(page.getByText('api key', { exact: true }).last()).toBeVisible()
+  await expect(page.getByTestId('config-revision-panel')).not.toContainText(secret)
+  await expect(page.locator('body')).not.toContainText(secret)
+  await expect(page.getByText('已设置（内容已隐藏）', { exact: true }).last()).toBeVisible()
+})
+
 test('search navigation, change review, emission preview, and save use the mock backend', async ({ page }) => {
   await openConfiguration(page)
 
