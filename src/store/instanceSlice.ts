@@ -14,6 +14,7 @@ import type {
   ConfigRevisionHistory,
   ConfigRevisionRollbackResponse,
   DeploymentIdentityStatus,
+  DeploymentInspection,
   GeneratedServerCommand,
   InstanceConfig,
   LogEntry,
@@ -126,6 +127,7 @@ export function createInstanceSlice(
   | 'loadConfig'
   | 'listConfigRevisions'
   | 'inspectDeploymentIdentity'
+  | 'inspectDeployment'
   | 'markConfigRevisionKnownGood'
   | 'rollbackConfigRevision'
 > {
@@ -376,6 +378,10 @@ export function createInstanceSlice(
     inspectDeploymentIdentity: async (instanceId) => {
       await configSaveCoordinator.waitForIdle()
       return invoke<DeploymentIdentityStatus>('inspect_deployment_identity', { instanceId })
+    },
+    inspectDeployment: async (instanceId) => {
+      await configSaveCoordinator.waitForIdle()
+      return invoke<DeploymentInspection>('inspect_deployment', { instanceId })
     },
     markConfigRevisionKnownGood: async (instanceId, revisionId, expectedCurrentFingerprint) => {
       await configSaveCoordinator.waitForIdle()

@@ -64,6 +64,8 @@ pub(crate) fn default_global_config() -> GlobalConfig {
         config_revisions: HashMap::new(),
         known_good_config_revisions: HashMap::new(),
         config_revision_audit: Vec::new(),
+        deployment_schema_version: crate::deployment::DEPLOYMENT_SCHEMA_VERSION,
+        deployments: HashMap::new(),
     }
 }
 
@@ -120,8 +122,88 @@ where
     let config_dir = state.config_dir.lock().unwrap().clone();
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
+    crate::deployment::ensure_deployments(&mut global)?;
     update_fn(&mut global);
     persist_global_config_unlocked(&config_dir, &global).map(|_| ())
+}
+
+/// Persists proxy routing only after rechecking instance start reservations under
+/// the serialized config-write boundary. This closes the check-to-write window
+/// between a proxy edit and deployment revision materialization.
+pub fn update_proxy_config_and_persist(
+    state: &AppState,
+    proxy_config: &ProxyConfig,
+) -> Result<(), String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&config_dir)?;
+    crate::config_revision::ensure_current_config_revisions(&mut global)?;
+    crate::deployment::ensure_deployments(&mut global)?;
+    let routing_changes = crate::deployment::routing_changed_instance_ids(
+        &global.proxy_config,
+        proxy_config,
+        global.instances.keys().cloned(),
+    );
+    let lifecycle_conflict = {
+        let starting = state.starting.lock().unwrap();
+        routing_changes
+            .iter()
+            .find(|instance_id| starting.contains(instance_id.as_str()))
+            .cloned()
+    };
+    if let Some(instance_id) = lifecycle_conflict {
+        return Err(format!(
+            "实例 {instance_id} 正在启动，部署路由状态暂时不能修改；请等待启动完成后重试"
+        ));
+    }
+    global.proxy_config = proxy_config.clone();
+    persist_global_config_unlocked(&config_dir, &global).map(|_| ())
+}
+
+/// Materializes a deployment revision under the same serialized boundary used by
+/// configuration saves. The caller must already hold the instance start reservation.
+pub fn materialize_deployment_revision(
+    state: &AppState,
+    instance_id: &str,
+    identity: &crate::deployment_identity::DeploymentIdentity,
+) -> Result<crate::deployment::DeploymentRevision, String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&config_dir)?;
+    crate::config_revision::ensure_current_config_revisions(&mut global)?;
+    crate::deployment::ensure_deployments(&mut global)?;
+    let revision = crate::deployment::materialize_revision(&mut global, instance_id, identity)?;
+    persist_global_config_unlocked(&config_dir, &global)?;
+    Ok(revision)
+}
+
+pub fn inspect_deployment_catalog(
+    state: &AppState,
+    instance_id: &str,
+    expected_identity: Option<&crate::deployment_identity::DeploymentIdentity>,
+    preflight_error: Option<String>,
+) -> Result<crate::deployment::DeploymentInspection, String> {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&config_dir)?;
+    let config_changed = crate::config_revision::ensure_current_config_revisions(&mut global)?;
+    let deployment_changed = crate::deployment::ensure_deployments(&mut global)?;
+    if config_changed || deployment_changed {
+        persist_global_config_unlocked(&config_dir, &global)?;
+    }
+    let running_revision_id = state
+        .running
+        .lock()
+        .unwrap()
+        .get(instance_id)
+        .map(|running| running.deployment_revision_id.clone());
+    Ok(crate::deployment::inspect(
+        &mut global,
+        instance_id,
+        expected_identity,
+        preflight_error,
+        running_revision_id,
+    ))
 }
 
 /// Persists an engine-name snapshot before publishing it to shared memory. Keeping both
@@ -148,6 +230,7 @@ pub fn replace_engine_names_and_persist(
     let config_dir = state.config_dir.lock().unwrap().clone();
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
+    crate::deployment::ensure_deployments(&mut global)?;
     publish_engine_names_after_persist(&state.engine_names, engine_names, |names| {
         global.engine_names = names.clone();
         persist_global_config_unlocked(&config_dir, &global).map(|_| ())
@@ -206,10 +289,16 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
     config.model_dirs = normalize_model_dirs(config.model_dirs);
     config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
     migrate_global_load_modes(&mut config);
-    match crate::config_revision::ensure_current_config_revisions(&mut config) {
+    let migration = crate::config_revision::ensure_current_config_revisions(&mut config).and_then(
+        |config_changed| {
+            crate::deployment::ensure_deployments(&mut config)
+                .map(|deployment_changed| config_changed || deployment_changed)
+        },
+    );
+    match migration {
         Ok(true) => {
             if let Err(error) = persist_global_config(config_dir, &config) {
-                let warning = format!("配置修订迁移未能持久化：{error}");
+                let warning = format!("配置或部署修订迁移未能持久化：{error}");
                 config.config_load_warning = Some(match config.config_load_warning.take() {
                     Some(existing) => format!("{existing}；{warning}"),
                     None => warning,
@@ -218,7 +307,7 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
         }
         Ok(false) => {}
         Err(error) => {
-            let warning = format!("配置修订迁移失败：{error}");
+            let warning = format!("配置或部署修订迁移失败：{error}");
             config.config_load_warning = Some(match config.config_load_warning.take() {
                 Some(existing) => format!("{existing}；{warning}"),
                 None => warning,
@@ -429,6 +518,8 @@ pub async fn save_config(
         })?;
         crate::config_revision::ensure_current_config_revisions(&mut global)
             .map_err(|error| AppError::new("CONFIG_REVISION_MIGRATION_FAILED", error, false))?;
+        crate::deployment::ensure_deployments(&mut global)
+            .map_err(|error| AppError::new("DEPLOYMENT_MIGRATION_FAILED", error, false))?;
         let previous_instances = global.instances.clone();
         let changed_instance_ids = crate::config_revision::changed_deployment_instance_ids(
             &previous_instances,
@@ -453,6 +544,8 @@ pub async fn save_config(
         apply_frontend_config(&mut global, snapshot, running_snapshot, engine_names);
         crate::config_revision::record_saved_config_revisions(&mut global, &previous_instances)
             .map_err(|error| AppError::new("CONFIG_REVISION_CREATE_FAILED", error, false))?;
+        crate::deployment::ensure_deployments(&mut global)
+            .map_err(|error| AppError::new("DEPLOYMENT_MIGRATION_FAILED", error, false))?;
         persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
             AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
                 "path",
@@ -737,6 +830,8 @@ mod tests {
             config_revisions: HashMap::new(),
             known_good_config_revisions: HashMap::new(),
             config_revision_audit: Vec::new(),
+            deployment_schema_version: crate::deployment::DEPLOYMENT_SCHEMA_VERSION,
+            deployments: HashMap::new(),
         }
     }
 
@@ -821,6 +916,15 @@ mod tests {
         };
         config.instances.insert(instance.id.clone(), instance);
         crate::config_revision::ensure_current_config_revisions(&mut config).unwrap();
+        let identity = crate::deployment_identity::DeploymentIdentity::new(
+            "urn:lsm:engine:v1:sha256:test".into(),
+            "urn:lsm:model:v1:sha256:test".into(),
+            "revision-test".into(),
+            "urn:lsm:configuration:v1:sha256:test".into(),
+            "urn:lsm:qualification:v2:sha256:test".into(),
+        )
+        .unwrap();
+        crate::deployment::materialize_revision(&mut config, "private-history", &identity).unwrap();
         config
             .instances
             .get_mut("private-history")
@@ -834,6 +938,8 @@ mod tests {
         assert!(!json.contains("config_revisions"));
         assert!(!json.contains("known_good_config_revisions"));
         assert!(!json.contains("config_revision_audit"));
+        assert!(!json.contains("deployment_schema_version"));
+        assert!(!json.contains("managed-deployment"));
         assert!(!json.contains("historical-api-key-must-not-cross-ipc"));
     }
 

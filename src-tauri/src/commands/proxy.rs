@@ -3043,6 +3043,26 @@ pub async fn save_proxy_config(
     };
     let _transition = state.proxy_lifecycle_lock.lock().await;
     let current = state.proxy_config.lock().unwrap().clone();
+    let deployment_routing_changes = {
+        let instances = state.instances.lock().unwrap();
+        crate::deployment::routing_changed_instance_ids(
+            &current,
+            &config,
+            instances.keys().cloned(),
+        )
+    };
+    let lifecycle_conflict = {
+        let starting = state.starting.lock().unwrap();
+        deployment_routing_changes
+            .iter()
+            .find(|instance_id| starting.contains(instance_id.as_str()))
+            .cloned()
+    };
+    if let Some(instance_id) = lifecycle_conflict {
+        return Err(format!(
+            "实例 {instance_id} 正在启动，部署路由状态暂时不能修改；请等待启动完成后重试"
+        ));
+    }
     let runtime_status = if crate::runtime_service::manages_instances() {
         Some(crate::runtime_service::ensure_runtime_service().await?)
     } else {
@@ -3079,9 +3099,7 @@ pub async fn save_proxy_config(
 
     let sync_generation = crate::runtime_service::mark_config_sync_pending();
     let apply_result = async {
-        update_and_persist(&state, |global| {
-            global.proxy_config = config.clone();
-        })?;
+        crate::commands::config::update_proxy_config_and_persist(&state, &config)?;
         *state.proxy_config.lock().unwrap() = config.clone();
         if crate::runtime_service::manages_instances() {
             crate::runtime_service::sync_app_config(&state).await?;
@@ -3832,6 +3850,8 @@ mod tests {
                     workload: "inference".into(),
                     launch_config: Some(instance),
                     deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: String::new(),
                 },
             )]),
             bound_addr: String::new(),
@@ -3888,6 +3908,8 @@ mod tests {
                     workload: "inference".into(),
                     launch_config: Some(instance),
                     deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: String::new(),
                 },
             )]),
             bound_addr: String::new(),
@@ -4545,6 +4567,8 @@ mod tests {
                 workload: "inference".into(),
                 launch_config: Some(instance),
                 deployment_identity: Default::default(),
+                deployment_id: String::new(),
+                deployment_revision_id: String::new(),
             },
         )]);
         let config = ProxyConfig {
@@ -4611,6 +4635,8 @@ mod tests {
                     workload: "inference".into(),
                     launch_config: Some(primary),
                     deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: String::new(),
                 },
             ),
             (
@@ -4626,6 +4652,8 @@ mod tests {
                     workload: "inference".into(),
                     launch_config: Some(backup),
                     deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: String::new(),
                 },
             ),
         ]);
@@ -4792,6 +4820,8 @@ mod tests {
                 workload: "inference".into(),
                 launch_config: Some(instance),
                 deployment_identity: Default::default(),
+                deployment_id: String::new(),
+                deployment_revision_id: String::new(),
             },
         )]);
         let config = ProxyConfig {
@@ -4856,6 +4886,8 @@ mod tests {
                     workload: "inference".into(),
                     launch_config: Some(launched),
                     deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: String::new(),
                 },
             ),
             (
@@ -4871,6 +4903,8 @@ mod tests {
                     workload: "inference".into(),
                     launch_config: Some(fallback),
                     deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: String::new(),
                 },
             ),
         ]);
@@ -4925,6 +4959,8 @@ mod tests {
                 workload: "inference".into(),
                 launch_config: Some(fallback),
                 deployment_identity: Default::default(),
+                deployment_id: String::new(),
+                deployment_revision_id: String::new(),
             },
         )]);
         let config = ProxyConfig {
@@ -5009,6 +5045,8 @@ mod tests {
                     workload: "inference".into(),
                     launch_config: Some(instance),
                     deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: String::new(),
                 },
             )]),
             bound_addr: String::new(),

@@ -1,9 +1,10 @@
 use super::protocol::{
     InstanceRecoveryPhase, InstanceRecoveryStatus, PersistedRuntimeState, RuntimeCommand,
     RuntimeFailure, RuntimeFailureKind, RuntimeLaunchSpec, RuntimeReply, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, INSTANCE_RECOVERY_BACKOFF_SECS,
-    INSTANCE_RECOVERY_CAPABILITY, INSTANCE_RECOVERY_MAX_ATTEMPTS, INSTANCE_RECOVERY_STABLE_SECS,
-    RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, DEPLOYMENT_REVISION_CAPABILITY,
+    INSTANCE_RECOVERY_BACKOFF_SECS, INSTANCE_RECOVERY_CAPABILITY, INSTANCE_RECOVERY_MAX_ATTEMPTS,
+    INSTANCE_RECOVERY_STABLE_SECS, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
+    RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
 use crate::commands::engine_capabilities::{executable_fingerprint, QUALIFICATION_PROFILE_VERSION};
@@ -115,6 +116,19 @@ fn validate_runtime_deployment_identity(spec: &RuntimeLaunchSpec) -> Result<(), 
     Ok(())
 }
 
+fn validate_runtime_deployment_revision(
+    spec: &RuntimeLaunchSpec,
+    proxy_config: &crate::models::ProxyConfig,
+) -> Result<(), String> {
+    crate::deployment::validate_runtime_revision(
+        &spec.deployment_revision,
+        &spec.instance_id,
+        &spec.config,
+        &spec.deployment_identity,
+        proxy_config,
+    )
+}
+
 fn instance_recovery_enabled(spec: &RuntimeLaunchSpec) -> bool {
     !spec.launch_config_stale
         && spec
@@ -131,22 +145,16 @@ fn runtime_launch_config_matches(
     let mut comparable = launch_config.clone();
     comparable.id = current_config.id.clone();
     comparable.name = current_config.name.clone();
-    comparable.auto_start = current_config.auto_start;
-    comparable.restart_policy = current_config.restart_policy.clone();
     comparable == *current_config
 }
 
 fn sync_desired_launch_config(
     spec: &mut RuntimeLaunchSpec,
     current_config: &crate::models::InstanceConfig,
+    proxy_config: &crate::models::ProxyConfig,
 ) {
-    spec.launch_config_stale = !runtime_launch_config_matches(&spec.config, current_config);
-    // These fields belong to the manager and do not alter the process command.
-    // Keep them current without replacing the exact launch snapshot.
-    spec.config.id = current_config.id.clone();
-    spec.config.name = current_config.name.clone();
-    spec.config.auto_start = current_config.auto_start;
-    spec.config.restart_policy = current_config.restart_policy.clone();
+    spec.launch_config_stale = !runtime_launch_config_matches(&spec.config, current_config)
+        || validate_runtime_deployment_revision(spec, proxy_config).is_err();
 }
 
 fn next_recovery_delay(restart_attempts: u32) -> Option<u64> {
@@ -253,12 +261,12 @@ fn validate_runtime_state(
 ) -> Result<PersistedRuntimeState, String> {
     match state.schema_version {
         RUNTIME_STATE_SCHEMA_VERSION => Ok(state),
-        1 | 2 => {
+        1..=3 => {
             state.schema_version = RUNTIME_STATE_SCHEMA_VERSION;
             Ok(state)
         }
         found => Err(format!(
-            "unsupported runtime state schema: expected {} or migratable schema 1 or 2, found {found}",
+            "unsupported runtime state schema: expected {} or migratable schema 1, 2, or 3, found {found}",
             RUNTIME_STATE_SCHEMA_VERSION
         )),
     }
@@ -463,6 +471,7 @@ impl RuntimeSupervisor {
             capabilities: vec![
                 BACKGROUND_DETACH_CAPABILITY.to_string(),
                 CONFIG_SYNC_ACK_CAPABILITY.to_string(),
+                DEPLOYMENT_REVISION_CAPABILITY.to_string(),
                 INSTANCE_RECOVERY_CAPABILITY.to_string(),
                 RUNTIME_ERROR_ACK_CAPABILITY.to_string(),
             ],
@@ -554,9 +563,10 @@ impl RuntimeSupervisor {
             state.proxy_config = proxy_config.clone();
             state.instances = instances;
             let current_configs = state.instances.clone();
+            let current_proxy = state.proxy_config.clone();
             for (instance_id, spec) in &mut state.desired_instances {
                 if let Some(config) = current_configs.get(instance_id) {
-                    sync_desired_launch_config(spec, config);
+                    sync_desired_launch_config(spec, config, &current_proxy);
                 }
             }
             let disabled = state
@@ -887,6 +897,8 @@ impl RuntimeSupervisor {
         }
         validate_runtime_engine_qualification(&spec)?;
         validate_runtime_deployment_identity(&spec)?;
+        let proxy_config = self.state.lock().unwrap().proxy_config.clone();
+        validate_runtime_deployment_revision(&spec, &proxy_config)?;
         crate::commands::server::validate_effective_launch_security(&spec.config, &spec.command)
             .map_err(|error| error.to_string())?;
         {
@@ -971,6 +983,8 @@ impl RuntimeSupervisor {
             workload: spec.workload.clone(),
             launch_config: Some(spec.config.clone()),
             deployment_identity: spec.deployment_identity.clone(),
+            deployment_id: spec.deployment_revision.deployment_id.clone(),
+            deployment_revision_id: spec.deployment_revision.id.clone(),
         };
         let perf_tracker = Arc::new(Mutex::new(RuntimePerfTracker::new(
             spec.instance_id.clone(),
@@ -2033,6 +2047,17 @@ mod tests {
     };
     use std::collections::HashMap;
 
+    fn test_deployment_identity() -> crate::deployment_identity::DeploymentIdentity {
+        crate::deployment_identity::DeploymentIdentity::new(
+            "urn:lsm:engine:v1:sha256:test".into(),
+            "urn:lsm:model:v1:sha256:test".into(),
+            "revision-test".into(),
+            "urn:lsm:configuration:v1:sha256:test".into(),
+            "urn:lsm:qualification:v2:sha256:test".into(),
+        )
+        .unwrap()
+    }
+
     fn detach_instance(pid: u32) -> RunningInstance {
         RunningInstance {
             instance_id: "instance-1".into(),
@@ -2045,17 +2070,31 @@ mod tests {
             workload: "inference".into(),
             launch_config: None,
             deployment_identity: Default::default(),
+            deployment_id: String::new(),
+            deployment_revision_id: String::new(),
         }
     }
 
     fn detach_spec() -> RuntimeLaunchSpec {
+        let config = InstanceConfig {
+            id: "instance-1".into(),
+            ..InstanceConfig::default()
+        };
+        let deployment_identity = test_deployment_identity();
+        let deployment_revision = crate::deployment::test_revision(
+            "instance-1",
+            &config,
+            &deployment_identity,
+            &crate::models::ProxyConfig::default(),
+        );
         RuntimeLaunchSpec {
             instance_id: "instance-1".into(),
-            config: InstanceConfig::default(),
+            config,
             launch_config_stale: false,
             engine_qualification_fingerprint: "test-fingerprint".into(),
             engine_qualification_profile_version: QUALIFICATION_PROFILE_VERSION,
-            deployment_identity: Default::default(),
+            deployment_identity,
+            deployment_revision,
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
@@ -2081,6 +2120,7 @@ mod tests {
         let model =
             crate::deployment_identity::artifact_identity_for_path("model", &model_path).unwrap();
         let config = InstanceConfig {
+            id: "instance-1".into(),
             model_path: model_path.to_string_lossy().to_string(),
             ..InstanceConfig::default()
         };
@@ -2095,6 +2135,12 @@ mod tests {
             "urn:lsm:qualification:v2:sha256:qualification-1".into(),
         )
         .unwrap();
+        let deployment_revision = crate::deployment::test_revision(
+            "instance-1",
+            &config,
+            &deployment_identity,
+            &crate::models::ProxyConfig::default(),
+        );
         let spec = RuntimeLaunchSpec {
             instance_id: "instance-1".into(),
             config,
@@ -2104,6 +2150,7 @@ mod tests {
             ),
             engine_qualification_profile_version: QUALIFICATION_PROFILE_VERSION,
             deployment_identity,
+            deployment_revision,
             engine_backend: "test".into(),
             command: vec![engine_path.to_string_lossy().to_string()],
             command_display: "llama-server".into(),
@@ -2166,28 +2213,37 @@ mod tests {
     }
 
     #[test]
-    fn launch_snapshot_staleness_ignores_manager_fields_but_blocks_old_commands() {
+    fn launch_snapshot_staleness_allows_display_renames_but_blocks_policy_and_command_drift() {
         let mut spec = detach_spec();
         spec.config.restart_policy = "on-failure".into();
+        spec.deployment_revision = crate::deployment::test_revision(
+            "instance-1",
+            &spec.config,
+            &spec.deployment_identity,
+            &crate::models::ProxyConfig::default(),
+        );
         let mut current = spec.config.clone();
         current.name = "renamed".into();
-        current.auto_start = true;
 
         assert!(runtime_launch_config_matches(&spec.config, &current));
-        sync_desired_launch_config(&mut spec, &current);
+        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
         assert!(!spec.launch_config_stale);
         assert!(super::instance_recovery_enabled(&spec));
-        assert_eq!(spec.config.name, "renamed");
-        assert!(spec.config.auto_start);
+
+        current.auto_start = true;
+        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
+        assert!(spec.launch_config_stale);
+        assert!(!super::instance_recovery_enabled(&spec));
+        current.auto_start = spec.config.auto_start;
 
         current.port = current.port.saturating_add(1);
-        sync_desired_launch_config(&mut spec, &current);
+        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
         assert!(spec.launch_config_stale);
         assert!(!super::instance_recovery_enabled(&spec));
         assert_ne!(spec.config.port, current.port);
 
         current.port = spec.config.port;
-        sync_desired_launch_config(&mut spec, &current);
+        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
         assert!(!spec.launch_config_stale);
         assert!(super::instance_recovery_enabled(&spec));
     }
@@ -2300,6 +2356,28 @@ mod tests {
         let migrated = validate_runtime_state(state).unwrap();
         assert_eq!(migrated.schema_version, RUNTIME_STATE_SCHEMA_VERSION);
         assert!(migrated.recovery.is_empty());
+    }
+
+    #[test]
+    fn schema_three_runtime_state_migrates_but_legacy_specs_remain_unbound() {
+        let mut state = PersistedRuntimeState {
+            schema_version: 3,
+            ..PersistedRuntimeState::default()
+        };
+        state
+            .desired_instances
+            .insert("instance-1".into(), detach_spec());
+        state
+            .desired_instances
+            .get_mut("instance-1")
+            .unwrap()
+            .deployment_revision = Default::default();
+        let migrated = validate_runtime_state(state).unwrap();
+        assert_eq!(migrated.schema_version, RUNTIME_STATE_SCHEMA_VERSION);
+        let legacy = &migrated.desired_instances["instance-1"];
+        assert!(
+            super::validate_runtime_deployment_revision(legacy, &migrated.proxy_config).is_err()
+        );
     }
 
     #[test]

@@ -69,6 +69,51 @@ export interface DeploymentIdentityStatus {
   identity?: DeploymentIdentity
 }
 
+export type DeploymentState = 'unmaterialized' | 'ready' | 'stale' | 'invalid'
+
+export interface DeploymentRuntimePolicy {
+  autoStart: boolean
+  restartPolicy: 'never' | 'on-failure' | string
+}
+
+export interface DeploymentRouteSnapshot {
+  id: string
+  enabled: boolean
+  modelAlias: string
+  priority: number
+  weight: number
+  maxConcurrentRequests: number
+}
+
+export interface DeploymentRoutingSnapshot {
+  proxyEnabled: boolean
+  defaultTarget: boolean
+  routingStrategy: string
+  routes: DeploymentRouteSnapshot[]
+}
+
+export interface DeploymentRevisionSummary {
+  id: string
+  deploymentIdentity: DeploymentIdentity
+  runtimePolicy: DeploymentRuntimePolicy
+  routing: DeploymentRoutingSnapshot
+  createdAt: number
+  current: boolean
+  rollbackTarget: boolean
+  integrityValid: boolean
+}
+
+export interface DeploymentInspection {
+  instanceId: string
+  deploymentId: string
+  state: DeploymentState
+  message: string | null
+  currentRevisionId: string | null
+  rollbackTargetRevisionId: string | null
+  runningRevisionId: string | null
+  revisions: DeploymentRevisionSummary[]
+}
+
 export interface EngineInfo {
   id: string
   name: string
@@ -700,6 +745,7 @@ export interface AppState {
   loadConfig: () => Promise<void>
   listConfigRevisions: (instanceId: string) => Promise<ConfigRevisionHistory>
   inspectDeploymentIdentity: (instanceId: string) => Promise<DeploymentIdentityStatus>
+  inspectDeployment: (instanceId: string) => Promise<DeploymentInspection>
   markConfigRevisionKnownGood: (instanceId: string, revisionId: string, expectedCurrentFingerprint: string) => Promise<ConfigRevisionHistory>
   rollbackConfigRevision: (instanceId: string, revisionId: string, expectedCurrentFingerprint: string) => Promise<ConfigRevisionRollbackResponse>
 

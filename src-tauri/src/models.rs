@@ -1018,6 +1018,12 @@ pub struct RunningInstance {
     pub launch_config: Option<InstanceConfig>,
     #[serde(default)]
     pub deployment_identity: crate::deployment_identity::DeploymentIdentity,
+    /// Stable first-class deployment that owns the launched revision.
+    #[serde(default)]
+    pub deployment_id: String,
+    /// Exact immutable deployment revision used for this process.
+    #[serde(default)]
+    pub deployment_revision_id: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1329,6 +1335,10 @@ pub struct GlobalConfig {
     pub known_good_config_revisions: HashMap<String, String>,
     #[serde(default)]
     pub config_revision_audit: Vec<crate::config_revision::ConfigRevisionAuditEvent>,
+    #[serde(default = "crate::deployment::default_deployment_schema_version")]
+    pub deployment_schema_version: u32,
+    #[serde(default)]
+    pub deployments: HashMap<String, crate::deployment::DeploymentRecord>,
 }
 
 /// Frontend-safe view of the active configuration. Historical snapshots are

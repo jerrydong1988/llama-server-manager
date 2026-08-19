@@ -144,11 +144,76 @@ function deploymentIdentity(spec) {
   return { ...material, deploymentId }
 }
 
-function withLaunchIdentity(spec) {
+function deploymentRevision(spec, identity, proxyConfig = {}) {
+  const deploymentMaterial = { schemaVersion: 1, instanceId: spec.instance_id }
+  const deploymentId = `urn:lsm:managed-deployment:v1:sha256:${crypto
+    .createHash('sha256')
+    .update(JSON.stringify(deploymentMaterial), 'utf8')
+    .digest('hex')}`
+  const deploymentIdentityMaterial = {
+    schemaVersion: identity.schemaVersion,
+    deploymentId: identity.deploymentId,
+    engineArtifactId: identity.engineArtifactId,
+    modelArtifactId: identity.modelArtifactId,
+    configRevisionId: identity.configRevisionId,
+    configurationId: identity.configurationId,
+    qualificationEvidenceId: identity.qualificationEvidenceId,
+  }
+  const runtimePolicy = {
+    autoStart: Boolean(spec.config.auto_start),
+    restartPolicy: spec.config.restart_policy?.toLowerCase() === 'on-failure'
+      ? 'on-failure'
+      : 'never',
+  }
+  const routing = {
+    proxyEnabled: Boolean(proxyConfig.enabled),
+    defaultTarget: proxyConfig.default_instance_id === spec.instance_id,
+    routingStrategy: String(proxyConfig.routing_strategy ?? 'priorityFailover').trim(),
+    routes: (proxyConfig.routes ?? [])
+      .filter(route => route.target_instance_id === spec.instance_id)
+      .map(route => ({
+        id: String(route.id ?? '').trim(),
+        enabled: route.enabled ?? true,
+        modelAlias: String(route.model_alias ?? '').trim(),
+        priority: route.priority ?? 0,
+        weight: route.weight ?? 1,
+        maxConcurrentRequests: route.max_concurrent_requests ?? 0,
+      }))
+      .sort((left, right) => (
+        left.id.localeCompare(right.id)
+        || Number(left.enabled) - Number(right.enabled)
+        || left.modelAlias.localeCompare(right.modelAlias)
+        || left.priority - right.priority
+        || left.weight - right.weight
+        || left.maxConcurrentRequests - right.maxConcurrentRequests
+      )),
+  }
+  const material = {
+    schemaVersion: 1,
+    deploymentId,
+    deploymentIdentity: deploymentIdentityMaterial,
+    runtimePolicy,
+    routing,
+  }
+  const id = `urn:lsm:deployment-revision:v1:sha256:${crypto
+    .createHash('sha256')
+    .update(JSON.stringify(material), 'utf8')
+    .digest('hex')}`
+  const createdAt = 1
+  const integrity = `sha256:${crypto
+    .createHash('sha256')
+    .update(JSON.stringify({ id, createdAt, material }), 'utf8')
+    .digest('hex')}`
+  return { ...material, id, createdAt, integrity }
+}
+
+function withLaunchIdentity(spec, proxyConfig) {
+  const identity = deploymentIdentity(spec)
   return {
     ...spec,
     ...engineQualificationBinding(spec.command),
-    deployment_identity: deploymentIdentity(spec),
+    deployment_identity: identity,
+    deployment_revision: deploymentRevision(spec, identity, proxyConfig),
   }
 }
 
@@ -335,7 +400,7 @@ function spawnRuntime(executable, dataDir) {
   return child
 }
 
-function testLaunchSpec(dataDir, backendPort) {
+function testLaunchSpec(dataDir, backendPort, proxyConfig) {
   const command = process.platform === 'win32'
     ? [process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', '/D', '/S', '/C', 'ping -n 120 127.0.0.1 >NUL']
     : ['/bin/sleep', '120']
@@ -345,6 +410,7 @@ function testLaunchSpec(dataDir, backendPort) {
     instance_id: 'runtime-smoke-instance',
     config: {
       ...defaultInstanceConfig(),
+      id: 'runtime-smoke-instance',
       name: 'Runtime IPC smoke instance',
       alias: 'runtime-smoke-model',
       model_path: modelPath,
@@ -356,21 +422,21 @@ function testLaunchSpec(dataDir, backendPort) {
     command_display: command.join(' '),
     workload: 'inference',
     working_directory: dataDir,
-  })
+  }, proxyConfig)
 }
 
-function crashingLaunchSpec(dataDir, backendPort) {
+function crashingLaunchSpec(dataDir, backendPort, proxyConfig) {
   const command = process.platform === 'win32'
     ? [process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', '/D', '/S', '/C', 'ping -n 2 127.0.0.1 >NUL & exit /B 1']
     : ['/bin/sh', '-c', 'sleep 0.2; exit 1']
   return withLaunchIdentity({
-    ...testLaunchSpec(dataDir, backendPort),
+    ...testLaunchSpec(dataDir, backendPort, proxyConfig),
     command,
     command_display: command.join(' '),
-  })
+  }, proxyConfig)
 }
 
-function recoverOnceLaunchSpec(dataDir, backendPort) {
+function recoverOnceLaunchSpec(dataDir, backendPort, proxyConfig) {
   const marker = 'runtime-recovery-once.marker'
   const command = process.platform === 'win32'
     ? [
@@ -381,13 +447,13 @@ function recoverOnceLaunchSpec(dataDir, backendPort) {
         `if exist ${marker} (ping -n 120 127.0.0.1 >NUL) else (type NUL > ${marker} & ping -n 2 127.0.0.1 >NUL & exit /B 1)`,
       ]
     : ['/bin/sh', '-c', `if [ -f ${marker} ]; then sleep 120; else : > ${marker}; sleep 0.2; exit 1; fi`]
-  const spec = testLaunchSpec(dataDir, backendPort)
+  const spec = testLaunchSpec(dataDir, backendPort, proxyConfig)
   return withLaunchIdentity({
     ...spec,
     config: { ...spec.config, restart_policy: 'on-failure' },
     command,
     command_display: command.join(' '),
-  })
+  }, proxyConfig)
 }
 
 async function waitForAutomaticRecovery(endpoint, token, originalPid) {
@@ -561,6 +627,7 @@ async function main() {
       || status.reply.payload?.service_pid <= 0
       || !status.reply.payload?.capabilities?.includes('background_detach_v1')
       || !status.reply.payload?.capabilities?.includes('config_sync_ack_v1')
+      || !status.reply.payload?.capabilities?.includes('deployment_revision_v1')
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')) {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }
@@ -578,7 +645,6 @@ async function main() {
       throw new Error(`duplicate runtime contender exited with code ${duplicateExitCodes[failedDuplicateIndex]}: ${duplicate.runtimeStderr()}`)
     }
 
-    const launchSpec = testLaunchSpec(dataDir, backendPort)
     const proxyConfig = {
       enabled: true,
       host: '127.0.0.1',
@@ -591,16 +657,17 @@ async function main() {
         scopes: ['inference', 'discovery'],
         requests_per_minute: 0,
       }],
-      default_instance_id: launchSpec.instance_id,
+      default_instance_id: 'runtime-smoke-instance',
       routes: [{
         id: 'runtime-smoke-route',
         enabled: true,
         model_alias: 'runtime-smoke-model',
-        target_instance_id: launchSpec.instance_id,
+        target_instance_id: 'runtime-smoke-instance',
         priority: 0,
       }],
       runtime_service_enabled: true,
     }
+    const launchSpec = testLaunchSpec(dataDir, backendPort, proxyConfig)
     const initialRevision = Date.now()
     const synced = await request(
       endpoint,
@@ -774,7 +841,7 @@ async function main() {
     const firstCrash = await request(
       endpoint,
       token,
-      { command: 'start_instance', payload: { spec: crashingLaunchSpec(dataDir, backendPort) } },
+      { command: 'start_instance', payload: { spec: crashingLaunchSpec(dataDir, backendPort, proxyConfig) } },
       'start-first-crash',
     )
     if (firstCrash.reply?.result !== 'instance' || firstCrash.reply.payload?.pid <= 0) {
@@ -817,7 +884,7 @@ async function main() {
     const secondCrash = await request(
       endpoint,
       token,
-      { command: 'start_instance', payload: { spec: crashingLaunchSpec(dataDir, backendPort) } },
+      { command: 'start_instance', payload: { spec: crashingLaunchSpec(dataDir, backendPort, proxyConfig) } },
       'start-second-crash',
     )
     if (secondCrash.reply?.result !== 'instance' || secondCrash.reply.payload?.pid <= 0) {
@@ -851,7 +918,7 @@ async function main() {
     const recoverOnce = await request(
       endpoint,
       token,
-      { command: 'start_instance', payload: { spec: recoverOnceLaunchSpec(dataDir, backendPort) } },
+      { command: 'start_instance', payload: { spec: recoverOnceLaunchSpec(dataDir, backendPort, proxyConfig) } },
       'start-automatic-recovery',
     )
     if (recoverOnce.reply?.result !== 'instance' || recoverOnce.reply.payload?.pid <= 0) {
