@@ -107,9 +107,10 @@ fn validate_runtime_deployment_identity(spec: &RuntimeLaunchSpec) -> Result<(), 
     let configuration_id = crate::config_revision::configuration_id_from_fingerprint(&fingerprint)
         .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
     if configuration_id != spec.deployment_identity.configuration_id {
-        return Err(
-            "DEPLOYMENT_CONFIG_IDENTITY_STALE: runtime configuration identity changed".to_string(),
-        );
+        return Err(format!(
+            "DEPLOYMENT_CONFIG_IDENTITY_STALE: runtime configuration identity changed (expected {}, found {})",
+            spec.deployment_identity.configuration_id, configuration_id
+        ));
     }
     Ok(())
 }

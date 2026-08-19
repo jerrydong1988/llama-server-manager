@@ -25,15 +25,26 @@ function loadDefaultInstanceConfig() {
 }
 
 const defaultInstanceConfig = loadDefaultInstanceConfig()
-const RUST_FLOAT_FIELDS = new Set([
-  'rope_scale', 'rope_freq_base', 'rope_freq_scale', 'yarn_ext_factor',
-  'yarn_attn_factor', 'yarn_beta_slow', 'yarn_beta_fast', 'spec_draft_p_min',
-  'spec_draft_p_split', 'slot_prompt_similarity', 'temp', 'top_p',
-  'repeat_penalty', 'min_p', 'presence_penalty', 'frequency_penalty',
-  'mirostat_lr', 'mirostat_ent', 'xtc_probability', 'xtc_threshold',
-  'dynatemp_range', 'dynatemp_exp', 'typical_p', 'dry_multiplier', 'dry_base',
-  'adaptive_target', 'adaptive_decay', 'top_n_sigma',
-])
+
+function loadRustConfigShape() {
+  const source = fs.readFileSync(
+    path.resolve(__dirname, '..', 'src-tauri', 'src', 'models.rs'),
+    'utf8',
+  )
+  const start = source.indexOf('pub struct InstanceConfig')
+  const end = source.indexOf('impl Default for InstanceConfig', start)
+  if (start === -1 || end === -1) throw new Error('InstanceConfig source definition was not found')
+  const definition = source.slice(start, end)
+  const fieldOrder = [...definition.matchAll(/pub\s+([a-zA-Z0-9_]+)\s*:/g)]
+    .map(match => match[1])
+  const floatFields = new Set(
+    [...definition.matchAll(/pub\s+([a-zA-Z0-9_]+)\s*:\s*f(?:32|64)/g)]
+      .map(match => match[1]),
+  )
+  return { fieldOrder, floatFields }
+}
+
+const RUST_CONFIG_SHAPE = loadRustConfigShape()
 const ARTIFACT_SAMPLE_BYTES = 64n * 1024n
 
 function stablePathHash(value) {
@@ -93,9 +104,16 @@ function artifactIdentity(kind, artifactPath) {
 
 function rustConfigJson(config) {
   const canonical = { ...config, id: '', name: '' }
-  const entries = Object.entries(canonical).map(([key, value]) => {
+  const keys = Object.keys(canonical)
+  const missing = RUST_CONFIG_SHAPE.fieldOrder.filter(key => !Object.hasOwn(canonical, key))
+  const extra = keys.filter(key => !RUST_CONFIG_SHAPE.fieldOrder.includes(key))
+  if (missing.length || extra.length) {
+    throw new Error(`runtime smoke config shape drifted (missing: ${missing.join(', ') || 'none'}; extra: ${extra.join(', ') || 'none'})`)
+  }
+  const entries = RUST_CONFIG_SHAPE.fieldOrder.map((key) => {
+    const value = canonical[key]
     let encoded = JSON.stringify(value)
-    if (RUST_FLOAT_FIELDS.has(key) && Number.isInteger(value)) encoded = `${value}.0`
+    if (RUST_CONFIG_SHAPE.floatFields.has(key) && Number.isInteger(value)) encoded = `${value}.0`
     return `${JSON.stringify(key)}:${encoded}`
   })
   return `{${entries.join(',')}}`
