@@ -6,6 +6,7 @@ import { formatHostPort, httpUrl } from '../utils/network'
 import { useI18n } from '../i18n'
 import { getProxyLabels } from '../i18n/pageLabels'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
+import { CanaryRolloutPanel } from './CanaryRollout/CanaryRolloutPanel'
 
 type ProxyRoute = {
   id: string
@@ -928,6 +929,8 @@ export default function ProxyPage() {
         <MetricCard label={labels.inFlightRequests} value={statusFresh ? status.inFlightRequests : '—'} icon={<Zap className="h-5 w-5" />} />
         <MetricCard label={labels.healthyRoutes} value={statusFresh ? `${status.healthyRoutes}/${status.activeRoutes}` : '—'} icon={<HeartPulse className="h-5 w-5" />} />
       </div>
+
+      <CanaryRolloutPanel proxyRunning={statusFresh && status.running} targets={effectiveTargets} />
 
       <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-5">

@@ -10,6 +10,7 @@ pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
 pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
 pub const INSTANCE_RECOVERY_CAPABILITY: &str = "instance_recovery_v1";
 pub const DEPLOYMENT_REVISION_CAPABILITY: &str = "deployment_revision_v1";
+pub const CANARY_ROUTING_CAPABILITY: &str = "canary_routing_v1";
 pub const INSTANCE_RECOVERY_MAX_ATTEMPTS: u32 = 3;
 pub const INSTANCE_RECOVERY_BACKOFF_SECS: [u64; 3] = [2, 10, 30];
 pub const INSTANCE_RECOVERY_STABLE_SECS: u64 = 5 * 60;

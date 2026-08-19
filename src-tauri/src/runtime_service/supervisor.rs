@@ -1,10 +1,10 @@
 use super::protocol::{
     InstanceRecoveryPhase, InstanceRecoveryStatus, PersistedRuntimeState, RuntimeCommand,
     RuntimeFailure, RuntimeFailureKind, RuntimeLaunchSpec, RuntimeReply, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, DEPLOYMENT_REVISION_CAPABILITY,
-    INSTANCE_RECOVERY_BACKOFF_SECS, INSTANCE_RECOVERY_CAPABILITY, INSTANCE_RECOVERY_MAX_ATTEMPTS,
-    INSTANCE_RECOVERY_STABLE_SECS, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
-    RUNTIME_STATE_SCHEMA_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, CANARY_ROUTING_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY,
+    DEPLOYMENT_REVISION_CAPABILITY, INSTANCE_RECOVERY_BACKOFF_SECS, INSTANCE_RECOVERY_CAPABILITY,
+    INSTANCE_RECOVERY_MAX_ATTEMPTS, INSTANCE_RECOVERY_STABLE_SECS, RUNTIME_ERROR_ACK_CAPABILITY,
+    RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
 use crate::commands::engine_capabilities::{executable_fingerprint, QUALIFICATION_PROFILE_VERSION};
@@ -470,6 +470,7 @@ impl RuntimeSupervisor {
             service_pid: std::process::id(),
             capabilities: vec![
                 BACKGROUND_DETACH_CAPABILITY.to_string(),
+                CANARY_ROUTING_CAPABILITY.to_string(),
                 CONFIG_SYNC_ACK_CAPABILITY.to_string(),
                 DEPLOYMENT_REVISION_CAPABILITY.to_string(),
                 INSTANCE_RECOVERY_CAPABILITY.to_string(),

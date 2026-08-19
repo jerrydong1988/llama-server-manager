@@ -66,6 +66,8 @@ pub(crate) fn default_global_config() -> GlobalConfig {
         config_revision_audit: Vec::new(),
         deployment_schema_version: crate::deployment::DEPLOYMENT_SCHEMA_VERSION,
         deployments: HashMap::new(),
+        canary_schema_version: crate::canary::CANARY_SCHEMA_VERSION,
+        canary_rollouts: Vec::new(),
     }
 }
 
@@ -123,6 +125,7 @@ where
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
+    crate::canary::ensure_canary_catalog(&mut global)?;
     update_fn(&mut global);
     persist_global_config_unlocked(&config_dir, &global).map(|_| ())
 }
@@ -139,11 +142,21 @@ pub fn update_proxy_config_and_persist(
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
+    crate::canary::ensure_canary_catalog(&mut global)?;
     let routing_changes = crate::deployment::routing_changed_instance_ids(
         &global.proxy_config,
         proxy_config,
         global.instances.keys().cloned(),
     );
+    let canary_instances = crate::canary::active_instance_ids(&global);
+    if let Some(instance_id) = routing_changes
+        .iter()
+        .find(|instance_id| canary_instances.contains(*instance_id))
+    {
+        return Err(format!(
+            "instance {instance_id} is bound to an unresolved canary rollout; abort or roll back the rollout before changing its deployment routing"
+        ));
+    }
     let lifecycle_conflict = {
         let starting = state.starting.lock().unwrap();
         routing_changes
@@ -172,7 +185,18 @@ pub fn materialize_deployment_revision(
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
+    crate::canary::ensure_canary_catalog(&mut global)?;
+    let bound_revision =
+        crate::canary::active_revision_for_instance(&global, instance_id).map(str::to_owned);
     let revision = crate::deployment::materialize_revision(&mut global, instance_id, identity)?;
+    if bound_revision
+        .as_deref()
+        .is_some_and(|expected| expected != revision.id)
+    {
+        return Err(format!(
+            "instance {instance_id} is bound to another revision by an unresolved canary rollout; abort or roll back the rollout before starting a new revision"
+        ));
+    }
     persist_global_config_unlocked(&config_dir, &global)?;
     Ok(revision)
 }
@@ -188,7 +212,8 @@ pub fn inspect_deployment_catalog(
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     let config_changed = crate::config_revision::ensure_current_config_revisions(&mut global)?;
     let deployment_changed = crate::deployment::ensure_deployments(&mut global)?;
-    if config_changed || deployment_changed {
+    let canary_changed = crate::canary::ensure_canary_catalog(&mut global)?;
+    if config_changed || deployment_changed || canary_changed {
         persist_global_config_unlocked(&config_dir, &global)?;
     }
     let running_revision_id = state
@@ -231,6 +256,7 @@ pub fn replace_engine_names_and_persist(
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
+    crate::canary::ensure_canary_catalog(&mut global)?;
     publish_engine_names_after_persist(&state.engine_names, engine_names, |names| {
         global.engine_names = names.clone();
         persist_global_config_unlocked(&config_dir, &global).map(|_| ())
@@ -289,12 +315,15 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
     config.model_dirs = normalize_model_dirs(config.model_dirs);
     config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
     migrate_global_load_modes(&mut config);
-    let migration = crate::config_revision::ensure_current_config_revisions(&mut config).and_then(
-        |config_changed| {
+    let migration = crate::config_revision::ensure_current_config_revisions(&mut config)
+        .and_then(|config_changed| {
             crate::deployment::ensure_deployments(&mut config)
                 .map(|deployment_changed| config_changed || deployment_changed)
-        },
-    );
+        })
+        .and_then(|changed| {
+            crate::canary::ensure_canary_catalog(&mut config)
+                .map(|canary_changed| changed || canary_changed)
+        });
     match migration {
         Ok(true) => {
             if let Err(error) = persist_global_config(config_dir, &config) {
@@ -307,7 +336,11 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
         }
         Ok(false) => {}
         Err(error) => {
-            let warning = format!("配置或部署修订迁移失败：{error}");
+            // A rollout whose integrity cannot be proven must never resume
+            // traffic automatically. Keep its evidence intact but disable the
+            // proxy in the recovered in-memory snapshot.
+            config.proxy_config.enabled = false;
+            let warning = format!("配置、部署或金丝雀发布记录迁移失败：{error}");
             config.config_load_warning = Some(match config.config_load_warning.take() {
                 Some(existing) => format!("{existing}；{warning}"),
                 None => warning,
@@ -520,12 +553,26 @@ pub async fn save_config(
             .map_err(|error| AppError::new("CONFIG_REVISION_MIGRATION_FAILED", error, false))?;
         crate::deployment::ensure_deployments(&mut global)
             .map_err(|error| AppError::new("DEPLOYMENT_MIGRATION_FAILED", error, false))?;
+        crate::canary::ensure_canary_catalog(&mut global)
+            .map_err(|error| AppError::new("CANARY_MIGRATION_FAILED", error, false))?;
         let previous_instances = global.instances.clone();
         let changed_instance_ids = crate::config_revision::changed_deployment_instance_ids(
             &previous_instances,
             &instances,
         )
         .map_err(|error| AppError::new("CONFIG_REVISION_FINGERPRINT_FAILED", error, false))?;
+        let canary_instances = crate::canary::active_instance_ids(&global);
+        if let Some(conflict) = changed_instance_ids
+            .iter()
+            .find(|instance_id| canary_instances.contains(*instance_id))
+        {
+            return Err(AppError::new(
+                "CANARY_LIFECYCLE_CONFLICT",
+                "deployment configuration cannot change while the instance is bound to an unresolved canary rollout",
+                true,
+            )
+            .with_context("instanceId", conflict.clone()));
+        }
         let lifecycle_conflict = {
             let reserved_instance_ids = state.starting.lock().unwrap();
             crate::config_revision::first_reserved_deployment_change(
@@ -832,6 +879,8 @@ mod tests {
             config_revision_audit: Vec::new(),
             deployment_schema_version: crate::deployment::DEPLOYMENT_SCHEMA_VERSION,
             deployments: HashMap::new(),
+            canary_schema_version: crate::canary::CANARY_SCHEMA_VERSION,
+            canary_rollouts: Vec::new(),
         }
     }
 

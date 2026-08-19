@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod canary;
 mod commands;
 mod config_revision;
 mod deployment;
@@ -16,6 +17,10 @@ mod utils;
 mod vector_policy;
 
 use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
+use crate::commands::canary::ipc::{
+    abort_canary_rollout, create_canary_rollout, list_canary_rollouts, observe_canary_rollout,
+    promote_canary_rollout, rollback_canary_rollout, set_canary_weight,
+};
 use crate::commands::cluster::{
     add_worker, approve_worker, find_rpc_server_binary, generate_rpc_launch_cmd,
     get_cluster_metrics, get_local_host, get_worker_info, get_workers, is_local_host, load_workers,
@@ -685,6 +690,7 @@ fn main() {
             get_system_metrics, get_system_health, get_slots, get_metrics, get_monitoring_series,
             get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
             get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
+            list_canary_rollouts, create_canary_rollout, observe_canary_rollout, set_canary_weight, promote_canary_rollout, abort_canary_rollout, rollback_canary_rollout,
             save_window_state, load_window_state,
             resolve_path,
             scan_workers_tcp, test_worker, get_worker_info,

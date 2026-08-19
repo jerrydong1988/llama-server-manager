@@ -448,3 +448,37 @@ export function getVectorPerformanceLabels(locale: string) {
     taskP95: zh ? '任务 P95' : 'Task P95',
   }
 }
+
+export function getCanaryRolloutLabels(lang: string) {
+  const zh = lang === 'zh-CN'
+  return {
+    title: zh ? '模型与引擎金丝雀发布' : 'Model and engine canary rollout',
+    subtitle: zh ? '在两个已运行的部署修订之间，以人工控制的流量比例进行观察、提升、中止或回滚。' : 'Observe, promote, abort, or roll back traffic between two running deployment revisions.',
+    safety: zh ? '基础路由和部署修订不会被改写；检测到修订或临时路由漂移时会阻止继续提升。' : 'Base routes and deployment revisions stay immutable; revision or overlay drift blocks progression.',
+    newRollout: zh ? '新建金丝雀发布' : 'New canary rollout',
+    stable: zh ? '稳定版本' : 'Stable', candidate: zh ? '候选版本' : 'Candidate',
+    selectInstance: zh ? '选择运行中的实例' : 'Select a running instance',
+    publicAlias: zh ? '对外模型名' : 'Public model alias', publicAliasHint: zh ? '客户端请求中使用的 model 值' : 'The model value clients will request',
+    candidateShare: zh ? '候选流量' : 'Candidate traffic',
+    create: zh ? '启动金丝雀' : 'Start canary', creating: zh ? '正在启动…' : 'Starting…',
+    proxyRequired: zh ? '请先启动路由服务，并确保至少两个实例处于运行状态。' : 'Start the routing proxy and keep at least two instances running.',
+    oneAtATime: zh ? '一次只允许一个未结束的金丝雀发布。' : 'Only one unresolved canary rollout is allowed at a time.',
+    refresh: zh ? '刷新列表' : 'Refresh list', observe: zh ? '采集观察快照' : 'Capture observation', applying: zh ? '处理中…' : 'Working…',
+    applyShare: zh ? '应用流量比例' : 'Apply traffic share', promote: zh ? '提升候选版本' : 'Promote candidate',
+    abort: zh ? '中止金丝雀' : 'Abort canary', rollback: zh ? '回滚提升' : 'Roll back promotion',
+    noHistory: zh ? '尚无金丝雀发布记录。' : 'No canary rollout history yet.',
+    active: zh ? '进行中' : 'Active', promoted: zh ? '已提升，可回滚' : 'Promoted, rollback available',
+    aborted: zh ? '已中止' : 'Aborted', rolledBack: zh ? '已回滚' : 'Rolled back',
+    healthy: zh ? '健康' : 'Healthy', notReady: zh ? '未就绪' : 'Not ready',
+    requests: zh ? '请求' : 'Requests', successRate: zh ? '成功率' : 'Success rate', noEvidence: zh ? '尚无代理请求证据' : 'No proxy request evidence yet',
+    revision: zh ? '部署修订' : 'Deployment revision', traffic: zh ? '当前流量' : 'Current traffic',
+    drift: zh ? '发布已因漂移而冻结' : 'Rollout frozen by drift', audit: zh ? '审计记录' : 'Audit trail',
+    integrityOk: zh ? '完整性已验证' : 'Integrity verified', integrityBad: zh ? '完整性校验失败' : 'Integrity check failed',
+    createdNotice: zh ? '金丝雀发布已启动。' : 'Canary rollout started.', observedNotice: zh ? '观察快照已写入审计记录。' : 'Observation snapshot added to the audit trail.',
+    shareNotice: zh ? '候选流量比例已更新。' : 'Candidate traffic share updated.', promotedNotice: zh ? '候选版本已接收全部流量，仍可人工回滚。' : 'The candidate now receives all traffic and remains manually rollbackable.',
+    abortedNotice: zh ? '金丝雀已中止，基础路由重新生效。' : 'The canary was aborted and base routing is active again.', rollbackNotice: zh ? '提升已回滚，基础路由重新生效。' : 'The promotion was rolled back and base routing is active again.',
+    confirmPromote: zh ? '确认让候选版本接收 100% 流量？只有候选健康且发布未漂移时才能继续。' : 'Promote the candidate to 100% traffic? This proceeds only while it is healthy and the rollout has no drift.',
+    confirmAbort: zh ? '确认中止当前金丝雀并移除临时路由？' : 'Abort this canary and remove its temporary routes?',
+    confirmRollback: zh ? '确认回滚提升并恢复基础路由？' : 'Roll back the promotion and restore base routing?',
+  }
+}

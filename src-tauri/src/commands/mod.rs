@@ -1,5 +1,6 @@
 pub mod adlx;
 pub mod autostart;
+pub mod canary;
 pub mod cluster;
 pub mod cluster_mdns;
 pub mod cluster_network;
