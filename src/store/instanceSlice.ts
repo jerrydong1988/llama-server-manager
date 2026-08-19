@@ -43,25 +43,38 @@ const mergeRecentLogs = (existing: LogEntry[], incoming: LogEntry[]) => {
 }
 
 const isStaleEngineCapabilityError = (error: unknown) => (
-  Boolean(error && typeof error === 'object' && (error as { code?: string }).code === 'ENGINE_CAPABILITIES_STALE')
+  Boolean(error && typeof error === 'object' && [
+    'ENGINE_CAPABILITIES_STALE',
+    'ENGINE_QUALIFICATION_STALE',
+  ].includes((error as { code?: string }).code || ''))
 )
 
 const invalidateEngineCapabilities = (set: AppStoreSet, engineExe: string) => {
   set(state => ({
-    engines: state.engines.map(engine => pathsEqual(engine.exe, engineExe)
-      ? {
-          ...engine,
-          version: '',
-          capabilities: {
-            status: 'unprobed',
-            versionStatus: 'unprobed',
-            supportedFlags: [],
-            helpHash: '',
-            executableFingerprint: '',
-            error: 'Engine executable changed; compatibility probe required.',
-          },
-        }
-      : engine),
+    engines: state.engines.map(engine => {
+      if (!pathsEqual(engine.exe, engineExe)) return engine
+      const qualification = engine.capabilities?.qualification
+      return {
+        ...engine,
+        version: '',
+        capabilities: {
+          status: 'unprobed',
+          versionStatus: 'unprobed',
+          supportedFlags: [],
+          helpHash: '',
+          executableFingerprint: '',
+          error: 'Engine executable changed; compatibility probe and qualification required.',
+          qualification: qualification && qualification.status !== 'unqualified'
+            ? {
+                ...qualification,
+                status: 'stale',
+                invalidatedAt: Math.floor(Date.now() / 1000),
+                diagnostic: 'Engine executable changed; qualification required.',
+              }
+            : qualification,
+        },
+      }
+    }),
   }))
 }
 type ConfigSaveSnapshot = {

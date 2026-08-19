@@ -174,6 +174,11 @@ export function getConfigPageLabels(lang: string) {
     templateCompatibilityDisabled: zh ? '\u53c2\u6570\u80fd\u529b\u672a\u5b8c\u6574\u786e\u8ba4\u65f6\u4e0d\u542f\u7528\u6279\u91cf\u9884\u8bbe' : 'Bulk presets are unavailable until parameter capabilities are fully confirmed',
     engineCompatibilityBlocked: zh ? '\u5f53\u524d\u5f15\u64ce\u4e0d\u652f\u6301\u5df2\u542f\u7528\u7684\u53c2\u6570' : 'The selected engine does not support active parameters',
     engineCompatibilityBlockedDesc: zh ? '\u8bf7\u6e05\u9664\u4e0b\u5217\u53c2\u6570\uff0c\u6216\u5728\u4fdd\u5b58\u524d\u66f4\u6362\u517c\u5bb9\u7684 llama-server \u5f15\u64ce\u3002' : 'Clear the following parameters or choose a compatible llama-server engine before saving.',
+    engineQualificationRequired: zh ? '当前引擎尚未通过资格认证' : 'The selected engine is not qualified',
+    engineQualificationRequiredDesc: zh ? '实例启动会被安全阻止。请在引擎管理中选择一个主生成模型，完成版本、能力、启动、健康与代表性推理认证。' : 'Instance start is safely blocked. In Engine Manager, select a primary generative model and complete version, capability, startup, health, and representative inference checks.',
+    engineQualificationIncompleteDesc: zh ? '当前认证的版本或能力证据不完整，实例启动已被阻止。请查看认证报告并重新运行。' : 'Version or capability evidence is incomplete, so instance start is blocked. Review the qualification report and rerun it.',
+    engineQualificationFailedDesc: zh ? '最近一次资格认证失败或被取消，实例启动已被阻止。请根据诊断证据修复后重新运行。' : 'The latest qualification failed or was cancelled, so instance start is blocked. Use the diagnostic evidence, fix the issue, and rerun it.',
+    engineQualificationStaleDesc: zh ? '引擎制品已变化，之前的认证证据已失效。请重新探测并运行资格认证。' : 'The engine artifact changed and previous evidence is stale. Probe and qualify the engine again.',
     performanceLink: zh ? '\u6027\u80fd\u8bca\u65ad' : 'Performance Diagnostics',
     performanceLinkDesc: zh
       ? '\u4fdd\u5b58\u5e76\u542f\u52a8\u5b9e\u4f8b\u540e\uff0c\u53ef\u5728\u6027\u80fd\u76d1\u63a7\u9875\u67e5\u770b\u541e\u5410\u3001\u663e\u5b58\u548c slot \u8bca\u65ad\u3002'

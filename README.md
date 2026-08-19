@@ -27,13 +27,13 @@ Use the [Download Center](https://download.cnzone.net/) for the recommended plat
 ## 快速开始 / Quick Start
 
 1. 在“模型仓库”添加本地 GGUF 目录，或从“下载管理”获取模型。
-2. 在“引擎管理”扫描包含 `llama-server` 的目录并设置默认引擎。
+2. 在“引擎管理”扫描包含 `llama-server` 的目录，设置默认引擎，并用一个主生成模型完成[引擎资格认证](docs/ENGINE_QUALIFICATION.md)。
 3. 在“实例管理”创建实例，选择模型、引擎和可用端口。
 4. 在“参数配置”检查上下文、GPU 层数、鉴权和服务参数，然后保存。
 5. 启动实例，通过“性能监控”和“服务器日志”确认运行状态。
 
 1. Add a local GGUF directory or download a model.
-2. Scan `llama-server` builds and choose a default engine.
+2. Scan `llama-server` builds, choose a default engine, and complete [engine qualification](docs/ENGINE_QUALIFICATION.md) with a primary generative model.
 3. Create an instance with a model, engine, and free port.
 4. Review context, GPU layers, authentication, and service options, then save.
 5. Start the instance and verify it in Performance and Logs.
@@ -91,7 +91,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 | 系统总览 | 系统健康、实例控制、关注中心、近期活动 | Dashboard | Health, instance controls, attention items, recent activity |
 | 模型仓库 | GGUF 递归扫描、元信息、分片与投影器识别 | Models | Recursive inventory, metadata, shards, and projectors |
 | 下载管理 | 双源浏览、队列、暂停恢复、并发、限速 | Downloads | Dual-source browsing, queues, resume, concurrency, throttling |
-| 引擎管理 | 多版本扫描、后端识别、默认引擎 | Engines | Multi-version scanning, backend detection, defaults |
+| 引擎管理 | 多版本扫描、能力探测、指纹绑定资格认证、默认引擎 | Engines | Multi-version scanning, capability probing, fingerprint-bound qualification, defaults |
 | 实例管理 | 多实例、端口检查、启停、连接测试、命令预览 | Instances | Multi-instance lifecycle, port checks, health, command preview |
 | 参数配置 | 搜索、预设、校验、鉴权、缓存和推测解码 | Configuration | Search, presets, validation, auth, cache, speculative decoding |
 | 集群管理 | Worker 发现、本地与 SSH 启动、RPC 配置 | Cluster | Worker discovery, local or SSH launch, RPC configuration |
@@ -111,6 +111,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - 独立后台运行时可在管理界面退出后继续托管实例与路由，并在当前用户登录后恢复。
 - 可选的实例故障自愈提供有界退避重启、持久化 Crash Loop 保护和原始故障诊断。
 - 每个实例保留有界、脱敏的配置修订历史，支持已知良好标记和停止状态下的事务回滚。
+- 启动前引擎资格认证验证版本、能力、启动、健康和代表性推理；报告绑定引擎指纹，证据缺失或失效时安全阻止启动。
 - 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
 - 端口冲突、路径、配置规则和启动健康检查。
 - 系统托盘、实例自动启动，以及由 Cloudflare R2 分发、Tauri 签名校验的应用内更新。
@@ -121,6 +122,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - Inline or file-based instance keys plus hashed, scoped multi-key routing authentication, per-key limits, and exact-origin CORS.
 - Native OpenAI Chat Completions / Responses and Anthropic Messages on one listener, with strict model boundaries, active probes, circuit breaking, four schedulers, safe `/slots` discovery, and Prometheus metrics.
 - An independent background runtime that keeps instances and routing alive after the management UI exits and restores them at user login.
+- Preflight engine qualification verifies version, capabilities, startup, health, and representative inference; fingerprint-bound evidence fails closed when missing or stale.
 - Atomic configuration saves, backup fallback, persistent downloads and logs.
 - Port, path, configuration, startup, and health validation.
 - System tray, instance auto-start, and Tauri-signed in-app updates distributed through Cloudflare R2.

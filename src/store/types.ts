@@ -54,6 +54,32 @@ export interface EngineInfo {
 
 export type EngineCapabilityStatus = 'unprobed' | 'detected' | 'partial' | 'timeout' | 'failed'
 export type EngineVersionStatus = 'unprobed' | 'detected' | 'unknown'
+export type EngineQualificationStatus = 'unqualified' | 'passed' | 'failed' | 'incomplete' | 'cancelled' | 'stale'
+
+export interface EngineQualificationCheck {
+  name: 'version' | 'capabilities' | 'startup' | 'health' | 'inference' | string
+  status: 'passed' | 'failed' | 'skipped' | 'cancelled' | string
+  durationMs: number
+  detail?: string
+}
+
+export interface EngineQualificationReport {
+  schemaVersion: number
+  profileVersion: number
+  status: EngineQualificationStatus
+  executableFingerprint: string
+  engineVersion: string
+  helpHash: string
+  modelId: string
+  modelName: string
+  modelSize: number
+  modelModifiedAt?: number
+  startedAt?: number
+  completedAt?: number
+  invalidatedAt?: number
+  checks: EngineQualificationCheck[]
+  diagnostic?: string
+}
 
 export interface EngineCapabilities {
   status: EngineCapabilityStatus | string
@@ -66,6 +92,7 @@ export interface EngineCapabilities {
   executableFingerprint: string
   probedAt?: number
   error?: string
+  qualification?: EngineQualificationReport
 }
 
 export interface GeneratedServerCommand {
@@ -623,6 +650,8 @@ export interface AppState {
 
   scanEngines: (paths: string[]) => Promise<void>
   probeEngineCapabilities: (id: string) => Promise<EngineInfo>
+  qualifyEngine: (id: string, modelId: string) => Promise<EngineInfo>
+  cancelEngineQualification: (id: string) => Promise<boolean>
   deleteEngine: (id: string) => Promise<void>
   renameEngine: (id: string, name: string) => void
   openEngineFolder: (dir: string) => Promise<void>

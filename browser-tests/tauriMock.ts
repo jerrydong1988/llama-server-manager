@@ -172,7 +172,7 @@ const engine: EngineInfo = {
     status: 'detected',
     versionStatus: 'detected',
     supportedFlags: [
-      '--temp', '--top-k', '--top-p', '--threads', '--kv-unified',
+      '--model', '--host', '--port', '--temp', '--top-k', '--top-p', '--threads', '--kv-unified',
       '--mmap', '--no-mmap', '--perf', '--no-perf',
       '--models-autoload', '--no-models-autoload', '--image-min-tokens', '--mmproj',
     ],
@@ -185,6 +185,39 @@ const engine: EngineInfo = {
     helpHash: 'browser-test-help',
     executableFingerprint: 'browser-test-engine-fingerprint',
     probedAt: IS_DOCS_SCENARIO ? Date.UTC(2026, 6, 31, 12, 0, 0) / 1000 : 1,
+    qualification: BROWSER_SCENARIO === 'engine-qualification'
+      ? {
+          schemaVersion: 1,
+          profileVersion: 1,
+          status: 'unqualified',
+          executableFingerprint: '',
+          engineVersion: '',
+          helpHash: '',
+          modelId: '',
+          modelName: '',
+          modelSize: 0,
+          checks: [],
+        }
+      : {
+          schemaVersion: 1,
+          profileVersion: 1,
+          status: 'passed',
+          executableFingerprint: 'browser-test-engine-fingerprint',
+          engineVersion: IS_DOCS_SCENARIO ? 'version: 10042 (6d2f8e1)' : 'version: 10042 (browser-test)',
+          helpHash: 'browser-test-help',
+          modelId: models[0].id,
+          modelName: models[0].name,
+          modelSize: models[0].size,
+          startedAt: 1,
+          completedAt: 2,
+          checks: [
+            { name: 'version', status: 'passed', durationMs: 10 },
+            { name: 'capabilities', status: 'passed', durationMs: 10 },
+            { name: 'startup', status: 'passed', durationMs: 20 },
+            { name: 'health', status: 'passed', durationMs: 30 },
+            { name: 'inference', status: 'passed', durationMs: 40 },
+          ],
+        },
   },
 }
 
@@ -1096,6 +1129,38 @@ mockIPC((command, payload) => {
       return null
     }
     case 'probe_engine_capabilities': return clone(engine)
+    case 'qualify_engine': {
+      const engineId = String(args.engineId ?? '')
+      const modelId = String(args.modelId ?? '')
+      const target = engines.find(candidate => candidate.id === engineId)
+      const qualificationModel = models.find(candidate => candidate.id === modelId)
+      if (!target || !qualificationModel) throw new Error('browser test qualification target not found')
+      target.capabilities = {
+        ...target.capabilities!,
+        qualification: {
+          schemaVersion: 1,
+          profileVersion: 1,
+          status: 'passed',
+          executableFingerprint: target.capabilities!.executableFingerprint,
+          engineVersion: target.version,
+          helpHash: target.capabilities!.helpHash,
+          modelId: qualificationModel.id,
+          modelName: qualificationModel.name,
+          modelSize: qualificationModel.size,
+          startedAt: 10,
+          completedAt: 11,
+          checks: [
+            { name: 'version', status: 'passed', durationMs: 10, detail: 'engine version was detected' },
+            { name: 'capabilities', status: 'passed', durationMs: 10, detail: 'required flags were confirmed' },
+            { name: 'startup', status: 'passed', durationMs: 20, detail: 'qualification server remained running' },
+            { name: 'health', status: 'passed', durationMs: 30, detail: 'GET /health returned HTTP 200 OK' },
+            { name: 'inference', status: 'passed', durationMs: 40, detail: 'POST /completion returned predicted output' },
+          ],
+        },
+      }
+      return clone(target)
+    }
+    case 'cancel_engine_qualification': return true
     case 'get_download_manager_snapshot':
       if (IS_DOCS_SCENARIO) {
         return {

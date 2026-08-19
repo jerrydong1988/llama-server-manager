@@ -221,6 +221,86 @@ pub struct ModelInfo {
 // Engine information.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct EngineQualificationCheck {
+    pub name: String,
+    pub status: String,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineQualificationReport {
+    #[serde(default = "default_engine_qualification_schema_version")]
+    pub schema_version: u8,
+    #[serde(default = "default_engine_qualification_profile_version")]
+    pub profile_version: u8,
+    #[serde(default = "default_engine_qualification_status")]
+    pub status: String,
+    #[serde(default)]
+    pub executable_fingerprint: String,
+    #[serde(default)]
+    pub engine_version: String,
+    #[serde(default)]
+    pub help_hash: String,
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub model_name: String,
+    #[serde(default)]
+    pub model_size: u64,
+    #[serde(default)]
+    pub model_modified_at: Option<u64>,
+    #[serde(default)]
+    pub started_at: Option<u64>,
+    #[serde(default)]
+    pub completed_at: Option<u64>,
+    #[serde(default)]
+    pub invalidated_at: Option<u64>,
+    #[serde(default)]
+    pub checks: Vec<EngineQualificationCheck>,
+    #[serde(default)]
+    pub diagnostic: Option<String>,
+}
+
+fn default_engine_qualification_schema_version() -> u8 {
+    1
+}
+
+fn default_engine_qualification_profile_version() -> u8 {
+    1
+}
+
+fn default_engine_qualification_status() -> String {
+    "unqualified".to_string()
+}
+
+impl Default for EngineQualificationReport {
+    fn default() -> Self {
+        Self {
+            schema_version: default_engine_qualification_schema_version(),
+            profile_version: default_engine_qualification_profile_version(),
+            status: default_engine_qualification_status(),
+            executable_fingerprint: String::new(),
+            engine_version: String::new(),
+            help_hash: String::new(),
+            model_id: String::new(),
+            model_name: String::new(),
+            model_size: 0,
+            model_modified_at: None,
+            started_at: None,
+            completed_at: None,
+            invalidated_at: None,
+            checks: Vec::new(),
+            diagnostic: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EngineCapabilities {
     #[serde(default = "default_engine_capability_status")]
     pub status: String,
@@ -242,6 +322,8 @@ pub struct EngineCapabilities {
     pub probed_at: Option<u64>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default)]
+    pub qualification: EngineQualificationReport,
 }
 
 fn default_engine_capability_status() -> String {
@@ -265,6 +347,7 @@ impl Default for EngineCapabilities {
             executable_fingerprint: String::new(),
             probed_at: None,
             error: None,
+            qualification: EngineQualificationReport::default(),
         }
     }
 }

@@ -12,6 +12,7 @@ import {
 } from '../engineCapabilities'
 import { dedupePaths, isPathWithinRoot, pathsEqual } from '../utils/path'
 import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
+import { EngineQualificationPanel } from './EngineQualificationPanel'
 
 const backendTone = (backend: string) => {
   switch (backend) {
@@ -34,8 +35,11 @@ const capabilityTone = (status: string) => {
 
 const EngineManager = () => {
   const engines = useAppStore(state => state.engines)
+  const models = useAppStore(state => state.models)
   const scanEngines = useAppStore(state => state.scanEngines)
   const probeEngineCapabilities = useAppStore(state => state.probeEngineCapabilities)
+  const qualifyEngine = useAppStore(state => state.qualifyEngine)
+  const cancelEngineQualification = useAppStore(state => state.cancelEngineQualification)
   const addRuntimeWarning = useAppStore(state => state.addRuntimeWarning)
   const loadInitialData = useAppStore(state => state.loadInitialData)
   const isLoading = useAppStore(state => state.isLoading)
@@ -54,6 +58,8 @@ const EngineManager = () => {
   const [searchQuery, setSearchQuery] = useState('')
   const [backendFilter, setBackendFilter] = useState('all')
   const [probingEngineId, setProbingEngineId] = useState<string | null>(null)
+  const [qualifyingEngineId, setQualifyingEngineId] = useState<string | null>(null)
+  const [qualificationModelId, setQualificationModelId] = useState('')
   const editingCanceledRef = useRef(false)
 
   const labels = useMemo(() => getEngineLabels(lang), [lang])
@@ -99,6 +105,25 @@ const EngineManager = () => {
     () => engines.find(engine => selectedEngineId && pathsEqual(engine.id, selectedEngineId)) ?? null,
     [engines, selectedEngineId],
   )
+
+  const qualificationModels = useMemo(() => models.filter(model => (
+    model.file_type === 'model'
+    && !model.is_shard
+    && !model.capabilities?.is_mmproj
+    && model.capabilities?.is_embedding_model !== true
+    && model.capabilities?.is_reranker_model !== true
+  )), [models])
+
+  useEffect(() => {
+    const reportModelId = selectedEngine?.capabilities?.qualification?.modelId
+    setQualificationModelId(current => {
+      if (qualificationModels.some(model => pathsEqual(model.id, current))) return current
+      if (reportModelId && qualificationModels.some(model => pathsEqual(model.id, reportModelId))) {
+        return reportModelId
+      }
+      return qualificationModels[0]?.id ?? ''
+    })
+  }, [qualificationModels, selectedEngine?.capabilities?.qualification?.modelId, selectedEngine?.id])
 
   const handleScan = async () => {
     await scanEngines(engineDirs)
@@ -172,6 +197,28 @@ const EngineManager = () => {
       addRuntimeWarning(formatMessage(labels.probeFailed, { error: String(error) }))
     } finally {
       setProbingEngineId(null)
+    }
+  }
+
+  const handleQualification = async () => {
+    if (!selectedEngine || !qualificationModelId || qualifyingEngineId) return
+    setQualifyingEngineId(selectedEngine.id)
+    try {
+      await qualifyEngine(selectedEngine.id, qualificationModelId)
+    } catch (error) {
+      addRuntimeWarning(formatMessage(labels.qualificationFailed, { error: String(error) }))
+    } finally {
+      setQualifyingEngineId(null)
+    }
+  }
+
+  const handleCancelQualification = async () => {
+    if (!qualifyingEngineId) return
+    try {
+      const cancelled = await cancelEngineQualification(qualifyingEngineId)
+      if (!cancelled) addRuntimeWarning(labels.qualificationCancelFailed)
+    } catch {
+      addRuntimeWarning(labels.qualificationCancelFailed)
     }
   }
 
@@ -530,6 +577,19 @@ const EngineManager = () => {
                   {labels.versionUnknownWarning}
                 </div>
               )}
+
+              <EngineQualificationPanel
+                engine={selectedEngine}
+                models={models}
+                selectedModelId={qualificationModelId}
+                qualifying={Boolean(qualifyingEngineId && pathsEqual(qualifyingEngineId, selectedEngine.id))}
+                busy={qualifyingEngineId !== null}
+                lang={lang}
+                labels={labels}
+                onModelChange={setQualificationModelId}
+                onQualify={() => void handleQualification()}
+                onCancel={() => void handleCancelQualification()}
+              />
 
               <div className="grid gap-3">
                 <Button

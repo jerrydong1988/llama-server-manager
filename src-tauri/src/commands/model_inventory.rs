@@ -856,6 +856,58 @@ mod tests {
         let capabilities = serde_json::from_str::<EngineCapabilities>("{}").unwrap();
         assert_eq!(capabilities.status, "unprobed");
         assert!(capabilities.supported_flags.is_empty());
+        assert_eq!(capabilities.qualification.status, "unqualified");
+        assert!(capabilities.qualification.checks.is_empty());
+    }
+
+    #[test]
+    fn engine_qualification_report_round_trips_through_inventory_cache() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        let dir =
+            std::env::temp_dir().join(format!("lsm-qualified-inventory-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("llama-server-test");
+        std::fs::write(&exe, b"engine").unwrap();
+        let report = crate::models::EngineQualificationReport {
+            status: "passed".to_string(),
+            executable_fingerprint: "fingerprint".to_string(),
+            model_id: "model-id".to_string(),
+            checks: vec![crate::models::EngineQualificationCheck {
+                name: "inference".to_string(),
+                status: "passed".to_string(),
+                duration_ms: 12,
+                detail: None,
+            }],
+            completed_at: Some(42),
+            ..crate::models::EngineQualificationReport::default()
+        };
+        let record = InventoryEngineRecord {
+            id: exe.to_string_lossy().to_string(),
+            name: "engine".to_string(),
+            dir: dir.to_string_lossy().to_string(),
+            exe: exe.to_string_lossy().to_string(),
+            version: "version: 1".to_string(),
+            backend: "CPU".to_string(),
+            capabilities: EngineCapabilities {
+                qualification: report,
+                ..EngineCapabilities::default()
+            },
+            exe_mtime: 0,
+            scan_root: dir.to_string_lossy().to_string(),
+            last_seen: 0,
+            cache_version: MODEL_INVENTORY_SCHEMA_VERSION,
+        };
+        upsert_engine_records_in_connection(&conn, std::slice::from_ref(&record)).unwrap();
+
+        let loaded = load_engine_index_from_connection(&conn, InventoryCacheReadMode::Current)
+            .unwrap()
+            .remove(&record.id)
+            .unwrap();
+        assert_eq!(loaded.capabilities.qualification.status, "passed");
+        assert_eq!(loaded.capabilities.qualification.model_id, "model-id");
+        assert_eq!(loaded.capabilities.qualification.checks.len(), 1);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
