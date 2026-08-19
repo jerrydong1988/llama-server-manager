@@ -3831,6 +3831,7 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(instance),
+                    deployment_identity: Default::default(),
                 },
             )]),
             bound_addr: String::new(),
@@ -3886,6 +3887,7 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(instance),
+                    deployment_identity: Default::default(),
                 },
             )]),
             bound_addr: String::new(),
@@ -4542,6 +4544,7 @@ mod tests {
                 telemetry_session_id: None,
                 workload: "inference".into(),
                 launch_config: Some(instance),
+                deployment_identity: Default::default(),
             },
         )]);
         let config = ProxyConfig {
@@ -4607,6 +4610,7 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(primary),
+                    deployment_identity: Default::default(),
                 },
             ),
             (
@@ -4621,6 +4625,7 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(backup),
+                    deployment_identity: Default::default(),
                 },
             ),
         ]);
@@ -4786,6 +4791,7 @@ mod tests {
                 telemetry_session_id: None,
                 workload: "inference".into(),
                 launch_config: Some(instance),
+                deployment_identity: Default::default(),
             },
         )]);
         let config = ProxyConfig {
@@ -4849,6 +4855,7 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(launched),
+                    deployment_identity: Default::default(),
                 },
             ),
             (
@@ -4863,6 +4870,7 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(fallback),
+                    deployment_identity: Default::default(),
                 },
             ),
         ]);
@@ -4916,6 +4924,7 @@ mod tests {
                 telemetry_session_id: None,
                 workload: "inference".into(),
                 launch_config: Some(fallback),
+                deployment_identity: Default::default(),
             },
         )]);
         let config = ProxyConfig {
@@ -4999,6 +5008,7 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(instance),
+                    deployment_identity: Default::default(),
                 },
             )]),
             bound_addr: String::new(),

@@ -516,6 +516,7 @@ pub(crate) fn stale_engine_qualification(
         qualification.invalidated_at = Some(now_secs());
         qualification.diagnostic = Some(compact_error(reason));
     }
+    let _ = crate::deployment_identity::seal_qualification_report(&mut qualification);
     qualification
 }
 
@@ -540,13 +541,18 @@ pub(crate) fn qualification_matches_executable(
     qualification_report_is_complete(qualification)
         && !qualification.executable_fingerprint.is_empty()
         && qualification.executable_fingerprint == executable_fingerprint(executable)
+        && crate::deployment_identity::artifact_identity_for_path(
+            "engine",
+            std::path::Path::new(executable),
+        )
+        .is_ok_and(|identity| identity.artifact_id == qualification.engine_artifact_id)
 }
 
 fn qualification_report_is_complete(qualification: &EngineQualificationReport) -> bool {
     const REQUIRED_CHECKS: [&str; 5] =
         ["version", "capabilities", "startup", "health", "inference"];
 
-    qualification.schema_version == 1
+    qualification.schema_version == 2
         && qualification.profile_version == QUALIFICATION_PROFILE_VERSION
         && qualification.status == "passed"
         && !qualification.engine_version.trim().is_empty()
@@ -556,6 +562,7 @@ fn qualification_report_is_complete(qualification: &EngineQualificationReport) -
         && qualification.model_size > 0
         && qualification.started_at.is_some()
         && qualification.completed_at.is_some()
+        && crate::deployment_identity::qualification_evidence_valid(qualification)
         && REQUIRED_CHECKS.iter().all(|required| {
             qualification
                 .checks
@@ -1642,12 +1649,30 @@ fn persist_engine_qualification(
             "engine executable changed; compatibility probe and qualification required",
         );
     }
+    match crate::deployment_identity::artifact_identity_for_path(
+        "engine",
+        std::path::Path::new(expected_executable),
+    ) {
+        Ok(identity) if identity.artifact_id == qualification.engine_artifact_id => {
+            current.artifact_identity = identity;
+        }
+        Ok(_) | Err(_) => {
+            qualification = stale_engine_qualification(
+                qualification,
+                "engine artifact identity changed while qualification was in progress",
+            );
+        }
+    }
+    crate::deployment_identity::seal_qualification_report(&mut qualification)?;
     current.capabilities.qualification = qualification;
     if let Err(error) = model_inventory::update_engine_probe(current) {
         current.capabilities.qualification.status = "failed".to_string();
         current.capabilities.qualification.diagnostic = bounded_qualification_diagnostic(format!(
             "qualification evidence was not persisted: {error}"
         ));
+        let _ = crate::deployment_identity::seal_qualification_report(
+            &mut current.capabilities.qualification,
+        );
     }
     Ok(current.clone())
 }
@@ -1711,6 +1736,10 @@ pub async fn qualify_engine(
     )?;
     let model_path =
         crate::security::require_authorized_model_path(std::path::Path::new(&model.path))?;
+    let engine_artifact_identity =
+        crate::deployment_identity::artifact_identity_for_path("engine", &executable)?;
+    let model_artifact_identity =
+        crate::deployment_identity::artifact_identity_for_path("model", &model_path)?;
     let (model_size, model_modified_at) = model_file_evidence(&model_path)?;
     let reservation = QualificationReservation::reserve(&engine.id)?;
     let started_at = now_secs();
@@ -1723,7 +1752,9 @@ pub async fn qualify_engine(
                 profile_version: QUALIFICATION_PROFILE_VERSION,
                 status: "incomplete".to_string(),
                 executable_fingerprint: fingerprint,
+                engine_artifact_id: engine_artifact_identity.artifact_id.clone(),
                 model_id: model.id.clone(),
+                model_artifact_id: model_artifact_identity.artifact_id.clone(),
                 model_name: model.name.clone(),
                 model_size,
                 model_modified_at,
@@ -1791,9 +1822,11 @@ pub async fn qualify_engine(
         profile_version: QUALIFICATION_PROFILE_VERSION,
         status: "incomplete".to_string(),
         executable_fingerprint: probed.capabilities.executable_fingerprint.clone(),
+        engine_artifact_id: engine_artifact_identity.artifact_id.clone(),
         engine_version: probed.version.clone(),
         help_hash: probed.capabilities.help_hash.clone(),
         model_id: model.id.clone(),
+        model_artifact_id: model_artifact_identity.artifact_id.clone(),
         model_name: model.name.clone(),
         model_size,
         model_modified_at,
@@ -1869,10 +1902,15 @@ pub async fn qualify_engine(
     report.completed_at = Some(now_secs());
 
     let final_model_evidence = model_file_evidence(&model_path);
+    let final_model_identity =
+        crate::deployment_identity::artifact_identity_for_path("model", &model_path);
     if !matches!(
         final_model_evidence,
         Ok((final_size, final_modified))
             if final_size == model_size && final_modified == model_modified_at
+    ) || !matches!(
+        final_model_identity,
+        Ok(ref identity) if identity.artifact_id == report.model_artifact_id
     ) {
         report.status = "failed".to_string();
         report.diagnostic = bounded_qualification_diagnostic(
@@ -2032,7 +2070,7 @@ mod tests {
     fn legacy_capabilities_default_to_an_unqualified_report() {
         let capabilities: EngineCapabilities = serde_json::from_str("{}").unwrap();
         assert_eq!(capabilities.qualification.status, "unqualified");
-        assert_eq!(capabilities.qualification.schema_version, 1);
+        assert_eq!(capabilities.qualification.schema_version, 2);
         assert_eq!(capabilities.qualification.profile_version, 1);
         assert!(capabilities.qualification.checks.is_empty());
     }
@@ -2062,12 +2100,18 @@ mod tests {
             uuid::Uuid::new_v4()
         ));
         std::fs::write(&path, vec![b'a'; 128 * 1024]).unwrap();
-        let qualification = EngineQualificationReport {
+        let engine_artifact_id =
+            crate::deployment_identity::artifact_identity_for_path("engine", &path)
+                .unwrap()
+                .artifact_id;
+        let mut qualification = EngineQualificationReport {
             status: "passed".to_string(),
             executable_fingerprint: executable_fingerprint(&path.to_string_lossy()),
+            engine_artifact_id,
             engine_version: "version: 1".to_string(),
             help_hash: "help-hash".to_string(),
             model_id: "model-id".to_string(),
+            model_artifact_id: "urn:lsm:model:v1:sha256:test".to_string(),
             model_name: "model.gguf".to_string(),
             model_size: 1024,
             started_at: Some(1),
@@ -2078,6 +2122,7 @@ mod tests {
                 .collect(),
             ..EngineQualificationReport::default()
         };
+        crate::deployment_identity::seal_qualification_report(&mut qualification).unwrap();
         assert!(qualification_matches_executable(
             &path.to_string_lossy(),
             &qualification

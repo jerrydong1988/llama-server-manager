@@ -2,6 +2,7 @@
 
 mod commands;
 mod config_revision;
+mod deployment_identity;
 mod error;
 mod models;
 mod operation_timing;
@@ -52,7 +53,8 @@ use crate::commands::scanner::{
 };
 use crate::commands::server::{
     check_port, generate_server_command, get_metrics, get_slots, get_system_health,
-    get_system_metrics, open_browser, start_server, stop_server, test_connection,
+    get_system_metrics, inspect_deployment_identity, open_browser, start_server, stop_server,
+    test_connection,
 };
 use crate::commands::telemetry::{
     get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_detail,
@@ -663,7 +665,7 @@ fn main() {
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
             probe_engine_capabilities, qualify_engine, cancel_engine_qualification,
             load_app_data, get_cached_scan,
-            generate_server_command, start_server, stop_server, open_browser,
+            generate_server_command, inspect_deployment_identity, start_server, stop_server, open_browser,
             save_config, load_config,
             list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
             browse_modelscope, download_modelscope_files,

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const RUNTIME_PROTOCOL_VERSION: u32 = 1;
-pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 2;
+pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 3;
 pub const MAX_RUNTIME_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
@@ -31,6 +31,8 @@ pub struct RuntimeLaunchSpec {
     pub engine_qualification_fingerprint: String,
     #[serde(default)]
     pub engine_qualification_profile_version: u8,
+    #[serde(default)]
+    pub deployment_identity: crate::deployment_identity::DeploymentIdentity,
     pub engine_backend: String,
     pub command: Vec<String>,
     pub command_display: String,
@@ -264,6 +266,7 @@ mod tests {
             launch_config_stale: false,
             engine_qualification_fingerprint: String::new(),
             engine_qualification_profile_version: 0,
+            deployment_identity: Default::default(),
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
@@ -343,6 +346,7 @@ mod tests {
             telemetry_session_id: None,
             workload: "inference".into(),
             launch_config: None,
+            deployment_identity: Default::default(),
         };
         let request = RuntimeRequest {
             protocol_version: RUNTIME_PROTOCOL_VERSION,

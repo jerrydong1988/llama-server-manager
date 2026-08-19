@@ -39,6 +39,34 @@ export interface ModelInfo {
   capabilities?: ModelCapabilities
   file_type: string
   is_shard?: boolean
+  artifact_identity?: ArtifactIdentity
+}
+
+export interface ArtifactIdentity {
+  schemaVersion: number
+  kind: 'engine' | 'model' | string
+  artifactId: string
+  algorithm: string
+  fileSize: number
+  sampleSize: number
+  sampleCount: number
+}
+
+export interface DeploymentIdentity {
+  schemaVersion: number
+  deploymentId: string
+  engineArtifactId: string
+  modelArtifactId: string
+  configRevisionId: string
+  configurationId: string
+  qualificationEvidenceId: string
+}
+
+export interface DeploymentIdentityStatus {
+  ready: boolean
+  errorCode?: string
+  message?: string
+  identity?: DeploymentIdentity
 }
 
 export interface EngineInfo {
@@ -50,6 +78,7 @@ export interface EngineInfo {
   backend: string
   custom_name?: string
   capabilities?: EngineCapabilities
+  artifact_identity?: ArtifactIdentity
 }
 
 export type EngineCapabilityStatus = 'unprobed' | 'detected' | 'partial' | 'timeout' | 'failed'
@@ -68,9 +97,11 @@ export interface EngineQualificationReport {
   profileVersion: number
   status: EngineQualificationStatus
   executableFingerprint: string
+  engineArtifactId: string
   engineVersion: string
   helpHash: string
   modelId: string
+  modelArtifactId: string
   modelName: string
   modelSize: number
   modelModifiedAt?: number
@@ -79,6 +110,7 @@ export interface EngineQualificationReport {
   invalidatedAt?: number
   checks: EngineQualificationCheck[]
   diagnostic?: string
+  evidenceId: string
 }
 
 export interface EngineCapabilities {
@@ -194,6 +226,8 @@ export interface ConfigFieldChangeSummary {
 export interface ConfigRevisionSummary {
   id: string
   fingerprint: string
+  identitySchemaVersion: number
+  configurationId: string
   parentRevisionId: string | null
   createdAt: number
   reason: ConfigRevisionReason
@@ -217,6 +251,7 @@ export interface ConfigRevisionHistory {
   instanceId: string
   currentFingerprint: string
   currentRevisionId: string
+  currentConfigurationId: string
   knownGoodRevisionId: string | null
   revisions: ConfigRevisionSummary[]
   audit: ConfigRevisionAuditSummary[]
@@ -664,6 +699,7 @@ export interface AppState {
   saveConfig: () => Promise<void>
   loadConfig: () => Promise<void>
   listConfigRevisions: (instanceId: string) => Promise<ConfigRevisionHistory>
+  inspectDeploymentIdentity: (instanceId: string) => Promise<DeploymentIdentityStatus>
   markConfigRevisionKnownGood: (instanceId: string, revisionId: string, expectedCurrentFingerprint: string) => Promise<ConfigRevisionHistory>
   rollbackConfigRevision: (instanceId: string, revisionId: string, expectedCurrentFingerprint: string) => Promise<ConfigRevisionRollbackResponse>
 

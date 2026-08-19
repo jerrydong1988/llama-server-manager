@@ -24,6 +24,8 @@ export type {
   ConfigRevisionRollbackResponse,
   ConfigFieldChangeSummary,
   ConfigValueSummary,
+  DeploymentIdentity,
+  DeploymentIdentityStatus,
   Instance,
   InstanceLifecyclePhase,
   LogEntry,

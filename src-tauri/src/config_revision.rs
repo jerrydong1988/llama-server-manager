@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-pub const CONFIG_REVISION_SCHEMA_VERSION: u32 = 1;
+pub const CONFIG_REVISION_SCHEMA_VERSION: u32 = 2;
 pub const CONFIG_REVISION_HISTORY_LIMIT: usize = 50;
 pub const CONFIG_REVISION_AUDIT_LIMIT: usize = 200;
 const CONFIG_REVISION_DIFF_LIMIT: usize = 128;
@@ -34,6 +34,10 @@ pub enum ConfigRevisionReason {
 pub struct ConfigRevisionRecord {
     pub id: String,
     pub fingerprint: String,
+    #[serde(default = "default_configuration_identity_schema_version")]
+    pub identity_schema_version: u8,
+    #[serde(default)]
+    pub configuration_id: String,
     pub parent_revision_id: Option<String>,
     pub created_at: u64,
     pub reason: ConfigRevisionReason,
@@ -93,6 +97,8 @@ pub struct ConfigFieldChangeSummary {
 pub struct ConfigRevisionSummary {
     pub id: String,
     pub fingerprint: String,
+    pub identity_schema_version: u8,
+    pub configuration_id: String,
     pub parent_revision_id: Option<String>,
     pub created_at: u64,
     pub reason: ConfigRevisionReason,
@@ -120,6 +126,7 @@ pub struct ConfigRevisionHistoryResponse {
     pub instance_id: String,
     pub current_fingerprint: String,
     pub current_revision_id: String,
+    pub current_configuration_id: String,
     pub known_good_revision_id: Option<String>,
     pub revisions: Vec<ConfigRevisionSummary>,
     pub audit: Vec<ConfigRevisionAuditSummary>,
@@ -130,6 +137,14 @@ pub struct ConfigRevisionHistoryResponse {
 pub struct ConfigRevisionRollbackResponse {
     pub config: InstanceConfig,
     pub history: ConfigRevisionHistoryResponse,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigRevisionIdentity {
+    pub revision_id: String,
+    pub configuration_id: String,
+    pub fingerprint: String,
 }
 
 fn now_epoch_seconds() -> u64 {
@@ -162,8 +177,46 @@ pub fn deployment_config_fingerprint(config: &InstanceConfig) -> Result<String, 
     Ok(format!("sha256:{digest:x}"))
 }
 
+const fn default_configuration_identity_schema_version() -> u8 {
+    1
+}
+
+pub fn configuration_id_from_fingerprint(fingerprint: &str) -> Result<String, String> {
+    let digest = fingerprint
+        .strip_prefix("sha256:")
+        .filter(|digest| {
+            digest.len() == 64 && digest.chars().all(|value| value.is_ascii_hexdigit())
+        })
+        .ok_or_else(|| "configuration fingerprint is not a sha256 digest".to_string())?;
+    Ok(format!(
+        "urn:lsm:configuration:v1:sha256:{}",
+        digest.to_ascii_lowercase()
+    ))
+}
+
 #[derive(Serialize)]
 struct ConfigRevisionIntegrityMaterial<'a> {
+    id: &'a str,
+    fingerprint: &'a str,
+    identity_schema_version: u8,
+    configuration_id: &'a str,
+    parent_revision_id: &'a Option<String>,
+    created_at: u64,
+    reason: ConfigRevisionReason,
+    rollback_of: &'a Option<String>,
+}
+
+fn event_integrity_fingerprint(
+    material: &ConfigRevisionIntegrityMaterial<'_>,
+) -> Result<String, String> {
+    let bytes = serde_json::to_vec(material)
+        .map_err(|error| format!("failed to serialize revision event identity: {error}"))?;
+    let digest = Sha256::digest(bytes);
+    Ok(format!("sha256:{digest:x}"))
+}
+
+#[derive(Serialize)]
+struct LegacyConfigRevisionIntegrityMaterial<'a> {
     id: &'a str,
     fingerprint: &'a str,
     parent_revision_id: &'a Option<String>,
@@ -172,39 +225,40 @@ struct ConfigRevisionIntegrityMaterial<'a> {
     rollback_of: &'a Option<String>,
 }
 
-fn event_integrity_fingerprint(
-    id: &str,
-    fingerprint: &str,
-    parent_revision_id: &Option<String>,
-    created_at: u64,
-    reason: ConfigRevisionReason,
-    rollback_of: &Option<String>,
-) -> Result<String, String> {
-    let bytes = serde_json::to_vec(&ConfigRevisionIntegrityMaterial {
-        id,
-        fingerprint,
-        parent_revision_id,
-        created_at,
-        reason,
-        rollback_of,
+fn legacy_event_integrity_fingerprint(record: &ConfigRevisionRecord) -> Result<String, String> {
+    let bytes = serde_json::to_vec(&LegacyConfigRevisionIntegrityMaterial {
+        id: &record.id,
+        fingerprint: &record.fingerprint,
+        parent_revision_id: &record.parent_revision_id,
+        created_at: record.created_at,
+        reason: record.reason,
+        rollback_of: &record.rollback_of,
     })
-    .map_err(|error| format!("failed to serialize revision event identity: {error}"))?;
-    let digest = Sha256::digest(bytes);
-    Ok(format!("sha256:{digest:x}"))
+    .map_err(|error| format!("failed to serialize legacy revision event identity: {error}"))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(bytes)))
 }
 
 fn record_integrity_valid(record: &ConfigRevisionRecord) -> bool {
     let snapshot_valid = deployment_config_fingerprint(&record.snapshot)
         .is_ok_and(|fingerprint| fingerprint == record.fingerprint);
-    let event_valid = event_integrity_fingerprint(
-        &record.id,
-        &record.fingerprint,
-        &record.parent_revision_id,
-        record.created_at,
-        record.reason,
-        &record.rollback_of,
-    )
-    .is_ok_and(|integrity| integrity == record.event_integrity);
+    let event_valid = if record.configuration_id.is_empty() {
+        legacy_event_integrity_fingerprint(record)
+            .is_ok_and(|integrity| integrity == record.event_integrity)
+    } else {
+        configuration_id_from_fingerprint(&record.fingerprint)
+            .is_ok_and(|identity| identity == record.configuration_id)
+            && event_integrity_fingerprint(&ConfigRevisionIntegrityMaterial {
+                id: &record.id,
+                fingerprint: &record.fingerprint,
+                identity_schema_version: record.identity_schema_version,
+                configuration_id: &record.configuration_id,
+                parent_revision_id: &record.parent_revision_id,
+                created_at: record.created_at,
+                reason: record.reason,
+                rollback_of: &record.rollback_of,
+            })
+            .is_ok_and(|integrity| integrity == record.event_integrity)
+    };
     snapshot_valid && event_valid
 }
 
@@ -265,17 +319,23 @@ fn append_revision_at(
         .or_default();
     let parent_revision_id = history.last().map(|revision| revision.id.clone());
     let id = Uuid::new_v4().to_string();
-    let event_integrity = event_integrity_fingerprint(
-        &id,
-        &fingerprint,
-        &parent_revision_id,
+    let identity_schema_version = default_configuration_identity_schema_version();
+    let configuration_id = configuration_id_from_fingerprint(&fingerprint)?;
+    let event_integrity = event_integrity_fingerprint(&ConfigRevisionIntegrityMaterial {
+        id: &id,
+        fingerprint: &fingerprint,
+        identity_schema_version,
+        configuration_id: &configuration_id,
+        parent_revision_id: &parent_revision_id,
         created_at,
         reason,
-        &rollback_of,
-    )?;
+        rollback_of: &rollback_of,
+    })?;
     history.push(ConfigRevisionRecord {
         id: id.clone(),
         fingerprint,
+        identity_schema_version,
+        configuration_id,
         parent_revision_id,
         created_at,
         reason,
@@ -306,6 +366,27 @@ fn ensure_current_config_revisions_at(
         ));
     }
     let mut changed = global.config_revision_schema_version < CONFIG_REVISION_SCHEMA_VERSION;
+    for history in global.config_revisions.values_mut() {
+        for record in history {
+            if !record.configuration_id.is_empty() || !record_integrity_valid(record) {
+                continue;
+            }
+            record.configuration_id = configuration_id_from_fingerprint(&record.fingerprint)?;
+            record.identity_schema_version = default_configuration_identity_schema_version();
+            record.event_integrity =
+                event_integrity_fingerprint(&ConfigRevisionIntegrityMaterial {
+                    id: &record.id,
+                    fingerprint: &record.fingerprint,
+                    identity_schema_version: record.identity_schema_version,
+                    configuration_id: &record.configuration_id,
+                    parent_revision_id: &record.parent_revision_id,
+                    created_at: record.created_at,
+                    reason: record.reason,
+                    rollback_of: &record.rollback_of,
+                })?;
+            changed = true;
+        }
+    }
     global.config_revision_schema_version = CONFIG_REVISION_SCHEMA_VERSION;
 
     let active_ids = active_instance_ids(global);
@@ -648,6 +729,10 @@ fn build_history_response(
             )
             .with_context("instanceId", instance_id)
         })?;
+    let current_configuration_id = history
+        .last()
+        .map(|revision| revision.configuration_id.clone())
+        .unwrap_or_default();
     let known_good_revision_id = global.known_good_config_revisions.get(instance_id).cloned();
     let by_id: HashMap<&str, &ConfigRevisionRecord> = history
         .iter()
@@ -671,6 +756,8 @@ fn build_history_response(
         revisions.push(ConfigRevisionSummary {
             id: revision.id.clone(),
             fingerprint: revision.fingerprint.clone(),
+            identity_schema_version: revision.identity_schema_version,
+            configuration_id: revision.configuration_id.clone(),
             parent_revision_id: revision.parent_revision_id.clone(),
             created_at: revision.created_at,
             reason: revision.reason,
@@ -699,9 +786,83 @@ fn build_history_response(
         instance_id: instance_id.to_string(),
         current_fingerprint,
         current_revision_id,
+        current_configuration_id,
         known_good_revision_id,
         revisions,
         audit,
+    })
+}
+
+pub fn resolve_current_config_identity(
+    state: &AppState,
+    instance_id: &str,
+    config: &InstanceConfig,
+) -> AppResult<ConfigRevisionIdentity> {
+    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    let mut global = load_global_config_for_update_unlocked(&config_dir).map_err(|error| {
+        config_revision_error("DEPLOYMENT_CONFIG_LOAD_FAILED", error, true)
+            .with_context("instanceId", instance_id)
+    })?;
+    if ensure_current_config_revisions(&mut global).map_err(|error| {
+        config_revision_error("DEPLOYMENT_CONFIG_MIGRATION_FAILED", error, false)
+            .with_context("instanceId", instance_id)
+    })? {
+        persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
+            config_revision_error("DEPLOYMENT_CONFIG_PERSIST_FAILED", error, true)
+                .with_context("instanceId", instance_id)
+        })?;
+    }
+    let persisted = global.instances.get(instance_id).ok_or_else(|| {
+        config_revision_error(
+            "DEPLOYMENT_CONFIG_NOT_PERSISTED",
+            "save this instance configuration before creating a deployment identity",
+            true,
+        )
+        .with_context("instanceId", instance_id)
+    })?;
+    let requested_fingerprint = deployment_config_fingerprint(config).map_err(|error| {
+        config_revision_error("DEPLOYMENT_CONFIG_IDENTITY_FAILED", error, false)
+            .with_context("instanceId", instance_id)
+    })?;
+    let persisted_fingerprint = deployment_config_fingerprint(persisted).map_err(|error| {
+        config_revision_error("DEPLOYMENT_CONFIG_IDENTITY_FAILED", error, false)
+            .with_context("instanceId", instance_id)
+    })?;
+    if requested_fingerprint != persisted_fingerprint {
+        return Err(config_revision_error(
+            "DEPLOYMENT_CONFIG_UNSAVED",
+            "the launch configuration differs from the current persisted revision",
+            true,
+        )
+        .with_context("instanceId", instance_id));
+    }
+    let record = global
+        .config_revisions
+        .get(instance_id)
+        .and_then(|history| history.last())
+        .filter(|record| record.fingerprint == requested_fingerprint)
+        .ok_or_else(|| {
+            config_revision_error(
+                "DEPLOYMENT_CONFIG_REVISION_MISSING",
+                "the persisted configuration has no matching current revision",
+                true,
+            )
+            .with_context("instanceId", instance_id)
+        })?;
+    if !record_integrity_valid(record) || record.configuration_id.is_empty() {
+        return Err(config_revision_error(
+            "DEPLOYMENT_CONFIG_REVISION_INVALID",
+            "the current configuration revision failed identity verification",
+            false,
+        )
+        .with_context("instanceId", instance_id)
+        .with_context("revisionId", &record.id));
+    }
+    Ok(ConfigRevisionIdentity {
+        revision_id: record.id.clone(),
+        configuration_id: record.configuration_id.clone(),
+        fingerprint: record.fingerprint.clone(),
     })
 }
 
@@ -1123,6 +1284,71 @@ mod tests {
         );
         assert!(!ensure_current_config_revisions_at(&mut global, 11).unwrap());
         assert_eq!(global.config_revisions["one"].len(), 1);
+    }
+
+    #[test]
+    fn schema_one_migration_preserves_revision_links_and_known_good_evidence() {
+        let (mut global, baseline_id, current_id) = global_with_two_revisions();
+        global.config_revision_schema_version = 1;
+        global
+            .known_good_config_revisions
+            .insert("one".into(), baseline_id.clone());
+        let audit_id = Uuid::new_v4().to_string();
+        global.config_revision_audit.push(ConfigRevisionAuditEvent {
+            id: audit_id.clone(),
+            instance_id: "one".into(),
+            created_at: 9,
+            action: ConfigRevisionAuditAction::KnownGoodSet,
+            revision_id: Some(baseline_id.clone()),
+            previous_revision_id: None,
+        });
+        for record in global.config_revisions.get_mut("one").unwrap() {
+            record.configuration_id.clear();
+            record.event_integrity = legacy_event_integrity_fingerprint(record).unwrap();
+        }
+
+        assert!(ensure_current_config_revisions_at(&mut global, 20).unwrap());
+
+        let history = &global.config_revisions["one"];
+        assert_eq!(history[0].id, baseline_id);
+        assert_eq!(history[1].id, current_id);
+        assert_eq!(
+            history[1].parent_revision_id.as_deref(),
+            Some(history[0].id.as_str())
+        );
+        assert!(history.iter().all(|record| {
+            !record.configuration_id.is_empty() && record_integrity_valid(record)
+        }));
+        assert_eq!(global.known_good_config_revisions["one"], history[0].id);
+        assert!(global
+            .config_revision_audit
+            .iter()
+            .any(|event| event.id == audit_id));
+    }
+
+    #[test]
+    fn corrupt_schema_one_revision_is_retained_as_invalid_during_migration() {
+        let mut global = global_with(vec![instance("one", "Display", 8080, "secret")]);
+        ensure_current_config_revisions_at(&mut global, 10).unwrap();
+        global.config_revision_schema_version = 1;
+        let corrupt_id = global.config_revisions["one"][0].id.clone();
+        {
+            let record = &mut global.config_revisions.get_mut("one").unwrap()[0];
+            record.configuration_id.clear();
+            record.event_integrity = legacy_event_integrity_fingerprint(record).unwrap();
+            record.snapshot.port += 1;
+        }
+
+        assert!(ensure_current_config_revisions_at(&mut global, 20).unwrap());
+
+        let history = &global.config_revisions["one"];
+        let corrupt = history
+            .iter()
+            .find(|record| record.id == corrupt_id)
+            .unwrap();
+        assert!(corrupt.configuration_id.is_empty());
+        assert!(!record_integrity_valid(corrupt));
+        assert!(record_integrity_valid(history.last().unwrap()));
     }
 
     #[test]

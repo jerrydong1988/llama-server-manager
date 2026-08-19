@@ -216,6 +216,8 @@ pub struct ModelInfo {
     pub file_type: String,
     #[serde(default)]
     pub is_shard: bool,
+    #[serde(default)]
+    pub artifact_identity: crate::deployment_identity::ArtifactIdentity,
 }
 
 // Engine information.
@@ -242,11 +244,15 @@ pub struct EngineQualificationReport {
     #[serde(default)]
     pub executable_fingerprint: String,
     #[serde(default)]
+    pub engine_artifact_id: String,
+    #[serde(default)]
     pub engine_version: String,
     #[serde(default)]
     pub help_hash: String,
     #[serde(default)]
     pub model_id: String,
+    #[serde(default)]
+    pub model_artifact_id: String,
     #[serde(default)]
     pub model_name: String,
     #[serde(default)]
@@ -263,10 +269,12 @@ pub struct EngineQualificationReport {
     pub checks: Vec<EngineQualificationCheck>,
     #[serde(default)]
     pub diagnostic: Option<String>,
+    #[serde(default)]
+    pub evidence_id: String,
 }
 
 fn default_engine_qualification_schema_version() -> u8 {
-    1
+    2
 }
 
 fn default_engine_qualification_profile_version() -> u8 {
@@ -284,9 +292,11 @@ impl Default for EngineQualificationReport {
             profile_version: default_engine_qualification_profile_version(),
             status: default_engine_qualification_status(),
             executable_fingerprint: String::new(),
+            engine_artifact_id: String::new(),
             engine_version: String::new(),
             help_hash: String::new(),
             model_id: String::new(),
+            model_artifact_id: String::new(),
             model_name: String::new(),
             model_size: 0,
             model_modified_at: None,
@@ -295,6 +305,7 @@ impl Default for EngineQualificationReport {
             invalidated_at: None,
             checks: Vec::new(),
             diagnostic: None,
+            evidence_id: String::new(),
         }
     }
 }
@@ -364,6 +375,8 @@ pub struct EngineInfo {
     pub custom_name: Option<String>,
     #[serde(default)]
     pub capabilities: EngineCapabilities,
+    #[serde(default)]
+    pub artifact_identity: crate::deployment_identity::ArtifactIdentity,
 }
 
 // Instance config.
@@ -1003,6 +1016,8 @@ pub struct RunningInstance {
     /// Immutable configuration snapshot used by runtime consumers until restart.
     #[serde(default)]
     pub launch_config: Option<InstanceConfig>,
+    #[serde(default)]
+    pub deployment_identity: crate::deployment_identity::DeploymentIdentity,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
