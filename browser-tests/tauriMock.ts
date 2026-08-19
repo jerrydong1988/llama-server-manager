@@ -1064,6 +1064,58 @@ mockIPC((command, payload) => {
         },
       }
     }
+    case 'inspect_deployment': {
+      const instanceId = String(args.instanceId ?? '')
+      const deploymentId = `urn:lsm:managed-deployment:v1:sha256:browser-${instanceId}`
+      if (BROWSER_SCENARIO === 'deployment-unmaterialized') {
+        return {
+          instanceId,
+          deploymentId,
+          state: 'unmaterialized',
+          message: 'browser mock unmaterialized detail',
+          currentRevisionId: null,
+          rollbackTargetRevisionId: null,
+          runningRevisionId: null,
+          revisions: [],
+        }
+      }
+      const state = BROWSER_SCENARIO === 'deployment-stale'
+        ? 'stale'
+        : BROWSER_SCENARIO === 'deployment-invalid' ? 'invalid' : 'ready'
+      const revisionId = `urn:lsm:deployment-revision:v1:sha256:browser-${instanceId}`
+      return {
+        instanceId,
+        deploymentId,
+        state,
+        message: state === 'ready' ? null : 'browser mock state detail',
+        currentRevisionId: revisionId,
+        rollbackTargetRevisionId: state === 'ready' ? `urn:lsm:deployment-revision:v1:sha256:previous-${instanceId}` : null,
+        runningRevisionId: control.state.running[instanceId] ? revisionId : null,
+        revisions: [{
+          id: revisionId,
+          deploymentIdentity: {
+            schemaVersion: 1,
+            deploymentId: `urn:lsm:deployment:v1:sha256:browser-${instanceId}`,
+            engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
+            modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
+            configRevisionId: `revision-current-${instanceId}`,
+            configurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
+            qualificationEvidenceId: 'urn:lsm:qualification:v2:sha256:browser-evidence',
+          },
+          runtimePolicy: { autoStart: false, restartPolicy: 'never' },
+          routing: {
+            proxyEnabled: false,
+            defaultTarget: false,
+            routingStrategy: 'priorityFailover',
+            routes: [],
+          },
+          createdAt: 1_787_059_200,
+          current: true,
+          rollbackTarget: false,
+          integrityValid: state !== 'invalid',
+        }],
+      }
+    }
     case 'mark_config_revision_known_good': {
       const instanceId = String(args.instanceId ?? '')
       const revisionId = String(args.revisionId ?? '')

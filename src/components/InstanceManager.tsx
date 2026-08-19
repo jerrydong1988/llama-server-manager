@@ -16,6 +16,7 @@ import { pathsEqual } from '../utils/path'
 import { usePortAvailability } from './InstanceManager/usePortAvailability'
 import { InstanceRecoveryPanel, InstanceRuntimePolicyControls } from './InstanceManager/InstanceRecoveryPanel'
 import { InstanceTestResult, type InstanceTestState } from './InstanceManager/InstanceTestResult'
+import { DeploymentPanel } from './InstanceManager/DeploymentPanel'
 
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
 const InstanceManager = () => {
@@ -652,6 +653,8 @@ const InstanceManager = () => {
                 lifecycleBusy={Boolean(instanceLifecycle[selectedInstance.id])}
                 onCancel={() => void stopInstance(selectedInstance.id).catch(() => {})}
               />
+
+              <DeploymentPanel instanceId={selectedInstance.id} refreshKey={`${selectedInstance.status}:${selectedInstance.config.auto_start}:${selectedInstance.config.restart_policy}`} />
 
               <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-800 dark:bg-slate-950/60">
                 <div className="grid min-w-0 grid-cols-[86px_minmax(0,1fr)] gap-3">

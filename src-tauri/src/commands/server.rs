@@ -2097,50 +2097,47 @@ pub struct DeploymentIdentityStatus {
     pub identity: Option<crate::deployment_identity::DeploymentIdentity>,
 }
 
+fn resolve_deployment_identity(
+    state: &AppState,
+    instance_id: &str,
+) -> AppResult<crate::deployment_identity::DeploymentIdentity> {
+    validate_instance_id(instance_id)?;
+    let config = state
+        .instances
+        .lock()
+        .unwrap()
+        .get(instance_id)
+        .cloned()
+        .ok_or_else(|| AppError::new("DEPLOYMENT_INSTANCE_NOT_FOUND", "未找到实例配置。", false))?;
+    let engine_exe = state
+        .engines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.id),
+                std::path::Path::new(&config.engine_id),
+            )
+        })
+        .map(|engine| engine.exe.clone())
+        .ok_or_else(|| {
+            AppError::new(
+                "DEPLOYMENT_ENGINE_NOT_FOUND",
+                "实例引用的引擎不在已扫描清单中。",
+                true,
+            )
+        })?;
+    let qualification = validate_engine_qualification(state, &config, &engine_exe)?;
+    build_deployment_identity(state, instance_id, &config, &engine_exe, &qualification)
+}
+
 #[tauri::command]
 pub fn inspect_deployment_identity(
     instance_id: String,
     state: tauri::State<'_, AppState>,
 ) -> DeploymentIdentityStatus {
-    let result = (|| -> AppResult<crate::deployment_identity::DeploymentIdentity> {
-        validate_instance_id(&instance_id)?;
-        let config = state
-            .instances
-            .lock()
-            .unwrap()
-            .get(&instance_id)
-            .cloned()
-            .ok_or_else(|| {
-                AppError::new("DEPLOYMENT_INSTANCE_NOT_FOUND", "未找到实例配置。", false)
-            })?;
-        let engine_exe = state
-            .engines
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|engine| {
-                paths_equal(
-                    std::path::Path::new(&engine.id),
-                    std::path::Path::new(&config.engine_id),
-                )
-            })
-            .map(|engine| engine.exe.clone())
-            .ok_or_else(|| {
-                AppError::new(
-                    "DEPLOYMENT_ENGINE_NOT_FOUND",
-                    "实例引用的引擎不在已扫描清单中。",
-                    true,
-                )
-            })?;
-        let qualification = validate_engine_qualification(state.inner(), &config, &engine_exe)?;
-        build_deployment_identity(
-            state.inner(),
-            &instance_id,
-            &config,
-            &engine_exe,
-            &qualification,
-        )
-    })();
+    let result = resolve_deployment_identity(state.inner(), &instance_id);
     match result {
         Ok(identity) => DeploymentIdentityStatus {
             ready: true,
@@ -2155,6 +2152,25 @@ pub fn inspect_deployment_identity(
             identity: None,
         },
     }
+}
+
+#[tauri::command]
+pub fn inspect_deployment(
+    instance_id: String,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<crate::deployment::DeploymentInspection> {
+    let preflight = resolve_deployment_identity(state.inner(), &instance_id);
+    let (identity, error) = match preflight {
+        Ok(identity) => (Some(identity), None),
+        Err(error) => (None, Some(error.message)),
+    };
+    crate::commands::config::inspect_deployment_catalog(
+        state.inner(),
+        &instance_id,
+        identity.as_ref(),
+        error,
+    )
+    .map_err(|message| AppError::new("DEPLOYMENT_INSPECTION_FAILED", message, true))
 }
 
 fn qualification_gate_error(status: &str, evidence_is_current: bool) -> Option<AppError> {
@@ -2379,6 +2395,15 @@ pub async fn start_server(
     };
     validate_effective_launch_security(&config, &cmd)?;
     let cmd_display = format_command_for_display(&cmd);
+    let deployment_revision = crate::commands::config::materialize_deployment_revision(
+        state.inner(),
+        &instance_id,
+        &deployment_identity,
+    )
+    .map_err(|message| {
+        AppError::new("DEPLOYMENT_REVISION_PERSIST_FAILED", message, true)
+            .with_context("instanceId", instance_id.clone())
+    })?;
     timing.mark("preflight");
 
     if crate::runtime_service::manages_instances() {
@@ -2390,6 +2415,7 @@ pub async fn start_server(
                 engine_qualification_fingerprint: engine_qualification.fingerprint.clone(),
                 engine_qualification_profile_version: engine_qualification.profile_version,
                 deployment_identity: deployment_identity.clone(),
+                deployment_revision: deployment_revision.clone(),
                 engine_backend: engine_backend.clone(),
                 command: cmd.clone(),
                 command_display: cmd_display.clone(),
@@ -2567,6 +2593,8 @@ pub async fn start_server(
                     workload: workload.as_str().to_string(),
                     launch_config: Some(config.clone()),
                     deployment_identity: deployment_identity.clone(),
+                    deployment_id: deployment_revision.deployment_id.clone(),
+                    deployment_revision_id: deployment_revision.id.clone(),
                 },
             );
             false
@@ -6203,6 +6231,8 @@ mod perf_parser_tests {
             workload: "inference".into(),
             launch_config: None,
             deployment_identity: Default::default(),
+            deployment_id: String::new(),
+            deployment_revision_id: String::new(),
         };
 
         assert!(!process_identity_matches(

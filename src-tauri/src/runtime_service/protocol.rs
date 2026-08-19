@@ -3,12 +3,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const RUNTIME_PROTOCOL_VERSION: u32 = 1;
-pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 3;
+pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 4;
 pub const MAX_RUNTIME_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
 pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
 pub const INSTANCE_RECOVERY_CAPABILITY: &str = "instance_recovery_v1";
+pub const DEPLOYMENT_REVISION_CAPABILITY: &str = "deployment_revision_v1";
 pub const INSTANCE_RECOVERY_MAX_ATTEMPTS: u32 = 3;
 pub const INSTANCE_RECOVERY_BACKOFF_SECS: [u64; 3] = [2, 10, 30];
 pub const INSTANCE_RECOVERY_STABLE_SECS: u64 = 5 * 60;
@@ -33,6 +34,9 @@ pub struct RuntimeLaunchSpec {
     pub engine_qualification_profile_version: u8,
     #[serde(default)]
     pub deployment_identity: crate::deployment_identity::DeploymentIdentity,
+    /// Complete immutable deployment revision used to validate recovery.
+    #[serde(default)]
+    pub deployment_revision: crate::deployment::DeploymentRevision,
     pub engine_backend: String,
     pub command: Vec<String>,
     pub command_display: String,
@@ -267,6 +271,7 @@ mod tests {
             engine_qualification_fingerprint: String::new(),
             engine_qualification_profile_version: 0,
             deployment_identity: Default::default(),
+            deployment_revision: Default::default(),
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
@@ -347,6 +352,8 @@ mod tests {
             workload: "inference".into(),
             launch_config: None,
             deployment_identity: Default::default(),
+            deployment_id: String::new(),
+            deployment_revision_id: String::new(),
         };
         let request = RuntimeRequest {
             protocol_version: RUNTIME_PROTOCOL_VERSION,
