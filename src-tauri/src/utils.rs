@@ -1,4 +1,4 @@
-use crate::models::{GgufMetadataSummary, ModelCapabilities};
+use crate::models::{GgufMetadataSummary, GgufResourceMetadata, ModelCapabilities};
 use crate::vector_policy::{classify_model_workload, ModelWorkload};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -85,6 +85,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
     let mut file_type: Option<u32> = None;
     let mut mtp_layers: Option<u32> = None;
     let mut has_swa: Option<bool> = None;
+    let mut resource = GgufResourceMetadata::default();
     let mut general_type: Option<String> = None;
     let mut model_name: Option<String> = None;
     let mut model_basename: Option<String> = None;
@@ -162,6 +163,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
             }
             4 => {
                 let value = read_u32(&mut file)?;
+                record_resource_metadata(&key_lower, value as u64, &mut resource);
                 if key == "general.file_type" {
                     file_type = Some(value);
                 }
@@ -177,6 +179,9 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
             }
             5 => {
                 let value = read_i32(&mut file)?;
+                if value > 0 {
+                    record_resource_metadata(&key_lower, value as u64, &mut resource);
+                }
                 if key_lower.contains("context_length") && value > 0 {
                     context_length = Some(value as u32);
                 }
@@ -189,6 +194,7 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
             }
             10 => {
                 let value = read_u64(&mut file)?;
+                record_resource_metadata(&key_lower, value, &mut resource);
                 if key_lower.contains("context_length") {
                     context_length = Some(value as u32);
                 }
@@ -201,6 +207,9 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
             }
             11 => {
                 let value = read_i64(&mut file)?;
+                if value > 0 {
+                    record_resource_metadata(&key_lower, value as u64, &mut resource);
+                }
                 if key_lower.contains("context_length") && value > 0 {
                     context_length = Some(value as u32);
                 }
@@ -296,7 +305,24 @@ pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
             base_model_repo,
             tags,
         },
+        resource,
     })
+}
+
+fn record_resource_metadata(key: &str, value: u64, resource: &mut GgufResourceMetadata) {
+    let value = u32::try_from(value).ok().filter(|value| *value > 0);
+    match key {
+        key if key.ends_with(".block_count") => resource.block_count = value,
+        key if key.ends_with(".embedding_length") => resource.embedding_length = value,
+        key if key.ends_with(".attention.head_count") => resource.attention_head_count = value,
+        key if key.ends_with(".attention.head_count_kv") => {
+            resource.attention_head_count_kv = value
+        }
+        key if key.ends_with(".attention.key_length") => resource.attention_key_length = value,
+        key if key.ends_with(".attention.value_length") => resource.attention_value_length = value,
+        key if key.ends_with(".attention.sliding_window") => resource.sliding_window = value,
+        _ => {}
+    }
 }
 
 fn read_u32(file: &mut std::fs::File) -> Result<u32, String> {
@@ -1311,6 +1337,39 @@ mod tests {
                 .has_swa,
             Some(false)
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn parsed_metadata_exposes_bounded_resource_scalars() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-resource-metadata-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("resource.gguf");
+        write_test_gguf(
+            &path,
+            &[
+                ("llama.block_count", TestMetadataValue::U32(32)),
+                ("llama.embedding_length", TestMetadataValue::U32(4096)),
+                ("llama.attention.head_count", TestMetadataValue::U32(32)),
+                ("llama.attention.head_count_kv", TestMetadataValue::U32(8)),
+                ("llama.attention.key_length", TestMetadataValue::U32(128)),
+                ("llama.attention.value_length", TestMetadataValue::U32(128)),
+                (
+                    "llama.attention.sliding_window",
+                    TestMetadataValue::U32(4096),
+                ),
+            ],
+        );
+
+        let resource = parse_gguf_metadata(&path).unwrap().resource;
+        assert_eq!(resource.block_count, Some(32));
+        assert_eq!(resource.embedding_length, Some(4096));
+        assert_eq!(resource.attention_head_count, Some(32));
+        assert_eq!(resource.attention_head_count_kv, Some(8));
+        assert_eq!(resource.attention_key_length, Some(128));
+        assert_eq!(resource.attention_value_length, Some(128));
+        assert_eq!(resource.sliding_window, Some(4096));
         let _ = std::fs::remove_dir_all(dir);
     }
 

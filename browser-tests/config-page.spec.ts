@@ -29,6 +29,37 @@ test('opening an instance config keeps React hook order stable (issue #5)', asyn
   expect(pageErrors).toEqual([])
 })
 
+test('resource planning is visible, invalidates after edits, and refreshes before save', async ({ page }) => {
+  await openConfiguration(page)
+
+  const panel = page.locator('[data-guide="resource-plan"]')
+  await expect(panel).toBeVisible()
+  await expect(panel.getByText('可行', { exact: true })).toBeVisible()
+  await expect(panel).toContainText('置信度: 中')
+  await expect(panel).toContainText('系统内存')
+  await expect(panel).toContainText('显存')
+  await expect(panel).toContainText('131,072')
+  await expect(panel).not.toContainText('C:\\browser-test')
+
+  const beforeEdit = await page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'plan_instance_resources').length
+  ))
+  await page.locator('[data-config-field="temp"] input').fill('0.7')
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'plan_instance_resources').length
+  ))).toBeGreaterThan(beforeEdit)
+  await expect(panel.getByText('可行', { exact: true })).toBeVisible()
+
+  const beforeSave = await page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'plan_instance_resources').length
+  ))
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'plan_instance_resources').length
+  ))).toBeGreaterThan(beforeSave)
+})
+
 test('configuration revisions expose redacted history, known-good audit, and transactional rollback', async ({ page }) => {
   await openConfiguration(page)
 

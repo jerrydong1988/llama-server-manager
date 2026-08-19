@@ -1,5 +1,5 @@
 import { invokeApp as invoke } from '../lib/ipc'
-import { message } from '@tauri-apps/plugin-dialog'
+import { confirm, message } from '@tauri-apps/plugin-dialog'
 import {
   loadAppBootstrap,
   normalizeStoredConfig,
@@ -18,10 +18,12 @@ import type {
   GeneratedServerCommand,
   InstanceConfig,
   LogEntry,
+  ResourcePlan,
 } from './types'
 import { resolveEffectiveEngine } from './engineResolution'
 import { pathsEqual } from '../utils/path'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
+import { getResourcePlanLaunchCopy } from '../i18n/resourcePlanCopy'
 
 const MAX_LOG_ENTRIES = 1000
 const MAX_RECENT_LOG_ENTRIES = 2000
@@ -120,6 +122,7 @@ export function createInstanceSlice(
   | 'addLogs'
   | 'clearLogs'
   | 'generateCommand'
+  | 'planResources'
   | 'startInstance'
   | 'stopInstance'
   | 'openBrowser'
@@ -216,6 +219,9 @@ export function createInstanceSlice(
         throw error
       }
     },
+    planResources: async (config: InstanceConfig, engineBackend: string) => (
+      invoke<ResourcePlan>('plan_instance_resources', { config, engineBackend })
+    ),
     startInstance: (id, manualRecovery = true) => runInstanceStart(id, async () => {
       const timing = beginOperationTiming('instance.start')
       let outcome: OperationOutcome = 'failure'
@@ -244,6 +250,31 @@ export function createInstanceSlice(
         }
         if (!normalized.config.engine_id) {
           normalized.config = { ...normalized.config, engine_id: engine.id }
+        }
+        const resourcePlan = await get().planResources(normalized.config, engine.backend)
+        timing.mark('resource-plan')
+        const launchCopy = getResourcePlanLaunchCopy((() => {
+          try { return localStorage.getItem('lang') || 'zh-CN' } catch { return 'zh-CN' }
+        })())
+        if (resourcePlan.status === 'infeasible') {
+          await message(
+            launchCopy.infeasibleBody,
+            { title: launchCopy.infeasibleTitle, kind: 'error' },
+          )
+          outcome = 'cancelled'
+          return
+        }
+        if (resourcePlan.status === 'constrained' || resourcePlan.status === 'unknown') {
+          const proceed = await confirm(
+            resourcePlan.status === 'constrained'
+              ? launchCopy.constrainedBody
+              : launchCopy.unknownBody,
+            { title: launchCopy.riskTitle, kind: 'warning' },
+          )
+          if (!proceed) {
+            outcome = 'cancelled'
+            return
+          }
         }
         if (normalized.changes.length > 0 || !pathsEqual(normalized.config.engine_id, instance.config.engine_id)) {
           set((state) => ({

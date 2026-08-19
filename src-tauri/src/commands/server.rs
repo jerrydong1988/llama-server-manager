@@ -2344,6 +2344,26 @@ pub async fn start_server(
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let manual = uses_manual_command(&config);
     let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
+    let resource_plan = crate::resource_planner::plan_instance_resources(
+        &config,
+        &engine_backend,
+        current_capacity_snapshot(),
+    );
+    if resource_plan.explicitly_infeasible() {
+        return Err(AppError::new(
+            "RESOURCE_PLAN_INFEASIBLE",
+            "资源规划器判定当前可用内存不足；配置未启动，请释放资源或调整上下文、缓存或卸载设置。",
+            true,
+        )
+        .with_context(
+            "ramExpectedBytes",
+            resource_plan.ram.required.expected_bytes.to_string(),
+        )
+        .with_context(
+            "vramExpectedBytes",
+            resource_plan.vram.required.expected_bytes.to_string(),
+        ));
+    }
     let deployment_identity = build_deployment_identity(
         state.inner(),
         &instance_id,
@@ -3703,6 +3723,57 @@ struct GpuSystemSnapshot {
     system_cpu_percent: Option<f32>,
     system_memory_total_mb: Option<f64>,
     system_memory_used_mb: Option<f64>,
+}
+
+fn mib_to_bytes(value: Option<f64>) -> Option<u64> {
+    value.and_then(|value| {
+        let bytes = value * 1024.0 * 1024.0;
+        if bytes.is_finite() && bytes >= 0.0 && bytes <= u64::MAX as f64 {
+            Some(bytes.round() as u64)
+        } else {
+            None
+        }
+    })
+}
+
+fn current_capacity_snapshot() -> crate::resource_planner::CapacitySnapshot {
+    let snapshot = collect_gpu_and_system();
+    let ram_total_bytes = mib_to_bytes(snapshot.system_memory_total_mb);
+    let ram_used_bytes = mib_to_bytes(snapshot.system_memory_used_mb);
+    let vram_total_bytes = mib_to_bytes(snapshot.vram_total_mb);
+    let vram_used_bytes = mib_to_bytes(snapshot.vram_used_mb);
+    crate::resource_planner::CapacitySnapshot {
+        ram_total_bytes,
+        ram_available_bytes: ram_total_bytes
+            .zip(ram_used_bytes)
+            .map(|(total, used)| total.saturating_sub(used)),
+        vram_total_bytes,
+        vram_available_bytes: vram_total_bytes
+            .zip(vram_used_bytes)
+            .map(|(total, used)| total.saturating_sub(used)),
+    }
+}
+
+#[tauri::command]
+pub async fn plan_instance_resources(
+    config: InstanceConfig,
+    engine_backend: String,
+) -> AppResult<crate::resource_planner::ResourcePlan> {
+    tokio::task::spawn_blocking(move || {
+        crate::resource_planner::plan_instance_resources(
+            &config,
+            &engine_backend,
+            current_capacity_snapshot(),
+        )
+    })
+    .await
+    .map_err(|error| {
+        AppError::new(
+            "RESOURCE_PLAN_FAILED",
+            format!("资源规划失败: {error}"),
+            true,
+        )
+    })
 }
 
 /// Collect GPU + system-level metrics. Uses cached System instance, no sleep.

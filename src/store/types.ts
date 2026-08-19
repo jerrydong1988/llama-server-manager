@@ -25,6 +25,17 @@ export interface GgufMetadataSummary {
   context_length?: number
   quant_type?: string
   capabilities?: ModelCapabilities
+  resource?: GgufResourceMetadata
+}
+
+export interface GgufResourceMetadata {
+  block_count?: number
+  embedding_length?: number
+  attention_head_count?: number
+  attention_head_count_kv?: number
+  attention_key_length?: number
+  attention_value_length?: number
+  sliding_window?: number
 }
 
 export interface ModelInfo {
@@ -176,6 +187,48 @@ export interface GeneratedServerCommand {
   command: string[]
   unsupportedFlags: string[]
   emittedOverrideKeys: Array<keyof InstanceConfig>
+}
+
+export type ResourcePlanStatus = 'feasible' | 'constrained' | 'infeasible' | 'unknown'
+export type ResourcePlanConfidence = 'high' | 'medium' | 'low'
+
+export interface ResourceRange {
+  minBytes: number
+  expectedBytes: number
+  maxBytes: number
+}
+
+export interface ResourceBudget {
+  required: ResourceRange
+  totalBytes: number | null
+  availableBytes: number | null
+  reservedBytes: number
+  expectedHeadroomBytes: number | null
+}
+
+export interface ResourceComponentEstimate {
+  kind: string
+  target: 'host' | 'accelerator' | string
+  required: ResourceRange
+  exact: boolean
+}
+
+export interface ResourcePlan {
+  schemaVersion: number
+  status: ResourcePlanStatus
+  confidence: ResourcePlanConfidence
+  ram: ResourceBudget
+  vram: ResourceBudget
+  components: ResourceComponentEstimate[]
+  facts: {
+    contextTokens: number
+    parallelSlots: number
+    modelShardsFound: number
+    modelShardsExpected: number
+    gpuOffloadPercent: number
+  }
+  reasons: string[]
+  assumptions: string[]
 }
 
 export interface InstanceConfig {
@@ -737,6 +790,7 @@ export interface AppState {
   openEngineFolder: (dir: string) => Promise<void>
 
   generateCommand: (config: InstanceConfig, engineExe: string) => Promise<GeneratedServerCommand>
+  planResources: (config: InstanceConfig, engineBackend: string) => Promise<ResourcePlan>
   startInstance: (id: string, manualRecovery?: boolean) => Promise<void>
   stopInstance: (id: string) => Promise<void>
   openBrowser: (instanceId: string, host: string, port: number, useTls?: boolean, apiPrefix?: string) => Promise<void>

@@ -11,6 +11,7 @@ import type {
   MsFileEntry,
   ModelInfo,
   MonitoringFrame,
+  ResourcePlan,
   SystemMetrics,
   WorkerInfo,
 } from '../src/store/types'
@@ -817,6 +818,41 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
   return { command, unsupportedFlags: [], emittedOverrideKeys: emitted }
 }
 
+const resourcePlan = (): ResourcePlan => {
+  const status = BROWSER_SCENARIO === 'resource-plan-infeasible' ? 'infeasible' : 'feasible'
+  const range = { minBytes: 5_368_709_120, expectedBytes: 6_442_450_944, maxBytes: 7_516_192_768 }
+  const vramRange = { minBytes: 3_221_225_472, expectedBytes: 4_294_967_296, maxBytes: 5_368_709_120 }
+  return {
+    schemaVersion: 1,
+    status,
+    confidence: 'medium',
+    ram: {
+      required: range,
+      totalBytes: 34_359_738_368,
+      availableBytes: status === 'infeasible' ? 1_073_741_824 : 25_769_803_776,
+      reservedBytes: 1_717_986_918,
+      expectedHeadroomBytes: status === 'infeasible' ? -7_086_695_936 : 17_609_365_914,
+    },
+    vram: {
+      required: vramRange,
+      totalBytes: 8_589_934_592,
+      availableBytes: status === 'infeasible' ? 536_870_912 : 8_321_499_136,
+      reservedBytes: 536_870_912,
+      expectedHeadroomBytes: status === 'infeasible' ? -4_294_967_296 : 3_489_660_928,
+    },
+    components: [],
+    facts: {
+      contextTokens: 131_072,
+      parallelSlots: 1,
+      modelShardsFound: 1,
+      modelShardsExpected: 1,
+      gpuOffloadPercent: 72,
+    },
+    reasons: status === 'infeasible' ? ['insufficient_available_ram', 'insufficient_available_vram'] : ['llama_fit_may_reduce_unset_parameters'],
+    assumptions: ['automatic_gpu_layers_follow_current_free_vram', 'prompt_cache_is_demand_driven_up_to_configured_limit'],
+  }
+}
+
 const systemMetrics: SystemMetrics = {
   cpu_percent: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 24 : 8) : 0,
   memory_mb: HAS_MONITORING_DATA ? (IS_DOCS_SCENARIO ? 11 * 1024 : 14 * 1024) : 128,
@@ -1490,6 +1526,7 @@ mockIPC((command, payload) => {
       syncAutomationProbe()
       return generated
     }
+    case 'plan_instance_resources': return resourcePlan()
     case 'save_config': {
       const instances = clone(args.instances as Record<string, InstanceConfig>)
       control.state.instances = instances

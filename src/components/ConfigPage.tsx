@@ -3,6 +3,7 @@ import { Activity, AlertTriangle, CheckCircle2, Cpu, File, ListChecks, LoaderCir
 import { useAppStore, type InstanceConfig, defaultInstanceConfig } from '../store'
 import { useI18n } from '../i18n'
 import { getConfigPageLabels, getConfigTemplates, type ConfigTemplate } from '../i18n/configPageCopy'
+import { getResourcePlanLaunchCopy } from '../i18n/resourcePlanCopy'
 import { validateConfig, type Warning } from '../validators'
 import {
   BasicSection, ReasoningSection, PerformanceSection, AdvancedSection,
@@ -33,6 +34,8 @@ import { FieldRuntimeProvider } from './ConfigPage/shared'
 import { canReuseConfigPreflight, configForPreflight, createConfigPreflightKey } from './ConfigPage/configPreflight'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
 import { useConfigSaveShortcut } from './ConfigPage/useConfigSaveShortcut'
+import { ResourcePlanPanel } from './ConfigPage/ResourcePlanPanel'
+import { useResourcePlan } from './ConfigPage/useResourcePlan'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -45,6 +48,7 @@ const ConfigPage = () => {
   const defaultEngineId = useAppStore(state => state.defaultEngineId)
   const setActiveTab = useAppStore(state => state.setActiveTab)
   const generateCommand = useAppStore(state => state.generateCommand)
+  const planResources = useAppStore(state => state.planResources)
   const addRuntimeWarning = useAppStore(state => state.addRuntimeWarning)
   const instanceLifecycle = useAppStore(state => state.instanceLifecycle)
   const { t, lang } = useI18n()
@@ -55,7 +59,7 @@ const ConfigPage = () => {
   const [baseline, setBaseline] = useState<InstanceConfig | null>(null)
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [saveStage, setSaveStage] = useState<'validating' | 'persisting' | null>(null)
+  const [saveStage, setSaveStage] = useState<'validating' | 'planning' | 'persisting' | null>(null)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<ModelAssetPickerTarget>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
@@ -146,6 +150,7 @@ const ConfigPage = () => {
     local ? isModelWorkloadLocked(currentModel, local.model_path) : false
   ), [currentModel, local])
   const labels = useMemo(() => getConfigPageLabels(lang), [lang])
+  const resourcePlanCopy = useMemo(() => getResourcePlanLaunchCopy(lang), [lang])
   const quickTemplates = useMemo(() => getConfigTemplates(lang), [lang])
   const currentEngine = useMemo(() => {
     return local ? resolveEffectiveEngine(local, engines, defaultEngineId) : null
@@ -155,6 +160,13 @@ const ConfigPage = () => {
     : null, [currentModel, local])
   const trustedEngineId = local?.engine_id || defaultEngineId || ''
   const { unsupportedEngineFlags, setUnsupportedEngineFlags, commandPreview, commandPreviewKey, previewingCommand, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local: compatibilityConfig, currentEngine, trustedEngineId })
+
+  const { currentResourcePlan, resourcePlanLoading, resourcePlanError, runResourcePlan, refreshResourcePlan } = useResourcePlan({
+    config: local,
+    engineBackend: currentEngine?.backend ?? '',
+    editRevisionRef,
+    planResources,
+  })
 
   saveShortcutRef.current = async () => {}
   if (!local) return <div className="space-y-5"><EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} /></div>
@@ -257,6 +269,19 @@ const ConfigPage = () => {
       }
 
       if (!saveIsCurrent()) {
+        outcome = 'cancelled'
+        return
+      }
+
+      setSaveStage('planning')
+      const planning = await runResourcePlan(
+        normalized.config,
+        engine?.backend ?? '',
+        saveRevision,
+        false,
+      )
+      timing.mark('resource-plan')
+      if (planning.stale || !saveIsCurrent()) {
         outcome = 'cancelled'
         return
       }
@@ -488,8 +513,13 @@ const ConfigPage = () => {
       children: advancedDirectoryGroups,
     },
   ]
-  const saveDisabled = !inst || saving || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))
-  const savingLabel = saveStage === 'validating' ? t.configPage.validating : saveStage === 'persisting' ? t.configPage.persisting : t.configPage.saving
+  const saveDisabled = !inst || saving || resourcePlanLoading || !currentResourcePlan || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired || unsupportedEngineFlags.length > 0))
+  const savingLabels = {
+    validating: t.configPage.validating,
+    planning: resourcePlanCopy.planning,
+    persisting: t.configPage.persisting,
+  }
+  const savingLabel = saveStage ? savingLabels[saveStage] : t.configPage.saving
 
   return (
     <div className="space-y-5">
@@ -698,6 +728,14 @@ const ConfigPage = () => {
               visibleWarnings={visibleWarnings}
               labels={labels}
               t={t}
+            />
+
+            <ResourcePlanPanel
+              plan={currentResourcePlan}
+              loading={resourcePlanLoading}
+              error={resourcePlanError}
+              lang={lang}
+              onRefresh={refreshResourcePlan}
             />
 
             {inst && (
