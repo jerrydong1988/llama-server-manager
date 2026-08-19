@@ -26,6 +26,58 @@ test('routing page documents OpenAI and Anthropic endpoints and compatibility bo
   await expect(compatibility).toContainText('32 MiB')
 })
 
+test('canary rollout remains operator controlled from observation through promotion and rollback', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'proxy')
+  })
+  await page.goto('/?scenario=canary-rollout')
+
+  const panel = page.getByTestId('canary-rollout-panel')
+  await expect(panel).toContainText('模型与引擎金丝雀发布')
+  await panel.getByRole('combobox', { name: '稳定版本' }).selectOption('browser-test-instance')
+  await panel.getByRole('combobox', { name: '候选版本' }).selectOption('browser-stopped-instance')
+  await panel.getByRole('textbox', { name: '对外模型名' }).fill('public-canary-model')
+  await panel.getByRole('spinbutton', { name: '候选流量' }).fill('10')
+  await panel.getByRole('button', { name: '启动金丝雀' }).click()
+
+  await expect(panel).toContainText('金丝雀发布已启动')
+  await expect(panel).toContainText('public-canary-model')
+  await expect(panel).toContainText('90%')
+  await expect(panel).toContainText('10%')
+  await expect(panel.getByRole('button', { name: '提升候选版本' })).toBeEnabled()
+
+  await panel.getByRole('button', { name: '采集观察快照' }).click()
+  await expect(panel).toContainText('观察快照已写入审计记录')
+  await expect(panel).toContainText('100.0%')
+
+  const share = panel.getByRole('spinbutton', { name: '候选流量' })
+  await share.fill('25')
+  await panel.getByRole('button', { name: '应用流量比例' }).click()
+  await expect(panel).toContainText('候选流量比例已更新')
+  await expect(panel).toContainText('75%')
+  await expect(panel).toContainText('25%')
+
+  page.once('dialog', dialog => dialog.accept())
+  await panel.getByRole('button', { name: '提升候选版本' }).click()
+  await expect(panel).toContainText('已提升，可回滚')
+  await expect(panel).toContainText('候选版本已接收全部流量')
+
+  page.once('dialog', dialog => dialog.accept())
+  await panel.getByRole('button', { name: '回滚提升' }).click()
+  await expect(panel).toContainText('已回滚')
+  await expect(panel).toContainText('提升已回滚')
+
+  const commands = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.map(call => call.command))
+  expect(commands).toEqual(expect.arrayContaining([
+    'create_canary_rollout',
+    'observe_canary_rollout',
+    'set_canary_weight',
+    'promote_canary_rollout',
+    'rollback_canary_rollout',
+  ]))
+})
+
 test('route switches expose current state and saving refreshes runtime health', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')

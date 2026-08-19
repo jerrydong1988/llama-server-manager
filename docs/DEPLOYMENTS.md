@@ -2,7 +2,7 @@
 
 Llama Server Manager treats every configured instance as one stable **Deployment**. A qualified launch request materializes an immutable **Deployment Revision** that records exactly what the manager accepted for that launch.
 
-This is the first workstream of [Phase 2 — Managed Deployment](PRODUCT_ROADMAP.md#phase-2--managed-deployment). It remains a single-machine feature: it does not schedule workers, estimate resources, perform canary promotion, or roll back automatically.
+This is the first workstream of [Phase 2 — Managed Deployment](PRODUCT_ROADMAP.md#phase-2--managed-deployment). It remains a single-machine foundation: it does not schedule workers, estimate resources, or roll back automatically. The later [model and engine canary workflow](CANARY_ROLLOUTS.md) uses its immutable revision bindings for explicit promotion and rollback decisions.
 
 ## What a revision binds
 
@@ -68,7 +68,7 @@ Persistence failure rolls back a spawned process through the existing lifecycle 
 
 When a new revision becomes current, the previous current revision becomes the explicit rollback target. This pointer is traceability evidence; Phase 2's Deployment abstraction does not automatically apply it.
 
-An operator can explicitly restore an earlier configuration through **Configuration Revisions**, verify qualification and routing, and start the instance. That qualified start will reuse an identical historical Deployment Revision when every bound input matches, or create a new one when any input differs. Canary promotion and automated rollback belong to later Phase 2 workstreams.
+An operator can explicitly restore an earlier configuration through **Configuration Revisions**, verify qualification and routing, and start the instance. That qualified start will reuse an identical historical Deployment Revision when every bound input matches, or create a new one when any input differs. The [canary rollout](CANARY_ROLLOUTS.md) provides operator-controlled promotion and restoration of base routing; automatic rollback remains outside this workstream.
 
 ## Validation
 

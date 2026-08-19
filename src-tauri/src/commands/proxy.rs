@@ -205,6 +205,7 @@ struct ResolvedProxyTarget {
 pub(crate) struct ProxyRequestResolution {
     config: ProxyConfig,
     candidates: Vec<ResolvedProxyTarget>,
+    routing_strategy: String,
 }
 
 #[derive(Clone)]
@@ -545,7 +546,12 @@ fn is_local_bind_host(host: &str) -> bool {
 fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
     let config = state.proxy_config.lock().unwrap().clone();
     let running = state.proxy_shutdown.lock().unwrap().is_some();
-    let active_routes = config.routes.iter().filter(|route| route.enabled).count();
+    let active_routes = config
+        .routes
+        .iter()
+        .chain(config.canary_routes.iter())
+        .filter(|route| route.enabled)
+        .count();
     let last_error = state.proxy_last_error.lock().unwrap().clone();
     let actual_bound_addr = state.proxy_bound_addr.lock().unwrap().clone();
     let bound_addr = actual_bound_addr.unwrap_or_else(|| proxy_bound_addr(&config));
@@ -578,6 +584,7 @@ fn proxy_status_from_snapshot(snapshot: &ProxyRuntimeSnapshot) -> ProxyStatus {
         .config
         .routes
         .iter()
+        .chain(snapshot.config.canary_routes.iter())
         .filter(|route| route.enabled)
         .count();
     ProxyStatus {
@@ -598,14 +605,47 @@ fn route_is_configured(route: &ProxyRoute) -> bool {
         && !route.target_instance_id.trim().is_empty()
 }
 
+fn all_proxy_routes(config: &ProxyConfig) -> impl Iterator<Item = &ProxyRoute> {
+    config.routes.iter().chain(config.canary_routes.iter())
+}
+
+fn canary_routes_for_model<'a>(
+    config: &'a ProxyConfig,
+    model: &str,
+) -> Vec<(usize, &'a ProxyRoute)> {
+    config
+        .canary_routes
+        .iter()
+        .enumerate()
+        .filter(|(_, route)| route_is_configured(route) && route.model_alias.trim() == model)
+        .collect()
+}
+
+fn has_canary_overlay(config: &ProxyConfig, model: &str) -> bool {
+    config
+        .canary_routes
+        .iter()
+        .any(|route| route.model_alias.trim() == model)
+}
+
+fn effective_routing_strategy(config: &ProxyConfig, requested_model: Option<&str>) -> String {
+    if requested_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .is_some_and(|model| has_canary_overlay(config, model))
+    {
+        "weighted".into()
+    } else {
+        config.routing_strategy.clone()
+    }
+}
+
 fn preferred_public_route<'a>(
     config: &'a ProxyConfig,
     target_instance_id: &str,
 ) -> Option<&'a ProxyRoute> {
     let target_instance_id = target_instance_id.trim();
-    config
-        .routes
-        .iter()
+    all_proxy_routes(config)
         .filter(|route| {
             route_is_configured(route) && route.target_instance_id.trim() == target_instance_id
         })
@@ -751,7 +791,11 @@ pub(crate) fn normalize_and_validate_proxy_config(
     }
 
     let mut route_ids = HashSet::new();
-    for route in &mut config.routes {
+    for route in config
+        .routes
+        .iter_mut()
+        .chain(config.canary_routes.iter_mut())
+    {
         route.id = route.id.trim().to_string();
         route.model_alias = route.model_alias.trim().to_string();
         route.target_instance_id = route.target_instance_id.trim().to_string();
@@ -768,7 +812,7 @@ pub(crate) fn normalize_and_validate_proxy_config(
         }
     }
 
-    for (index, route) in config.routes.iter().enumerate() {
+    for (index, route) in all_proxy_routes(&config).enumerate() {
         if !route.enabled {
             continue;
         }
@@ -781,6 +825,20 @@ pub(crate) fn normalize_and_validate_proxy_config(
         if !instances.contains_key(route.target_instance_id.trim()) {
             return Err(format!("第 {} 条已启用路由的目标实例不存在", index + 1));
         }
+    }
+    if config
+        .routes
+        .iter()
+        .any(|route| !route.required_deployment_revision_id.trim().is_empty())
+    {
+        return Err("普通代理路由不能声明金丝雀部署修订绑定".into());
+    }
+    if config
+        .canary_routes
+        .iter()
+        .any(|route| route.required_deployment_revision_id.trim().is_empty())
+    {
+        return Err("金丝雀路由必须绑定部署修订".into());
     }
     Ok(config)
 }
@@ -864,12 +922,16 @@ fn resolved_target_for_id(
     running: &HashMap<String, crate::models::RunningInstance>,
     id: &str,
     endpoint_workload: Option<ModelWorkload>,
-    route_priority: i32,
-    route_weight: u32,
-    route_max_concurrent_requests: u32,
+    route: Option<&ProxyRoute>,
 ) -> Option<ResolvedProxyTarget> {
     let stored_config = instances.get(id)?;
     let running_info = running.get(id)?;
+    if route.is_some_and(|route| {
+        !route.required_deployment_revision_id.trim().is_empty()
+            && running_info.deployment_revision_id != route.required_deployment_revision_id.trim()
+    }) {
+        return None;
+    }
     let config = running_info.launch_config.as_ref().unwrap_or(stored_config);
     if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
         return None;
@@ -896,9 +958,9 @@ fn resolved_target_for_id(
             .then_some(config.ctx_size as u64),
         telemetry_session_id: running_info.telemetry_session_id.clone(),
         workload,
-        route_priority,
-        route_weight: route_weight.max(1),
-        route_max_concurrent_requests,
+        route_priority: route.map_or(0, |route| route.priority),
+        route_weight: route.map_or(1, |route| route.weight.max(1)),
+        route_max_concurrent_requests: route.map_or(0, |route| route.max_concurrent_requests),
     })
 }
 
@@ -914,12 +976,34 @@ fn resolve_proxy_candidates_from(
         .filter(|model| !model.is_empty());
 
     if let Some(model) = requested_model {
-        let matching_routes = proxy_config
-            .routes
-            .iter()
-            .enumerate()
-            .filter(|(_, route)| route_is_configured(route) && route.model_alias.trim() == model)
-            .collect::<Vec<_>>();
+        let canary_overlay = has_canary_overlay(proxy_config, model);
+        if canary_overlay
+            && proxy_config
+                .canary_routes
+                .iter()
+                .filter(|route| route.enabled && route.model_alias.trim() == model)
+                .any(|route| {
+                    let required = route.required_deployment_revision_id.trim();
+                    required.is_empty()
+                        || running
+                            .get(route.target_instance_id.trim())
+                            .map_or(true, |instance| instance.deployment_revision_id != required)
+                })
+        {
+            return Vec::new();
+        }
+        let matching_routes = if canary_overlay {
+            canary_routes_for_model(proxy_config, model)
+        } else {
+            proxy_config
+                .routes
+                .iter()
+                .enumerate()
+                .filter(|(_, route)| {
+                    route_is_configured(route) && route.model_alias.trim() == model
+                })
+                .collect::<Vec<_>>()
+        };
         if !matching_routes.is_empty() {
             let mut candidates = matching_routes
                 .into_iter()
@@ -929,9 +1013,7 @@ fn resolve_proxy_candidates_from(
                         running,
                         route.target_instance_id.trim(),
                         endpoint_workload,
-                        route.priority,
-                        route.weight,
-                        route.max_concurrent_requests,
+                        Some(route),
                     )
                     .map(|target| (route.priority, index, target))
                 })
@@ -942,14 +1024,15 @@ fn resolve_proxy_candidates_from(
                 .map(|(_, _, target)| target)
                 .collect();
         }
+        if canary_overlay {
+            return Vec::new();
+        }
 
-        let has_explicit_routes = proxy_config.routes.iter().any(route_is_configured);
+        let has_explicit_routes = all_proxy_routes(proxy_config).any(route_is_configured);
         if proxy_config.strict_model_routing && has_explicit_routes {
             return Vec::new();
         }
-        let routed_ids = proxy_config
-            .routes
-            .iter()
+        let routed_ids = all_proxy_routes(proxy_config)
             .filter(|route| route_is_configured(route))
             .map(|route| route.target_instance_id.trim())
             .collect::<HashSet<_>>();
@@ -967,7 +1050,7 @@ fn resolve_proxy_candidates_from(
                 && (config.name.trim() == model || id.as_str() == model);
             if (public_match || legacy_match) && !routed_ids.contains(id.as_str()) {
                 if let Some(target) =
-                    resolved_target_for_id(instances, running, id, endpoint_workload, 0, 1, 0)
+                    resolved_target_for_id(instances, running, id, endpoint_workload, None)
                 {
                     candidates.push(target);
                 }
@@ -981,9 +1064,7 @@ fn resolve_proxy_candidates_from(
                     running,
                     default_instance_id,
                     endpoint_workload,
-                    0,
-                    1,
-                    0,
+                    None,
                 ) {
                     candidates.push(target);
                 }
@@ -999,17 +1080,13 @@ fn resolve_proxy_candidates_from(
             running,
             default_instance_id,
             endpoint_workload,
-            0,
-            1,
-            0,
+            None,
         ) {
             return vec![target];
         }
     }
 
-    let routed_ids = proxy_config
-        .routes
-        .iter()
+    let routed_ids = all_proxy_routes(proxy_config)
         .filter(|route| route_is_configured(route))
         .map(|route| route.target_instance_id.trim())
         .collect::<HashSet<_>>();
@@ -1018,7 +1095,7 @@ fn resolve_proxy_candidates_from(
     let mut candidates = ids
         .into_iter()
         .filter(|id| !routed_ids.contains(id.as_str()))
-        .filter_map(|id| resolved_target_for_id(instances, running, id, endpoint_workload, 0, 1, 0))
+        .filter_map(|id| resolved_target_for_id(instances, running, id, endpoint_workload, None))
         .collect::<Vec<_>>();
     if proxy_config.strict_model_routing && candidates.len() != 1 {
         candidates.clear();
@@ -1049,7 +1126,7 @@ fn all_resolved_targets(snapshot: &ProxyRuntimeSnapshot) -> Vec<ResolvedProxyTar
     ids.sort();
     ids.into_iter()
         .filter_map(|id| {
-            resolved_target_for_id(&snapshot.instances, &snapshot.running, id, None, 0, 1, 0)
+            resolved_target_for_id(&snapshot.instances, &snapshot.running, id, None, None)
         })
         .collect()
 }
@@ -1068,7 +1145,12 @@ pub(crate) fn proxy_request_resolution_from(
         requested_model,
         endpoint_workload,
     );
-    ProxyRequestResolution { config, candidates }
+    let routing_strategy = effective_routing_strategy(&config, requested_model);
+    ProxyRequestResolution {
+        config,
+        candidates,
+        routing_strategy,
+    }
 }
 
 fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
@@ -1207,7 +1289,7 @@ fn public_response_model(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if let Some(requested) = requested {
-        let route_is_public = proxy_config.routes.iter().any(|route| {
+        let route_is_public = all_proxy_routes(proxy_config).any(|route| {
             route.enabled
                 && route.target_instance_id.trim() == target.instance_id.trim()
                 && route.model_alias.trim() == requested
@@ -1885,7 +1967,7 @@ fn select_resolved_target(
     let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
     let selected = router_state.runtime.select_target(
         &scheduling,
-        &snapshot.config.routing_strategy,
+        &effective_routing_strategy(&snapshot.config, requested_model),
         &routing_group_key(requested_model, endpoint_workload),
     )?;
     let target = candidates
@@ -2041,6 +2123,7 @@ pub(crate) fn status_with_runtime(
         .config
         .routes
         .iter()
+        .chain(snapshot.config.canary_routes.iter())
         .filter(|route| route_is_configured(route))
         .map(|route| route.target_instance_id.clone())
         .collect::<Vec<_>>();
@@ -2427,15 +2510,11 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
         .filter(|target| target.running)
         .map(|target| target.instance_id.as_str())
         .collect::<HashSet<_>>();
-    let routed_target_ids = config
-        .routes
-        .iter()
+    let routed_target_ids = all_proxy_routes(config)
         .filter(|route| route_is_configured(route))
         .map(|route| route.target_instance_id.trim())
         .collect::<HashSet<_>>();
-    let mut ids = config
-        .routes
-        .iter()
+    let mut ids = all_proxy_routes(config)
         .filter(|route| {
             route.enabled
                 && !route.model_alias.trim().is_empty()
@@ -2512,6 +2591,7 @@ async fn proxy_upstream(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
     let proxy_config = resolution.config;
+    let routing_strategy = resolution.routing_strategy;
     let mut candidates = resolution.candidates;
     let routing_key = routing_group_key(
         requested_model.as_deref(),
@@ -2530,11 +2610,11 @@ async fn proxy_upstream(
     }
     let (target, target_permit) = loop {
         let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
-        let Some(selected) = router_state.runtime.select_target(
-            &scheduling,
-            &proxy_config.routing_strategy,
-            &routing_key,
-        ) else {
+        let Some(selected) =
+            router_state
+                .runtime
+                .select_target(&scheduling, &routing_strategy, &routing_key)
+        else {
             return error_response(
                 api_format,
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -3034,15 +3114,18 @@ pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<Proxy
 }
 
 pub async fn save_proxy_config(
-    config: ProxyConfig,
+    mut config: ProxyConfig,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyConfig, String> {
+    let _transition = state.proxy_lifecycle_lock.lock().await;
+    let current = state.proxy_config.lock().unwrap().clone();
+    // Canary routes are owned exclusively by the rollout state machine. The
+    // general proxy editor neither exposes nor removes them.
+    config.canary_routes = current.canary_routes.clone();
     let config = {
         let instances = state.instances.lock().unwrap();
         normalize_and_validate_proxy_config(config, &instances)?
     };
-    let _transition = state.proxy_lifecycle_lock.lock().await;
-    let current = state.proxy_config.lock().unwrap().clone();
     let deployment_routing_changes = {
         let instances = state.instances.lock().unwrap();
         crate::deployment::routing_changed_instance_ids(
@@ -4703,6 +4786,111 @@ mod tests {
             None,
         )
         .is_none());
+    }
+
+    #[test]
+    fn canary_overlay_replaces_only_its_public_alias_and_forces_weighted_scheduling() {
+        let stable_id = "stable-instance".to_string();
+        let candidate_id = "candidate-instance".to_string();
+        let stable = InstanceConfig {
+            id: stable_id.clone(),
+            alias: "stable-upstream".into(),
+            ..InstanceConfig::default()
+        };
+        let candidate = InstanceConfig {
+            id: candidate_id.clone(),
+            alias: "candidate-upstream".into(),
+            ..InstanceConfig::default()
+        };
+        let instances = HashMap::from([
+            (stable_id.clone(), stable.clone()),
+            (candidate_id.clone(), candidate.clone()),
+        ]);
+        let running = [
+            (stable_id.clone(), stable, 18080_u16, "stable-revision"),
+            (
+                candidate_id.clone(),
+                candidate,
+                18081_u16,
+                "candidate-revision",
+            ),
+        ]
+        .into_iter()
+        .map(|(id, config, port, revision_id)| {
+            (
+                id.clone(),
+                RunningInstance {
+                    instance_id: id,
+                    pid: 1,
+                    port,
+                    host: "127.0.0.1".into(),
+                    start_time: 0,
+                    executable_path: String::new(),
+                    telemetry_session_id: None,
+                    workload: "inference".into(),
+                    launch_config: Some(config),
+                    deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: revision_id.into(),
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+        let config = ProxyConfig {
+            routing_strategy: "priorityFailover".into(),
+            routes: vec![ProxyRoute {
+                model_alias: "public-model".into(),
+                target_instance_id: stable_id.clone(),
+                ..ProxyRoute::default()
+            }],
+            canary_routes: vec![
+                ProxyRoute {
+                    model_alias: "public-model".into(),
+                    target_instance_id: stable_id.clone(),
+                    required_deployment_revision_id: "stable-revision".into(),
+                    weight: 90,
+                    ..ProxyRoute::default()
+                },
+                ProxyRoute {
+                    model_alias: "public-model".into(),
+                    target_instance_id: candidate_id.clone(),
+                    required_deployment_revision_id: "candidate-revision".into(),
+                    weight: 10,
+                    ..ProxyRoute::default()
+                },
+            ],
+            ..ProxyConfig::default()
+        };
+
+        let resolution = super::proxy_request_resolution_from(
+            config.clone(),
+            &instances,
+            &running,
+            Some("public-model"),
+            None,
+        );
+        assert_eq!(resolution.routing_strategy, "weighted");
+        assert_eq!(resolution.candidates.len(), 2);
+        assert_eq!(resolution.candidates[0].route_weight, 90);
+        assert_eq!(resolution.candidates[1].route_weight, 10);
+        let mut drifted = running.clone();
+        drifted
+            .get_mut(&candidate_id)
+            .unwrap()
+            .deployment_revision_id = "unexpected-revision".into();
+        assert!(super::proxy_request_resolution_from(
+            config.clone(),
+            &instances,
+            &drifted,
+            Some("public-model"),
+            None,
+        )
+        .candidates
+        .is_empty());
+        assert_eq!(
+            super::effective_routing_strategy(&config, Some("another-model")),
+            "priorityFailover"
+        );
     }
 
     #[test]

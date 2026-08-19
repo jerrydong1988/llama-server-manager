@@ -6,8 +6,9 @@ mod transport;
 use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, DEPLOYMENT_REVISION_CAPABILITY,
-    INSTANCE_RECOVERY_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, CANARY_ROUTING_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY,
+    DEPLOYMENT_REVISION_CAPABILITY, INSTANCE_RECOVERY_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
+    RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -30,6 +31,7 @@ const MAX_RUNTIME_SERVICE_LOG_BYTES: u64 = 4 * 1024 * 1024;
 fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
     [
         BACKGROUND_DETACH_CAPABILITY,
+        CANARY_ROUTING_CAPABILITY,
         CONFIG_SYNC_ACK_CAPABILITY,
         DEPLOYMENT_REVISION_CAPABILITY,
         INSTANCE_RECOVERY_CAPABILITY,
@@ -901,6 +903,7 @@ mod tests {
             service_pid: 1,
             capabilities: vec![
                 BACKGROUND_DETACH_CAPABILITY.into(),
+                CANARY_ROUTING_CAPABILITY.into(),
                 CONFIG_SYNC_ACK_CAPABILITY.into(),
                 DEPLOYMENT_REVISION_CAPABILITY.into(),
                 INSTANCE_RECOVERY_CAPABILITY.into(),

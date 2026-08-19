@@ -25,6 +25,7 @@ const HAS_PROXY_DATA = [
   'proxy-routing',
   'proxy-route-health',
   'proxy-route-legacy-ids',
+  'canary-rollout',
   'docs-screenshots',
 ].includes(BROWSER_SCENARIO ?? '')
 const INSTANCE_ID = 'browser-test-instance'
@@ -446,8 +447,8 @@ const proxyConfig: BrowserProxyConfig = {
 const proxyStatus = {
   running: HAS_PROXY_DATA,
   bound_addr: '127.0.0.1:11435',
-  active_routes: IS_DOCS_SCENARIO ? 3 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : BROWSER_SCENARIO === 'proxy-routing' ? 1 : 0,
-  healthy_routes: HAS_PROXY_DATA ? 1 : 0,
+  active_routes: IS_DOCS_SCENARIO ? 3 : BROWSER_SCENARIO === 'canary-rollout' ? 2 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : BROWSER_SCENARIO === 'proxy-routing' ? 1 : 0,
+  healthy_routes: BROWSER_SCENARIO === 'canary-rollout' ? 2 : HAS_PROXY_DATA ? 1 : 0,
   unhealthy_routes: IS_DOCS_SCENARIO ? 2 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 1 : 0,
   in_flight_requests: 0,
   total_requests: IS_DOCS_SCENARIO ? 42 : 0,
@@ -481,6 +482,15 @@ const proxyTargets = IS_DOCS_SCENARIO
         running: false,
       },
     ]
+  : BROWSER_SCENARIO === 'canary-rollout'
+  ? [runningProxyTarget, {
+      instance_id: STOPPED_INSTANCE_ID,
+      name: 'Candidate Engine Revision',
+      alias: 'browser-candidate',
+      host: '127.0.0.1',
+      port: 18082,
+      running: true,
+    }]
   : BROWSER_SCENARIO === 'proxy-routing'
   ? [runningProxyTarget]
   : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '')
@@ -493,6 +503,37 @@ const proxyTargets = IS_DOCS_SCENARIO
       running: false,
     }, runningProxyTarget]
     : []
+
+type BrowserCanaryRollout = Record<string, unknown> & {
+  id: string
+  state: 'active' | 'promoted' | 'aborted' | 'rolled_back'
+  candidateWeight: number
+  updatedAt: number
+  events: Array<Record<string, unknown>>
+}
+let canaryRollouts: BrowserCanaryRollout[] = []
+let canaryObservationRound = 0
+
+function canaryHealth(instanceId: string) {
+  return { instanceId, status: 'ready', ready: true }
+}
+
+function canaryEvidence(total: number, failed: number) {
+  return { total, succeeded: total - failed, failed, latestCompletedAt: Date.now() }
+}
+
+function appendCanaryEvent(rollout: BrowserCanaryRollout, kind: string, summary: string) {
+  rollout.updatedAt = Date.now()
+  rollout.events.unshift({
+    sequence: rollout.events.length + 1,
+    occurredAt: rollout.updatedAt,
+    kind,
+    summary,
+    stableEvidence: rollout.stableEvidence ?? null,
+    candidateEvidence: rollout.candidateEvidence ?? null,
+    integrityValid: true,
+  })
+}
 const runtimeStatus = {
   servicePid: 4242,
   serviceVersion: IS_DOCS_SCENARIO ? '2.9.37' : '2.9.30-browser-test',
@@ -1468,6 +1509,86 @@ mockIPC((command, payload) => {
       return true
     case 'test_connection': return 'HTTP 200'
     case 'process_download_queue': return null
+    case 'list_canary_rollouts': return clone(canaryRollouts)
+    case 'create_canary_rollout': {
+      const stableInstanceId = String(args.stableInstanceId ?? '')
+      const candidateInstanceId = String(args.candidateInstanceId ?? '')
+      const candidateWeight = Number(args.candidateWeight ?? 10)
+      const now = Date.now()
+      const rollout: BrowserCanaryRollout = {
+        id: 'browser-canary-rollout',
+        modelAlias: String(args.modelAlias ?? ''),
+        state: 'active',
+        stableInstanceId,
+        candidateInstanceId,
+        stableRevisionId: 'urn:lsm:deployment-revision:v1:sha256:stable-browser-revision',
+        candidateRevisionId: 'urn:lsm:deployment-revision:v1:sha256:candidate-browser-revision',
+        stableWeight: 100 - candidateWeight,
+        candidateWeight,
+        createdAt: now,
+        updatedAt: now,
+        integrityValid: true,
+        drift: [],
+        canChangeTraffic: true,
+        canPromote: true,
+        canAbort: true,
+        canRollback: false,
+        stableHealth: canaryHealth(stableInstanceId),
+        candidateHealth: canaryHealth(candidateInstanceId),
+        stableEvidence: null,
+        candidateEvidence: null,
+        events: [],
+      }
+      appendCanaryEvent(rollout, 'created', `canary activated at ${candidateWeight}% candidate traffic`)
+      canaryRollouts = [rollout]
+      return clone(rollout)
+    }
+    case 'observe_canary_rollout': {
+      const rollout = canaryRollouts.find(item => item.id === String(args.rolloutId ?? ''))
+      if (!rollout) throw new Error('browser canary rollout not found')
+      canaryObservationRound += 1
+      rollout.stableEvidence = canaryEvidence(20 + canaryObservationRound, 1)
+      rollout.candidateEvidence = canaryEvidence(4 + canaryObservationRound, 0)
+      appendCanaryEvent(rollout, 'observed', 'browser observation captured')
+      return clone(rollout)
+    }
+    case 'set_canary_weight': {
+      const rollout = canaryRollouts.find(item => item.id === String(args.rolloutId ?? ''))
+      if (!rollout) throw new Error('browser canary rollout not found')
+      const candidateWeight = Number(args.candidateWeight ?? rollout.candidateWeight)
+      rollout.candidateWeight = candidateWeight
+      rollout.stableWeight = 100 - candidateWeight
+      appendCanaryEvent(rollout, 'traffic_changed', `candidate traffic changed to ${candidateWeight}%`)
+      return clone(rollout)
+    }
+    case 'promote_canary_rollout': {
+      const rollout = canaryRollouts.find(item => item.id === String(args.rolloutId ?? ''))
+      if (!rollout) throw new Error('browser canary rollout not found')
+      rollout.state = 'promoted'
+      rollout.stableWeight = 0
+      rollout.candidateWeight = 100
+      rollout.canChangeTraffic = false
+      rollout.canPromote = false
+      rollout.canAbort = false
+      rollout.canRollback = true
+      appendCanaryEvent(rollout, 'promoted', 'candidate promoted to 100% traffic')
+      return clone(rollout)
+    }
+    case 'abort_canary_rollout':
+    case 'rollback_canary_rollout': {
+      const rollout = canaryRollouts.find(item => item.id === String(args.rolloutId ?? ''))
+      if (!rollout) throw new Error('browser canary rollout not found')
+      const rollback = command === 'rollback_canary_rollout'
+      rollout.state = rollback ? 'rolled_back' : 'aborted'
+      rollout.stableWeight = 0
+      rollout.candidateWeight = 0
+      rollout.canChangeTraffic = false
+      rollout.canPromote = false
+      rollout.canAbort = false
+      rollout.canRollback = false
+      appendCanaryEvent(rollout, rollback ? 'rolled_back' : 'aborted', 'base routing restored')
+      return clone(rollout)
+    }
     case 'get_proxy_config': return clone(proxyConfig)
     case 'get_proxy_status':
       if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')

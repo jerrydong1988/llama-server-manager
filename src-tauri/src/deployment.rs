@@ -295,6 +295,30 @@ fn validate_record(instance_id: &str, record: &DeploymentRecord) -> Result<(), S
     Ok(())
 }
 
+/// Returns the integrity-checked current revision for an instance. Operational
+/// workflows use this binding instead of reaching into the deployment catalog
+/// or accepting a merely matching identifier from the runtime process.
+pub fn validated_current_revision(
+    global: &GlobalConfig,
+    instance_id: &str,
+) -> Result<DeploymentRevision, String> {
+    let record = global
+        .deployments
+        .get(instance_id)
+        .ok_or_else(|| format!("deployment record {instance_id} does not exist"))?;
+    validate_record(instance_id, record)?;
+    let revision_id = record
+        .current_revision_id
+        .as_deref()
+        .ok_or_else(|| format!("deployment {instance_id} has not been materialized"))?;
+    record
+        .revisions
+        .iter()
+        .find(|revision| revision.id == revision_id)
+        .cloned()
+        .ok_or_else(|| format!("deployment {instance_id} current revision is missing"))
+}
+
 pub fn ensure_deployments(global: &mut GlobalConfig) -> Result<bool, String> {
     if global.deployment_schema_version > DEPLOYMENT_SCHEMA_VERSION {
         return Err(format!(

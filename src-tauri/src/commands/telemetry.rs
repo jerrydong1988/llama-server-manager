@@ -2774,6 +2774,54 @@ pub async fn list_inference_requests(
     .map_err(|e| format!("推理请求查询失败: {}", e))?
 }
 
+fn request_evidence_for_target(
+    conn: &Connection,
+    target_instance_id: &str,
+    since_ms: i64,
+) -> Result<crate::canary::CanaryRequestEvidence, String> {
+    conn.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(CASE WHEN error_text IS NULL AND http_status >= 200 AND http_status < 400 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN error_text IS NOT NULL OR http_status IS NULL OR http_status < 200 OR http_status >= 400 THEN 1 ELSE 0 END), 0),
+                MAX(completed_at)
+         FROM inference_requests
+         WHERE source = 'proxy' AND target_instance_id = ?1 AND completed_at >= ?2",
+        params![target_instance_id, since_ms],
+        |row| {
+            Ok(crate::canary::CanaryRequestEvidence {
+                total: row.get::<_, i64>(0)?.max(0) as u64,
+                succeeded: row.get::<_, i64>(1)?.max(0) as u64,
+                failed: row.get::<_, i64>(2)?.max(0) as u64,
+                latest_completed_at: row.get(3)?,
+            })
+        },
+    )
+    .map_err(|error| format!("failed to query canary request evidence: {error}"))
+}
+
+pub(crate) async fn canary_request_evidence(
+    stable_instance_id: String,
+    candidate_instance_id: String,
+    since_ms: i64,
+) -> Result<
+    (
+        crate::canary::CanaryRequestEvidence,
+        crate::canary::CanaryRequestEvidence,
+    ),
+    String,
+> {
+    flush_telemetry_writer()?;
+    tokio::task::spawn_blocking(move || {
+        let conn = open_connection()?;
+        Ok((
+            request_evidence_for_target(&conn, &stable_instance_id, since_ms)?,
+            request_evidence_for_target(&conn, &candidate_instance_id, since_ms)?,
+        ))
+    })
+    .await
+    .map_err(|error| format!("canary request evidence query failed: {error}"))?
+}
+
 fn inference_requests_for_session(
     conn: &Connection,
     session_id: &str,
@@ -3077,6 +3125,72 @@ mod tests {
             session_workload_from_connection(&conn, "missing").unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn canary_evidence_is_target_scoped_time_bounded_and_classifies_failures() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        for (session_id, instance_id) in [
+            ("stable-session", "stable"),
+            ("candidate-session", "candidate"),
+        ] {
+            insert_run_session(
+                &conn,
+                &RunSessionStart {
+                    id: session_id,
+                    instance_id,
+                    instance_name: instance_id,
+                    model_path: "model.gguf",
+                    engine_id: "engine",
+                    backend: "cpu",
+                    config_hash: "hash",
+                    command_line: "llama-server",
+                    workload: ModelWorkload::Inference,
+                    started_at: 0,
+                },
+            )
+            .unwrap();
+        }
+        for (session, task, completed, target, status, error) in [
+            ("stable-session", 1, 90, "stable", Some(200), None),
+            ("stable-session", 2, 110, "stable", Some(200), None),
+            (
+                "stable-session",
+                3,
+                120,
+                "stable",
+                Some(500),
+                Some("upstream"),
+            ),
+            ("candidate-session", 4, 130, "candidate", Some(204), None),
+            (
+                "candidate-session",
+                5,
+                140,
+                "candidate",
+                None,
+                Some("transport"),
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO inference_requests
+                 (session_id, task_id, slot_id, completed_at, source, target_instance_id, http_status, error_text)
+                 VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6)",
+                params![session, task, completed, target, status, error],
+            )
+            .unwrap();
+        }
+
+        let stable = request_evidence_for_target(&conn, "stable", 100).unwrap();
+        let candidate = request_evidence_for_target(&conn, "candidate", 100).unwrap();
+        assert_eq!((stable.total, stable.succeeded, stable.failed), (2, 1, 1));
+        assert_eq!(stable.latest_completed_at, Some(120));
+        assert_eq!(
+            (candidate.total, candidate.succeeded, candidate.failed),
+            (2, 1, 1)
+        );
+        assert_eq!(candidate.latest_completed_at, Some(140));
     }
 
     #[test]

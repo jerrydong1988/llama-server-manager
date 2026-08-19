@@ -1122,6 +1122,10 @@ pub struct ProxyRoute {
     pub enabled: bool,
     pub model_alias: String,
     pub target_instance_id: String,
+    /// Optional exact running Deployment Revision required by manager-owned
+    /// routing workflows. Ordinary operator routes leave this empty.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub required_deployment_revision_id: String,
     pub priority: i32,
     /// Relative traffic share for weighted scheduling within the same priority tier.
     pub weight: u32,
@@ -1136,6 +1140,7 @@ impl Default for ProxyRoute {
             enabled: true,
             model_alias: String::new(),
             target_instance_id: String::new(),
+            required_deployment_revision_id: String::new(),
             priority: 0,
             weight: 1,
             max_concurrent_requests: 0,
@@ -1180,6 +1185,11 @@ pub struct ProxyConfig {
     pub public_api_key: String,
     pub default_instance_id: String,
     pub routes: Vec<ProxyRoute>,
+    /// Temporary operator-controlled routes owned by the canary rollout
+    /// workflow. They override base routes for the same public model alias but
+    /// are deliberately excluded from immutable deployment revision identity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub canary_routes: Vec<ProxyRoute>,
     pub routing_strategy: String,
     /// Reject internal instance identifiers and undeclared model selectors.
     /// Existing saved configurations did not contain this field, so deserialize
@@ -1214,6 +1224,7 @@ impl Default for ProxyConfig {
             public_api_key: String::new(),
             default_instance_id: String::new(),
             routes: Vec::new(),
+            canary_routes: Vec::new(),
             routing_strategy: "priorityFailover".into(),
             strict_model_routing: true,
             timeout_ms: 600_000,
@@ -1354,6 +1365,10 @@ pub struct GlobalConfig {
     pub deployment_schema_version: u32,
     #[serde(default)]
     pub deployments: HashMap<String, crate::deployment::DeploymentRecord>,
+    #[serde(default = "crate::canary::default_canary_schema_version")]
+    pub canary_schema_version: u32,
+    #[serde(default)]
+    pub canary_rollouts: Vec<crate::canary::CanaryRolloutRecord>,
 }
 
 /// Frontend-safe view of the active configuration. Historical snapshots are
