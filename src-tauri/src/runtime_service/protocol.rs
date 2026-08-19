@@ -25,6 +25,12 @@ pub struct RuntimeLaunchSpec {
     /// edit must not make failure recovery start that stale command again.
     #[serde(default)]
     pub launch_config_stale: bool,
+    /// Automatic recovery may only execute the exact engine artifact whose
+    /// complete qualification evidence was accepted by the GUI preflight.
+    #[serde(default)]
+    pub engine_qualification_fingerprint: String,
+    #[serde(default)]
+    pub engine_qualification_profile_version: u8,
     pub engine_backend: String,
     pub command: Vec<String>,
     pub command_display: String,
@@ -256,6 +262,8 @@ mod tests {
             instance_id: "instance-1".into(),
             config: InstanceConfig::default(),
             launch_config_stale: false,
+            engine_qualification_fingerprint: String::new(),
+            engine_qualification_profile_version: 0,
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
@@ -272,13 +280,16 @@ mod tests {
             }
         });
         let decoded: RuntimeRequest = serde_json::from_value(request).unwrap();
-        assert!(matches!(
-            decoded.command,
-            RuntimeCommand::StartInstance {
-                manual_recovery: true,
-                ..
-            }
-        ));
+        let RuntimeCommand::StartInstance {
+            spec,
+            manual_recovery,
+        } = decoded.command
+        else {
+            panic!("expected start command");
+        };
+        assert!(manual_recovery);
+        assert!(spec.engine_qualification_fingerprint.is_empty());
+        assert_eq!(spec.engine_qualification_profile_version, 0);
     }
 
     #[test]

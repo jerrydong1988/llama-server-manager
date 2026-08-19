@@ -1,6 +1,7 @@
 use crate::commands::adlx;
 use crate::commands::engine_capabilities::{
     blocked_security_flags, capabilities_match_executable, command_for_capabilities,
+    executable_fingerprint, invalidate_engine_evidence, qualification_matches_executable,
     unsupported_command_flags,
 };
 use crate::commands::nvml;
@@ -1912,11 +1913,10 @@ fn trusted_engine_capabilities(
     if capabilities_match_executable(engine_exe, &engine.capabilities) {
         return EngineCapabilityResolution::Available(Box::new(engine.capabilities.clone()));
     }
-    engine.version.clear();
-    engine.capabilities = EngineCapabilities {
-        error: Some("engine executable changed; compatibility probe required".to_string()),
-        ..EngineCapabilities::default()
-    };
+    invalidate_engine_evidence(
+        engine,
+        "engine executable changed; compatibility probe and qualification required",
+    );
     let _ = crate::commands::model_inventory::update_engine_probe(engine);
     EngineCapabilityResolution::Stale
 }
@@ -1960,6 +1960,103 @@ fn validate_configured_engine(
     crate::security::require_path_within_root(std::path::Path::new(engine_exe), &authorized_root)
         .map_err(|message| AppError::new("CONFIGURED_ENGINE_UNAUTHORIZED", message, false))?;
     Ok(())
+}
+
+struct ValidatedEngineQualification {
+    fingerprint: String,
+    profile_version: u8,
+}
+
+fn validate_engine_qualification(
+    state: &AppState,
+    config: &InstanceConfig,
+    engine_exe: &str,
+) -> AppResult<ValidatedEngineQualification> {
+    let mut engines = state.engines.lock().unwrap();
+    let engine = engines
+        .iter_mut()
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.id),
+                std::path::Path::new(&config.engine_id),
+            )
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                "ENGINE_QUALIFICATION_REQUIRED",
+                "实例引用的引擎没有可用的资格认证证据。",
+                false,
+            )
+        })?;
+    if !paths_equal(
+        &normalized_engine_path(&engine.exe),
+        &normalized_engine_path(engine_exe),
+    ) {
+        return Err(AppError::new(
+            "ENGINE_QUALIFICATION_STALE",
+            "引擎路径已变化，请重新完成能力探测和资格认证。",
+            false,
+        ));
+    }
+
+    let qualification_fingerprint = engine
+        .capabilities
+        .qualification
+        .executable_fingerprint
+        .clone();
+    let current_fingerprint = executable_fingerprint(engine_exe);
+    if !qualification_fingerprint.is_empty() && qualification_fingerprint != current_fingerprint {
+        invalidate_engine_evidence(
+            engine,
+            "engine executable changed; compatibility probe and qualification required",
+        );
+        let _ = crate::commands::model_inventory::update_engine_probe(engine);
+    }
+
+    let qualification = &engine.capabilities.qualification;
+    if let Some(error) = qualification_gate_error(
+        qualification.status.as_str(),
+        qualification_matches_executable(engine_exe, qualification),
+    ) {
+        return Err(error);
+    }
+    Ok(ValidatedEngineQualification {
+        fingerprint: qualification.executable_fingerprint.clone(),
+        profile_version: qualification.profile_version,
+    })
+}
+
+fn qualification_gate_error(status: &str, evidence_is_current: bool) -> Option<AppError> {
+    if evidence_is_current {
+        return None;
+    }
+    Some(match status {
+        "stale" => AppError::new(
+            "ENGINE_QUALIFICATION_STALE",
+            "引擎制品已变化，之前的资格认证证据已失效；请重新探测并认证。",
+            false,
+        ),
+        "incomplete" => AppError::new(
+            "ENGINE_QUALIFICATION_INCOMPLETE",
+            "引擎资格认证不完整；版本或能力证据未通过，禁止启动实例。",
+            false,
+        ),
+        "failed" | "cancelled" => AppError::new(
+            "ENGINE_QUALIFICATION_FAILED",
+            "引擎资格认证未通过；请查看报告、修复问题并重新认证。",
+            false,
+        ),
+        "unqualified" => AppError::new(
+            "ENGINE_QUALIFICATION_REQUIRED",
+            "引擎尚未完成资格认证；请先在引擎管理中运行认证。",
+            false,
+        ),
+        _ => AppError::new(
+            "ENGINE_QUALIFICATION_INCOMPLETE",
+            "引擎资格认证状态未知，禁止启动实例。",
+            false,
+        ),
+    })
 }
 
 fn stale_engine_error() -> AppError {
@@ -2095,6 +2192,7 @@ pub async fn start_server(
 ) -> AppResult<()> {
     let mut timing = crate::operation_timing::OperationTiming::new("start_server");
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
+    let engine_qualification = validate_engine_qualification(state.inner(), &config, &engine_exe)?;
     validate_instance_id(&instance_id)?;
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let manual = uses_manual_command(&config);
@@ -2151,6 +2249,8 @@ pub async fn start_server(
                 instance_id: instance_id.clone(),
                 config: config.clone(),
                 launch_config_stale: false,
+                engine_qualification_fingerprint: engine_qualification.fingerprint.clone(),
+                engine_qualification_profile_version: engine_qualification.profile_version,
                 engine_backend: engine_backend.clone(),
                 command: cmd.clone(),
                 command_display: cmd_display.clone(),
@@ -4673,6 +4773,24 @@ fn split_args_checked(input: &str) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod perf_parser_tests {
     use super::*;
+
+    #[test]
+    fn qualification_gate_fails_closed_with_stable_error_codes() {
+        for (status, expected_code) in [
+            ("unqualified", "ENGINE_QUALIFICATION_REQUIRED"),
+            ("incomplete", "ENGINE_QUALIFICATION_INCOMPLETE"),
+            ("failed", "ENGINE_QUALIFICATION_FAILED"),
+            ("cancelled", "ENGINE_QUALIFICATION_FAILED"),
+            ("stale", "ENGINE_QUALIFICATION_STALE"),
+            ("passed", "ENGINE_QUALIFICATION_INCOMPLETE"),
+            ("unexpected", "ENGINE_QUALIFICATION_INCOMPLETE"),
+        ] {
+            let error = qualification_gate_error(status, false)
+                .expect("non-current qualification evidence must block startup");
+            assert_eq!(error.code, expected_code);
+        }
+        assert!(qualification_gate_error("passed", true).is_none());
+    }
 
     #[test]
     fn current_process_identity_is_available() {

@@ -6,6 +6,7 @@ use super::protocol::{
     RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
+use crate::commands::engine_capabilities::{executable_fingerprint, QUALIFICATION_PROFILE_VERSION};
 use crate::commands::proxy::{
     normalize_and_validate_proxy_config, proxy_request_resolution_from,
     proxy_router_from_source_with_runtime, status_with_runtime, ProxyDataSource,
@@ -45,6 +46,31 @@ fn unix_timestamp() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
+}
+
+fn validate_runtime_engine_qualification(spec: &RuntimeLaunchSpec) -> Result<(), String> {
+    if spec.engine_qualification_fingerprint.is_empty()
+        || spec.engine_qualification_profile_version == 0
+    {
+        return Err(
+            "ENGINE_QUALIFICATION_REQUIRED: runtime launch snapshot has no qualification binding"
+                .to_string(),
+        );
+    }
+    if spec.engine_qualification_profile_version != QUALIFICATION_PROFILE_VERSION {
+        return Err(format!(
+            "ENGINE_QUALIFICATION_INCOMPLETE: runtime launch snapshot uses qualification profile {} but profile {} is required",
+            spec.engine_qualification_profile_version, QUALIFICATION_PROFILE_VERSION
+        ));
+    }
+    let executable = spec.command.first().map(String::as_str).unwrap_or_default();
+    if executable_fingerprint(executable) != spec.engine_qualification_fingerprint {
+        return Err(
+            "ENGINE_QUALIFICATION_STALE: runtime engine artifact no longer matches qualification evidence"
+                .to_string(),
+        );
+    }
+    Ok(())
 }
 
 fn instance_recovery_enabled(spec: &RuntimeLaunchSpec) -> bool {
@@ -817,6 +843,7 @@ impl RuntimeSupervisor {
         if spec.command.is_empty() || spec.command[0].trim().is_empty() {
             return Err("runtime launch command is empty".into());
         }
+        validate_runtime_engine_qualification(&spec)?;
         crate::commands::server::validate_effective_launch_security(&spec.config, &spec.command)
             .map_err(|error| error.to_string())?;
         {
@@ -1948,8 +1975,10 @@ mod tests {
         gui_owner_is_alive, is_instance_recovery_error, recovery_budget_is_stable,
         recovery_status_after_failure, runtime_config_matches, runtime_launch_config_matches,
         scheduled_recovery_matches, should_stop_for_missing_gui, sync_desired_launch_config,
-        validate_background_detach_inventory, validate_runtime_state, GuiOwner,
+        validate_background_detach_inventory, validate_runtime_engine_qualification,
+        validate_runtime_state, GuiOwner, QUALIFICATION_PROFILE_VERSION,
     };
+    use crate::commands::engine_capabilities::executable_fingerprint;
     use crate::commands::server::read_process_identity;
     use crate::models::{InstanceConfig, RunningInstance};
     use crate::runtime_service::protocol::{
@@ -1978,6 +2007,8 @@ mod tests {
             instance_id: "instance-1".into(),
             config: InstanceConfig::default(),
             launch_config_stale: false,
+            engine_qualification_fingerprint: "test-fingerprint".into(),
+            engine_qualification_profile_version: QUALIFICATION_PROFILE_VERSION,
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
@@ -2003,6 +2034,34 @@ mod tests {
         assert_eq!(status.max_restart_attempts, INSTANCE_RECOVERY_MAX_ATTEMPTS);
         assert_eq!(status.next_retry_at, None);
         assert_eq!(status.origin_failure.message, "origin");
+    }
+
+    #[test]
+    fn runtime_recovery_is_bound_to_the_qualified_engine_artifact() {
+        let mut spec = detach_spec();
+        spec.engine_qualification_fingerprint.clear();
+        spec.engine_qualification_profile_version = 0;
+        assert!(validate_runtime_engine_qualification(&spec)
+            .unwrap_err()
+            .starts_with("ENGINE_QUALIFICATION_REQUIRED:"));
+
+        let executable = std::env::temp_dir().join(format!(
+            "lsm-runtime-qualified-engine-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&executable, vec![b'a'; 128 * 1024]).unwrap();
+        spec.command = vec![executable.to_string_lossy().to_string()];
+        spec.engine_qualification_fingerprint =
+            executable_fingerprint(&executable.to_string_lossy());
+        spec.engine_qualification_profile_version = QUALIFICATION_PROFILE_VERSION;
+        validate_runtime_engine_qualification(&spec).unwrap();
+
+        std::fs::write(&executable, vec![b'b'; 128 * 1024]).unwrap();
+        assert!(validate_runtime_engine_qualification(&spec)
+            .unwrap_err()
+            .starts_with("ENGINE_QUALIFICATION_STALE:"));
+        let _ = std::fs::remove_file(executable);
     }
 
     #[test]

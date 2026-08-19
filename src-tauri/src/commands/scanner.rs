@@ -1,4 +1,6 @@
-use crate::commands::engine_capabilities::capabilities_match_executable;
+use crate::commands::engine_capabilities::{
+    capabilities_match_executable, invalidate_engine_evidence,
+};
 use crate::commands::model_inventory::{
     self, InventoryDirectoryRecord, InventoryEngineRecord, InventoryModelRecord,
 };
@@ -304,11 +306,10 @@ fn merge_scanned_engine_capabilities(scanned: &mut [EngineInfo], current: &[Engi
         if !engine.capabilities.executable_fingerprint.is_empty()
             && !capabilities_match_executable(&engine.exe, &engine.capabilities)
         {
-            engine.version.clear();
-            engine.capabilities = crate::models::EngineCapabilities {
-                error: Some("engine executable changed; compatibility probe required".to_string()),
-                ..crate::models::EngineCapabilities::default()
-            };
+            invalidate_engine_evidence(
+                engine,
+                "engine executable changed; compatibility probe and qualification required",
+            );
         }
 
         let Some(active) = current.iter().find(|candidate| {
@@ -1188,6 +1189,21 @@ mod incremental_scan_tests {
                 version_status: "detected".to_string(),
                 executable_fingerprint: fingerprint,
                 probed_at: Some(100),
+                qualification: crate::models::EngineQualificationReport {
+                    status: "passed".to_string(),
+                    executable_fingerprint:
+                        crate::commands::engine_capabilities::executable_fingerprint(
+                            &exe.to_string_lossy(),
+                        ),
+                    checks: vec![crate::models::EngineQualificationCheck {
+                        name: "inference".to_string(),
+                        status: "passed".to_string(),
+                        duration_ms: 10,
+                        detail: None,
+                    }],
+                    completed_at: Some(100),
+                    ..crate::models::EngineQualificationReport::default()
+                },
                 ..crate::models::EngineCapabilities::default()
             },
         };
@@ -1199,11 +1215,14 @@ mod incremental_scan_tests {
         merge_scanned_engine_capabilities(&mut scanned, &[current.clone()]);
         assert_eq!(scanned[0].version, "version: 100");
         assert_eq!(scanned[0].capabilities.status, "detected");
+        assert_eq!(scanned[0].capabilities.qualification.status, "passed");
 
         std::fs::write(&exe, vec![b'b'; 128 * 1024]).unwrap();
         current.capabilities.probed_at = Some(200);
         merge_scanned_engine_capabilities(&mut scanned, &[current]);
         assert_eq!(scanned[0].capabilities.status, "unprobed");
+        assert_eq!(scanned[0].capabilities.qualification.status, "stale");
+        assert_eq!(scanned[0].capabilities.qualification.checks.len(), 1);
         assert!(scanned[0].version.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
