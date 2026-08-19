@@ -15,12 +15,14 @@ import {
   type ConfigRevisionHistory,
   type ConfigRevisionSummary,
   type ConfigValueSummary,
+  type DeploymentIdentityStatus,
   type InstanceConfig,
   type InstanceLifecyclePhase,
 } from '../../store'
 import { getConfigPageLabels } from '../../i18n/configPageCopy'
 import { Badge, Button, InsetSurface } from '../ui'
 import { fieldLabel } from './configWorkspace'
+import { DeploymentIdentityCard } from './DeploymentIdentityCard'
 
 type Labels = ReturnType<typeof getConfigPageLabels>
 
@@ -75,6 +77,7 @@ export function ConfigRevisionPanel({
   onRollbackApplied: (config: InstanceConfig) => void
 }) {
   const listConfigRevisions = useAppStore(state => state.listConfigRevisions)
+  const inspectDeploymentIdentity = useAppStore(state => state.inspectDeploymentIdentity)
   const markConfigRevisionKnownGood = useAppStore(state => state.markConfigRevisionKnownGood)
   const rollbackConfigRevision = useAppStore(state => state.rollbackConfigRevision)
   const addRuntimeWarning = useAppStore(state => state.addRuntimeWarning)
@@ -84,6 +87,7 @@ export function ConfigRevisionPanel({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [busyRevisionId, setBusyRevisionId] = useState<string | null>(null)
   const [rollbackTarget, setRollbackTarget] = useState<ConfigRevisionSummary | null>(null)
+  const [identityStatus, setIdentityStatus] = useState<DeploymentIdentityStatus | null>(null)
 
   const loadHistory = async () => {
     setLoading(true)
@@ -91,6 +95,7 @@ export function ConfigRevisionPanel({
     try {
       const next = await listConfigRevisions(instanceId)
       setHistory(next)
+      setIdentityStatus(await inspectDeploymentIdentity(instanceId))
       setExpandedId(current => retainedExpandedRevision(current, next))
     } catch (loadError) {
       setError(String(loadError))
@@ -103,10 +108,14 @@ export function ConfigRevisionPanel({
     let cancelled = false
     setLoading(true)
     setError('')
-    void listConfigRevisions(instanceId)
-      .then(next => {
+    void Promise.all([
+      listConfigRevisions(instanceId),
+      inspectDeploymentIdentity(instanceId),
+    ])
+      .then(([next, status]) => {
         if (cancelled) return
         setHistory(next)
+        setIdentityStatus(status)
         setExpandedId(current => retainedExpandedRevision(current, next))
       })
       .catch(loadError => {
@@ -118,7 +127,7 @@ export function ConfigRevisionPanel({
     return () => {
       cancelled = true
     }
-  }, [instanceId, listConfigRevisions, refreshKey])
+  }, [instanceId, inspectDeploymentIdentity, listConfigRevisions, refreshKey])
 
   const markKnownGood = async (revision: ConfigRevisionSummary) => {
     if (!history || busyRevisionId) return
@@ -177,6 +186,8 @@ export function ConfigRevisionPanel({
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </Button>
       </div>
+
+      {identityStatus && <DeploymentIdentityCard status={identityStatus} labels={labels} />}
 
       {rollbackBlocked && (
         <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">

@@ -10,11 +10,14 @@ Existing instances receive one migration baseline on first load. Creating an ins
 
 - a unique revision ID;
 - a SHA-256 configuration fingerprint;
+- a stable `urn:lsm:configuration:v1:sha256:*` identity derived from that canonical fingerprint;
 - a parent revision link and timestamp;
 - a creation reason; and
 - the selected target for rollback-created revisions.
 
 The active configuration and its revision are committed together through the existing atomic `instances.json` write. A failed write does not update the in-memory configuration shown by the application.
+
+Revision schema 2 includes the configuration identity in each event-integrity seal. Valid schema-1 histories migrate without changing revision IDs, parent links, known-good pointers, or audit events. A corrupt legacy event stays visible and invalid; migration appends a valid current baseline when needed but never rewrites corruption into trusted history.
 
 ## Inspect history and diffs
 

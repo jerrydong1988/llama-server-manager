@@ -187,29 +187,35 @@ const engine: EngineInfo = {
     probedAt: IS_DOCS_SCENARIO ? Date.UTC(2026, 6, 31, 12, 0, 0) / 1000 : 1,
     qualification: BROWSER_SCENARIO === 'engine-qualification'
       ? {
-          schemaVersion: 1,
+          schemaVersion: 2,
           profileVersion: 1,
           status: 'unqualified',
           executableFingerprint: '',
+          engineArtifactId: '',
           engineVersion: '',
           helpHash: '',
           modelId: '',
+          modelArtifactId: '',
           modelName: '',
           modelSize: 0,
           checks: [],
+          evidenceId: '',
         }
       : {
-          schemaVersion: 1,
+          schemaVersion: 2,
           profileVersion: 1,
           status: 'passed',
           executableFingerprint: 'browser-test-engine-fingerprint',
+          engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
           engineVersion: IS_DOCS_SCENARIO ? 'version: 10042 (6d2f8e1)' : 'version: 10042 (browser-test)',
           helpHash: 'browser-test-help',
           modelId: models[0].id,
+          modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
           modelName: models[0].name,
           modelSize: models[0].size,
           startedAt: 1,
           completedAt: 2,
+          evidenceId: 'urn:lsm:qualification:v2:sha256:browser-evidence',
           checks: [
             { name: 'version', status: 'passed', durationMs: 10 },
             { name: 'capabilities', status: 'passed', durationMs: 10 },
@@ -612,11 +618,14 @@ const ensureRevisionHistory = (instanceId: string) => {
     instanceId,
     currentFingerprint: `sha256:current-${instanceId}`,
     currentRevisionId: currentId,
+    currentConfigurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
     knownGoodRevisionId: null,
     revisions: [
       {
         id: currentId,
         fingerprint: `sha256:current-${instanceId}`,
+        identitySchemaVersion: 1,
+        configurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
         parentRevisionId: baselineId,
         createdAt: 1_787_000_100,
         reason: 'save',
@@ -649,6 +658,8 @@ const ensureRevisionHistory = (instanceId: string) => {
       {
         id: baselineId,
         fingerprint: `sha256:baseline-${instanceId}`,
+        identitySchemaVersion: 1,
+        configurationId: `urn:lsm:configuration:v1:sha256:baseline-${instanceId}`,
         parentRevisionId: null,
         createdAt: 1_787_000_000,
         reason: 'migration',
@@ -1017,6 +1028,42 @@ mockIPC((command, payload) => {
       const instanceId = String(args.instanceId ?? '')
       return clone(ensureRevisionHistory(instanceId))
     }
+    case 'inspect_deployment_identity': {
+      const instanceId = String(args.instanceId ?? '')
+      if (BROWSER_SCENARIO === 'deployment-identity-incomplete') {
+        return {
+          ready: false,
+          errorCode: 'ENGINE_QUALIFICATION_INCOMPLETE',
+          message: 'browser mock detail must not be required for localized rendering',
+        }
+      }
+      if (BROWSER_SCENARIO === 'deployment-identity-stale') {
+        return {
+          ready: false,
+          errorCode: 'DEPLOYMENT_MODEL_IDENTITY_STALE',
+          message: 'stale browser mock detail must not be rendered',
+        }
+      }
+      if (BROWSER_SCENARIO === 'deployment-identity-legacy') {
+        return {
+          ready: false,
+          errorCode: 'DEPLOYMENT_IDENTITY_INVALID',
+          message: 'legacy browser mock detail must not be rendered',
+        }
+      }
+      return {
+        ready: true,
+        identity: {
+          schemaVersion: 1,
+          deploymentId: `urn:lsm:deployment:v1:sha256:browser-${instanceId}`,
+          engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
+          modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
+          configRevisionId: `revision-current-${instanceId}`,
+          configurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
+          qualificationEvidenceId: 'urn:lsm:qualification:v2:sha256:browser-evidence',
+        },
+      }
+    }
     case 'mark_config_revision_known_good': {
       const instanceId = String(args.instanceId ?? '')
       const revisionId = String(args.revisionId ?? '')
@@ -1068,6 +1115,8 @@ mockIPC((command, payload) => {
       history.revisions.unshift({
         id: rollbackId,
         fingerprint: target.fingerprint,
+        identitySchemaVersion: 1,
+        configurationId: target.configurationId,
         parentRevisionId: history.currentRevisionId,
         createdAt: 1_787_000_300,
         reason: 'rollback',
@@ -1085,6 +1134,7 @@ mockIPC((command, payload) => {
       })
       history.currentRevisionId = rollbackId
       history.currentFingerprint = target.fingerprint
+      history.currentConfigurationId = target.configurationId
       revisionSnapshots.set(rollbackId, clone(restored))
       const response: ConfigRevisionRollbackResponse = {
         config: clone(restored),
@@ -1138,17 +1188,20 @@ mockIPC((command, payload) => {
       target.capabilities = {
         ...target.capabilities!,
         qualification: {
-          schemaVersion: 1,
+          schemaVersion: 2,
           profileVersion: 1,
           status: 'passed',
           executableFingerprint: target.capabilities!.executableFingerprint,
+          engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
           engineVersion: target.version,
           helpHash: target.capabilities!.helpHash,
           modelId: qualificationModel.id,
+          modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
           modelName: qualificationModel.name,
           modelSize: qualificationModel.size,
           startedAt: 10,
           completedAt: 11,
+          evidenceId: 'urn:lsm:qualification:v2:sha256:browser-evidence',
           checks: [
             { name: 'version', status: 'passed', durationMs: 10, detail: 'engine version was detected' },
             { name: 'capabilities', status: 'passed', durationMs: 10, detail: 'required flags were confirmed' },

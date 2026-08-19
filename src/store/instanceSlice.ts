@@ -13,6 +13,7 @@ import type {
   AppState,
   ConfigRevisionHistory,
   ConfigRevisionRollbackResponse,
+  DeploymentIdentityStatus,
   GeneratedServerCommand,
   InstanceConfig,
   LogEntry,
@@ -124,6 +125,7 @@ export function createInstanceSlice(
   | 'saveConfig'
   | 'loadConfig'
   | 'listConfigRevisions'
+  | 'inspectDeploymentIdentity'
   | 'markConfigRevisionKnownGood'
   | 'rollbackConfigRevision'
 > {
@@ -370,6 +372,10 @@ export function createInstanceSlice(
     listConfigRevisions: async (instanceId) => {
       await configSaveCoordinator.waitForIdle()
       return invoke<ConfigRevisionHistory>('list_config_revisions', { instanceId })
+    },
+    inspectDeploymentIdentity: async (instanceId) => {
+      await configSaveCoordinator.waitForIdle()
+      return invoke<DeploymentIdentityStatus>('inspect_deployment_identity', { instanceId })
     },
     markConfigRevisionKnownGood: async (instanceId, revisionId, expectedCurrentFingerprint) => {
       await configSaveCoordinator.waitForIdle()

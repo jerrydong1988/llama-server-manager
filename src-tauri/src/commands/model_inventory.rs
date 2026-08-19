@@ -1,3 +1,4 @@
+use crate::deployment_identity::ArtifactIdentity;
 use crate::models::{EngineCapabilities, EngineInfo, ModelCapabilities, ModelInfo};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
@@ -6,12 +7,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 5;
-// Cache version 4 has the same persisted row shape as version 5. Version 5 only
-// adds metadata that can safely remain unknown until the background refresh
-// reparses the file. Keep compatible rows visible during that refresh so an
-// application update never turns an existing inventory into a blank screen.
-const MIN_DISPLAYABLE_INVENTORY_CACHE_VERSION: i64 = 4;
+const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 6;
+// Cache version 5 has the same required display fields as version 6. Version 6
+// adds versioned artifact identities that remain explicitly unverified until
+// the background refresh samples the file.
+// Keep compatible rows visible during that refresh so an application update
+// never turns an existing inventory into a blank screen.
+const MIN_DISPLAYABLE_INVENTORY_CACHE_VERSION: i64 = 5;
 static INVENTORY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 static INVENTORY_SCHEMA_LOCK: Mutex<()> = Mutex::new(());
 
@@ -48,6 +50,7 @@ pub struct InventoryModelRecord {
     pub capabilities: ModelCapabilities,
     pub file_type: String,
     pub is_shard: bool,
+    pub artifact_identity: ArtifactIdentity,
     pub last_seen: i64,
     pub cache_version: i64,
 }
@@ -61,6 +64,7 @@ pub struct InventoryEngineRecord {
     pub version: String,
     pub backend: String,
     pub capabilities: EngineCapabilities,
+    pub artifact_identity: ArtifactIdentity,
     pub exe_mtime: u64,
     pub scan_root: String,
     pub last_seen: i64,
@@ -108,6 +112,7 @@ impl InventoryModelRecord {
             capabilities: model.capabilities.clone(),
             file_type: model.file_type.clone(),
             is_shard: model.is_shard,
+            artifact_identity: model.artifact_identity.clone(),
             last_seen: now_secs(),
             cache_version: MODEL_INVENTORY_SCHEMA_VERSION,
         }
@@ -129,6 +134,7 @@ impl InventoryModelRecord {
             capabilities: self.capabilities.clone(),
             file_type: self.file_type.clone(),
             is_shard: self.is_shard,
+            artifact_identity: self.artifact_identity.clone(),
         }
     }
 }
@@ -143,6 +149,7 @@ impl InventoryEngineRecord {
             version: engine.version.clone(),
             backend: engine.backend.clone(),
             capabilities: engine.capabilities.clone(),
+            artifact_identity: engine.artifact_identity.clone(),
             exe_mtime,
             scan_root,
             last_seen: now_secs(),
@@ -160,6 +167,7 @@ impl InventoryEngineRecord {
             backend: self.backend.clone(),
             custom_name: None,
             capabilities: self.capabilities.clone(),
+            artifact_identity: self.artifact_identity.clone(),
         }
     }
 }
@@ -242,6 +250,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             capabilities_json TEXT NOT NULL,
             file_type TEXT NOT NULL,
             is_shard INTEGER NOT NULL,
+            artifact_identity_json TEXT NOT NULL DEFAULT '{}',
             last_seen INTEGER NOT NULL,
             cache_version INTEGER NOT NULL
         );
@@ -261,6 +270,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             version TEXT NOT NULL,
             backend TEXT NOT NULL,
             capabilities_json TEXT NOT NULL DEFAULT '{}',
+            artifact_identity_json TEXT NOT NULL DEFAULT '{}',
             exe_mtime INTEGER NOT NULL,
             scan_root TEXT NOT NULL,
             last_seen INTEGER NOT NULL,
@@ -291,6 +301,18 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         conn,
         "engine_inventory",
         "capabilities_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    ensure_column(
+        conn,
+        "model_inventory",
+        "artifact_identity_json",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    ensure_column(
+        conn,
+        "engine_inventory",
+        "artifact_identity_json",
         "TEXT NOT NULL DEFAULT '{}'",
     )?;
     conn.pragma_update(None, "user_version", MODEL_INVENTORY_SCHEMA_VERSION)
@@ -418,7 +440,8 @@ fn load_model_index_from_connection(
             r#"
             SELECT path, id, display_path, name, scan_root, size, mtime,
                    architecture, context_length, quant_type, has_mtp_head,
-                   capabilities_json, file_type, is_shard, last_seen, cache_version
+                   capabilities_json, file_type, is_shard, artifact_identity_json,
+                   last_seen, cache_version
             FROM model_inventory
             "#,
         )
@@ -467,9 +490,10 @@ fn upsert_model_records_in_connection(
                 INSERT INTO model_inventory (
                     path, id, display_path, name, scan_root, size, mtime,
                     architecture, context_length, quant_type, has_mtp_head,
-                    capabilities_json, file_type, is_shard, last_seen, cache_version
+                    capabilities_json, file_type, is_shard, artifact_identity_json,
+                    last_seen, cache_version
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
                 )
                 ON CONFLICT(path) DO UPDATE SET
                     id=excluded.id,
@@ -485,6 +509,7 @@ fn upsert_model_records_in_connection(
                     capabilities_json=excluded.capabilities_json,
                     file_type=excluded.file_type,
                     is_shard=excluded.is_shard,
+                    artifact_identity_json=excluded.artifact_identity_json,
                     last_seen=excluded.last_seen,
                     cache_version=excluded.cache_version
             "#,
@@ -508,6 +533,8 @@ fn upsert_model_records_in_connection(
             capabilities_json,
             record.file_type,
             if record.is_shard { 1 } else { 0 },
+            serde_json::to_string(&record.artifact_identity)
+                .map_err(|e| format!("failed to encode model artifact identity: {e}"))?,
             record.last_seen,
             MODEL_INVENTORY_SCHEMA_VERSION,
         ])
@@ -584,7 +611,7 @@ fn load_engine_index_from_connection(
         .prepare(
             r#"
             SELECT id, name, dir, exe, version, backend, capabilities_json,
-                   exe_mtime, scan_root, last_seen, cache_version
+                   artifact_identity_json, exe_mtime, scan_root, last_seen, cache_version
             FROM engine_inventory
             "#,
         )
@@ -632,9 +659,9 @@ fn upsert_engine_records_in_connection(
             r#"
                 INSERT INTO engine_inventory (
                     id, name, dir, exe, version, backend, capabilities_json,
-                    exe_mtime, scan_root, last_seen, cache_version
+                    artifact_identity_json, exe_mtime, scan_root, last_seen, cache_version
                 ) VALUES (
-                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
                 )
                 ON CONFLICT(id) DO UPDATE SET
                     name=excluded.name,
@@ -643,6 +670,7 @@ fn upsert_engine_records_in_connection(
                     version=excluded.version,
                     backend=excluded.backend,
                     capabilities_json=excluded.capabilities_json,
+                    artifact_identity_json=excluded.artifact_identity_json,
                     exe_mtime=excluded.exe_mtime,
                     scan_root=excluded.scan_root,
                     last_seen=excluded.last_seen,
@@ -660,6 +688,8 @@ fn upsert_engine_records_in_connection(
             record.backend,
             serde_json::to_string(&record.capabilities)
                 .map_err(|e| format!("failed to encode engine capabilities: {e}"))?,
+            serde_json::to_string(&record.artifact_identity)
+                .map_err(|e| format!("failed to encode engine artifact identity: {e}"))?,
             record.exe_mtime as i64,
             record.scan_root,
             record.last_seen,
@@ -676,8 +706,14 @@ pub fn update_engine_probe(engine: &EngineInfo) -> Result<(), String> {
         .map_err(|e| format!("failed to encode engine capabilities: {e}"))?;
     let changed = conn
         .execute(
-            "UPDATE engine_inventory SET version = ?2, capabilities_json = ?3 WHERE id = ?1",
-            params![engine.id, engine.version, capabilities_json],
+            "UPDATE engine_inventory SET version = ?2, capabilities_json = ?3, artifact_identity_json = ?4 WHERE id = ?1",
+            params![
+                engine.id,
+                engine.version,
+                capabilities_json,
+                serde_json::to_string(&engine.artifact_identity)
+                    .map_err(|e| format!("failed to encode engine artifact identity: {e}"))?
+            ],
         )
         .map_err(|e| format!("failed to persist engine capability probe: {e}"))?;
     if changed == 0 {
@@ -754,6 +790,7 @@ fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRe
             )
         })?;
     let context_length_i64: Option<i64> = row.get(8)?;
+    let artifact_identity_json: String = row.get(14)?;
     Ok(InventoryModelRecord {
         path: row.get(0)?,
         id: row.get(1)?,
@@ -769,8 +806,9 @@ fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRe
         capabilities,
         file_type: row.get(12)?,
         is_shard: row.get::<_, i64>(13)? != 0,
-        last_seen: row.get(14)?,
-        cache_version: row.get(15)?,
+        artifact_identity: serde_json::from_str(&artifact_identity_json).unwrap_or_default(),
+        last_seen: row.get(15)?,
+        cache_version: row.get(16)?,
     })
 }
 
@@ -778,6 +816,7 @@ fn engine_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inventory
     let capabilities_json: String = row.get(6)?;
     let capabilities =
         serde_json::from_str::<EngineCapabilities>(&capabilities_json).unwrap_or_default();
+    let artifact_identity_json: String = row.get(7)?;
     Ok(InventoryEngineRecord {
         id: row.get(0)?,
         name: row.get(1)?,
@@ -786,10 +825,11 @@ fn engine_record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Inventory
         version: row.get(4)?,
         backend: row.get(5)?,
         capabilities,
-        exe_mtime: row.get::<_, i64>(7)?.max(0) as u64,
-        scan_root: row.get(8)?,
-        last_seen: row.get(9)?,
-        cache_version: row.get(10)?,
+        artifact_identity: serde_json::from_str(&artifact_identity_json).unwrap_or_default(),
+        exe_mtime: row.get::<_, i64>(8)?.max(0) as u64,
+        scan_root: row.get(9)?,
+        last_seen: row.get(10)?,
+        cache_version: row.get(11)?,
     })
 }
 
@@ -893,6 +933,10 @@ mod tests {
                 qualification: report,
                 ..EngineCapabilities::default()
             },
+            artifact_identity: crate::deployment_identity::artifact_identity_for_path(
+                "engine", &exe,
+            )
+            .unwrap(),
             exe_mtime: 0,
             scan_root: dir.to_string_lossy().to_string(),
             last_seen: 0,
@@ -907,6 +951,8 @@ mod tests {
         assert_eq!(loaded.capabilities.qualification.status, "passed");
         assert_eq!(loaded.capabilities.qualification.model_id, "model-id");
         assert_eq!(loaded.capabilities.qualification.checks.len(), 1);
+        assert!(loaded.artifact_identity.is_verified());
+        assert_eq!(loaded.artifact_identity, record.artifact_identity);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

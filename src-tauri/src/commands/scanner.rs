@@ -468,6 +468,17 @@ fn scan_model_directory_incremental(
         }
 
         let idx = models.len();
+        let artifact_identity =
+            match crate::deployment_identity::artifact_identity_for_path("model", &entry.path) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    errors.push(format!(
+                        "{} identity scan failed: {error}",
+                        entry.path.display()
+                    ));
+                    Default::default()
+                }
+            };
         models.push(ModelInfo {
             id: uuid::Uuid::new_v4().to_string(),
             name: entry.name,
@@ -480,6 +491,7 @@ fn scan_model_directory_incremental(
             capabilities: ModelCapabilities::default(),
             file_type: utils::classify_gguf_file(&entry.path).to_string(),
             is_shard: false,
+            artifact_identity,
         });
         inventory_meta.insert(idx, (cache_key, scan_root_key.to_string(), entry.mtime));
         fresh_files.push((idx, entry.path));
@@ -635,6 +647,8 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
         .unwrap_or_else(|_| dir.to_path_buf())
         .to_string_lossy()
         .to_string();
+    let artifact_identity =
+        crate::deployment_identity::artifact_identity_for_path("engine", exe).ok()?;
     Some(EngineInfo {
         id,
         name: format!("{} ({})", name, backend),
@@ -644,6 +658,7 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
         backend,
         custom_name: None,
         capabilities: Default::default(),
+        artifact_identity,
     })
 }
 
@@ -1206,6 +1221,10 @@ mod incremental_scan_tests {
                 },
                 ..crate::models::EngineCapabilities::default()
             },
+            artifact_identity: crate::deployment_identity::artifact_identity_for_path(
+                "engine", &exe,
+            )
+            .unwrap(),
         };
         let mut scanned = vec![EngineInfo {
             capabilities: crate::models::EngineCapabilities::default(),

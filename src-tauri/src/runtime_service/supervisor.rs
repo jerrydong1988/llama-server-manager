@@ -73,6 +73,48 @@ fn validate_runtime_engine_qualification(spec: &RuntimeLaunchSpec) -> Result<(),
     Ok(())
 }
 
+fn validate_runtime_deployment_identity(spec: &RuntimeLaunchSpec) -> Result<(), String> {
+    if !spec.deployment_identity.is_valid() {
+        return Err(
+            "DEPLOYMENT_IDENTITY_INVALID: runtime launch snapshot has no valid deployment identity"
+                .to_string(),
+        );
+    }
+    let executable = spec.command.first().map(String::as_str).unwrap_or_default();
+    let engine = crate::deployment_identity::artifact_identity_for_path(
+        "engine",
+        std::path::Path::new(executable),
+    )
+    .map_err(|error| format!("DEPLOYMENT_ENGINE_IDENTITY_FAILED: {error}"))?;
+    if engine.artifact_id != spec.deployment_identity.engine_artifact_id {
+        return Err(
+            "DEPLOYMENT_ENGINE_IDENTITY_STALE: runtime engine artifact identity changed"
+                .to_string(),
+        );
+    }
+    let model = crate::deployment_identity::artifact_identity_for_path(
+        "model",
+        std::path::Path::new(&spec.config.model_path),
+    )
+    .map_err(|error| format!("DEPLOYMENT_MODEL_IDENTITY_FAILED: {error}"))?;
+    if model.artifact_id != spec.deployment_identity.model_artifact_id {
+        return Err(
+            "DEPLOYMENT_MODEL_IDENTITY_STALE: runtime model artifact identity changed".to_string(),
+        );
+    }
+    let fingerprint = crate::config_revision::deployment_config_fingerprint(&spec.config)
+        .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
+    let configuration_id = crate::config_revision::configuration_id_from_fingerprint(&fingerprint)
+        .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
+    if configuration_id != spec.deployment_identity.configuration_id {
+        return Err(format!(
+            "DEPLOYMENT_CONFIG_IDENTITY_STALE: runtime configuration identity changed (expected {}, found {})",
+            spec.deployment_identity.configuration_id, configuration_id
+        ));
+    }
+    Ok(())
+}
+
 fn instance_recovery_enabled(spec: &RuntimeLaunchSpec) -> bool {
     !spec.launch_config_stale
         && spec
@@ -211,12 +253,12 @@ fn validate_runtime_state(
 ) -> Result<PersistedRuntimeState, String> {
     match state.schema_version {
         RUNTIME_STATE_SCHEMA_VERSION => Ok(state),
-        1 => {
+        1 | 2 => {
             state.schema_version = RUNTIME_STATE_SCHEMA_VERSION;
             Ok(state)
         }
         found => Err(format!(
-            "unsupported runtime state schema: expected {} or migratable schema 1, found {found}",
+            "unsupported runtime state schema: expected {} or migratable schema 1 or 2, found {found}",
             RUNTIME_STATE_SCHEMA_VERSION
         )),
     }
@@ -844,6 +886,7 @@ impl RuntimeSupervisor {
             return Err("runtime launch command is empty".into());
         }
         validate_runtime_engine_qualification(&spec)?;
+        validate_runtime_deployment_identity(&spec)?;
         crate::commands::server::validate_effective_launch_security(&spec.config, &spec.command)
             .map_err(|error| error.to_string())?;
         {
@@ -927,6 +970,7 @@ impl RuntimeSupervisor {
             telemetry_session_id,
             workload: spec.workload.clone(),
             launch_config: Some(spec.config.clone()),
+            deployment_identity: spec.deployment_identity.clone(),
         };
         let perf_tracker = Arc::new(Mutex::new(RuntimePerfTracker::new(
             spec.instance_id.clone(),
@@ -1975,8 +2019,9 @@ mod tests {
         gui_owner_is_alive, is_instance_recovery_error, recovery_budget_is_stable,
         recovery_status_after_failure, runtime_config_matches, runtime_launch_config_matches,
         scheduled_recovery_matches, should_stop_for_missing_gui, sync_desired_launch_config,
-        validate_background_detach_inventory, validate_runtime_engine_qualification,
-        validate_runtime_state, GuiOwner, QUALIFICATION_PROFILE_VERSION,
+        validate_background_detach_inventory, validate_runtime_deployment_identity,
+        validate_runtime_engine_qualification, validate_runtime_state, GuiOwner,
+        QUALIFICATION_PROFILE_VERSION,
     };
     use crate::commands::engine_capabilities::executable_fingerprint;
     use crate::commands::server::read_process_identity;
@@ -1999,6 +2044,7 @@ mod tests {
             telemetry_session_id: None,
             workload: "inference".into(),
             launch_config: None,
+            deployment_identity: Default::default(),
         }
     }
 
@@ -2009,12 +2055,67 @@ mod tests {
             launch_config_stale: false,
             engine_qualification_fingerprint: "test-fingerprint".into(),
             engine_qualification_profile_version: QUALIFICATION_PROFILE_VERSION,
+            deployment_identity: Default::default(),
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
             workload: "inference".into(),
             working_directory: None,
         }
+    }
+
+    #[test]
+    fn runtime_recovery_revalidates_the_complete_deployment_identity() {
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-runtime-deployment-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let engine_path = dir.join("llama-server");
+        let model_path = dir.join("model.gguf");
+        std::fs::write(&engine_path, vec![b'e'; 128 * 1024]).unwrap();
+        std::fs::write(&model_path, vec![b'm'; 128 * 1024]).unwrap();
+        let engine =
+            crate::deployment_identity::artifact_identity_for_path("engine", &engine_path).unwrap();
+        let model =
+            crate::deployment_identity::artifact_identity_for_path("model", &model_path).unwrap();
+        let config = InstanceConfig {
+            model_path: model_path.to_string_lossy().to_string(),
+            ..InstanceConfig::default()
+        };
+        let fingerprint = crate::config_revision::deployment_config_fingerprint(&config).unwrap();
+        let configuration_id =
+            crate::config_revision::configuration_id_from_fingerprint(&fingerprint).unwrap();
+        let deployment_identity = crate::deployment_identity::DeploymentIdentity::new(
+            engine.artifact_id,
+            model.artifact_id,
+            "revision-1".into(),
+            configuration_id,
+            "urn:lsm:qualification:v2:sha256:qualification-1".into(),
+        )
+        .unwrap();
+        let spec = RuntimeLaunchSpec {
+            instance_id: "instance-1".into(),
+            config,
+            launch_config_stale: false,
+            engine_qualification_fingerprint: executable_fingerprint(
+                &engine_path.to_string_lossy(),
+            ),
+            engine_qualification_profile_version: QUALIFICATION_PROFILE_VERSION,
+            deployment_identity,
+            engine_backend: "test".into(),
+            command: vec![engine_path.to_string_lossy().to_string()],
+            command_display: "llama-server".into(),
+            workload: "inference".into(),
+            working_directory: None,
+        };
+        validate_runtime_deployment_identity(&spec).unwrap();
+        std::fs::write(&model_path, vec![b'x'; 128 * 1024]).unwrap();
+        assert!(validate_runtime_deployment_identity(&spec)
+            .unwrap_err()
+            .starts_with("DEPLOYMENT_MODEL_IDENTITY_STALE"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn failure(message: &str, occurred_at: u64) -> RuntimeFailure {

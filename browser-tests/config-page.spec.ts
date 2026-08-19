@@ -33,6 +33,9 @@ test('configuration revisions expose redacted history, known-good audit, and tra
   await openConfiguration(page)
 
   const panel = page.getByTestId('config-revision-panel')
+  const deploymentIdentity = page.getByTestId('deployment-identity-status')
+  await expect(deploymentIdentity).toContainText(/部署身份|Deployment Identity/)
+  await expect(deploymentIdentity).toContainText(/已验证，可启动|Verified and ready/)
   await expect(panel).toBeVisible()
   await expect(panel.getByText('保存配置', { exact: true })).toBeVisible()
   await expect(panel.getByText('已设置（内容已隐藏）', { exact: true })).toBeVisible()
@@ -72,6 +75,34 @@ test('stale configuration rollback is rejected without refreshing the editor to 
   await expect(panel).toContainText('CONFIG_REVISION_STALE')
   await expect(page.locator('[data-config-field="port"] input')).toHaveValue('18081')
   await expect(panel.getByText('回滚生成', { exact: true })).toHaveCount(0)
+})
+
+test('deployment identity explains an incomplete fail-closed gate without exposing backend detail', async ({ page }) => {
+  await openConfiguration(page, 'deployment-identity-incomplete')
+
+  const status = page.getByTestId('deployment-identity-status')
+  await expect(status).toContainText('尚未就绪')
+  await expect(status).toContainText('ENGINE_QUALIFICATION_INCOMPLETE')
+  await expect(status).toContainText('请刷新模型和引擎清单、完成引擎资格认证，并保存当前配置。')
+  await expect(status).not.toContainText('browser mock detail')
+})
+
+test('deployment identity presents stale artifact evidence as fail-closed', async ({ page }) => {
+  await openConfiguration(page, 'deployment-identity-stale')
+
+  const status = page.getByTestId('deployment-identity-status')
+  await expect(status).toContainText('尚未就绪')
+  await expect(status).toContainText('DEPLOYMENT_MODEL_IDENTITY_STALE')
+  await expect(status).not.toContainText('stale browser mock detail')
+})
+
+test('deployment identity presents legacy snapshots as fail-closed', async ({ page }) => {
+  await openConfiguration(page, 'deployment-identity-legacy')
+
+  const status = page.getByTestId('deployment-identity-status')
+  await expect(status).toContainText('尚未就绪')
+  await expect(status).toContainText('DEPLOYMENT_IDENTITY_INVALID')
+  await expect(status).not.toContainText('legacy browser mock detail')
 })
 
 test('unsaved secret-bearing fields are redacted from the change review', async ({ page }) => {

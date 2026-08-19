@@ -1965,6 +1965,8 @@ fn validate_configured_engine(
 struct ValidatedEngineQualification {
     fingerprint: String,
     profile_version: u8,
+    engine_artifact_id: String,
+    evidence_id: String,
 }
 
 fn validate_engine_qualification(
@@ -2023,7 +2025,136 @@ fn validate_engine_qualification(
     Ok(ValidatedEngineQualification {
         fingerprint: qualification.executable_fingerprint.clone(),
         profile_version: qualification.profile_version,
+        engine_artifact_id: qualification.engine_artifact_id.clone(),
+        evidence_id: qualification.evidence_id.clone(),
     })
+}
+
+fn build_deployment_identity(
+    state: &AppState,
+    instance_id: &str,
+    config: &InstanceConfig,
+    engine_exe: &str,
+    qualification: &ValidatedEngineQualification,
+) -> AppResult<crate::deployment_identity::DeploymentIdentity> {
+    let engine_identity = crate::deployment_identity::artifact_identity_for_path(
+        "engine",
+        std::path::Path::new(engine_exe),
+    )
+    .map_err(|message| AppError::new("DEPLOYMENT_ENGINE_IDENTITY_FAILED", message, true))?;
+    if engine_identity.artifact_id != qualification.engine_artifact_id {
+        return Err(AppError::new(
+            "DEPLOYMENT_ENGINE_IDENTITY_STALE",
+            "引擎制品身份与资格证据不一致，请重新扫描并认证。",
+            false,
+        ));
+    }
+    let model_path =
+        crate::security::require_authorized_model_path(std::path::Path::new(&config.model_path))
+            .map_err(|message| AppError::new("DEPLOYMENT_MODEL_UNAUTHORIZED", message, false))?;
+    let model_identity =
+        crate::deployment_identity::artifact_identity_for_path("model", &model_path)
+            .map_err(|message| AppError::new("DEPLOYMENT_MODEL_IDENTITY_FAILED", message, true))?;
+    let inventory_identity = state
+        .models
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|model| paths_equal(std::path::Path::new(&model.path), &model_path))
+        .map(|model| model.artifact_identity.clone())
+        .ok_or_else(|| {
+            AppError::new(
+                "DEPLOYMENT_MODEL_NOT_SCANNED",
+                "当前模型不在已扫描清单中，请先刷新模型清单。",
+                true,
+            )
+        })?;
+    if !inventory_identity.is_verified() || inventory_identity != model_identity {
+        return Err(AppError::new(
+            "DEPLOYMENT_MODEL_IDENTITY_STALE",
+            "模型制品身份尚未验证或已变化，请重新扫描模型。",
+            true,
+        ));
+    }
+    let config_identity =
+        crate::config_revision::resolve_current_config_identity(state, instance_id, config)?;
+    crate::deployment_identity::DeploymentIdentity::new(
+        engine_identity.artifact_id,
+        model_identity.artifact_id,
+        config_identity.revision_id,
+        config_identity.configuration_id,
+        qualification.evidence_id.clone(),
+    )
+    .map_err(|message| AppError::new("DEPLOYMENT_IDENTITY_FAILED", message, false))
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeploymentIdentityStatus {
+    pub ready: bool,
+    pub error_code: Option<String>,
+    pub message: Option<String>,
+    pub identity: Option<crate::deployment_identity::DeploymentIdentity>,
+}
+
+#[tauri::command]
+pub fn inspect_deployment_identity(
+    instance_id: String,
+    state: tauri::State<'_, AppState>,
+) -> DeploymentIdentityStatus {
+    let result = (|| -> AppResult<crate::deployment_identity::DeploymentIdentity> {
+        validate_instance_id(&instance_id)?;
+        let config = state
+            .instances
+            .lock()
+            .unwrap()
+            .get(&instance_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::new("DEPLOYMENT_INSTANCE_NOT_FOUND", "未找到实例配置。", false)
+            })?;
+        let engine_exe = state
+            .engines
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|engine| {
+                paths_equal(
+                    std::path::Path::new(&engine.id),
+                    std::path::Path::new(&config.engine_id),
+                )
+            })
+            .map(|engine| engine.exe.clone())
+            .ok_or_else(|| {
+                AppError::new(
+                    "DEPLOYMENT_ENGINE_NOT_FOUND",
+                    "实例引用的引擎不在已扫描清单中。",
+                    true,
+                )
+            })?;
+        let qualification = validate_engine_qualification(state.inner(), &config, &engine_exe)?;
+        build_deployment_identity(
+            state.inner(),
+            &instance_id,
+            &config,
+            &engine_exe,
+            &qualification,
+        )
+    })();
+    match result {
+        Ok(identity) => DeploymentIdentityStatus {
+            ready: true,
+            error_code: None,
+            message: None,
+            identity: Some(identity),
+        },
+        Err(error) => DeploymentIdentityStatus {
+            ready: false,
+            error_code: Some(error.code),
+            message: Some(error.message),
+            identity: None,
+        },
+    }
 }
 
 fn qualification_gate_error(status: &str, evidence_is_current: bool) -> Option<AppError> {
@@ -2197,6 +2328,13 @@ pub async fn start_server(
     let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let manual = uses_manual_command(&config);
     let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
+    let deployment_identity = build_deployment_identity(
+        state.inner(),
+        &instance_id,
+        &config,
+        &engine_exe,
+        &engine_qualification,
+    )?;
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
     let cmd = if manual {
@@ -2251,6 +2389,7 @@ pub async fn start_server(
                 launch_config_stale: false,
                 engine_qualification_fingerprint: engine_qualification.fingerprint.clone(),
                 engine_qualification_profile_version: engine_qualification.profile_version,
+                deployment_identity: deployment_identity.clone(),
                 engine_backend: engine_backend.clone(),
                 command: cmd.clone(),
                 command_display: cmd_display.clone(),
@@ -2427,6 +2566,7 @@ pub async fn start_server(
                     telemetry_session_id: telemetry_session_id.clone(),
                     workload: workload.as_str().to_string(),
                     launch_config: Some(config.clone()),
+                    deployment_identity: deployment_identity.clone(),
                 },
             );
             false
@@ -6062,6 +6202,7 @@ mod perf_parser_tests {
             telemetry_session_id: None,
             workload: "inference".into(),
             launch_config: None,
+            deployment_identity: Default::default(),
         };
 
         assert!(!process_identity_matches(

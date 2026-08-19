@@ -29,9 +29,10 @@ assert.match(
 const protocolSource = read('src-tauri/src/runtime_service/protocol.rs')
 assert.match(protocolSource, /INSTANCE_RECOVERY_BACKOFF_SECS: \[u64; 3\] = \[2, 10, 30\]/)
 assert.match(protocolSource, /INSTANCE_RECOVERY_MAX_ATTEMPTS: u32 = 3/)
-assert.match(protocolSource, /RUNTIME_STATE_SCHEMA_VERSION: u32 = 2/)
+assert.match(protocolSource, /RUNTIME_STATE_SCHEMA_VERSION: u32 = 3/)
 assert.match(protocolSource, /default_manual_recovery\(\) -> bool \{\s*true/)
 assert.match(protocolSource, /pub launch_config_stale: bool/)
+assert.match(protocolSource, /pub deployment_identity: crate::deployment_identity::DeploymentIdentity/)
 
 const supervisorSource = read('src-tauri/src/runtime_service/supervisor.rs')
 assert.match(supervisorSource, /InstanceRecoveryPhase::CrashLoop/)
@@ -39,6 +40,7 @@ assert.match(supervisorSource, /origin_failure/)
 assert.match(supervisorSource, /recovery_budget_is_stable/)
 assert.match(supervisorSource, /clear_stable_instance_recovery/)
 assert.match(supervisorSource, /automatic start skipped/)
+assert.match(supervisorSource, /validate_runtime_deployment_identity\(&spec\)\?/)
 assert.match(
   supervisorSource,
   /spec\.launch_config_stale = !runtime_launch_config_matches/,
