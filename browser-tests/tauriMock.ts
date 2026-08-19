@@ -1030,11 +1030,25 @@ mockIPC((command, payload) => {
     }
     case 'inspect_deployment_identity': {
       const instanceId = String(args.instanceId ?? '')
-      if (BROWSER_SCENARIO === 'deployment-identity-blocked') {
+      if (BROWSER_SCENARIO === 'deployment-identity-incomplete') {
         return {
           ready: false,
-          errorCode: 'ENGINE_QUALIFICATION_REQUIRED',
+          errorCode: 'ENGINE_QUALIFICATION_INCOMPLETE',
           message: 'browser mock detail must not be required for localized rendering',
+        }
+      }
+      if (BROWSER_SCENARIO === 'deployment-identity-stale') {
+        return {
+          ready: false,
+          errorCode: 'DEPLOYMENT_MODEL_IDENTITY_STALE',
+          message: 'stale browser mock detail must not be rendered',
+        }
+      }
+      if (BROWSER_SCENARIO === 'deployment-identity-legacy') {
+        return {
+          ready: false,
+          errorCode: 'DEPLOYMENT_IDENTITY_INVALID',
+          message: 'legacy browser mock detail must not be rendered',
         }
       }
       return {
