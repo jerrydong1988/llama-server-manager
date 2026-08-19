@@ -1,12 +1,40 @@
 const childProcess = require('node:child_process')
 const crypto = require('node:crypto')
+const esbuild = require('esbuild')
 const fs = require('node:fs')
 const http = require('node:http')
+const Module = require('node:module')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
 
 const sleep = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds))
+
+function loadDefaultInstanceConfig() {
+  const sourcePath = path.resolve(__dirname, '..', 'src', 'store', 'defaults.ts')
+  const compiled = esbuild.transformSync(fs.readFileSync(sourcePath, 'utf8'), {
+    format: 'cjs',
+    loader: 'ts',
+    target: 'node20',
+  }).code
+  const loaded = new Module(sourcePath, module)
+  loaded.filename = sourcePath
+  loaded.paths = Module._nodeModulePaths(path.dirname(sourcePath))
+  loaded._compile(compiled, sourcePath)
+  return loaded.exports.defaultInstanceConfig
+}
+
+const defaultInstanceConfig = loadDefaultInstanceConfig()
+const RUST_FLOAT_FIELDS = new Set([
+  'rope_scale', 'rope_freq_base', 'rope_freq_scale', 'yarn_ext_factor',
+  'yarn_attn_factor', 'yarn_beta_slow', 'yarn_beta_fast', 'spec_draft_p_min',
+  'spec_draft_p_split', 'slot_prompt_similarity', 'temp', 'top_p',
+  'repeat_penalty', 'min_p', 'presence_penalty', 'frequency_penalty',
+  'mirostat_lr', 'mirostat_ent', 'xtc_probability', 'xtc_threshold',
+  'dynatemp_range', 'dynatemp_exp', 'typical_p', 'dry_multiplier', 'dry_base',
+  'adaptive_target', 'adaptive_decay', 'top_n_sigma',
+])
+const ARTIFACT_SAMPLE_BYTES = 64n * 1024n
 
 function stablePathHash(value) {
   let hash = 0xcbf29ce484222325n
@@ -29,6 +57,81 @@ function unsignedLittleEndian(value, byteLength) {
     remaining >>= 8n
   }
   return bytes
+}
+
+function artifactIdentity(kind, artifactPath) {
+  const fileSize = fs.statSync(artifactPath, { bigint: true }).size
+  const last = fileSize > ARTIFACT_SAMPLE_BYTES ? fileSize - ARTIFACT_SAMPLE_BYTES : 0n
+  const offsets = fileSize <= ARTIFACT_SAMPLE_BYTES
+    ? [0n]
+    : [...new Set([0n, last / 4n, last / 2n, (last * 3n) / 4n, last].map(String))]
+        .map(BigInt)
+        .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+  const digest = crypto.createHash('sha256')
+  digest.update(Buffer.from('llama-server-manager:sampled-artifact:v1\0'))
+  digest.update(Buffer.from(kind))
+  digest.update(unsignedLittleEndian(fileSize, 8))
+  digest.update(unsignedLittleEndian(ARTIFACT_SAMPLE_BYTES, 8))
+  const file = fs.openSync(artifactPath, 'r')
+  try {
+    for (const offset of offsets) {
+      const readLength = Number(fileSize - offset < ARTIFACT_SAMPLE_BYTES
+        ? fileSize - offset
+        : ARTIFACT_SAMPLE_BYTES)
+      const sample = Buffer.alloc(readLength)
+      const count = fs.readSync(file, sample, 0, readLength, Number(offset))
+      if (count !== readLength) throw new Error(`short ${kind} identity sample`)
+      digest.update(unsignedLittleEndian(offset, 8))
+      digest.update(unsignedLittleEndian(BigInt(readLength), 8))
+      digest.update(sample)
+    }
+  } finally {
+    fs.closeSync(file)
+  }
+  return `urn:lsm:${kind}:v1:sha256:${digest.digest('hex')}`
+}
+
+function rustConfigJson(config) {
+  const canonical = { ...config, id: '', name: '' }
+  const entries = Object.entries(canonical).map(([key, value]) => {
+    let encoded = JSON.stringify(value)
+    if (RUST_FLOAT_FIELDS.has(key) && Number.isInteger(value)) encoded = `${value}.0`
+    return `${JSON.stringify(key)}:${encoded}`
+  })
+  return `{${entries.join(',')}}`
+}
+
+function deploymentIdentity(spec) {
+  const engineArtifactId = artifactIdentity('engine', spec.command[0])
+  const modelArtifactId = artifactIdentity('model', spec.config.model_path)
+  const configurationHash = crypto
+    .createHash('sha256')
+    .update(rustConfigJson(spec.config), 'utf8')
+    .digest('hex')
+  const configRevisionId = 'runtime-smoke-revision-v1'
+  const configurationId = `urn:lsm:configuration:v1:sha256:${configurationHash}`
+  const qualificationEvidenceId = 'urn:lsm:qualification:v2:sha256:runtime-smoke'
+  const material = {
+    schemaVersion: 1,
+    engineArtifactId,
+    modelArtifactId,
+    configRevisionId,
+    configurationId,
+    qualificationEvidenceId,
+  }
+  const deploymentId = `urn:lsm:deployment:v1:sha256:${crypto
+    .createHash('sha256')
+    .update(JSON.stringify(material), 'utf8')
+    .digest('hex')}`
+  return { ...material, deploymentId }
+}
+
+function withLaunchIdentity(spec) {
+  return {
+    ...spec,
+    ...engineQualificationBinding(spec.command),
+    deployment_identity: deploymentIdentity(spec),
+  }
 }
 
 function fingerprintPathIdentity(value) {
@@ -218,33 +321,35 @@ function testLaunchSpec(dataDir, backendPort) {
   const command = process.platform === 'win32'
     ? [process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', '/D', '/S', '/C', 'ping -n 120 127.0.0.1 >NUL']
     : ['/bin/sleep', '120']
-  return {
+  const modelPath = path.join(dataDir, 'runtime-smoke-model.gguf')
+  fs.writeFileSync(modelPath, 'runtime-smoke-model')
+  return withLaunchIdentity({
     instance_id: 'runtime-smoke-instance',
     config: {
+      ...defaultInstanceConfig(),
       name: 'Runtime IPC smoke instance',
       alias: 'runtime-smoke-model',
+      model_path: modelPath,
       host: '127.0.0.1',
       port: backendPort,
     },
     engine_backend: 'test',
     command,
     command_display: command.join(' '),
-    ...engineQualificationBinding(command),
     workload: 'inference',
     working_directory: dataDir,
-  }
+  })
 }
 
 function crashingLaunchSpec(dataDir, backendPort) {
   const command = process.platform === 'win32'
     ? [process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe', '/D', '/S', '/C', 'ping -n 2 127.0.0.1 >NUL & exit /B 1']
     : ['/bin/sh', '-c', 'sleep 0.2; exit 1']
-  return {
+  return withLaunchIdentity({
     ...testLaunchSpec(dataDir, backendPort),
     command,
     command_display: command.join(' '),
-    ...engineQualificationBinding(command),
-  }
+  })
 }
 
 function recoverOnceLaunchSpec(dataDir, backendPort) {
@@ -259,13 +364,12 @@ function recoverOnceLaunchSpec(dataDir, backendPort) {
       ]
     : ['/bin/sh', '-c', `if [ -f ${marker} ]; then sleep 120; else : > ${marker}; sleep 0.2; exit 1; fi`]
   const spec = testLaunchSpec(dataDir, backendPort)
-  return {
+  return withLaunchIdentity({
     ...spec,
     config: { ...spec.config, restart_policy: 'on-failure' },
     command,
     command_display: command.join(' '),
-    ...engineQualificationBinding(command),
-  }
+  })
 }
 
 async function waitForAutomaticRecovery(endpoint, token, originalPid) {
