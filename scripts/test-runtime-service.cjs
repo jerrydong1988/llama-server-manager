@@ -10,11 +10,98 @@ const sleep = (milliseconds) => new Promise(resolve => setTimeout(resolve, milli
 
 function stablePathHash(value) {
   let hash = 0xcbf29ce484222325n
-  for (const byte of Buffer.from(value, 'utf8')) {
+  return updateFingerprintHash(hash, Buffer.from(value, 'utf8')).toString(16).padStart(16, '0')
+}
+
+function updateFingerprintHash(hash, bytes) {
+  for (const byte of bytes) {
     hash ^= BigInt(byte)
     hash = BigInt.asUintN(64, hash * 0x100000001b3n)
   }
-  return hash.toString(16).padStart(16, '0')
+  return hash
+}
+
+function unsignedLittleEndian(value, byteLength) {
+  const bytes = Buffer.alloc(byteLength)
+  let remaining = BigInt(value)
+  for (let index = 0; index < byteLength; index += 1) {
+    bytes[index] = Number(remaining & 0xffn)
+    remaining >>= 8n
+  }
+  return bytes
+}
+
+function fingerprintPathIdentity(value) {
+  if (process.platform !== 'win32') return value.trim()
+
+  let normalized = value.trim().replaceAll('\\', '/')
+  const lower = normalized.toLowerCase()
+  if (lower.startsWith('//?/unc/')) {
+    normalized = `//${normalized.slice(8)}`
+  } else if (lower.startsWith('//?/')) {
+    normalized = normalized.slice(4)
+  }
+
+  const isUnc = normalized.startsWith('//')
+  const isDriveRooted = normalized.length >= 3
+    && normalized[1] === ':' && normalized[2] === '/'
+  const prefix = isUnc ? '//' : isDriveRooted ? normalized.slice(0, 3) : ''
+  const body = isUnc ? normalized.slice(2) : isDriveRooted ? normalized.slice(3) : normalized
+  const protectedSegments = isUnc ? 2 : 0
+  const segments = []
+  for (const segment of body.split('/')) {
+    if (!segment || segment === '.') continue
+    if (segment === '..') {
+      if (segments.length > protectedSegments && segments.at(-1) !== '..') {
+        segments.pop()
+      } else if (!prefix) {
+        segments.push(segment)
+      }
+      continue
+    }
+    segments.push(segment)
+  }
+  const joined = segments.join('/')
+  return (joined ? `${prefix}${joined}` : prefix || '.').toLowerCase()
+}
+
+function executableFingerprint(executable) {
+  const canonical = fs.realpathSync.native(executable)
+  const metadata = fs.statSync(canonical, { bigint: true })
+  if (!metadata.isFile()) throw new Error(`qualification executable is not a file: ${canonical}`)
+
+  const normalizedPath = fingerprintPathIdentity(canonical)
+  const sampleBytes = 32n * 1024n
+  const sampleRange = metadata.size > sampleBytes ? metadata.size - sampleBytes : 0n
+  const offsets = [...new Set([0n, sampleRange / 2n, sampleRange].map(String))]
+    .map(BigInt)
+    .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+
+  let hash = 0xcbf29ce484222325n
+  hash = updateFingerprintHash(hash, Buffer.from(normalizedPath, 'utf8'))
+  hash = updateFingerprintHash(hash, unsignedLittleEndian(metadata.size, 8))
+  hash = updateFingerprintHash(hash, unsignedLittleEndian(metadata.mtimeNs, 16))
+
+  const file = fs.openSync(canonical, 'r')
+  try {
+    const buffer = Buffer.alloc(Number(sampleBytes))
+    for (const offset of offsets) {
+      const count = fs.readSync(file, buffer, 0, buffer.length, Number(offset))
+      hash = updateFingerprintHash(hash, unsignedLittleEndian(offset, 8))
+      hash = updateFingerprintHash(hash, buffer.subarray(0, count))
+    }
+  } finally {
+    fs.closeSync(file)
+  }
+
+  return `v2:${normalizedPath}:${metadata.size}:${metadata.mtimeNs}:${hash.toString(16).padStart(16, '0')}`
+}
+
+function engineQualificationBinding(command) {
+  return {
+    engine_qualification_fingerprint: executableFingerprint(command[0]),
+    engine_qualification_profile_version: 1,
+  }
 }
 
 function endpointSuffix(token) {
@@ -142,6 +229,7 @@ function testLaunchSpec(dataDir, backendPort) {
     engine_backend: 'test',
     command,
     command_display: command.join(' '),
+    ...engineQualificationBinding(command),
     workload: 'inference',
     working_directory: dataDir,
   }
@@ -155,6 +243,7 @@ function crashingLaunchSpec(dataDir, backendPort) {
     ...testLaunchSpec(dataDir, backendPort),
     command,
     command_display: command.join(' '),
+    ...engineQualificationBinding(command),
   }
 }
 
@@ -175,6 +264,7 @@ function recoverOnceLaunchSpec(dataDir, backendPort) {
     config: { ...spec.config, restart_policy: 'on-failure' },
     command,
     command_display: command.join(' '),
+    ...engineQualificationBinding(command),
   }
 }
 
