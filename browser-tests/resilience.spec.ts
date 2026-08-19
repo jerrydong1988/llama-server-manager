@@ -124,6 +124,23 @@ test('instance start reports an immediate transient state while the backend is p
   await expect(page.getByRole('button', { name: '停止', exact: true }).first()).toBeEnabled()
 })
 
+test('an explicitly infeasible resource plan blocks launch before persistence or process start', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'instances')
+  })
+  await page.goto('/?scenario=resource-plan-infeasible')
+
+  await page.getByRole('button', { name: '启动', exact: true }).first().click()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'plan_instance_resources').length
+  ))).toBe(1)
+  expect(await page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'start_server').length
+  ))).toBe(0)
+  await expect(page.getByRole('button', { name: '启动', exact: true }).first()).toBeEnabled()
+})
+
 test('a transient updater failure is visible and a manual retry discovers the update', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('lang', 'zh-CN'))
   await page.goto('/?scenario=updater-retry')

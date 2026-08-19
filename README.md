@@ -183,6 +183,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [配置修订与回滚 / Configuration Revisions](docs/CONFIG_REVISIONS.md)
 - [版本化部署身份 / Versioned Deployment Identity](docs/DEPLOYMENT_IDENTITY.md)
 - [托管部署与修订 / Managed Deployments and Revisions](docs/DEPLOYMENTS.md)
+- [资源规划器 / Resource Planner](docs/RESOURCE_PLANNER.md)
 - [隐私政策 / Privacy Policy](PRIVACY.md)
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)

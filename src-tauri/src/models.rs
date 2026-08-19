@@ -198,6 +198,21 @@ pub struct GgufMetadataSummary {
     pub context_length: Option<u32>,
     pub quant_type: Option<String>,
     pub capabilities: ModelCapabilities,
+    #[serde(default)]
+    pub resource: GgufResourceMetadata,
+}
+
+/// Bounded scalar metadata used by the resource planner. Tensor names and
+/// filesystem details are intentionally excluded from this summary.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct GgufResourceMetadata {
+    pub block_count: Option<u32>,
+    pub embedding_length: Option<u32>,
+    pub attention_head_count: Option<u32>,
+    pub attention_head_count_kv: Option<u32>,
+    pub attention_key_length: Option<u32>,
+    pub attention_value_length: Option<u32>,
+    pub sliding_window: Option<u32>,
 }
 
 // Model information.
