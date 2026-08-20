@@ -168,7 +168,7 @@ pub enum RuntimeReply {
     Ack,
     Status(Box<RuntimeServiceStatus>),
     Instance(Box<RunningInstance>),
-    ProxyStatus(ProxyStatus),
+    ProxyStatus(Box<ProxyStatus>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

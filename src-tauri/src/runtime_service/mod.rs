@@ -130,14 +130,14 @@ pub async fn clear_last_error() -> Result<(), String> {
 
 pub async fn start_proxy() -> Result<crate::models::ProxyStatus, String> {
     match call_recovering(RuntimeCommand::StartProxy).await? {
-        RuntimeReply::ProxyStatus(status) => Ok(status),
+        RuntimeReply::ProxyStatus(status) => Ok(*status),
         _ => Err("runtime service returned an unexpected proxy response".into()),
     }
 }
 
 pub async fn stop_proxy() -> Result<crate::models::ProxyStatus, String> {
     match call_recovering(RuntimeCommand::StopProxy).await? {
-        RuntimeReply::ProxyStatus(status) => Ok(status),
+        RuntimeReply::ProxyStatus(status) => Ok(*status),
         _ => Err("runtime service returned an unexpected proxy response".into()),
     }
 }

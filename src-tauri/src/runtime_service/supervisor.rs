@@ -1936,8 +1936,16 @@ impl RuntimeSupervisor {
                     self.status(registered_for_login),
                 )))
             }
-            RuntimeCommand::StartProxy => self.start_proxy().await.map(RuntimeReply::ProxyStatus),
-            RuntimeCommand::StopProxy => self.stop_proxy().await.map(RuntimeReply::ProxyStatus),
+            RuntimeCommand::StartProxy => self
+                .start_proxy()
+                .await
+                .map(Box::new)
+                .map(RuntimeReply::ProxyStatus),
+            RuntimeCommand::StopProxy => self
+                .stop_proxy()
+                .await
+                .map(Box::new)
+                .map(RuntimeReply::ProxyStatus),
             RuntimeCommand::Shutdown { stop_instances } => {
                 if stop_instances {
                     let mut failures = Vec::new();
