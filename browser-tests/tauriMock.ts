@@ -26,6 +26,7 @@ const HAS_PROXY_DATA = [
   'proxy-route-health',
   'proxy-route-legacy-ids',
   'canary-rollout',
+  'operational-metrics',
   'docs-screenshots',
 ].includes(BROWSER_SCENARIO ?? '')
 const INSTANCE_ID = 'browser-test-instance'
@@ -447,11 +448,58 @@ const proxyConfig: BrowserProxyConfig = {
 const proxyStatus = {
   running: HAS_PROXY_DATA,
   bound_addr: '127.0.0.1:11435',
-  active_routes: IS_DOCS_SCENARIO ? 3 : BROWSER_SCENARIO === 'canary-rollout' ? 2 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : BROWSER_SCENARIO === 'proxy-routing' ? 1 : 0,
+  active_routes: IS_DOCS_SCENARIO ? 3 : BROWSER_SCENARIO === 'canary-rollout' ? 2 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : ['proxy-routing', 'operational-metrics'].includes(BROWSER_SCENARIO ?? '') ? 1 : 0,
   healthy_routes: BROWSER_SCENARIO === 'canary-rollout' ? 2 : HAS_PROXY_DATA ? 1 : 0,
   unhealthy_routes: IS_DOCS_SCENARIO ? 2 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 1 : 0,
   in_flight_requests: 0,
   total_requests: IS_DOCS_SCENARIO ? 42 : 0,
+  operational: BROWSER_SCENARIO === 'operational-metrics'
+    ? {
+        window_seconds: 300,
+        request_count: 20,
+        failed_request_count: 3,
+        error_rate_percent: 15,
+        queue_depth: 2,
+        queued_requests_total: 8,
+        queue_timeouts_total: 1,
+        queue_wait_p95_ms: 420,
+        ttft_sample_count: 18,
+        ttft_p50_ms: 620,
+        ttft_p95_ms: 3500,
+        prompt_tokens_observed: 1000,
+        cached_prompt_tokens: 400,
+        cache_reuse_percent: 40,
+        in_flight_requests: 58,
+        max_concurrent_requests: 64,
+        saturation_percent: 90.625,
+        alerts: [
+          { id: 'error_rate', severity: 'warning', observed: 15, threshold: 10 },
+          { id: 'ttft_p95', severity: 'warning', observed: 3500, threshold: 3000 },
+          { id: 'queue_wait_p95', severity: 'warning', observed: 420, threshold: 250 },
+          { id: 'queue_timeouts', severity: 'warning', observed: 1, threshold: 1 },
+          { id: 'saturation', severity: 'warning', observed: 90.625, threshold: 85 },
+        ],
+      }
+    : {
+        window_seconds: 300,
+        request_count: 0,
+        failed_request_count: 0,
+        error_rate_percent: null,
+        queue_depth: 0,
+        queued_requests_total: 0,
+        queue_timeouts_total: 0,
+        queue_wait_p95_ms: null,
+        ttft_sample_count: 0,
+        ttft_p50_ms: null,
+        ttft_p95_ms: null,
+        prompt_tokens_observed: 0,
+        cached_prompt_tokens: 0,
+        cache_reuse_percent: null,
+        in_flight_requests: 0,
+        max_concurrent_requests: 64,
+        saturation_percent: 0,
+        alerts: [],
+      },
   last_error: null,
 }
 const runningProxyTarget = {
@@ -519,7 +567,15 @@ function canaryHealth(instanceId: string) {
 }
 
 function canaryEvidence(total: number, failed: number) {
-  return { total, succeeded: total - failed, failed, latestCompletedAt: Date.now() }
+  return {
+    total,
+    succeeded: total - failed,
+    failed,
+    latestCompletedAt: Date.now(),
+    ttftP95Ms: 1200,
+    queueWaitP95Ms: 80,
+    cacheReuseBasisPoints: 3750,
+  }
 }
 
 function appendCanaryEvent(rollout: BrowserCanaryRollout, kind: string, summary: string) {

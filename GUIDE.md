@@ -414,6 +414,16 @@ Instance Routing exposes native OpenAI and Anthropic formats on one listener, ro
 | 上下文与槽位发现 / Context and slots | `GET /props?model=...`、`GET /slots?model=...` |
 | 存活、就绪与指标 / Liveness, readiness, metrics | `GET /live`、`GET /ready`、`GET /metrics` |
 
+### 运营指标与告警 / Operational Metrics and Alerts
+
+路由页使用同一个 5 分钟实时窗口显示首响应 P95、当前排队与排队 P95、已观测提示缓存复用、错误率和全局并发饱和度。`—` 表示上游没有提供可用证据，不代表 0。告警给出检查顺序，但不会自动提高并发、改变金丝雀流量、提升候选版本或回滚部署。
+
+The routing page uses one five-minute live window for TTFT P95, queue depth and queue P95, observed prompt-cache reuse, error rate, and global concurrency saturation. `—` means the upstream supplied no usable evidence, not zero. Alerts provide an investigation order but never raise concurrency, change canary traffic, promote, or roll back automatically.
+
+`GET /metrics` 提供相同定义的 Prometheus counter、gauge 和 histogram。TTFT 从代理鉴权/准入开始，到第一个非空下游响应正文块可发送时结束；排队时间单独计量。缓存比例只使用上游明确返回的数值字段，本功能不会保留提示词、输出、请求体或 API Key。完整阈值、兼容性与调查顺序见[运营指标与告警](docs/OPERATIONAL_METRICS.md)。
+
+`GET /metrics` exposes Prometheus counters, gauges, and histograms with the same definitions. TTFT begins at authenticated proxy admission and ends when the first non-empty downstream body chunk is ready; queue wait is measured separately. Cache ratios use only explicit numeric upstream fields, and this feature retains no prompts, outputs, request bodies, or API keys. See [Operational Metrics and Alerts](docs/OPERATIONAL_METRICS.md) for thresholds, compatibility, and the investigation order.
+
 Anthropic 路径支持文本、图片、thinking、工具调用、工具结果和流式事件。工具调用要求目标实例启用 `--jinja`。Claude Code 应把 `ANTHROPIC_BASE_URL` 指向统一路由根地址（不要附加 `/v1`），并将 `ANTHROPIC_MODEL` 设为已配置的公开模型名；配置代理密钥时同时设置 `ANTHROPIC_AUTH_TOKEN`。
 
 从 llama.cpp `b10354` 起，可在实例参数的服务扩展区域配置 `--tools-runtime`，把内置工具放入 Docker、Podman、已有容器或 SSH 目标中执行；留空时工具直接使用主机环境。该隔离能力仍为实验性功能，配置远程或容器运行时时仍需限制监听地址、CORS Origin 和 API Key。

@@ -25,8 +25,8 @@ use crate::commands::proxy_protocol::{
     request_format, response_request_id, rewrite_json_response, rewrite_sse_line, ProxyApiFormat,
 };
 use crate::commands::proxy_runtime::{
-    GlobalRequestPermit, InFlightBodyPermit, RouterRuntime, RoutingCandidate, TargetCapabilities,
-    TargetHealthSnapshot, TargetRequestPermit,
+    GlobalRequestPermit, InFlightBodyPermit, RequestObservation, RouterRuntime, RoutingCandidate,
+    TargetCapabilities, TargetHealthSnapshot, TargetRequestPermit,
 };
 use crate::commands::server::{effective_api_key, effective_server_scheme};
 use crate::commands::telemetry::{
@@ -311,6 +311,9 @@ struct ProxyTelemetryGuard {
     http_status: u16,
     started_at: std::time::Instant,
     started_at_ms: i64,
+    queue_time_ms: u64,
+    ttft_ms: Option<u64>,
+    usage: ProxyUsageObservation,
     vector_metadata: Option<VectorRequestMetadata>,
     api_format: ProxyApiFormat,
     recorded: bool,
@@ -323,16 +326,25 @@ struct ProxyTelemetryGuard {
 struct ProxyAdmissionGuards {
     global: GlobalRequestPermit,
     body: InFlightBodyPermit,
+    started_at: std::time::Instant,
+    started_at_ms: i64,
 }
 
 #[derive(Clone)]
 struct ProxyAdmissionPermit(Arc<Mutex<Option<ProxyAdmissionGuards>>>);
 
 impl ProxyAdmissionPermit {
-    fn new(global: GlobalRequestPermit, body: InFlightBodyPermit) -> Self {
+    fn new(
+        global: GlobalRequestPermit,
+        body: InFlightBodyPermit,
+        started_at: std::time::Instant,
+        started_at_ms: i64,
+    ) -> Self {
         Self(Arc::new(Mutex::new(Some(ProxyAdmissionGuards {
             global,
             body,
+            started_at,
+            started_at_ms,
         }))))
     }
 
@@ -348,18 +360,152 @@ struct ProxyTelemetryRecord {
     http_status: Option<u16>,
     started_at_ms: i64,
     duration_ms: f64,
+    queue_time_ms: f64,
+    ttft_ms: Option<f64>,
+    prompt_tokens: Option<u64>,
+    cached_prompt_tokens: Option<u64>,
     error_text: Option<String>,
     api_format: ProxyApiFormat,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ProxyUsageObservation {
+    prompt_tokens: Option<u64>,
+    cached_prompt_tokens: Option<u64>,
+}
+
+impl ProxyUsageObservation {
+    fn merge(&mut self, other: Self) {
+        self.prompt_tokens = match (self.prompt_tokens, other.prompt_tokens) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (left, right) => left.or(right),
+        };
+        self.cached_prompt_tokens = match (self.cached_prompt_tokens, other.cached_prompt_tokens) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (left, right) => left.or(right),
+        };
+    }
+}
+
+fn json_u64(value: Option<&serde_json::Value>) -> Option<u64> {
+    value.and_then(|value| {
+        value.as_u64().or_else(|| {
+            value
+                .as_i64()
+                .and_then(|number| (number >= 0).then_some(number as u64))
+        })
+    })
+}
+
+fn usage_from_object(object: &serde_json::Map<String, serde_json::Value>) -> ProxyUsageObservation {
+    let cached_from_details = object
+        .get("prompt_tokens_details")
+        .or_else(|| object.get("input_tokens_details"))
+        .and_then(serde_json::Value::as_object)
+        .and_then(|details| json_u64(details.get("cached_tokens")));
+    let cache_read = json_u64(object.get("cache_read_input_tokens"));
+    let cache_creation = json_u64(object.get("cache_creation_input_tokens"));
+    let cached_prompt_tokens = cached_from_details
+        .or_else(|| json_u64(object.get("cached_tokens")))
+        .or_else(|| json_u64(object.get("cache_n")))
+        .or(cache_read);
+    let prompt_tokens = json_u64(object.get("prompt_tokens"))
+        .or_else(|| {
+            json_u64(object.get("input_tokens")).map(|input| {
+                input
+                    .saturating_add(cache_read.unwrap_or(0))
+                    .saturating_add(cache_creation.unwrap_or(0))
+            })
+        })
+        .or_else(|| {
+            json_u64(object.get("prompt_n")).map(|processed| {
+                processed.saturating_add(json_u64(object.get("cache_n")).unwrap_or(0))
+            })
+        });
+    ProxyUsageObservation {
+        prompt_tokens,
+        cached_prompt_tokens,
+    }
+}
+
+fn proxy_usage_from_json(value: &serde_json::Value) -> ProxyUsageObservation {
+    let mut observed = ProxyUsageObservation::default();
+    match value {
+        serde_json::Value::Object(object) => {
+            observed.merge(usage_from_object(object));
+            for key in ["usage", "timings", "message", "response"] {
+                if let Some(value) = object.get(key) {
+                    observed.merge(proxy_usage_from_json(value));
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                observed.merge(proxy_usage_from_json(value));
+            }
+        }
+        _ => {}
+    }
+    observed
+}
+
+fn proxy_usage_from_bytes(bytes: &[u8]) -> ProxyUsageObservation {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .map(|value| proxy_usage_from_json(&value))
+        .unwrap_or_default()
+}
+
+fn proxy_usage_from_sse_line(line: &str) -> ProxyUsageObservation {
+    let payload = line
+        .strip_prefix("data:")
+        .map(str::trim)
+        .unwrap_or_default();
+    if payload.is_empty() || payload == "[DONE]" {
+        return ProxyUsageObservation::default();
+    }
+    proxy_usage_from_bytes(payload.as_bytes())
+}
+
 impl ProxyTelemetryGuard {
+    fn observe_response_at(
+        &mut self,
+        bytes: &[u8],
+        usage: ProxyUsageObservation,
+        observed_at: std::time::Instant,
+    ) {
+        if bytes.is_empty() {
+            return;
+        }
+        if self.ttft_ms.is_none() {
+            self.ttft_ms = Some(
+                observed_at
+                    .saturating_duration_since(self.started_at)
+                    .as_millis()
+                    .min(u64::MAX as u128) as u64,
+            );
+        }
+        self.usage.merge(usage);
+    }
+
+    fn observe_response_chunk(&mut self, bytes: &[u8], usage: ProxyUsageObservation) {
+        self.observe_response_at(bytes, usage, std::time::Instant::now());
+    }
+
     fn record_once(&mut self, error_text: Option<String>) {
         if self.recorded {
             return;
         }
         self.recorded = true;
-        self.runtime
-            .record_completed(self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        let duration_ms = self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        let failed = error_text.is_some() || !(200..400).contains(&self.http_status);
+        self.runtime.record_completed(RequestObservation {
+            duration_ms,
+            queue_wait_ms: self.queue_time_ms,
+            ttft_ms: self.ttft_ms,
+            prompt_tokens: self.usage.prompt_tokens,
+            cached_prompt_tokens: self.usage.cached_prompt_tokens,
+            failed,
+        });
         let _ = record_proxy_telemetry(
             self.session_id.as_deref(),
             &ProxyTelemetryRecord {
@@ -368,7 +514,11 @@ impl ProxyTelemetryGuard {
                 target_instance_id: self.target_instance_id.clone(),
                 http_status: Some(self.http_status),
                 started_at_ms: self.started_at_ms,
-                duration_ms: self.started_at.elapsed().as_secs_f64() * 1000.0,
+                duration_ms: duration_ms as f64,
+                queue_time_ms: self.queue_time_ms as f64,
+                ttft_ms: self.ttft_ms.map(|value| value as f64),
+                prompt_tokens: self.usage.prompt_tokens,
+                cached_prompt_tokens: self.usage.cached_prompt_tokens,
                 error_text,
                 api_format: self.api_format,
             },
@@ -432,6 +582,10 @@ fn record_proxy_telemetry(
             target_instance_id: record.target_instance_id.clone(),
             http_status: record.http_status,
             duration_ms: record.duration_ms,
+            queue_time_ms: record.queue_time_ms,
+            ttft_ms: record.ttft_ms,
+            prompt_tokens: record.prompt_tokens,
+            cached_prompt_tokens: record.cached_prompt_tokens,
             error_text: record.error_text.clone(),
             api_format: record.api_format.as_str().to_string(),
         },
@@ -575,6 +729,7 @@ fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
         unhealthy_routes: active_routes,
         in_flight_requests: 0,
         total_requests: 0,
+        operational: Default::default(),
         last_error,
     }
 }
@@ -595,6 +750,7 @@ fn proxy_status_from_snapshot(snapshot: &ProxyRuntimeSnapshot) -> ProxyStatus {
         unhealthy_routes: active_routes,
         in_flight_requests: 0,
         total_requests: 0,
+        operational: Default::default(),
         last_error: snapshot.last_error.clone(),
     }
 }
@@ -1605,6 +1761,8 @@ async fn proxy_security_middleware(
         return response;
     }
     if request.method() == Method::POST && request_scope(request.uri().path()) == "inference" {
+        let started_at = std::time::Instant::now();
+        let started_at_ms = current_time_ms();
         let Some(permit) = router_state
             .runtime
             .acquire_global(
@@ -1635,6 +1793,7 @@ async fn proxy_security_middleware(
         let reservation = match request_body_reservation(request.uri().path(), request.headers()) {
             Ok(reservation) => reservation,
             Err(error) => {
+                router_state.runtime.record_rejected();
                 let mut response = error_response(format, StatusCode::PAYLOAD_TOO_LARGE, &error);
                 ensure_request_id_header(&mut response, format);
                 apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
@@ -1660,9 +1819,12 @@ async fn proxy_security_middleware(
             apply_cors_headers(&mut response, origin.as_deref());
             return response;
         };
-        request
-            .extensions_mut()
-            .insert(ProxyAdmissionPermit::new(permit, body_permit));
+        request.extensions_mut().insert(ProxyAdmissionPermit::new(
+            permit,
+            body_permit,
+            started_at,
+            started_at_ms,
+        ));
     }
     request.headers_mut().remove("authorization");
     request.headers_mut().remove("x-api-key");
@@ -1788,7 +1950,7 @@ fn append_bounded_response_chunk(
 async fn collect_bounded_response_body(
     response: reqwest::Response,
     limit: usize,
-) -> Result<Bytes, String> {
+) -> Result<(Bytes, Option<std::time::Instant>), String> {
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
@@ -1796,12 +1958,16 @@ async fn collect_bounded_response_body(
         return Err(format!("upstream JSON response exceeds {limit} bytes"));
     }
     let mut body = Vec::new();
+    let mut first_chunk_at = None;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|error| error.to_string())?;
+        if first_chunk_at.is_none() && !chunk.is_empty() {
+            first_chunk_at = Some(std::time::Instant::now());
+        }
         append_bounded_response_chunk(&mut body, &chunk, limit)?;
     }
-    Ok(Bytes::from(body))
+    Ok((Bytes::from(body), first_chunk_at))
 }
 
 async fn fetch_token_count_value(
@@ -1830,7 +1996,7 @@ async fn fetch_token_count_value(
     if !response.status().is_success() {
         return None;
     }
-    let body = collect_bounded_response_body(response, MAX_TOKEN_COUNT_RESPONSE_BYTES)
+    let (body, _) = collect_bounded_response_body(response, MAX_TOKEN_COUNT_RESPONSE_BYTES)
         .await
         .ok()?;
     serde_json::from_slice(&body).ok()
@@ -2141,6 +2307,7 @@ pub(crate) fn status_with_runtime(
     status.unhealthy_routes = unhealthy;
     status.in_flight_requests = runtime.in_flight_requests();
     status.total_requests = runtime.total_requests();
+    status.operational = runtime.operational_snapshot(snapshot.config.max_concurrent_requests);
     status
 }
 
@@ -2183,10 +2350,15 @@ async fn proxy_ready(State(router_state): State<ProxyRouterState>) -> Response {
 }
 
 async fn proxy_metrics(State(router_state): State<ProxyRouterState>) -> Response {
+    let max_concurrent_requests = router_state.source.proxy_config().max_concurrent_requests;
     Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
-        .body(Body::from(router_state.runtime.prometheus_metrics()))
+        .body(Body::from(
+            router_state
+                .runtime
+                .prometheus_metrics(max_concurrent_requests),
+        ))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -2557,8 +2729,12 @@ async fn proxy_upstream(
     let ProxyAdmissionGuards {
         global: global_permit,
         body: body_permit,
+        started_at,
+        started_at_ms,
     } = admission_guards;
+    let queue_time_ms = global_permit.queue_wait_ms();
     if api_format.is_anthropic() && method != Method::POST {
+        router_state.runtime.record_rejected();
         return error_response(
             api_format,
             StatusCode::METHOD_NOT_ALLOWED,
@@ -2568,6 +2744,7 @@ async fn proxy_upstream(
     let body = match body {
         Ok(body) => body,
         Err(rejection) => {
+            router_state.runtime.record_rejected();
             let status = rejection.into_response().status();
             let message = if status == StatusCode::PAYLOAD_TOO_LARGE {
                 format!(
@@ -2582,7 +2759,10 @@ async fn proxy_upstream(
     };
     let requested_model = match requested_model_from_body(&body) {
         Ok(model) => model,
-        Err(error) => return error_response(api_format, StatusCode::BAD_REQUEST, &error),
+        Err(error) => {
+            router_state.runtime.record_rejected();
+            return error_response(api_format, StatusCode::BAD_REQUEST, &error);
+        }
     };
     let request_streaming = request_uses_streaming(&body);
     let vector_metadata = vector_request_metadata(uri.path(), &body);
@@ -2598,6 +2778,7 @@ async fn proxy_upstream(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
     if candidates.is_empty() {
+        router_state.runtime.record_rejected();
         return error_response(
             api_format,
             if requested_model.is_some() {
@@ -2615,6 +2796,7 @@ async fn proxy_upstream(
                 .runtime
                 .select_target(&scheduling, &routing_strategy, &routing_key)
         else {
+            router_state.runtime.record_rejected();
             return error_response(
                 api_format,
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -2625,6 +2807,7 @@ async fn proxy_upstream(
             .iter()
             .position(|target| target.public.instance_id == selected.instance_id)
         else {
+            router_state.runtime.record_rejected();
             return error_response(
                 api_format,
                 StatusCode::BAD_GATEWAY,
@@ -2636,6 +2819,7 @@ async fn proxy_upstream(
             break (target, permit);
         }
         if candidates.is_empty() {
+            router_state.runtime.record_rejected();
             return error_response(
                 api_format,
                 StatusCode::TOO_MANY_REQUESTS,
@@ -2647,6 +2831,7 @@ async fn proxy_upstream(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
         target.workload,
     ) {
+        router_state.runtime.record_rejected();
         return error_response(
             api_format,
             StatusCode::BAD_REQUEST,
@@ -2656,8 +2841,7 @@ async fn proxy_upstream(
     let response_model =
         public_response_model(&proxy_config, &target.public, requested_model.as_deref());
     let upstream_body = rewrite_request_model(&body, &target.upstream_model_id);
-    let started_at = std::time::Instant::now();
-    let started_at_ms = current_time_ms();
+    let upstream_started_at = std::time::Instant::now();
     let proxy_task_id = next_proxy_task_id();
     let client = proxy_http_client(proxy_config.connect_timeout_ms);
 
@@ -2696,6 +2880,10 @@ async fn proxy_upstream(
                     http_status: Some(StatusCode::BAD_REQUEST.as_u16()),
                     started_at_ms,
                     duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+                    queue_time_ms: queue_time_ms as f64,
+                    ttft_ms: None,
+                    prompt_tokens: None,
+                    cached_prompt_tokens: None,
                     error_text: Some(error_text),
                     api_format,
                 },
@@ -2714,11 +2902,12 @@ async fn proxy_upstream(
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
         Ok(method) => method,
         Err(err) => {
+            router_state.runtime.record_rejected();
             return error_response(
                 api_format,
                 StatusCode::BAD_REQUEST,
                 &format!("invalid method: {}", err),
-            )
+            );
         }
     };
 
@@ -2739,9 +2928,13 @@ async fn proxy_upstream(
                 proxy_config.unhealthy_threshold,
                 Duration::from_millis(proxy_config.recovery_cooldown_ms),
             );
-            router_state
-                .runtime
-                .record_completed(started_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
+            let duration_ms = started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+            router_state.runtime.record_completed(RequestObservation {
+                duration_ms,
+                queue_wait_ms: queue_time_ms,
+                failed: true,
+                ..Default::default()
+            });
             let _ = record_proxy_telemetry(
                 target.telemetry_session_id.as_deref(),
                 &ProxyTelemetryRecord {
@@ -2750,7 +2943,11 @@ async fn proxy_upstream(
                     target_instance_id: target.public.instance_id.clone(),
                     http_status: None,
                     started_at_ms,
-                    duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+                    duration_ms: duration_ms as f64,
+                    queue_time_ms: queue_time_ms as f64,
+                    ttft_ms: None,
+                    prompt_tokens: None,
+                    cached_prompt_tokens: None,
                     error_text: Some(err.to_string()),
                     api_format,
                 },
@@ -2775,7 +2972,7 @@ async fn proxy_upstream(
     } else {
         router_state.runtime.mark_probe_success(
             &target.public.instance_id,
-            started_at.elapsed().as_secs_f64() * 1_000.0,
+            upstream_started_at.elapsed().as_secs_f64() * 1_000.0,
             None,
         );
     }
@@ -2819,6 +3016,9 @@ async fn proxy_upstream(
         http_status,
         started_at,
         started_at_ms,
+        queue_time_ms,
+        ttft_ms: None,
+        usage: ProxyUsageObservation::default(),
         vector_metadata,
         api_format,
         recorded: false,
@@ -2828,9 +3028,9 @@ async fn proxy_upstream(
         _target_permit: Some(target_permit),
     };
     if (response_is_json && !response_is_sse) || (api_format.is_anthropic() && !status_success) {
-        let response_body =
+        let (response_body, first_chunk_at) =
             match collect_bounded_response_body(response, MAX_PROXY_JSON_RESPONSE_BYTES).await {
-                Ok(bytes) => bytes,
+                Ok(result) => result,
                 Err(error_text) => {
                     telemetry_guard.record_once(Some(error_text.clone()));
                     return error_response(
@@ -2840,6 +3040,10 @@ async fn proxy_upstream(
                     );
                 }
             };
+        if let Some(first_chunk_at) = first_chunk_at {
+            let usage = proxy_usage_from_bytes(&response_body);
+            telemetry_guard.observe_response_at(&response_body, usage, first_chunk_at);
+        }
         telemetry_guard.record_once(if status_success {
             None
         } else {
@@ -2895,9 +3099,12 @@ async fn proxy_upstream(
                 }
                 match tokio::time::timeout(idle_timeout, line_stream.as_mut().next()).await {
                     Ok(Some(Ok(line))) => {
+                        let usage = proxy_usage_from_sse_line(&line);
                         let line = rewrite_sse_line(&line, &response_model, api_format);
+                        let bytes = Bytes::from(format!("{line}\n"));
+                        telemetry_guard.observe_response_chunk(&bytes, usage);
                         Some((
-                            Ok::<_, std::io::Error>(Bytes::from(format!("{line}\n"))),
+                            Ok::<_, std::io::Error>(bytes),
                             (
                                 line_stream,
                                 false,
@@ -2977,10 +3184,14 @@ async fn proxy_upstream(
                 return None;
             }
             match tokio::time::timeout(idle_timeout, upstream_stream.as_mut().next()).await {
-                Ok(Some(Ok(bytes))) => Some((
-                    Ok(bytes),
-                    (upstream_stream, false, telemetry_guard, idle_timeout),
-                )),
+                Ok(Some(Ok(bytes))) => {
+                    let usage = proxy_usage_from_bytes(&bytes);
+                    telemetry_guard.observe_response_chunk(&bytes, usage);
+                    Some((
+                        Ok(bytes),
+                        (upstream_stream, false, telemetry_guard, idle_timeout),
+                    ))
+                }
                 Ok(Some(Err(err))) => {
                     let error_text = err.to_string();
                     telemetry_guard.record_once(Some(error_text.clone()));
@@ -3593,6 +3804,25 @@ mod tests {
         fn proxy_snapshot(&self) -> super::ProxyRuntimeSnapshot {
             self.snapshot.clone()
         }
+    }
+
+    #[test]
+    fn proxy_usage_extracts_openai_anthropic_and_llama_cache_fields() {
+        let openai = super::proxy_usage_from_bytes(
+            br#"{"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":40}}}"#,
+        );
+        assert_eq!(openai.prompt_tokens, Some(100));
+        assert_eq!(openai.cached_prompt_tokens, Some(40));
+
+        let anthropic = super::proxy_usage_from_sse_line(
+            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":10}}}"#,
+        );
+        assert_eq!(anthropic.prompt_tokens, Some(60));
+        assert_eq!(anthropic.cached_prompt_tokens, Some(30));
+
+        let llama = super::proxy_usage_from_bytes(br#"{"timings":{"prompt_n":24,"cache_n":8}}"#);
+        assert_eq!(llama.prompt_tokens, Some(32));
+        assert_eq!(llama.cached_prompt_tokens, Some(8));
     }
 
     async fn spawn_test_router(
@@ -4324,8 +4554,10 @@ mod tests {
             bound_addr: String::new(),
             last_error: None,
         };
-        let router = super::proxy_router_from_source_with_limits(
+        let runtime = Arc::new(super::RouterRuntime::default());
+        let router = super::proxy_router_from_source_with_runtime_and_limits(
             Arc::new(TestProxySource { snapshot }),
+            runtime.clone(),
             1_024,
             super::MAX_ANTHROPIC_REQUEST_BODY_BYTES,
         );
@@ -4363,6 +4595,10 @@ mod tests {
             .unwrap()
             .status();
         assert_eq!(rejected_status, StatusCode::PAYLOAD_TOO_LARGE);
+        let operational =
+            runtime.operational_snapshot(ProxyConfig::default().max_concurrent_requests);
+        assert_eq!(operational.request_count, 2);
+        assert_eq!(operational.failed_request_count, 2);
 
         task.abort();
     }

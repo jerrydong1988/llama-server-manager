@@ -47,6 +47,12 @@ pub struct CanaryRequestEvidence {
     pub succeeded: u64,
     pub failed: u64,
     pub latest_completed_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttft_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_wait_p95_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_reuse_basis_points: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

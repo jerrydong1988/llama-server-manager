@@ -1,13 +1,29 @@
+use crate::models::{ProxyOperationalAlert, ProxyOperationalSnapshot};
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Notify;
 
-const LATENCY_BUCKETS_MS: [u64; 9] = [10, 25, 50, 100, 250, 500, 1_000, 5_000, u64::MAX];
+const LATENCY_BUCKETS_MS: [u64; 11] = [
+    10,
+    25,
+    50,
+    100,
+    250,
+    500,
+    1_000,
+    3_000,
+    5_000,
+    10_000,
+    u64::MAX,
+];
 const MAX_SCHEDULING_COUNTERS: usize = 4_096;
+const OPERATIONAL_WINDOW: Duration = Duration::from_secs(300);
+const MAX_OPERATIONAL_EVENTS: usize = 4_096;
+const MIN_ALERT_SAMPLES: usize = 5;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -103,6 +119,37 @@ struct RouterMetrics {
     completed_requests: AtomicU64,
     duration_sum_ms: AtomicU64,
     latency_buckets: Mutex<[u64; LATENCY_BUCKETS_MS.len()]>,
+    queued_requests_total: AtomicU64,
+    queue_timeouts_total: AtomicU64,
+    queue_wait_sum_ms: AtomicU64,
+    queue_wait_buckets: Mutex<[u64; LATENCY_BUCKETS_MS.len()]>,
+    ttft_sum_ms: AtomicU64,
+    ttft_samples: AtomicU64,
+    ttft_buckets: Mutex<[u64; LATENCY_BUCKETS_MS.len()]>,
+    prompt_tokens_observed: AtomicU64,
+    cached_prompt_tokens: AtomicU64,
+    recent: Mutex<VecDeque<OperationalEvent>>,
+}
+
+#[derive(Debug, Clone)]
+struct OperationalEvent {
+    completed_at: Instant,
+    queue_wait_ms: Option<u64>,
+    ttft_ms: Option<u64>,
+    prompt_tokens: Option<u64>,
+    cached_prompt_tokens: Option<u64>,
+    failed: bool,
+    queue_timeout: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct RequestObservation {
+    pub duration_ms: u64,
+    pub queue_wait_ms: u64,
+    pub ttft_ms: Option<u64>,
+    pub prompt_tokens: Option<u64>,
+    pub cached_prompt_tokens: Option<u64>,
+    pub failed: bool,
 }
 
 struct DynamicConcurrencyLimiter {
@@ -124,6 +171,7 @@ pub(crate) struct RouterRuntime {
     targets: Mutex<HashMap<String, TargetRuntime>>,
     scheduling_counters: Mutex<HashMap<String, u64>>,
     limiter: DynamicConcurrencyLimiter,
+    queue_depth: AtomicUsize,
     in_flight_body_bytes: AtomicUsize,
     rate_buckets: Mutex<HashMap<String, RateBucket>>,
     metrics: RouterMetrics,
@@ -136,6 +184,7 @@ impl Default for RouterRuntime {
             targets: Mutex::new(HashMap::new()),
             scheduling_counters: Mutex::new(HashMap::new()),
             limiter: DynamicConcurrencyLimiter::default(),
+            queue_depth: AtomicUsize::new(0),
             in_flight_body_bytes: AtomicUsize::new(0),
             rate_buckets: Mutex::new(HashMap::new()),
             metrics: RouterMetrics::default(),
@@ -145,6 +194,17 @@ impl Default for RouterRuntime {
 
 pub(crate) struct GlobalRequestPermit {
     runtime: Arc<RouterRuntime>,
+    queue_wait_ms: u64,
+}
+
+struct QueueDepthGuard {
+    runtime: Arc<RouterRuntime>,
+}
+
+impl Drop for QueueDepthGuard {
+    fn drop(&mut self) {
+        self.runtime.queue_depth.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 pub(crate) struct InFlightBodyPermit {
@@ -167,6 +227,12 @@ impl Drop for GlobalRequestPermit {
     }
 }
 
+impl GlobalRequestPermit {
+    pub(crate) fn queue_wait_ms(&self) -> u64 {
+        self.queue_wait_ms
+    }
+}
+
 pub(crate) struct TargetRequestPermit {
     runtime: Arc<RouterRuntime>,
     instance_id: String,
@@ -183,6 +249,50 @@ impl Drop for TargetRequestPermit {
 }
 
 impl RouterRuntime {
+    fn try_acquire_global_slot(&self, limit: usize) -> bool {
+        loop {
+            let active = self.limiter.active.load(Ordering::Acquire);
+            if active >= limit {
+                return false;
+            }
+            if self
+                .limiter
+                .active
+                .compare_exchange_weak(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    fn record_histogram(buckets: &Mutex<[u64; LATENCY_BUCKETS_MS.len()]>, value_ms: u64) {
+        if let Some(index) = LATENCY_BUCKETS_MS
+            .iter()
+            .position(|upper| value_ms <= *upper)
+        {
+            let mut buckets = buckets.lock().unwrap();
+            buckets[index] = buckets[index].saturating_add(1);
+        }
+    }
+
+    fn push_operational_event(&self, event: OperationalEvent) {
+        let cutoff = Instant::now()
+            .checked_sub(OPERATIONAL_WINDOW)
+            .unwrap_or_else(Instant::now);
+        let mut recent = self.metrics.recent.lock().unwrap();
+        while recent
+            .front()
+            .is_some_and(|existing| existing.completed_at < cutoff)
+        {
+            recent.pop_front();
+        }
+        recent.push_back(event);
+        while recent.len() > MAX_OPERATIONAL_EVENTS {
+            recent.pop_front();
+        }
+    }
+
     fn next_scheduling_ticket(&self, strategy: &str, routing_key: &str) -> u64 {
         let key = format!("{strategy}\u{1f}{routing_key}");
         let mut counters = self.scheduling_counters.lock().unwrap();
@@ -201,33 +311,69 @@ impl RouterRuntime {
         queue_timeout: Duration,
     ) -> Option<GlobalRequestPermit> {
         let limit = max_concurrent_requests.max(1) as usize;
+        if self.try_acquire_global_slot(limit) {
+            self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
+            Self::record_histogram(&self.metrics.queue_wait_buckets, 0);
+            return Some(GlobalRequestPermit {
+                runtime: self.clone(),
+                queue_wait_ms: 0,
+            });
+        }
+        self.metrics
+            .queued_requests_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.queue_depth.fetch_add(1, Ordering::AcqRel);
+        let queue_guard = QueueDepthGuard {
+            runtime: self.clone(),
+        };
+        let queued_at = Instant::now();
         let acquire = async {
             loop {
-                let active = self.limiter.active.load(Ordering::Acquire);
-                if active < limit
-                    && self
-                        .limiter
-                        .active
-                        .compare_exchange(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                {
+                if self.try_acquire_global_slot(limit) {
                     self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
-                    return GlobalRequestPermit {
-                        runtime: self.clone(),
-                    };
+                    return;
                 }
                 self.limiter.notify.notified().await;
             }
         };
-        match tokio::time::timeout(queue_timeout, acquire).await {
-            Ok(permit) => Some(permit),
+        let result = match tokio::time::timeout(queue_timeout, acquire).await {
+            Ok(()) => {
+                let queue_wait_ms = queued_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+                self.metrics
+                    .queue_wait_sum_ms
+                    .fetch_add(queue_wait_ms, Ordering::Relaxed);
+                Self::record_histogram(&self.metrics.queue_wait_buckets, queue_wait_ms);
+                Some(GlobalRequestPermit {
+                    runtime: self.clone(),
+                    queue_wait_ms,
+                })
+            }
             Err(_) => {
+                let queue_wait_ms = queued_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
                 self.metrics
                     .rejected_requests
                     .fetch_add(1, Ordering::Relaxed);
+                self.metrics
+                    .queue_timeouts_total
+                    .fetch_add(1, Ordering::Relaxed);
+                self.push_operational_event(OperationalEvent {
+                    completed_at: Instant::now(),
+                    queue_wait_ms: Some(queue_wait_ms),
+                    ttft_ms: None,
+                    prompt_tokens: None,
+                    cached_prompt_tokens: None,
+                    failed: true,
+                    queue_timeout: true,
+                });
                 None
             }
-        }
+        };
+        drop(queue_guard);
+        result
+    }
+
+    pub(crate) fn queue_depth(&self) -> usize {
+        self.queue_depth.load(Ordering::Acquire)
     }
 
     pub(crate) fn in_flight_requests(&self) -> usize {
@@ -300,9 +446,7 @@ impl RouterRuntime {
                 retry_after_secs: 0,
             };
         }
-        self.metrics
-            .rejected_requests
-            .fetch_add(1, Ordering::Relaxed);
+        self.record_rejected();
         RateLimitDecision {
             allowed: false,
             limit,
@@ -454,26 +598,184 @@ impl RouterRuntime {
         self.mark_probe_failure(instance_id, error, unhealthy_threshold, recovery_cooldown);
     }
 
-    pub(crate) fn record_completed(&self, duration_ms: u64) {
+    pub(crate) fn record_completed(&self, observation: RequestObservation) {
         self.metrics
             .completed_requests
             .fetch_add(1, Ordering::Relaxed);
         self.metrics
             .duration_sum_ms
-            .fetch_add(duration_ms, Ordering::Relaxed);
-        let mut buckets = self.metrics.latency_buckets.lock().unwrap();
-        if let Some(index) = LATENCY_BUCKETS_MS
-            .iter()
-            .position(|upper| duration_ms <= *upper)
-        {
-            buckets[index] = buckets[index].saturating_add(1);
+            .fetch_add(observation.duration_ms, Ordering::Relaxed);
+        Self::record_histogram(&self.metrics.latency_buckets, observation.duration_ms);
+        if let Some(ttft_ms) = observation.ttft_ms {
+            self.metrics.ttft_samples.fetch_add(1, Ordering::Relaxed);
+            self.metrics
+                .ttft_sum_ms
+                .fetch_add(ttft_ms, Ordering::Relaxed);
+            Self::record_histogram(&self.metrics.ttft_buckets, ttft_ms);
         }
+        if let Some(prompt_tokens) = observation.prompt_tokens {
+            self.metrics
+                .prompt_tokens_observed
+                .fetch_add(prompt_tokens, Ordering::Relaxed);
+        }
+        if let Some(cached_prompt_tokens) = observation.cached_prompt_tokens {
+            self.metrics
+                .cached_prompt_tokens
+                .fetch_add(cached_prompt_tokens, Ordering::Relaxed);
+        }
+        self.push_operational_event(OperationalEvent {
+            completed_at: Instant::now(),
+            queue_wait_ms: Some(observation.queue_wait_ms),
+            ttft_ms: observation.ttft_ms,
+            prompt_tokens: observation.prompt_tokens,
+            cached_prompt_tokens: observation.cached_prompt_tokens,
+            failed: observation.failed,
+            queue_timeout: false,
+        });
     }
 
     pub(crate) fn record_rejected(&self) {
         self.metrics
             .rejected_requests
             .fetch_add(1, Ordering::Relaxed);
+        self.push_operational_event(OperationalEvent {
+            completed_at: Instant::now(),
+            queue_wait_ms: None,
+            ttft_ms: None,
+            prompt_tokens: None,
+            cached_prompt_tokens: None,
+            failed: true,
+            queue_timeout: false,
+        });
+    }
+
+    fn percentile(values: &mut [u64], percentile: f64) -> Option<u64> {
+        if values.is_empty() {
+            return None;
+        }
+        values.sort_unstable();
+        let index = ((values.len() - 1) as f64 * percentile).ceil() as usize;
+        values.get(index).copied()
+    }
+
+    pub(crate) fn operational_snapshot(
+        &self,
+        max_concurrent_requests: u32,
+    ) -> ProxyOperationalSnapshot {
+        let cutoff = Instant::now()
+            .checked_sub(OPERATIONAL_WINDOW)
+            .unwrap_or_else(Instant::now);
+        let mut recent = self.metrics.recent.lock().unwrap();
+        while recent
+            .front()
+            .is_some_and(|event| event.completed_at < cutoff)
+        {
+            recent.pop_front();
+        }
+        let events = recent.iter().cloned().collect::<Vec<_>>();
+        drop(recent);
+
+        let request_count = events.len() as u64;
+        let failed_request_count = events.iter().filter(|event| event.failed).count() as u64;
+        let error_rate_percent = (request_count > 0)
+            .then_some(failed_request_count as f64 / request_count as f64 * 100.0);
+        let mut queue_waits = events
+            .iter()
+            .filter_map(|event| event.queue_wait_ms)
+            .collect::<Vec<_>>();
+        let queue_wait_sample_count = queue_waits.len();
+        let mut ttft = events
+            .iter()
+            .filter_map(|event| event.ttft_ms)
+            .collect::<Vec<_>>();
+        let ttft_sample_count = ttft.len() as u64;
+        let queue_wait_p95_ms = Self::percentile(&mut queue_waits, 0.95);
+        let ttft_p50_ms = Self::percentile(&mut ttft.clone(), 0.50);
+        let ttft_p95_ms = Self::percentile(&mut ttft, 0.95);
+        let prompt_tokens_observed = events
+            .iter()
+            .filter_map(|event| event.prompt_tokens)
+            .fold(0_u64, u64::saturating_add);
+        let cached_prompt_tokens = events
+            .iter()
+            .filter_map(|event| event.cached_prompt_tokens)
+            .fold(0_u64, u64::saturating_add);
+        let cache_reuse_percent = (prompt_tokens_observed > 0).then_some(
+            cached_prompt_tokens.min(prompt_tokens_observed) as f64 / prompt_tokens_observed as f64
+                * 100.0,
+        );
+        let queue_timeouts = events.iter().filter(|event| event.queue_timeout).count();
+        let in_flight_requests = self.in_flight_requests();
+        let queue_depth = self.queue_depth();
+        let effective_limit = max_concurrent_requests.max(1);
+        let saturation_percent = in_flight_requests as f64 / effective_limit as f64 * 100.0;
+        let mut alerts = Vec::new();
+        let mut add_alert = |id: &str, severity: &str, observed: f64, threshold: f64| {
+            alerts.push(ProxyOperationalAlert {
+                id: id.to_string(),
+                severity: severity.to_string(),
+                observed,
+                threshold,
+            });
+        };
+        if events.len() >= MIN_ALERT_SAMPLES {
+            if let Some(error_rate) = error_rate_percent {
+                if error_rate >= 25.0 {
+                    add_alert("error_rate", "critical", error_rate, 25.0);
+                } else if error_rate >= 10.0 {
+                    add_alert("error_rate", "warning", error_rate, 10.0);
+                }
+            }
+        }
+        if ttft_sample_count as usize >= MIN_ALERT_SAMPLES {
+            if let Some(value) = ttft_p95_ms {
+                if value >= 10_000 {
+                    add_alert("ttft_p95", "critical", value as f64, 10_000.0);
+                } else if value >= 3_000 {
+                    add_alert("ttft_p95", "warning", value as f64, 3_000.0);
+                }
+            }
+        }
+        if queue_wait_sample_count >= MIN_ALERT_SAMPLES {
+            if let Some(value) = queue_wait_p95_ms {
+                if value >= 1_000 {
+                    add_alert("queue_wait_p95", "critical", value as f64, 1_000.0);
+                } else if value >= 250 {
+                    add_alert("queue_wait_p95", "warning", value as f64, 250.0);
+                }
+            }
+        }
+        if queue_timeouts >= 3 {
+            add_alert("queue_timeouts", "critical", queue_timeouts as f64, 3.0);
+        } else if queue_timeouts > 0 {
+            add_alert("queue_timeouts", "warning", queue_timeouts as f64, 1.0);
+        }
+        if saturation_percent >= 100.0 && queue_depth > 0 {
+            add_alert("saturation", "critical", saturation_percent, 100.0);
+        } else if saturation_percent >= 85.0 {
+            add_alert("saturation", "warning", saturation_percent, 85.0);
+        }
+
+        ProxyOperationalSnapshot {
+            window_seconds: OPERATIONAL_WINDOW.as_secs(),
+            request_count,
+            failed_request_count,
+            error_rate_percent,
+            queue_depth,
+            queued_requests_total: self.metrics.queued_requests_total.load(Ordering::Relaxed),
+            queue_timeouts_total: self.metrics.queue_timeouts_total.load(Ordering::Relaxed),
+            queue_wait_p95_ms,
+            ttft_sample_count,
+            ttft_p50_ms,
+            ttft_p95_ms,
+            prompt_tokens_observed,
+            cached_prompt_tokens,
+            cache_reuse_percent,
+            in_flight_requests,
+            max_concurrent_requests: effective_limit,
+            saturation_percent,
+            alerts,
+        }
     }
 
     pub(crate) fn capabilities_stale(&self, instance_id: &str, max_age: Duration) -> bool {
@@ -546,13 +848,19 @@ impl RouterRuntime {
             })
     }
 
-    pub(crate) fn prometheus_metrics(&self) -> String {
+    pub(crate) fn prometheus_metrics(&self, max_concurrent_requests: u32) -> String {
         let total = self.metrics.total_requests.load(Ordering::Relaxed);
         let completed = self.metrics.completed_requests.load(Ordering::Relaxed);
         let rejected = self.metrics.rejected_requests.load(Ordering::Relaxed);
         let upstream_errors = self.metrics.upstream_errors.load(Ordering::Relaxed);
         let duration_sum = self.metrics.duration_sum_ms.load(Ordering::Relaxed);
         let buckets = *self.metrics.latency_buckets.lock().unwrap();
+        let queue_wait_sum = self.metrics.queue_wait_sum_ms.load(Ordering::Relaxed);
+        let queue_wait_buckets = *self.metrics.queue_wait_buckets.lock().unwrap();
+        let ttft_sum = self.metrics.ttft_sum_ms.load(Ordering::Relaxed);
+        let ttft_samples = self.metrics.ttft_samples.load(Ordering::Relaxed);
+        let ttft_buckets = *self.metrics.ttft_buckets.lock().unwrap();
+        let operational = self.operational_snapshot(max_concurrent_requests);
         let targets = self.targets.lock().unwrap();
         let mut output = String::new();
         output.push_str("# HELP lsm_router_requests_total Total accepted router requests.\n");
@@ -572,6 +880,19 @@ impl RouterRuntime {
         output.push_str(&format!(
             "lsm_router_in_flight_requests {}\n",
             self.in_flight_requests()
+        ));
+        output.push_str("# HELP lsm_router_queue_depth Requests currently waiting for the global concurrency limiter.\n");
+        output.push_str("# TYPE lsm_router_queue_depth gauge\n");
+        output.push_str(&format!("lsm_router_queue_depth {}\n", self.queue_depth()));
+        output.push_str("# TYPE lsm_router_queued_requests_total counter\n");
+        output.push_str(&format!(
+            "lsm_router_queued_requests_total {}\n",
+            self.metrics.queued_requests_total.load(Ordering::Relaxed)
+        ));
+        output.push_str("# TYPE lsm_router_queue_timeouts_total counter\n");
+        output.push_str(&format!(
+            "lsm_router_queue_timeouts_total {}\n",
+            self.metrics.queue_timeouts_total.load(Ordering::Relaxed)
         ));
         output.push_str("# TYPE lsm_router_in_flight_request_body_bytes gauge\n");
         output.push_str(&format!(
@@ -594,6 +915,66 @@ impl RouterRuntime {
         output.push_str(&format!(
             "lsm_router_request_duration_milliseconds_sum {duration_sum}\nlsm_router_request_duration_milliseconds_count {completed}\n"
         ));
+        output.push_str("# HELP lsm_router_queue_wait_milliseconds Time spent waiting for global router admission.\n");
+        output.push_str("# TYPE lsm_router_queue_wait_milliseconds histogram\n");
+        let mut cumulative = 0u64;
+        for (index, upper) in LATENCY_BUCKETS_MS.iter().enumerate() {
+            cumulative = cumulative.saturating_add(queue_wait_buckets[index]);
+            let label = if *upper == u64::MAX {
+                "+Inf".to_string()
+            } else {
+                upper.to_string()
+            };
+            output.push_str(&format!(
+                "lsm_router_queue_wait_milliseconds_bucket{{le=\"{label}\"}} {cumulative}\n"
+            ));
+        }
+        output.push_str(&format!(
+            "lsm_router_queue_wait_milliseconds_sum {queue_wait_sum}\nlsm_router_queue_wait_milliseconds_count {total}\n"
+        ));
+        output.push_str("# HELP lsm_router_ttft_milliseconds Time from authenticated request admission to the first downstream response body chunk.\n");
+        output.push_str("# TYPE lsm_router_ttft_milliseconds histogram\n");
+        let mut cumulative = 0u64;
+        for (index, upper) in LATENCY_BUCKETS_MS.iter().enumerate() {
+            cumulative = cumulative.saturating_add(ttft_buckets[index]);
+            let label = if *upper == u64::MAX {
+                "+Inf".to_string()
+            } else {
+                upper.to_string()
+            };
+            output.push_str(&format!(
+                "lsm_router_ttft_milliseconds_bucket{{le=\"{label}\"}} {cumulative}\n"
+            ));
+        }
+        output.push_str(&format!(
+            "lsm_router_ttft_milliseconds_sum {ttft_sum}\nlsm_router_ttft_milliseconds_count {ttft_samples}\n"
+        ));
+        output.push_str("# HELP lsm_router_prompt_tokens_observed_total Prompt tokens explicitly reported by upstream responses.\n");
+        output.push_str("# TYPE lsm_router_prompt_tokens_observed_total counter\n");
+        output.push_str(&format!(
+            "lsm_router_prompt_tokens_observed_total {}\n",
+            self.metrics.prompt_tokens_observed.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP lsm_router_prompt_tokens_cached_total Prompt tokens explicitly reported as cache-reused by upstream responses.\n");
+        output.push_str("# TYPE lsm_router_prompt_tokens_cached_total counter\n");
+        output.push_str(&format!(
+            "lsm_router_prompt_tokens_cached_total {}\n",
+            self.metrics.cached_prompt_tokens.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP lsm_router_saturation_ratio Current global in-flight requests divided by the configured limit.\n");
+        output.push_str("# TYPE lsm_router_saturation_ratio gauge\n");
+        output.push_str(&format!(
+            "lsm_router_saturation_ratio {:.6}\n",
+            operational.saturation_percent / 100.0
+        ));
+        output.push_str("# HELP lsm_router_operational_alert Active deterministic operational alerts by identifier and severity.\n");
+        output.push_str("# TYPE lsm_router_operational_alert gauge\n");
+        for alert in &operational.alerts {
+            output.push_str(&format!(
+                "lsm_router_operational_alert{{alert=\"{}\",severity=\"{}\"}} 1\n",
+                alert.id, alert.severity
+            ));
+        }
         output.push_str("# TYPE lsm_router_target_ready gauge\n");
         output.push_str("# TYPE lsm_router_target_active_requests gauge\n");
         for (instance_id, target) in targets.iter() {
@@ -781,5 +1162,84 @@ mod tests {
         assert_eq!(runtime.in_flight_body_bytes(), 40);
         drop(second);
         assert_eq!(runtime.in_flight_body_bytes(), 0);
+    }
+
+    #[test]
+    fn operational_snapshot_uses_bounded_signals_and_deterministic_alerts() {
+        let runtime = RouterRuntime::default();
+        for _ in 0..5 {
+            runtime.record_completed(RequestObservation {
+                duration_ms: 15_000,
+                queue_wait_ms: 1_500,
+                ttft_ms: Some(12_000),
+                prompt_tokens: Some(100),
+                cached_prompt_tokens: Some(40),
+                failed: true,
+            });
+        }
+        let snapshot = runtime.operational_snapshot(8);
+        assert_eq!(snapshot.window_seconds, 300);
+        assert_eq!(snapshot.request_count, 5);
+        assert_eq!(snapshot.failed_request_count, 5);
+        assert_eq!(snapshot.ttft_p95_ms, Some(12_000));
+        assert_eq!(snapshot.queue_wait_p95_ms, Some(1_500));
+        assert_eq!(snapshot.cache_reuse_percent, Some(40.0));
+        assert!(snapshot
+            .alerts
+            .iter()
+            .any(|alert| alert.id == "error_rate" && alert.severity == "critical"));
+        assert!(snapshot
+            .alerts
+            .iter()
+            .any(|alert| alert.id == "ttft_p95" && alert.severity == "critical"));
+        assert!(snapshot
+            .alerts
+            .iter()
+            .any(|alert| alert.id == "queue_wait_p95" && alert.severity == "critical"));
+
+        let sparse_metrics = RouterRuntime::default();
+        sparse_metrics.record_completed(RequestObservation {
+            duration_ms: 15_000,
+            queue_wait_ms: 1_500,
+            ttft_ms: Some(12_000),
+            prompt_tokens: None,
+            cached_prompt_tokens: None,
+            failed: true,
+        });
+        for _ in 0..4 {
+            sparse_metrics.record_rejected();
+        }
+        let sparse_snapshot = sparse_metrics.operational_snapshot(8);
+        assert!(sparse_snapshot
+            .alerts
+            .iter()
+            .all(|alert| alert.id != "ttft_p95" && alert.id != "queue_wait_p95"));
+
+        let metrics = runtime.prometheus_metrics(8);
+        assert!(metrics.contains("lsm_router_ttft_milliseconds_bucket"));
+        assert!(metrics.contains("lsm_router_queue_wait_milliseconds_bucket"));
+        assert!(metrics.contains("lsm_router_prompt_tokens_cached_total 200"));
+        assert!(metrics.contains("alert=\"ttft_p95\",severity=\"critical\""));
+    }
+
+    #[tokio::test]
+    async fn queue_timeouts_release_depth_and_surface_an_alert() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let first = runtime
+            .acquire_global(1, Duration::from_millis(20))
+            .await
+            .unwrap();
+        assert!(runtime
+            .acquire_global(1, Duration::from_millis(1))
+            .await
+            .is_none());
+        assert_eq!(runtime.queue_depth(), 0);
+        let snapshot = runtime.operational_snapshot(1);
+        assert_eq!(snapshot.queue_timeouts_total, 1);
+        assert!(snapshot
+            .alerts
+            .iter()
+            .any(|alert| alert.id == "queue_timeouts" && alert.severity == "warning"));
+        drop(first);
     }
 }

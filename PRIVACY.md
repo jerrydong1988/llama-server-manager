@@ -1,12 +1,14 @@
 # 隐私政策 / Privacy Policy
 
-最后更新：2026-07-31
+最后更新：2026-08-20
 
 Llama Server Manager 是本地运行的开源桌面应用。项目维护者不经营用户账号、云端遥测平台或广告服务，也不会通过本应用接收用户的配置、日志或性能记录。
 
 ## 本地保存的数据
 
 应用会在当前用户的应用数据目录中保存运行所需的数据，包括实例和引擎配置、模型目录、下载队列与历史、服务器日志、集群配置以及性能遥测数据库。这些性能遥测用于应用内监控和诊断，默认不会上传给项目维护者。
+
+本地路由遥测可能包含请求耗时、排队等待、首个响应正文块耗时、HTTP 结果，以及上游明确返回的提示与缓存 Token 数量。运营指标功能不会保留提示词、生成内容、响应正文块、请求体或 API Key。实时告警窗口与进程计数会随路由运行时重置；持久化的数值请求记录继续由应用现有的本地遥测保留与清理控制管理。
 
 配置中可能包含 API Key、SSH 用户名、私有路径或远程服务器地址。用户应保护自己的应用数据目录，并在分享日志或截图前删除敏感信息。
 
@@ -39,5 +41,7 @@ Cloudflare、GitHub、ModelScope、Hugging Face 以及用户配置的远程服�
 Llama Server Manager is a locally operated open-source desktop application. The project maintainer does not operate user accounts, hosted telemetry, or advertising services and does not receive application configuration, logs, or local performance records automatically.
 
 The application stores configuration, download state, logs, cluster settings, and a local telemetry database in the current user's application data directory. It checks a project update endpoint hosted on Cloudflare R2 at startup and downloads a platform-specific signed update only after user confirmation; connects to ModelScope or Hugging Face when the user browses or downloads models; and connects to local or user-configured servers and workers for management, health checks, metrics, routing, and SSH/RPC functions. Credentials configured for a server are sent only to the corresponding configured target.
+
+Local routing telemetry may include numeric request duration, queue wait, time to first response-body chunk, HTTP outcome, and prompt/cache token counts explicitly reported by the configured upstream. The operational metrics feature does not retain prompts, generated content, response chunks, request bodies, or API keys. Live alert windows and process counters reset with the routing runtime; persisted numeric request rows remain governed by the application's local telemetry retention and pruning controls.
 
 The application contains no advertising or behavior-analytics SDK and does not automatically upload crash reports, performance records, model contents, or server logs to the project maintainer. Third-party services and user-configured remote systems are governed by their own privacy policies.

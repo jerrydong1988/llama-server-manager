@@ -60,7 +60,36 @@ type ProxyStatus = {
   unhealthyRoutes: number
   inFlightRequests: number
   totalRequests: number
+  operational: ProxyOperationalSnapshot
   lastError: string | null
+}
+
+type ProxyOperationalAlert = {
+  id: string
+  severity: 'warning' | 'critical'
+  observed: number
+  threshold: number
+}
+
+type ProxyOperationalSnapshot = {
+  windowSeconds: number
+  requestCount: number
+  failedRequestCount: number
+  errorRatePercent: number | null
+  queueDepth: number
+  queuedRequestsTotal: number
+  queueTimeoutsTotal: number
+  queueWaitP95Ms: number | null
+  ttftSampleCount: number
+  ttftP50Ms: number | null
+  ttftP95Ms: number | null
+  promptTokensObserved: number
+  cachedPromptTokens: number
+  cacheReusePercent: number | null
+  inFlightRequests: number
+  maxConcurrentRequests: number
+  saturationPercent: number
+  alerts: ProxyOperationalAlert[]
 }
 
 type NumericProxyConfigKey = 'connectTimeoutMs' | 'timeoutMs' | 'streamingIdleTimeoutMs'
@@ -163,6 +192,14 @@ function getNumber(record: Record<string, unknown>, keys: string[], fallback = 0
   return fallback
 }
 
+function getOptionalNumber(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return null
+}
+
 function getBoolean(record: Record<string, unknown>, keys: string[], fallback = false) {
   for (const key of keys) {
     const value = record[key]
@@ -245,16 +282,52 @@ function normalizeConfig(value: unknown): ProxyConfig {
   }
 }
 
+function normalizeOperationalStatus(value: unknown, config: ProxyConfig, inFlightRequests: number): ProxyOperationalSnapshot {
+  const record = asRecord(value)
+  const alertsValue = Array.isArray(record.alerts) ? record.alerts : []
+  const maxConcurrentRequests = Math.max(1, getNumber(record, ['max_concurrent_requests', 'maxConcurrentRequests'], config.maxConcurrentRequests))
+  return {
+    windowSeconds: getNumber(record, ['window_seconds', 'windowSeconds'], 300),
+    requestCount: getNumber(record, ['request_count', 'requestCount']),
+    failedRequestCount: getNumber(record, ['failed_request_count', 'failedRequestCount']),
+    errorRatePercent: getOptionalNumber(record, ['error_rate_percent', 'errorRatePercent']),
+    queueDepth: getNumber(record, ['queue_depth', 'queueDepth']),
+    queuedRequestsTotal: getNumber(record, ['queued_requests_total', 'queuedRequestsTotal']),
+    queueTimeoutsTotal: getNumber(record, ['queue_timeouts_total', 'queueTimeoutsTotal']),
+    queueWaitP95Ms: getOptionalNumber(record, ['queue_wait_p95_ms', 'queueWaitP95Ms']),
+    ttftSampleCount: getNumber(record, ['ttft_sample_count', 'ttftSampleCount']),
+    ttftP50Ms: getOptionalNumber(record, ['ttft_p50_ms', 'ttftP50Ms']),
+    ttftP95Ms: getOptionalNumber(record, ['ttft_p95_ms', 'ttftP95Ms']),
+    promptTokensObserved: getNumber(record, ['prompt_tokens_observed', 'promptTokensObserved']),
+    cachedPromptTokens: getNumber(record, ['cached_prompt_tokens', 'cachedPromptTokens']),
+    cacheReusePercent: getOptionalNumber(record, ['cache_reuse_percent', 'cacheReusePercent']),
+    inFlightRequests: getNumber(record, ['in_flight_requests', 'inFlightRequests'], inFlightRequests),
+    maxConcurrentRequests,
+    saturationPercent: getNumber(record, ['saturation_percent', 'saturationPercent'], inFlightRequests / maxConcurrentRequests * 100),
+    alerts: alertsValue.map(value => {
+      const alert = asRecord(value)
+      return {
+        id: getString(alert, ['id'], 'unknown'),
+        severity: getString(alert, ['severity']) === 'critical' ? 'critical' as const : 'warning' as const,
+        observed: getNumber(alert, ['observed']),
+        threshold: getNumber(alert, ['threshold']),
+      }
+    }),
+  }
+}
+
 function normalizeStatus(value: unknown, config: ProxyConfig): ProxyStatus {
   const record = asRecord(value)
+  const inFlightRequests = getNumber(record, ['in_flight_requests', 'inFlightRequests'], 0)
   return {
     running: getBoolean(record, ['running', 'is_running', 'isRunning'], false),
     boundAddr: getString(record, ['bound_addr', 'boundAddr', 'endpoint', 'url'], formatHostPort(config.host, config.port)),
     activeRoutes: getNumber(record, ['active_routes', 'activeRoutes'], config.routes.filter(route => route.enabled).length),
     healthyRoutes: getNumber(record, ['healthy_routes', 'healthyRoutes'], 0),
     unhealthyRoutes: getNumber(record, ['unhealthy_routes', 'unhealthyRoutes'], 0),
-    inFlightRequests: getNumber(record, ['in_flight_requests', 'inFlightRequests'], 0),
+    inFlightRequests,
     totalRequests: getNumber(record, ['total_requests', 'totalRequests'], 0),
+    operational: normalizeOperationalStatus(record.operational, config, inFlightRequests),
     lastError: getString(record, ['last_error', 'lastError', 'error']) || null,
   }
 }
@@ -371,6 +444,23 @@ function routeAvailabilityView(kind: RouteAvailabilityKind, labels: ReturnType<t
     case 'pending': return { label: labels.routePendingSave, tone: 'amber' as const }
     case 'invalid': return { label: labels.routeIncomplete, tone: 'red' as const }
   }
+}
+
+function formatOperationalMs(value: number | null) {
+  return value == null ? '—' : `${Math.round(value).toLocaleString()} ms`
+}
+
+function formatOperationalPercent(value: number | null) {
+  return value == null ? '—' : `${value.toFixed(1)}%`
+}
+
+function operationalAlertCopy(id: string, labels: ReturnType<typeof getProxyLabels>) {
+  if (id === 'error_rate') return { title: labels.alertErrorRate, action: labels.alertErrorRateAction }
+  if (id === 'ttft_p95') return { title: labels.alertTtft, action: labels.alertTtftAction }
+  if (id === 'queue_wait_p95') return { title: labels.alertQueueWait, action: labels.alertQueueWaitAction }
+  if (id === 'queue_timeouts') return { title: labels.alertQueueTimeouts, action: labels.alertQueueTimeoutsAction }
+  if (id === 'saturation') return { title: labels.alertSaturation, action: labels.alertSaturationAction }
+  return { title: labels.alertUnknown, action: labels.alertUnknownAction }
 }
 
 export default function ProxyPage() {
@@ -929,6 +1019,56 @@ export default function ProxyPage() {
         <MetricCard label={labels.inFlightRequests} value={statusFresh ? status.inFlightRequests : '—'} icon={<Zap className="h-5 w-5" />} />
         <MetricCard label={labels.healthyRoutes} value={statusFresh ? `${status.healthyRoutes}/${status.activeRoutes}` : '—'} icon={<HeartPulse className="h-5 w-5" />} />
       </div>
+
+      <Surface as="section" className="p-5" data-testid="proxy-operational-metrics">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.operationalMetrics}</h3>
+            <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{labels.operationalMetricsHint}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={statusFresh && status.running ? 'emerald' : 'slate'}>{statusFresh && status.running ? labels.liveWindow : labels.unavailable}</Badge>
+            <Badge tone="blue">{Math.round(status.operational.windowSeconds / 60)} min</Badge>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+          {[
+            [labels.ttftP95, formatOperationalMs(status.operational.ttftP95Ms), `${status.operational.ttftSampleCount} ${labels.samples}`],
+            [labels.queueDepth, statusFresh ? status.operational.queueDepth.toLocaleString() : '—', `${labels.queueP95}: ${formatOperationalMs(status.operational.queueWaitP95Ms)}`],
+            [labels.cacheReuse, formatOperationalPercent(status.operational.cacheReusePercent), `${status.operational.cachedPromptTokens.toLocaleString()} / ${status.operational.promptTokensObserved.toLocaleString()} ${labels.tokens}`],
+            [labels.errorRate, formatOperationalPercent(status.operational.errorRatePercent), `${status.operational.failedRequestCount.toLocaleString()} / ${status.operational.requestCount.toLocaleString()}`],
+            [labels.saturation, formatOperationalPercent(statusFresh ? status.operational.saturationPercent : null), `${status.operational.inFlightRequests} / ${status.operational.maxConcurrentRequests}`],
+            [labels.windowRequests, statusFresh ? status.operational.requestCount.toLocaleString() : '—', `${status.operational.queueTimeoutsTotal.toLocaleString()} ${labels.queueTimeouts}`],
+          ].map(([label, value, detail]) => (
+            <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-950/70">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
+              <div className="mt-1 text-lg font-semibold text-slate-950 dark:text-slate-50">{value}</div>
+              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{detail}</div>
+            </div>
+          ))}
+        </div>
+        <div className="mt-4 space-y-2" data-operational-alert-count={status.operational.alerts.length}>
+          {statusFresh && status.running && status.operational.alerts.length === 0 ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
+              {labels.noOperationalAlerts}
+            </div>
+          ) : null}
+          {status.operational.alerts.map(alert => {
+            const copy = operationalAlertCopy(alert.id, labels)
+            const critical = alert.severity === 'critical'
+            return (
+              <div key={`${alert.id}-${alert.severity}`} className={`rounded-lg border px-3 py-2 text-sm ${critical ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'}`}>
+                <div className="flex flex-wrap items-center gap-2 font-semibold">
+                  <AlertTriangle className="h-4 w-4" />
+                  <span>{copy.title}</span>
+                  <Badge tone={critical ? 'red' : 'amber'}>{critical ? labels.critical : labels.warning}</Badge>
+                </div>
+                <p className="mt-1 text-xs leading-5 opacity-90">{copy.action}</p>
+              </div>
+            )
+          })}
+        </div>
+      </Surface>
 
       <CanaryRolloutPanel proxyRunning={statusFresh && status.running} targets={effectiveTargets} />
 

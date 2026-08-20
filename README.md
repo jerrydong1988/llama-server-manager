@@ -185,6 +185,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [托管部署与修订 / Managed Deployments and Revisions](docs/DEPLOYMENTS.md)
 - [资源规划器 / Resource Planner](docs/RESOURCE_PLANNER.md)
 - [模型与引擎金丝雀发布 / Model and Engine Canary Rollouts](docs/CANARY_ROLLOUTS.md)
+- [运营指标与告警 / Operational Metrics and Alerts](docs/OPERATIONAL_METRICS.md)
 - [隐私政策 / Privacy Policy](PRIVACY.md)
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)

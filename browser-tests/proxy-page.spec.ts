@@ -26,6 +26,41 @@ test('routing page documents OpenAI and Anthropic endpoints and compatibility bo
   await expect(compatibility).toContainText('32 MiB')
 })
 
+test('operational metrics keep unknown states explicit and surface actionable alerts', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'proxy')
+  })
+  await page.goto('/?scenario=operational-metrics')
+
+  const panel = page.getByTestId('proxy-operational-metrics')
+  await expect(panel).toContainText('运营指标与告警')
+  await expect(panel).toContainText('3,500 ms')
+  await expect(panel).toContainText('420 ms')
+  await expect(panel).toContainText('40.0%')
+  await expect(panel).toContainText('15.0%')
+  await expect(panel).toContainText('90.6%')
+  await expect(panel).toContainText('代理错误率升高')
+  await expect(panel).toContainText('先检查目标健康')
+  await expect(panel).toContainText('首响应延迟升高')
+  await expect(panel).toContainText('路由并发接近饱和')
+  await expect(panel).not.toContainText('缓存复用率过低')
+
+})
+
+test('operational metrics and alert actions are available in English', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'en-US')
+    localStorage.setItem('lastTab', 'proxy')
+  })
+  await page.goto('/?scenario=operational-metrics')
+
+  const panel = page.getByTestId('proxy-operational-metrics')
+  await expect(panel).toContainText('Operational metrics and alerts')
+  await expect(panel).toContainText('Elevated proxy error rate')
+  await expect(panel).toContainText('Inspect target health')
+})
+
 test('canary rollout remains operator controlled from observation through promotion and rollback', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
@@ -50,6 +85,9 @@ test('canary rollout remains operator controlled from observation through promot
   await panel.getByRole('button', { name: '采集观察快照' }).click()
   await expect(panel).toContainText('观察快照已写入审计记录')
   await expect(panel).toContainText('100.0%')
+  await expect(panel).toContainText('1,200 ms')
+  await expect(panel).toContainText('80 ms')
+  await expect(panel).toContainText('37.5%')
 
   const share = panel.getByRole('spinbutton', { name: '候选流量' })
   await share.fill('25')

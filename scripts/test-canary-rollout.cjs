@@ -34,8 +34,8 @@ const entry = `
     canRollback: false,
     stableHealth: { instanceId: 'stable', status: 'ready', ready: true },
     candidateHealth: { instanceId: 'candidate', status: 'ready', ready: true },
-    stableEvidence: { total: 10, succeeded: 9, failed: 1, latestCompletedAt: 150 },
-    candidateEvidence: { total: 2, succeeded: 2, failed: 0, latestCompletedAt: 160 },
+    stableEvidence: { total: 10, succeeded: 9, failed: 1, latestCompletedAt: 150, ttftP95Ms: 1200, queueWaitP95Ms: 80, cacheReuseBasisPoints: 3750 },
+    candidateEvidence: { total: 2, succeeded: 2, failed: 0, latestCompletedAt: 160, ttftP95Ms: 900, queueWaitP95Ms: 20, cacheReuseBasisPoints: 5000 },
     events: [{ sequence: 1, occurredAt: 100, kind: 'created', summary: 'created', integrityValid: true }],
   }
 
@@ -44,7 +44,10 @@ const entry = `
   assert.equal(rollout.candidateHealth.ready, true)
   assert.equal(rollout.events[0].integrityValid, true)
   assert.equal(evidenceRate(rollout.stableEvidence), 0.9)
-  assert.equal(evidenceRate({ total: 0, succeeded: 0, failed: 0, latestCompletedAt: null }), null)
+  assert.equal(rollout.stableEvidence?.ttftP95Ms, 1200)
+  assert.equal(rollout.stableEvidence?.queueWaitP95Ms, 80)
+  assert.equal(rollout.stableEvidence?.cacheReuseBasisPoints, 3750)
+  assert.equal(evidenceRate({ total: 0, succeeded: 0, failed: 0, latestCompletedAt: null, ttftP95Ms: null, queueWaitP95Ms: null, cacheReuseBasisPoints: null }), null)
   assert.equal(shortRevision(raw.stableRevisionId), '1234567890ab')
 
   const malformed = normalizeCanaryRollout({ id: 'safe', state: 'unexpected', drift: [1, 'kept'] })
@@ -91,5 +94,8 @@ assert.match(panel, /window\.confirm\(labels\.confirmPromote\)/, 'promotion must
 assert.match(panel, /!rollout\.candidateHealth\.ready/, 'promotion must be gated on candidate health')
 assert.match(panel, /rollout\.drift\.length > 0/, 'drift must be visible')
 assert.match(panel, /rollout\.events/, 'audit evidence must be visible')
+assert.match(panel, /value\.ttftP95Ms/, 'canary evidence must expose target TTFT')
+assert.match(panel, /value\.queueWaitP95Ms/, 'canary evidence must expose target queue wait')
+assert.match(panel, /value\.cacheReuseBasisPoints/, 'canary evidence must expose observed cache reuse')
 
 console.log('Canary rollout view-model and action gates passed.')

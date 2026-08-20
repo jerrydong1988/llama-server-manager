@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
@@ -91,6 +91,9 @@ pub struct InferenceRequestSummary {
     pub target_instance_id: Option<String>,
     pub http_status: Option<u16>,
     pub error_text: Option<String>,
+    pub queue_time_ms: Option<f64>,
+    pub ttft_ms: Option<f64>,
+    pub cached_prompt_tokens: Option<u64>,
     pub prompt_tokens: Option<u64>,
     pub prompt_time_ms: Option<f64>,
     pub prompt_tps: Option<f64>,
@@ -216,6 +219,10 @@ pub struct ProxyRequestRecord {
     pub target_instance_id: String,
     pub http_status: Option<u16>,
     pub duration_ms: f64,
+    pub queue_time_ms: f64,
+    pub ttft_ms: Option<f64>,
+    pub prompt_tokens: Option<u64>,
+    pub cached_prompt_tokens: Option<u64>,
     pub error_text: Option<String>,
     pub api_format: String,
 }
@@ -403,6 +410,9 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             target_instance_id TEXT,
             http_status INTEGER,
             error_text TEXT,
+            queue_time_ms REAL,
+            ttft_ms REAL,
+            cached_prompt_tokens INTEGER,
             prompt_tokens INTEGER,
             prompt_time_ms REAL,
             prompt_tps REAL,
@@ -507,6 +517,9 @@ fn migrate_inference_request_columns(conn: &Connection) -> Result<(), String> {
         ("target_instance_id", "TEXT"),
         ("http_status", "INTEGER"),
         ("error_text", "TEXT"),
+        ("queue_time_ms", "REAL"),
+        ("ttft_ms", "REAL"),
+        ("cached_prompt_tokens", "INTEGER"),
     ];
     for (name, definition) in additions {
         if !columns.iter().any(|column| column == name) {
@@ -1120,8 +1133,9 @@ fn insert_proxy_request(
     conn.execute(
         "INSERT INTO inference_requests
             (session_id, task_id, slot_id, completed_at, source, api_format, model,
-             target_instance_id, http_status, error_text, total_time_ms)
-         VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6, ?7, ?8, ?9)
+             target_instance_id, http_status, error_text, total_time_ms, queue_time_ms,
+             ttft_ms, prompt_tokens, cached_prompt_tokens)
+         VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(session_id, task_id) DO UPDATE SET
              completed_at = excluded.completed_at,
              source = excluded.source,
@@ -1130,7 +1144,11 @@ fn insert_proxy_request(
              target_instance_id = excluded.target_instance_id,
              http_status = excluded.http_status,
              error_text = excluded.error_text,
-             total_time_ms = excluded.total_time_ms",
+             total_time_ms = excluded.total_time_ms,
+             queue_time_ms = excluded.queue_time_ms,
+             ttft_ms = excluded.ttft_ms,
+             prompt_tokens = excluded.prompt_tokens,
+             cached_prompt_tokens = excluded.cached_prompt_tokens",
         params![
             session_id,
             record.task_id,
@@ -1141,6 +1159,10 @@ fn insert_proxy_request(
             record.http_status.map(|v| v as i64),
             record.error_text.as_deref(),
             record.duration_ms,
+            record.queue_time_ms,
+            record.ttft_ms,
+            record.prompt_tokens.map(|value| value as i64),
+            record.cached_prompt_tokens.map(|value| value as i64),
         ],
     )
     .map_err(|e| format!("failed to write proxy request telemetry: {}", e))?;
@@ -2779,24 +2801,71 @@ fn request_evidence_for_target(
     target_instance_id: &str,
     since_ms: i64,
 ) -> Result<crate::canary::CanaryRequestEvidence, String> {
-    conn.query_row(
+    let (mut evidence, prompt_tokens, cached_prompt_tokens) = conn.query_row(
         "SELECT COUNT(*),
                 COALESCE(SUM(CASE WHEN error_text IS NULL AND http_status >= 200 AND http_status < 400 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN error_text IS NOT NULL OR http_status IS NULL OR http_status < 200 OR http_status >= 400 THEN 1 ELSE 0 END), 0),
-                MAX(completed_at)
+                MAX(completed_at),
+                COALESCE(SUM(prompt_tokens), 0),
+                COALESCE(SUM(cached_prompt_tokens), 0)
          FROM inference_requests
          WHERE source = 'proxy' AND target_instance_id = ?1 AND completed_at >= ?2",
         params![target_instance_id, since_ms],
         |row| {
-            Ok(crate::canary::CanaryRequestEvidence {
-                total: row.get::<_, i64>(0)?.max(0) as u64,
-                succeeded: row.get::<_, i64>(1)?.max(0) as u64,
-                failed: row.get::<_, i64>(2)?.max(0) as u64,
-                latest_completed_at: row.get(3)?,
-            })
+            Ok((
+                crate::canary::CanaryRequestEvidence {
+                    total: row.get::<_, i64>(0)?.max(0) as u64,
+                    succeeded: row.get::<_, i64>(1)?.max(0) as u64,
+                    failed: row.get::<_, i64>(2)?.max(0) as u64,
+                    latest_completed_at: row.get(3)?,
+                    ..Default::default()
+                },
+                row.get::<_, i64>(4)?.max(0) as u64,
+                row.get::<_, i64>(5)?.max(0) as u64,
+            ))
         },
     )
-    .map_err(|error| format!("failed to query canary request evidence: {error}"))
+    .map_err(|error| format!("failed to query canary request evidence: {error}"))?;
+
+    let percentile = |column: &str| -> Result<Option<u64>, String> {
+        let count = conn
+            .query_row(
+                &format!(
+                    "SELECT COUNT(*) FROM inference_requests
+                     WHERE source = 'proxy' AND target_instance_id = ?1 AND completed_at >= ?2
+                       AND {column} IS NOT NULL"
+                ),
+                params![target_instance_id, since_ms],
+                |row| row.get::<_, i64>(0),
+            )
+            .map_err(|error| format!("failed to count canary {column} evidence: {error}"))?;
+        if count <= 0 {
+            return Ok(None);
+        }
+        let offset = (((count - 1) as f64) * 0.95).ceil() as i64;
+        conn.query_row(
+            &format!(
+                "SELECT CAST({column} AS INTEGER) FROM inference_requests
+                 WHERE source = 'proxy' AND target_instance_id = ?1 AND completed_at >= ?2
+                   AND {column} IS NOT NULL
+                 ORDER BY {column} ASC LIMIT 1 OFFSET ?3"
+            ),
+            params![target_instance_id, since_ms, offset],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|value| value.map(|value| value.max(0) as u64))
+        .map_err(|error| format!("failed to query canary {column} percentile: {error}"))
+    };
+
+    evidence.ttft_p95_ms = percentile("ttft_ms")?;
+    evidence.queue_wait_p95_ms = percentile("queue_time_ms")?;
+    evidence.cache_reuse_basis_points = (prompt_tokens > 0).then_some(
+        ((cached_prompt_tokens.min(prompt_tokens) as f64 / prompt_tokens as f64) * 10_000.0)
+            .round()
+            .clamp(0.0, 10_000.0) as u32,
+    );
+    Ok(evidence)
 }
 
 pub(crate) async fn canary_request_evidence(
@@ -2830,7 +2899,7 @@ fn inference_requests_for_session(
     let mut stmt = conn
         .prepare(
             "SELECT session_id, task_id, slot_id, completed_at, source, api_format, model, target_instance_id, http_status, error_text,
-                    prompt_tokens, prompt_time_ms, prompt_tps,
+                    queue_time_ms, ttft_ms, cached_prompt_tokens, prompt_tokens, prompt_time_ms, prompt_tps,
                     generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
                     spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms
              FROM inference_requests
@@ -2854,18 +2923,21 @@ fn inference_requests_for_session(
                 target_instance_id: row.get(7)?,
                 http_status: row.get::<_, Option<i64>>(8)?.map(|v| v as u16),
                 error_text: row.get(9)?,
-                prompt_tokens: row.get::<_, Option<i64>>(10)?.map(|v| v as u64),
-                prompt_time_ms: row.get(11)?,
-                prompt_tps: row.get(12)?,
-                generated_tokens: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
-                generation_time_ms: row.get(14)?,
-                generation_tps: row.get(15)?,
-                total_tokens: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
-                total_time_ms: row.get(17)?,
-                spec_accept_rate: row.get(18)?,
-                spec_accepted: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
-                spec_generated: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
-                spec_gen_time_ms: row.get(21)?,
+                queue_time_ms: row.get(10)?,
+                ttft_ms: row.get(11)?,
+                cached_prompt_tokens: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
+                prompt_tokens: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
+                prompt_time_ms: row.get(14)?,
+                prompt_tps: row.get(15)?,
+                generated_tokens: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                generation_time_ms: row.get(17)?,
+                generation_tps: row.get(18)?,
+                total_tokens: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+                total_time_ms: row.get(20)?,
+                spec_accept_rate: row.get(21)?,
+                spec_accepted: row.get::<_, Option<i64>>(22)?.map(|v| v as u64),
+                spec_generated: row.get::<_, Option<i64>>(23)?.map(|v| v as u64),
+                spec_gen_time_ms: row.get(24)?,
             })
         })
         .map_err(|e| format!("无法查询推理请求: {}", e))?;
@@ -3181,16 +3253,30 @@ mod tests {
             )
             .unwrap();
         }
+        conn.execute(
+            "UPDATE inference_requests
+             SET ttft_ms = task_id * 1000, queue_time_ms = task_id * 10,
+                 prompt_tokens = 100, cached_prompt_tokens = CASE WHEN target_instance_id = 'stable' THEN 50 ELSE 20 END
+             WHERE completed_at >= 100",
+            [],
+        )
+        .unwrap();
 
         let stable = request_evidence_for_target(&conn, "stable", 100).unwrap();
         let candidate = request_evidence_for_target(&conn, "candidate", 100).unwrap();
         assert_eq!((stable.total, stable.succeeded, stable.failed), (2, 1, 1));
         assert_eq!(stable.latest_completed_at, Some(120));
+        assert_eq!(stable.ttft_p95_ms, Some(3_000));
+        assert_eq!(stable.queue_wait_p95_ms, Some(30));
+        assert_eq!(stable.cache_reuse_basis_points, Some(5_000));
         assert_eq!(
             (candidate.total, candidate.succeeded, candidate.failed),
             (2, 1, 1)
         );
         assert_eq!(candidate.latest_completed_at, Some(140));
+        assert_eq!(candidate.ttft_p95_ms, Some(5_000));
+        assert_eq!(candidate.queue_wait_p95_ms, Some(50));
+        assert_eq!(candidate.cache_reuse_basis_points, Some(2_000));
     }
 
     #[test]
@@ -4066,6 +4152,11 @@ mod tests {
         assert!(column_names(&conn, "inference_requests")
             .iter()
             .any(|column| column == "api_format"));
+        for column in ["queue_time_ms", "ttft_ms", "cached_prompt_tokens"] {
+            assert!(column_names(&conn, "inference_requests")
+                .iter()
+                .any(|existing| existing == column));
+        }
         for index_name in [
             "idx_vector_activity_session_completed",
             "idx_vector_activity_session_source_completed",
@@ -4158,6 +4249,10 @@ mod tests {
                 target_instance_id: "anthropic-instance".into(),
                 http_status: Some(200),
                 duration_ms: 12.5,
+                queue_time_ms: 2.5,
+                ttft_ms: Some(8.0),
+                prompt_tokens: Some(32),
+                cached_prompt_tokens: Some(16),
                 error_text: None,
                 api_format: "anthropic".into(),
             },
@@ -4169,6 +4264,9 @@ mod tests {
         assert_eq!(requests[0].source, "proxy");
         assert_eq!(requests[0].api_format.as_deref(), Some("anthropic"));
         assert_eq!(requests[0].model.as_deref(), Some("local-claude"));
+        assert_eq!(requests[0].queue_time_ms, Some(2.5));
+        assert_eq!(requests[0].ttft_ms, Some(8.0));
+        assert_eq!(requests[0].cached_prompt_tokens, Some(16));
     }
 
     #[test]
