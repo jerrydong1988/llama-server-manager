@@ -40,6 +40,10 @@ function formatPercent(value: number | null) {
   return value == null ? '—' : `${(value * 100).toFixed(1)}%`
 }
 
+function formatMilliseconds(value: number | null) {
+  return value == null ? '—' : `${Math.round(value).toLocaleString()} ms`
+}
+
 function EvidenceSummary({ value, labels }: { value: CanaryRequestEvidence | null; labels: ReturnType<typeof getCanaryRolloutLabels> }) {
   if (!value) return <p className="text-xs text-slate-500 dark:text-slate-400">{labels.noEvidence}</p>
   return (
@@ -51,6 +55,18 @@ function EvidenceSummary({ value, labels }: { value: CanaryRequestEvidence | nul
       <div className="rounded-lg bg-slate-100 px-3 py-2 dark:bg-slate-950/70">
         <div className="text-slate-500 dark:text-slate-400">{labels.successRate}</div>
         <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{formatPercent(evidenceRate(value))}</div>
+      </div>
+      <div className="rounded-lg bg-slate-100 px-3 py-2 dark:bg-slate-950/70">
+        <div className="text-slate-500 dark:text-slate-400">{labels.ttftP95}</div>
+        <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{formatMilliseconds(value.ttftP95Ms)}</div>
+      </div>
+      <div className="rounded-lg bg-slate-100 px-3 py-2 dark:bg-slate-950/70">
+        <div className="text-slate-500 dark:text-slate-400">{labels.queueP95}</div>
+        <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{formatMilliseconds(value.queueWaitP95Ms)}</div>
+      </div>
+      <div className="col-span-2 rounded-lg bg-slate-100 px-3 py-2 dark:bg-slate-950/70">
+        <div className="text-slate-500 dark:text-slate-400">{labels.cacheReuse}</div>
+        <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">{formatPercent(value.cacheReuseBasisPoints == null ? null : value.cacheReuseBasisPoints / 10_000)}</div>
       </div>
     </div>
   )

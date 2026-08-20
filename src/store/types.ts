@@ -583,6 +583,9 @@ export interface InferenceRequestSummary {
   target_instance_id: string | null
   http_status: number | null
   error_text: string | null
+  queue_time_ms: number | null
+  ttft_ms: number | null
+  cached_prompt_tokens: number | null
   prompt_tokens: number | null
   prompt_time_ms: number | null
   prompt_tps: number | null

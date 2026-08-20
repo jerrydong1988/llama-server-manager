@@ -2,7 +2,7 @@
 
 Llama Server Manager can compare two already-running Deployment Revisions behind one public model alias. The operator chooses the stable revision, candidate revision, and initial candidate traffic share, observes current health and request outcomes, and then explicitly promotes, aborts, or rolls back the rollout.
 
-This is the third workstream of [Phase 2 — Managed Deployment](PRODUCT_ROADMAP.md#phase-2--managed-deployment). It is a local, operator-controlled workflow. It does not start or stop instances, relocate workloads, promote automatically, or provide the general TTFT, queue, cache, saturation, and alerting system planned for the next workstream.
+This is the third workstream of [Phase 2 — Managed Deployment](PRODUCT_ROADMAP.md#phase-2--managed-deployment). It is a local, operator-controlled workflow. It does not start or stop instances, relocate workloads, or promote automatically. The shared TTFT, queue, cache, saturation, and alert definitions are documented in [Operational Metrics and Alerts](OPERATIONAL_METRICS.md).
 
 ## Prerequisites
 
@@ -32,10 +32,10 @@ Use **Observe now** to record a fresh point-in-time observation. The panel shows
 - rollout state and stable/candidate traffic shares;
 - the exact stable and candidate revision IDs;
 - current instance health;
-- successful and failed proxied request counts since the rollout began; and
+- successful and failed proxied request counts, TTFT P95, queue-wait P95, and observed prompt-cache reuse since the rollout began; and
 - revision or route drift plus the bounded audit history.
 
-Request evidence is scoped to the two selected targets, begins at the rollout creation time, and counts completed proxy requests. It is operational evidence, not the general metrics and alerting system.
+Request evidence is scoped to the two selected targets, begins at the rollout creation time, and counts completed proxy requests. Missing TTFT or cache usage remains unknown. These target values reuse the shared operational definitions, but promotion remains an explicit operator decision and never fires from an alert.
 
 ### 3. Adjust traffic
 

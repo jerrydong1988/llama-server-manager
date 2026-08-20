@@ -318,15 +318,15 @@ mod tests {
             "service_pid": 42,
             "background_enabled": false,
             "registered_for_login": false,
-            "proxy": ProxyStatus {
-                running: false,
-                bound_addr: "127.0.0.1:11435".into(),
-                active_routes: 0,
-                healthy_routes: 0,
-                unhealthy_routes: 0,
-                in_flight_requests: 0,
-                total_requests: 0,
-                last_error: None,
+            "proxy": {
+                "running": false,
+                "bound_addr": "127.0.0.1:11435",
+                "active_routes": 0,
+                "healthy_routes": 0,
+                "unhealthy_routes": 0,
+                "in_flight_requests": 0,
+                "total_requests": 0,
+                "last_error": null,
             },
             "running": {},
         });
@@ -338,6 +338,7 @@ mod tests {
         assert!(status.monitoring.is_empty());
         assert!(status.performance.is_empty());
         assert!(status.recovery.is_empty());
+        assert_eq!(status.proxy.operational.request_count, 0);
     }
 
     #[test]

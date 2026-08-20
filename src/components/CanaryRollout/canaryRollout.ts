@@ -5,6 +5,9 @@ export type CanaryRequestEvidence = {
   succeeded: number
   failed: number
   latestCompletedAt: number | null
+  ttftP95Ms: number | null
+  queueWaitP95Ms: number | null
+  cacheReuseBasisPoints: number | null
 }
 
 export type CanaryTargetHealth = {
@@ -72,6 +75,9 @@ function evidence(value: unknown): CanaryRequestEvidence | null {
     succeeded: Math.max(0, number(source.succeeded)),
     failed: Math.max(0, number(source.failed)),
     latestCompletedAt: typeof source.latestCompletedAt === 'number' ? source.latestCompletedAt : null,
+    ttftP95Ms: typeof source.ttftP95Ms === 'number' ? Math.max(0, source.ttftP95Ms) : null,
+    queueWaitP95Ms: typeof source.queueWaitP95Ms === 'number' ? Math.max(0, source.queueWaitP95Ms) : null,
+    cacheReuseBasisPoints: typeof source.cacheReuseBasisPoints === 'number' ? Math.max(0, source.cacheReuseBasisPoints) : null,
   }
 }
 

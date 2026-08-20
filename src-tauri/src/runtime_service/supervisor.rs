@@ -418,6 +418,7 @@ impl RuntimeSupervisor {
                 unhealthy_routes: active_routes,
                 in_flight_requests: 0,
                 total_requests: 0,
+                operational: Default::default(),
                 last_error: None,
             }),
             proxy_runtime: tokio::sync::Mutex::new(None),

@@ -1246,6 +1246,36 @@ impl Default for ProxyConfig {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProxyOperationalAlert {
+    pub id: String,
+    pub severity: String,
+    pub observed: f64,
+    pub threshold: f64,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ProxyOperationalSnapshot {
+    pub window_seconds: u64,
+    pub request_count: u64,
+    pub failed_request_count: u64,
+    pub error_rate_percent: Option<f64>,
+    pub queue_depth: usize,
+    pub queued_requests_total: u64,
+    pub queue_timeouts_total: u64,
+    pub queue_wait_p95_ms: Option<u64>,
+    pub ttft_sample_count: u64,
+    pub ttft_p50_ms: Option<u64>,
+    pub ttft_p95_ms: Option<u64>,
+    pub prompt_tokens_observed: u64,
+    pub cached_prompt_tokens: u64,
+    pub cache_reuse_percent: Option<f64>,
+    pub in_flight_requests: usize,
+    pub max_concurrent_requests: u32,
+    pub saturation_percent: f64,
+    pub alerts: Vec<ProxyOperationalAlert>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProxyStatus {
     pub running: bool,
     pub bound_addr: String,
@@ -1258,6 +1288,8 @@ pub struct ProxyStatus {
     pub in_flight_requests: usize,
     #[serde(default)]
     pub total_requests: u64,
+    #[serde(default)]
+    pub operational: ProxyOperationalSnapshot,
     pub last_error: Option<String>,
 }
 

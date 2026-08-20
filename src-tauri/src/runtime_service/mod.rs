@@ -921,6 +921,7 @@ mod tests {
                 unhealthy_routes: 0,
                 in_flight_requests: 0,
                 total_requests: 0,
+                operational: Default::default(),
                 last_error: None,
             },
             running: Default::default(),
