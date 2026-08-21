@@ -15,3 +15,4 @@ pub mod runtime_service;
 pub mod security;
 pub mod utils;
 pub mod vector_policy;
+pub mod worker_agent;

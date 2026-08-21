@@ -158,6 +158,8 @@ jobs:
           if ($commands.Count -ne 1) { throw "Expected one packaged lsm.exe, found $($commands.Count)" }
           $version = & $commands[0].FullName --output json version | ConvertFrom-Json
           if (-not $version.ok -or $version.data.schemaVersion -ne 1) { throw 'Packaged lsm.exe contract check failed' }
+          $agentHelp = & $commands[0].FullName worker-agent help
+          if ($LASTEXITCODE -ne 0 -or ($agentHelp -join "`n") -notmatch 'secure Worker Agent') { throw 'Packaged lsm.exe Worker Agent check failed' }
       - name: Upload unsigned Windows installers for signing
         id: upload-unsigned-windows
         if: startsWith(github.ref, 'refs/tags/v')
@@ -337,6 +339,7 @@ jobs:
           command_path="$(find src-tauri/target/release/bundle/macos -type f -path '*/Contents/MacOS/lsm' | head -n 1)"
           test -x "$command_path"
           "$command_path" --output json version | grep -F '"schemaVersion": 1'
+          "$command_path" worker-agent help | grep -F 'secure Worker Agent'
       - name: Prepare exact macOS updater payload
         run: |
           destination="$RUNNER_TEMP/updater-macos"
@@ -459,6 +462,7 @@ jobs:
           dpkg-deb -x "${packages[0]}" "$destination"
           test -x "$destination/usr/bin/lsm"
           "$destination/usr/bin/lsm" --output json version | grep -F '"schemaVersion": 1'
+          "$destination/usr/bin/lsm" worker-agent help | grep -F 'secure Worker Agent'
       - name: Upload Linux x86_64 GitHub release input
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -533,6 +537,7 @@ jobs:
           dpkg-deb -x "${packages[0]}" "$destination"
           test -x "$destination/usr/bin/lsm"
           "$destination/usr/bin/lsm" --output json version | grep -F '"schemaVersion": 1'
+          "$destination/usr/bin/lsm" worker-agent help | grep -F 'secure Worker Agent'
       - name: Upload Linux ARM64 GitHub release input
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

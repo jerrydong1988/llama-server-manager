@@ -81,7 +81,18 @@ fn load_workers_from(path: &std::path::Path) -> Vec<WorkerInfo> {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str::<Vec<WorkerInfo>>(&s).ok())
-        .map(|workers| workers.into_iter().filter(is_persistable_worker).collect())
+        .map(|workers| {
+            workers
+                .into_iter()
+                .filter(is_persistable_worker)
+                .map(|mut worker| {
+                    if worker.origin == WorkerOrigin::Agent {
+                        worker.status = WorkerStatus::Unknown;
+                    }
+                    worker
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -336,6 +347,7 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
                                     status: WorkerStatus::Unknown,
                                     last_seen: Some(chrono::Utc::now().to_rfc3339()),
                                     auto_discovered: true,
+                                    agent: None,
                                 });
                             }
                         }
@@ -582,6 +594,7 @@ pub async fn add_worker(
             status: WorkerStatus::Unknown,
             last_seen: None,
             auto_discovered: false,
+            agent: None,
         };
         workers.push(worker.clone());
         worker
@@ -666,6 +679,17 @@ pub async fn remove_worker(id: String, state: State<'_, AppState>) -> Result<(),
             WorkerOrigin::Ssh => {
                 let _ = crate::commands::cluster_ssh::stop_ssh_tunnel(worker.port).await?;
             }
+            WorkerOrigin::Agent => {
+                if let Some(connection) = &worker.agent {
+                    if let Err(error) = crate::worker_agent::stop_remote_rpc(connection).await {
+                        eprintln!(
+                            "Secure Worker Agent cleanup failed for {}: {error}",
+                            worker.id
+                        );
+                    }
+                }
+                let _ = crate::worker_agent::stop_manager_bridge(&worker.id).await;
+            }
             WorkerOrigin::Manual => {}
         }
     }
@@ -734,6 +758,14 @@ pub async fn stop_worker(id: String, state: State<'_, AppState>) -> Result<bool,
     let stopped = match worker.origin {
         WorkerOrigin::Local => stop_local_worker(worker.port).await?,
         WorkerOrigin::Ssh => crate::commands::cluster_ssh::stop_ssh_tunnel(worker.port).await?,
+        WorkerOrigin::Agent => {
+            let connection = worker
+                .agent
+                .as_ref()
+                .ok_or_else(|| "Secure Worker Agent metadata is missing".to_string())?;
+            let status = crate::worker_agent::stop_remote_rpc(connection).await?;
+            !status.rpc_running
+        }
         WorkerOrigin::Manual => {
             return Err("Only manager-owned local or SSH workers can be stopped".to_string())
         }
@@ -1092,6 +1124,7 @@ mod tests {
             status: WorkerStatus::Unknown,
             last_seen: Some("2024-01-01T00:00:00Z".into()),
             auto_discovered: true,
+            agent: None,
         };
         let test_workers = vec![
             WorkerInfo {
@@ -1104,6 +1137,7 @@ mod tests {
                 status: WorkerStatus::Online,
                 last_seen: Some("2024-01-01T00:00:00Z".into()),
                 auto_discovered: false,
+                agent: None,
             },
             WorkerInfo {
                 id: "local-1".into(),
@@ -1115,6 +1149,7 @@ mod tests {
                 status: WorkerStatus::Online,
                 last_seen: None,
                 auto_discovered: false,
+                agent: None,
             },
             WorkerInfo {
                 id: "ssh-1".into(),
@@ -1126,6 +1161,7 @@ mod tests {
                 status: WorkerStatus::Online,
                 last_seen: None,
                 auto_discovered: false,
+                agent: None,
             },
             discovered.clone(),
         ];

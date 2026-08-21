@@ -39,9 +39,18 @@ fn run_test_fixture_server(arguments: &[std::ffi::OsString]) -> Result<(), Strin
 }
 
 fn main() {
+    let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if arguments
+        .first()
+        .is_some_and(|argument| argument == "worker-agent")
+    {
+        std::process::exit(llama_server_manager::worker_agent::run_cli(
+            arguments.into_iter().skip(1),
+        ));
+    }
+
     #[cfg(debug_assertions)]
     {
-        let arguments = std::env::args_os().skip(1).collect::<Vec<_>>();
         if arguments
             .first()
             .is_some_and(|argument| argument == "__test-fixture-server")
@@ -68,7 +77,5 @@ fn main() {
         return;
     }
 
-    std::process::exit(llama_server_manager::headless_cli::run(
-        std::env::args_os().skip(1),
-    ));
+    std::process::exit(llama_server_manager::headless_cli::run(arguments));
 }
