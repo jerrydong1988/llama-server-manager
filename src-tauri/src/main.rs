@@ -58,6 +58,10 @@ use crate::commands::telemetry::{
     get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
     list_telemetry_sessions, prune_telemetry,
 };
+use crate::commands::worker_agent::ipc::{
+    enroll_worker_agent, list_worker_agent_audit, start_worker_agent, stop_worker_agent,
+    test_worker_agent,
+};
 use crate::config_revision::{
     list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
 };
@@ -112,6 +116,7 @@ fn persist_runtime_state(app: &tauri::AppHandle) {
 
 fn finalize_app_exit(app: &tauri::AppHandle, keep_runtime: bool) {
     flush_download_manager_state(app);
+    crate::worker_agent::stop_all_manager_bridges();
     let failures = if keep_runtime {
         Vec::new()
     } else {
@@ -560,6 +565,13 @@ fn main() {
                     crate::residency::draining_instance_ids(&config);
             }
 
+            // Recreate stable loopback bridges for persisted secure Agent workers.
+            // Credentials remain file-backed and are reloaded by each authenticated request.
+            let restore_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                crate::commands::worker_agent::restore_worker_agent_bridges(restore_app).await;
+            });
+
             // Restore log capture, metrics, and the single authoritative health monitor.
             let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
             for (id, ri) in &config.running {
@@ -661,6 +673,7 @@ fn main() {
             start_mdns_discovery, stop_mdns_discovery,
             ssh_launch_rpc,
             stop_ssh_tunnel,
+            enroll_worker_agent, test_worker_agent, start_worker_agent, stop_worker_agent, list_worker_agent_audit,
             enable_autostart, disable_autostart, is_autostart_enabled,
             get_startup_elapsed,
             show_window,

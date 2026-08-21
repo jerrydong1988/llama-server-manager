@@ -98,7 +98,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 | 引擎管理 | 多版本扫描、能力探测、指纹绑定资格认证、默认引擎 | Engines | Multi-version scanning, capability probing, fingerprint-bound qualification, defaults |
 | 实例管理 | 多实例、端口检查、启停、连接测试、命令预览 | Instances | Multi-instance lifecycle, port checks, health, command preview |
 | 参数配置 | 搜索、预设、校验、鉴权、缓存和推测解码 | Configuration | Search, presets, validation, auth, cache, speculative decoding |
-| 集群管理 | Worker 发现、本地与 SSH 启动、RPC 配置 | Cluster | Worker discovery, local or SSH launch, RPC configuration |
+| 集群管理 | Worker 发现、本地与 SSH 启动、安全 Agent、加密 RPC | Cluster | Worker discovery, local or SSH launch, secure Agents, encrypted RPC |
 | 实例路由 | 双协议 API、严格路由、调度、熔断、限流、可观测性 | Routing | Dual-protocol API, strict routing, scheduling, resilience, observability |
 | 性能监控 | 生成与向量吞吐、双来源遥测、历史基线和诊断 | Performance | Generation and vector throughput, dual-source telemetry, baselines, diagnostics |
 | 监控大屏 | 服务健康、吞吐、压力、下载和告警 | Monitoring Wall | Health, throughput, pressure, downloads, alerts |
@@ -193,6 +193,7 @@ xattr -cr /Applications/LlamaServerManager.app
 - [模型与引擎金丝雀发布 / Model and Engine Canary Rollouts](docs/CANARY_ROLLOUTS.md)
 - [运营指标与告警 / Operational Metrics and Alerts](docs/OPERATIONAL_METRICS.md)
 - [自动模型驻留 / Automatic Model Residency](docs/MODEL_RESIDENCY.md)
+- [安全 Worker Agent / Secure Worker Agent](docs/WORKER_AGENT.md)
 - [隐私政策 / Privacy Policy](PRIVACY.md)
 - [代码签名政策 / Code Signing Policy](CODE_SIGNING_POLICY.md)
 - [依赖安全审计 / Dependency Audit](docs/DEPENDENCY_AUDIT.md)

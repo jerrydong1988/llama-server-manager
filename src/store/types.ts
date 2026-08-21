@@ -509,7 +509,19 @@ export interface WorkerDevice {
 }
 
 export type WorkerStatus = 'Online' | 'Offline' | 'Testing' | 'Unknown'
-export type WorkerOrigin = 'manual' | 'local' | 'ssh'
+export type WorkerOrigin = 'manual' | 'local' | 'ssh' | 'agent'
+
+export interface WorkerAgentConnection {
+  agent_id: string
+  control_host: string
+  control_port: number
+  tunnel_host: string
+  tunnel_port: number
+  tls_server_name: string
+  tls_cert_path: string
+  token_path: string
+  certificate_sha256: string
+}
 
 export interface WorkerInfo {
   id: string
@@ -521,6 +533,7 @@ export interface WorkerInfo {
   status: WorkerStatus
   last_seen?: string
   auto_discovered: boolean
+  agent?: WorkerAgentConnection
 }
 
 export interface Usb4Adapter {

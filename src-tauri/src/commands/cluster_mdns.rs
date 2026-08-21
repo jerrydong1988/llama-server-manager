@@ -121,6 +121,7 @@ async fn run_mdns_discovery(
                                 status: WorkerStatus::Unknown,
                                 last_seen: Some(chrono::Utc::now().to_rfc3339()),
                                 auto_discovered: true,
+                                agent: None,
                             });
                         })?;
                     }
@@ -169,6 +170,7 @@ mod tests {
             status: WorkerStatus::Online,
             last_seen: None,
             auto_discovered: true,
+            agent: None,
         };
         let mut manual = discovered.clone();
         manual.id = "manual".into();

@@ -1598,6 +1598,56 @@ mockIPC((command, payload) => {
       }
       return null
     }
+    case 'enroll_worker_agent': {
+      const enrollment = (args.enrollment ?? {}) as Record<string, unknown>
+      const id = 'agent-browser-secure-worker'
+      const existing = clusterWorkers.find(worker => worker.id === id)
+      const worker: WorkerInfo = {
+        id,
+        host: '127.0.0.1',
+        port: Number(enrollment.localPort ?? 50152) || 50152,
+        name: String(enrollment.name ?? '') || 'Secure Browser Agent',
+        origin: 'agent',
+        devices: [],
+        status: 'Offline',
+        auto_discovered: false,
+        agent: {
+          agent_id: 'browser-secure-worker',
+          control_host: String(enrollment.controlHost ?? 'worker.example.net'),
+          control_port: Number(enrollment.controlPort ?? 7443),
+          tunnel_host: String(enrollment.tunnelHost ?? 'worker.example.net'),
+          tunnel_port: Number(enrollment.tunnelPort ?? 7444),
+          tls_server_name: String(enrollment.tlsServerName ?? 'worker.example.net'),
+          tls_cert_path: String(enrollment.tlsCertPath ?? 'C:\\secure\\worker-agent.crt'),
+          token_path: String(enrollment.tokenPath ?? 'C:\\secure\\worker-agent.token'),
+          certificate_sha256: 'a'.repeat(64),
+        },
+      }
+      if (existing) Object.assign(existing, worker)
+      else clusterWorkers.push(worker)
+      return clone(worker)
+    }
+    case 'test_worker_agent':
+      return { rpc_running: clusterWorkers.find(worker => worker.id === args.id)?.status === 'Online' }
+    case 'start_worker_agent': {
+      const worker = clusterWorkers.find(worker => worker.id === args.id)
+      if (worker) worker.status = 'Online'
+      return { rpc_running: true }
+    }
+    case 'stop_worker_agent': {
+      const worker = clusterWorkers.find(worker => worker.id === args.id)
+      if (worker) worker.status = 'Offline'
+      return { rpc_running: false }
+    }
+    case 'list_worker_agent_audit':
+      return [{
+        sequence: 1,
+        timestamp: new Date().toISOString(),
+        event: 'status',
+        outcome: 'allowed',
+        detail: 'request completed',
+        hash: 'b'.repeat(64),
+      }]
     case 'get_workers':
       return IS_DOCS_SCENARIO
         ? [

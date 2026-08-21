@@ -19,3 +19,4 @@ pub mod scanner;
 pub mod server;
 pub mod telemetry;
 pub mod vector_metrics;
+pub mod worker_agent;

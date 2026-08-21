@@ -1086,6 +1086,7 @@ pub enum WorkerOrigin {
     Manual,
     Local,
     Ssh,
+    Agent,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1104,6 +1105,10 @@ pub struct WorkerInfo {
     pub last_seen: Option<String>,
     #[serde(default)]
     pub auto_discovered: bool,
+    /// Secure Worker Agent metadata. Credential contents remain file-backed and
+    /// are deliberately excluded; only the operator-selected token path is kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::worker_agent::WorkerAgentConnection>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

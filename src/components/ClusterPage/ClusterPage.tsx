@@ -12,6 +12,15 @@ import ResidencySchedulerPanel from './ResidencySchedulerPanel'
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
 type RpcLaunchResult = { ok: boolean; host?: string; port?: number; error?: string }
 type WorkerTestResult = { ok: boolean }
+type WorkerAgentStatus = { rpc_running: boolean }
+type WorkerAgentAuditEntry = {
+  sequence: number
+  timestamp: string
+  event: string
+  outcome: string
+  detail: string
+  hash: string
+}
 
 export default function ClusterPage() {
   const { t, lang } = useI18n()
@@ -28,7 +37,21 @@ export default function ClusterPage() {
 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [showAddDialog, setShowAddDialog] = useState(false)
+  const [showAgentDialog, setShowAgentDialog] = useState(false)
   const [formData, setFormData] = useState({ host: '', port: 50052, name: '' })
+  const [agentForm, setAgentForm] = useState({
+    name: '',
+    controlHost: '',
+    controlPort: 7443,
+    tunnelHost: '',
+    tunnelPort: 7444,
+    tlsServerName: '',
+    tlsCertPath: '',
+    tokenPath: '',
+    localPort: 0,
+  })
+  const [agentAudit, setAgentAudit] = useState<Record<string, WorkerAgentAuditEntry[]>>({})
+  const [agentAuditLoading, setAgentAuditLoading] = useState<string | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [mdnsActive, setMdnsActive] = useState(false)
   const [showLaunchWizard, setShowLaunchWizard] = useState(false)
@@ -57,7 +80,7 @@ export default function ClusterPage() {
   }, [])
 
   useEffect(() => {
-    if (!showAddDialog && !showLaunchWizard && !showLocalLaunch) return
+    if (!showAddDialog && !showAgentDialog && !showLaunchWizard && !showLocalLaunch) return
 
     const dialog = dialogRef.current
     if (!dialog) return
@@ -77,6 +100,8 @@ export default function ClusterPage() {
       } else if (showLaunchWizard) {
         setShowLaunchWizard(false)
         setLaunchStep(0)
+      } else if (showAgentDialog) {
+        setShowAgentDialog(false)
       } else {
         setShowAddDialog(false)
       }
@@ -121,7 +146,7 @@ export default function ClusterPage() {
       dialog.removeEventListener('keydown', handleKeyDown)
       if (previousFocus?.isConnected) previousFocus.focus()
     }
-  }, [showAddDialog, showLaunchWizard, showLocalLaunch])
+  }, [showAddDialog, showAgentDialog, showLaunchWizard, showLocalLaunch])
 
   useEffect(() => {
     void invoke<WorkerInfo[]>('get_workers')
@@ -181,10 +206,22 @@ export default function ClusterPage() {
 
   const handleStopWorker = async (worker: WorkerInfo) => {
     try {
-      await invoke('stop_worker', { id: worker.id })
+      await invoke(worker.origin === 'agent' ? 'stop_worker_agent' : 'stop_worker', { id: worker.id })
       updateWorker(worker.id, { status: 'Offline' })
     } catch (error) {
       console.error('Failed to stop worker:', error)
+    }
+  }
+
+  const handleStartAgent = async (worker: WorkerInfo) => {
+    updateWorker(worker.id, { status: 'Testing' })
+    try {
+      await invoke<WorkerAgentStatus>('start_worker_agent', { id: worker.id })
+      const all: WorkerInfo[] = await invoke('get_workers')
+      setWorkers(all)
+    } catch (error) {
+      updateWorker(worker.id, { status: 'Offline' })
+      addRuntimeWarning(`secure Agent start failed: ${errorMessage(error)}`)
     }
   }
 
@@ -268,6 +305,18 @@ export default function ClusterPage() {
   }
 
   const handleTest = async (worker: WorkerInfo) => {
+    if (worker.origin === 'agent') {
+      updateWorker(worker.id, { status: 'Testing' })
+      try {
+        await invoke<WorkerAgentStatus>('test_worker_agent', { id: worker.id })
+        const all: WorkerInfo[] = await invoke('get_workers')
+        setWorkers(all)
+      } catch (error) {
+        updateWorker(worker.id, { status: 'Offline' })
+        addRuntimeWarning(`secure Agent test failed: ${errorMessage(error)}`)
+      }
+      return
+    }
     const { host, port } = worker
     updateWorker(worker.id, { status: 'Testing' })
     try {
@@ -275,6 +324,38 @@ export default function ClusterPage() {
       updateWorker(worker.id, { status: result.ok ? 'Online' : 'Offline' })
     } catch {
       updateWorker(worker.id, { status: 'Offline' })
+    }
+  }
+
+  const handleAgentEnroll = async () => {
+    if (!agentForm.controlHost.trim() || !agentForm.tunnelHost.trim() || !agentForm.tlsServerName.trim()
+      || !agentForm.tlsCertPath.trim() || !agentForm.tokenPath.trim()) {
+      setLaunchError(t.clusterPage.agentSecurityNote)
+      return
+    }
+    setLaunching(true)
+    setLaunchError('')
+    try {
+      await invoke<WorkerInfo>('enroll_worker_agent', { enrollment: agentForm })
+      const all: WorkerInfo[] = await invoke('get_workers')
+      setWorkers(all)
+      setShowAgentDialog(false)
+    } catch (error) {
+      setLaunchError(errorMessage(error))
+    } finally {
+      setLaunching(false)
+    }
+  }
+
+  const handleLoadAgentAudit = async (worker: WorkerInfo) => {
+    setAgentAuditLoading(worker.id)
+    try {
+      const entries = await invoke<WorkerAgentAuditEntry[]>('list_worker_agent_audit', { id: worker.id, limit: 20 })
+      setAgentAudit(current => ({ ...current, [worker.id]: entries }))
+    } catch (error) {
+      addRuntimeWarning(`secure Agent audit failed: ${errorMessage(error)}`)
+    } finally {
+      setAgentAuditLoading(null)
     }
   }
 
@@ -393,7 +474,7 @@ export default function ClusterPage() {
         </div>
 
         <div className="grid w-full gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] 2xl:w-auto 2xl:min-w-[680px]">
-          <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
+          <div className="grid min-w-0 grid-cols-3 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
             {clusterScanning ? (
               <Button
                 onClick={handleCancelScan}
@@ -421,6 +502,15 @@ export default function ClusterPage() {
               icon={<Plus className="h-4 w-4" />}
             >
               {t.clusterPage.addWorker}
+            </Button>
+
+            <Button
+              onClick={() => { setShowAgentDialog(true); setLaunchError('') }}
+              variant="violet"
+              className="min-w-0 whitespace-nowrap"
+              icon={<Zap className="h-4 w-4" />}
+            >
+              {t.clusterPage.secureAgent}
             </Button>
           </div>
 
@@ -505,6 +595,11 @@ export default function ClusterPage() {
                           {worker.auto_discovered && (
                             <Badge tone="slate" className="px-2 py-0.5 text-[11px]">{labels.auto}</Badge>
                           )}
+                          {worker.origin === 'agent' && (
+                            <Badge tone="violet" className="px-2 py-0.5 text-[11px]">
+                              {t.clusterPage.agentBadge}
+                            </Badge>
+                          )}
                           {isLocalWorker(worker.host) && (
                             <Badge tone="emerald" className="px-2 py-0.5 text-[11px]">
                               {t.clusterPage.localWorker}
@@ -545,14 +640,25 @@ export default function ClusterPage() {
                           {expanded.has(worker.id) ? labels.hideDetails : labels.showDetails}
                         </Button>
                         <div className="flex w-[88px] shrink-0 items-center justify-end gap-2">
-                          {worker.origin === 'local' || worker.origin === 'ssh' ? (
+                          {worker.origin === 'agent' && worker.status !== 'Online' ? (
+                            <Button
+                              onClick={() => void handleStartAgent(worker)}
+                              variant="success"
+                              size="icon"
+                              className="h-8 w-8"
+                              title={t.clusterPage.startAgent}
+                              aria-label={t.clusterPage.startAgent}
+                            >
+                              <Play className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : worker.origin === 'local' || worker.origin === 'ssh' || worker.origin === 'agent' ? (
                             <Button
                               onClick={() => void handleStopWorker(worker)}
                               variant="danger"
                               size="icon"
                               className="h-8 w-8"
-                              title={t.clusterPage.stopLocalWorker}
-                              aria-label={t.clusterPage.stopLocalWorker}
+                              title={worker.origin === 'agent' ? t.clusterPage.stopAgent : t.clusterPage.stopLocalWorker}
+                              aria-label={worker.origin === 'agent' ? t.clusterPage.stopAgent : t.clusterPage.stopLocalWorker}
                             >
                               <StopCircle className="h-3.5 w-3.5" />
                             </Button>
@@ -575,7 +681,44 @@ export default function ClusterPage() {
                   </div>
 
                   {expanded.has(worker.id) && (
-                    <div className="bg-slate-950/70 px-5 py-4">
+                    <div className="space-y-4 bg-slate-950/70 px-5 py-4">
+                      {worker.origin === 'agent' && worker.agent && (
+                        <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-4">
+                          <div className="grid gap-2 text-xs text-violet-100 md:grid-cols-2">
+                            <span className="truncate">Agent: {worker.agent.agent_id}</span>
+                            <span className="truncate">TLS: {worker.agent.tls_server_name}</span>
+                            <span className="truncate md:col-span-2">
+                              {t.clusterPage.certificateFingerprint}: {worker.agent.certificate_sha256}
+                            </span>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between gap-3">
+                            <span className="text-xs font-medium text-violet-200">{t.clusterPage.auditLog}</span>
+                            <Button
+                              onClick={() => void handleLoadAgentAudit(worker)}
+                              variant="violet"
+                              size="sm"
+                              disabled={agentAuditLoading === worker.id}
+                            >
+                              {t.clusterPage.loadAudit}
+                            </Button>
+                          </div>
+                          {agentAudit[worker.id] && (
+                            <div className="mt-3 max-h-48 space-y-2 overflow-y-auto">
+                              {agentAudit[worker.id].length === 0 ? (
+                                <p className="text-xs text-violet-300/70">{t.clusterPage.noAudit}</p>
+                              ) : agentAudit[worker.id].map(entry => (
+                                <div key={entry.sequence} className="rounded border border-violet-500/10 bg-slate-950/40 px-3 py-2 text-xs">
+                                  <div className="flex flex-wrap justify-between gap-2 text-violet-200">
+                                    <span>#{entry.sequence} {entry.event} · {entry.outcome}</span>
+                                    <span>{new Date(entry.timestamp).toLocaleString()}</span>
+                                  </div>
+                                  <p className="mt-1 text-slate-400">{entry.detail}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {worker.devices.length === 0 ? (
                         <span className="text-sm text-slate-500">{t.clusterPage.noDevices}</span>
                       ) : (
@@ -679,6 +822,72 @@ export default function ClusterPage() {
             <div className="flex justify-end gap-2 border-t border-slate-800 px-6 py-4">
               <Button onClick={() => setShowAddDialog(false)} variant="subtle">{t.common.cancel}</Button>
               <Button onClick={() => void handleAdd()} variant="primary">{t.common.save}</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showAgentDialog && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onMouseDown={event => { if (event.target === event.currentTarget) setShowAgentDialog(false) }}
+        >
+          <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="agent-worker-dialog-title" tabIndex={-1} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-violet-500/30 bg-slate-900 shadow-[0_30px_80px_rgba(2,6,23,0.7)]">
+            <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
+              <h3 id="agent-worker-dialog-title" className="font-semibold text-slate-50">{t.clusterPage.agentDialogTitle}</h3>
+              <Button onClick={() => setShowAgentDialog(false)} variant="subtle" size="icon" aria-label={t.common.cancel}><X className="h-4 w-4" /></Button>
+            </div>
+            <div className="space-y-4 p-6">
+              <div className="rounded-lg border border-violet-500/20 bg-violet-500/10 p-3 text-xs leading-5 text-violet-200">
+                {t.clusterPage.agentSecurityNote}
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.agentName}</label>
+                  <TextInput value={agentForm.name} onChange={event => setAgentForm({ ...agentForm, name: event.target.value })} placeholder="GPU Worker" className="h-10" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.controlHost}</label>
+                  <TextInput value={agentForm.controlHost} onChange={event => setAgentForm({ ...agentForm, controlHost: event.target.value })} placeholder="worker.example.net" className="h-10" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.controlPort}</label>
+                  <TextInput type="number" value={agentForm.controlPort} onChange={event => setAgentForm({ ...agentForm, controlPort: parseInt(event.target.value, 10) || 7443 })} className="h-10" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.tunnelHost}</label>
+                  <TextInput value={agentForm.tunnelHost} onChange={event => setAgentForm({ ...agentForm, tunnelHost: event.target.value })} placeholder="worker.example.net" className="h-10" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.tunnelPort}</label>
+                  <TextInput type="number" value={agentForm.tunnelPort} onChange={event => setAgentForm({ ...agentForm, tunnelPort: parseInt(event.target.value, 10) || 7444 })} className="h-10" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.tlsServerName}</label>
+                  <TextInput value={agentForm.tlsServerName} onChange={event => setAgentForm({ ...agentForm, tlsServerName: event.target.value })} placeholder="worker.example.net" className="h-10" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.tlsCertPath}</label>
+                  <TextInput value={formatPathForDisplay(agentForm.tlsCertPath)} onChange={event => setAgentForm({ ...agentForm, tlsCertPath: event.target.value })} placeholder="C:\\secure\\worker-agent.crt" className="h-10" />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.tokenPath}</label>
+                  <TextInput type="password" value={formatPathForDisplay(agentForm.tokenPath)} onChange={event => setAgentForm({ ...agentForm, tokenPath: event.target.value })} placeholder="C:\\secure\\worker-agent.token" className="h-10" />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-slate-400">{t.clusterPage.localBridgePort}</label>
+                  <TextInput type="number" value={agentForm.localPort} onChange={event => setAgentForm({ ...agentForm, localPort: Math.max(0, parseInt(event.target.value, 10) || 0) })} className="h-10" />
+                </div>
+              </div>
+              {launchError && (
+                <div className="whitespace-pre-wrap rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-200">{launchError}</div>
+              )}
+            </div>
+            <div className="flex justify-end gap-2 border-t border-slate-800 px-6 py-4">
+              <Button onClick={() => setShowAgentDialog(false)} variant="subtle">{t.common.cancel}</Button>
+              <Button onClick={() => void handleAgentEnroll()} disabled={launching} variant="violet">
+                {launching ? t.clusterPage.launching : t.clusterPage.enrollAgent}
+              </Button>
             </div>
           </div>
         </div>

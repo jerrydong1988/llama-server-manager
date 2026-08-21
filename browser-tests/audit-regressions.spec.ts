@@ -155,6 +155,45 @@ test('a newly added cluster worker is immediately connection-tested', async ({ p
   await expect(page.getByText('在线', { exact: true }).first()).toBeVisible()
 })
 
+test('secure Worker Agent enrollment uses pinned file metadata and explicit lifecycle IPC', async ({ page }) => {
+  await openTab(page, 'cluster', 'cluster-add-worker')
+
+  await page.getByRole('button', { name: '安全 Agent', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '注册安全 Worker Agent' })
+  const inputs = dialog.locator('input')
+  await inputs.nth(0).fill('Secure GPU Worker')
+  await inputs.nth(1).fill('worker.example.net')
+  await inputs.nth(2).fill('7443')
+  await inputs.nth(3).fill('worker.example.net')
+  await inputs.nth(4).fill('7444')
+  await inputs.nth(5).fill('worker.example.net')
+  await inputs.nth(6).fill('C:\\secure\\worker-agent.crt')
+  await inputs.nth(7).fill('C:\\secure\\worker-agent.token')
+  await inputs.nth(8).fill('50152')
+  await dialog.getByRole('button', { name: '注册 Agent', exact: true }).click()
+
+  await expect(page.getByText('Secure GPU Worker', { exact: true }).first()).toBeVisible()
+  await page.getByRole('button', { name: '启动 Agent RPC', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'start_worker_agent').length
+  ))).toBe(1)
+  await page.getByRole('button', { name: '停止 Agent RPC', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'stop_worker_agent').length
+  ))).toBe(1)
+
+  const enrollment = await page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.find(call => call.command === 'enroll_worker_agent')?.payload
+  )) as { enrollment?: Record<string, unknown> } | undefined
+  expect(enrollment?.enrollment).toMatchObject({
+    controlHost: 'worker.example.net',
+    tlsServerName: 'worker.example.net',
+    tlsCertPath: 'C:\\secure\\worker-agent.crt',
+    tokenPath: 'C:\\secure\\worker-agent.token',
+  })
+  expect(enrollment?.enrollment).not.toHaveProperty('token')
+})
+
 test('download browsing ignores stale responses and composing Enter', async ({ page }) => {
   await openTab(page, 'downloads', 'download-browse-race')
 
