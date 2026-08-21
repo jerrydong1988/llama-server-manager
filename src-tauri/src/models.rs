@@ -1414,6 +1414,59 @@ pub struct GlobalConfig {
     pub residency_audit: Vec<crate::residency::ResidencyAuditEvent>,
 }
 
+impl AppState {
+    pub fn from_global_config(
+        config_dir: PathBuf,
+        config: &GlobalConfig,
+        models: Vec<ModelInfo>,
+        engines: Vec<EngineInfo>,
+        workers: Vec<WorkerInfo>,
+    ) -> Self {
+        Self {
+            models: Mutex::new(models),
+            engines: Mutex::new(engines),
+            model_scan_generation: AtomicU64::new(0),
+            engine_scan_generation: AtomicU64::new(0),
+            engine_names: Mutex::new(config.engine_names.clone()),
+            instances: Mutex::new(config.instances.clone()),
+            running: Mutex::new(config.running.clone()),
+            starting: Mutex::new(std::collections::HashSet::new()),
+            config_dir: Mutex::new(config_dir),
+            cancel_flags: Mutex::new(HashMap::new()),
+            pause_flags: Mutex::new(HashMap::new()),
+            active_downloads: Mutex::new(std::collections::HashSet::new()),
+            active_download_paths: Mutex::new(std::collections::HashSet::new()),
+            download_queue: Mutex::new(Vec::new()),
+            download_active_batches: Mutex::new(std::collections::HashSet::new()),
+            download_active_entries: Mutex::new(HashMap::new()),
+            download_last_inflight_persist: Mutex::new(Instant::now()),
+            download_scheduler_lock: Mutex::new(()),
+            download_inflight_lock: Mutex::new(()),
+            download_shutting_down: AtomicBool::new(false),
+            download_active_file_slots: AtomicUsize::new(0),
+            download_slot_notify: Arc::new(tokio::sync::Notify::new()),
+            download_max_concurrent: Mutex::new(config.download_max_concurrent.max(1)),
+            download_bandwidth_limit_bytes_per_sec: Mutex::new(
+                config.download_bandwidth_limit_bytes_per_sec,
+            ),
+            download_low_priority_throttle: Mutex::new(config.download_low_priority_throttle),
+            download_bandwidth_limiter: Mutex::new(DownloadBandwidthLimiter::default()),
+            workers: Mutex::new(workers),
+            usb4_adapters: Mutex::new(Vec::new()),
+            proxy_config: Mutex::new(config.proxy_config.clone()),
+            proxy_shutdown: Mutex::new(None),
+            proxy_task: Mutex::new(None),
+            proxy_router_runtime: Mutex::new(None),
+            residency_draining: Mutex::new(crate::residency::draining_instance_ids(config)),
+            proxy_bound_addr: Mutex::new(None),
+            proxy_last_error: Mutex::new(None),
+            proxy_lifecycle_lock: tokio::sync::Mutex::new(()),
+            runtime_managed_instances: Mutex::new(std::collections::HashSet::new()),
+            restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
+        }
+    }
+}
+
 /// Frontend-safe view of the active configuration. Historical snapshots are
 /// deliberately absent so neither startup injection nor IPC can expose them.
 #[derive(Debug, serde::Serialize)]

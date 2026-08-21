@@ -76,10 +76,8 @@ fn inspect_locked(global: &GlobalConfig, state: &AppState) -> AppResult<Residenc
 #[tauri::command]
 pub async fn inspect_model_residency(state: State<'_, AppState>) -> AppResult<ResidencyInspection> {
     let (inspection, drains) = {
-        let _guard = crate::commands::config::CONFIG_WRITE_LOCK
-            .lock()
-            .map_err(|_| "config persistence lock is poisoned".to_string())?;
         let config_dir = state.config_dir.lock().unwrap().clone();
+        let _guard = crate::commands::config::lock_global_config_for_update(&config_dir)?;
         let mut global =
             crate::commands::config::load_global_config_for_update_unlocked(&config_dir)?;
         let changed = ensure_catalogs(&mut global)?;
@@ -100,10 +98,8 @@ pub async fn save_model_residency_policy(
     state: State<'_, AppState>,
 ) -> AppResult<ResidencyInspection> {
     let (inspection, drains) = {
-        let _guard = crate::commands::config::CONFIG_WRITE_LOCK
-            .lock()
-            .map_err(|_| "config persistence lock is poisoned".to_string())?;
         let config_dir = state.config_dir.lock().unwrap().clone();
+        let _guard = crate::commands::config::lock_global_config_for_update(&config_dir)?;
         let mut global =
             crate::commands::config::load_global_config_for_update_unlocked(&config_dir)?;
         ensure_catalogs(&mut global)?;
@@ -125,10 +121,8 @@ pub async fn begin_model_residency_drain(
     state: State<'_, AppState>,
 ) -> AppResult<ResidencyDrainStatus> {
     let drains = {
-        let _guard = crate::commands::config::CONFIG_WRITE_LOCK
-            .lock()
-            .map_err(|_| "config persistence lock is poisoned".to_string())?;
         let config_dir = state.config_dir.lock().unwrap().clone();
+        let _guard = crate::commands::config::lock_global_config_for_update(&config_dir)?;
         let mut global =
             crate::commands::config::load_global_config_for_update_unlocked(&config_dir)?;
         ensure_catalogs(&mut global)?;
@@ -182,10 +176,8 @@ pub async fn complete_model_residency_operation(
     state: State<'_, AppState>,
 ) -> AppResult<ResidencyInspection> {
     let (inspection, drains) = {
-        let _guard = crate::commands::config::CONFIG_WRITE_LOCK
-            .lock()
-            .map_err(|_| "config persistence lock is poisoned".to_string())?;
         let config_dir = state.config_dir.lock().unwrap().clone();
+        let _guard = crate::commands::config::lock_global_config_for_update(&config_dir)?;
         let mut global =
             crate::commands::config::load_global_config_for_update_unlocked(&config_dir)?;
         ensure_catalogs(&mut global)?;

@@ -70,7 +70,7 @@ fn workers_path() -> PathBuf {
     new_path
 }
 
-pub(crate) fn load_workers() -> Vec<WorkerInfo> {
+pub fn load_workers() -> Vec<WorkerInfo> {
     load_workers_from(&workers_path())
 }
 

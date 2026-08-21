@@ -1,6 +1,7 @@
 use crate::canary::{CanaryRolloutInspection, CanaryTargetHealth};
 use crate::commands::config::{
-    load_global_config_for_update_unlocked, persist_global_config_unlocked, CONFIG_WRITE_LOCK,
+    load_global_config_for_update_unlocked, lock_global_config_for_update,
+    persist_global_config_unlocked,
 };
 use crate::models::{AppState, GlobalConfig, RunningInstance};
 use std::collections::HashMap;
@@ -81,8 +82,8 @@ async fn runtime_context(state: &AppState) -> Result<RuntimeContext, String> {
 }
 
 fn load_catalog(state: &AppState) -> Result<GlobalConfig, String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir)?;
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     let revision_changed = crate::config_revision::ensure_current_config_revisions(&mut global)?;
     let deployment_changed = crate::deployment::ensure_deployments(&mut global)?;
@@ -127,8 +128,8 @@ fn restore_persisted_catalog(
     previous_schema: u32,
     previous_rollouts: Vec<crate::canary::CanaryRolloutRecord>,
 ) -> Result<(), String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir)?;
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     global.proxy_config = previous_proxy;
     global.canary_schema_version = previous_schema;
@@ -145,7 +146,7 @@ where
     let now_ms = crate::commands::telemetry::current_time_ms();
     let config_dir = state.config_dir.lock().unwrap().clone();
     let (rollout_id, previous_proxy, previous_schema, previous_rollouts, next_proxy) = {
-        let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        let _guard = lock_global_config_for_update(&config_dir)?;
         let mut global = load_global_config_for_update_unlocked(&config_dir)?;
         crate::config_revision::ensure_current_config_revisions(&mut global)?;
         crate::deployment::ensure_deployments(&mut global)?;
@@ -368,8 +369,8 @@ pub async fn observe_canary_rollout(
         .await?;
 
     let global = {
-        let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
         let config_dir = state.config_dir.lock().unwrap().clone();
+        let _guard = lock_global_config_for_update(&config_dir)?;
         let mut global = load_global_config_for_update_unlocked(&config_dir)?;
         crate::config_revision::ensure_current_config_revisions(&mut global)?;
         crate::deployment::ensure_deployments(&mut global)?;

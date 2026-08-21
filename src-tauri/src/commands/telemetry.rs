@@ -320,7 +320,7 @@ fn open_raw_connection() -> Result<Connection, String> {
     Ok(conn)
 }
 
-pub(crate) fn initialize_telemetry_storage() -> Result<(), String> {
+pub fn initialize_telemetry_storage() -> Result<(), String> {
     if TELEMETRY_SCHEMA_READY.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -769,7 +769,7 @@ fn enqueue_telemetry(write: TelemetryWrite) -> Result<(), String> {
     }
 }
 
-pub(crate) fn flush_telemetry_writer() -> Result<(), String> {
+pub fn flush_telemetry_writer() -> Result<(), String> {
     let (sender, receiver) = mpsc::channel();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut flush = TelemetryWrite::Flush(sender);
@@ -1501,7 +1501,7 @@ fn prune_connection(conn: &mut Connection, before: i64) -> Result<u32, String> {
     Ok(affected)
 }
 
-pub(crate) fn prune_telemetry_storage(retention_days: u32) -> Result<u32, String> {
+pub fn prune_telemetry_storage(retention_days: u32) -> Result<u32, String> {
     let days = retention_days.clamp(1, 365);
     let before = now_ms() - days as i64 * 24 * 60 * 60 * 1000;
     let (sender, receiver) = mpsc::channel();

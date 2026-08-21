@@ -26,7 +26,8 @@ Visit the [documentation site](https://docs.cnzone.net/docs) for the latest onli
 10. [性能监控 / Performance Monitoring](#性能监控-performance-monitoring)
 11. [监控大屏 / Monitoring Wall](#监控大屏-monitoring-wall)
 12. [服务器日志 / Server Logs](#服务器日志-server-logs)
-13. [常见问题 / FAQ](#常见问题-faq)
+13. [Headless CLI / Command-line Automation](#headless-cli-command-line-automation)
+14. [常见问题 / FAQ](#常见问题-faq)
 
 ---
 
@@ -557,6 +558,37 @@ Server Logs collects instance stdout and stderr, startup commands, PIDs, health 
 常见信号：`address already in use` 表示端口冲突；模型文件打开失败表示路径或权限问题；GPU 分配失败通常需要降低 GPU 层数、上下文或批大小；健康接口暂时返回错误但模型接口可用时，连接测试会使用兼容回退判断。
 
 Common signals include port conflicts, model path or permission errors, GPU allocation failures, and transient health endpoint errors. Connection tests can use compatible model endpoint fallback when appropriate.
+
+---
+
+## Headless CLI / Command-line Automation
+
+安装包同时提供 `lsm` 命令行工具，用于在不打开桌面窗口时查询运行时、列出或启停已配置实例，以及查询或启停统一路由。Windows 的 `lsm.exe` 位于应用安装目录且安装器不会自动修改 `PATH`；macOS 可使用 `/Applications/LlamaServerManager.app/Contents/MacOS/lsm`，Linux DEB 安装到 `/usr/bin/lsm`。
+
+The package includes an `lsm` command-line tool for runtime status, configured instance lifecycle, and routing lifecycle without opening the desktop window. On Windows, `lsm.exe` is in the application directory and the installer does not change `PATH`; use `/Applications/LlamaServerManager.app/Contents/MacOS/lsm` on macOS and `/usr/bin/lsm` after a Linux DEB installation.
+
+常用命令 / Common commands:
+
+```text
+lsm --output json status
+lsm --output json instance list
+lsm --output json instance start <INSTANCE>
+lsm --output json instance stop <INSTANCE>
+lsm --output json proxy start
+lsm --output json proxy stop
+```
+
+CLI 复用桌面端已保存的模型、引擎资格证据、配置修订和部署前置检查；它不会绕过过期配置、资源约束或鉴权安全门。请先在界面中完成资源扫描、引擎认证、实例配置与保存，再自动化生命周期。启动后的工作负载会在 CLI 退出后保持运行；最后一个工作负载停止时释放 CLI 驻留，而登录恢复仍由界面的“独立后台运行时”设置控制。
+
+The CLI reuses saved models, engine qualification evidence, configuration revisions, and deployment preflight. It does not bypass stale configuration, resource feasibility, or authentication gates. Configure and save resources in the UI before automating lifecycle. Started workloads remain alive after the CLI exits; CLI residency is released after the final workload stops, while login recovery remains controlled by the independent-runtime setting.
+
+`--output json` 对成功和失败都输出单个 schema v1 JSON 文档。脚本应同时检查 `ok` 和进程退出码：`0` 成功、`2` 参数错误、`3` 未找到、`4` 前置条件或冲突、`5` 暂时不可用、`6` 安全拒绝，其他内部故障为 `1`。实例输出不包含模型路径、启动参数、API Key、凭据文件或运行时控制 token；CLI 也不接受 token 参数。
+
+With `--output json`, both success and failure produce one schema-v1 JSON document. Automation should inspect both `ok` and the process exit code: `0` success, `2` usage, `3` not found, `4` precondition or conflict, `5` unavailable, `6` security rejection, and `1` for other internal failures. Instance output excludes model paths, launch arguments, API keys, credential files, and the runtime control token; the CLI has no token argument.
+
+完整命令、JSON 契约、退出码与 PowerShell / shell 示例见 [`docs/HEADLESS_CLI.md`](docs/HEADLESS_CLI.md)。
+
+See [`docs/HEADLESS_CLI.md`](docs/HEADLESS_CLI.md) for the full command, JSON, exit-code, PowerShell, and shell contracts.
 
 ---
 

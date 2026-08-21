@@ -4,14 +4,72 @@ use crate::models::{
     GlobalConfig, InstanceConfig, ProxyConfig, WindowState,
 };
 use crate::vector_policy::normalize_for_launch;
+use fs2::FileExt;
 use std::collections::{HashMap, HashSet};
+use std::fs::{File, OpenOptions};
 use std::path::Path;
-use std::sync::{LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::time::Duration;
 use tauri::Emitter;
 
 // Unified config write helpers.
 
-pub(crate) static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+pub(crate) struct GlobalConfigWriteGuard {
+    _process_guard: MutexGuard<'static, ()>,
+    lock_file: File,
+}
+
+impl Drop for GlobalConfigWriteGuard {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.lock_file);
+    }
+}
+
+pub(crate) fn lock_global_config_for_update(
+    config_dir: &Path,
+) -> Result<GlobalConfigWriteGuard, String> {
+    let process_guard = CONFIG_WRITE_LOCK
+        .lock()
+        .map_err(|_| "global configuration write lock is poisoned".to_string())?;
+    std::fs::create_dir_all(config_dir)
+        .map_err(|error| format!("failed to create config directory: {error}"))?;
+    let path = config_dir.join(".instances.lock");
+    let lock_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|error| format!("failed to open global configuration lock: {error}"))?;
+    crate::persistence::enforce_private_file(&path)
+        .map_err(|error| format!("failed to protect global configuration lock: {error}"))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        match FileExt::try_lock_exclusive(&lock_file) {
+            Ok(()) => break,
+            Err(error)
+                if error.raw_os_error() == fs2::lock_contended_error().raw_os_error()
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
+                return Err("timed out waiting for the global configuration lock".into());
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to acquire global configuration lock: {error}"
+                ));
+            }
+        }
+    }
+    Ok(GlobalConfigWriteGuard {
+        _process_guard: process_guard,
+        lock_file,
+    })
+}
 
 fn dedupe_path_dirs(directories: Vec<String>) -> Vec<String> {
     let mut seen = HashSet::new();
@@ -115,7 +173,7 @@ pub fn persist_global_config(
     config_dir: &std::path::Path,
     global: &GlobalConfig,
 ) -> Result<(), String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+    let _guard = lock_global_config_for_update(config_dir)?;
     persist_global_config_unlocked(config_dir, global).map(|_| ())
 }
 
@@ -124,8 +182,8 @@ pub fn update_and_persist<F>(state: &AppState, update_fn: F) -> Result<(), Strin
 where
     F: FnOnce(&mut GlobalConfig),
 {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir)?;
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
@@ -142,8 +200,8 @@ pub fn update_proxy_config_and_persist(
     state: &AppState,
     proxy_config: &ProxyConfig,
 ) -> Result<(), String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir)?;
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
@@ -186,8 +244,8 @@ pub fn materialize_deployment_revision(
     instance_id: &str,
     identity: &crate::deployment_identity::DeploymentIdentity,
 ) -> Result<crate::deployment::DeploymentRevision, String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir)?;
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
@@ -214,8 +272,8 @@ pub fn inspect_deployment_catalog(
     expected_identity: Option<&crate::deployment_identity::DeploymentIdentity>,
     preflight_error: Option<String>,
 ) -> Result<crate::deployment::DeploymentInspection, String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir)?;
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     let config_changed = crate::config_revision::ensure_current_config_revisions(&mut global)?;
     let deployment_changed = crate::deployment::ensure_deployments(&mut global)?;
@@ -259,8 +317,8 @@ pub fn replace_engine_names_and_persist(
     state: &AppState,
     engine_names: HashMap<String, String>,
 ) -> Result<(), String> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir)?;
     let mut global = load_global_config_for_update_unlocked(&config_dir)?;
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
@@ -551,7 +609,10 @@ pub async fn save_config(
             .with_context("path", config_dir.display().to_string())
     })?;
     {
-        let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        let _guard = lock_global_config_for_update(&config_dir).map_err(|error| {
+            AppError::new("CONFIG_LOCK_FAILED", error, true)
+                .with_context("path", config_dir.display().to_string())
+        })?;
         // Runtime-owned fields must be sampled after taking the write lock. Otherwise a
         // concurrent start/stop can persist newer state and then be overwritten here.
         let running_snapshot = state.running.lock().unwrap().clone();
@@ -782,6 +843,27 @@ pub fn resolve_path(path: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_config_guard_excludes_a_second_file_writer() {
+        let dir = temp_config_dir("cross-process-lock");
+        let guard = lock_global_config_for_update(&dir).unwrap();
+        let competing = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dir.join(".instances.lock"))
+            .unwrap();
+
+        let error = competing.try_lock_exclusive().unwrap_err();
+        assert_eq!(
+            error.raw_os_error(),
+            fs2::lock_contended_error().raw_os_error()
+        );
+        drop(guard);
+        competing.try_lock_exclusive().unwrap();
+        competing.unlock().unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn engine_names_are_not_published_when_persistence_fails() {
