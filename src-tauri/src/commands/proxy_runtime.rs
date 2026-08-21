@@ -1,6 +1,7 @@
 use crate::models::{ProxyOperationalAlert, ProxyOperationalSnapshot};
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -96,6 +97,45 @@ pub(crate) struct RoutingCandidate {
     pub max_concurrent_requests: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LocalityDecision {
+    NotApplicable,
+    Hit,
+    Miss,
+    Fallback,
+}
+
+impl LocalityDecision {
+    pub(crate) fn header_value(self) -> Option<&'static str> {
+        match self {
+            Self::NotApplicable => None,
+            Self::Hit => Some("hit"),
+            Self::Miss => Some("miss"),
+            Self::Fallback => Some("fallback"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct RoutingSelection {
+    pub candidate: RoutingCandidate,
+    pub locality: LocalityDecision,
+}
+
+#[derive(Debug, Clone)]
+struct LocalityBinding {
+    instance_id: String,
+    expires_at_ms: u64,
+    generation: u64,
+}
+
+#[derive(Default)]
+struct LocalityStore {
+    bindings: HashMap<String, LocalityBinding>,
+    oldest_first: VecDeque<(u64, String)>,
+    generation: u64,
+}
+
 #[derive(Debug)]
 struct RateBucket {
     tokens: f64,
@@ -128,6 +168,9 @@ struct RouterMetrics {
     ttft_buckets: Mutex<[u64; LATENCY_BUCKETS_MS.len()]>,
     prompt_tokens_observed: AtomicU64,
     cached_prompt_tokens: AtomicU64,
+    locality_hits: AtomicU64,
+    locality_misses: AtomicU64,
+    locality_fallbacks: AtomicU64,
     recent: Mutex<VecDeque<OperationalEvent>>,
 }
 
@@ -175,6 +218,8 @@ pub struct RouterRuntime {
     queue_depth: AtomicUsize,
     in_flight_body_bytes: AtomicUsize,
     rate_buckets: Mutex<HashMap<String, RateBucket>>,
+    locality_salt: [u8; 16],
+    locality_store: Mutex<LocalityStore>,
     metrics: RouterMetrics,
 }
 
@@ -189,6 +234,8 @@ impl Default for RouterRuntime {
             queue_depth: AtomicUsize::new(0),
             in_flight_body_bytes: AtomicUsize::new(0),
             rate_buckets: Mutex::new(HashMap::new()),
+            locality_salt: *uuid::Uuid::new_v4().as_bytes(),
+            locality_store: Mutex::new(LocalityStore::default()),
             metrics: RouterMetrics::default(),
         }
     }
@@ -463,6 +510,26 @@ impl RouterRuntime {
         strategy: &str,
         routing_key: &str,
     ) -> Option<RoutingCandidate> {
+        self.select_target_with_locality(candidates, strategy, routing_key, None)
+            .map(|selection| selection.candidate)
+    }
+
+    pub(crate) fn locality_key(&self, routing_key: &str, material: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(self.locality_salt);
+        hasher.update(routing_key.as_bytes());
+        hasher.update([0]);
+        hasher.update(material);
+        format!("{:x}", hasher.finalize())
+    }
+
+    pub(crate) fn select_target_with_locality(
+        &self,
+        candidates: &[RoutingCandidate],
+        strategy: &str,
+        routing_key: &str,
+        locality_key: Option<&str>,
+    ) -> Option<RoutingSelection> {
         let now = now_ms();
         let draining_targets = self.draining_targets.lock().unwrap();
         let targets = self.targets.lock().unwrap();
@@ -487,7 +554,40 @@ impl RouterRuntime {
         }
         let best_priority = eligible.iter().map(|candidate| candidate.priority).min()?;
         eligible.retain(|candidate| candidate.priority == best_priority);
-        match strategy {
+        let (locality, bound_instance) = if let Some(key) = locality_key {
+            let mut store = self.locality_store.lock().unwrap();
+            let bound_instance = match store.bindings.get(key) {
+                Some(binding) if binding.expires_at_ms > now => Some(binding.instance_id.clone()),
+                Some(_) => {
+                    store.bindings.remove(key);
+                    None
+                }
+                None => None,
+            };
+            let decision = match bound_instance.as_deref() {
+                Some(instance_id)
+                    if eligible.iter().any(|item| item.instance_id == instance_id) =>
+                {
+                    LocalityDecision::Hit
+                }
+                Some(_) => LocalityDecision::Fallback,
+                None => LocalityDecision::Miss,
+            };
+            (decision, bound_instance)
+        } else {
+            (LocalityDecision::NotApplicable, None)
+        };
+        if locality == LocalityDecision::Hit {
+            let bound_instance = bound_instance?;
+            let candidate = eligible
+                .into_iter()
+                .find(|candidate| candidate.instance_id == bound_instance)?;
+            return Some(RoutingSelection {
+                candidate,
+                locality: LocalityDecision::Hit,
+            });
+        }
+        let candidate = match strategy {
             "roundRobin" => {
                 let index =
                     self.next_scheduling_ticket(strategy, routing_key) as usize % eligible.len();
@@ -518,17 +618,93 @@ impl RouterRuntime {
                     .map(|candidate| candidate.weight.max(1) as u64)
                     .sum::<u64>();
                 let mut ticket = self.next_scheduling_ticket(strategy, routing_key) % total_weight;
+                let mut selected = None;
                 for candidate in eligible {
                     let weight = candidate.weight.max(1) as u64;
                     if ticket < weight {
-                        return Some(candidate);
+                        selected = Some(candidate);
+                        break;
                     }
                     ticket -= weight;
                 }
-                None
+                selected
             }
             _ => eligible.into_iter().next(),
+        }?;
+        Some(RoutingSelection {
+            candidate,
+            locality,
+        })
+    }
+
+    pub(crate) fn record_locality_selection(&self, decision: LocalityDecision) {
+        let counter = match decision {
+            LocalityDecision::Hit => Some(&self.metrics.locality_hits),
+            LocalityDecision::Miss => Some(&self.metrics.locality_misses),
+            LocalityDecision::Fallback => Some(&self.metrics.locality_fallbacks),
+            LocalityDecision::NotApplicable => None,
+        };
+        if let Some(counter) = counter {
+            counter.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    pub(crate) fn record_locality_success(
+        &self,
+        locality_key: &str,
+        instance_id: &str,
+        ttl_ms: u64,
+        max_entries: usize,
+    ) {
+        if locality_key.is_empty() || instance_id.is_empty() || ttl_ms == 0 || max_entries == 0 {
+            return;
+        }
+        let now = now_ms();
+        let mut store = self.locality_store.lock().unwrap();
+        store.generation = store.generation.wrapping_add(1).max(1);
+        let generation = store.generation;
+        store.bindings.insert(
+            locality_key.to_string(),
+            LocalityBinding {
+                instance_id: instance_id.to_string(),
+                expires_at_ms: now.saturating_add(ttl_ms),
+                generation,
+            },
+        );
+        store
+            .oldest_first
+            .push_back((generation, locality_key.to_string()));
+        while store.bindings.len() > max_entries {
+            let Some((candidate_generation, candidate_key)) = store.oldest_first.pop_front() else {
+                break;
+            };
+            if store
+                .bindings
+                .get(&candidate_key)
+                .is_some_and(|binding| binding.generation == candidate_generation)
+            {
+                store.bindings.remove(&candidate_key);
+            }
+        }
+        let order_limit = max_entries.saturating_mul(4).max(1_024);
+        if store.oldest_first.len() > order_limit {
+            let mut current = store
+                .bindings
+                .iter()
+                .map(|(key, binding)| (binding.generation, key.clone()))
+                .collect::<Vec<_>>();
+            current.sort_by_key(|(generation, _)| *generation);
+            store.oldest_first = current.into();
+        }
+    }
+
+    fn active_locality_bindings(&self) -> usize {
+        let now = now_ms();
+        let mut store = self.locality_store.lock().unwrap();
+        store
+            .bindings
+            .retain(|_, binding| binding.expires_at_ms > now);
+        store.bindings.len()
     }
 
     pub(crate) fn acquire_target(
@@ -857,6 +1033,11 @@ impl RouterRuntime {
             .lock()
             .unwrap()
             .retain(|instance_id, _| instance_ids.contains(instance_id));
+        self.locality_store
+            .lock()
+            .unwrap()
+            .bindings
+            .retain(|_, binding| instance_ids.contains(&binding.instance_id));
     }
 
     pub(crate) fn route_health_counts(
@@ -994,6 +1175,31 @@ impl RouterRuntime {
         output.push_str(&format!(
             "lsm_router_prompt_tokens_cached_total {}\n",
             self.metrics.cached_prompt_tokens.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP lsm_router_locality_hits_total Requests routed to an eligible existing locality binding.\n");
+        output.push_str("# TYPE lsm_router_locality_hits_total counter\n");
+        output.push_str(&format!(
+            "lsm_router_locality_hits_total {}\n",
+            self.metrics.locality_hits.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP lsm_router_locality_misses_total Requests with a locality key but no live binding.\n");
+        output.push_str("# TYPE lsm_router_locality_misses_total counter\n");
+        output.push_str(&format!(
+            "lsm_router_locality_misses_total {}\n",
+            self.metrics.locality_misses.load(Ordering::Relaxed)
+        ));
+        output.push_str("# HELP lsm_router_locality_fallbacks_total Requests whose bound target was ineligible and used the configured scheduler.\n");
+        output.push_str("# TYPE lsm_router_locality_fallbacks_total counter\n");
+        output.push_str(&format!(
+            "lsm_router_locality_fallbacks_total {}\n",
+            self.metrics.locality_fallbacks.load(Ordering::Relaxed)
+        ));
+        output
+            .push_str("# HELP lsm_router_locality_bindings Active in-memory locality bindings.\n");
+        output.push_str("# TYPE lsm_router_locality_bindings gauge\n");
+        output.push_str(&format!(
+            "lsm_router_locality_bindings {}\n",
+            self.active_locality_bindings()
         ));
         output.push_str("# HELP lsm_router_saturation_ratio Current global in-flight requests divided by the configured limit.\n");
         output.push_str("# TYPE lsm_router_saturation_ratio gauge\n");
@@ -1181,6 +1387,112 @@ mod tests {
                 .instance_id,
             "two"
         );
+    }
+
+    #[test]
+    fn locality_prefers_a_live_binding_but_never_overrides_priority_or_capacity() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let primary = RoutingCandidate {
+            max_concurrent_requests: 1,
+            ..candidate("primary", 0, 1)
+        };
+        let peer = candidate("peer", 0, 1);
+        let standby = candidate("standby", 10, 1);
+        let key = runtime.locality_key("model-a", b"session-a");
+
+        runtime.record_locality_success(&key, "peer", 60_000, 10);
+        let hit = runtime
+            .select_target_with_locality(
+                &[primary.clone(), peer.clone(), standby.clone()],
+                "roundRobin",
+                "model-a",
+                Some(&key),
+            )
+            .unwrap();
+        assert_eq!(hit.candidate.instance_id, "peer");
+        assert_eq!(hit.locality, LocalityDecision::Hit);
+
+        runtime.record_locality_success(&key, "standby", 60_000, 10);
+        let priority_fallback = runtime
+            .select_target_with_locality(
+                &[primary.clone(), peer.clone(), standby],
+                "priorityFailover",
+                "model-a",
+                Some(&key),
+            )
+            .unwrap();
+        assert_eq!(priority_fallback.candidate.instance_id, "primary");
+        assert_eq!(priority_fallback.locality, LocalityDecision::Fallback);
+
+        runtime.record_locality_success(&key, "primary", 60_000, 10);
+        let permit = runtime.acquire_target(&primary).unwrap();
+        let capacity_fallback = runtime
+            .select_target_with_locality(
+                &[primary, peer],
+                "priorityFailover",
+                "model-a",
+                Some(&key),
+            )
+            .unwrap();
+        assert_eq!(capacity_fallback.candidate.instance_id, "peer");
+        assert_eq!(capacity_fallback.locality, LocalityDecision::Fallback);
+        drop(permit);
+    }
+
+    #[test]
+    fn locality_bindings_expire_rebind_and_stay_bounded_without_raw_keys_in_metrics() {
+        let runtime = RouterRuntime::default();
+        let candidates = vec![candidate("one", 0, 1), candidate("two", 0, 1)];
+        let first_key = runtime.locality_key("model-a", b"secret-session-one");
+        let second_key = runtime.locality_key("model-a", b"secret-session-two");
+        assert_ne!(first_key, "secret-session-one");
+
+        let miss = runtime
+            .select_target_with_locality(
+                &candidates,
+                "priorityFailover",
+                "model-a",
+                Some(&first_key),
+            )
+            .unwrap();
+        assert_eq!(miss.locality, LocalityDecision::Miss);
+        runtime.record_locality_selection(miss.locality);
+        runtime.record_locality_success(&first_key, "one", 1, 1);
+        std::thread::sleep(Duration::from_millis(2));
+        let expired = runtime
+            .select_target_with_locality(
+                &candidates,
+                "priorityFailover",
+                "model-a",
+                Some(&first_key),
+            )
+            .unwrap();
+        assert_eq!(expired.locality, LocalityDecision::Miss);
+
+        runtime.record_locality_success(&first_key, "one", 60_000, 1);
+        runtime.record_locality_success(&second_key, "two", 60_000, 1);
+        for _ in 0..5_000 {
+            runtime.record_locality_success(&second_key, "two", 60_000, 1);
+        }
+        assert_eq!(runtime.active_locality_bindings(), 1);
+        assert!(runtime.locality_store.lock().unwrap().oldest_first.len() <= 1_024);
+        let rebound = runtime
+            .select_target_with_locality(
+                &candidates,
+                "priorityFailover",
+                "model-a",
+                Some(&second_key),
+            )
+            .unwrap();
+        assert_eq!(rebound.candidate.instance_id, "two");
+        assert_eq!(rebound.locality, LocalityDecision::Hit);
+        runtime.record_locality_selection(rebound.locality);
+
+        let metrics = runtime.prometheus_metrics(8);
+        assert!(metrics.contains("lsm_router_locality_hits_total 1"));
+        assert!(metrics.contains("lsm_router_locality_misses_total 1"));
+        assert!(metrics.contains("lsm_router_locality_bindings 1"));
+        assert!(!metrics.contains("secret-session"));
     }
 
     #[tokio::test]

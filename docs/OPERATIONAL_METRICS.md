@@ -62,10 +62,14 @@ Alerts are advisory. They do not mutate proxy configuration, stop instances, cha
 - `lsm_router_ttft_milliseconds`
 - `lsm_router_prompt_tokens_observed_total`
 - `lsm_router_prompt_tokens_cached_total`
+- `lsm_router_locality_hits_total`
+- `lsm_router_locality_misses_total`
+- `lsm_router_locality_fallbacks_total`
+- `lsm_router_locality_bindings`
 - `lsm_router_saturation_ratio`
 - `lsm_router_operational_alert{alert="...",severity="..."}`
 
-Histograms use explicit millisecond buckets ending in `+Inf`. The operational-alert gauge exports active alerts only. Scrapers should use counter deltas and their own durable retention; the manager does not claim to be a metrics database.
+Histograms use explicit millisecond buckets ending in `+Inf`. Locality counters report eligible binding reuse, absent/expired bindings, and safety/capacity fallbacks; the binding gauge contains only the current count and never exports a key or prompt. The operational-alert gauge exports active alerts only. Scrapers should use counter deltas and their own durable retention; the manager does not claim to be a metrics database.
 
 ## Investigation order
 

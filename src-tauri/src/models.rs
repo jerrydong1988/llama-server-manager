@@ -62,10 +62,14 @@ mod model_capability_tests {
         )
         .unwrap();
         assert!(!legacy.strict_model_routing);
+        assert!(!legacy.locality_routing_enabled);
+        assert_eq!(legacy.locality_ttl_ms, 30 * 60 * 1_000);
+        assert_eq!(legacy.locality_max_entries, 10_000);
         assert_eq!(legacy.max_concurrent_requests, 64);
         assert_eq!(legacy.health_check_interval_ms, 5_000);
 
         assert!(ProxyConfig::default().strict_model_routing);
+        assert!(ProxyConfig::default().locality_routing_enabled);
         let explicit: ProxyConfig =
             serde_json::from_str(r#"{"strict_model_routing":true}"#).unwrap();
         assert!(explicit.strict_model_routing);
@@ -1201,6 +1205,15 @@ pub struct ProxyConfig {
     /// them permissively while keeping newly created configurations strict.
     #[serde(default)]
     pub strict_model_routing: bool,
+    /// Prefer an eligible target with a recent session/prompt-prefix binding.
+    /// Legacy configurations deserialize with this disabled so upgrades do not
+    /// silently change scheduling behavior.
+    #[serde(default)]
+    pub locality_routing_enabled: bool,
+    /// Sliding lifetime for successful in-memory locality bindings.
+    pub locality_ttl_ms: u64,
+    /// Maximum number of in-memory locality bindings retained by the router.
+    pub locality_max_entries: u32,
     pub timeout_ms: u64,
     pub connect_timeout_ms: u64,
     pub streaming_idle_timeout_ms: u64,
@@ -1232,6 +1245,9 @@ impl Default for ProxyConfig {
             canary_routes: Vec::new(),
             routing_strategy: "priorityFailover".into(),
             strict_model_routing: true,
+            locality_routing_enabled: true,
+            locality_ttl_ms: 30 * 60 * 1_000,
+            locality_max_entries: 10_000,
             timeout_ms: 600_000,
             connect_timeout_ms: 5_000,
             streaming_idle_timeout_ms: 300_000,

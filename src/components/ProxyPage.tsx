@@ -35,6 +35,9 @@ type ProxyConfig = {
   defaultInstanceId: string
   routingStrategy: string
   strictModelRouting: boolean
+  localityRoutingEnabled: boolean
+  localityTtlMs: number
+  localityMaxEntries: number
   connectTimeoutMs: number
   timeoutMs: number
   streamingIdleTimeoutMs: number
@@ -95,6 +98,7 @@ type ProxyOperationalSnapshot = {
 type NumericProxyConfigKey = 'connectTimeoutMs' | 'timeoutMs' | 'streamingIdleTimeoutMs'
   | 'healthCheckIntervalMs' | 'healthCheckTimeoutMs' | 'unhealthyThreshold'
   | 'recoveryCooldownMs' | 'maxConcurrentRequests' | 'queueTimeoutMs' | 'requestsPerMinute'
+  | 'localityTtlMs' | 'localityMaxEntries'
 
 type RuntimeServiceView = {
   servicePid: number
@@ -145,6 +149,9 @@ const defaultConfig: ProxyConfig = {
   defaultInstanceId: '',
   routingStrategy: 'priorityFailover',
   strictModelRouting: true,
+  localityRoutingEnabled: true,
+  localityTtlMs: 1800000,
+  localityMaxEntries: 10000,
   connectTimeoutMs: 5000,
   timeoutMs: 600000,
   streamingIdleTimeoutMs: 300000,
@@ -264,6 +271,9 @@ function normalizeConfig(value: unknown): ProxyConfig {
     defaultInstanceId: getString(record, ['default_instance_id', 'defaultInstanceId', 'default_target_id', 'defaultTargetId']),
     routingStrategy: getString(record, ['routing_strategy', 'routingStrategy'], defaultConfig.routingStrategy),
     strictModelRouting: getBoolean(record, ['strict_model_routing', 'strictModelRouting'], defaultConfig.strictModelRouting),
+    localityRoutingEnabled: getBoolean(record, ['locality_routing_enabled', 'localityRoutingEnabled'], defaultConfig.localityRoutingEnabled),
+    localityTtlMs: getNumber(record, ['locality_ttl_ms', 'localityTtlMs'], defaultConfig.localityTtlMs),
+    localityMaxEntries: getNumber(record, ['locality_max_entries', 'localityMaxEntries'], defaultConfig.localityMaxEntries),
     connectTimeoutMs: getNumber(record, ['connect_timeout_ms', 'connectTimeoutMs'], defaultConfig.connectTimeoutMs),
     timeoutMs: getNumber(record, ['timeout_ms', 'timeoutMs'], defaultConfig.timeoutMs),
     streamingIdleTimeoutMs: getNumber(record, ['streaming_idle_timeout_ms', 'streamingIdleTimeoutMs'], defaultConfig.streamingIdleTimeoutMs),
@@ -379,6 +389,9 @@ function toCommandConfig(config: ProxyConfig) {
     default_instance_id: config.defaultInstanceId,
     routing_strategy: config.routingStrategy,
     strict_model_routing: config.strictModelRouting,
+    locality_routing_enabled: config.localityRoutingEnabled,
+    locality_ttl_ms: config.localityTtlMs,
+    locality_max_entries: config.localityMaxEntries,
     connect_timeout_ms: config.connectTimeoutMs,
     timeout_ms: config.timeoutMs,
     streaming_idle_timeout_ms: config.streamingIdleTimeoutMs,
@@ -1169,6 +1182,7 @@ export default function ProxyPage() {
                 <button
                   type="button"
                   role="switch"
+                  aria-label={labels.strictRouting}
                   aria-checked={draft.strictModelRouting}
                   onClick={() => updateDraft({ strictModelRouting: !draft.strictModelRouting })}
                   className={`flex h-10 w-full items-center justify-between rounded-lg border px-3 text-sm transition ${draft.strictModelRouting ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}
@@ -1181,6 +1195,46 @@ export default function ProxyPage() {
               </div>
             </div>
             <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.strictRoutingHint}</p>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="min-w-0">
+                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.localityRouting}</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-label={labels.localityRouting}
+                  aria-checked={draft.localityRoutingEnabled}
+                  onClick={() => updateDraft({ localityRoutingEnabled: !draft.localityRoutingEnabled })}
+                  className={`flex h-10 w-full items-center justify-between rounded-lg border px-3 text-sm transition ${draft.localityRoutingEnabled ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}
+                >
+                  <span>{draft.localityRoutingEnabled ? labels.enabled : labels.disabled}</span>
+                  <span className={`relative inline-flex h-6 w-11 rounded-full ${draft.localityRoutingEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+                    <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${draft.localityRoutingEnabled ? 'left-6' : 'left-1'}`} />
+                  </span>
+                </button>
+              </div>
+              <label className="min-w-0">
+                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.localityTtl}</span>
+                <TextInput
+                  type="number"
+                  min={60000}
+                  max={86400000}
+                  value={draft.localityTtlMs}
+                  onChange={event => updateNumericDraft('localityTtlMs', Math.max(60000, Math.min(86400000, Number(event.target.value) || 60000)))}
+                />
+              </label>
+              <label className="min-w-0">
+                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.localityCapacity}</span>
+                <TextInput
+                  type="number"
+                  min={1}
+                  max={100000}
+                  value={draft.localityMaxEntries}
+                  onChange={event => updateNumericDraft('localityMaxEntries', Math.max(1, Math.min(100000, Number(event.target.value) || 1)))}
+                />
+              </label>
+            </div>
+            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.localityRoutingHint}</p>
 
             {status.lastError ? (
               <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">

@@ -181,7 +181,10 @@ test('production scheduling and scoped API keys round-trip through the settings 
   await expect(page.getByText('旧版单一 API Key（可选）')).toHaveCount(0)
 
   await page.getByRole('combobox', { name: '调度策略' }).selectOption('weighted')
-  await expect(page.getByRole('switch', { name: '已启用' })).toBeChecked()
+  await expect(page.getByRole('switch', { name: '严格模型路由' })).toBeChecked()
+  await expect(page.getByRole('switch', { name: '会话/缓存感知路由' })).toBeChecked()
+  await page.getByRole('spinbutton', { name: '绑定有效期（毫秒）' }).fill('120000')
+  await page.getByRole('spinbutton', { name: '最大绑定数' }).fill('99')
   await page.getByRole('button', { name: '添加 API Key' }).click()
   const keyInput = page.getByRole('textbox', { name: 'API Key（至少 16 字符）' })
   await expect(keyInput).toHaveAttribute('type', 'password')
@@ -231,6 +234,9 @@ test('production scheduling and scoped API keys round-trip through the settings 
   expect(savedConfig).toMatchObject({
     routing_strategy: 'weighted',
     strict_model_routing: true,
+    locality_routing_enabled: true,
+    locality_ttl_ms: 120_000,
+    locality_max_entries: 99,
     max_concurrent_requests: 64,
     queue_timeout_ms: 1000,
     cors_allowed_origins: ['https://app.example.com'],

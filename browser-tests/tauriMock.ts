@@ -349,6 +349,9 @@ type BrowserProxyConfig = {
   default_instance_id: string
   routing_strategy: string
   strict_model_routing: boolean
+  locality_routing_enabled: boolean
+  locality_ttl_ms: number
+  locality_max_entries: number
   connect_timeout_ms: number
   timeout_ms: number
   streaming_idle_timeout_ms: number
@@ -374,6 +377,9 @@ const proxyConfig: BrowserProxyConfig = {
   default_instance_id: IS_DOCS_SCENARIO ? INSTANCE_ID : '',
   routing_strategy: 'priorityFailover',
   strict_model_routing: true,
+  locality_routing_enabled: true,
+  locality_ttl_ms: 1_800_000,
+  locality_max_entries: 10_000,
   connect_timeout_ms: 5_000,
   timeout_ms: 600_000,
   streaming_idle_timeout_ms: 300_000,
