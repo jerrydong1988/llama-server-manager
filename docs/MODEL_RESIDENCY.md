@@ -4,7 +4,7 @@ Automatic model residency is the first implementation workstream in [Phase 3 —
 
 ## Safety boundary
 
-The current Cluster-page Worker is a trusted llama.cpp `rpc-server` compute endpoint. It does not provide an authenticated lifecycle protocol for launching a remote `llama-server`. Residency therefore never runs remote shell commands and never treats an RPC Worker as a remote lifecycle target. That boundary changes only in the separate Secure Worker Agent workstream.
+The Cluster-page Worker is a llama.cpp `rpc-server` compute endpoint. A [Secure Worker Agent](WORKER_AGENT.md) can authenticate and encrypt its fixed, least-privileged `rpc-server` lifecycle, but it does not launch a remote `llama-server`. Residency therefore never runs remote shell commands and never treats an RPC Worker as a remote model-server lifecycle target.
 
 Manual instance start and stop remain available. The scheduler manages only instances explicitly present in its policy, and it evicts only placements it previously adopted or warmed. Disabling the scheduler pauses reconciliation; it does not stop workloads. To remove a scheduler-owned placement, keep the scheduler enabled, disable that instance's intent, preview the plan, and apply it.
 
@@ -47,7 +47,7 @@ An evicted placement can be warmed by applying a later selected plan. A failed e
 4. Select **Save and preview**. Review selected decisions, reason codes, worst-case usage, plan ID, and ordered operations.
 5. Select **Apply plan**. Keep the application running until the operation list is reconciled, or return later to inspect persistent failure evidence.
 
-The control surface reports registered RPC Workers for context and explicitly marks that the Worker Agent is unavailable. No Worker is required for planning or execution.
+The control surface reports registered RPC Workers for context, including securely enrolled Agent Workers. Worker selection and RPC offload remain part of each instance configuration; residency planning and execution require no Worker.
 
 ## Validation
 
