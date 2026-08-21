@@ -168,6 +168,7 @@ impl Default for DynamicConcurrencyLimiter {
 
 pub(crate) struct RouterRuntime {
     started_at: Instant,
+    draining_targets: Mutex<HashSet<String>>,
     targets: Mutex<HashMap<String, TargetRuntime>>,
     scheduling_counters: Mutex<HashMap<String, u64>>,
     limiter: DynamicConcurrencyLimiter,
@@ -181,6 +182,7 @@ impl Default for RouterRuntime {
     fn default() -> Self {
         Self {
             started_at: Instant::now(),
+            draining_targets: Mutex::new(HashSet::new()),
             targets: Mutex::new(HashMap::new()),
             scheduling_counters: Mutex::new(HashMap::new()),
             limiter: DynamicConcurrencyLimiter::default(),
@@ -462,10 +464,14 @@ impl RouterRuntime {
         routing_key: &str,
     ) -> Option<RoutingCandidate> {
         let now = now_ms();
+        let draining_targets = self.draining_targets.lock().unwrap();
         let targets = self.targets.lock().unwrap();
         let mut eligible = candidates
             .iter()
             .filter(|candidate| {
+                if draining_targets.contains(&candidate.instance_id) {
+                    return false;
+                }
                 let state = targets.get(&candidate.instance_id);
                 let circuit_open =
                     state.is_some_and(|state| state.circuit_open_until_ms > now || !state.ready);
@@ -529,6 +535,10 @@ impl RouterRuntime {
         self: &Arc<Self>,
         candidate: &RoutingCandidate,
     ) -> Option<TargetRequestPermit> {
+        let draining_targets = self.draining_targets.lock().unwrap();
+        if draining_targets.contains(&candidate.instance_id) {
+            return None;
+        }
         let mut targets = self.targets.lock().unwrap();
         let target = targets.entry(candidate.instance_id.clone()).or_default();
         if candidate.max_concurrent_requests > 0
@@ -541,6 +551,24 @@ impl RouterRuntime {
             runtime: self.clone(),
             instance_id: candidate.instance_id.clone(),
         })
+    }
+
+    pub(crate) fn set_target_draining(&self, instance_id: &str, draining: bool) {
+        let mut targets = self.draining_targets.lock().unwrap();
+        if draining {
+            targets.insert(instance_id.to_string());
+        } else {
+            targets.remove(instance_id);
+        }
+    }
+
+    pub(crate) fn target_active_requests(&self, instance_id: &str) -> usize {
+        self.targets
+            .lock()
+            .unwrap()
+            .get(instance_id)
+            .map(|target| target.active_requests)
+            .unwrap_or(0)
     }
 
     pub(crate) fn mark_probe_success(
@@ -788,18 +816,21 @@ impl RouterRuntime {
     }
 
     pub(crate) fn target_snapshot(&self, instance_id: &str) -> TargetHealthSnapshot {
+        let draining = self.draining_targets.lock().unwrap().contains(instance_id);
         let targets = self.targets.lock().unwrap();
         let target = targets.get(instance_id).cloned().unwrap_or_default();
         TargetHealthSnapshot {
             instance_id: instance_id.to_string(),
-            status: if target.ready {
+            status: if draining {
+                "draining".to_string()
+            } else if target.ready {
                 "ready".to_string()
             } else if target.circuit_open_until_ms > now_ms() {
                 "circuit_open".to_string()
             } else {
                 "unavailable".to_string()
             },
-            ready: target.ready && target.circuit_open_until_ms <= now_ms(),
+            ready: !draining && target.ready && target.circuit_open_until_ms <= now_ms(),
             consecutive_failures: target.consecutive_failures,
             circuit_open_until_ms: target.circuit_open_until_ms,
             last_checked_at_ms: target.last_checked_at_ms,
@@ -832,14 +863,16 @@ impl RouterRuntime {
         &self,
         route_instance_ids: impl IntoIterator<Item = String>,
     ) -> (usize, usize) {
+        let draining_targets = self.draining_targets.lock().unwrap();
         let targets = self.targets.lock().unwrap();
         let now = now_ms();
         route_instance_ids
             .into_iter()
             .fold((0, 0), |(healthy, unhealthy), id| {
-                let ready = targets
-                    .get(&id)
-                    .is_some_and(|target| target.ready && target.circuit_open_until_ms <= now);
+                let ready = !draining_targets.contains(&id)
+                    && targets
+                        .get(&id)
+                        .is_some_and(|target| target.ready && target.circuit_open_until_ms <= now);
                 if ready {
                     (healthy + 1, unhealthy)
                 } else {
@@ -861,6 +894,7 @@ impl RouterRuntime {
         let ttft_samples = self.metrics.ttft_samples.load(Ordering::Relaxed);
         let ttft_buckets = *self.metrics.ttft_buckets.lock().unwrap();
         let operational = self.operational_snapshot(max_concurrent_requests);
+        let draining_targets = self.draining_targets.lock().unwrap();
         let targets = self.targets.lock().unwrap();
         let mut output = String::new();
         output.push_str("# HELP lsm_router_requests_total Total accepted router requests.\n");
@@ -979,7 +1013,11 @@ impl RouterRuntime {
         output.push_str("# TYPE lsm_router_target_active_requests gauge\n");
         for (instance_id, target) in targets.iter() {
             let label = instance_id.replace('\\', "\\\\").replace('"', "\\\"");
-            let ready = u8::from(target.ready && target.circuit_open_until_ms <= now_ms());
+            let ready = u8::from(
+                !draining_targets.contains(instance_id)
+                    && target.ready
+                    && target.circuit_open_until_ms <= now_ms(),
+            );
             output.push_str(&format!(
                 "lsm_router_target_ready{{instance_id=\"{label}\"}} {ready}\n"
             ));
@@ -1045,6 +1083,32 @@ mod tests {
                 .instance_id,
             "primary"
         );
+    }
+
+    #[test]
+    fn draining_rejects_new_admissions_without_losing_existing_request_counts() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let primary = candidate("primary", 0, 1);
+        let standby = candidate("standby", 10, 1);
+        let existing = runtime.acquire_target(&primary).unwrap();
+        assert_eq!(runtime.target_active_requests("primary"), 1);
+
+        runtime.set_target_draining("primary", true);
+        assert_eq!(
+            runtime
+                .select_target(&[primary.clone(), standby], "priorityFailover", "model-a")
+                .unwrap()
+                .instance_id,
+            "standby"
+        );
+        assert!(runtime.acquire_target(&primary).is_none());
+        assert_eq!(runtime.target_snapshot("primary").status, "draining");
+        assert_eq!(runtime.target_active_requests("primary"), 1);
+
+        drop(existing);
+        assert_eq!(runtime.target_active_requests("primary"), 0);
+        runtime.set_target_draining("primary", false);
+        assert!(runtime.acquire_target(&primary).is_some());
     }
 
     #[test]

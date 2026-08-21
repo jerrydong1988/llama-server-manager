@@ -125,6 +125,97 @@ export interface DeploymentInspection {
   revisions: DeploymentRevisionSummary[]
 }
 
+export interface ResidencyIntent {
+  instanceId: string
+  priority: number
+  enabled: boolean
+}
+
+export interface ResidencyPolicy {
+  enabled: boolean
+  ramBudgetBytes: number
+  vramBudgetBytes: number
+  drainTimeoutSeconds: number
+  intents: ResidencyIntent[]
+}
+
+export type ResidencyPlacementPhase = 'evicted' | 'resident' | 'draining' | 'failed'
+export type ResidencyOperationKind = 'drain' | 'evict' | 'warm'
+
+export interface ResidencyPlacementRecord {
+  instanceId: string
+  deploymentId: string
+  revisionId: string
+  phase: ResidencyPlacementPhase
+  planId: string
+  updatedAt: number
+  routingDrained: boolean
+  lastError?: string
+}
+
+export interface ResidencyAuditEvent {
+  id: string
+  recordedAt: number
+  action: string
+  outcome: string
+  instanceId?: string
+  deploymentId?: string
+  revisionId?: string
+  planId?: string
+  message?: string
+}
+
+export interface ResidencyDecision {
+  instanceId: string
+  instanceName: string
+  priority: number
+  intentEnabled: boolean
+  selected: boolean
+  deploymentId: string | null
+  revisionId: string | null
+  runningRevisionId: string | null
+  resourceStatus: string
+  ramBytes: number
+  vramBytes: number
+  reasons: string[]
+}
+
+export interface ResidencyOperation {
+  sequence: number
+  kind: ResidencyOperationKind
+  instanceId: string
+  deploymentId: string
+  revisionId: string
+  reason: string
+}
+
+export interface ResidencyPlan {
+  schemaVersion: number
+  planId: string
+  generatedAt: number
+  ramBudgetBytes: number
+  ramUsedBytes: number
+  vramBudgetBytes: number
+  vramUsedBytes: number
+  decisions: ResidencyDecision[]
+  operations: ResidencyOperation[]
+}
+
+export interface ResidencyInspection {
+  policy: ResidencyPolicy
+  plan: ResidencyPlan
+  placements: ResidencyPlacementRecord[]
+  audit: ResidencyAuditEvent[]
+  registeredRpcWorkers: number
+  workerAgentAvailable: boolean
+}
+
+export interface ResidencyDrainStatus {
+  instanceId: string
+  routingDrained: boolean
+  activeRequests: number
+}
+
 export interface EngineInfo {
   id: string
   name: string

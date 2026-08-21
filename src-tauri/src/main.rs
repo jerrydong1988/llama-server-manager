@@ -10,6 +10,7 @@ mod models;
 mod operation_timing;
 mod path_utils;
 mod persistence;
+mod residency;
 mod resource_planner;
 mod runtime_service;
 mod security;
@@ -52,6 +53,10 @@ use crate::commands::monitoring::get_monitoring_series;
 use crate::commands::proxy::{
     get_proxy_config, get_proxy_status, list_proxy_targets, restart_proxy, save_proxy_config,
     start_proxy, stop_proxy, test_proxy_route,
+};
+use crate::commands::residency::{
+    begin_model_residency_drain, complete_model_residency_operation,
+    get_model_residency_drain_status, inspect_model_residency, save_model_residency_policy,
 };
 use crate::commands::scanner::{
     delete_engine, delete_model_file, get_cached_scan, get_engines, get_models, load_app_data,
@@ -422,6 +427,7 @@ fn main() {
         eprintln!("Path authority initialization failed: {error}");
     }
     let initial_workers = load_workers();
+    let initial_residency_draining = crate::residency::draining_instance_ids(&initial_config);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -567,6 +573,8 @@ fn main() {
                 *st.engine_names.lock().unwrap() = config.engine_names.clone();
                 *st.running.lock().unwrap() = config.running.clone();
                 *st.proxy_config.lock().unwrap() = config.proxy_config.clone();
+                *st.residency_draining.lock().unwrap() =
+                    crate::residency::draining_instance_ids(&config);
             }
 
             // Restore log capture, metrics, and the single authoritative health monitor.
@@ -661,6 +669,7 @@ fn main() {
             proxy_shutdown: Mutex::new(None),
             proxy_task: Mutex::new(None),
             proxy_router_runtime: Mutex::new(None),
+            residency_draining: Mutex::new(initial_residency_draining),
             proxy_bound_addr: Mutex::new(None),
             proxy_last_error: Mutex::new(None),
             proxy_lifecycle_lock: tokio::sync::Mutex::new(()),
@@ -691,6 +700,7 @@ fn main() {
             get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
             get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
             list_canary_rollouts, create_canary_rollout, observe_canary_rollout, set_canary_weight, promote_canary_rollout, abort_canary_rollout, rollback_canary_rollout,
+            inspect_model_residency, save_model_residency_policy, begin_model_residency_drain, get_model_residency_drain_status, complete_model_residency_operation,
             save_window_state, load_window_state,
             resolve_path,
             scan_workers_tcp, test_worker, get_worker_info,

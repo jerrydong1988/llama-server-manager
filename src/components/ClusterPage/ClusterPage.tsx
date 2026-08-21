@@ -7,6 +7,7 @@ import { useI18n } from '../../i18n'
 import { getClusterLabels } from '../../i18n/pageLabels'
 import { formatPathForDisplay, pathsEqual } from '../../utils/path'
 import { Badge, Button, InsetSurface, MetricCard, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
+import ResidencySchedulerPanel from './ResidencySchedulerPanel'
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
 type RpcLaunchResult = { ok: boolean; host?: string; port?: number; error?: string }
@@ -476,6 +477,8 @@ export default function ClusterPage() {
           <MetricCard key={card.label} label={card.label} value={card.value} tone={card.tone} />
         ))}
       </div>
+
+      <ResidencySchedulerPanel />
 
       <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_320px]">
         <Surface as="section" className="overflow-hidden">

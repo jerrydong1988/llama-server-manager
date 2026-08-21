@@ -1337,6 +1337,9 @@ pub struct AppState {
     pub proxy_shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     pub proxy_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     pub proxy_router_runtime: Mutex<Option<Arc<crate::commands::proxy_runtime::RouterRuntime>>>,
+    /// Persisted residency drains are mirrored here so the router can reject new
+    /// admissions before the UI reconnects after an application restart.
+    pub residency_draining: Mutex<std::collections::HashSet<String>>,
     pub proxy_bound_addr: Mutex<Option<String>>,
     pub proxy_last_error: Mutex<Option<String>>,
     pub proxy_lifecycle_lock: tokio::sync::Mutex<()>,
@@ -1401,6 +1404,14 @@ pub struct GlobalConfig {
     pub canary_schema_version: u32,
     #[serde(default)]
     pub canary_rollouts: Vec<crate::canary::CanaryRolloutRecord>,
+    #[serde(default = "crate::residency::default_residency_schema_version")]
+    pub residency_schema_version: u32,
+    #[serde(default)]
+    pub residency_policy: crate::residency::ResidencyPolicy,
+    #[serde(default)]
+    pub residency_placements: Vec<crate::residency::ResidencyPlacementRecord>,
+    #[serde(default)]
+    pub residency_audit: Vec<crate::residency::ResidencyAuditEvent>,
 }
 
 /// Frontend-safe view of the active configuration. Historical snapshots are

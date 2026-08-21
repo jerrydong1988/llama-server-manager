@@ -12,6 +12,9 @@ import type {
   ModelInfo,
   MonitoringFrame,
   ResourcePlan,
+  ResidencyAuditEvent,
+  ResidencyInspection,
+  ResidencyPolicy,
   SystemMetrics,
   WorkerInfo,
 } from '../src/store/types'
@@ -816,6 +819,72 @@ const clusterWorkers: WorkerInfo[] = BROWSER_SCENARIO === 'cluster-worker'
       auto_discovered: false,
     }]
   : []
+let residencyPolicy: ResidencyPolicy = {
+  enabled: false,
+  ramBudgetBytes: 0,
+  vramBudgetBytes: 0,
+  drainTimeoutSeconds: 120,
+  intents: [],
+}
+const residencyAudit: ResidencyAuditEvent[] = []
+
+const residencyInspection = (): ResidencyInspection => {
+  const decisions = residencyPolicy.intents.map(intent => {
+    const running = Boolean(state.running[intent.instanceId])
+    return {
+      instanceId: intent.instanceId,
+      instanceName: state.instances[intent.instanceId]?.name || intent.instanceId,
+      priority: intent.priority,
+      intentEnabled: intent.enabled,
+      selected: residencyPolicy.enabled && intent.enabled,
+      deploymentId: `urn:lsm:managed-deployment:${intent.instanceId}`,
+      revisionId: `urn:lsm:deployment-revision:${intent.instanceId}`,
+      runningRevisionId: running ? `urn:lsm:deployment-revision:${intent.instanceId}` : null,
+      resourceStatus: 'feasible',
+      ramBytes: 2 * 1024 ** 3,
+      vramBytes: 0,
+      reasons: residencyPolicy.enabled && intent.enabled ? ['selected_within_budget'] : ['intent_disabled'],
+    }
+  })
+  const operations = decisions
+    .filter(decision => decision.selected && !decision.runningRevisionId)
+    .map((decision, index) => ({
+      sequence: index + 1,
+      kind: 'warm' as const,
+      instanceId: decision.instanceId,
+      deploymentId: decision.deploymentId || '',
+      revisionId: decision.revisionId || '',
+      reason: 'selected_revision_not_running',
+    }))
+  return {
+    policy: clone(residencyPolicy),
+    plan: {
+      schemaVersion: 1,
+      planId: 'sha256:browser-residency-plan',
+      generatedAt: Math.floor(Date.now() / 1000),
+      ramBudgetBytes: residencyPolicy.ramBudgetBytes,
+      ramUsedBytes: decisions.filter(decision => decision.selected).length * 2 * 1024 ** 3,
+      vramBudgetBytes: residencyPolicy.vramBudgetBytes,
+      vramUsedBytes: 0,
+      decisions,
+      operations,
+    },
+    placements: decisions
+      .filter(decision => decision.selected && decision.runningRevisionId)
+      .map(decision => ({
+        instanceId: decision.instanceId,
+        deploymentId: decision.deploymentId || '',
+        revisionId: decision.revisionId || '',
+        phase: 'resident' as const,
+        planId: 'sha256:browser-residency-plan',
+        updatedAt: Math.floor(Date.now() / 1000),
+        routingDrained: false,
+      })),
+    audit: clone(residencyAudit).reverse(),
+    registeredRpcWorkers: clusterWorkers.filter(worker => !worker.auto_discovered).length,
+    workerAgentAvailable: false,
+  }
+}
 
 const control: BrowserTestControl = {
   marker: BROWSER_TEST_MARKER,
@@ -1555,6 +1624,41 @@ mockIPC((command, payload) => {
             },
           ]
         : clone(clusterWorkers)
+    case 'inspect_model_residency': return residencyInspection()
+    case 'save_model_residency_policy': {
+      residencyPolicy = clone(args.policy as ResidencyPolicy)
+      residencyAudit.push({
+        id: `browser-residency-audit-${residencyAudit.length + 1}`,
+        recordedAt: Math.floor(Date.now() / 1000),
+        action: 'policy_updated',
+        outcome: 'success',
+      })
+      return residencyInspection()
+    }
+    case 'begin_model_residency_drain': return {
+      instanceId: String(args.instanceId ?? ''),
+      routingDrained: true,
+      activeRequests: 0,
+    }
+    case 'get_model_residency_drain_status': return {
+      instanceId: String(args.instanceId ?? ''),
+      routingDrained: true,
+      activeRequests: 0,
+    }
+    case 'complete_model_residency_operation': {
+      residencyAudit.push({
+        id: `browser-residency-audit-${residencyAudit.length + 1}`,
+        recordedAt: Math.floor(Date.now() / 1000),
+        action: String(args.action ?? ''),
+        outcome: args.success ? 'success' : 'failed',
+        instanceId: String(args.instanceId ?? ''),
+        deploymentId: String(args.deploymentId ?? ''),
+        revisionId: String(args.revisionId ?? ''),
+        planId: String(args.planId ?? ''),
+        message: args.error ? String(args.error) : undefined,
+      })
+      return residencyInspection()
+    }
     case 'is_local_host': return false
     case 'test_worker': return { ok: true, latency_ms: 12, devices: [] }
     case 'check_port':
