@@ -3553,6 +3553,9 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
     let app_for_server = app.clone();
     let source: Arc<dyn ProxyDataSource> = Arc::new(TauriProxyDataSource { app: app.clone() });
     let (router, router_runtime) = proxy_router_from_source_with_runtime(source);
+    for instance_id in state.residency_draining.lock().unwrap().iter() {
+        router_runtime.set_target_draining(instance_id, true);
+    }
     *state.proxy_router_runtime.lock().unwrap() = Some(router_runtime);
     let server_task = tokio::spawn(async move {
         let result = axum::serve(listener, router)

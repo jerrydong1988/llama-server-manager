@@ -68,6 +68,10 @@ pub(crate) fn default_global_config() -> GlobalConfig {
         deployments: HashMap::new(),
         canary_schema_version: crate::canary::CANARY_SCHEMA_VERSION,
         canary_rollouts: Vec::new(),
+        residency_schema_version: crate::residency::RESIDENCY_SCHEMA_VERSION,
+        residency_policy: crate::residency::ResidencyPolicy::default(),
+        residency_placements: Vec::new(),
+        residency_audit: Vec::new(),
     }
 }
 
@@ -126,6 +130,7 @@ where
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
     crate::canary::ensure_canary_catalog(&mut global)?;
+    crate::residency::ensure_residency_catalog(&mut global)?;
     update_fn(&mut global);
     persist_global_config_unlocked(&config_dir, &global).map(|_| ())
 }
@@ -143,6 +148,7 @@ pub fn update_proxy_config_and_persist(
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
     crate::canary::ensure_canary_catalog(&mut global)?;
+    crate::residency::ensure_residency_catalog(&mut global)?;
     let routing_changes = crate::deployment::routing_changed_instance_ids(
         &global.proxy_config,
         proxy_config,
@@ -186,6 +192,7 @@ pub fn materialize_deployment_revision(
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
     crate::canary::ensure_canary_catalog(&mut global)?;
+    crate::residency::ensure_residency_catalog(&mut global)?;
     let bound_revision =
         crate::canary::active_revision_for_instance(&global, instance_id).map(str::to_owned);
     let revision = crate::deployment::materialize_revision(&mut global, instance_id, identity)?;
@@ -213,7 +220,8 @@ pub fn inspect_deployment_catalog(
     let config_changed = crate::config_revision::ensure_current_config_revisions(&mut global)?;
     let deployment_changed = crate::deployment::ensure_deployments(&mut global)?;
     let canary_changed = crate::canary::ensure_canary_catalog(&mut global)?;
-    if config_changed || deployment_changed || canary_changed {
+    let residency_changed = crate::residency::ensure_residency_catalog(&mut global)?;
+    if config_changed || deployment_changed || canary_changed || residency_changed {
         persist_global_config_unlocked(&config_dir, &global)?;
     }
     let running_revision_id = state
@@ -257,6 +265,7 @@ pub fn replace_engine_names_and_persist(
     crate::config_revision::ensure_current_config_revisions(&mut global)?;
     crate::deployment::ensure_deployments(&mut global)?;
     crate::canary::ensure_canary_catalog(&mut global)?;
+    crate::residency::ensure_residency_catalog(&mut global)?;
     publish_engine_names_after_persist(&state.engine_names, engine_names, |names| {
         global.engine_names = names.clone();
         persist_global_config_unlocked(&config_dir, &global).map(|_| ())
@@ -323,11 +332,15 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
         .and_then(|changed| {
             crate::canary::ensure_canary_catalog(&mut config)
                 .map(|canary_changed| changed || canary_changed)
+        })
+        .and_then(|changed| {
+            crate::residency::ensure_residency_catalog(&mut config)
+                .map(|residency_changed| changed || residency_changed)
         });
     match migration {
         Ok(true) => {
             if let Err(error) = persist_global_config(config_dir, &config) {
-                let warning = format!("配置或部署修订迁移未能持久化：{error}");
+                let warning = format!("配置、部署修订或模型驻留记录迁移未能持久化：{error}");
                 config.config_load_warning = Some(match config.config_load_warning.take() {
                     Some(existing) => format!("{existing}；{warning}"),
                     None => warning,
@@ -340,7 +353,7 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
             // traffic automatically. Keep its evidence intact but disable the
             // proxy in the recovered in-memory snapshot.
             config.proxy_config.enabled = false;
-            let warning = format!("配置、部署或金丝雀发布记录迁移失败：{error}");
+            let warning = format!("配置、部署、金丝雀发布或模型驻留记录迁移失败：{error}");
             config.config_load_warning = Some(match config.config_load_warning.take() {
                 Some(existing) => format!("{existing}；{warning}"),
                 None => warning,
@@ -555,6 +568,8 @@ pub async fn save_config(
             .map_err(|error| AppError::new("DEPLOYMENT_MIGRATION_FAILED", error, false))?;
         crate::canary::ensure_canary_catalog(&mut global)
             .map_err(|error| AppError::new("CANARY_MIGRATION_FAILED", error, false))?;
+        crate::residency::ensure_residency_catalog(&mut global)
+            .map_err(|error| AppError::new("RESIDENCY_MIGRATION_FAILED", error, false))?;
         let previous_instances = global.instances.clone();
         let changed_instance_ids = crate::config_revision::changed_deployment_instance_ids(
             &previous_instances,
@@ -593,6 +608,8 @@ pub async fn save_config(
             .map_err(|error| AppError::new("CONFIG_REVISION_CREATE_FAILED", error, false))?;
         crate::deployment::ensure_deployments(&mut global)
             .map_err(|error| AppError::new("DEPLOYMENT_MIGRATION_FAILED", error, false))?;
+        crate::residency::ensure_residency_catalog(&mut global)
+            .map_err(|error| AppError::new("RESIDENCY_MIGRATION_FAILED", error, false))?;
         persist_global_config_unlocked(&config_dir, &global).map_err(|error| {
             AppError::new("CONFIG_PERSIST_FAILED", error, true).with_context(
                 "path",
@@ -636,6 +653,7 @@ pub async fn load_config(
         global.download_bandwidth_limit_bytes_per_sec;
     *state.download_low_priority_throttle.lock().unwrap() = global.download_low_priority_throttle;
     *state.proxy_config.lock().unwrap() = global.proxy_config.clone();
+    *state.residency_draining.lock().unwrap() = crate::residency::draining_instance_ids(&global);
 
     // Restore log capture, metrics, and the single authoritative health monitor.
     let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
@@ -881,6 +899,10 @@ mod tests {
             deployments: HashMap::new(),
             canary_schema_version: crate::canary::CANARY_SCHEMA_VERSION,
             canary_rollouts: Vec::new(),
+            residency_schema_version: crate::residency::RESIDENCY_SCHEMA_VERSION,
+            residency_policy: crate::residency::ResidencyPolicy::default(),
+            residency_placements: Vec::new(),
+            residency_audit: Vec::new(),
         }
     }
 
@@ -918,6 +940,41 @@ mod tests {
                 .to_string_lossy()
                 .to_string()]
         );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn legacy_config_migrates_the_residency_catalog_without_frontend_injection() {
+        let dir = temp_config_dir("legacy-residency-catalog");
+        let legacy = sample_config();
+        let mut value = serde_json::to_value(legacy).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("residency_schema_version");
+        object.remove("residency_policy");
+        object.remove("residency_placements");
+        object.remove("residency_audit");
+        std::fs::write(
+            dir.join("instances.json"),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = read_config_from_disk(&dir);
+        assert_eq!(
+            loaded.residency_schema_version,
+            crate::residency::RESIDENCY_SCHEMA_VERSION
+        );
+        assert_eq!(
+            loaded.residency_policy,
+            crate::residency::ResidencyPolicy::default()
+        );
+        assert!(loaded.residency_placements.is_empty());
+        assert!(loaded.residency_audit.is_empty());
+        let frontend = FrontendGlobalConfig::from(&loaded);
+        let frontend_value = serde_json::to_value(frontend).unwrap();
+        assert!(frontend_value.get("residency_policy").is_none());
+        assert!(frontend_value.get("residency_placements").is_none());
+        assert!(frontend_value.get("residency_audit").is_none());
         let _ = std::fs::remove_dir_all(dir);
     }
 
