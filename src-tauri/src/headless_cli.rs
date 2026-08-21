@@ -336,6 +336,10 @@ fn seed_test_fixture(data_dir: Option<PathBuf>) -> AppResult<CommandResult> {
     }
     let model_path = model_root.join("fixture.gguf");
     std::fs::write(&model_path, vec![b'f'; 128 * 1024])?;
+    // Match the real scanner's stable path identity. CI temporary directories can
+    // be aliases (/var -> /private/var on macOS or 8.3 -> long paths on Windows).
+    let engine_path = std::fs::canonicalize(&engine_path)?;
+    let model_path = std::fs::canonicalize(&model_path)?;
 
     let engine_identity =
         crate::deployment_identity::artifact_identity_for_path("engine", &engine_path)
