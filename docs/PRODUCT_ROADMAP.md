@@ -14,12 +14,13 @@ The product should remain useful on a single workstation while building a delibe
 | --- | --- | --- | --- |
 | Phase 1 — Reliable Runtime | Complete | [#53](https://github.com/jerrydong1988/llama-server-manager/issues/53) | [Milestone 1](https://github.com/jerrydong1988/llama-server-manager/milestone/1) |
 | Phase 2 — Managed Deployment | Complete | [#54](https://github.com/jerrydong1988/llama-server-manager/issues/54) | [Milestone 2](https://github.com/jerrydong1988/llama-server-manager/milestone/2) |
-| Phase 3 — Distributed Control Plane | **Current** | [#55](https://github.com/jerrydong1988/llama-server-manager/issues/55) | [Milestone 3](https://github.com/jerrydong1988/llama-server-manager/milestone/3) |
+| Phase 3 — Distributed Control Plane | Complete | [#55](https://github.com/jerrydong1988/llama-server-manager/issues/55) | [Milestone 3](https://github.com/jerrydong1988/llama-server-manager/milestone/3) |
 
-- **Current phase:** Phase 3 — Distributed Control Plane
+- **Current phase:** None — Phase 1 through Phase 3 are complete.
 - **Last roadmap review:** 2026-08-21
+- **Program status:** The three-phase roadmap is complete. Any successor phase requires a dedicated roadmap change.
 - **Phase order:** Phase 1 → Phase 2 → Phase 3
-- **Transition basis:** Phase 2 tracker [#54](https://github.com/jerrydong1988/llama-server-manager/issues/54) records accepted exit evidence for every Phase 2 workstream and has no unresolved exit blocker.
+- **Completion basis:** Phase 3 tracker [#55](https://github.com/jerrydong1988/llama-server-manager/issues/55) records accepted exit evidence for every Phase 3 workstream and has no unresolved exit blocker.
 
 Only a dedicated roadmap pull request may change the current-phase marker, phase order, product direction, or exit gates.
 
@@ -120,7 +121,7 @@ Phase 1 establishes identity, recovery, and rollback. Phase 2 makes revisions de
 
 ## Phase 3 — Distributed Control Plane
 
-**Status:** Current. Activated on 2026-08-21 after the Phase 2 transition protocol completed.
+**Status:** Complete. Exit accepted on 2026-08-21 in [tracker #55](https://github.com/jerrydong1988/llama-server-manager/issues/55).
 
 **Outcome:** Coordinate secure workers and resource-aware routing while preserving first-class single-node operation.
 
@@ -171,9 +172,9 @@ Ideas for later phases must be captured in their tracking issue or a linked cand
 1. Complete the current phase tracker and link objective evidence for every exit criterion.
 2. Run the relevant local validation and all required cross-platform CI.
 3. Perform a dedicated phase-exit review; unresolved blockers keep the phase current.
-4. Merge a dedicated roadmap pull request that marks the phase complete and the next phase current.
-5. Update both milestone descriptions and both phase tracking issues.
-6. Only then start a Codex Goal or implementation issue for the next phase.
+4. Merge a dedicated roadmap pull request that marks the phase complete and the next phase current. When the final planned phase exits, mark the roadmap complete without inventing a successor phase.
+5. Update the affected milestone descriptions and phase tracking issues.
+6. Only then start a Codex Goal or implementation issue for the next phase. If no successor phase is planned, new product work requires a dedicated roadmap change first.
 
 Closing a milestone or shipping a release does not automatically activate the next phase.
 
