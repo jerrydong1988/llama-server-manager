@@ -104,6 +104,8 @@ jobs:
         run: cargo build --manifest-path src-tauri/Cargo.toml --locked
       - name: Test independent runtime lifecycle on Windows
         run: npm run test:runtime-service
+      - name: Test Headless CLI lifecycle on Windows
+        run: npm run test:headless-cli
       - name: Validate user guide
         run: npm run check:guide
       - name: Detect SignPath configuration
@@ -142,6 +144,20 @@ jobs:
       - name: Build Tauri release and updater payload
         if: startsWith(github.ref, 'refs/tags/v')
         run: npm run tauri build -- --config src-tauri/tauri.updater.conf.json
+      - name: Verify Headless CLI in Windows package
+        shell: pwsh
+        run: |
+          $packages = @(Get-ChildItem -Path 'src-tauri/target/release/bundle/msi/*.msi' -File)
+          if ($packages.Count -ne 1) { throw "Expected one MSI package, found $($packages.Count)" }
+          $destination = Join-Path $env:RUNNER_TEMP 'lsm-msi-layout'
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          $arguments = @('/a', "`"$($packages[0].FullName)`"", '/qn', "TARGETDIR=`"$destination`"")
+          $process = Start-Process -FilePath 'msiexec.exe' -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "MSI administrative extraction failed: $($process.ExitCode)" }
+          $commands = @(Get-ChildItem -LiteralPath $destination -Recurse -File -Filter 'lsm.exe')
+          if ($commands.Count -ne 1) { throw "Expected one packaged lsm.exe, found $($commands.Count)" }
+          $version = & $commands[0].FullName --output json version | ConvertFrom-Json
+          if (-not $version.ok -or $version.data.schemaVersion -ne 1) { throw 'Packaged lsm.exe contract check failed' }
       - name: Upload unsigned Windows installers for signing
         id: upload-unsigned-windows
         if: startsWith(github.ref, 'refs/tags/v')
@@ -245,6 +261,8 @@ jobs:
         run: cargo build --manifest-path src-tauri/Cargo.toml --locked
       - name: Test independent runtime lifecycle on macOS
         run: npm run test:runtime-service
+      - name: Test Headless CLI lifecycle on macOS
+        run: npm run test:headless-cli
       - name: Validate user guide
         run: npm run check:guide
       - name: Detect Apple signing configuration
@@ -309,6 +327,16 @@ jobs:
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --config src-tauri/tauri.updater.conf.json
+      - name: Verify Headless CLI in macOS package
+        run: |
+          command_count="$(find src-tauri/target/release/bundle/macos -type f -path '*/Contents/MacOS/lsm' | wc -l | tr -d '[:space:]')"
+          if [ "$command_count" -ne 1 ]; then
+            echo "Expected one packaged macOS lsm, found $command_count" >&2
+            exit 1
+          fi
+          command_path="$(find src-tauri/target/release/bundle/macos -type f -path '*/Contents/MacOS/lsm' | head -n 1)"
+          test -x "$command_path"
+          "$command_path" --output json version | grep -F '"schemaVersion": 1'
       - name: Prepare exact macOS updater payload
         run: |
           destination="$RUNNER_TEMP/updater-macos"
@@ -414,10 +442,23 @@ jobs:
         run: cargo build --manifest-path src-tauri/Cargo.toml --locked
       - name: Test independent runtime lifecycle on Linux x64
         run: npm run test:runtime-service
+      - name: Test Headless CLI lifecycle on Linux x64
+        run: npm run test:headless-cli
       - name: Validate user guide
         run: npm run check:guide
       - name: Build Linux x86_64 DEB package
         run: npm run tauri build -- --bundles deb
+      - name: Verify Headless CLI in Linux x86_64 package
+        run: |
+          mapfile -t packages < <(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb')
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "Expected one Linux x86_64 DEB, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          destination="$RUNNER_TEMP/lsm-deb-layout"
+          dpkg-deb -x "${packages[0]}" "$destination"
+          test -x "$destination/usr/bin/lsm"
+          "$destination/usr/bin/lsm" --output json version | grep -F '"schemaVersion": 1'
       - name: Upload Linux x86_64 GitHub release input
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -475,10 +516,23 @@ jobs:
         run: cargo build --manifest-path src-tauri/Cargo.toml --locked
       - name: Test independent runtime lifecycle on Linux ARM64
         run: npm run test:runtime-service
+      - name: Test Headless CLI lifecycle on Linux ARM64
+        run: npm run test:headless-cli
       - name: Validate user guide
         run: npm run check:guide
       - name: Build Linux ARM64 DEB package
         run: npm run tauri build -- --bundles deb
+      - name: Verify Headless CLI in Linux ARM64 package
+        run: |
+          mapfile -t packages < <(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb')
+          if [ "${#packages[@]}" -ne 1 ]; then
+            echo "Expected one Linux ARM64 DEB, found ${#packages[@]}" >&2
+            exit 1
+          fi
+          destination="$RUNNER_TEMP/lsm-deb-layout"
+          dpkg-deb -x "${packages[0]}" "$destination"
+          test -x "$destination/usr/bin/lsm"
+          "$destination/usr/bin/lsm" --output json version | grep -F '"schemaVersion": 1'
       - name: Upload Linux ARM64 GitHub release input
         if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

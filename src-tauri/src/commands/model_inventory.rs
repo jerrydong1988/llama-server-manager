@@ -211,7 +211,7 @@ fn open_raw_connection() -> Result<Connection, String> {
     Ok(conn)
 }
 
-pub(crate) fn initialize_inventory_storage() -> Result<(), String> {
+pub fn initialize_inventory_storage() -> Result<(), String> {
     if INVENTORY_SCHEMA_READY.load(Ordering::Acquire) {
         return Ok(());
     }

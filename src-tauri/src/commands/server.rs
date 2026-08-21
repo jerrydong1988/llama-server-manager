@@ -337,7 +337,6 @@ pub(crate) fn telemetry_config_hash(config: &InstanceConfig) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-#[cfg(test)]
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
     prepare_launch(config.clone(), engine_path).2
 }
@@ -2327,26 +2326,30 @@ pub async fn generate_server_command(
     })
 }
 
-#[tauri::command]
-pub async fn start_server(
-    instance_id: String,
+struct PreparedServerLaunch {
     config: InstanceConfig,
-    engine_exe: String,
-    engine_backend: String,
-    manual_recovery: Option<bool>,
-    state: tauri::State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> AppResult<()> {
-    let mut timing = crate::operation_timing::OperationTiming::new("start_server");
-    validate_configured_engine(state.inner(), &config, &engine_exe)?;
-    let engine_qualification = validate_engine_qualification(state.inner(), &config, &engine_exe)?;
-    validate_instance_id(&instance_id)?;
-    let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
+    workload: ModelWorkload,
+    command: Vec<String>,
+    command_display: String,
+    engine_qualification: ValidatedEngineQualification,
+    deployment_identity: crate::deployment_identity::DeploymentIdentity,
+    deployment_revision: crate::deployment::DeploymentRevision,
+}
+
+fn prepare_server_launch(
+    state: &AppState,
+    instance_id: &str,
+    config: InstanceConfig,
+    engine_exe: &str,
+    engine_backend: &str,
+) -> AppResult<PreparedServerLaunch> {
+    validate_configured_engine(state, &config, engine_exe)?;
+    let engine_qualification = validate_engine_qualification(state, &config, engine_exe)?;
     let manual = uses_manual_command(&config);
-    let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
+    let (config, workload, generated_command) = prepare_launch_checked(config, engine_exe)?;
     let resource_plan = crate::resource_planner::plan_instance_resources(
         &config,
-        &engine_backend,
+        engine_backend,
         current_capacity_snapshot(),
     );
     if resource_plan.explicitly_infeasible() {
@@ -2365,30 +2368,29 @@ pub async fn start_server(
         ));
     }
     let deployment_identity = build_deployment_identity(
-        state.inner(),
-        &instance_id,
+        state,
+        instance_id,
         &config,
-        &engine_exe,
+        engine_exe,
         &engine_qualification,
     )?;
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
-    let cmd = if manual {
-        generated_cmd
+    let command = if manual {
+        generated_command
     } else {
-        let engine_capabilities =
-            match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
-                EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
-                EngineCapabilityResolution::Missing => None,
-                EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
-            };
+        let engine_capabilities = match trusted_engine_capabilities(state, &config, engine_exe) {
+            EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
+            EngineCapabilityResolution::Missing => None,
+            EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
+        };
         validate_custom_argument_capabilities(&config, engine_capabilities.as_deref())?;
-        let generated_cmd = adapt_managed_arguments_for_capabilities(
-            &generated_cmd,
+        let generated_command = adapt_managed_arguments_for_capabilities(
+            &generated_command,
             engine_capabilities.as_deref(),
         );
         if let Some(capabilities) = engine_capabilities.as_deref() {
-            let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
+            let unsupported = unsupported_command_flags(&generated_command, capabilities);
             if !unsupported.is_empty() {
                 return Err(AppError::new(
                     "ENGINE_PARAMETER_UNSUPPORTED",
@@ -2400,7 +2402,7 @@ pub async fn start_server(
                 ));
             }
         }
-        let blocked = blocked_security_flags(&generated_cmd, engine_capabilities.as_deref());
+        let blocked = blocked_security_flags(&generated_command, engine_capabilities.as_deref());
         if !blocked.is_empty() {
             return Err(AppError::new(
                 "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
@@ -2411,91 +2413,217 @@ pub async fn start_server(
                 false,
             ));
         }
-        command_for_capabilities(&generated_cmd, engine_capabilities.as_deref())
+        command_for_capabilities(&generated_command, engine_capabilities.as_deref())
     };
-    validate_effective_launch_security(&config, &cmd)?;
-    let cmd_display = format_command_for_display(&cmd);
+    validate_effective_launch_security(&config, &command)?;
+    let command_display = format_command_for_display(&command);
     let deployment_revision = crate::commands::config::materialize_deployment_revision(
-        state.inner(),
-        &instance_id,
+        state,
+        instance_id,
         &deployment_identity,
     )
     .map_err(|message| {
         AppError::new("DEPLOYMENT_REVISION_PERSIST_FAILED", message, true)
-            .with_context("instanceId", instance_id.clone())
+            .with_context("instanceId", instance_id)
     })?;
+
+    Ok(PreparedServerLaunch {
+        config,
+        workload,
+        command,
+        command_display,
+        engine_qualification,
+        deployment_identity,
+        deployment_revision,
+    })
+}
+
+async fn start_prepared_runtime_instance(
+    state: &AppState,
+    instance_id: &str,
+    engine_backend: &str,
+    prepared: &PreparedServerLaunch,
+    manual_recovery: bool,
+) -> AppResult<RunningInstance> {
+    let running = crate::runtime_service::start_instance(
+        crate::runtime_service::RuntimeLaunchSpec {
+            instance_id: instance_id.to_string(),
+            config: prepared.config.clone(),
+            launch_config_stale: false,
+            engine_qualification_fingerprint: prepared.engine_qualification.fingerprint.clone(),
+            engine_qualification_profile_version: prepared.engine_qualification.profile_version,
+            deployment_identity: prepared.deployment_identity.clone(),
+            deployment_revision: prepared.deployment_revision.clone(),
+            engine_backend: engine_backend.to_string(),
+            command: prepared.command.clone(),
+            command_display: prepared.command_display.clone(),
+            workload: prepared.workload.as_str().to_string(),
+            working_directory: std::env::current_dir()
+                .ok()
+                .map(|path| path.to_string_lossy().to_string()),
+        },
+        manual_recovery,
+    )
+    .await
+    .map_err(AppError::from)?;
+
+    let previous_instance = {
+        state
+            .running
+            .lock()
+            .unwrap()
+            .insert(instance_id.to_string(), running.clone());
+        let previous = state
+            .instances
+            .lock()
+            .unwrap()
+            .insert(instance_id.to_string(), prepared.config.clone());
+        state
+            .runtime_managed_instances
+            .lock()
+            .unwrap()
+            .insert(instance_id.to_string());
+        previous
+    };
+    let running_snapshot = state.running.lock().unwrap().clone();
+    let persisted_instance_id = instance_id.to_string();
+    let persisted_config = prepared.config.clone();
+    if let Err(error) = crate::commands::config::update_and_persist(state, |global| {
+        global.running = running_snapshot;
+        global
+            .instances
+            .insert(persisted_instance_id, persisted_config);
+    }) {
+        let _ = crate::runtime_service::stop_instance(instance_id.to_string()).await;
+        state.running.lock().unwrap().remove(instance_id);
+        state
+            .runtime_managed_instances
+            .lock()
+            .unwrap()
+            .remove(instance_id);
+        let mut instances = state.instances.lock().unwrap();
+        if let Some(previous) = previous_instance {
+            instances.insert(instance_id.to_string(), previous);
+        } else {
+            instances.remove(instance_id);
+        }
+        return Err(AppError::new(
+            "RUNTIME_STATE_PERSIST_FAILED",
+            format!("后台运行时已回滚实例启动，因为配置持久化失败: {error}"),
+            true,
+        ));
+    }
+    Ok(running)
+}
+
+pub async fn start_configured_runtime_instance(
+    state: &AppState,
+    instance_id: &str,
+) -> AppResult<RunningInstance> {
+    validate_instance_id(instance_id)?;
+    let _reservation = reserve_instance_start(state, instance_id)?;
+    let config = state
+        .instances
+        .lock()
+        .unwrap()
+        .get(instance_id)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::new("INSTANCE_NOT_FOUND", "找不到指定的实例配置。", false)
+                .with_context("instanceId", instance_id)
+        })?;
+    let engine = state
+        .engines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.id),
+                std::path::Path::new(&config.engine_id),
+            )
+        })
+        .cloned()
+        .ok_or_else(|| {
+            AppError::new(
+                "CONFIGURED_ENGINE_NOT_FOUND",
+                "实例配置引用的 llama-server 引擎已不存在，请重新扫描或选择引擎。",
+                false,
+            )
+            .with_context("instanceId", instance_id)
+        })?;
+    crate::runtime_service::sync_app_config(state)
+        .await
+        .map_err(AppError::from)?;
+    let prepared = prepare_server_launch(state, instance_id, config, &engine.exe, &engine.backend)?;
+    start_prepared_runtime_instance(state, instance_id, &engine.backend, &prepared, true).await
+}
+
+pub async fn stop_configured_runtime_instance(
+    state: &AppState,
+    instance_id: &str,
+) -> AppResult<()> {
+    validate_instance_id(instance_id)?;
+    let status = crate::runtime_service::ensure_runtime_service()
+        .await
+        .map_err(AppError::from)?;
+    let configured = state.instances.lock().unwrap().contains_key(instance_id);
+    let runtime_known =
+        status.running.contains_key(instance_id) || status.recovery.contains_key(instance_id);
+    if !configured && !runtime_known {
+        return Err(
+            AppError::new("INSTANCE_NOT_FOUND", "找不到指定的实例。", false)
+                .with_context("instanceId", instance_id),
+        );
+    }
+
+    crate::runtime_service::stop_instance(instance_id.to_string())
+        .await
+        .map_err(AppError::from)?;
+    state.running.lock().unwrap().remove(instance_id);
+    state
+        .runtime_managed_instances
+        .lock()
+        .unwrap()
+        .remove(instance_id);
+    crate::commands::config::update_and_persist(state, |global| {
+        global.running.remove(instance_id);
+    })
+    .map_err(AppError::from)
+}
+
+#[tauri::command]
+pub async fn start_server(
+    instance_id: String,
+    config: InstanceConfig,
+    engine_exe: String,
+    engine_backend: String,
+    manual_recovery: Option<bool>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> AppResult<()> {
+    let mut timing = crate::operation_timing::OperationTiming::new("start_server");
+    validate_instance_id(&instance_id)?;
+    let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
+    let prepared = prepare_server_launch(
+        state.inner(),
+        &instance_id,
+        config,
+        &engine_exe,
+        &engine_backend,
+    )?;
     timing.mark("preflight");
 
     if crate::runtime_service::manages_instances() {
-        let running = crate::runtime_service::start_instance(
-            crate::runtime_service::RuntimeLaunchSpec {
-                instance_id: instance_id.clone(),
-                config: config.clone(),
-                launch_config_stale: false,
-                engine_qualification_fingerprint: engine_qualification.fingerprint.clone(),
-                engine_qualification_profile_version: engine_qualification.profile_version,
-                deployment_identity: deployment_identity.clone(),
-                deployment_revision: deployment_revision.clone(),
-                engine_backend: engine_backend.clone(),
-                command: cmd.clone(),
-                command_display: cmd_display.clone(),
-                workload: workload.as_str().to_string(),
-                working_directory: std::env::current_dir()
-                    .ok()
-                    .map(|path| path.to_string_lossy().to_string()),
-            },
+        let running = start_prepared_runtime_instance(
+            state.inner(),
+            &instance_id,
+            &engine_backend,
+            &prepared,
             manual_recovery.unwrap_or(true),
         )
-        .await
-        .map_err(AppError::from)?;
+        .await?;
         timing.mark("runtime-start");
-
-        let previous_instance = {
-            state
-                .running
-                .lock()
-                .unwrap()
-                .insert(instance_id.clone(), running.clone());
-            let previous = state
-                .instances
-                .lock()
-                .unwrap()
-                .insert(instance_id.clone(), config.clone());
-            state
-                .runtime_managed_instances
-                .lock()
-                .unwrap()
-                .insert(instance_id.clone());
-            previous
-        };
-        let running_snapshot = state.running.lock().unwrap().clone();
-        let persisted_instance_id = instance_id.clone();
-        let persisted_config = config.clone();
-        if let Err(error) = crate::commands::config::update_and_persist(&state, |global| {
-            global.running = running_snapshot;
-            global
-                .instances
-                .insert(persisted_instance_id, persisted_config);
-        }) {
-            let _ = crate::runtime_service::stop_instance(instance_id.clone()).await;
-            state.running.lock().unwrap().remove(&instance_id);
-            state
-                .runtime_managed_instances
-                .lock()
-                .unwrap()
-                .remove(&instance_id);
-            let mut instances = state.instances.lock().unwrap();
-            if let Some(previous) = previous_instance {
-                instances.insert(instance_id.clone(), previous);
-            } else {
-                instances.remove(&instance_id);
-            }
-            return Err(AppError::new(
-                "RUNTIME_STATE_PERSIST_FAILED",
-                format!("后台运行时已回滚实例启动，因为配置持久化失败: {error}"),
-                true,
-            ));
-        }
         timing.mark("persist-main");
 
         app.emit(
@@ -2503,22 +2631,22 @@ pub async fn start_server(
             serde_json::json!({
                 "instanceId": instance_id,
                 "pid": running.pid,
-                "port": config.port,
-                "host": config.host,
-                "command": cmd_display,
+                "port": prepared.config.port,
+                "host": prepared.config.host,
+                "command": prepared.command_display,
                 "effectiveConfig": {
-                    "model_path": config.model_path,
-                    "alias": config.alias,
-                    "host": config.host,
-                    "port": config.port,
-                    "api_key": config.api_key,
-                    "api_key_file": config.api_key_file,
-                    "ssl_key_file": config.ssl_key_file,
-                    "ssl_cert_file": config.ssl_cert_file,
-                    "path_prefix": config.path_prefix,
-                    "api_prefix": config.api_prefix,
-                    "embedding": config.embedding,
-                    "reranking": config.reranking,
+                    "model_path": prepared.config.model_path,
+                    "alias": prepared.config.alias,
+                    "host": prepared.config.host,
+                    "port": prepared.config.port,
+                    "api_key": prepared.config.api_key,
+                    "api_key_file": prepared.config.api_key_file,
+                    "ssl_key_file": prepared.config.ssl_key_file,
+                    "ssl_cert_file": prepared.config.ssl_cert_file,
+                    "path_prefix": prepared.config.path_prefix,
+                    "api_prefix": prepared.config.api_prefix,
+                    "embedding": prepared.config.embedding,
+                    "reranking": prepared.config.reranking,
                 },
             }),
         )
@@ -2531,6 +2659,16 @@ pub async fn start_server(
         timing.finish("success");
         return Ok(());
     }
+
+    let PreparedServerLaunch {
+        config,
+        workload,
+        command: cmd,
+        command_display: cmd_display,
+        deployment_identity,
+        deployment_revision,
+        ..
+    } = prepared;
 
     // Create a log file; llama-server writes here directly without pipe forwarding.
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -3184,7 +3322,7 @@ pub(crate) fn terminate_running_instance(ri: &RunningInstance) -> bool {
     }
 }
 
-pub(crate) fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<String> {
+pub fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<String> {
     let state = app.state::<AppState>();
     let running = state.running.lock().unwrap().clone();
     let mut failures = Vec::new();

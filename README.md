@@ -38,6 +38,10 @@ Use the [Download Center](https://download.cnzone.net/) for the recommended plat
 4. Review context, GPU layers, authentication, and service options, then save.
 5. Start the instance and verify it in Performance and Logs.
 
+已完成桌面配置的实例也可由安装包内置的 [`lsm` Headless CLI](docs/HEADLESS_CLI.md) 通过稳定 JSON 契约与退出码自动启停；它复用同一启动前置检查，不在命令行传递运行时凭据。
+
+Configured instances can also be automated with the bundled [`lsm` Headless CLI](docs/HEADLESS_CLI.md), using stable JSON envelopes and exit codes while preserving the same launch gates and keeping runtime credentials off the command line.
+
 ![首次运行设置顺序 / First-run setup sequence](public/docs/guide/flow-01-first-run.png)
 
 ## 界面预览 / Interface Preview
@@ -109,6 +113,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - 实例 API Key 与 API Key 文件支持；统一路由支持摘要持久化的多 Key、推理/发现权限、独立限流和精确 Origin CORS。
 - 同一统一路由原生支持 OpenAI Chat Completions / Responses 与 Anthropic Messages，并提供严格模型边界、健康探测、熔断、四种调度策略、安全 `/slots` 发现和 Prometheus 指标。
 - 独立后台运行时可在管理界面退出后继续托管实例与路由，并在当前用户登录后恢复。
+- 安装包内置 `lsm` Headless CLI，提供实例与路由生命周期、结构化输出、稳定退出码和本地私有认证。
 - 可选的实例故障自愈提供有界退避重启、持久化 Crash Loop 保护和原始故障诊断。
 - 每个实例保留有界、脱敏的配置修订历史，支持已知良好标记和停止状态下的事务回滚。
 - 启动前引擎资格认证验证版本、能力、启动、健康和代表性推理；报告绑定引擎指纹，证据缺失或失效时安全阻止启动。
@@ -122,6 +127,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - Inline or file-based instance keys plus hashed, scoped multi-key routing authentication, per-key limits, and exact-origin CORS.
 - Native OpenAI Chat Completions / Responses and Anthropic Messages on one listener, with strict model boundaries, active probes, circuit breaking, four schedulers, safe `/slots` discovery, and Prometheus metrics.
 - An independent background runtime that keeps instances and routing alive after the management UI exits and restores them at user login.
+- A bundled `lsm` Headless CLI for instance and proxy lifecycle, structured output, stable exit codes, and private local authentication.
 - Preflight engine qualification verifies version, capabilities, startup, health, and representative inference; fingerprint-bound evidence fails closed when missing or stale.
 - Atomic configuration saves, backup fallback, persistent downloads and logs.
 - Port, path, configuration, startup, and health validation.

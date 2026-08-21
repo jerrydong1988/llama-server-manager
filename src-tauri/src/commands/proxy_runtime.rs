@@ -166,7 +166,7 @@ impl Default for DynamicConcurrencyLimiter {
     }
 }
 
-pub(crate) struct RouterRuntime {
+pub struct RouterRuntime {
     started_at: Instant,
     draining_targets: Mutex<HashSet<String>>,
     targets: Mutex<HashMap<String, TargetRuntime>>,

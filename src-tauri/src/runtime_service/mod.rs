@@ -457,6 +457,66 @@ async fn ping_with_token(token: String) -> bool {
     )
 }
 
+#[cfg(windows)]
+struct StandardHandleInheritanceGuard {
+    handles: Vec<(windows_sys::Win32::Foundation::HANDLE, u32)>,
+}
+
+#[cfg(windows)]
+impl StandardHandleInheritanceGuard {
+    fn acquire() -> Result<Self, String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{
+            GetHandleInformation, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
+        };
+
+        let handles = [
+            std::io::stdin().as_raw_handle() as HANDLE,
+            std::io::stdout().as_raw_handle() as HANDLE,
+            std::io::stderr().as_raw_handle() as HANDLE,
+        ];
+        let mut protected = Vec::new();
+        for handle in handles {
+            let mut flags = 0_u32;
+            if unsafe { GetHandleInformation(handle, &mut flags) } == 0
+                || flags & HANDLE_FLAG_INHERIT == 0
+            {
+                continue;
+            }
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
+                for (protected_handle, protected_flags) in &protected {
+                    unsafe {
+                        SetHandleInformation(
+                            *protected_handle,
+                            HANDLE_FLAG_INHERIT,
+                            *protected_flags & HANDLE_FLAG_INHERIT,
+                        );
+                    }
+                }
+                return Err(format!(
+                    "failed to protect runtime service handle inheritance: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            protected.push((handle, flags));
+        }
+        Ok(Self { handles: protected })
+    }
+}
+
+#[cfg(windows)]
+impl Drop for StandardHandleInheritanceGuard {
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+
+        for (handle, flags) in &self.handles {
+            unsafe {
+                SetHandleInformation(*handle, HANDLE_FLAG_INHERIT, *flags & HANDLE_FLAG_INHERIT);
+            }
+        }
+    }
+}
+
 fn spawn_runtime_process() -> Result<(), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("failed to locate runtime executable: {error}"))?;
@@ -504,6 +564,8 @@ fn spawn_runtime_process() -> Result<(), String> {
             Ok(())
         });
     }
+    #[cfg(windows)]
+    let _inheritance_guard = StandardHandleInheritanceGuard::acquire()?;
     command
         .spawn()
         .map(|_| ())
@@ -725,7 +787,7 @@ fn runtime_status_payload(
     })
 }
 
-pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus) {
+pub fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus) {
     use tauri::{Emitter, Manager};
 
     let state = app.state::<crate::models::AppState>();

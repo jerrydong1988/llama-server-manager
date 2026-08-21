@@ -1,5 +1,6 @@
 use crate::commands::config::{
-    load_global_config_for_update_unlocked, persist_global_config_unlocked, CONFIG_WRITE_LOCK,
+    load_global_config_for_update_unlocked, lock_global_config_for_update,
+    persist_global_config_unlocked,
 };
 use crate::error::{AppError, AppResult};
 use crate::models::{AppState, GlobalConfig, InstanceConfig};
@@ -798,8 +799,11 @@ pub fn resolve_current_config_identity(
     instance_id: &str,
     config: &InstanceConfig,
 ) -> AppResult<ConfigRevisionIdentity> {
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir).map_err(|error| {
+        config_revision_error("DEPLOYMENT_CONFIG_LOCK_FAILED", error, true)
+            .with_context("instanceId", instance_id)
+    })?;
     let mut global = load_global_config_for_update_unlocked(&config_dir).map_err(|error| {
         config_revision_error("DEPLOYMENT_CONFIG_LOAD_FAILED", error, true)
             .with_context("instanceId", instance_id)
@@ -872,8 +876,11 @@ pub fn list_config_revisions(
     state: tauri::State<'_, AppState>,
 ) -> AppResult<ConfigRevisionHistoryResponse> {
     validate_instance_id(&instance_id)?;
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir).map_err(|error| {
+        config_revision_error("CONFIG_REVISION_LOCK_FAILED", error, true)
+            .with_context("instanceId", &instance_id)
+    })?;
     let mut global = load_global_config_for_update_unlocked(&config_dir).map_err(|error| {
         config_revision_error("CONFIG_REVISION_LOAD_FAILED", error, true)
             .with_context("instanceId", &instance_id)
@@ -966,8 +973,11 @@ pub fn mark_config_revision_known_good(
     state: tauri::State<'_, AppState>,
 ) -> AppResult<ConfigRevisionHistoryResponse> {
     validate_instance_id(&instance_id)?;
-    let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
     let config_dir = state.config_dir.lock().unwrap().clone();
+    let _guard = lock_global_config_for_update(&config_dir).map_err(|error| {
+        config_revision_error("CONFIG_REVISION_LOCK_FAILED", error, true)
+            .with_context("instanceId", &instance_id)
+    })?;
     let mut global = load_global_config_for_update_unlocked(&config_dir).map_err(|error| {
         config_revision_error("CONFIG_REVISION_LOAD_FAILED", error, true)
             .with_context("instanceId", &instance_id)
@@ -1161,7 +1171,10 @@ pub async fn rollback_config_revision(
 
     let config_dir = state.config_dir.lock().unwrap().clone();
     let (config, history) = {
-        let _guard = CONFIG_WRITE_LOCK.lock().unwrap();
+        let _guard = lock_global_config_for_update(&config_dir).map_err(|error| {
+            config_revision_error("CONFIG_REVISION_LOCK_FAILED", error, true)
+                .with_context("instanceId", &instance_id)
+        })?;
         if state.running.lock().unwrap().contains_key(&instance_id) {
             return Err(config_revision_error(
                 "CONFIG_REVISION_LIFECYCLE_CONFLICT",

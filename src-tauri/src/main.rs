@@ -1,21 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod canary;
-mod commands;
-mod config_revision;
-mod deployment;
-mod deployment_identity;
-mod error;
-mod models;
-mod operation_timing;
-mod path_utils;
-mod persistence;
-mod residency;
-mod resource_planner;
-mod runtime_service;
-mod security;
-mod utils;
-mod vector_policy;
+pub use llama_server_manager::*;
 
 use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
 use crate::commands::canary::ipc::{
@@ -77,9 +62,8 @@ use crate::config_revision::{
     list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
 };
 use crate::models::{AppState, WindowState, WorkerOrigin};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::Instant;
 use tauri::{Emitter, Manager};
 
@@ -427,7 +411,6 @@ fn main() {
         eprintln!("Path authority initialization failed: {error}");
     }
     let initial_workers = load_workers();
-    let initial_residency_draining = crate::residency::draining_instance_ids(&initial_config);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -636,46 +619,13 @@ fn main() {
             }));
             Ok(())
         })
-        .manage(AppState {
-            models: Mutex::new(default_models),
-            engines: Mutex::new(default_engines),
-            model_scan_generation: std::sync::atomic::AtomicU64::new(0),
-            engine_scan_generation: std::sync::atomic::AtomicU64::new(0),
-            engine_names: Mutex::new(HashMap::new()),
-            instances: Mutex::new(HashMap::new()),
-            running: Mutex::new(HashMap::new()),
-            starting: Mutex::new(std::collections::HashSet::new()),
-            config_dir: Mutex::new(config_dir),
-            cancel_flags: Mutex::new(HashMap::new()),
-            pause_flags: Mutex::new(HashMap::new()),
-            active_downloads: Mutex::new(std::collections::HashSet::new()),
-            active_download_paths: Mutex::new(std::collections::HashSet::new()),
-            download_queue: Mutex::new(Vec::new()),
-            download_active_batches: Mutex::new(std::collections::HashSet::new()),
-            download_active_entries: Mutex::new(HashMap::new()),
-            download_last_inflight_persist: Mutex::new(Instant::now()),
-            download_scheduler_lock: Mutex::new(()),
-            download_inflight_lock: Mutex::new(()),
-            download_shutting_down: std::sync::atomic::AtomicBool::new(false),
-            download_active_file_slots: std::sync::atomic::AtomicUsize::new(0),
-            download_slot_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
-            download_max_concurrent: Mutex::new(initial_config.download_max_concurrent.max(1)),
-            download_bandwidth_limit_bytes_per_sec: Mutex::new(initial_config.download_bandwidth_limit_bytes_per_sec),
-            download_low_priority_throttle: Mutex::new(initial_config.download_low_priority_throttle),
-            download_bandwidth_limiter: Mutex::new(models::DownloadBandwidthLimiter::default()),
-            workers: Mutex::new(initial_workers),
-            usb4_adapters: Mutex::new(Vec::new()),
-            proxy_config: Mutex::new(initial_config.proxy_config),
-            proxy_shutdown: Mutex::new(None),
-            proxy_task: Mutex::new(None),
-            proxy_router_runtime: Mutex::new(None),
-            residency_draining: Mutex::new(initial_residency_draining),
-            proxy_bound_addr: Mutex::new(None),
-            proxy_last_error: Mutex::new(None),
-            proxy_lifecycle_lock: tokio::sync::Mutex::new(()),
-            runtime_managed_instances: Mutex::new(std::collections::HashSet::new()),
-            restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
-        })
+        .manage(AppState::from_global_config(
+            config_dir,
+            &initial_config,
+            default_models,
+            default_engines,
+            initial_workers,
+        ))
         .invoke_handler(tauri::generate_handler![
             scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata,
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
