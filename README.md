@@ -74,9 +74,9 @@ Choose model, engine, and port per instance, tune structured options with search
 
 ### 实例路由 / Instance Routing
 
-把多个运行实例聚合为生产级 OpenAI / Anthropic 兼容入口。支持 Chat Completions、Responses、Messages、Token Count、Embeddings、Rerank、严格模型边界、四种调度策略、主动健康探测、熔断、并发与限流、细粒度 API Key、CORS、安全 `/props`/`/slots` 发现和 Prometheus 指标。
+把多个运行实例聚合为生产级 OpenAI / Anthropic 兼容入口。支持 Chat Completions、Responses、Messages、Token Count、Embeddings、Rerank、严格模型边界、四种调度策略、隐私安全的会话/提示缓存 locality、主动健康探测、熔断、并发与限流、细粒度 API Key、CORS、安全 `/props`/`/slots` 发现和 Prometheus 指标。
 
-Expose running instances through one production OpenAI / Anthropic-compatible gateway with Chat Completions, Responses, Messages, embeddings, rerank, strict model boundaries, four schedulers, active probes, circuit breaking, concurrency and rate limits, scoped API keys, safe capability discovery, and Prometheus metrics.
+Expose running instances through one production OpenAI / Anthropic-compatible gateway with Chat Completions, Responses, Messages, embeddings, rerank, strict model boundaries, four schedulers, privacy-safe session/prompt-cache locality, active probes, circuit breaking, concurrency and rate limits, scoped API keys, safe capability discovery, and Prometheus metrics.
 
 ![实例路由 / Instance Routing](public/docs/guide/08-instance-routing.png)
 

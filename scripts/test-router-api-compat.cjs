@@ -31,6 +31,9 @@ for (const route of [
 
 for (const field of [
   'strict_model_routing',
+  'locality_routing_enabled',
+  'locality_ttl_ms',
+  'locality_max_entries',
   'connect_timeout_ms',
   'streaming_idle_timeout_ms',
   'health_check_interval_ms',
@@ -51,6 +54,11 @@ for (const strategy of ['priorityFailover', 'roundRobin', 'leastBusy', 'weighted
 }
 
 assert.match(proxy, /PROXY_API_KEY_HASH_PREFIX/)
+assert.match(proxy, /x-lsm-session-id/)
+assert.match(proxy, /x-lsm-locality/)
+assert.match(runtime, /lsm_router_locality_hits_total/)
+assert.match(runtime, /lsm_router_locality_fallbacks_total/)
+assert.match(docs, /localityRoutingEnabled/)
 assert.match(proxy, /cors_allowed_origins/)
 assert.match(proxy, /HashSet::from\(\["inference", "discovery"\]\)/)
 assert.match(proxy, /for key in \["id", "n_ctx", "speculative", "is_processing", "n_past"\]/)

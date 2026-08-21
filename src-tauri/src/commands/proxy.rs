@@ -54,6 +54,9 @@ const MAX_PROXY_IN_FLIGHT_BODY_BYTES: usize = 256 * 1024 * 1024;
 const TARGET_CAPABILITY_MAX_AGE: Duration = Duration::from_secs(60);
 const PROXY_API_KEY_HASH_PREFIX: &str = "sha256:";
 const SUPPORTED_ANTHROPIC_VERSION: &str = "2023-06-01";
+const LSM_SESSION_HEADER: &str = "x-lsm-session-id";
+const MAX_LOCALITY_SESSION_ID_BYTES: usize = 256;
+const MAX_LOCALITY_PREFIX_BYTES: usize = 4 * 1024;
 
 fn proxy_http_client(connect_timeout_ms: u64) -> reqwest::Client {
     let connect_timeout_ms = connect_timeout_ms.clamp(100, 60_000);
@@ -841,6 +844,8 @@ pub(crate) fn normalize_and_validate_proxy_config(
         .clamp(250, config.health_check_interval_ms.max(250));
     config.unhealthy_threshold = config.unhealthy_threshold.clamp(1, 100);
     config.recovery_cooldown_ms = config.recovery_cooldown_ms.clamp(1_000, 3_600_000);
+    config.locality_ttl_ms = config.locality_ttl_ms.clamp(60_000, 24 * 60 * 60 * 1_000);
+    config.locality_max_entries = config.locality_max_entries.clamp(1, 100_000);
     config.max_concurrent_requests = config.max_concurrent_requests.clamp(1, 100_000);
     config.queue_timeout_ms = config.queue_timeout_ms.clamp(10, 300_000);
     config.requests_per_minute = config.requests_per_minute.min(10_000_000);
@@ -1309,6 +1314,101 @@ pub(crate) fn proxy_request_resolution_from(
     }
 }
 
+fn bounded_locality_material(kind: &str, bytes: &[u8]) -> Vec<u8> {
+    let mut material =
+        Vec::with_capacity(kind.len() + 1 + bytes.len().min(MAX_LOCALITY_PREFIX_BYTES));
+    material.extend_from_slice(kind.as_bytes());
+    material.push(0);
+    material.extend_from_slice(&bytes[..bytes.len().min(MAX_LOCALITY_PREFIX_BYTES)]);
+    material
+}
+
+fn locality_identifier(value: &serde_json::Value) -> Option<&str> {
+    value
+        .as_str()
+        .or_else(|| value.as_object()?.get("id")?.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn stable_message_material(value: &serde_json::Value, field: &str) -> Option<Vec<u8>> {
+    let messages = value.get(field)?.as_array()?;
+    let mut prefix = Vec::new();
+    for message in messages {
+        let role = message
+            .get("role")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        prefix.push(message);
+        if !matches!(role, "system" | "developer") {
+            break;
+        }
+    }
+    if prefix.is_empty() {
+        return None;
+    }
+    let serialized = serde_json::to_vec(&(value.get("system"), prefix)).ok()?;
+    Some(bounded_locality_material("message-prefix", &serialized))
+}
+
+fn request_locality_material(headers: &HeaderMap, body: &[u8]) -> Result<Option<Vec<u8>>, String> {
+    if let Some(value) = headers.get(LSM_SESSION_HEADER) {
+        let value = value
+            .to_str()
+            .map_err(|_| format!("{LSM_SESSION_HEADER} must be valid ASCII/UTF-8"))?
+            .trim();
+        if value.is_empty() {
+            return Err(format!("{LSM_SESSION_HEADER} must not be empty"));
+        }
+        if value.len() > MAX_LOCALITY_SESSION_ID_BYTES {
+            return Err(format!(
+                "{LSM_SESSION_HEADER} exceeds the {MAX_LOCALITY_SESSION_ID_BYTES} byte limit"
+            ));
+        }
+        return Ok(Some(bounded_locality_material(
+            "explicit-session",
+            value.as_bytes(),
+        )));
+    }
+
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return Ok(None);
+    };
+    if let Some(conversation) = value.get("conversation").and_then(locality_identifier) {
+        return Ok(Some(bounded_locality_material(
+            "conversation",
+            conversation.as_bytes(),
+        )));
+    }
+    if let Some(metadata) = value.get("metadata") {
+        for field in ["session_id", "conversation_id"] {
+            if let Some(identifier) = metadata.get(field).and_then(locality_identifier) {
+                return Ok(Some(bounded_locality_material(
+                    field,
+                    identifier.as_bytes(),
+                )));
+            }
+        }
+    }
+    if let Some(material) = stable_message_material(&value, "messages")
+        .or_else(|| stable_message_material(&value, "input"))
+    {
+        return Ok(Some(material));
+    }
+    for field in ["prompt", "input"] {
+        if let Some(prompt) = value.get(field) {
+            let serialized = match prompt.as_str() {
+                Some(prompt) => prompt.as_bytes().to_vec(),
+                None => serde_json::to_vec(prompt).unwrap_or_default(),
+            };
+            if !serialized.is_empty() {
+                return Ok(Some(bounded_locality_material(field, &serialized)));
+            }
+        }
+    }
+    Ok(None)
+}
+
 fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
     let value = serde_json::from_slice::<serde_json::Value>(body)
         .map_err(|_| "request body must be a valid JSON object".to_string())?;
@@ -1623,13 +1723,13 @@ fn apply_cors_headers(response: &mut Response, origin: Option<&str>) {
     response.headers_mut().insert(
         "access-control-allow-headers",
         HeaderValue::from_static(
-            "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-request-id, openai-organization, openai-project",
+            "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-request-id, x-lsm-session-id, openai-organization, openai-project",
         ),
     );
     response.headers_mut().insert(
         "access-control-expose-headers",
         HeaderValue::from_static(
-            "request-id, x-request-id, retry-after, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining",
+            "request-id, x-request-id, x-lsm-locality, retry-after, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining",
         ),
     );
     response
@@ -1913,7 +2013,12 @@ fn is_hop_by_hop_header(name: &str, connection_tokens: &HashSet<String>) -> bool
 fn should_forward_request_header(name: &str, connection_tokens: &HashSet<String>) -> bool {
     !matches!(
         name,
-        "host" | "content-length" | "accept-encoding" | "authorization" | "x-api-key"
+        "host"
+            | "content-length"
+            | "accept-encoding"
+            | "authorization"
+            | "x-api-key"
+            | "x-lsm-session-id"
     ) && !is_hop_by_hop_header(name, connection_tokens)
 }
 
@@ -2777,6 +2882,18 @@ async fn proxy_upstream(
         requested_model.as_deref(),
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
+    let locality_key = if proxy_config.locality_routing_enabled && vector_metadata.is_none() {
+        match request_locality_material(&headers, &body) {
+            Ok(Some(material)) => Some(router_state.runtime.locality_key(&routing_key, &material)),
+            Ok(None) => None,
+            Err(error) => {
+                router_state.runtime.record_rejected();
+                return error_response(api_format, StatusCode::BAD_REQUEST, &error);
+            }
+        }
+    } else {
+        None
+    };
     if candidates.is_empty() {
         router_state.runtime.record_rejected();
         return error_response(
@@ -2789,13 +2906,14 @@ async fn proxy_upstream(
             "no public route matches the requested model",
         );
     }
-    let (target, target_permit) = loop {
+    let (target, target_permit, locality_decision) = loop {
         let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
-        let Some(selected) =
-            router_state
-                .runtime
-                .select_target(&scheduling, &routing_strategy, &routing_key)
-        else {
+        let Some(selected) = router_state.runtime.select_target_with_locality(
+            &scheduling,
+            &routing_strategy,
+            &routing_key,
+            locality_key.as_deref(),
+        ) else {
             router_state.runtime.record_rejected();
             return error_response(
                 api_format,
@@ -2805,7 +2923,7 @@ async fn proxy_upstream(
         };
         let Some(index) = candidates
             .iter()
-            .position(|target| target.public.instance_id == selected.instance_id)
+            .position(|target| target.public.instance_id == selected.candidate.instance_id)
         else {
             router_state.runtime.record_rejected();
             return error_response(
@@ -2815,8 +2933,8 @@ async fn proxy_upstream(
             );
         };
         let target = candidates.remove(index);
-        if let Some(permit) = router_state.runtime.acquire_target(&selected) {
-            break (target, permit);
+        if let Some(permit) = router_state.runtime.acquire_target(&selected.candidate) {
+            break (target, permit, selected.locality);
         }
         if candidates.is_empty() {
             router_state.runtime.record_rejected();
@@ -2827,6 +2945,9 @@ async fn proxy_upstream(
             );
         }
     };
+    router_state
+        .runtime
+        .record_locality_selection(locality_decision);
     if !vector_endpoint_matches_target(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
         target.workload,
@@ -2986,10 +3107,21 @@ async fn proxy_upstream(
     let response_is_sse = response_content_type.contains("text/event-stream");
     let response_is_json = response_content_type.contains("json");
     let status_success = status.is_success();
+    if status_success {
+        if let Some(locality_key) = locality_key.as_deref() {
+            router_state.runtime.record_locality_success(
+                locality_key,
+                &target.public.instance_id,
+                proxy_config.locality_ttl_ms,
+                proxy_config.locality_max_entries as usize,
+            );
+        }
+    }
     let response_connection_tokens = connection_header_tokens(response.headers());
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
         if lower == "content-length"
+            || lower == "x-lsm-locality"
             || (!status_success && lower == "content-type")
             || (api_format.is_anthropic() && !status_success && lower == "request-id")
             || is_hop_by_hop_header(&lower, &response_connection_tokens)
@@ -3005,6 +3137,9 @@ async fn proxy_upstream(
     }
     if !status_success {
         builder = builder.header("content-type", "application/json");
+    }
+    if let Some(value) = locality_decision.header_value() {
+        builder = builder.header("x-lsm-locality", value);
     }
 
     let http_status = status.as_u16();
@@ -3754,7 +3889,7 @@ mod tests {
     use crate::vector_policy::ModelWorkload;
     use axum::body::Body;
     use axum::extract::State;
-    use axum::http::{HeaderMap, StatusCode, Uri};
+    use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
     use axum::response::{IntoResponse, Response};
     use axum::routing::post;
     use axum::{Json, Router};
@@ -3793,6 +3928,47 @@ mod tests {
         let llama = super::proxy_usage_from_bytes(br#"{"timings":{"prompt_n":24,"cache_n":8}}"#);
         assert_eq!(llama.prompt_tokens, Some(32));
         assert_eq!(llama.cached_prompt_tokens, Some(8));
+    }
+
+    #[test]
+    fn locality_material_prefers_explicit_sessions_and_keeps_growing_chats_stable() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            super::LSM_SESSION_HEADER,
+            "operator-session".parse().unwrap(),
+        );
+        let explicit = super::request_locality_material(
+            &headers,
+            br#"{"messages":[{"role":"user","content":"ignored"}]}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(explicit.starts_with(b"explicit-session\0"));
+        assert!(explicit.ends_with(b"operator-session"));
+        assert!(!super::should_forward_request_header(
+            super::LSM_SESSION_HEADER,
+            &std::collections::HashSet::new()
+        ));
+
+        let initial = super::request_locality_material(
+            &HeaderMap::new(),
+            br#"{"messages":[{"role":"system","content":"safe"},{"role":"user","content":"first"}]}"#,
+        )
+        .unwrap();
+        let continued = super::request_locality_material(
+            &HeaderMap::new(),
+            br#"{"messages":[{"role":"system","content":"safe"},{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"next"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(initial, continued);
+
+        headers.insert(
+            super::LSM_SESSION_HEADER,
+            "x".repeat(super::MAX_LOCALITY_SESSION_ID_BYTES + 1)
+                .parse()
+                .unwrap(),
+        );
+        assert!(super::request_locality_material(&headers, b"{}").is_err());
     }
 
     async fn spawn_test_router(
@@ -3936,6 +4112,40 @@ mod tests {
             StatusCode::NOT_FOUND,
             "unsupported mock endpoint",
         )
+    }
+
+    #[derive(Clone)]
+    struct LocalityUpstreamState {
+        id: String,
+        received_session_headers: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    async fn mock_locality_upstream(
+        State(state): State<LocalityUpstreamState>,
+        uri: Uri,
+        headers: HeaderMap,
+    ) -> Response {
+        if uri.path() == "/health" {
+            return Json(json!({ "status": "ok" })).into_response();
+        }
+        state.received_session_headers.lock().unwrap().push(
+            headers
+                .get(super::LSM_SESSION_HEADER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+        );
+        let mut response = Json(json!({
+            "id": format!("chatcmpl-{}", state.id),
+            "object": "chat.completion",
+            "model": format!("upstream-{}", state.id),
+            "upstream": state.id,
+            "choices": []
+        }))
+        .into_response();
+        response
+            .headers_mut()
+            .insert("x-lsm-locality", HeaderValue::from_static("spoofed"));
+        response
     }
 
     #[derive(Default)]
@@ -4200,6 +4410,65 @@ mod tests {
         }
     }
 
+    fn locality_proxy_snapshot(
+        upstreams: &[(&str, std::net::SocketAddr)],
+    ) -> super::ProxyRuntimeSnapshot {
+        let mut instances = HashMap::new();
+        let mut running = HashMap::new();
+        let mut routes = Vec::new();
+        for (index, (id, address)) in upstreams.iter().enumerate() {
+            let instance = InstanceConfig {
+                id: (*id).to_string(),
+                name: format!("Locality target {id}"),
+                model_path: format!(r"C:\private\{id}.gguf"),
+                alias: format!("upstream-{id}"),
+                host: address.ip().to_string(),
+                port: address.port(),
+                ..InstanceConfig::default()
+            };
+            instances.insert((*id).to_string(), instance.clone());
+            running.insert(
+                (*id).to_string(),
+                RunningInstance {
+                    instance_id: (*id).to_string(),
+                    pid: std::process::id(),
+                    port: address.port(),
+                    host: address.ip().to_string(),
+                    start_time: 0,
+                    executable_path: String::new(),
+                    telemetry_session_id: None,
+                    workload: "inference".into(),
+                    launch_config: Some(instance),
+                    deployment_identity: Default::default(),
+                    deployment_id: String::new(),
+                    deployment_revision_id: String::new(),
+                },
+            );
+            routes.push(ProxyRoute {
+                id: format!("locality-route-{index}"),
+                model_alias: "locality-model".into(),
+                target_instance_id: (*id).to_string(),
+                priority: 0,
+                ..ProxyRoute::default()
+            });
+        }
+        super::ProxyRuntimeSnapshot {
+            config: ProxyConfig {
+                enabled: true,
+                routing_strategy: "roundRobin".into(),
+                locality_routing_enabled: true,
+                locality_ttl_ms: 60_000,
+                locality_max_entries: 100,
+                routes,
+                ..ProxyConfig::default()
+            },
+            instances,
+            running,
+            bound_addr: String::new(),
+            last_error: None,
+        }
+    }
+
     fn target_health(
         instance_id: &str,
         context_length: Option<u64>,
@@ -4341,6 +4610,8 @@ mod tests {
             ProxyConfig {
                 routing_strategy: "firstHealthy".into(),
                 connect_timeout_ms: 1,
+                locality_ttl_ms: 1,
+                locality_max_entries: 0,
                 max_concurrent_requests: 0,
                 cors_allowed_origins: vec![
                     " https://app.example.com/ ".into(),
@@ -4361,6 +4632,8 @@ mod tests {
         .unwrap();
         assert_eq!(normalized.routing_strategy, "priorityFailover");
         assert_eq!(normalized.connect_timeout_ms, 100);
+        assert_eq!(normalized.locality_ttl_ms, 60_000);
+        assert_eq!(normalized.locality_max_entries, 1);
         assert_eq!(normalized.max_concurrent_requests, 1);
         assert_eq!(
             normalized.cors_allowed_origins,
@@ -5502,6 +5775,218 @@ mod tests {
         );
         proxy_task.abort();
         upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn locality_routing_reuses_falls_back_rebinds_and_exposes_no_session_secret() {
+        let received_one = Arc::new(Mutex::new(Vec::new()));
+        let received_two = Arc::new(Mutex::new(Vec::new()));
+        let (address_one, task_one) = spawn_test_router(
+            Router::new()
+                .fallback(axum::routing::any(mock_locality_upstream))
+                .with_state(LocalityUpstreamState {
+                    id: "one".into(),
+                    received_session_headers: received_one.clone(),
+                }),
+        )
+        .await;
+        let (address_two, task_two) = spawn_test_router(
+            Router::new()
+                .fallback(axum::routing::any(mock_locality_upstream))
+                .with_state(LocalityUpstreamState {
+                    id: "two".into(),
+                    received_session_headers: received_two.clone(),
+                }),
+        )
+        .await;
+        let snapshot = locality_proxy_snapshot(&[("one", address_one), ("two", address_two)]);
+        let (router, runtime) =
+            super::proxy_router_from_source_with_runtime(Arc::new(TestProxySource { snapshot }));
+        let (proxy_address, proxy_task) = spawn_test_router(router).await;
+        let client = reqwest::Client::new();
+
+        let request = || {
+            client
+                .post(format!("http://{proxy_address}/v1/chat/completions"))
+                .header(super::LSM_SESSION_HEADER, "private-session")
+                .json(&json!({
+                    "model": "locality-model",
+                    "messages": [{ "role": "user", "content": "hello" }]
+                }))
+        };
+        let first = request().send().await.unwrap();
+        assert_eq!(
+            first
+                .headers()
+                .get("x-lsm-locality")
+                .and_then(|value| value.to_str().ok()),
+            Some("miss")
+        );
+        assert_eq!(
+            first.json::<serde_json::Value>().await.unwrap()["upstream"],
+            "one"
+        );
+
+        let second = request().send().await.unwrap();
+        assert_eq!(
+            second
+                .headers()
+                .get("x-lsm-locality")
+                .and_then(|value| value.to_str().ok()),
+            Some("hit")
+        );
+        assert_eq!(
+            second.json::<serde_json::Value>().await.unwrap()["upstream"],
+            "one"
+        );
+
+        runtime.set_target_draining("one", true);
+        let fallback = request().send().await.unwrap();
+        assert_eq!(
+            fallback
+                .headers()
+                .get("x-lsm-locality")
+                .and_then(|value| value.to_str().ok()),
+            Some("fallback")
+        );
+        assert_eq!(
+            fallback.json::<serde_json::Value>().await.unwrap()["upstream"],
+            "two"
+        );
+        runtime.set_target_draining("one", false);
+
+        let rebound = request().send().await.unwrap();
+        assert_eq!(
+            rebound
+                .headers()
+                .get("x-lsm-locality")
+                .and_then(|value| value.to_str().ok()),
+            Some("hit")
+        );
+        assert_eq!(
+            rebound.json::<serde_json::Value>().await.unwrap()["upstream"],
+            "two"
+        );
+
+        let automatic = client
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .json(&json!({
+                "model": "locality-model",
+                "messages": [
+                    { "role": "system", "content": "stable policy" },
+                    { "role": "user", "content": "first prompt" }
+                ]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            automatic
+                .headers()
+                .get("x-lsm-locality")
+                .and_then(|value| value.to_str().ok()),
+            Some("miss")
+        );
+        assert_eq!(
+            automatic.json::<serde_json::Value>().await.unwrap()["upstream"],
+            "one"
+        );
+        let continued = client
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .json(&json!({
+                "model": "locality-model",
+                "messages": [
+                    { "role": "system", "content": "stable policy" },
+                    { "role": "user", "content": "first prompt" },
+                    { "role": "assistant", "content": "first response" },
+                    { "role": "user", "content": "follow up" }
+                ]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            continued
+                .headers()
+                .get("x-lsm-locality")
+                .and_then(|value| value.to_str().ok()),
+            Some("hit")
+        );
+        assert_eq!(
+            continued.json::<serde_json::Value>().await.unwrap()["upstream"],
+            "one"
+        );
+
+        let metrics = client
+            .get(format!("http://{proxy_address}/metrics"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(metrics.contains("lsm_router_locality_hits_total 3"));
+        assert!(metrics.contains("lsm_router_locality_misses_total 2"));
+        assert!(metrics.contains("lsm_router_locality_fallbacks_total 1"));
+        assert!(metrics.contains("lsm_router_locality_bindings 2"));
+        assert!(!metrics.contains("private-session"));
+        assert!(received_one.lock().unwrap().iter().all(Option::is_none));
+        assert!(received_two.lock().unwrap().iter().all(Option::is_none));
+
+        proxy_task.abort();
+        task_one.abort();
+        task_two.abort();
+    }
+
+    #[tokio::test]
+    async fn legacy_disabled_locality_keeps_the_configured_scheduler() {
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let state = |id: &str| LocalityUpstreamState {
+            id: id.into(),
+            received_session_headers: received.clone(),
+        };
+        let (address_one, task_one) = spawn_test_router(
+            Router::new()
+                .fallback(axum::routing::any(mock_locality_upstream))
+                .with_state(state("one")),
+        )
+        .await;
+        let (address_two, task_two) = spawn_test_router(
+            Router::new()
+                .fallback(axum::routing::any(mock_locality_upstream))
+                .with_state(state("two")),
+        )
+        .await;
+        let mut snapshot = locality_proxy_snapshot(&[("one", address_one), ("two", address_two)]);
+        snapshot.config.locality_routing_enabled = false;
+        let router = super::proxy_router_from_source(Arc::new(TestProxySource { snapshot }));
+        let (proxy_address, proxy_task) = spawn_test_router(router).await;
+        let client = reqwest::Client::new();
+        let mut upstreams = Vec::new();
+        for _ in 0..2 {
+            let response = client
+                .post(format!("http://{proxy_address}/v1/chat/completions"))
+                .header(super::LSM_SESSION_HEADER, "legacy-session")
+                .json(&json!({
+                    "model": "locality-model",
+                    "messages": [{ "role": "user", "content": "hello" }]
+                }))
+                .send()
+                .await
+                .unwrap();
+            assert!(!response.headers().contains_key("x-lsm-locality"));
+            upstreams.push(
+                response.json::<serde_json::Value>().await.unwrap()["upstream"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            );
+        }
+        assert_eq!(upstreams, vec!["one", "two"]);
+
+        proxy_task.abort();
+        task_one.abort();
+        task_two.abort();
     }
 
     #[tokio::test]
