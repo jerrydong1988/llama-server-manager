@@ -13,13 +13,13 @@ The product should remain useful on a single workstation while building a delibe
 | Phase | Status | Tracking issue | Milestone |
 | --- | --- | --- | --- |
 | Phase 1 — Reliable Runtime | Complete | [#53](https://github.com/jerrydong1988/llama-server-manager/issues/53) | [Milestone 1](https://github.com/jerrydong1988/llama-server-manager/milestone/1) |
-| Phase 2 — Managed Deployment | **Current** | [#54](https://github.com/jerrydong1988/llama-server-manager/issues/54) | [Milestone 2](https://github.com/jerrydong1988/llama-server-manager/milestone/2) |
-| Phase 3 — Distributed Control Plane | Planned | [#55](https://github.com/jerrydong1988/llama-server-manager/issues/55) | [Milestone 3](https://github.com/jerrydong1988/llama-server-manager/milestone/3) |
+| Phase 2 — Managed Deployment | Complete | [#54](https://github.com/jerrydong1988/llama-server-manager/issues/54) | [Milestone 2](https://github.com/jerrydong1988/llama-server-manager/milestone/2) |
+| Phase 3 — Distributed Control Plane | **Current** | [#55](https://github.com/jerrydong1988/llama-server-manager/issues/55) | [Milestone 3](https://github.com/jerrydong1988/llama-server-manager/milestone/3) |
 
-- **Current phase:** Phase 2 — Managed Deployment
-- **Last roadmap review:** 2026-08-19
+- **Current phase:** Phase 3 — Distributed Control Plane
+- **Last roadmap review:** 2026-08-21
 - **Phase order:** Phase 1 → Phase 2 → Phase 3
-- **Transition basis:** Phase 1 tracker [#53](https://github.com/jerrydong1988/llama-server-manager/issues/53) records accepted exit evidence for every Phase 1 workstream and has no unresolved exit blocker.
+- **Transition basis:** Phase 2 tracker [#54](https://github.com/jerrydong1988/llama-server-manager/issues/54) records accepted exit evidence for every Phase 2 workstream and has no unresolved exit blocker.
 
 Only a dedicated roadmap pull request may change the current-phase marker, phase order, product direction, or exit gates.
 
@@ -92,7 +92,7 @@ Phase 1 establishes identity, recovery, and rollback. Phase 2 makes revisions de
 
 ## Phase 2 — Managed Deployment
 
-**Status:** Current. Activated on 2026-08-19 after the Phase 1 transition protocol completed.
+**Status:** Complete. Exit accepted on 2026-08-20 in [tracker #54](https://github.com/jerrydong1988/llama-server-manager/issues/54).
 
 **Outcome:** Turn reliable instances into observable, versioned, policy-driven deployments.
 
@@ -120,7 +120,7 @@ Phase 1 establishes identity, recovery, and rollback. Phase 2 makes revisions de
 
 ## Phase 3 — Distributed Control Plane
 
-**Status:** Planned.
+**Status:** Current. Activated on 2026-08-21 after the Phase 2 transition protocol completed.
 
 **Outcome:** Coordinate secure workers and resource-aware routing while preserving first-class single-node operation.
 
