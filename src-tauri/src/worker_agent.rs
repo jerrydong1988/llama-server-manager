@@ -1981,6 +1981,7 @@ fn windows_process_sid(process_id: Option<u32>) -> Result<String, String> {
     crate::persistence::windows_process_sid(process_id).map_err(worker_agent_error)
 }
 
+#[cfg(any(windows, target_os = "linux"))]
 fn tracked_rpc_child_pid(runtime: &AgentRuntime) -> Result<u32, String> {
     let mut child = runtime
         .rpc_child
@@ -2154,7 +2155,7 @@ fn linux_tcp_peer_pid(stream: &TcpStream) -> Result<u32, String> {
         }
         let row_local = linux_proc_ipv4_endpoint(fields[1]);
         let row_remote = linux_proc_ipv4_endpoint(fields[2]);
-        if row_local.as_ref() == Some(peer) && row_remote.as_ref() == Some(local) {
+        if row_local.as_ref() == Some(&peer) && row_remote.as_ref() == Some(&local) {
             let candidate = (fields[7].parse::<u32>().ok(), fields[9].parse::<u64>().ok());
             if socket_match.replace(candidate).is_some() {
                 return Err(worker_agent_error(
