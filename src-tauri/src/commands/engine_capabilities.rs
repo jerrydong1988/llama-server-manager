@@ -25,6 +25,7 @@ const QUALIFICATION_INFERENCE_TIMEOUT: Duration = Duration::from_secs(60);
 const QUALIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const QUALIFICATION_PROMPT: &str = "LSM qualification probe.";
 const MAX_QUALIFICATION_DIAGNOSTIC_CHARS: usize = 2_000;
+const MAX_QUALIFICATION_INFERENCE_BYTES: usize = 256 * 1024;
 
 static ACTIVE_QUALIFICATIONS: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
 
@@ -66,6 +67,7 @@ struct QualificationLaunch {
     health_request_timeout: Duration,
     inference_timeout: Duration,
     poll_interval: Duration,
+    artifact_leases: Option<crate::deployment_identity::LaunchArtifactLeases>,
 }
 
 #[derive(Debug)]
@@ -125,15 +127,19 @@ fn terminate_probe_process_tree(child: &mut std::process::Child) -> Option<Strin
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let tree_killed = Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .creation_flags(0x08000000)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+        let tree_killed = crate::utils::windows_system_utility("taskkill.exe")
+            .ok()
+            .and_then(|utility| {
+                Command::new(utility)
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(0x08000000)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .ok()
+            })
+            .is_some_and(|status| status.success());
         if !tree_killed {
             let _ = child.kill();
         }
@@ -187,6 +193,10 @@ fn run_bounded(executable: &str, argument: &str) -> CommandOutput {
     let mut command = Command::new(executable);
     command
         .arg(argument)
+        .env_clear()
+        .envs(crate::utils::sanitized_engine_environment(
+            std::iter::empty::<(&str, &str)>(),
+        ))
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
@@ -437,59 +447,8 @@ fn classify_probe_status(supported_flags: &[String], timed_out: bool) -> &'stati
     }
 }
 
-fn update_fingerprint_hash(hash: &mut u64, bytes: &[u8]) {
-    for byte in bytes {
-        *hash ^= u64::from(*byte);
-        *hash = hash.wrapping_mul(0x100000001b3);
-    }
-}
-
 pub(crate) fn executable_fingerprint(executable: &str) -> String {
-    const SAMPLE_BYTES: u64 = 32 * 1024;
-
-    let path = std::fs::canonicalize(executable).unwrap_or_else(|_| executable.into());
-    let metadata = match path.metadata() {
-        Ok(metadata) if metadata.is_file() => metadata,
-        _ => return String::new(),
-    };
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    let normalized_path = path_identity_key(&path);
-
-    let mut hash = 0xcbf29ce484222325_u64;
-    update_fingerprint_hash(&mut hash, normalized_path.as_bytes());
-    update_fingerprint_hash(&mut hash, &metadata.len().to_le_bytes());
-    update_fingerprint_hash(&mut hash, &modified.to_le_bytes());
-
-    let mut file = match File::open(&path) {
-        Ok(file) => file,
-        Err(_) => return String::new(),
-    };
-    let mut offsets = BTreeSet::new();
-    offsets.insert(0_u64);
-    offsets.insert(metadata.len().saturating_sub(SAMPLE_BYTES) / 2);
-    offsets.insert(metadata.len().saturating_sub(SAMPLE_BYTES));
-    let mut buffer = vec![0_u8; SAMPLE_BYTES as usize];
-    for offset in offsets {
-        if file.seek(SeekFrom::Start(offset)).is_err() {
-            return String::new();
-        }
-        let count = match file.read(&mut buffer) {
-            Ok(count) => count,
-            Err(_) => return String::new(),
-        };
-        update_fingerprint_hash(&mut hash, &offset.to_le_bytes());
-        update_fingerprint_hash(&mut hash, &buffer[..count]);
-    }
-
-    format!(
-        "v2:{normalized_path}:{}:{modified}:{hash:016x}",
-        metadata.len()
-    )
+    crate::deployment_identity::engine_fingerprint_for_path(std::path::Path::new(executable))
 }
 
 pub(crate) fn capabilities_match_executable(
@@ -656,6 +615,139 @@ fn reserve_qualification_port() -> Result<u16, String> {
         .map_err(|error| format!("cannot inspect qualification port: {error}"))
 }
 
+#[cfg(windows)]
+fn qualification_listener_pid(port: u16) -> Result<u32, String> {
+    use std::ptr;
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetTcpTable2, MIB_TCPTABLE2, MIB_TCP_STATE_LISTEN,
+    };
+    let mut length = 0_u32;
+    let initial = unsafe { GetTcpTable2(ptr::null_mut(), &mut length, 0) };
+    if initial != ERROR_INSUFFICIENT_BUFFER || length == 0 {
+        return Err("failed to size the qualification TCP owner table".to_string());
+    }
+    let words = (length as usize).div_ceil(std::mem::size_of::<usize>());
+    let mut table = vec![0_usize; words];
+    let status =
+        unsafe { GetTcpTable2(table.as_mut_ptr().cast::<MIB_TCPTABLE2>(), &mut length, 0) };
+    if status != NO_ERROR {
+        return Err("failed to inspect the qualification TCP owner table".to_string());
+    }
+    let table = table.as_ptr().cast::<MIB_TCPTABLE2>();
+    let rows = unsafe {
+        std::slice::from_raw_parts((*table).table.as_ptr(), (*table).dwNumEntries as usize)
+    };
+    let mut matched = None;
+    for row in rows {
+        let local_port = u16::from_be((row.dwLocalPort & 0xffff) as u16);
+        let local_addr = std::net::Ipv4Addr::from(u32::from_be(row.dwLocalAddr));
+        if row.dwState == MIB_TCP_STATE_LISTEN as u32
+            && local_port == port
+            && local_addr.is_loopback()
+            && matched.replace(row.dwOwningPid).is_some()
+        {
+            return Err("qualification listener owner is ambiguous".to_string());
+        }
+    }
+    matched.ok_or_else(|| "qualification listener owner was not found".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn qualification_listener_pid(port: u16) -> Result<u32, String> {
+    let table = std::fs::read_to_string("/proc/net/tcp")
+        .map_err(|error| format!("failed to inspect qualification TCP owners: {error}"))?;
+    let encoded_port = format!("{port:04X}");
+    let mut inode = None;
+    for line in table.lines().skip(1) {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 10 || fields[3] != "0A" {
+            continue;
+        }
+        let Some((address, row_port)) = fields[1].split_once(':') else {
+            continue;
+        };
+        if address == "0100007F" && row_port == encoded_port {
+            let candidate = fields[9]
+                .parse::<u64>()
+                .map_err(|_| "qualification listener inode is invalid".to_string())?;
+            if inode.replace(candidate).is_some() {
+                return Err("qualification listener owner is ambiguous".to_string());
+            }
+        }
+    }
+    let expected = format!(
+        "socket:[{}]",
+        inode.ok_or_else(|| { "qualification listener socket was not found".to_string() })?
+    );
+    let mut matched = None;
+    for process in std::fs::read_dir("/proc")
+        .map_err(|error| format!("failed to inspect qualification processes: {error}"))?
+        .flatten()
+        .take(16_384)
+    {
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Ok(descriptors) = std::fs::read_dir(process.path().join("fd")) else {
+            continue;
+        };
+        if descriptors.flatten().take(4_096).any(|descriptor| {
+            std::fs::read_link(descriptor.path())
+                .ok()
+                .is_some_and(|target| target == std::path::Path::new(&expected))
+        }) {
+            if matched.replace(pid).is_some() {
+                return Err("qualification listener owner is ambiguous".to_string());
+            }
+        }
+    }
+    matched.ok_or_else(|| "qualification listener PID was not found".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn qualification_listener_pid(port: u16) -> Result<u32, String> {
+    let output = Command::new("/usr/sbin/lsof")
+        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
+        .env_clear()
+        .output()
+        .map_err(|error| format!("failed to inspect qualification listener owner: {error}"))?;
+    if !output.status.success() || output.stdout.len() > 128 {
+        return Err("qualification listener owner was not found".to_string());
+    }
+    let text = std::str::from_utf8(&output.stdout)
+        .map_err(|_| "qualification listener PID is invalid".to_string())?;
+    let pids = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| line.trim().parse::<u32>())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "qualification listener PID is invalid".to_string())?;
+    if pids.len() != 1 {
+        return Err("qualification listener owner is ambiguous".to_string());
+    }
+    Ok(pids[0])
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn qualification_listener_pid(_port: u16) -> Result<u32, String> {
+    Err("qualification listener owner verification is unsupported".to_string())
+}
+
+fn verify_qualification_listener_owner(port: u16, child_pid: u32) -> Result<(), String> {
+    let owner = qualification_listener_pid(port)?;
+    if owner != child_pid {
+        return Err(format!(
+            "qualification listener belongs to unexpected process {owner}, expected {child_pid}"
+        ));
+    }
+    Ok(())
+}
+
 fn qualification_arguments(
     capabilities: &EngineCapabilities,
     model_path: &std::path::Path,
@@ -702,8 +794,33 @@ fn eligible_qualification_model(model: &ModelInfo) -> bool {
         && model.capabilities.is_reranker_model != Some(true)
 }
 
+fn parse_bounded_qualification_json(
+    response: reqwest::blocking::Response,
+) -> Result<serde_json::Value, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_QUALIFICATION_INFERENCE_BYTES as u64)
+    {
+        return Err(format!(
+            "qualification response exceeds {MAX_QUALIFICATION_INFERENCE_BYTES} bytes"
+        ));
+    }
+    let mut body = Vec::with_capacity(8 * 1024);
+    response
+        .take((MAX_QUALIFICATION_INFERENCE_BYTES + 1) as u64)
+        .read_to_end(&mut body)
+        .map_err(|error| format!("cannot read qualification response: {error}"))?;
+    if body.len() > MAX_QUALIFICATION_INFERENCE_BYTES {
+        return Err(format!(
+            "qualification response exceeds {MAX_QUALIFICATION_INFERENCE_BYTES} bytes"
+        ));
+    }
+    serde_json::from_slice(&body)
+        .map_err(|error| format!("invalid qualification JSON evidence: {error}"))
+}
+
 fn run_runtime_qualification(
-    launch: QualificationLaunch,
+    mut launch: QualificationLaunch,
     cancelled: Arc<AtomicBool>,
 ) -> RuntimeQualificationResult {
     let startup_started = Instant::now();
@@ -760,7 +877,10 @@ fn run_runtime_qualification(
     let mut command = Command::new(&launch.executable);
     command
         .args(&launch.arguments)
-        .envs(launch.environment.iter().cloned())
+        .env_clear()
+        .envs(crate::utils::sanitized_engine_environment(
+            launch.environment.iter().map(|(key, value)| (key, value)),
+        ))
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file));
@@ -902,6 +1022,17 @@ fn run_runtime_qualification(
             }
             match client.get(&health_url).send() {
                 Ok(response) if response.status().is_success() => {
+                    if let Err(error) = verify_qualification_listener_owner(launch.port, child.id())
+                    {
+                        health_check = Some(qualification_check(
+                            "health",
+                            "failed",
+                            qualification_duration_ms(health_started),
+                            Some(error.clone()),
+                        ));
+                        terminal_reason = Some(error);
+                        break;
+                    }
                     if startup_check.is_none() {
                         startup_check = Some(qualification_check(
                             "startup",
@@ -984,7 +1115,9 @@ fn run_runtime_qualification(
             }) {
                 Ok(response) if response.status().is_success() => {
                     let http_status = response.status();
-                    match response.json::<serde_json::Value>() {
+                    match verify_qualification_listener_owner(launch.port, child.id())
+                        .and_then(|_| parse_bounded_qualification_json(response))
+                    {
                         Ok(payload)
                             if payload
                                 .get("tokens_predicted")
@@ -1018,8 +1151,7 @@ fn run_runtime_qualification(
                             terminal_reason = Some(message);
                         }
                         Err(error) => {
-                            let message =
-                                format!("POST /completion returned invalid JSON evidence: {error}");
+                            let message = format!("POST /completion rejected evidence: {error}");
                             inference_check = Some(qualification_check(
                                 "inference",
                                 "failed",
@@ -1072,7 +1204,7 @@ fn run_runtime_qualification(
     let output = String::from_utf8_lossy(&read_stream_capped(&mut output_file)).into_owned();
     drop(output_file);
     let _ = std::fs::remove_file(output_path);
-    let diagnostic = if status == "passed" {
+    let mut diagnostic = if status == "passed" {
         None
     } else {
         bounded_qualification_diagnostic(match (terminal_reason, output.is_empty()) {
@@ -1082,6 +1214,15 @@ fn run_runtime_qualification(
             (None, true) => "qualification failed without diagnostic output".to_string(),
         })
     };
+
+    if let Some(mut artifacts) = launch.artifact_leases.take() {
+        if let Err(error) = artifacts.verify_unchanged() {
+            status = "failed".to_string();
+            diagnostic = bounded_qualification_diagnostic(format!(
+                "qualification artifacts changed while representative inference was in progress: {error}"
+            ));
+        }
+    }
 
     RuntimeQualificationResult {
         status,
@@ -1102,14 +1243,40 @@ fn run_runtime_qualification(
 
 fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let previous_qualification = std::mem::take(&mut engine.capabilities.qualification);
-    let fingerprint_before = executable_fingerprint(&engine.exe);
-    let version_output = run_bounded(&engine.exe, "--version");
-    let help_output = run_bounded(&engine.exe, "--help");
+    let mut artifact = match crate::deployment_identity::ArtifactLease::open_authorized(
+        "engine",
+        std::path::Path::new(&engine.exe),
+    ) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            engine.capabilities.qualification = previous_qualification;
+            invalidate_engine_evidence(
+                &mut engine,
+                format!("engine executable could not be bound to a verified object: {error}"),
+            );
+            return engine;
+        }
+    };
+    if !engine.artifact_identity.is_verified() || artifact.identity() != &engine.artifact_identity {
+        engine.capabilities.qualification = previous_qualification;
+        invalidate_engine_evidence(
+            &mut engine,
+            "engine executable no longer matches the verified scan identity; refresh the engine scan before probing",
+        );
+        return engine;
+    }
+    let fingerprint_before = artifact.fingerprint().unwrap_or_default().to_string();
+    let bound_executable = artifact.launch_path().to_string_lossy().to_string();
+    let version_output = run_bounded(&bound_executable, "--version");
+    let help_output = run_bounded(&bound_executable, "--help");
     let supported_flags = extract_supported_flags(&help_output.text);
     let reported_defaults = extract_reported_defaults(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
-    let fingerprint = executable_fingerprint(&engine.exe);
-    if fingerprint_before.is_empty() || fingerprint_before != fingerprint {
+    let fingerprint = artifact.fingerprint().unwrap_or_default().to_string();
+    if fingerprint_before.is_empty()
+        || fingerprint_before != fingerprint
+        || artifact.verify_unchanged().is_err()
+    {
         engine.capabilities.qualification = previous_qualification;
         invalidate_engine_evidence(
             &mut engine,
@@ -1882,15 +2049,23 @@ pub async fn qualify_engine(
         }
     };
     let arguments = qualification_arguments(&probed.capabilities, &model_path, port)?;
+    let mut qualification_command = vec![executable.to_string_lossy().to_string()];
+    qualification_command.extend(arguments);
+    let (bound_command, artifact_leases) = crate::deployment_identity::bind_expected_artifacts(
+        &qualification_command,
+        &report.engine_artifact_id,
+        &report.model_artifact_id,
+    )?;
     let launch = QualificationLaunch {
-        executable: executable.to_string_lossy().to_string(),
-        arguments,
+        executable: bound_command[0].clone(),
+        arguments: bound_command[1..].to_vec(),
         port,
         environment: Vec::new(),
         startup_timeout: QUALIFICATION_STARTUP_TIMEOUT,
         health_request_timeout: QUALIFICATION_HEALTH_REQUEST_TIMEOUT,
         inference_timeout: QUALIFICATION_INFERENCE_TIMEOUT,
         poll_interval: QUALIFICATION_POLL_INTERVAL,
+        artifact_leases: Some(artifact_leases),
     };
     let cancelled = reservation.cancelled.clone();
     let runtime = tokio::task::spawn_blocking(move || run_runtime_qualification(launch, cancelled))
@@ -1978,11 +2153,11 @@ mod tests {
             port,
             environment: vec![
                 (
-                    "LSM_QUALIFICATION_FIXTURE_PORT".to_string(),
+                    "GGML_LSM_QUALIFICATION_FIXTURE_PORT".to_string(),
                     port.to_string(),
                 ),
                 (
-                    "LSM_QUALIFICATION_FIXTURE_MODE".to_string(),
+                    "GGML_LSM_QUALIFICATION_FIXTURE_MODE".to_string(),
                     mode.to_string(),
                 ),
             ],
@@ -1990,6 +2165,7 @@ mod tests {
             health_request_timeout: Duration::from_millis(100),
             inference_timeout: Duration::from_secs(1),
             poll_interval: Duration::from_millis(20),
+            artifact_leases: None,
         }
     }
 
@@ -2015,11 +2191,11 @@ mod tests {
     #[test]
     #[ignore]
     fn qualification_http_fixture_process() {
-        let Ok(port) = std::env::var("LSM_QUALIFICATION_FIXTURE_PORT") else {
+        let Ok(port) = std::env::var("GGML_LSM_QUALIFICATION_FIXTURE_PORT") else {
             return;
         };
         let port = port.parse::<u16>().unwrap();
-        let mode = std::env::var("LSM_QUALIFICATION_FIXTURE_MODE")
+        let mode = std::env::var("GGML_LSM_QUALIFICATION_FIXTURE_MODE")
             .unwrap_or_else(|_| "success".to_string());
         let listener = TcpListener::bind(("127.0.0.1", port)).unwrap();
         for incoming in listener.incoming() {
@@ -2056,6 +2232,9 @@ mod tests {
                         r#"{"content":"OK","tokens_predicted":1}"#,
                     );
                 }
+                // Keep the owning listener live long enough for the parent to
+                // authenticate it after receiving the HTTP response.
+                thread::sleep(Duration::from_millis(250));
                 break;
             }
             write_fixture_response(&mut stream, "404 Not Found", r#"{"error":"not found"}"#);
@@ -2094,11 +2273,13 @@ mod tests {
 
     #[test]
     fn qualification_evidence_is_bound_to_the_current_executable_artifact() {
-        let path = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().join(format!(
             "lsm-qualified-engine-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
+        crate::persistence::enforce_private_directory(&directory).unwrap();
+        let path = directory.join("llama-server.exe");
         std::fs::write(&path, vec![b'a'; 128 * 1024]).unwrap();
         let engine_artifact_id =
             crate::deployment_identity::artifact_identity_for_path("engine", &path)
@@ -2133,7 +2314,7 @@ mod tests {
             &path.to_string_lossy(),
             &qualification
         ));
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -2419,18 +2600,24 @@ mod tests {
     }
 
     #[test]
-    fn executable_fingerprint_includes_sampled_file_content() {
-        let path = std::env::temp_dir().join(format!(
+    fn executable_fingerprint_includes_all_file_content() {
+        let directory = std::env::temp_dir().join(format!(
             "lsm-engine-fingerprint-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        std::fs::write(&path, vec![b'a'; 128 * 1024]).unwrap();
+        crate::persistence::enforce_private_directory(&directory).unwrap();
+        let path = directory.join("llama-server.exe");
+        let mut bytes = vec![b'a'; 160 * 1024];
+        std::fs::write(&path, &bytes).unwrap();
         let first = executable_fingerprint(&path.to_string_lossy());
-        std::fs::write(&path, vec![b'b'; 128 * 1024]).unwrap();
+        // This offset was outside the retired first/middle/last 32 KiB
+        // windows and proves the complete digest observes every byte.
+        bytes[40_000] = b'b';
+        std::fs::write(&path, &bytes).unwrap();
         let second = executable_fingerprint(&path.to_string_lossy());
         assert_ne!(first, second);
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

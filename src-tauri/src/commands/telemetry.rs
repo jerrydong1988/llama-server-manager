@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
@@ -307,16 +307,17 @@ pub fn current_time_ms() -> i64 {
 
 fn open_raw_connection() -> Result<Connection, String> {
     let path = telemetry_db_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("无法创建遥测数据目录: {}", e))?;
-    }
-    let conn = Connection::open(path).map_err(|e| format!("无法打开遥测数据库: {}", e))?;
+    crate::persistence::prepare_private_file(&path)
+        .map_err(|e| format!("无法保护遥测数据库: {e}"))?;
+    let conn = Connection::open(&path).map_err(|e| format!("无法打开遥测数据库: {}", e))?;
     conn.busy_timeout(Duration::from_secs(5))
         .map_err(|e| format!("failed to configure telemetry busy timeout: {e}"))?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| format!("无法启用遥测数据库外键: {}", e))?;
     conn.pragma_update(None, "synchronous", "NORMAL")
         .map_err(|e| format!("failed to configure telemetry synchronous mode: {e}"))?;
+    crate::persistence::protect_sqlite_files(&path)
+        .map_err(|e| format!("无法保护遥测数据库文件: {e}"))?;
     Ok(conn)
 }
 
@@ -331,6 +332,8 @@ pub fn initialize_telemetry_storage() -> Result<(), String> {
     let conn = open_raw_connection()?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("无法启用遥测数据库 WAL: {}", e))?;
+    crate::persistence::protect_sqlite_files(&telemetry_db_path())
+        .map_err(|e| format!("无法保护遥测数据库文件: {e}"))?;
     init_schema(&conn)?;
     TELEMETRY_SCHEMA_READY.store(true, Ordering::Release);
     Ok(())
@@ -484,6 +487,13 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     if stored_version < SCHEMA_VERSION {
         migrate_inference_request_columns(conn)?;
         migrate_vector_schema(conn)?;
+    }
+    if stored_version < 10 {
+        conn.execute(
+            "UPDATE run_sessions SET command_line = '[legacy command redacted]'",
+            [],
+        )
+        .map_err(|e| format!("failed to scrub legacy command telemetry: {e}"))?;
     }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
@@ -806,6 +816,12 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
             return;
         }
     };
+    let startup_before = now_ms() - 14_i64 * 24 * 60 * 60 * 1000;
+    if let Err(error) = prune_connection(&mut conn, startup_before)
+        .and_then(|_| enforce_runtime_telemetry_quota(&conn))
+    {
+        eprintln!("Telemetry writer startup quota maintenance failed: {error}");
+    }
     let mut pending_control = None;
     let mut last_write_error: Option<String> = None;
     loop {
@@ -902,6 +918,7 @@ fn write_telemetry_batch_with_retry(
                     }
                 }
             }
+            enforce_runtime_telemetry_quota(&transaction)?;
             transaction.commit().map_err(|error| {
                 format!("Telemetry writer failed to commit transaction: {error}")
             })?;
@@ -919,6 +936,33 @@ fn write_telemetry_batch_with_retry(
     }
     let error = last_error.unwrap_or_else(|| "Telemetry writer failed without an error".into());
     writes.iter().map(|_| error.clone()).collect::<Vec<_>>()
+}
+
+fn enforce_runtime_telemetry_quota(conn: &Connection) -> Result<(), String> {
+    const TABLE_QUOTAS: &[(&str, &str, i64)] = &[
+        ("inference_requests", "completed_at", 100_000),
+        ("metric_samples", "ts", 500_000),
+        ("slot_snapshots", "ts", 250_000),
+        ("vector_activity_events", "completed_at", 100_000),
+    ];
+    for (table, order_column, max_rows) in TABLE_QUOTAS {
+        let count = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map_err(|error| format!("failed to count {table} telemetry quota: {error}"))?;
+        let excess = count.saturating_sub(*max_rows);
+        if excess > 0 {
+            conn.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} ORDER BY {order_column} ASC, rowid ASC LIMIT ?1)"
+                ),
+                params![excess],
+            )
+            .map_err(|error| format!("failed to enforce {table} telemetry quota: {error}"))?;
+        }
+    }
+    Ok(())
 }
 
 fn apply_telemetry_write(conn: &Connection, write: &TelemetryWrite) -> Result<(), String> {

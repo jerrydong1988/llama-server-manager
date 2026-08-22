@@ -2,8 +2,9 @@
 
 The Secure Worker Agent is the Phase 3 remote-execution boundary for Llama Server
 Manager. It ships inside the existing `lsm` command on Windows, macOS, Linux
-x86_64, and Linux ARM64. Single-node installations do not need an Agent and the
-existing manual, local, and SSH Worker modes remain available.
+x86_64, and Linux ARM64. Single-node installations do not need an Agent.
+Unauthenticated manual, local, SSH, and discovery-based Worker modes are not
+accepted as distributed-inference identities.
 
 ## Security properties
 
@@ -17,12 +18,12 @@ existing manual, local, and SSH Worker modes remain available.
 - Protocol version 1 allows only `status`, `rpc_start`, `rpc_stop`, and `audit`.
   Unknown actions and unknown JSON fields are rejected.
 - Remote requests cannot provide a program, argument, environment variable,
-  working directory, device selector, or filesystem path. `rpc_start` can launch
-  only the absolute `rpc-server` executable configured locally on the Worker,
-  with the fixed `--host 127.0.0.1 --port <configured-port>` arguments. At most
-  one child is owned by an Agent process.
-- The RPC port is bound to loopback. The manager exposes a persisted loopback
-  bridge and carries RPC bytes through a separately authenticated TLS tunnel.
+  working directory, device selector, or filesystem path. The configured
+  `rpc-server` identity is verified, but `rpc_start` fails closed because current
+  upstream `rpc-server` builds cannot expose an authenticated or OS-private
+  child transport. No unauthenticated loopback child is created.
+- Status, credential rotation, audit retrieval, stop/cleanup, and enrollment
+  remain available while compute startup is closed.
 - Protocol frames are limited to 64 KiB and the two listeners share a 64-
   connection in-flight limit. Repeated unauthenticated failures are aggregated
   instead of creating an attacker-controlled stream of audit writes.
@@ -30,18 +31,18 @@ existing manual, local, and SSH Worker modes remain available.
   before execution and fail closed if the audit log cannot be persisted. The
   Agent refuses startup and audit
   reads if an existing record is malformed, reordered, removed from the middle,
-  changed, or exceeds the 8 MiB operational limit.
+  changed, or cannot be rotated into a bounded immutable segment. Up to 16
+  verified segments are retained; rotation fails closed before overwriting the
+  retention set.
 
 This design authenticates the machines and protects traffic in transit. It does
 not attest the remote operating system, GPU firmware, model weights, or
 `rpc-server` binary. Protect the Worker host and distribute credentials through a
 separate trusted channel.
 
-The manager-side loopback bridge carries the raw llama.cpp RPC protocol. TCP
-loopback is host-local, not per-user: every process on the manager host can reach
-the bridge. Secure Agent mode therefore requires a dedicated manager account or
-host with no untrusted local OS users. This deployment requirement is shown in a
-native confirmation dialog before the manager reads or restricts the token.
+The manager does not open the raw llama.cpp RPC bridge while compute startup is
+closed. Enrollment still uses a native confirmation dialog before the manager
+reads, imports, and restricts the certificate and token.
 
 ## 1. Prepare TLS material
 
@@ -116,10 +117,9 @@ Open **Cluster Management → Secure Agent** and enter:
 
 The manager verifies TLS, token, protocol version, Agent ID, and certificate
 fingerprint before persisting the Worker. Persistence contains only public
-connection metadata and the two credential paths. The chosen bridge port is
-stable and is recreated after manager restarts. If that port is occupied,
-restoration marks the Worker offline rather than silently selecting a new port
-that would invalidate saved `--rpc` settings.
+connection metadata and application-private credential paths. The chosen bridge
+port is retained as future transport metadata, but no bridge is opened while
+compute startup is closed.
 
 Enrollment first shows a native confirmation containing the canonical
 certificate and token paths, both remote endpoints, TLS server name, and local
@@ -127,9 +127,9 @@ bridge. Only after approval does the backend read the exact 64-hex-character
 token, reset/restrict its ACL to the current user, and connect to the displayed
 endpoint.
 
-Use **Start Agent RPC**, **Stop Agent RPC**, **Test Connection**, and **Load
-Audit** from the Worker row. Removing an Agent Worker attempts to stop its remote
-child, always closes the local bridge, and then removes the persisted metadata.
+Use **Test Connection** and **Load Audit** from the Worker row. Compute start is
+disabled and the backend independently rejects `rpc_start`. Removing an Agent
+Worker attempts defensive stop/cleanup before removing persisted metadata.
 
 ## Credential rotation and recovery
 
@@ -150,11 +150,12 @@ the pinned identity and therefore requires re-enrollment with the new
 certificate. Back up the Agent JSON, token, certificate, private key, and audit
 log according to their sensitivity; never commit them to a repository.
 
-The audit file is intentionally bounded at 8 MiB. When it reaches that limit,
-the Agent refuses authenticated lifecycle and tunnel actions. Stop the Agent,
-move the complete audit file to protected archival storage without editing it,
-and restart the Agent to begin a new hash chain. Retain the archived chain and
-the timestamp of the service restart together for continuity.
+The active audit file is bounded and rotates into immutable, hash-linked
+segments. The Agent verifies every retained segment before serving audit data or
+performing an authenticated action. Up to 16 segments are retained; when the
+retention set is full, rotation fails closed instead of deleting or overwriting
+history. Archive complete segments through an operator-controlled process before
+that point and never edit a segment in place.
 
 ## CLI contract
 

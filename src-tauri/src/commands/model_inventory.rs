@@ -34,7 +34,7 @@ impl InventoryCacheReadMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct InventoryModelRecord {
     pub path: String,
     pub id: String,
@@ -198,16 +198,16 @@ fn now_secs() -> i64 {
 
 fn open_raw_connection() -> Result<Connection, String> {
     let path = inventory_db_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create model inventory directory: {}", e))?;
-    }
-    let conn = Connection::open(path)
+    crate::persistence::prepare_private_file(&path)
+        .map_err(|e| format!("failed to protect model inventory database: {e}"))?;
+    let conn = Connection::open(&path)
         .map_err(|e| format!("failed to open model inventory database: {}", e))?;
     conn.busy_timeout(Duration::from_secs(5))
         .map_err(|e| format!("failed to configure model inventory busy timeout: {e}"))?;
     conn.pragma_update(None, "synchronous", "NORMAL")
         .map_err(|e| format!("failed to configure model inventory synchronous mode: {e}"))?;
+    crate::persistence::protect_sqlite_files(&path)
+        .map_err(|e| format!("failed to protect model inventory database files: {e}"))?;
     Ok(conn)
 }
 
@@ -222,6 +222,8 @@ pub fn initialize_inventory_storage() -> Result<(), String> {
     let conn = open_raw_connection()?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("failed to enable model inventory WAL: {}", e))?;
+    crate::persistence::protect_sqlite_files(&inventory_db_path())
+        .map_err(|e| format!("failed to protect model inventory database files: {e}"))?;
     init_schema(&conn)?;
     INVENTORY_SCHEMA_READY.store(true, Ordering::Release);
     Ok(())
@@ -446,12 +448,33 @@ fn load_model_index_from_connection(
             "#,
         )
         .map_err(|e| format!("failed to prepare model inventory query: {}", e))?;
-    let rows = stmt
-        .query_map([], record_from_row)
-        .map_err(|e| format!("failed to query model inventory: {}", e))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("failed to read model inventory row: {}", e))?;
-    Ok(rows
+    let mut rows = stmt
+        .query([])
+        .map_err(|e| format!("failed to query model inventory: {}", e))?;
+    let mut records = Vec::new();
+    let mut retained_bytes = 0_usize;
+    while let Some(row) = rows
+        .next()
+        .map_err(|e| format!("failed to read model inventory row: {}", e))?
+    {
+        if records.len() >= 10_000 {
+            return Err("model inventory exceeds the 10000-record load limit".to_string());
+        }
+        let record = record_from_row(row)
+            .map_err(|e| format!("failed to decode model inventory row: {e}"))?;
+        retained_bytes = retained_bytes
+            .checked_add(
+                serde_json::to_vec(&record)
+                    .map_err(|e| format!("failed to size model inventory row: {e}"))?
+                    .len(),
+            )
+            .ok_or_else(|| "model inventory retained-size overflow".to_string())?;
+        if retained_bytes > 8 * 1024 * 1024 {
+            return Err("model inventory exceeds the 8 MiB retained load limit".to_string());
+        }
+        records.push(record);
+    }
+    Ok(records
         .into_iter()
         .filter(|record| read_mode.accepts(record.cache_version))
         .filter(|record| std::path::Path::new(&record.path).is_file())
@@ -518,6 +541,9 @@ fn upsert_model_records_in_connection(
     for record in records {
         let capabilities_json = serde_json::to_string(&record.capabilities)
             .map_err(|e| format!("failed to encode model capabilities: {}", e))?;
+        if capabilities_json.len() > 64 * 1024 {
+            return Err("model capability summary exceeds the 64 KiB record limit".to_string());
+        }
         stmt.execute(params![
             record.path,
             record.id,
@@ -781,6 +807,16 @@ pub fn delete_engine(id: &str) -> Result<(), String> {
 
 fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRecord> {
     let capabilities_json: String = row.get(11)?;
+    if capabilities_json.len() > 64 * 1024 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            11,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "model capability summary exceeds 64 KiB",
+            )),
+        ));
+    }
     let capabilities =
         serde_json::from_str::<ModelCapabilities>(&capabilities_json).map_err(|err| {
             rusqlite::Error::FromSqlConversionFailure(
@@ -791,6 +827,16 @@ fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRe
         })?;
     let context_length_i64: Option<i64> = row.get(8)?;
     let artifact_identity_json: String = row.get(14)?;
+    if artifact_identity_json.len() > 16 * 1024 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            14,
+            rusqlite::types::Type::Text,
+            Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "model artifact identity exceeds 16 KiB",
+            )),
+        ));
+    }
     Ok(InventoryModelRecord {
         path: row.get(0)?,
         id: row.get(1)?,

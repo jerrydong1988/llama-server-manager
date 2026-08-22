@@ -1210,7 +1210,10 @@ pub async fn rollback_config_revision(
     if crate::runtime_service::manages_instances() {
         crate::runtime_service::mark_config_sync_pending();
     }
-    Ok(ConfigRevisionRollbackResponse { config, history })
+    Ok(ConfigRevisionRollbackResponse {
+        config: crate::models::redact_instance_for_frontend(&config),
+        history,
+    })
 }
 
 #[cfg(test)]

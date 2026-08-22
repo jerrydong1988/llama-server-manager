@@ -42,7 +42,11 @@ assert.match(supervisorSource, /origin_failure/)
 assert.match(supervisorSource, /recovery_budget_is_stable/)
 assert.match(supervisorSource, /clear_stable_instance_recovery/)
 assert.match(supervisorSource, /automatic start skipped/)
-assert.match(supervisorSource, /validate_runtime_deployment_identity\(&spec\)\?/)
+assert.match(
+  supervisorSource,
+  /bind_launch_artifacts\([\s\S]*?validate_runtime_engine_qualification\(&spec, &artifact_leases\)\?[\s\S]*?validate_runtime_deployment_identity\(&spec, &artifact_leases\)\?/,
+  'runtime recovery must bind verified artifact objects before qualification and deployment checks',
+)
 assert.match(supervisorSource, /validate_runtime_deployment_revision\(&spec, &proxy_config\)\?/)
 assert.match(
   supervisorSource,

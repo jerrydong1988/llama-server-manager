@@ -4,63 +4,47 @@ const Module = require('node:module')
 const path = require('node:path')
 const esbuild = require('esbuild')
 
-const entry = `
-  import assert from 'node:assert/strict'
-  import { maskStartupCommandSecrets } from './src/store/commandFormatting'
-  import { forEachConcurrent } from './src/utils/async'
-
-  async function run() {
-    assert.equal(
-      maskStartupCommandSecrets('llama-server --api-key secret-value --port 8080'),
-      'llama-server --api-key ******** --port 8080',
-    )
-    assert.equal(
-      maskStartupCommandSecrets('llama-server --api-key="secret value" --api-key-file key.txt'),
-      'llama-server --api-key=******** --api-key-file key.txt',
-    )
-
-    let active = 0
-    let peak = 0
-    const processed = []
-    await forEachConcurrent([1, 2, 3, 4, 5, 6, 7], 3, async value => {
-      active += 1
-      peak = Math.max(peak, active)
-      await new Promise(resolve => setTimeout(resolve, 5))
-      processed.push(value)
-      active -= 1
-    })
-    assert.equal(peak, 3)
-    assert.deepEqual(processed.sort((left, right) => left - right), [1, 2, 3, 4, 5, 6, 7])
-  }
-
-  run()
-    .then(() => console.log('audit remediation regression tests passed'))
-    .catch(error => {
-      console.error(error)
-      process.exitCode = 1
-    })
-`
-
-const bundled = esbuild.buildSync({
-  bundle: true,
-  format: 'cjs',
-  platform: 'node',
-  packages: 'external',
-  write: false,
-  stdin: {
-    contents: entry,
-    resolveDir: process.cwd(),
-    sourcefile: 'audit-remediations.test.ts',
-    loader: 'ts',
-  },
-})
-
-const testModule = new Module(path.join(process.cwd(), 'audit-remediations.test.cjs'))
-testModule.filename = path.join(process.cwd(), 'audit-remediations.test.cjs')
-testModule.paths = Module._nodeModulePaths(process.cwd())
-testModule._compile(bundled.outputFiles[0].text, testModule.filename)
-
 const root = path.join(__dirname, '..')
+function loadTypeScriptModule(relative) {
+  const filename = path.join(root, relative)
+  const compiled = esbuild.transformSync(fs.readFileSync(filename, 'utf8'), {
+    format: 'cjs',
+    loader: 'ts',
+    sourcefile: filename,
+    target: 'node20',
+  })
+  const loaded = new Module(filename)
+  loaded.filename = filename
+  loaded.paths = Module._nodeModulePaths(path.dirname(filename))
+  loaded._compile(compiled.code, filename)
+  return loaded.exports
+}
+
+const { maskStartupCommandSecrets } = loadTypeScriptModule('src/store/commandFormatting.ts')
+const { forEachConcurrent } = loadTypeScriptModule('src/utils/async.ts')
+const behaviorTests = (async () => {
+  assert.equal(
+    maskStartupCommandSecrets('llama-server --api-key secret-value --port 8080'),
+    'llama-server --api-key ******** --port 8080',
+  )
+  assert.equal(
+    maskStartupCommandSecrets('llama-server --api-key="secret value" --api-key-file key.txt'),
+    'llama-server --api-key=******** --api-key-file key.txt',
+  )
+
+  let active = 0
+  let peak = 0
+  const processed = []
+  await forEachConcurrent([1, 2, 3, 4, 5, 6, 7], 3, async value => {
+    active += 1
+    peak = Math.max(peak, active)
+    await new Promise(resolve => setTimeout(resolve, 5))
+    processed.push(value)
+    active -= 1
+  })
+  assert.equal(peak, 3)
+  assert.deepEqual(processed.sort((left, right) => left - right), [1, 2, 3, 4, 5, 6, 7])
+})()
 const downloadSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'commands', 'download.rs'), 'utf8')
 const proxySource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'commands', 'proxy.rs'), 'utf8')
 const serverSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'commands', 'server.rs'), 'utf8')
@@ -102,7 +86,20 @@ assert.match(
   'a rejected pause request must roll an optimistic pausing state back to active',
 )
 assert.match(clusterPageSource, /labels\.workerLoadFailed/, 'worker load failures must be visible to the user')
-assert.match(clusterPageSource, /labels\.workerScanFailed/, 'worker scan failures must be visible to the user')
+for (const operation of [
+  'secure Agent test failed',
+  'secure Agent stop failed',
+  'secure Agent removal failed',
+  'secure Agent audit failed',
+]) {
+  assert.match(clusterPageSource, new RegExp(operation), `${operation} must be visible to the user`)
+}
+assert.doesNotMatch(
+  clusterPageSource,
+  /scan_workers_tcp|scan_workers_mdns|connect_worker_ssh|launch_local_rpc|'start_worker_agent'/,
+  'the Cluster UI must not restore legacy or fail-closed unauthenticated worker paths',
+)
+assert.match(clusterPageSource, /<Button disabled variant="success"/, 'Agent compute startup must be disabled in the renderer')
 assert.match(
   instanceManagerSource,
   /catch \(error\) \{[\s\S]*setPortStatus\(labels\.portCheckFailed\)[\s\S]*addRuntimeWarning[\s\S]*return/,
@@ -143,3 +140,10 @@ assert.match(telemetrySource, /completed_at = inference_requests\.completed_at/,
 assert.match(downloadBrowseSource, /useAppStore\.setState\(state =>/, 'local file discovery must merge into the latest download state')
 assert.match(downloadBrowseSource, /latest\.updatedAt[\s\S]*browseStartedAt/, 'local discovery must not overwrite concurrent progress')
 assert.doesNotMatch(bigScreenSource, /const loadInitialData = useAppStore/, 'wallboard must not start a duplicate bootstrap scan')
+
+behaviorTests
+  .then(() => console.log('audit remediation regression tests passed'))
+  .catch(error => {
+    console.error(error)
+    process.exitCode = 1
+  })

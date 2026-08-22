@@ -186,7 +186,7 @@ test('production scheduling and scoped API keys round-trip through the settings 
   await page.getByRole('spinbutton', { name: '绑定有效期（毫秒）' }).fill('120000')
   await page.getByRole('spinbutton', { name: '最大绑定数' }).fill('99')
   await page.getByRole('button', { name: '添加 API Key' }).click()
-  const keyInput = page.getByRole('textbox', { name: 'API Key（至少 16 字符）' })
+  const keyInput = page.getByRole('textbox', { name: 'API Key（至少 32 字符）' })
   await expect(keyInput).toHaveAttribute('type', 'password')
   const generatedKey = await keyInput.inputValue()
   expect(generatedKey).toMatch(/^lsm_[0-9a-f]{32}$/)

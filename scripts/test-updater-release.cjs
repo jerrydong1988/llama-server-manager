@@ -29,6 +29,7 @@ try {
     UPDATER_INPUT_DIR: inputRoot,
     UPDATER_OUTPUT_DIR: outputRoot,
     R2_PUBLIC_BASE_URL: 'https://updates.example.test',
+    SOURCE_SHA: 'a'.repeat(40),
   }
   const stage = spawnSync(process.execPath, ['scripts/prepare-updater-release.mjs', '--stage'], {
     cwd: root,
@@ -51,8 +52,11 @@ try {
   })
   assert.equal(manifestRun.status, 0, manifestRun.stderr || manifestRun.stdout)
 
-  const manifest = JSON.parse(fs.readFileSync(path.join(outputRoot, 'latest.json'), 'utf8'))
+  const manifest = JSON.parse(fs.readFileSync(path.join(outputRoot, 'release-envelope.json'), 'utf8'))
   assert.equal(manifest.version, version)
+  assert.equal(manifest.release_tag, `v${version}`)
+  assert.equal(manifest.source_sha, 'a'.repeat(40))
+  assert.ok(Number.isSafeInteger(manifest.release_counter) && manifest.release_counter > 0)
   assert.deepEqual(
     Object.keys(manifest.platforms).sort(),
     ['darwin-aarch64', 'windows-x86_64-msi', 'windows-x86_64-nsis'],
@@ -62,6 +66,7 @@ try {
   for (const entry of Object.values(manifest.platforms)) {
     assert.ok(entry.url.startsWith(`https://updates.example.test/releases/v${version}/`))
     assert.ok(entry.signature.startsWith('signature-'))
+    assert.match(entry.sha256, /^[0-9a-f]{64}$/)
   }
 } finally {
   fs.rmSync(temporaryRoot, { recursive: true, force: true })

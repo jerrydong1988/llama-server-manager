@@ -52,6 +52,22 @@ export const buildPickerTree = (rootDir: string, models: ModelInfo[]): PickerNod
 export const countActive = (activeParams: Set<keyof InstanceConfig>, keys: Array<keyof InstanceConfig>) =>
   keys.filter(key => activeParams.has(key)).length
 
+export const clearSecretConfiguredMarker = (config: InstanceConfig, key: keyof InstanceConfig): InstanceConfig => {
+  switch (key) {
+    case 'manual_command': return { ...config, manual_command_configured: false }
+    case 'api_key': return { ...config, api_key_configured: false }
+    case 'api_key_file': return { ...config, api_key_file_configured: false }
+    case 'ssl_key_file': return { ...config, ssl_key_file_configured: false }
+    case 'ssl_cert_file': return { ...config, ssl_cert_file_configured: false }
+    case 'ui_config_file': return { ...config, ui_config_file_configured: false }
+    case 'ui_config': return { ...config, ui_config_configured: false }
+    case 'mcp_servers_config': return { ...config, mcp_servers_config_configured: false }
+    case 'mcp_servers_json': return { ...config, mcp_servers_json_configured: false }
+    case 'custom_args': return { ...config, custom_args_configured: false }
+    default: return config
+  }
+}
+
 export type ConfigChange = {
   key: keyof InstanceConfig
   label: string

@@ -270,8 +270,10 @@ fn initialize_state(data_dir: Option<PathBuf>) -> AppResult<AppState> {
     }
     let config_dir = crate::utils::get_data_dir().join("configs");
     let config = crate::commands::config::read_config_from_disk(&config_dir);
-    crate::security::initialize_path_authority(&config.engine_dirs, &config.model_dirs)
+    crate::security::initialize_path_authority()
         .map_err(|message| AppError::new("PATH_AUTHORITY_INITIALIZATION_FAILED", message, false))?;
+    crate::security::validate_configured_roots(&config.engine_dirs, &config.model_dirs)
+        .map_err(|message| AppError::new("PATH_AUTHORITY_REQUIRED", message, false))?;
     crate::commands::model_inventory::initialize_inventory_storage()
         .map_err(|message| AppError::new("INVENTORY_INITIALIZATION_FAILED", message, true))?;
     let models = crate::commands::model_inventory::list_cached_models()

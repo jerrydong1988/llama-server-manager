@@ -1,3 +1,4 @@
+pub mod bounded_http;
 pub mod canary;
 pub mod commands;
 pub mod config_revision;

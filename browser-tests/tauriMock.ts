@@ -799,7 +799,6 @@ type BrowserTestControl = {
   releaseBrowse: (repoId: string, files: MsFileEntry[]) => void
   releasePortCheck: (port: number, available: boolean) => void
   releaseStart: () => void
-  releaseWorkerScan: (workers: WorkerInfo[]) => void
 }
 
 declare global {
@@ -812,17 +811,25 @@ let releasePendingStart: (() => void) | null = null
 let delayedInventoryCacheLoaded = false
 const pendingBrowses: Array<{ repoId: string; resolve: (files: MsFileEntry[]) => void }> = []
 const pendingPortChecks: Array<{ port: number; resolve: (available: boolean) => void }> = []
-const pendingWorkerScans: Array<(workers: WorkerInfo[]) => void> = []
 const clusterWorkers: WorkerInfo[] = BROWSER_SCENARIO === 'cluster-worker'
   ? [{
-      id: 'browser-cluster-worker',
-      host: '192.168.50.10',
-      port: 50052,
-      name: 'Browser Cluster Worker',
-      origin: 'manual',
+      id: 'browser-secure-agent',
+      host: '127.0.0.1',
+      port: 50152,
+      name: 'Browser Secure Agent',
+      origin: 'agent',
       devices: [{ device_type: 'Vulkan', name: 'Browser GPU', vram_mb: 16_384, free_mb: 12_288 }],
       status: 'Offline',
       auto_discovered: false,
+      agent: {
+        agent_id: 'browser-secure-agent',
+        control_host: 'worker.example.net',
+        control_port: 7443,
+        tunnel_host: 'worker.example.net',
+        tunnel_port: 7444,
+        tls_server_name: 'worker.example.net',
+        certificate_sha256: 'b'.repeat(64),
+      },
     }]
   : []
 let residencyPolicy: ResidencyPolicy = {
@@ -917,11 +924,32 @@ const control: BrowserTestControl = {
     resolve(available)
   },
   releaseStart: () => releasePendingStart?.(),
-  releaseWorkerScan: (workers) => {
-    const resolve = pendingWorkerScans.shift()
-    if (!resolve) throw new Error('No pending browser-test worker scan')
-    resolve(clone(workers))
+}
+
+const updaterPlatforms: Record<string, { url: string; signature: string; sha256: string }> = {
+  'windows-x86_64-nsis': {
+    url: 'https://updates.cnzone.net/releases/v2.9.37/LlamaServerManager_2.9.37_windows-x86_64-nsis-setup.exe',
+    signature: 'browser-test-nsis-signature',
+    sha256: 'a'.repeat(64),
   },
+  'windows-x86_64-msi': {
+    url: 'https://updates.cnzone.net/releases/v2.9.37/LlamaServerManager_2.9.37_windows-x86_64-msi.msi',
+    signature: 'browser-test-msi-signature',
+    sha256: 'b'.repeat(64),
+  },
+  'darwin-aarch64': {
+    url: 'https://updates.cnzone.net/releases/v2.9.37/LlamaServerManager_2.9.37_aarch64.app.tar.gz',
+    signature: 'browser-test-macos-signature',
+    sha256: 'c'.repeat(64),
+  },
+}
+
+const updaterRawJson = {
+  version: '2.9.37',
+  release_tag: 'v2.9.37',
+  source_sha: 'd'.repeat(40),
+  release_counter: 2_000_009_000_037,
+  platforms: updaterPlatforms,
 }
 
 const syncAutomationProbe = () => {
@@ -1190,6 +1218,19 @@ mockIPC((command, payload) => {
 
   switch (command) {
     case 'plugin:app|bundle_type': return 'nsis'
+    case 'verify_updater_release': {
+      const target = String(args.target ?? '')
+      const platform = updaterPlatforms[target]
+      if (!platform) throw new Error('browser test updater target is unavailable')
+      return {
+        version: updaterRawJson.version,
+        releaseTag: updaterRawJson.release_tag,
+        sourceSha: updaterRawJson.source_sha,
+        releaseCounter: updaterRawJson.release_counter,
+        target,
+        platform: clone(platform),
+      }
+    }
     case 'plugin:updater|check':
       control.updaterCheckCount += 1
       if (BROWSER_SCENARIO === 'updater-retry' && control.updaterCheckCount === 1) {
@@ -1202,7 +1243,7 @@ mockIPC((command, payload) => {
           version: '2.9.37',
           date: '2026-07-31T00:00:00Z',
           body: 'Browser updater test',
-          rawJson: {},
+          rawJson: clone(updaterRawJson),
         }
       }
       return null
@@ -1580,30 +1621,6 @@ mockIPC((command, payload) => {
         diagnostics: [],
       }
     case 'list_inference_requests': return []
-    case 'scan_workers_tcp':
-      if (BROWSER_SCENARIO === 'cluster-scan-race') {
-        return new Promise<WorkerInfo[]>((resolve) => pendingWorkerScans.push(resolve))
-      }
-      return clone(clusterWorkers)
-    case 'add_worker': {
-      const host = String(args.host ?? '')
-      const port = Number(args.port ?? 50052)
-      const name = String(args.name ?? '') || host
-      const existing = clusterWorkers.find(worker => worker.host === host && worker.port === port)
-      if (!existing) {
-        clusterWorkers.push({
-          id: `browser-worker-${clusterWorkers.length + 1}`,
-          host,
-          port,
-          name,
-          origin: 'manual',
-          devices: [],
-          status: 'Offline',
-          auto_discovered: false,
-        })
-      }
-      return null
-    }
     case 'enroll_worker_agent': {
       const enrollment = (args.enrollment ?? {}) as Record<string, unknown>
       const id = 'agent-browser-secure-worker'
@@ -1624,8 +1641,6 @@ mockIPC((command, payload) => {
           tunnel_host: String(enrollment.tunnelHost ?? 'worker.example.net'),
           tunnel_port: Number(enrollment.tunnelPort ?? 7444),
           tls_server_name: String(enrollment.tlsServerName ?? 'worker.example.net'),
-          tls_cert_path: String(enrollment.tlsCertPath ?? 'C:\\secure\\worker-agent.crt'),
-          token_path: String(enrollment.tokenPath ?? 'C:\\secure\\worker-agent.token'),
           certificate_sha256: 'a'.repeat(64),
         },
       }
@@ -1633,8 +1648,11 @@ mockIPC((command, payload) => {
       else clusterWorkers.push(worker)
       return clone(worker)
     }
-    case 'test_worker_agent':
-      return { rpc_running: clusterWorkers.find(worker => worker.id === args.id)?.status === 'Online' }
+    case 'test_worker_agent': {
+      const worker = clusterWorkers.find(worker => worker.id === args.id)
+      if (worker) worker.status = 'Online'
+      return { rpc_running: worker?.status === 'Online' }
+    }
     case 'start_worker_agent': {
       const worker = clusterWorkers.find(worker => worker.id === args.id)
       if (worker) worker.status = 'Online'
@@ -1716,7 +1734,6 @@ mockIPC((command, payload) => {
       return residencyInspection()
     }
     case 'is_local_host': return false
-    case 'test_worker': return { ok: true, latency_ms: 12, devices: [] }
     case 'check_port':
       if (BROWSER_SCENARIO === 'port-check-race') {
         const port = Number(args.port ?? 0)
@@ -1806,6 +1823,7 @@ mockIPC((command, payload) => {
       return clone(rollout)
     }
     case 'get_proxy_config': return clone(proxyConfig)
+    case 'generate_proxy_api_key': return `lsm_${'e'.repeat(32)}`
     case 'get_proxy_status':
       if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')
       return clone(proxyStatus)

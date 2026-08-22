@@ -45,8 +45,6 @@ function loadRustConfigShape() {
 }
 
 const RUST_CONFIG_SHAPE = loadRustConfigShape()
-const ARTIFACT_SAMPLE_BYTES = 64n * 1024n
-
 function stablePathHash(value) {
   let hash = 0xcbf29ce484222325n
   return updateFingerprintHash(hash, Buffer.from(value, 'utf8')).toString(16).padStart(16, '0')
@@ -60,45 +58,15 @@ function updateFingerprintHash(hash, bytes) {
   return hash
 }
 
-function unsignedLittleEndian(value, byteLength) {
-  const bytes = Buffer.alloc(byteLength)
-  let remaining = BigInt(value)
-  for (let index = 0; index < byteLength; index += 1) {
-    bytes[index] = Number(remaining & 0xffn)
-    remaining >>= 8n
-  }
-  return bytes
-}
-
 function artifactIdentity(kind, artifactPath) {
   const fileSize = fs.statSync(artifactPath, { bigint: true }).size
-  const last = fileSize > ARTIFACT_SAMPLE_BYTES ? fileSize - ARTIFACT_SAMPLE_BYTES : 0n
-  const offsets = fileSize <= ARTIFACT_SAMPLE_BYTES
-    ? [0n]
-    : [...new Set([0n, last / 4n, last / 2n, (last * 3n) / 4n, last].map(String))]
-        .map(BigInt)
-        .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
   const digest = crypto.createHash('sha256')
-  digest.update(Buffer.from('llama-server-manager:sampled-artifact:v1\0'))
+  digest.update(Buffer.from('llama-server-manager:full-artifact:v1\0'))
   digest.update(Buffer.from(kind))
-  digest.update(unsignedLittleEndian(fileSize, 8))
-  digest.update(unsignedLittleEndian(ARTIFACT_SAMPLE_BYTES, 8))
-  const file = fs.openSync(artifactPath, 'r')
-  try {
-    for (const offset of offsets) {
-      const readLength = Number(fileSize - offset < ARTIFACT_SAMPLE_BYTES
-        ? fileSize - offset
-        : ARTIFACT_SAMPLE_BYTES)
-      const sample = Buffer.alloc(readLength)
-      const count = fs.readSync(file, sample, 0, readLength, Number(offset))
-      if (count !== readLength) throw new Error(`short ${kind} identity sample`)
-      digest.update(unsignedLittleEndian(offset, 8))
-      digest.update(unsignedLittleEndian(BigInt(readLength), 8))
-      digest.update(sample)
-    }
-  } finally {
-    fs.closeSync(file)
-  }
+  const sizeBytes = Buffer.alloc(8)
+  sizeBytes.writeBigUInt64LE(fileSize)
+  digest.update(sizeBytes)
+  digest.update(fs.readFileSync(artifactPath))
   return `urn:lsm:${kind}:v1:sha256:${digest.digest('hex')}`
 }
 
@@ -257,30 +225,19 @@ function executableFingerprint(executable) {
   if (!metadata.isFile()) throw new Error(`qualification executable is not a file: ${canonical}`)
 
   const normalizedPath = fingerprintPathIdentity(canonical)
-  const sampleBytes = 32n * 1024n
-  const sampleRange = metadata.size > sampleBytes ? metadata.size - sampleBytes : 0n
-  const offsets = [...new Set([0n, sampleRange / 2n, sampleRange].map(String))]
-    .map(BigInt)
-    .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
+  const digest = crypto.createHash('sha256')
+  digest.update(Buffer.from('llama-server-manager:engine-fingerprint:v3\0'))
+  digest.update(Buffer.from(normalizedPath, 'utf8'))
+  const sizeBytes = Buffer.alloc(8)
+  sizeBytes.writeBigUInt64LE(metadata.size)
+  digest.update(sizeBytes)
+  const modifiedBytes = Buffer.alloc(16)
+  modifiedBytes.writeBigUInt64LE(BigInt.asUintN(64, metadata.mtimeNs), 0)
+  modifiedBytes.writeBigUInt64LE(metadata.mtimeNs >> 64n, 8)
+  digest.update(modifiedBytes)
+  digest.update(Buffer.from(artifactIdentity('engine', canonical), 'utf8'))
 
-  let hash = 0xcbf29ce484222325n
-  hash = updateFingerprintHash(hash, Buffer.from(normalizedPath, 'utf8'))
-  hash = updateFingerprintHash(hash, unsignedLittleEndian(metadata.size, 8))
-  hash = updateFingerprintHash(hash, unsignedLittleEndian(metadata.mtimeNs, 16))
-
-  const file = fs.openSync(canonical, 'r')
-  try {
-    const buffer = Buffer.alloc(Number(sampleBytes))
-    for (const offset of offsets) {
-      const count = fs.readSync(file, buffer, 0, buffer.length, Number(offset))
-      hash = updateFingerprintHash(hash, unsignedLittleEndian(offset, 8))
-      hash = updateFingerprintHash(hash, buffer.subarray(0, count))
-    }
-  } finally {
-    fs.closeSync(file)
-  }
-
-  return `v2:${normalizedPath}:${metadata.size}:${metadata.mtimeNs}:${hash.toString(16).padStart(16, '0')}`
+  return `v3:${normalizedPath}:${metadata.size}:${metadata.mtimeNs}:${digest.digest('hex')}`
 }
 
 function engineQualificationBinding(command) {

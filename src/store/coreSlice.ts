@@ -214,8 +214,8 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         get().addRuntimeWarning(`Engine rename failed: ${String(error)}`)
       })
     },
-    openEngineFolder: async (dir) => {
-      await invoke('open_engine_folder', { dir })
+    openEngineFolder: async (engineId) => {
+      await invoke('open_engine_folder', { engineId })
     },
   }
 }

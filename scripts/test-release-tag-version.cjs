@@ -24,25 +24,40 @@ assert.match(`${mismatched.stdout}\n${mismatched.stderr}`, /must match release v
 const matching = runForTag(`v${packageJson.version}`)
 assert.equal(matching.status, 0, matching.stderr || matching.stdout)
 
-const workflow = fs.readFileSync(
+const buildWorkflow = fs.readFileSync(
   path.join(__dirname, '..', '.github', 'workflows', 'build.yml'),
   'utf8',
 )
-assert.match(workflow, /finalize-release:/, 'release workflow must have a final notes check')
-assert.match(
-  workflow,
-  /needs:\s*\[build-windows, build-macos, build-linux, build-linux-arm64, publish-updater\]/,
-  'release notes must be finalized only after every package job and updater publication succeeds',
+const publishWorkflow = fs.readFileSync(
+  path.join(__dirname, '..', '.github', 'workflows', 'publish-release.yml'),
+  'utf8',
 )
 assert.match(
-  workflow,
+  publishWorkflow,
+  /workflow_run:\s*[\s\S]*workflows:\s*\[Build\]/,
+  'protected publication must descend from a completed Build workflow',
+)
+assert.match(
+  publishWorkflow,
+  /stage:\s*[\s\S]*needs:\s*\[qualify, rebuild-windows, rebuild-macos, rebuild-linux\]/,
+  'release staging must wait for every exact-source package rebuild',
+)
+assert.match(
+  publishWorkflow,
+  /publish:\s*[\s\S]*needs:\s*\[qualify, stage\]/,
+  'publication must wait for qualified, immutable staged inputs',
+)
+assert.match(
+  publishWorkflow,
   /releases\/generate-notes/,
   'an empty release body must use GitHub generated release notes',
 )
 assert.match(
-  workflow,
-  /Release notes already exist; preserving the curated content/,
-  'curated release notes must not be overwritten',
+  publishWorkflow,
+  /if ! gh release view[\s\S]*gh release create[\s\S]*--notes-file release-stage\/updater-notes\.md/,
+  'generated notes must only create a missing release so curated notes remain untouched',
 )
+assert.doesNotMatch(publishWorkflow, /gh release edit|--clobber/, 'published release metadata and assets must not be replaced')
+assert.match(buildWorkflow, /branches:\s*\[master\]/, 'release source Build must protect the default branch')
 
 console.log('release tag version regression passed')
