@@ -1655,7 +1655,13 @@ mod incremental_scan_tests {
         let malformed = dir.join("malformed.gguf");
         std::fs::write(&malformed, b"not-a-gguf").unwrap();
         crate::persistence::enforce_private_file(&malformed).unwrap();
-        let scan_root_key = canonical_key(&dir);
+        // Windows runners can expose the temporary directory through an 8.3 alias while
+        // canonicalizing its children to the long path. Mirror the production scan entry
+        // point by passing the canonical root to the incremental scanner.
+        let canonical_dir = std::fs::canonicalize(&dir).unwrap();
+        let canonical_malformed = std::fs::canonicalize(&malformed).unwrap();
+        assert!(path_is_within(&canonical_malformed, &canonical_dir));
+        let scan_root_key = canonical_key(&canonical_dir);
         let mut models = Vec::new();
         let mut seen_display_paths = HashSet::new();
         let mut seen_inventory_paths = HashSet::new();
@@ -1667,8 +1673,8 @@ mod incremental_scan_tests {
         let mut budget = ScanBudget::default();
 
         scan_model_directory_incremental(
-            &dir,
-            &dir,
+            &canonical_dir,
+            &canonical_dir,
             &scan_root_key,
             0,
             &HashMap::new(),
@@ -1699,8 +1705,8 @@ mod incremental_scan_tests {
         errors.clear();
         let mut budget = ScanBudget::default();
         scan_model_directory_incremental(
-            &dir,
-            &dir,
+            &canonical_dir,
+            &canonical_dir,
             &scan_root_key,
             0,
             &inventory,
