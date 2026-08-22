@@ -502,9 +502,16 @@ function testLaunchSpec(dataDir, backendPort, proxyConfig) {
   fs.writeFileSync(modelPath, 'runtime-smoke-model')
   protectWindowsFixtureTree(path.dirname(modelPath))
   const apiKeyFile = fixtureApiKeyFile(dataDir)
-  const command = process.platform === 'win32'
-    ? [fixtureCommand(dataDir), '/D', '/S', '/C', 'ping -n 120 127.0.0.1 >NUL & rem', '--model', modelPath, '--api-key-file', apiKeyFile]
-    : [fixtureCommand(dataDir), '-c', 'sleep 120', 'runtime-smoke', '--model', modelPath, '--api-key-file', apiKeyFile]
+  const command = [
+    fixtureCommand(dataDir),
+    '__test-fixture-server',
+    '--fixture-listen-port',
+    '0',
+    '--model',
+    modelPath,
+    '--api-key-file',
+    apiKeyFile,
+  ]
   return withLaunchIdentity({
     instance_id: 'runtime-smoke-instance',
     config: {
@@ -528,9 +535,18 @@ function testLaunchSpec(dataDir, backendPort, proxyConfig) {
 
 function crashingLaunchSpec(dataDir, backendPort, proxyConfig) {
   const spec = testLaunchSpec(dataDir, backendPort, proxyConfig)
-  const command = process.platform === 'win32'
-    ? [fixtureCommand(dataDir), '/D', '/S', '/C', 'ping -n 2 127.0.0.1 >NUL & exit /B 1 & rem', '--model', spec.config.model_path, '--api-key-file', spec.config.api_key_file]
-    : [fixtureCommand(dataDir), '-c', 'sleep 0.2; exit 1', '--model', spec.config.model_path, '--api-key-file', spec.config.api_key_file]
+  const command = [
+    fixtureCommand(dataDir),
+    '__test-fixture-server',
+    '--fixture-listen-port',
+    '0',
+    '--exit-after-ms',
+    '200',
+    '--model',
+    spec.config.model_path,
+    '--api-key-file',
+    spec.config.api_key_file,
+  ]
   return withLaunchIdentity({
     ...spec,
     command,
@@ -539,21 +555,22 @@ function crashingLaunchSpec(dataDir, backendPort, proxyConfig) {
 }
 
 function recoverOnceLaunchSpec(dataDir, backendPort, proxyConfig) {
-  const marker = 'runtime-recovery-once.marker'
+  const marker = path.join(dataDir, 'runtime-recovery-once.marker')
   const spec = testLaunchSpec(dataDir, backendPort, proxyConfig)
-  const command = process.platform === 'win32'
-    ? [
-        fixtureCommand(dataDir),
-        '/D',
-        '/S',
-        '/C',
-        `if exist ${marker} (ping -n 120 127.0.0.1 >NUL) else (type NUL > ${marker} & ping -n 2 127.0.0.1 >NUL & exit /B 1) & rem`,
-        '--model',
-        spec.config.model_path,
-        '--api-key-file',
-        spec.config.api_key_file,
-      ]
-    : [fixtureCommand(dataDir), '-c', `if [ -f ${marker} ]; then sleep 120; else : > ${marker}; sleep 0.2; exit 1; fi`, '--model', spec.config.model_path, '--api-key-file', spec.config.api_key_file]
+  const command = [
+    fixtureCommand(dataDir),
+    '__test-fixture-server',
+    '--fixture-listen-port',
+    '0',
+    '--exit-after-ms',
+    '200',
+    '--crash-once-marker',
+    marker,
+    '--model',
+    spec.config.model_path,
+    '--api-key-file',
+    spec.config.api_key_file,
+  ]
   return withLaunchIdentity({
     ...spec,
     config: { ...spec.config, restart_policy: 'on-failure' },
@@ -564,12 +581,20 @@ function recoverOnceLaunchSpec(dataDir, backendPort, proxyConfig) {
 
 function fixtureCommand(dataDir) {
   const directory = path.join(dataDir, 'engines', 'runtime-smoke')
-  const destination = path.join(directory, process.platform === 'win32' ? 'cmd.exe' : 'sh')
+  const destination = path.join(directory, process.platform === 'win32' ? 'lsm.exe' : 'lsm')
   if (!fs.existsSync(destination)) {
     fs.mkdirSync(directory, { recursive: true })
-    const source = process.platform === 'win32'
-      ? process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe'
-      : '/bin/sh'
+    const source = path.resolve(
+      __dirname,
+      '..',
+      'src-tauri',
+      'target',
+      'debug',
+      process.platform === 'win32' ? 'lsm.exe' : 'lsm',
+    )
+    if (!fs.existsSync(source)) {
+      throw new Error(`runtime fixture CLI is missing: ${source}`)
+    }
     fs.copyFileSync(source, destination)
     if (process.platform !== 'win32') fs.chmodSync(destination, 0o700)
   }

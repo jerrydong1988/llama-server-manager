@@ -2,19 +2,54 @@
 fn run_test_fixture_server(arguments: &[std::ffi::OsString]) -> Result<(), String> {
     use std::io::{Read, Write};
 
-    let port = arguments
-        .windows(2)
-        .find(|pair| pair[0] == "--port")
-        .and_then(|pair| pair[1].to_str())
+    let option = |name: &str| {
+        arguments
+            .windows(2)
+            .find(|pair| pair[0] == name)
+            .and_then(|pair| pair[1].to_str())
+    };
+    let port = option("--fixture-listen-port")
+        .or_else(|| option("--port"))
         .ok_or_else(|| "fixture server requires --port".to_string())?
         .parse::<u16>()
         .map_err(|error| format!("fixture server port is invalid: {error}"))?;
+    let exit_after = option("--exit-after-ms")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map(std::time::Duration::from_millis)
+                .map_err(|error| format!("fixture server exit delay is invalid: {error}"))
+        })
+        .transpose()?;
+    let crash_once_marker = option("--crash-once-marker");
+    let crash_once_requested = crash_once_marker.is_some();
+    let crash_once = crash_once_marker
+        .map(std::path::PathBuf::from)
+        .map(|marker| {
+            if !marker.is_absolute() {
+                return Err("fixture server crash marker must be absolute".to_string());
+            }
+            if marker.exists() {
+                return Ok(false);
+            }
+            std::fs::write(&marker, b"crash once")
+                .map_err(|error| format!("fixture server crash marker failed: {error}"))?;
+            Ok(true)
+        })
+        .transpose()?
+        .unwrap_or(false);
+    let started = std::time::Instant::now();
     let listener = std::net::TcpListener::bind(("127.0.0.1", port))
         .map_err(|error| format!("fixture server bind failed: {error}"))?;
     listener
         .set_nonblocking(true)
         .map_err(|error| format!("fixture server setup failed: {error}"))?;
     loop {
+        if exit_after.is_some_and(|delay| started.elapsed() >= delay)
+            && (!crash_once_requested || crash_once)
+        {
+            return Err("fixture server requested a test crash".to_string());
+        }
         match listener.accept() {
             Ok((mut stream, _)) => {
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(1)));

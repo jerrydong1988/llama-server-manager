@@ -167,6 +167,8 @@ pub fn validate_configured_roots(
 pub fn require_authorized_engine_root(path: &Path) -> Result<PathBuf, String> {
     let canonical = canonical_directory(path)?;
     let managed_root = crate::utils::get_data_dir().join("engines");
+    let managed_root =
+        canonical_directory(&managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
     if path_is_within(&canonical, &managed_root) {
         return Ok(canonical);
     }
