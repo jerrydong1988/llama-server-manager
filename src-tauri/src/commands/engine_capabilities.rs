@@ -700,10 +700,9 @@ fn qualification_listener_pid(port: u16) -> Result<u32, String> {
             std::fs::read_link(descriptor.path())
                 .ok()
                 .is_some_and(|target| target == std::path::Path::new(&expected))
-        }) {
-            if matched.replace(pid).is_some() {
-                return Err("qualification listener owner is ambiguous".to_string());
-            }
+        }) && matched.replace(pid).is_some()
+        {
+            return Err("qualification listener owner is ambiguous".to_string());
         }
     }
     matched.ok_or_else(|| "qualification listener PID was not found".to_string())

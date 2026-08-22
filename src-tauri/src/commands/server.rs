@@ -715,11 +715,32 @@ fn reject_literal_argv_secrets(command: &[String]) -> AppResult<()> {
         "--mcp-servers-config",
         "--ui-config-file",
     ];
-    for argument in command.iter().skip(1) {
+    let mut index = 1;
+    while index < command.len() {
+        let argument = &command[index];
+        if SAFE_PRIVATE_FILE_FLAGS.contains(&argument.as_str()) {
+            let value = command.get(index + 1).ok_or_else(|| {
+                AppError::new(
+                    "PRIVATE_FILE_ARGUMENT_MISSING",
+                    format!("{argument} requires a private file path"),
+                    false,
+                )
+            })?;
+            if value.trim().is_empty() || value.starts_with("--") {
+                return Err(AppError::new(
+                    "PRIVATE_FILE_ARGUMENT_INVALID",
+                    format!("{argument} requires a private file path"),
+                    false,
+                ));
+            }
+            index += 2;
+            continue;
+        }
         let flag = argument
             .split_once('=')
             .map_or(argument.as_str(), |(flag, _)| flag);
         if SAFE_PRIVATE_FILE_FLAGS.contains(&flag) {
+            index += 1;
             continue;
         }
         let lower = flag.to_ascii_lowercase();
@@ -744,6 +765,7 @@ fn reject_literal_argv_secrets(command: &[String]) -> AppResult<()> {
                 false,
             ));
         }
+        index += 1;
     }
     Ok(())
 }
@@ -3382,7 +3404,7 @@ fn prepare_server_launch(
     let deployment_identity = build_deployment_identity(
         state,
         instance_id,
-        &config,
+        &persisted_config,
         engine_exe,
         &engine_qualification,
         Some(&command),
@@ -7633,6 +7655,35 @@ mod perf_parser_tests {
             telemetry_config_hash(&first),
             telemetry_config_hash(&rotated)
         );
+    }
+
+    #[test]
+    fn argv_secret_guard_accepts_private_file_values_but_rejects_literal_credentials() {
+        assert!(reject_literal_argv_secrets(&[
+            "llama-server".into(),
+            "--api-key-file".into(),
+            "/private/credentials/instance.api-key".into(),
+            "--ssl-key-file=/private/credentials/server.secret.key".into(),
+        ])
+        .is_ok());
+        assert!(reject_literal_argv_secrets(&[
+            "llama-server".into(),
+            "--api-key".into(),
+            "literal-secret".into(),
+        ])
+        .is_err());
+        assert!(reject_literal_argv_secrets(&[
+            "llama-server".into(),
+            "--future-secret".into(),
+            "literal-secret".into(),
+        ])
+        .is_err());
+        assert!(reject_literal_argv_secrets(&[
+            "llama-server".into(),
+            "--api-key-file".into(),
+            "--future-secret".into(),
+        ])
+        .is_err());
     }
 
     #[test]

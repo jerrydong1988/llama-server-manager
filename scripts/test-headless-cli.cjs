@@ -63,37 +63,102 @@ function runtimeEndpoint(dataDir, token) {
   if (Buffer.byteLength(preferred, 'utf8') <= 90) return preferred
   const fallback = path.join(
     os.tmpdir(),
-    `llama-server-manager-${stablePathHash(dataDir)}`,
+    `lsm-${stablePathHash(dataDir)}-${suffix}`,
     `control-${suffix}.sock`,
   )
   return Buffer.byteLength(fallback, 'utf8') <= 90
     ? fallback
-    : path.join('/tmp', `llama-server-manager-${stablePathHash(dataDir)}`, `control-${suffix}.sock`)
+    : path.join('/tmp', `lsm-${suffix}`, `control-${suffix}.sock`)
 }
 
-async function runtimeRequest(endpoint, token, command, requestId) {
-  const body = Buffer.from(JSON.stringify({
+function runtimeFrame(value) {
+  const body = Buffer.from(JSON.stringify(value))
+  const frame = Buffer.allocUnsafe(body.length + 4)
+  frame.writeUInt32LE(body.length, 0)
+  body.copy(frame, 4)
+  return frame
+}
+
+function runtimeHandshakeProof(token, nonce, servicePid) {
+  const servicePidBytes = Buffer.alloc(4)
+  servicePidBytes.writeUInt32LE(servicePid)
+  return crypto
+    .createHash('sha256')
+    .update(Buffer.from('llama-server-manager:runtime-handshake:v1\0'))
+    .update(Buffer.from(token, 'utf8'))
+    .update(Buffer.from([0]))
+    .update(Buffer.from(nonce, 'utf8'))
+    .update(Buffer.from([0]))
+    .update(servicePidBytes)
+    .digest('hex')
+}
+
+async function runtimeRequest(endpoint, token, servicePid, command, requestId) {
+  const requestFrame = runtimeFrame({
     protocol_version: 1,
     request_id: requestId,
     token,
     command,
-  }))
-  const frame = Buffer.allocUnsafe(body.length + 4)
-  frame.writeUInt32LE(body.length, 0)
-  body.copy(frame, 4)
+  })
+  const nonce = crypto.randomUUID()
+  const handshakeFrame = runtimeFrame({ protocol_version: 1, nonce })
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(endpoint)
-    const chunks = []
+    let buffered = Buffer.alloc(0)
+    let phase = 'handshake'
+    let settled = false
+    const fail = (error) => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      reject(error)
+    }
     socket.setTimeout(5_000, () => socket.destroy(new Error('runtime request timed out')))
-    socket.once('connect', () => socket.write(frame))
-    socket.on('data', chunk => chunks.push(chunk))
-    socket.once('error', reject)
+    socket.once('connect', () => socket.write(handshakeFrame))
+    socket.on('data', (chunk) => {
+      buffered = Buffer.concat([buffered, chunk])
+      while (!settled && buffered.length >= 4) {
+        const length = buffered.readUInt32LE(0)
+        if (length > 8 * 1024 * 1024) {
+          fail(new Error(`runtime response frame was oversized: ${length}`))
+          return
+        }
+        if (buffered.length < length + 4) return
+        const payload = buffered.subarray(4, length + 4)
+        buffered = buffered.subarray(length + 4)
+        let response
+        try {
+          response = JSON.parse(payload.toString('utf8'))
+        } catch (error) {
+          fail(error)
+          return
+        }
+        if (phase === 'handshake') {
+          const expectedProof = Buffer.from(
+            runtimeHandshakeProof(token, nonce, servicePid),
+            'utf8',
+          )
+          const actualProof = Buffer.from(String(response.proof ?? ''), 'utf8')
+          if (response.protocol_version !== 1
+            || response.nonce !== nonce
+            || response.service_pid !== servicePid
+            || actualProof.length !== expectedProof.length
+            || !crypto.timingSafeEqual(actualProof, expectedProof)) {
+            fail(new Error('runtime server authentication failed before sending credentials'))
+            return
+          }
+          phase = 'response'
+          socket.write(requestFrame)
+          continue
+        }
+        settled = true
+        socket.end()
+        resolve(response)
+      }
+    })
+    socket.once('error', fail)
     socket.once('end', () => {
-      const response = Buffer.concat(chunks)
-      if (response.length < 4) return reject(new Error('runtime response was truncated'))
-      const length = response.readUInt32LE(0)
-      if (response.length < length + 4) return reject(new Error('runtime response was incomplete'))
-      resolve(JSON.parse(response.subarray(4, length + 4).toString('utf8')))
+      if (!settled) fail(new Error('runtime response was truncated'))
     })
   })
 }
@@ -198,6 +263,7 @@ async function main() {
     const response = await runtimeRequest(
       runtimeEndpoint(dataDir, token),
       token,
+      servicePid,
       { command: 'shutdown', payload: { stop_instances: true } },
       'cli-smoke-shutdown',
     )
@@ -216,6 +282,16 @@ async function main() {
     const tempRoot = fs.realpathSync.native(os.tmpdir())
     if (!resolved.startsWith(`${tempRoot}${path.sep}`)) {
       throw new Error(`refusing to remove unexpected CLI smoke path: ${resolved}`)
+    }
+    if (process.platform === 'win32') {
+      childProcess.execFileSync('icacls', [resolved, '/inheritance:e', '/T', '/C'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      childProcess.execFileSync('icacls', [resolved, '/reset', '/T', '/C'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
     }
     fs.rmSync(resolved, { recursive: true, force: true })
   }

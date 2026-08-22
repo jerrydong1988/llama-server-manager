@@ -79,6 +79,7 @@ fn validate_runtime_engine_qualification(
 fn validate_runtime_deployment_identity(
     spec: &RuntimeLaunchSpec,
     artifacts: &crate::deployment_identity::LaunchArtifactLeases,
+    persisted_config: &crate::models::InstanceConfig,
 ) -> Result<(), String> {
     if !spec.deployment_identity.is_valid() {
         return Err(
@@ -97,7 +98,7 @@ fn validate_runtime_deployment_identity(
             "DEPLOYMENT_MODEL_IDENTITY_STALE: runtime model artifact identity changed".to_string(),
         );
     }
-    let fingerprint = crate::config_revision::deployment_config_fingerprint(&spec.config)
+    let fingerprint = crate::config_revision::deployment_config_fingerprint(persisted_config)
         .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
     let configuration_id = crate::config_revision::configuration_id_from_fingerprint(&fingerprint)
         .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
@@ -178,14 +179,15 @@ fn instance_recovery_enabled(spec: &RuntimeLaunchSpec) -> bool {
             .eq_ignore_ascii_case("on-failure")
 }
 
-fn runtime_launch_config_matches(
-    launch_config: &crate::models::InstanceConfig,
+fn runtime_deployment_config_matches(
+    deployment_identity: &crate::deployment_identity::DeploymentIdentity,
     current_config: &crate::models::InstanceConfig,
 ) -> bool {
-    let mut comparable = launch_config.clone();
-    comparable.id = current_config.id.clone();
-    comparable.name = current_config.name.clone();
-    comparable == *current_config
+    crate::config_revision::deployment_config_fingerprint(current_config)
+        .and_then(|fingerprint| {
+            crate::config_revision::configuration_id_from_fingerprint(&fingerprint)
+        })
+        .is_ok_and(|configuration_id| configuration_id == deployment_identity.configuration_id)
 }
 
 fn sync_desired_launch_config(
@@ -193,8 +195,9 @@ fn sync_desired_launch_config(
     current_config: &crate::models::InstanceConfig,
     proxy_config: &crate::models::ProxyConfig,
 ) {
-    spec.launch_config_stale = !runtime_launch_config_matches(&spec.config, current_config)
-        || validate_runtime_deployment_revision(spec, proxy_config).is_err();
+    spec.launch_config_stale =
+        !runtime_deployment_config_matches(&spec.deployment_identity, current_config)
+            || validate_runtime_deployment_revision(spec, proxy_config).is_err();
 }
 
 fn next_recovery_delay(restart_attempts: u32) -> Option<u64> {
@@ -943,8 +946,17 @@ impl RuntimeSupervisor {
                 &spec.deployment_identity,
             )?;
         validate_runtime_engine_qualification(&spec, &artifact_leases)?;
-        validate_runtime_deployment_identity(&spec, &artifact_leases)?;
-        let proxy_config = self.state.lock().unwrap().proxy_config.clone();
+        let (proxy_config, persisted_config) = {
+            let state = self.state.lock().unwrap();
+            let persisted_config = state.instances.get(&spec.instance_id).cloned().ok_or_else(|| {
+                format!(
+                    "DEPLOYMENT_CONFIG_NOT_SYNCED: no persisted configuration is synchronized for instance {}",
+                    spec.instance_id
+                )
+            })?;
+            (state.proxy_config.clone(), persisted_config)
+        };
+        validate_runtime_deployment_identity(&spec, &artifact_leases, &persisted_config)?;
         validate_runtime_deployment_revision(&spec, &proxy_config)?;
         crate::commands::server::validate_effective_launch_security(&spec.config, &spec.command)
             .map_err(|error| error.to_string())?;
@@ -2112,7 +2124,7 @@ fn should_stop_for_missing_gui(background_enabled: bool, heartbeat_expired: bool
 mod tests {
     use super::{
         gui_owner_is_alive, is_instance_recovery_error, recovery_budget_is_stable,
-        recovery_status_after_failure, runtime_config_matches, runtime_launch_config_matches,
+        recovery_status_after_failure, runtime_config_matches, runtime_deployment_config_matches,
         scheduled_recovery_matches, should_stop_for_missing_gui, sync_desired_launch_config,
         validate_background_detach_inventory, validate_runtime_deployment_identity_from_paths,
         validate_runtime_engine_qualification_from_paths, validate_runtime_state, GuiOwner,
@@ -2128,12 +2140,17 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    fn test_deployment_identity() -> crate::deployment_identity::DeploymentIdentity {
+    fn test_deployment_identity(
+        config: &InstanceConfig,
+    ) -> crate::deployment_identity::DeploymentIdentity {
+        let fingerprint = crate::config_revision::deployment_config_fingerprint(config).unwrap();
+        let configuration_id =
+            crate::config_revision::configuration_id_from_fingerprint(&fingerprint).unwrap();
         crate::deployment_identity::DeploymentIdentity::new(
             "urn:lsm:engine:v1:sha256:test".into(),
             "urn:lsm:model:v1:sha256:test".into(),
             "revision-test".into(),
-            "urn:lsm:configuration:v1:sha256:test".into(),
+            configuration_id,
             "urn:lsm:qualification:v2:sha256:test".into(),
         )
         .unwrap()
@@ -2161,7 +2178,7 @@ mod tests {
             id: "instance-1".into(),
             ..InstanceConfig::default()
         };
-        let deployment_identity = test_deployment_identity();
+        let deployment_identity = test_deployment_identity(&config);
         let deployment_revision = crate::deployment::test_revision(
             "instance-1",
             &config,
@@ -2296,9 +2313,10 @@ mod tests {
     }
 
     #[test]
-    fn launch_snapshot_staleness_allows_display_renames_but_blocks_policy_and_command_drift() {
+    fn launch_snapshot_staleness_uses_persisted_identity_instead_of_materialized_credentials() {
         let mut spec = detach_spec();
         spec.config.restart_policy = "on-failure".into();
+        spec.deployment_identity = test_deployment_identity(&spec.config);
         spec.deployment_revision = crate::deployment::test_revision(
             "instance-1",
             &spec.config,
@@ -2308,7 +2326,12 @@ mod tests {
         let mut current = spec.config.clone();
         current.name = "renamed".into();
 
-        assert!(runtime_launch_config_matches(&spec.config, &current));
+        assert!(runtime_deployment_config_matches(
+            &spec.deployment_identity,
+            &current
+        ));
+        spec.config.api_key.clear();
+        spec.config.api_key_file = "/private/runtime/api-key".into();
         sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
         assert!(!spec.launch_config_stale);
         assert!(super::instance_recovery_enabled(&spec));
@@ -2318,6 +2341,12 @@ mod tests {
         assert!(spec.launch_config_stale);
         assert!(!super::instance_recovery_enabled(&spec));
         current.auto_start = spec.config.auto_start;
+
+        current.api_key = "a-different-persisted-api-key".into();
+        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
+        assert!(spec.launch_config_stale);
+        assert!(!super::instance_recovery_enabled(&spec));
+        current.api_key.clear();
 
         current.port = current.port.saturating_add(1);
         sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());

@@ -334,12 +334,12 @@ function runtimeEndpoint(dataDir, token) {
   if (unixSocketPathFits(preferred)) return preferred
   const fallback = path.join(
     os.tmpdir(),
-    `llama-server-manager-${dataHash}`,
+    `lsm-${dataHash}-${suffix}`,
     `control-${suffix}.sock`,
   )
   return unixSocketPathFits(fallback)
     ? fallback
-    : path.join('/tmp', `llama-server-manager-${dataHash}`, `control-${suffix}.sock`)
+    : path.join('/tmp', `lsm-${suffix}`, `control-${suffix}.sock`)
 }
 
 function debugExecutable() {
@@ -1120,10 +1120,27 @@ async function main() {
 
     const recoveryMarker = path.join(dataDir, 'runtime-recovery-once.marker')
     fs.rmSync(recoveryMarker, { force: true })
+    const recoveryLaunchSpec = recoverOnceLaunchSpec(dataDir, backendPort, proxyConfig)
+    const recoverySynced = await request(
+      endpoint,
+      token,
+      {
+        command: 'sync_config',
+        payload: {
+          revision: initialRevision + 2,
+          proxy_config: proxyConfig,
+          instances: { [recoveryLaunchSpec.instance_id]: recoveryLaunchSpec.config },
+        },
+      },
+      'sync-automatic-recovery-config',
+    )
+    if (recoverySynced.reply?.result !== 'ack') {
+      throw new Error(`automatic recovery configuration sync failed: ${JSON.stringify(recoverySynced)}`)
+    }
     const recoverOnce = await request(
       endpoint,
       token,
-      { command: 'start_instance', payload: { spec: recoverOnceLaunchSpec(dataDir, backendPort, proxyConfig) } },
+      { command: 'start_instance', payload: { spec: recoveryLaunchSpec } },
       'start-automatic-recovery',
     )
     if (recoverOnce.reply?.result !== 'instance' || recoverOnce.reply.payload?.pid <= 0) {
