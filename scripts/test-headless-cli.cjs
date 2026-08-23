@@ -193,7 +193,13 @@ async function main() {
   if (!fs.existsSync(executable) || fs.statSync(executable).size === 0) {
     throw new Error(`headless CLI binary is missing: ${executable}; run cargo build first`)
   }
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-cli-smoke-'))
+  // Recent macOS GitHub runners mount the system temporary directory noexec.
+  // The seeded engine is executable, so keep that isolated fixture inside the
+  // checkout on macOS and use the system temporary directory elsewhere.
+  const smokeRoot = process.platform === 'darwin'
+    ? path.resolve(__dirname, '..')
+    : os.tmpdir()
+  const dataDir = fs.mkdtempSync(path.join(smokeRoot, 'lsm-cli-smoke-'))
   let servicePid = 0
   try {
     const help = invoke(executable, dataDir, ['help'])
@@ -279,8 +285,9 @@ async function main() {
   } finally {
     if (servicePid > 0) terminatePid(servicePid)
     const resolved = fs.realpathSync.native(dataDir)
-    const tempRoot = fs.realpathSync.native(os.tmpdir())
-    if (!resolved.startsWith(`${tempRoot}${path.sep}`)) {
+    const resolvedSmokeRoot = fs.realpathSync.native(smokeRoot)
+    if (path.dirname(resolved) !== resolvedSmokeRoot
+      || !path.basename(resolved).startsWith('lsm-cli-smoke-')) {
       throw new Error(`refusing to remove unexpected CLI smoke path: ${resolved}`)
     }
     if (process.platform === 'win32') {

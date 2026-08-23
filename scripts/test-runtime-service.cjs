@@ -584,19 +584,40 @@ function fixtureCommand(dataDir) {
   const destination = path.join(directory, process.platform === 'win32' ? 'lsm.exe' : 'lsm')
   if (!fs.existsSync(destination)) {
     fs.mkdirSync(directory, { recursive: true })
-    const source = path.resolve(
-      __dirname,
-      '..',
-      'src-tauri',
-      'target',
-      'debug',
-      process.platform === 'win32' ? 'lsm.exe' : 'lsm',
-    )
-    if (!fs.existsSync(source)) {
-      throw new Error(`runtime fixture CLI is missing: ${source}`)
+    if (process.platform === 'win32') {
+      const source = path.resolve(__dirname, '..', 'src-tauri', 'target', 'debug', 'lsm.exe')
+      if (!fs.existsSync(source)) {
+        throw new Error(`runtime fixture CLI is missing: ${source}`)
+      }
+      fs.copyFileSync(source, destination)
+    } else {
+      fs.writeFileSync(destination, `#!/bin/sh
+exit_after=
+crash_once_marker=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --exit-after-ms) exit_after="$2"; shift 2 ;;
+    --crash-once-marker) crash_once_marker="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+should_crash=0
+if [ -n "$crash_once_marker" ]; then
+  if [ ! -f "$crash_once_marker" ]; then
+    : > "$crash_once_marker"
+    should_crash=1
+  fi
+elif [ -n "$exit_after" ]; then
+  should_crash=1
+fi
+if [ "$should_crash" -eq 1 ]; then
+  sleep 0.2
+  exit 1
+fi
+while :; do sleep 60; done
+`, { encoding: 'utf8', mode: 0o700 })
+      fs.chmodSync(destination, 0o700)
     }
-    fs.copyFileSync(source, destination)
-    if (process.platform !== 'win32') fs.chmodSync(destination, 0o700)
   }
   protectWindowsFixtureTree(path.join(dataDir, 'engines'))
   return destination
@@ -800,7 +821,13 @@ async function main() {
   if (!fs.existsSync(executable)) {
     throw new Error(`debug runtime executable is missing: ${executable}; run cargo build first`)
   }
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lsm-runtime-smoke-'))
+  // Recent macOS GitHub runners mount the system temporary directory noexec.
+  // Keep executable fixtures in the checkout there while retaining the normal
+  // system-temporary isolation on other platforms.
+  const smokeRoot = process.platform === 'darwin'
+    ? path.resolve(__dirname, '..')
+    : os.tmpdir()
+  const dataDir = fs.mkdtempSync(path.join(smokeRoot, 'lsm-runtime-smoke-'))
   let forwardedRequests = 0
   const backend = http.createServer((request, response) => {
     const chunks = []
