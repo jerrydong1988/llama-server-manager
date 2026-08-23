@@ -944,7 +944,7 @@ fn open_windows_ancestor_guards(_path: &Path, _root: &Path) -> Result<Vec<File>,
     Ok(Vec::new())
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn inheritable_artifact_path(file: &File) -> Result<PathBuf, String> {
     use std::os::fd::AsRawFd;
 
@@ -966,11 +966,21 @@ fn inheritable_artifact_path(file: &File) -> Result<PathBuf, String> {
             std::io::Error::last_os_error()
         ));
     }
-    #[cfg(target_os = "linux")]
-    let path = PathBuf::from(format!("/proc/self/fd/{descriptor}"));
-    #[cfg(not(target_os = "linux"))]
-    let path = PathBuf::from(format!("/dev/fd/{descriptor}"));
-    Ok(path)
+    Ok(PathBuf::from(format!("/proc/self/fd/{descriptor}")))
+}
+
+#[cfg(target_os = "linux")]
+fn artifact_launch_path(_canonical_path: &Path, file: &File) -> Result<PathBuf, String> {
+    inheritable_artifact_path(file)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn artifact_launch_path(canonical_path: &Path, _file: &File) -> Result<PathBuf, String> {
+    // macOS exposes descriptors through /dev/fd, but that filesystem cannot
+    // be used as an exec path. On platforms without executable fd paths, the
+    // owner-protected tree excludes other OS principals while the retained
+    // lease and post-spawn verification detect in-place artifact mutation.
+    Ok(canonical_path.to_path_buf())
 }
 
 #[derive(Debug)]
@@ -1012,10 +1022,7 @@ impl ArtifactLease {
             identity_and_bundle_leases(kind, &canonical_path, &mut file, Some(deadline))?;
         let fingerprint = (kind == "engine")
             .then(|| engine_fingerprint_material(&canonical_path, modified, &identity));
-        #[cfg(unix)]
-        let launch_path = inheritable_artifact_path(&file)?;
-        #[cfg(windows)]
-        let launch_path = canonical_path.clone();
+        let launch_path = artifact_launch_path(&canonical_path, &file)?;
         Ok(Self {
             kind: kind.to_string(),
             canonical_path,
@@ -1057,10 +1064,7 @@ impl ArtifactLease {
             modified,
             &identity,
         ));
-        #[cfg(unix)]
-        let launch_path = inheritable_artifact_path(&file)?;
-        #[cfg(windows)]
-        let launch_path = canonical_path.clone();
+        let launch_path = artifact_launch_path(&canonical_path, &file)?;
         Ok(Self {
             kind: "engine".to_string(),
             canonical_path,
@@ -1120,10 +1124,7 @@ impl ArtifactLease {
             identity_and_bundle_leases(kind, &canonical_path, &mut file, deadline)?;
         let fingerprint = (kind == "engine")
             .then(|| engine_fingerprint_material(&canonical_path, modified, &identity));
-        #[cfg(unix)]
-        let launch_path = inheritable_artifact_path(&file)?;
-        #[cfg(windows)]
-        let launch_path = canonical_path.clone();
+        let launch_path = artifact_launch_path(&canonical_path, &file)?;
         Ok(Self {
             kind: kind.to_string(),
             canonical_path,
@@ -1535,6 +1536,23 @@ pub fn qualification_evidence_valid(report: &crate::models::EngineQualificationR
 mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn artifact_launch_path_matches_platform_exec_capability() {
+        let dir = std::env::temp_dir().join(format!("lsm-launch-path-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&dir).unwrap();
+        let artifact = dir.join("engine");
+        fs::write(&artifact, b"engine").unwrap();
+        let canonical = fs::canonicalize(&artifact).unwrap();
+        let file = open_artifact_file(&canonical, false).unwrap();
+        let launch_path = artifact_launch_path(&canonical, &file).unwrap();
+        #[cfg(target_os = "linux")]
+        assert!(launch_path.starts_with("/proc/self/fd"));
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(launch_path, canonical);
+        drop(file);
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn full_identity_survives_move_and_changes_with_any_content() {

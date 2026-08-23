@@ -590,23 +590,6 @@ function fixtureCommand(dataDir) {
         throw new Error(`runtime fixture CLI is missing: ${source}`)
       }
       fs.copyFileSync(source, destination)
-    } else if (process.platform === 'darwin') {
-      const source = path.resolve(__dirname, 'fixtures', 'runtime-smoke.c')
-      childProcess.execFileSync('cc', [
-        '-O0',
-        '-Wall',
-        '-Wextra',
-        '-Werror',
-        source,
-        '-o',
-        destination,
-      ], { stdio: 'pipe' })
-      childProcess.execFileSync(
-        '/usr/bin/codesign',
-        ['--force', '--sign', '-', destination],
-        { stdio: 'pipe' },
-      )
-      fs.chmodSync(destination, 0o700)
     } else {
       fs.writeFileSync(destination, `#!/bin/sh
 exit_after=
