@@ -1981,9 +1981,10 @@ mod tests {
         assert!(snapshot.uses_managed_snapshot());
         assert_eq!(snapshot.identity(), &source_identity);
         assert_eq!(snapshot.fingerprint(), Some(source_fingerprint.as_str()));
+        let canonical_snapshot_root = fs::canonicalize(data_dir.join("engine-snapshots")).unwrap();
         assert!(crate::path_utils::path_is_within(
             snapshot.launch_path(),
-            &data_dir.join("engine-snapshots")
+            &canonical_snapshot_root
         ));
         assert_ne!(snapshot.launch_path(), engine);
         assert!(snapshot.launch_path().is_file());
