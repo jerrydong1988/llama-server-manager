@@ -1,8 +1,8 @@
 # Versioned Deployment Identity
 
-LSM creates a versioned, local identity chain before it starts or recovers an instance. The chain binds the exact engine artifact, primary model artifact, immutable configuration revision, and sealed qualification evidence that were accepted by preflight.
+LSM creates a versioned, local identity chain before it starts or recovers an instance. The chain binds the exact engine artifact, primary model artifact, immutable configuration revision, and qualification or advisory evidence recorded by preflight.
 
-LSM 在启动或恢复实例前创建版本化的本地身份链。该身份链绑定预检实际接受的引擎制品、主模型制品、不可变配置修订和已封存的资格证据。
+LSM 在启动或恢复实例前创建版本化的本地身份链。该身份链绑定预检实际接受的引擎制品、主模型制品、不可变配置修订，以及资格认证或告警状态证据。
 
 ## Identity chain
 
@@ -11,7 +11,7 @@ LSM 在启动或恢复实例前创建版本化的本地身份链。该身份链�
 | Engine artifact | `urn:lsm:engine:v1:sha256:*` | complete executable plus the recursive DLL bundle on Windows; complete executable elsewhere | any bound byte or Windows DLL membership changes |
 | Model artifact | `urn:lsm:model:v1:sha256:*` | complete selected primary GGUF | any file byte changes |
 | Configuration | `urn:lsm:configuration:v1:sha256:*` | canonical deployment-affecting configuration | a deployment-affecting field changes |
-| Qualification evidence | `urn:lsm:qualification:v2:sha256:*` | sealed terminal qualification report | report content, engine identity, or representative model identity changes |
+| Qualification evidence | `urn:lsm:qualification:v2:sha256:*` | sealed passed report, or deterministic advisory admission material | report/advisory status, profile, or engine identity changes |
 | Deployment | `urn:lsm:deployment:v1:sha256:*` | the four identities above plus the immutable configuration revision ID | any component identity changes |
 
 Models and non-Windows engines use `sha256-full-v1`. Windows engines use `sha256-engine-bundle-v1`, which seals the complete executable and every recursively discovered DLL into one deterministic identity. Paths and timestamps are excluded from the artifact ID, so moving unchanged content preserves its identity. These identities prove content equality within the bound artifact set; they do not prove publisher authenticity or replace code signing.
@@ -42,15 +42,15 @@ Windows 外部 GGUF 模型会继续保留在操作者已授权的目录中。目
 
 - Inventory schema 7 persists complete artifact identities. Compatible schema 5 and 6 rows remain visible during refresh but are excluded from incremental reuse until each file is completely hashed again.
 - Configuration revision schema 2 adds the stable configuration identity to event integrity. A valid schema 1 history is upgraded without changing revision IDs, parent links, known-good pointers, or audit events. Corrupt legacy events remain visible and invalid; migration never blesses them.
-- Qualification schema 2 seals engine and representative-model artifact identities into a deterministic evidence ID. Legacy, malformed, incomplete, or stale evidence cannot pass the launch gate.
+- Qualification schema 2/profile 3 seals a passed GPU-offload or CPU-backend smoke report. Missing, failed, incomplete, cancelled, or stale qualification creates deterministic advisory admission evidence instead of blocking launch; exact artifact, configuration, security, and recovery checks remain fail-closed.
 - Runtime state schema 3 persists the composite identity. Legacy snapshots can be read for diagnostics, but automatic recovery fails closed until a new verified launch snapshot exists.
 
 ## Operator workflow
 
 1. Refresh model and engine inventories after installing, replacing, or moving artifacts.
-2. Re-run engine qualification when its artifact or representative model changes.
+2. Re-run engine qualification when its artifact or representative model changes and current compatibility evidence is useful.
 3. Save the instance configuration so it has a current immutable revision.
-4. Check **Configuration → Deployment Identity**. “Verified and ready” means every component is current.
+4. Check **Configuration → Deployment Identity**. “Verified and ready” means the hard artifact/configuration bindings are current; qualification may still carry an advisory warning.
 5. Start the instance. Both initial launch and background recovery re-hash the engine and primary model and re-check the configuration and composite IDs.
 
 The status panel exposes only stable IDs and error codes. It does not expose filesystem paths, credentials, certificate material, manual commands, or private configuration values.

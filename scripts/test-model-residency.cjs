@@ -63,7 +63,7 @@ assert.match(panel, /begin_model_residency_drain/, 'drain must be persisted befo
 assert.match(panel, /get_model_residency_drain_status/, 'in-flight requests must be polled')
 assert.match(panel, /status\.activeRequests === 0/, 'eviction must wait for zero active requests')
 assert.match(panel, /complete_model_residency_operation/, 'operation outcomes must be persisted')
-assert.match(panel, /startInstance\(operation\.instanceId, false\)/, 'warming must use the existing qualified start path')
+assert.match(panel, /startInstance\(operation\.instanceId, false\)/, 'warming must use the existing validated start path')
 assert.match(panel, /stopInstance\(operation\.instanceId\)/, 'eviction must use the existing stop path')
 
 console.log('Model residency policy serialization and reconcile ordering passed.')

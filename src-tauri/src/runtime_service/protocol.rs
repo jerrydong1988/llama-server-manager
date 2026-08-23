@@ -27,8 +27,9 @@ pub struct RuntimeLaunchSpec {
     /// edit must not make failure recovery start that stale command again.
     #[serde(default)]
     pub launch_config_stale: bool,
-    /// Automatic recovery may only execute the exact engine artifact whose
-    /// complete qualification evidence was accepted by the GUI preflight.
+    /// Automatic recovery may only execute the exact engine artifact accepted
+    /// by GUI preflight. Qualification status is advisory, while this artifact
+    /// fingerprint remains a hard launch and recovery boundary.
     #[serde(default)]
     pub engine_qualification_fingerprint: String,
     #[serde(default)]

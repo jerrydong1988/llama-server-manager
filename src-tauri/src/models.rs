@@ -269,6 +269,10 @@ pub struct EngineQualificationReport {
     #[serde(default)]
     pub help_hash: String,
     #[serde(default)]
+    pub execution_profile: String,
+    #[serde(default)]
+    pub backend: String,
+    #[serde(default)]
     pub model_id: String,
     #[serde(default)]
     pub model_artifact_id: String,
@@ -314,6 +318,8 @@ impl Default for EngineQualificationReport {
             engine_artifact_id: String::new(),
             engine_version: String::new(),
             help_hash: String::new(),
+            execution_profile: String::new(),
+            backend: String::new(),
             model_id: String::new(),
             model_artifact_id: String::new(),
             model_name: String::new(),

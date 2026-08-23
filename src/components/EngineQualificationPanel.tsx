@@ -173,6 +173,9 @@ export function EngineQualificationPanel({
           <div className="space-y-2 text-xs">
             {[
               [labels.qualificationProfile, `${report.schemaVersion} / ${report.profileVersion}`],
+              [labels.qualificationExecutionProfile, report.executionProfile
+                ? `${report.executionProfile}${report.backend ? ` · ${report.backend}` : ''}`
+                : '--'],
               [labels.qualificationFingerprint, fingerprint],
               [labels.qualificationModelEvidence, `${report.modelName || '--'} · ${formatBytes(report.modelSize)}`],
               [labels.qualificationCompleted, completed],

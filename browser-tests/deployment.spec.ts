@@ -31,7 +31,7 @@ test('legacy instances explain first materialization without exposing backend de
   await openInstances(page, 'deployment-unmaterialized')
   const panel = page.getByTestId('deployment-panel')
   await expect(panel).toContainText('Not materialized')
-  await expect(panel).toContainText('The next qualified start will create the first immutable revision.')
+  await expect(panel).toContainText('The next validated start will create the first immutable revision.')
   await expect(panel).not.toContainText('browser mock unmaterialized detail')
 })
 

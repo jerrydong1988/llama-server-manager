@@ -312,7 +312,7 @@ function executableFingerprint(executable) {
 function engineQualificationBinding(command) {
   return {
     engine_qualification_fingerprint: executableFingerprint(command[0]),
-    engine_qualification_profile_version: 2,
+    engine_qualification_profile_version: 3,
   }
 }
 

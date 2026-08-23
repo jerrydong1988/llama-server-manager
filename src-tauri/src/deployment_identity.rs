@@ -1991,6 +1991,45 @@ pub fn qualification_evidence_id(
     ))
 }
 
+pub fn advisory_qualification_evidence_id(
+    engine_artifact_id: &str,
+    executable_fingerprint: &str,
+    qualification_status: &str,
+    profile_version: u8,
+) -> Result<String, String> {
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Material<'a> {
+        schema_version: u8,
+        evidence_kind: &'static str,
+        engine_artifact_id: &'a str,
+        executable_fingerprint: &'a str,
+        qualification_status: &'a str,
+        profile_version: u8,
+    }
+
+    if !engine_artifact_id.starts_with("urn:lsm:engine:v1:sha256:")
+        || executable_fingerprint.trim().is_empty()
+        || qualification_status.trim().is_empty()
+        || profile_version == 0
+    {
+        return Err("cannot seal advisory qualification evidence from incomplete material".into());
+    }
+    let bytes = serde_json::to_vec(&Material {
+        schema_version: 1,
+        evidence_kind: "advisory-runtime-admission",
+        engine_artifact_id,
+        executable_fingerprint,
+        qualification_status,
+        profile_version,
+    })
+    .map_err(|error| format!("failed to serialize advisory qualification evidence: {error}"))?;
+    Ok(format!(
+        "urn:lsm:qualification:v2:sha256:{:x}",
+        Sha256::digest(bytes)
+    ))
+}
+
 pub fn seal_qualification_report(
     report: &mut crate::models::EngineQualificationReport,
 ) -> Result<(), String> {
@@ -2091,6 +2130,20 @@ mod tests {
         let mut tampered = identity;
         tampered.model_artifact_id = "other-model".into();
         assert!(!tampered.is_valid());
+    }
+
+    #[test]
+    fn advisory_qualification_evidence_is_deterministic_and_status_bound() {
+        let engine = "urn:lsm:engine:v1:sha256:engine";
+        let failed = advisory_qualification_evidence_id(engine, "fingerprint", "failed", 3)
+            .expect("advisory evidence should be sealable");
+        let repeated = advisory_qualification_evidence_id(engine, "fingerprint", "failed", 3)
+            .expect("advisory evidence should be deterministic");
+        let passed = advisory_qualification_evidence_id(engine, "fingerprint", "passed", 3)
+            .expect("status should remain part of the evidence");
+        assert_eq!(failed, repeated);
+        assert_ne!(failed, passed);
+        assert!(failed.starts_with("urn:lsm:qualification:v2:sha256:"));
     }
 
     #[cfg(windows)]

@@ -540,7 +540,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     deploymentRefresh: 'Refresh deployment status', deploymentLoading: 'Loading deployment...',
     deploymentLoadFailed: 'Deployment status failed to load', deploymentReady: 'Ready',
     deploymentUnmaterialized: 'Not materialized', deploymentStale: 'Needs new revision', deploymentInvalid: 'Invalid',
-    deploymentUnmaterializedHint: 'The next qualified start will create the first immutable revision.',
+    deploymentUnmaterializedHint: 'The next validated start will create the first immutable revision.',
     deploymentStaleHint: 'Artifacts, configuration, policy, or routing changed. Start again to create a new revision.',
     deploymentInvalidHint: 'Deployment history failed integrity or schema validation. Recovery is blocked.',
     deploymentId: 'Deployment', deploymentCurrentRevision: 'Current revision',

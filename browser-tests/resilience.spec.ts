@@ -16,13 +16,13 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
-test('engine qualification turns fail-closed evidence into a passing report', async ({ page }) => {
+test('engine qualification is advisory until a GPU-backed report passes', async ({ page }) => {
   await openEngineManager(page, 'engine-qualification')
 
   await page.getByRole('button', { name: '实例管理', exact: true }).click()
   await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
   await expect(page.getByTestId('engine-qualification-notice')).toBeVisible()
-  await expect(page.getByTestId('engine-qualification-notice')).toContainText('实例启动会被安全阻止')
+  await expect(page.getByTestId('engine-qualification-notice')).toContainText('实例仍可启动')
   await page.getByRole('button', { name: '引擎管理', exact: true }).click()
 
   const panel = page.getByTestId('engine-qualification-panel')
@@ -32,6 +32,8 @@ test('engine qualification turns fail-closed evidence into a passing report', as
 
   await expect(panel.getByText('已通过', { exact: true })).toBeVisible()
   await expect(page.getByTestId('qualification-report')).toBeVisible()
+  await expect(page.getByTestId('qualification-report')).toContainText('gpu-offload-maximized')
+  await expect(page.getByTestId('qualification-report')).toContainText('Vulkan')
   await expect(page.getByTestId('qualification-report').getByText(/^通过 ·/)).toHaveCount(5)
   await expect.poll(() => page.evaluate(() => (
     window.__TAURI_BROWSER_TEST__.calls

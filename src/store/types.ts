@@ -247,6 +247,8 @@ export interface EngineQualificationReport {
   engineArtifactId: string
   engineVersion: string
   helpHash: string
+  executionProfile: string
+  backend: string
   modelId: string
   modelArtifactId: string
   modelName: string

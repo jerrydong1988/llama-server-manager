@@ -2855,6 +2855,8 @@ struct ValidatedEngineQualification {
     profile_version: u8,
     engine_artifact_id: String,
     evidence_id: String,
+    status: String,
+    warning: Option<String>,
 }
 
 fn validate_engine_qualification(
@@ -2873,8 +2875,8 @@ fn validate_engine_qualification(
         })
         .ok_or_else(|| {
             AppError::new(
-                "ENGINE_QUALIFICATION_REQUIRED",
-                "实例引用的引擎没有可用的资格认证证据。",
+                "CONFIGURED_ENGINE_NOT_FOUND",
+                "实例引用的引擎不在已扫描清单中。",
                 false,
             )
         })?;
@@ -2883,8 +2885,8 @@ fn validate_engine_qualification(
         &normalized_engine_path(engine_exe),
     ) {
         return Err(AppError::new(
-            "ENGINE_QUALIFICATION_STALE",
-            "引擎路径已变化，请重新完成能力探测和资格认证。",
+            "CONFIGURED_ENGINE_MISMATCH",
+            "实例引用的引擎路径与当前扫描结果不一致。",
             false,
         ));
     }
@@ -2904,17 +2906,27 @@ fn validate_engine_qualification(
     }
 
     let qualification = &engine.capabilities.qualification;
-    if let Some(error) = qualification_gate_error(
-        qualification.status.as_str(),
-        qualification_matches_executable(engine_exe, qualification),
-    ) {
-        return Err(error);
-    }
+    let evidence_is_current = qualification_matches_executable(engine_exe, qualification);
+    let warning = qualification_advisory(qualification.status.as_str(), evidence_is_current);
     Ok(ValidatedEngineQualification {
-        fingerprint: qualification.executable_fingerprint.clone(),
-        profile_version: qualification.profile_version,
-        engine_artifact_id: qualification.engine_artifact_id.clone(),
-        evidence_id: qualification.evidence_id.clone(),
+        fingerprint: current_fingerprint,
+        profile_version: if evidence_is_current {
+            qualification.profile_version
+        } else {
+            crate::commands::engine_capabilities::QUALIFICATION_PROFILE_VERSION
+        },
+        engine_artifact_id: if evidence_is_current {
+            qualification.engine_artifact_id.clone()
+        } else {
+            String::new()
+        },
+        evidence_id: if evidence_is_current {
+            qualification.evidence_id.clone()
+        } else {
+            String::new()
+        },
+        status: qualification.status.clone(),
+        warning,
     })
 }
 
@@ -2931,7 +2943,9 @@ fn build_deployment_identity(
         std::path::Path::new(engine_exe),
     )
     .map_err(|message| AppError::new("DEPLOYMENT_ENGINE_IDENTITY_FAILED", message, true))?;
-    if engine_identity.artifact_id != qualification.engine_artifact_id {
+    if !qualification.engine_artifact_id.is_empty()
+        && engine_identity.artifact_id != qualification.engine_artifact_id
+    {
         return Err(AppError::new(
             "DEPLOYMENT_ENGINE_IDENTITY_STALE",
             "引擎制品身份与资格证据不一致，请重新扫描并认证。",
@@ -2982,13 +2996,26 @@ fn build_deployment_identity(
     }
     let config_identity =
         crate::config_revision::resolve_current_config_identity(state, instance_id, config)?;
+    let qualification_evidence_id = if qualification.evidence_id.is_empty() {
+        crate::deployment_identity::advisory_qualification_evidence_id(
+            &engine_identity.artifact_id,
+            &qualification.fingerprint,
+            &qualification.status,
+            qualification.profile_version,
+        )
+        .map_err(|message| {
+            AppError::new("DEPLOYMENT_QUALIFICATION_EVIDENCE_FAILED", message, false)
+        })?
+    } else {
+        qualification.evidence_id.clone()
+    };
     crate::deployment_identity::DeploymentIdentity::new_with_auxiliary(
         engine_identity.artifact_id,
         model_identity.artifact_id,
         auxiliary_artifacts,
         config_identity.revision_id,
         config_identity.configuration_id,
-        qualification.evidence_id.clone(),
+        qualification_evidence_id,
     )
     .map_err(|message| AppError::new("DEPLOYMENT_IDENTITY_FAILED", message, false))
 }
@@ -3134,37 +3161,25 @@ pub fn inspect_deployment(
     .map_err(|message| AppError::new("DEPLOYMENT_INSPECTION_FAILED", message, true))
 }
 
-fn qualification_gate_error(status: &str, evidence_is_current: bool) -> Option<AppError> {
+fn qualification_advisory(status: &str, evidence_is_current: bool) -> Option<String> {
     if evidence_is_current {
         return None;
     }
-    Some(match status {
-        "stale" => AppError::new(
-            "ENGINE_QUALIFICATION_STALE",
-            "引擎制品已变化，之前的资格认证证据已失效；请重新探测并认证。",
-            false,
-        ),
-        "incomplete" => AppError::new(
-            "ENGINE_QUALIFICATION_INCOMPLETE",
-            "引擎资格认证不完整；版本或能力证据未通过，禁止启动实例。",
-            false,
-        ),
-        "failed" | "cancelled" => AppError::new(
-            "ENGINE_QUALIFICATION_FAILED",
-            "引擎资格认证未通过；请查看报告、修复问题并重新认证。",
-            false,
-        ),
-        "unqualified" => AppError::new(
-            "ENGINE_QUALIFICATION_REQUIRED",
-            "引擎尚未完成资格认证；请先在引擎管理中运行认证。",
-            false,
-        ),
-        _ => AppError::new(
-            "ENGINE_QUALIFICATION_INCOMPLETE",
-            "引擎资格认证状态未知，禁止启动实例。",
-            false,
-        ),
-    })
+    Some(str::to_string(match status {
+        "stale" => "引擎资格证据已失效；本次启动继续使用当前已绑定制品，建议重新探测并认证。",
+        "incomplete" => {
+            "引擎资格认证证据不完整；本次启动不会被阻止，请根据运行日志确认实际兼容性。"
+        }
+        "failed" => "最近一次引擎资格认证未通过；本次启动不会被阻止，请观察健康状态和运行日志。",
+        "cancelled" => "最近一次引擎资格认证已取消；本次启动不会被阻止，建议稍后重新认证。",
+        "unqualified" => {
+            "引擎尚未运行资格认证；本次启动不会被阻止，建议使用代表性模型完成 GPU 冒烟验证。"
+        }
+        "passed" => {
+            "已有资格认证来自旧版或证据不完整；本次启动不会被阻止，建议按当前 GPU 配置重新认证。"
+        }
+        _ => "引擎资格状态未知；本次启动不会被阻止，请观察健康状态和运行日志。",
+    }))
 }
 
 fn stale_engine_error() -> AppError {
@@ -3641,6 +3656,7 @@ pub async fn start_server(
                 "port": prepared.config.port,
                 "host": prepared.config.host,
                 "command": prepared.command_display,
+                "qualificationWarning": prepared.engine_qualification.warning.clone(),
                 "effectiveConfig": {
                     "model_path": prepared.config.model_path,
                     "alias": prepared.config.alias,
@@ -3688,8 +3704,8 @@ pub async fn start_server(
         )?;
     if artifact_leases.engine_fingerprint() != engine_qualification.fingerprint {
         return Err(AppError::new(
-            "ENGINE_QUALIFICATION_STALE",
-            "runtime engine artifact no longer matches qualification evidence",
+            "ENGINE_CAPABILITIES_STALE",
+            "runtime engine artifact no longer matches the verified launch binding",
             false,
         )
         .with_context("instanceId", instance_id));
@@ -3881,6 +3897,7 @@ pub async fn start_server(
             "port": config.port,
             "host": config.host,
             "command": cmd_display,
+            "qualificationWarning": engine_qualification.warning.clone(),
             "effectiveConfig": {
                 "model_path": config.model_path,
                 "alias": config.alias,
@@ -6372,21 +6389,24 @@ mod perf_parser_tests {
     }
 
     #[test]
-    fn qualification_gate_fails_closed_with_stable_error_codes() {
-        for (status, expected_code) in [
-            ("unqualified", "ENGINE_QUALIFICATION_REQUIRED"),
-            ("incomplete", "ENGINE_QUALIFICATION_INCOMPLETE"),
-            ("failed", "ENGINE_QUALIFICATION_FAILED"),
-            ("cancelled", "ENGINE_QUALIFICATION_FAILED"),
-            ("stale", "ENGINE_QUALIFICATION_STALE"),
-            ("passed", "ENGINE_QUALIFICATION_INCOMPLETE"),
-            ("unexpected", "ENGINE_QUALIFICATION_INCOMPLETE"),
+    fn qualification_status_is_advisory_when_evidence_is_not_current() {
+        for status in [
+            "unqualified",
+            "incomplete",
+            "failed",
+            "cancelled",
+            "stale",
+            "passed",
+            "unexpected",
         ] {
-            let error = qualification_gate_error(status, false)
-                .expect("non-current qualification evidence must block startup");
-            assert_eq!(error.code, expected_code);
+            let warning = qualification_advisory(status, false)
+                .expect("non-current qualification evidence should produce a warning");
+            assert!(!warning.trim().is_empty());
         }
-        assert!(qualification_gate_error("passed", true).is_none());
+        assert!(qualification_advisory("unqualified", false)
+            .unwrap()
+            .contains("不会被阻止"));
+        assert!(qualification_advisory("passed", true).is_none());
     }
 
     #[test]

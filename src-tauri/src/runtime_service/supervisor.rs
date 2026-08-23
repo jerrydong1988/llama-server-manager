@@ -7,6 +7,7 @@ use super::protocol::{
     RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
+#[cfg(test)]
 use crate::commands::engine_capabilities::QUALIFICATION_PROFILE_VERSION;
 use crate::commands::proxy::{
     normalize_and_validate_proxy_config, proxy_request_resolution_from,
@@ -53,23 +54,15 @@ fn validate_runtime_engine_qualification(
     spec: &RuntimeLaunchSpec,
     artifacts: &crate::deployment_identity::LaunchArtifactLeases,
 ) -> Result<(), String> {
-    if spec.engine_qualification_fingerprint.is_empty()
-        || spec.engine_qualification_profile_version == 0
-    {
+    if spec.engine_qualification_fingerprint.is_empty() {
         return Err(
-            "ENGINE_QUALIFICATION_REQUIRED: runtime launch snapshot has no qualification binding"
+            "DEPLOYMENT_ENGINE_BINDING_REQUIRED: runtime launch snapshot has no engine artifact binding"
                 .to_string(),
         );
     }
-    if spec.engine_qualification_profile_version != QUALIFICATION_PROFILE_VERSION {
-        return Err(format!(
-            "ENGINE_QUALIFICATION_INCOMPLETE: runtime launch snapshot uses qualification profile {} but profile {} is required",
-            spec.engine_qualification_profile_version, QUALIFICATION_PROFILE_VERSION
-        ));
-    }
     if artifacts.engine_fingerprint() != spec.engine_qualification_fingerprint {
         return Err(
-            "ENGINE_QUALIFICATION_STALE: runtime engine artifact no longer matches qualification evidence"
+            "DEPLOYMENT_ENGINE_BINDING_STALE: runtime engine artifact no longer matches the launch snapshot"
                 .to_string(),
         );
     }
@@ -115,23 +108,18 @@ fn validate_runtime_deployment_identity(
 fn validate_runtime_engine_qualification_from_paths(
     spec: &RuntimeLaunchSpec,
 ) -> Result<(), String> {
-    if spec.engine_qualification_fingerprint.is_empty()
-        || spec.engine_qualification_profile_version == 0
-    {
+    if spec.engine_qualification_fingerprint.is_empty() {
         return Err(
-            "ENGINE_QUALIFICATION_REQUIRED: runtime launch snapshot has no qualification binding"
+            "DEPLOYMENT_ENGINE_BINDING_REQUIRED: runtime launch snapshot has no engine artifact binding"
                 .to_string(),
         );
-    }
-    if spec.engine_qualification_profile_version != QUALIFICATION_PROFILE_VERSION {
-        return Err("ENGINE_QUALIFICATION_INCOMPLETE: runtime profile mismatch".to_string());
     }
     let executable = spec.command.first().map(String::as_str).unwrap_or_default();
     if crate::commands::engine_capabilities::executable_fingerprint(executable)
         != spec.engine_qualification_fingerprint
     {
         return Err(
-            "ENGINE_QUALIFICATION_STALE: runtime engine artifact no longer matches qualification evidence"
+            "DEPLOYMENT_ENGINE_BINDING_STALE: runtime engine artifact no longer matches the launch snapshot"
                 .to_string(),
         );
     }
@@ -2283,13 +2271,13 @@ mod tests {
     }
 
     #[test]
-    fn runtime_recovery_is_bound_to_the_qualified_engine_artifact() {
+    fn runtime_recovery_is_bound_to_the_exact_engine_artifact() {
         let mut spec = detach_spec();
         spec.engine_qualification_fingerprint.clear();
         spec.engine_qualification_profile_version = 0;
         assert!(validate_runtime_engine_qualification_from_paths(&spec)
             .unwrap_err()
-            .starts_with("ENGINE_QUALIFICATION_REQUIRED:"));
+            .starts_with("DEPLOYMENT_ENGINE_BINDING_REQUIRED:"));
 
         let directory = std::env::temp_dir().join(format!(
             "lsm-runtime-qualified-engine-{}-{}",
@@ -2308,7 +2296,7 @@ mod tests {
         std::fs::write(&executable, vec![b'b'; 128 * 1024]).unwrap();
         assert!(validate_runtime_engine_qualification_from_paths(&spec)
             .unwrap_err()
-            .starts_with("ENGINE_QUALIFICATION_STALE:"));
+            .starts_with("DEPLOYMENT_ENGINE_BINDING_STALE:"));
         let _ = std::fs::remove_dir_all(directory);
     }
 

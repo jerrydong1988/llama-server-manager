@@ -537,7 +537,7 @@ pub fn inspect(
         (
             DeploymentState::Unmaterialized,
             preflight_error.or_else(|| {
-                Some("deployment will be materialized on the next qualified start".into())
+                Some("deployment will be materialized on the next validated start".into())
             }),
         )
     } else if let Some(error) = preflight_error {

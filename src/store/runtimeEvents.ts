@@ -275,6 +275,7 @@ export function registerGlobalStoreListeners(
     port: number
     host: string
     command: string
+    qualificationWarning?: string
     effectiveConfig?: Partial<InstanceConfig>
   }>(store, 'server-started', (event) => {
     lastReportedRuntimeStatusError = null
@@ -300,9 +301,12 @@ export function registerGlobalStoreListeners(
     })
     state.addLog({
       instanceId: event.payload.instanceId,
-      text: `${formatStartupCommand(event.payload.command)}\n-- PID: ${event.payload.pid} | Port: ${event.payload.port}`,
+      text: `${formatStartupCommand(event.payload.command)}\n-- PID: ${event.payload.pid} | Port: ${event.payload.port}${event.payload.qualificationWarning ? `\n-- Qualification advisory: ${event.payload.qualificationWarning}` : ''}`,
       timestamp: Date.now(),
     })
+    if (event.payload.qualificationWarning) {
+      state.addRuntimeWarning(event.payload.qualificationWarning)
+    }
   })
 
   registerListener<{ instanceId: string; expected?: boolean; reason?: string; exitCode?: number | null }>(store, 'server-stopped', (event) => {

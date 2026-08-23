@@ -194,12 +194,14 @@ const engine: EngineInfo = {
     qualification: BROWSER_SCENARIO === 'engine-qualification'
       ? {
           schemaVersion: 2,
-          profileVersion: 2,
+          profileVersion: 3,
           status: 'unqualified',
           executableFingerprint: '',
           engineArtifactId: '',
           engineVersion: '',
           helpHash: '',
+          executionProfile: '',
+          backend: '',
           modelId: '',
           modelArtifactId: '',
           modelName: '',
@@ -209,12 +211,14 @@ const engine: EngineInfo = {
         }
       : {
           schemaVersion: 2,
-          profileVersion: 2,
+          profileVersion: 3,
           status: 'passed',
           executableFingerprint: 'browser-test-engine-fingerprint',
           engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
           engineVersion: IS_DOCS_SCENARIO ? 'version: 10042 (6d2f8e1)' : 'version: 10042 (browser-test)',
           helpHash: 'browser-test-help',
+          executionProfile: 'gpu-offload-maximized',
+          backend: IS_DOCS_SCENARIO ? 'CUDA' : 'Vulkan',
           modelId: models[0].id,
           modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
           modelName: models[0].name,
@@ -1281,9 +1285,16 @@ mockIPC((command, payload) => {
       const instanceId = String(args.instanceId ?? '')
       if (BROWSER_SCENARIO === 'deployment-identity-incomplete') {
         return {
-          ready: false,
-          errorCode: 'ENGINE_QUALIFICATION_INCOMPLETE',
-          message: 'browser mock detail must not be required for localized rendering',
+          ready: true,
+          identity: {
+            schemaVersion: 1,
+            deploymentId: `urn:lsm:deployment:v1:sha256:browser-advisory-${instanceId}`,
+            engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
+            modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
+            configRevisionId: `revision-current-${instanceId}`,
+            configurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
+            qualificationEvidenceId: 'urn:lsm:qualification:v2:sha256:browser-advisory',
+          },
         }
       }
       if (BROWSER_SCENARIO === 'deployment-identity-stale') {
@@ -1490,12 +1501,14 @@ mockIPC((command, payload) => {
         ...target.capabilities!,
         qualification: {
           schemaVersion: 2,
-          profileVersion: 2,
+          profileVersion: 3,
           status: 'passed',
           executableFingerprint: target.capabilities!.executableFingerprint,
           engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
           engineVersion: target.version,
           helpHash: target.capabilities!.helpHash,
+          executionProfile: 'gpu-offload-maximized',
+          backend: target.backend,
           modelId: qualificationModel.id,
           modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
           modelName: qualificationModel.name,

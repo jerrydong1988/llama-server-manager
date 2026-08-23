@@ -371,6 +371,8 @@ fn seed_test_fixture(data_dir: Option<PathBuf>) -> AppResult<CommandResult> {
         engine_artifact_id: engine_identity.artifact_id.clone(),
         engine_version: "fixture-1".into(),
         help_hash: "fixture-help".into(),
+        execution_profile: "backend-native-cpu".into(),
+        backend: "CPU".into(),
         model_id: "fixture-model".into(),
         model_artifact_id: model_identity.artifact_id.clone(),
         model_name: "fixture.gguf".into(),

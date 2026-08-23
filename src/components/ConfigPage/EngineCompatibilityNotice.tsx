@@ -49,9 +49,7 @@ export function EngineCompatibilityNotice({ engine, unsupportedFlags, probing, l
         : qualificationStatus === 'failed' || qualificationStatus === 'cancelled'
           ? labels.engineQualificationFailedDesc
           : labels.engineQualificationRequiredDesc
-    const tone = qualificationStatus === 'unqualified'
-      ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200'
-      : 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200'
+    const tone = 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200'
     return (
       <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${tone}`} data-testid="engine-qualification-notice">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />

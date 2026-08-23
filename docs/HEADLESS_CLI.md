@@ -31,7 +31,7 @@ help
 
 `--data-dir` is intended for isolated testing or an explicitly separated manager profile and must be an absolute path. Omitting it uses the same platform data directory as the desktop application.
 
-Lifecycle commands use the same persisted configuration and full launch preflight as the GUI. The CLI cannot create an unqualified engine, bypass a stale Deployment Revision, weaken public-bind authentication, or start an infeasible placement. Configure and qualify engines, models, instances, and routes in the GUI before automating their lifecycle.
+Lifecycle commands use the same persisted configuration and full launch preflight as the GUI. Missing or failed engine qualification is surfaced as advisory evidence, while the CLI still cannot bypass exact artifact binding, a stale Deployment Revision, public-bind authentication, or resource feasibility. Configure engines, models, instances, and routes in the GUI before automating their lifecycle; run qualification when representative GPU/CPU compatibility evidence is useful.
 
 Starting an instance or proxy acquires runtime residency so the workload survives the CLI process. Stopping the final workload releases CLI-acquired residency unless the existing independent-runtime setting is enabled. Login recovery remains controlled by that setting in the desktop application.
 

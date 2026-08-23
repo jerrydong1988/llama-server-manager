@@ -18,7 +18,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 1;
-pub(crate) const QUALIFICATION_PROFILE_VERSION: u8 = 2;
+pub(crate) const QUALIFICATION_PROFILE_VERSION: u8 = 3;
 const QUALIFICATION_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const QUALIFICATION_HEALTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const QUALIFICATION_INFERENCE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -516,6 +516,8 @@ fn qualification_report_is_complete(qualification: &EngineQualificationReport) -
         && qualification.status == "passed"
         && !qualification.engine_version.trim().is_empty()
         && !qualification.help_hash.is_empty()
+        && !qualification.execution_profile.is_empty()
+        && !qualification.backend.is_empty()
         && !qualification.model_id.is_empty()
         && !qualification.model_name.is_empty()
         && qualification.model_size > 0
@@ -537,7 +539,8 @@ fn qualification_after_capability_probe(
     current_help_hash: &str,
 ) -> EngineQualificationReport {
     if qualification.status == "unqualified"
-        || (qualification.executable_fingerprint == executable_fingerprint
+        || (qualification.profile_version == QUALIFICATION_PROFILE_VERSION
+            && qualification.executable_fingerprint == executable_fingerprint
             && qualification.engine_version == engine_version
             && qualification.help_hash == current_help_hash)
     {
@@ -545,7 +548,7 @@ fn qualification_after_capability_probe(
     } else {
         stale_engine_qualification(
             qualification,
-            "engine version or capability evidence changed; qualification required",
+            "engine version, capability evidence, or qualification profile changed; rerun qualification for current advisory evidence",
         )
     }
 }
@@ -754,6 +757,7 @@ fn verify_qualification_listener_owner(port: u16, child_pid: u32) -> Result<(), 
 
 fn qualification_arguments(
     capabilities: &EngineCapabilities,
+    backend: &str,
     model_path: &std::path::Path,
     port: u16,
 ) -> Result<Vec<String>, String> {
@@ -772,12 +776,27 @@ fn qualification_arguments(
         port_flag.to_string(),
         port.to_string(),
     ];
+    // A GPU qualification must explicitly request GPU offload instead of
+    // relying on version-specific defaults that may silently remain CPU-only.
+    // CPU builds naturally keep their native placement.
+    if !backend.eq_ignore_ascii_case("cpu") && !backend.trim().is_empty() {
+        let gpu_layers_flag =
+            supported_qualification_flag(capabilities, &["--n-gpu-layers", "-ngl"]).ok_or_else(
+                || format!("{backend} engine help did not confirm the GPU layer offload flag"),
+            )?;
+        arguments.push(gpu_layers_flag.to_string());
+        arguments.push("999".to_string());
+    }
+
+    // Disabling the redundant startup warmup keeps the smoke test bounded; the
+    // representative inference below still proves that the selected backend
+    // can execute with the requested placement.
     for (candidates, value) in [
         (&["--ctx-size", "-c"][..], Some("512")),
-        (&["--threads", "-t"][..], Some("2")),
-        (&["--n-gpu-layers", "-ngl"][..], Some("0")),
-        (&["--no-op-offload"][..], None),
-        (&["--no-kv-offload"][..], None),
+        (&["--parallel", "-np"][..], Some("1")),
+        (&["--batch-size", "-b"][..], Some("512")),
+        (&["--ubatch-size", "-ub"][..], Some("512")),
+        (&["--no-warmup"][..], None),
         (&["--no-ui"][..], None),
         (&["--offline"][..], None),
     ] {
@@ -812,6 +831,14 @@ fn eligible_qualification_model(model: &ModelInfo) -> bool {
         && !model.capabilities.is_mmproj
         && model.capabilities.is_embedding_model != Some(true)
         && model.capabilities.is_reranker_model != Some(true)
+}
+
+fn qualification_execution_profile(backend: &str) -> String {
+    if backend.eq_ignore_ascii_case("cpu") || backend.trim().is_empty() {
+        "backend-native-cpu".to_string()
+    } else {
+        "gpu-offload-maximized".to_string()
+    }
 }
 
 fn parse_bounded_qualification_json(
@@ -950,6 +977,7 @@ fn run_runtime_qualification(
     let mut status = "failed".to_string();
     let mut terminal_reason = None;
     let mut last_health_error: Option<String>;
+    let mut last_health_was_loading: bool;
     let health_url = format!("http://127.0.0.1:{}/health", launch.port);
 
     match health_client {
@@ -1070,17 +1098,27 @@ fn run_runtime_qualification(
                     break;
                 }
                 Ok(response) => {
+                    last_health_was_loading =
+                        response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE;
                     last_health_error =
                         Some(format!("GET /health returned HTTP {}", response.status()));
                 }
                 Err(error) => {
+                    last_health_was_loading = false;
                     last_health_error = Some(format!("GET /health failed: {error}"));
                 }
             }
             if health_started.elapsed() >= launch.startup_timeout {
-                let message = last_health_error
-                    .clone()
-                    .unwrap_or_else(|| "qualification health check timed out".to_string());
+                let message = if last_health_was_loading {
+                    format!(
+                        "qualification server remained in the model-loading state (HTTP 503) for {} seconds; this result does not prove engine/model incompatibility",
+                        launch.startup_timeout.as_secs()
+                    )
+                } else {
+                    last_health_error
+                        .clone()
+                        .unwrap_or_else(|| "qualification health check timed out".to_string())
+                };
                 if startup_check.is_none() {
                     startup_check = Some(qualification_check(
                         "startup",
@@ -1953,6 +1991,8 @@ pub async fn qualify_engine(
                 status: "incomplete".to_string(),
                 executable_fingerprint: fingerprint,
                 engine_artifact_id: engine_artifact_identity.artifact_id.clone(),
+                execution_profile: qualification_execution_profile(&engine.backend),
+                backend: engine.backend.clone(),
                 model_id: model.id.clone(),
                 model_artifact_id: model_artifact_identity.artifact_id.clone(),
                 model_name: model.name.clone(),
@@ -1997,7 +2037,7 @@ pub async fn qualify_engine(
         }),
     );
     let capability_result = if probed.capabilities.status == "detected" {
-        qualification_arguments(&probed.capabilities, &model_path, 1).map(|_| ())
+        qualification_arguments(&probed.capabilities, &engine.backend, &model_path, 1).map(|_| ())
     } else {
         Err(format!(
             "engine capability status is {}",
@@ -2025,6 +2065,8 @@ pub async fn qualify_engine(
         engine_artifact_id: engine_artifact_identity.artifact_id.clone(),
         engine_version: probed.version.clone(),
         help_hash: probed.capabilities.help_hash.clone(),
+        execution_profile: qualification_execution_profile(&engine.backend),
+        backend: engine.backend.clone(),
         model_id: model.id.clone(),
         model_artifact_id: model_artifact_identity.artifact_id.clone(),
         model_name: model.name.clone(),
@@ -2081,7 +2123,8 @@ pub async fn qualify_engine(
             return persist_engine_qualification(state.inner(), &engine.id, &engine.exe, report);
         }
     };
-    let arguments = qualification_arguments(&probed.capabilities, &model_path, port)?;
+    let arguments =
+        qualification_arguments(&probed.capabilities, &engine.backend, &model_path, port)?;
     let mut qualification_command = vec![executable.to_string_lossy().to_string()];
     qualification_command.extend(arguments);
     let (bound_command, artifact_leases) = crate::deployment_identity::bind_expected_artifacts(
@@ -2326,6 +2369,8 @@ mod tests {
             engine_artifact_id,
             engine_version: "version: 1".to_string(),
             help_hash: "help-hash".to_string(),
+            execution_profile: "gpu-offload-maximized".to_string(),
+            backend: "Vulkan".to_string(),
             model_id: "model-id".to_string(),
             model_artifact_id: "urn:lsm:model:v1:sha256:test".to_string(),
             model_name: "model.gguf".to_string(),
@@ -2353,7 +2398,7 @@ mod tests {
     }
 
     #[test]
-    fn passed_status_without_complete_current_profile_evidence_fails_closed() {
+    fn passed_status_without_complete_current_profile_evidence_is_not_current() {
         let qualification = EngineQualificationReport {
             status: "passed".to_string(),
             executable_fingerprint: "fingerprint".to_string(),
@@ -2385,34 +2430,58 @@ mod tests {
     }
 
     #[test]
-    fn qualification_profile_is_loopback_only_and_uses_a_cpu_baseline() {
+    fn qualification_profile_is_loopback_only_and_requests_gpu_offload() {
         let capabilities = detected(&[
             "--model",
             "--host",
             "--port",
             "--ctx-size",
-            "--threads",
+            "--parallel",
+            "--batch-size",
+            "--ubatch-size",
             "--n-gpu-layers",
             "--no-op-offload",
             "--no-kv-offload",
+            "--no-warmup",
             "--offline",
             "--no-ui",
             "--log-disable",
         ]);
-        let arguments =
-            qualification_arguments(&capabilities, std::path::Path::new("model.gguf"), 18432)
-                .unwrap();
+        let arguments = qualification_arguments(
+            &capabilities,
+            "Vulkan",
+            std::path::Path::new("model.gguf"),
+            18432,
+        )
+        .unwrap();
         assert!(arguments
             .windows(2)
             .any(|pair| pair == ["--host", "127.0.0.1"]));
         assert!(arguments.windows(2).any(|pair| pair == ["--port", "18432"]));
+        assert!(arguments.windows(2).any(|pair| pair == ["--parallel", "1"]));
         assert!(arguments
             .windows(2)
-            .any(|pair| pair == ["--n-gpu-layers", "0"]));
-        assert!(arguments.contains(&"--no-op-offload".to_string()));
-        assert!(arguments.contains(&"--no-kv-offload".to_string()));
+            .any(|pair| pair == ["--batch-size", "512"]));
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["--ubatch-size", "512"]));
+        assert!(arguments.contains(&"--no-warmup".to_string()));
+        assert!(arguments
+            .windows(2)
+            .any(|pair| pair == ["--n-gpu-layers", "999"]));
+        assert!(!arguments.contains(&"--no-op-offload".to_string()));
+        assert!(!arguments.contains(&"--no-kv-offload".to_string()));
         assert!(arguments.contains(&"--offline".to_string()));
         assert!(!arguments.contains(&"--log-disable".to_string()));
+
+        let cpu_arguments = qualification_arguments(
+            &capabilities,
+            "CPU",
+            std::path::Path::new("model.gguf"),
+            18433,
+        )
+        .unwrap();
+        assert!(!cpu_arguments.contains(&"--n-gpu-layers".to_string()));
     }
 
     #[test]
@@ -2446,6 +2515,9 @@ mod tests {
         assert_eq!(result.checks[0].status, "passed");
         assert_eq!(result.checks[1].status, "failed");
         assert_eq!(result.checks[2].status, "skipped");
+        assert!(result.diagnostic.as_deref().is_some_and(
+            |diagnostic| diagnostic.contains("does not prove engine/model incompatibility")
+        ));
         assert_port_released(port);
     }
 
