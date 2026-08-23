@@ -507,6 +507,9 @@ fn upsert_model_records_in_connection(
     conn: &Connection,
     records: &[InventoryModelRecord],
 ) -> Result<(), String> {
+    let mut existing_identity = conn
+        .prepare("SELECT size, mtime, artifact_identity_json FROM model_inventory WHERE path = ?1")
+        .map_err(|e| format!("failed to prepare model identity preservation query: {e}"))?;
     let mut stmt = conn
         .prepare(
             r#"
@@ -544,6 +547,26 @@ fn upsert_model_records_in_connection(
         if capabilities_json.len() > 64 * 1024 {
             return Err("model capability summary exceeds the 64 KiB record limit".to_string());
         }
+        let artifact_identity = if record.artifact_identity.is_verified() {
+            record.artifact_identity.clone()
+        } else {
+            existing_identity
+                .query_row(params![record.path], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .ok()
+                .and_then(|(size, mtime, encoded)| {
+                    (size == record.size as i64 && mtime == record.mtime as i64)
+                        .then(|| serde_json::from_str::<ArtifactIdentity>(&encoded).ok())
+                        .flatten()
+                })
+                .filter(ArtifactIdentity::is_verified)
+                .unwrap_or_else(|| record.artifact_identity.clone())
+        };
         stmt.execute(params![
             record.path,
             record.id,
@@ -559,7 +582,7 @@ fn upsert_model_records_in_connection(
             capabilities_json,
             record.file_type,
             if record.is_shard { 1 } else { 0 },
-            serde_json::to_string(&record.artifact_identity)
+            serde_json::to_string(&artifact_identity)
                 .map_err(|e| format!("failed to encode model artifact identity: {e}"))?,
             record.last_seen,
             MODEL_INVENTORY_SCHEMA_VERSION,
@@ -626,6 +649,28 @@ pub fn delete_model(path: &str) -> Result<(), String> {
         params![path],
     )
     .map_err(|e| format!("failed to delete model inventory row: {}", e))?;
+    Ok(())
+}
+
+pub fn update_model_identity(path: &Path, identity: &ArtifactIdentity) -> Result<(), String> {
+    if !identity.is_verified() {
+        return Err("refusing to persist an unverified model artifact identity".to_string());
+    }
+    let canonical_path = std::fs::canonicalize(path)
+        .map_err(|error| format!("failed to resolve model inventory path: {error}"))?;
+    let canonical_key = canonical_path.to_string_lossy().to_string();
+    let encoded = serde_json::to_string(identity)
+        .map_err(|error| format!("failed to encode model artifact identity: {error}"))?;
+    let conn = open_connection()?;
+    let changed = conn
+        .execute(
+            "UPDATE model_inventory SET artifact_identity_json = ?2, last_seen = ?3 WHERE path = ?1 OR display_path = ?1",
+            params![canonical_key, encoded, now_secs()],
+        )
+        .map_err(|error| format!("failed to persist model artifact identity: {error}"))?;
+    if changed == 0 {
+        return Err("model is no longer present in the scan inventory".to_string());
+    }
     Ok(())
 }
 
@@ -999,6 +1044,64 @@ mod tests {
         assert_eq!(loaded.capabilities.qualification.checks.len(), 1);
         assert!(loaded.artifact_identity.is_verified());
         assert_eq!(loaded.artifact_identity, record.artifact_identity);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn discovery_upsert_preserves_a_matching_verified_model_identity() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-model-identity-inventory-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("model.gguf");
+        std::fs::write(&path, b"verified model bytes").unwrap();
+        let canonical = std::fs::canonicalize(&path)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let identity =
+            crate::deployment_identity::artifact_identity_for_path("model", &path).unwrap();
+        let model = ModelInfo {
+            id: "model-id".to_string(),
+            name: "model.gguf".to_string(),
+            path: canonical.clone(),
+            size: 20,
+            architecture: None,
+            context_length: None,
+            quant_type: None,
+            has_mtp_head: false,
+            capabilities: ModelCapabilities::default(),
+            file_type: "model".to_string(),
+            is_shard: false,
+            artifact_identity: identity.clone(),
+        };
+        let verified = InventoryModelRecord::from_model(
+            &model,
+            canonical.clone(),
+            dir.to_string_lossy().to_string(),
+            42,
+        );
+        upsert_model_records_in_connection(&conn, std::slice::from_ref(&verified)).unwrap();
+
+        let mut discovery = verified.clone();
+        discovery.artifact_identity = ArtifactIdentity::default();
+        upsert_model_records_in_connection(&conn, std::slice::from_ref(&discovery)).unwrap();
+        let preserved = load_model_index_from_connection(&conn, InventoryCacheReadMode::Current)
+            .unwrap()
+            .remove(&canonical)
+            .unwrap();
+        assert_eq!(preserved.artifact_identity, identity);
+
+        discovery.mtime += 1;
+        upsert_model_records_in_connection(&conn, std::slice::from_ref(&discovery)).unwrap();
+        let invalidated = load_model_index_from_connection(&conn, InventoryCacheReadMode::Current)
+            .unwrap()
+            .remove(&canonical)
+            .unwrap();
+        assert!(!invalidated.artifact_identity.is_verified());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

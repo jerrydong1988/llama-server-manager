@@ -18,7 +18,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 1;
-pub(crate) const QUALIFICATION_PROFILE_VERSION: u8 = 1;
+pub(crate) const QUALIFICATION_PROFILE_VERSION: u8 = 2;
 const QUALIFICATION_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 const QUALIFICATION_HEALTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const QUALIFICATION_INFERENCE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -585,12 +585,17 @@ fn bounded_qualification_diagnostic(message: impl Into<String>) -> Option<String
     if normalized.is_empty() {
         None
     } else {
-        Some(
-            normalized
-                .chars()
-                .take(MAX_QUALIFICATION_DIAGNOSTIC_CHARS)
-                .collect(),
-        )
+        let characters = normalized.chars().collect::<Vec<_>>();
+        if characters.len() <= MAX_QUALIFICATION_DIAGNOSTIC_CHARS {
+            return Some(normalized);
+        }
+        const DIAGNOSTIC_TAIL_CHARS: usize = 1_400;
+        let head_chars = MAX_QUALIFICATION_DIAGNOSTIC_CHARS - DIAGNOSTIC_TAIL_CHARS - 5;
+        let head = characters[..head_chars].iter().collect::<String>();
+        let tail = characters[characters.len() - DIAGNOSTIC_TAIL_CHARS..]
+            .iter()
+            .collect::<String>();
+        Some(format!("{head} ... {tail}"))
     }
 }
 
@@ -771,9 +776,10 @@ fn qualification_arguments(
         (&["--ctx-size", "-c"][..], Some("512")),
         (&["--threads", "-t"][..], Some("2")),
         (&["--n-gpu-layers", "-ngl"][..], Some("0")),
+        (&["--no-op-offload"][..], None),
+        (&["--no-kv-offload"][..], None),
         (&["--no-ui"][..], None),
         (&["--offline"][..], None),
-        (&["--log-disable"][..], None),
     ] {
         if let Some(flag) = supported_qualification_flag(capabilities, candidates) {
             arguments.push(flag.to_string());
@@ -783,6 +789,21 @@ fn qualification_arguments(
         }
     }
     Ok(arguments)
+}
+
+fn persist_selected_model_identity(
+    state: &AppState,
+    model_path: &std::path::Path,
+    identity: &crate::deployment_identity::ArtifactIdentity,
+) -> Result<(), String> {
+    model_inventory::update_model_identity(model_path, identity)?;
+    let mut models = state.models.lock().unwrap();
+    let model = models
+        .iter_mut()
+        .find(|model| paths_equal(std::path::Path::new(&model.path), model_path))
+        .ok_or_else(|| "qualification model was removed from the scanned inventory".to_string())?;
+    model.artifact_identity = identity.clone();
+    Ok(())
 }
 
 fn eligible_qualification_model(model: &ModelInfo) -> bool {
@@ -1918,6 +1939,7 @@ pub async fn qualify_engine(
         crate::deployment_identity::artifact_identity_for_path("engine", &executable)?;
     let model_artifact_identity =
         crate::deployment_identity::artifact_identity_for_path("model", &model_path)?;
+    persist_selected_model_identity(state.inner(), &model_path, &model_artifact_identity)?;
     let (model_size, model_modified_at) = model_file_evidence(&model_path)?;
     let reservation = QualificationReservation::reserve(&engine.id)?;
     let started_at = now_secs();
@@ -2268,6 +2290,7 @@ mod tests {
     #[test]
     fn stale_invalidation_preserves_completed_qualification_evidence() {
         let mut qualification = EngineQualificationReport {
+            profile_version: QUALIFICATION_PROFILE_VERSION,
             status: "passed".to_string(),
             executable_fingerprint: "old-fingerprint".to_string(),
             checks: vec![qualification_check("health", "passed", 25, None)],
@@ -2297,6 +2320,7 @@ mod tests {
                 .unwrap()
                 .artifact_id;
         let mut qualification = EngineQualificationReport {
+            profile_version: QUALIFICATION_PROFILE_VERSION,
             status: "passed".to_string(),
             executable_fingerprint: executable_fingerprint(&path.to_string_lossy()),
             engine_artifact_id,
@@ -2349,6 +2373,18 @@ mod tests {
     }
 
     #[test]
+    fn qualification_diagnostics_keep_the_terminal_engine_log() {
+        let diagnostic = bounded_qualification_diagnostic(format!(
+            "qualification server exited; {} FINAL_ENGINE_FAILURE",
+            "startup-noise ".repeat(400)
+        ))
+        .unwrap();
+        assert!(diagnostic.starts_with("qualification server exited"));
+        assert!(diagnostic.contains("FINAL_ENGINE_FAILURE"));
+        assert!(diagnostic.chars().count() <= MAX_QUALIFICATION_DIAGNOSTIC_CHARS);
+    }
+
+    #[test]
     fn qualification_profile_is_loopback_only_and_uses_a_cpu_baseline() {
         let capabilities = detected(&[
             "--model",
@@ -2357,6 +2393,8 @@ mod tests {
             "--ctx-size",
             "--threads",
             "--n-gpu-layers",
+            "--no-op-offload",
+            "--no-kv-offload",
             "--offline",
             "--no-ui",
             "--log-disable",
@@ -2371,8 +2409,10 @@ mod tests {
         assert!(arguments
             .windows(2)
             .any(|pair| pair == ["--n-gpu-layers", "0"]));
+        assert!(arguments.contains(&"--no-op-offload".to_string()));
+        assert!(arguments.contains(&"--no-kv-offload".to_string()));
         assert!(arguments.contains(&"--offline".to_string()));
-        assert!(arguments.contains(&"--log-disable".to_string()));
+        assert!(!arguments.contains(&"--log-disable".to_string()));
     }
 
     #[test]

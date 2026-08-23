@@ -1039,6 +1039,89 @@ pub struct ArtifactLease {
     _ancestor_guards: Vec<File>,
 }
 
+/// A bounded discovery lease used while reading model metadata.
+///
+/// Repository scanning is intentionally not an artifact-certification pass: a
+/// model root may contain terabytes of GGUF data, while metadata lives near the
+/// start of each file. The retained file and ancestor handles keep the object
+/// stable for the metadata read on Windows, and the pre/post observations catch
+/// ordinary in-place changes on every platform. Full-content identity is still
+/// established when a selected model is qualified or launched.
+#[derive(Debug)]
+pub struct ArtifactInspectionLease {
+    canonical_path: PathBuf,
+    file: File,
+    observed_size: u64,
+    observed_modified: u128,
+    _ancestor_guards: Vec<File>,
+}
+
+impl ArtifactInspectionLease {
+    pub fn open_model_beneath_authorized_root(path: &Path, root: &Path) -> Result<Self, String> {
+        let canonical_path = std::fs::canonicalize(path)
+            .map_err(|error| format!("failed to resolve model artifact: {error}"))?;
+        let authorized_root = std::fs::canonicalize(root)
+            .map_err(|error| format!("failed to resolve authorized artifact root: {error}"))?;
+        if !crate::path_utils::paths_equal(&canonical_path, &authorized_root)
+            && !crate::path_utils::path_is_within(&canonical_path, &authorized_root)
+        {
+            return Err("model artifact escaped its authorized root".to_string());
+        }
+
+        let ancestor_guards = open_windows_ancestor_guards(&canonical_path, &authorized_root)?;
+        let file = open_artifact_file(&canonical_path, false)?;
+        FileExt::try_lock_shared(&file)
+            .map_err(|error| format!("artifact is being modified: {error}"))?;
+        let metadata = file
+            .metadata()
+            .map_err(|error| format!("failed to inspect model artifact: {error}"))?;
+        if !metadata.is_file() {
+            return Err("model artifact is not a regular file".to_string());
+        }
+        let observed_size = metadata.len();
+        let observed_modified = modified_nanos(&file);
+        Ok(Self {
+            canonical_path,
+            file,
+            observed_size,
+            observed_modified,
+            _ancestor_guards: ancestor_guards,
+        })
+    }
+
+    pub fn canonical_path(&self) -> &Path {
+        &self.canonical_path
+    }
+
+    pub fn try_clone_file(&self) -> Result<File, String> {
+        self.file
+            .try_clone()
+            .map_err(|error| format!("failed to clone inspected artifact handle: {error}"))
+    }
+
+    pub fn verify_unchanged(&self) -> Result<(), String> {
+        let metadata = self
+            .file
+            .metadata()
+            .map_err(|error| format!("failed to re-inspect model artifact: {error}"))?;
+        if metadata.len() != self.observed_size
+            || modified_nanos(&self.file) != self.observed_modified
+        {
+            return Err(format!(
+                "model artifact changed during metadata inspection: {}",
+                self.canonical_path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ArtifactInspectionLease {
+    fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
+    }
+}
+
 #[cfg(windows)]
 fn is_owner_protection_error(error: &str) -> bool {
     error.contains("artifact path is writable by another Windows principal")

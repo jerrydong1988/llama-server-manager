@@ -344,6 +344,12 @@ fn cached_artifact_identity_is_reusable(
     identity.is_verified()
 }
 
+fn push_scan_error_once(errors: &mut Vec<String>, error: String) {
+    if !errors.iter().any(|existing| existing == &error) {
+        errors.push(error);
+    }
+}
+
 fn reuse_cached_engines_for_root(
     scan_root_key: &str,
     inventory: &HashMap<String, InventoryEngineRecord>,
@@ -491,7 +497,7 @@ fn scan_model_directory_incremental(
     seen_inventory_paths: &mut HashSet<String>,
     seen_directory_keys: &mut HashSet<String>,
     inventory_meta: &mut HashMap<usize, (String, String, u64)>,
-    fresh_files: &mut Vec<(usize, crate::deployment_identity::ArtifactLease)>,
+    fresh_files: &mut Vec<(usize, crate::deployment_identity::ArtifactInspectionLease)>,
     directory_records: &mut Vec<InventoryDirectoryRecord>,
     errors: &mut Vec<String>,
     budget: &mut ScanBudget,
@@ -502,7 +508,7 @@ fn scan_model_directory_incremental(
     let fingerprint = match read_directory_fingerprint(dir, scan_root, budget) {
         Ok(fingerprint) => fingerprint,
         Err(err) => {
-            errors.push(err);
+            push_scan_error_once(errors, err);
             return 0;
         }
     };
@@ -540,6 +546,10 @@ fn scan_model_directory_incremental(
                     errors,
                     budget,
                 );
+                if let Err(error) = budget.check_time() {
+                    push_scan_error_once(errors, error);
+                    break;
+                }
             } else {
                 errors.push(format!(
                     "{} exceeded the model scan depth limit of {} and was skipped",
@@ -615,12 +625,9 @@ fn scan_model_directory_incremental(
         file_count += 1;
 
         if let Some(record) = inventory.get(&cache_key) {
-            if record.mtime == candidate_mtime
-                && record.size == candidate_metadata.len()
-                && cached_artifact_identity_is_reusable(&record.artifact_identity)
-            {
+            if record.mtime == candidate_mtime && record.size == candidate_metadata.len() {
                 if let Err(error) = budget.add_result() {
-                    errors.push(error);
+                    push_scan_error_once(errors, error);
                     break;
                 }
                 let idx = models.len();
@@ -636,34 +643,28 @@ fn scan_model_directory_incremental(
         }
 
         if let Err(error) = budget.add_result().and_then(|_| budget.add_parse()) {
-            errors.push(error);
+            push_scan_error_once(errors, error);
             break;
         }
         let idx = models.len();
-        let artifact_lease =
-            match crate::deployment_identity::ArtifactLease::open_beneath_authorized_root_with_deadline(
-                "model",
+        let inspection_lease =
+            match crate::deployment_identity::ArtifactInspectionLease::open_model_beneath_authorized_root(
                 &canonical_entry,
                 scan_root,
-                budget.deadline(),
             ) {
                 Ok(lease) => Some(lease),
                 Err(error) => {
                     if let Err(budget_error) = budget.check_time() {
-                        errors.push(budget_error);
+                        push_scan_error_once(errors, budget_error);
                         break;
                     }
                     errors.push(format!(
-                        "{} identity scan failed: {error}",
+                        "{} metadata inspection failed: {error}",
                         canonical_entry.display()
                     ));
                     None
                 }
             };
-        let artifact_identity = artifact_lease
-            .as_ref()
-            .map(|lease| lease.identity().clone())
-            .unwrap_or_default();
         models.push(ModelInfo {
             id: uuid::Uuid::new_v4().to_string(),
             name: entry.name,
@@ -676,10 +677,13 @@ fn scan_model_directory_incremental(
             capabilities: ModelCapabilities::default(),
             file_type: utils::classify_gguf_file(&canonical_entry).to_string(),
             is_shard: false,
-            artifact_identity,
+            // Repository scans discover models and read bounded metadata. Full
+            // content identity is established only for a model selected for
+            // qualification or launch, avoiding a terabyte-scale scan pass.
+            artifact_identity: Default::default(),
         });
         inventory_meta.insert(idx, (cache_key, scan_root_key.to_string(), candidate_mtime));
-        if let Some(lease) = artifact_lease {
+        if let Some(lease) = inspection_lease {
             fresh_files.push((idx, lease));
         }
     }
@@ -931,7 +935,8 @@ pub async fn scan_models(
         let mut scan_root_keys = HashSet::new();
         let mut inventory_meta: HashMap<usize, (String, String, u64)> = HashMap::new();
         let mut errors = Vec::new();
-        let mut fresh_files: Vec<(usize, crate::deployment_identity::ArtifactLease)> = Vec::new();
+        let mut fresh_files: Vec<(usize, crate::deployment_identity::ArtifactInspectionLease)> =
+            Vec::new();
         let mut directory_records: Vec<InventoryDirectoryRecord> = Vec::new();
         let mut budget = ScanBudget::default();
 
@@ -969,6 +974,11 @@ pub async fn scan_models(
                 &mut budget,
             );
 
+            if let Err(error) = budget.check_time() {
+                push_scan_error_once(&mut errors, error);
+                break;
+            }
+
             if file_count == 0 {
                 errors.push(format!("{} contains no .gguf model files", root_str));
             }
@@ -1003,7 +1013,7 @@ pub async fn scan_models(
                 for chunk in chunks {
                     let sender = sender.clone();
                     scope.spawn(move || {
-                        for (model_idx, mut lease) in chunk {
+                        for (model_idx, lease) in chunk {
                             let path = lease.canonical_path().to_path_buf();
                             let result = lease.try_clone_file().and_then(|file| {
                                 utils::parse_gguf_metadata_from_open_file_with_deadline(
@@ -1012,11 +1022,8 @@ pub async fn scan_models(
                                     parse_deadline,
                                 )
                             });
-                            let result = result.and_then(|summary| {
-                                lease
-                                    .verify_unchanged_with_deadline(parse_deadline)
-                                    .map(|_| summary)
-                            });
+                            let result = result
+                                .and_then(|summary| lease.verify_unchanged().map(|_| summary));
                             if sender.send((model_idx, path, result)).is_err() {
                                 break;
                             }
@@ -1686,7 +1693,7 @@ mod incremental_scan_tests {
     }
 
     #[test]
-    fn unchanged_failed_metadata_record_is_reused_without_reparsing() {
+    fn unchanged_discovery_record_is_reused_without_reparsing_or_rehashing() {
         let dir = temp_test_dir("malformed-model-cache");
         crate::persistence::enforce_private_directory(&dir).unwrap();
         let malformed = dir.join("malformed.gguf");
@@ -1727,6 +1734,7 @@ mod incremental_scan_tests {
             &mut budget,
         );
         assert_eq!(fresh_files.len(), 1, "{errors:?}");
+        assert!(!models[0].artifact_identity.is_verified());
         let (cache_key, stored_root, mtime) = inventory_meta.get(&0).unwrap().clone();
         let cached =
             InventoryModelRecord::from_model(&models[0], cache_key.clone(), stored_root, mtime);
@@ -1797,7 +1805,8 @@ mod incremental_scan_tests {
             &mut errors,
             &mut budget,
         );
-        assert_eq!(fresh_files.len(), 1, "{errors:?}");
+        assert!(fresh_files.is_empty(), "{errors:?}");
+        assert!(!models[0].artifact_identity.is_verified());
         let _ = std::fs::remove_dir_all(dir);
     }
 

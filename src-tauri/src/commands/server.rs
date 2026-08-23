@@ -2944,27 +2944,7 @@ fn build_deployment_identity(
     let model_identity =
         crate::deployment_identity::artifact_identity_for_path("model", &model_path)
             .map_err(|message| AppError::new("DEPLOYMENT_MODEL_IDENTITY_FAILED", message, true))?;
-    let inventory_identity = state
-        .models
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|model| paths_equal(std::path::Path::new(&model.path), &model_path))
-        .map(|model| model.artifact_identity.clone())
-        .ok_or_else(|| {
-            AppError::new(
-                "DEPLOYMENT_MODEL_NOT_SCANNED",
-                "当前模型不在已扫描清单中，请先刷新模型清单。",
-                true,
-            )
-        })?;
-    if !inventory_identity.is_verified() || inventory_identity != model_identity {
-        return Err(AppError::new(
-            "DEPLOYMENT_MODEL_IDENTITY_STALE",
-            "模型制品身份尚未验证或已变化，请重新扫描模型。",
-            true,
-        ));
-    }
+    reconcile_scanned_model_identity(state, &model_path, &model_identity, "model")?;
     let command_has_flag = |flags: &[&str]| match launch_command {
         None => true,
         Some(command) => command.iter().skip(1).any(|argument| {
@@ -2994,27 +2974,7 @@ fn build_deployment_identity(
             "model", &canonical,
         )
         .map_err(|message| AppError::new("DEPLOYMENT_AUXILIARY_IDENTITY_FAILED", message, true))?;
-        let inventory_identity = state
-            .models
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|model| paths_equal(std::path::Path::new(&model.path), &canonical))
-            .map(|model| model.artifact_identity.clone())
-            .ok_or_else(|| {
-                AppError::new(
-                    "DEPLOYMENT_AUXILIARY_NOT_SCANNED",
-                    format!("{role} model is not in the scanned inventory"),
-                    true,
-                )
-            })?;
-        if !inventory_identity.is_verified() || inventory_identity != artifact_identity {
-            return Err(AppError::new(
-                "DEPLOYMENT_AUXILIARY_IDENTITY_STALE",
-                format!("{role} model identity is stale; refresh the model inventory"),
-                true,
-            ));
-        }
+        reconcile_scanned_model_identity(state, &canonical, &artifact_identity, role)?;
         auxiliary_artifacts.push(crate::deployment_identity::AuxiliaryArtifactIdentity {
             role: role.to_string(),
             artifact_id: artifact_identity.artifact_id,
@@ -3031,6 +2991,55 @@ fn build_deployment_identity(
         qualification.evidence_id.clone(),
     )
     .map_err(|message| AppError::new("DEPLOYMENT_IDENTITY_FAILED", message, false))
+}
+
+fn reconcile_scanned_model_identity(
+    state: &AppState,
+    path: &std::path::Path,
+    current_identity: &crate::deployment_identity::ArtifactIdentity,
+    role: &str,
+) -> AppResult<()> {
+    let inventory_identity = state
+        .models
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|model| paths_equal(std::path::Path::new(&model.path), path))
+        .map(|model| model.artifact_identity.clone())
+        .ok_or_else(|| {
+            AppError::new(
+                "DEPLOYMENT_MODEL_NOT_SCANNED",
+                format!("{role} model is not in the scanned inventory"),
+                true,
+            )
+        })?;
+    if inventory_identity.is_verified() {
+        if inventory_identity != *current_identity {
+            return Err(AppError::new(
+                "DEPLOYMENT_MODEL_IDENTITY_STALE",
+                format!("{role} model content changed after its last verification"),
+                true,
+            ));
+        }
+        return Ok(());
+    }
+
+    crate::commands::model_inventory::update_model_identity(path, current_identity).map_err(
+        |message| AppError::new("DEPLOYMENT_MODEL_IDENTITY_PERSIST_FAILED", message, true),
+    )?;
+    let mut models = state.models.lock().unwrap();
+    let model = models
+        .iter_mut()
+        .find(|model| paths_equal(std::path::Path::new(&model.path), path))
+        .ok_or_else(|| {
+            AppError::new(
+                "DEPLOYMENT_MODEL_NOT_SCANNED",
+                format!("{role} model was removed from the scanned inventory"),
+                true,
+            )
+        })?;
+    model.artifact_identity = current_identity.clone();
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -5048,14 +5057,13 @@ fn authorize_resource_plan_model_paths(
         }
         let canonical = crate::security::require_authorized_model_path(std::path::Path::new(value))
             .map_err(|message| AppError::new("RESOURCE_PLAN_MODEL_UNAUTHORIZED", message, false))?;
-        let inventory_entry = inventory.iter().find(|model| {
-            paths_equal(std::path::Path::new(&model.path), &canonical)
-                && model.artifact_identity.is_verified()
-        });
+        let inventory_entry = inventory
+            .iter()
+            .find(|model| paths_equal(std::path::Path::new(&model.path), &canonical));
         if inventory_entry.is_none() {
             return Err(AppError::new(
                 "RESOURCE_PLAN_MODEL_NOT_SCANNED",
-                format!("{label}不在已验证的模型清单中，请先刷新模型扫描。"),
+                format!("{label}不在模型清单中，请先刷新模型扫描。"),
                 true,
             ));
         }
