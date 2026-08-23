@@ -338,6 +338,12 @@ fn saved_engine_name<'a>(names: &'a HashMap<String, String>, id: &str) -> Option
 
 const MAX_MODEL_SCAN_DEPTH: usize = 32;
 
+fn cached_artifact_identity_is_reusable(
+    identity: &crate::deployment_identity::ArtifactIdentity,
+) -> bool {
+    identity.is_verified()
+}
+
 fn reuse_cached_engines_for_root(
     scan_root_key: &str,
     inventory: &HashMap<String, InventoryEngineRecord>,
@@ -388,7 +394,11 @@ fn try_reuse_engine_root(
     let reusable = directory_inventory
         .get(scan_root_key)
         .map(|record| record.signature == signature)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        && inventory
+            .values()
+            .filter(|record| record.scan_root == scan_root_key)
+            .all(|record| cached_artifact_identity_is_reusable(&record.artifact_identity));
     if reusable {
         reuse_cached_engines_for_root(
             scan_root_key,
@@ -416,7 +426,9 @@ fn push_indexed_engine(
     seen_inventory_ids.insert(cache_key.clone());
 
     if let Some(record) = inventory.get(&cache_key) {
-        if record.exe_mtime == exe_mtime {
+        if record.exe_mtime == exe_mtime
+            && cached_artifact_identity_is_reusable(&record.artifact_identity)
+        {
             let info = record.to_engine_info();
             engine_records.push(InventoryEngineRecord::from_engine(
                 &info,
@@ -603,7 +615,10 @@ fn scan_model_directory_incremental(
         file_count += 1;
 
         if let Some(record) = inventory.get(&cache_key) {
-            if record.mtime == candidate_mtime && record.size == candidate_metadata.len() {
+            if record.mtime == candidate_mtime
+                && record.size == candidate_metadata.len()
+                && cached_artifact_identity_is_reusable(&record.artifact_identity)
+            {
                 if let Err(error) = budget.add_result() {
                     errors.push(error);
                     break;
@@ -1487,6 +1502,28 @@ mod incremental_scan_tests {
     }
 
     #[test]
+    fn retired_sampled_identities_are_never_reused() {
+        let retired = crate::deployment_identity::ArtifactIdentity {
+            schema_version: crate::deployment_identity::ARTIFACT_IDENTITY_SCHEMA_VERSION,
+            kind: "engine".to_string(),
+            artifact_id: "urn:lsm:engine:v1:sha256:retired".to_string(),
+            algorithm: "sha256-sampled-v1".to_string(),
+            file_size: 1024,
+            sample_size: 64,
+            sample_count: 3,
+        };
+        let verified = crate::deployment_identity::ArtifactIdentity {
+            algorithm: "sha256-full-v1".to_string(),
+            sample_size: 0,
+            sample_count: 0,
+            ..retired.clone()
+        };
+
+        assert!(!cached_artifact_identity_is_reusable(&retired));
+        assert!(cached_artifact_identity_is_reusable(&verified));
+    }
+
+    #[test]
     fn path_under_directory_uses_component_boundaries() {
         let parent = PathBuf::from("models").join("foo");
         let child = parent.join("bar").join("model.gguf");
@@ -1724,6 +1761,43 @@ mod incremental_scan_tests {
 
         assert_eq!(models.len(), 1);
         assert!(fresh_files.is_empty());
+
+        let mut retired_inventory = inventory.clone();
+        let retired_identity = &mut retired_inventory
+            .values_mut()
+            .next()
+            .unwrap()
+            .artifact_identity;
+        retired_identity.algorithm = "sha256-sampled-v1".to_string();
+        retired_identity.sample_size = 64;
+        retired_identity.sample_count = 3;
+        models.clear();
+        seen_display_paths.clear();
+        seen_inventory_paths.clear();
+        seen_directory_keys.clear();
+        inventory_meta.clear();
+        fresh_files.clear();
+        directory_records.clear();
+        errors.clear();
+        let mut budget = ScanBudget::default();
+        scan_model_directory_incremental(
+            &canonical_dir,
+            &canonical_dir,
+            &scan_root_key,
+            0,
+            &retired_inventory,
+            &HashMap::new(),
+            &mut models,
+            &mut seen_display_paths,
+            &mut seen_inventory_paths,
+            &mut seen_directory_keys,
+            &mut inventory_meta,
+            &mut fresh_files,
+            &mut directory_records,
+            &mut errors,
+            &mut budget,
+        );
+        assert_eq!(fresh_files.len(), 1, "{errors:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 

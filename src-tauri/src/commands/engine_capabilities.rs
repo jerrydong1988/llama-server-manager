@@ -1242,8 +1242,7 @@ fn run_runtime_qualification(
 
 fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let previous_qualification = std::mem::take(&mut engine.capabilities.qualification);
-    let mut artifact = match crate::deployment_identity::ArtifactLease::open_authorized(
-        "engine",
+    let mut artifact = match crate::deployment_identity::ArtifactLease::open_authorized_engine(
         std::path::Path::new(&engine.exe),
     ) {
         Ok(artifact) => artifact,
@@ -1255,6 +1254,12 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
             );
             return engine;
         }
+    };
+    let uses_managed_snapshot = artifact.uses_managed_snapshot();
+    let execution_source = if uses_managed_snapshot {
+        "managed-snapshot"
+    } else {
+        "direct"
     };
     if !engine.artifact_identity.is_verified() || artifact.identity() != &engine.artifact_identity {
         engine.capabilities.qualification = previous_qualification;
@@ -1272,8 +1277,14 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let reported_defaults = extract_reported_defaults(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
     let fingerprint = artifact.fingerprint().unwrap_or_default().to_string();
+    let source_fingerprint_after = uses_managed_snapshot.then(|| {
+        crate::deployment_identity::engine_fingerprint_for_path(std::path::Path::new(&engine.exe))
+    });
     if fingerprint_before.is_empty()
         || fingerprint_before != fingerprint
+        || source_fingerprint_after
+            .as_deref()
+            .is_some_and(|current| current != fingerprint)
         || artifact.verify_unchanged().is_err()
     {
         engine.capabilities.qualification = previous_qualification;
@@ -1337,6 +1348,7 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         reported_defaults_version: REPORTED_DEFAULTS_VERSION,
         help_hash: current_help_hash,
         executable_fingerprint: fingerprint,
+        execution_source: execution_source.to_string(),
         probed_at: Some(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)

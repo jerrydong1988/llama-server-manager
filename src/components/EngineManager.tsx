@@ -548,6 +548,12 @@ const EngineManager = () => {
                   [labels.version, versionLabel(selectedEngine)],
                   [labels.versionRecognition, versionStatusLabel(selectedEngine)],
                   [labels.compatibility, capabilityLabel(normalizeEngineCapabilityStatus(selectedEngine.capabilities))],
+                  [labels.executionSource,
+                    selectedEngine.capabilities?.executionSource === 'managed-snapshot'
+                      ? labels.executionSourceManaged
+                      : selectedEngine.capabilities?.executionSource === 'direct'
+                        ? labels.executionSourceDirect
+                        : '--'],
                   [labels.supportedFlags, selectedEngine.capabilities?.supportedFlags?.length ?? 0],
                   [labels.lastProbe, selectedEngine.capabilities?.probedAt
                     ? new Date(selectedEngine.capabilities.probedAt * 1000).toLocaleString(lang)

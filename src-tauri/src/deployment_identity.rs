@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
+#[cfg(windows)]
+use std::io::Write;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
@@ -415,6 +417,7 @@ fn engine_identity_and_bundle_leases(
     canonical_path: &Path,
     primary_file: &mut File,
     deadline: Option<Instant>,
+    validate_owner: bool,
 ) -> Result<(ArtifactIdentity, Vec<EngineBundleMemberLease>), String> {
     const MAX_BUNDLE_MEMBERS: usize = 512;
     const MAX_BUNDLE_DEPTH: usize = 8;
@@ -496,7 +499,9 @@ fn engine_identity_and_bundle_leases(
         if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
             return Err("engine bundle hashing exceeded the scan work deadline".to_string());
         }
-        validate_owner_protected_tree(&path, root)?;
+        if validate_owner {
+            validate_owner_protected_tree(&path, root)?;
+        }
         let mut file = open_artifact_file(&path, false)?;
         FileExt::try_lock_shared(&file)
             .map_err(|error| format!("engine bundle member is being modified: {error}"))?;
@@ -525,6 +530,7 @@ fn engine_identity_and_bundle_leases(
     _canonical_path: &Path,
     primary_file: &mut File,
     deadline: Option<Instant>,
+    _validate_owner: bool,
 ) -> Result<(ArtifactIdentity, Vec<EngineBundleMemberLease>), String> {
     Ok((
         artifact_identity_from_open_file_with_deadline("engine", primary_file, deadline)?,
@@ -538,8 +544,18 @@ fn identity_and_bundle_leases(
     file: &mut File,
     deadline: Option<Instant>,
 ) -> Result<(ArtifactIdentity, Vec<EngineBundleMemberLease>), String> {
+    identity_and_bundle_leases_with_owner_validation(kind, canonical_path, file, deadline, true)
+}
+
+fn identity_and_bundle_leases_with_owner_validation(
+    kind: &str,
+    canonical_path: &Path,
+    file: &mut File,
+    deadline: Option<Instant>,
+    validate_owner: bool,
+) -> Result<(ArtifactIdentity, Vec<EngineBundleMemberLease>), String> {
     if kind == "engine" {
-        engine_identity_and_bundle_leases(canonical_path, file, deadline)
+        engine_identity_and_bundle_leases(canonical_path, file, deadline, validate_owner)
     } else {
         Ok((
             artifact_identity_from_open_file_with_deadline(kind, file, deadline)?,
@@ -586,7 +602,13 @@ pub fn engine_fingerprint_for_path(path: &Path) -> String {
         Err(_) => return String::new(),
     };
     let modified = modified_nanos(&file);
-    let identity = match identity_and_bundle_leases("engine", &canonical_path, &mut file, None) {
+    let identity = match identity_and_bundle_leases_with_owner_validation(
+        "engine",
+        &canonical_path,
+        &mut file,
+        None,
+        false,
+    ) {
         Ok((identity, _)) => identity,
         Err(_) => return String::new(),
     };
@@ -597,7 +619,8 @@ pub fn artifact_identity_for_path(kind: &str, path: &Path) -> Result<ArtifactIde
     let canonical_path = std::fs::canonicalize(path)
         .map_err(|error| format!("failed to resolve {} artifact: {error}", kind))?;
     let mut file = open_artifact_file(&canonical_path, false)?;
-    identity_and_bundle_leases(kind, &canonical_path, &mut file, None).map(|(identity, _)| identity)
+    identity_and_bundle_leases_with_owner_validation(kind, &canonical_path, &mut file, None, false)
+        .map(|(identity, _)| identity)
 }
 
 pub fn artifact_identity_for_path_with_deadline(
@@ -608,8 +631,14 @@ pub fn artifact_identity_for_path_with_deadline(
     let canonical_path = std::fs::canonicalize(path)
         .map_err(|error| format!("failed to resolve {} artifact: {error}", kind))?;
     let mut file = open_artifact_file(&canonical_path, false)?;
-    identity_and_bundle_leases(kind, &canonical_path, &mut file, Some(deadline))
-        .map(|(identity, _)| identity)
+    identity_and_bundle_leases_with_owner_validation(
+        kind,
+        &canonical_path,
+        &mut file,
+        Some(deadline),
+        false,
+    )
+    .map(|(identity, _)| identity)
 }
 
 #[cfg(unix)]
@@ -991,9 +1020,104 @@ pub struct ArtifactLease {
     launch_path: PathBuf,
     file: File,
     identity: ArtifactIdentity,
+    // Evidence remains bound to the user-selected source path even when the
+    // executable is launched from an application-owned snapshot.
     fingerprint: Option<String>,
+    // Integrity checks always bind the object retained by this lease.
+    integrity_fingerprint: Option<String>,
+    managed_snapshot: bool,
     bundle_members: Vec<EngineBundleMemberLease>,
     _ancestor_guards: Vec<File>,
+}
+
+#[cfg(windows)]
+fn is_owner_protection_error(error: &str) -> bool {
+    error.contains("artifact path is writable by another Windows principal")
+        || error.contains("artifact path is owned by an untrusted Windows principal")
+        || error.contains("artifact path has an unrestricted null DACL")
+        || error.contains(
+            "artifact path grants write-like access through an unsupported Windows ACL entry",
+        )
+}
+
+#[cfg(windows)]
+struct ManagedSnapshotStaging {
+    path: PathBuf,
+    armed: bool,
+}
+
+#[cfg(windows)]
+impl ManagedSnapshotStaging {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(windows)]
+impl Drop for ManagedSnapshotStaging {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn copy_leased_artifact(
+    source: &mut File,
+    expected_size: u64,
+    destination: &Path,
+) -> Result<(), String> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "managed engine snapshot destination has no parent".to_string())?;
+    crate::persistence::enforce_private_directory(parent)?;
+    source.seek(SeekFrom::Start(0)).map_err(|error| {
+        format!(
+            "failed to rewind managed engine snapshot source {}: {error}",
+            destination.display()
+        )
+    })?;
+    let mut destination_file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(destination)
+        .map_err(|error| {
+            format!(
+                "failed to create managed engine snapshot file {}: {error}",
+                destination.display()
+            )
+        })?;
+    let copied = std::io::copy(source, &mut destination_file).map_err(|error| {
+        format!(
+            "failed to copy managed engine snapshot file {}: {error}",
+            destination.display()
+        )
+    })?;
+    if copied != expected_size {
+        return Err(format!(
+            "managed engine snapshot copied {copied} bytes but expected {expected_size}: {}",
+            destination.display()
+        ));
+    }
+    destination_file.flush().map_err(|error| {
+        format!(
+            "failed to flush managed engine snapshot file {}: {error}",
+            destination.display()
+        )
+    })?;
+    destination_file.sync_all().map_err(|error| {
+        format!(
+            "failed to persist managed engine snapshot file {}: {error}",
+            destination.display()
+        )
+    })?;
+    drop(destination_file);
+    crate::persistence::enforce_private_file(destination)
 }
 
 impl ArtifactLease {
@@ -1022,6 +1146,7 @@ impl ArtifactLease {
             identity_and_bundle_leases(kind, &canonical_path, &mut file, Some(deadline))?;
         let fingerprint = (kind == "engine")
             .then(|| engine_fingerprint_material(&canonical_path, modified, &identity));
+        let integrity_fingerprint = fingerprint.clone();
         let launch_path = artifact_launch_path(&canonical_path, &file)?;
         Ok(Self {
             kind: kind.to_string(),
@@ -1031,6 +1156,8 @@ impl ArtifactLease {
             file,
             identity,
             fingerprint,
+            integrity_fingerprint,
+            managed_snapshot: false,
             bundle_members,
             _ancestor_guards: ancestor_guards,
         })
@@ -1064,6 +1191,7 @@ impl ArtifactLease {
             modified,
             &identity,
         ));
+        let integrity_fingerprint = fingerprint.clone();
         let launch_path = artifact_launch_path(&canonical_path, &file)?;
         Ok(Self {
             kind: "engine".to_string(),
@@ -1073,6 +1201,8 @@ impl ArtifactLease {
             file,
             identity,
             fingerprint,
+            integrity_fingerprint,
+            managed_snapshot: false,
             bundle_members,
             _ancestor_guards: ancestor_guards,
         })
@@ -1080,6 +1210,178 @@ impl ArtifactLease {
 
     pub fn open_authorized(kind: &str, path: &Path) -> Result<Self, String> {
         Self::open_authorized_with_mode(kind, path, false, None)
+    }
+
+    pub fn open_authorized_engine(path: &Path) -> Result<Self, String> {
+        match Self::open_authorized("engine", path) {
+            Ok(lease) => Ok(lease),
+            Err(strict_error) => {
+                #[cfg(windows)]
+                {
+                    if is_owner_protection_error(&strict_error) {
+                        Self::open_managed_engine_snapshot(path).map_err(|snapshot_error| {
+                            format!(
+                                "engine source did not satisfy direct execution policy ({strict_error}); managed private snapshot failed: {snapshot_error}"
+                            )
+                        })
+                    } else {
+                        Err(strict_error)
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    Err(strict_error)
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    fn open_managed_engine_snapshot(path: &Path) -> Result<Self, String> {
+        let (canonical_path, authorized_root) =
+            crate::security::require_authorized_artifact_path("engine", path)?;
+        let ancestor_guards = open_windows_ancestor_guards(&canonical_path, &authorized_root)?;
+        let mut file = open_artifact_file(&canonical_path, false)?;
+        FileExt::try_lock_shared(&file).map_err(|error| {
+            format!(
+                "engine source is being modified by another process {}: {error}",
+                canonical_path.display()
+            )
+        })?;
+        let modified = modified_nanos(&file);
+        let (identity, bundle_members) = identity_and_bundle_leases_with_owner_validation(
+            "engine",
+            &canonical_path,
+            &mut file,
+            None,
+            false,
+        )?;
+        let fingerprint = Some(engine_fingerprint_material(
+            &canonical_path,
+            modified,
+            &identity,
+        ));
+        let launch_path = artifact_launch_path(&canonical_path, &file)?;
+        let mut source = Self {
+            kind: "engine".to_string(),
+            canonical_path,
+            authorized_root,
+            launch_path,
+            file,
+            identity,
+            integrity_fingerprint: fingerprint.clone(),
+            fingerprint,
+            managed_snapshot: false,
+            bundle_members,
+            _ancestor_guards: ancestor_guards,
+        };
+        let data_dir = crate::utils::get_data_dir();
+        source.stage_managed_engine_snapshot_at(&data_dir)
+    }
+
+    #[cfg(windows)]
+    fn stage_managed_engine_snapshot_at(&mut self, data_dir: &Path) -> Result<Self, String> {
+        let executable_name = self
+            .canonical_path
+            .file_name()
+            .ok_or_else(|| "engine executable has no file name".to_string())?
+            .to_os_string();
+        let mut cache_key = Sha256::new();
+        cache_key.update(b"llama-server-manager:managed-engine-snapshot:v1\0");
+        cache_key.update(self.identity.artifact_id.as_bytes());
+        cache_key.update(
+            executable_name
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .as_bytes(),
+        );
+        let cache_key = format!("{:x}", cache_key.finalize());
+        let snapshot_root = data_dir.join("engine-snapshots");
+        let version_root = snapshot_root.join("v1");
+        crate::persistence::enforce_private_directory(data_dir)?;
+        crate::persistence::enforce_private_directory(&snapshot_root)?;
+        crate::persistence::enforce_private_directory(&version_root)?;
+
+        let final_dir = version_root.join(cache_key);
+        let final_executable = final_dir.join(&executable_name);
+        let source_identity = self.identity.clone();
+        let evidence_fingerprint = self.fingerprint.clone();
+        if final_dir.exists() {
+            return Self::bind_existing_managed_snapshot(
+                &final_executable,
+                &source_identity,
+                evidence_fingerprint,
+            );
+        }
+
+        let staging_path = version_root.join(format!(".staging-{}", uuid::Uuid::new_v4().simple()));
+        crate::persistence::enforce_private_directory(&staging_path)?;
+        let mut staging = ManagedSnapshotStaging::new(staging_path.clone());
+        let staged_executable = staging_path.join(&executable_name);
+        let primary_size = self
+            .file
+            .metadata()
+            .map_err(|error| {
+                format!(
+                    "failed to inspect engine source {}: {error}",
+                    self.canonical_path.display()
+                )
+            })?
+            .len();
+        copy_leased_artifact(&mut self.file, primary_size, &staged_executable)?;
+        for member in &mut self.bundle_members {
+            let destination = staging_path.join(Path::new(&member.relative_path));
+            copy_leased_artifact(&mut member.file, member.identity.file_size, &destination)?;
+        }
+
+        {
+            let staged = Self::open_owner_protected_executable(&staged_executable)?;
+            if staged.identity != source_identity {
+                return Err(
+                    "managed engine snapshot does not match the verified source bundle".to_string(),
+                );
+            }
+        }
+        match std::fs::rename(&staging_path, &final_dir) {
+            Ok(()) => staging.disarm(),
+            Err(_error) if final_dir.exists() => {
+                drop(staging);
+                return Self::bind_existing_managed_snapshot(
+                    &final_executable,
+                    &source_identity,
+                    evidence_fingerprint,
+                );
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to publish managed engine snapshot {}: {error}",
+                    final_dir.display()
+                ));
+            }
+        }
+        Self::bind_existing_managed_snapshot(
+            &final_executable,
+            &source_identity,
+            evidence_fingerprint,
+        )
+    }
+
+    #[cfg(windows)]
+    fn bind_existing_managed_snapshot(
+        executable: &Path,
+        expected_identity: &ArtifactIdentity,
+        evidence_fingerprint: Option<String>,
+    ) -> Result<Self, String> {
+        let mut snapshot = Self::open_owner_protected_executable(executable)?;
+        if snapshot.identity != *expected_identity {
+            return Err(format!(
+                "managed engine snapshot identity mismatch: {}",
+                executable.display()
+            ));
+        }
+        snapshot.fingerprint = evidence_fingerprint;
+        snapshot.managed_snapshot = true;
+        Ok(snapshot)
     }
 
     pub fn open_authorized_with_deadline(
@@ -1124,6 +1426,7 @@ impl ArtifactLease {
             identity_and_bundle_leases(kind, &canonical_path, &mut file, deadline)?;
         let fingerprint = (kind == "engine")
             .then(|| engine_fingerprint_material(&canonical_path, modified, &identity));
+        let integrity_fingerprint = fingerprint.clone();
         let launch_path = artifact_launch_path(&canonical_path, &file)?;
         Ok(Self {
             kind: kind.to_string(),
@@ -1133,6 +1436,8 @@ impl ArtifactLease {
             file,
             identity,
             fingerprint,
+            integrity_fingerprint,
+            managed_snapshot: false,
             bundle_members,
             _ancestor_guards: ancestor_guards,
         })
@@ -1144,6 +1449,10 @@ impl ArtifactLease {
 
     pub fn fingerprint(&self) -> Option<&str> {
         self.fingerprint.as_deref()
+    }
+
+    pub fn uses_managed_snapshot(&self) -> bool {
+        self.managed_snapshot
     }
 
     pub fn launch_path(&self) -> &Path {
@@ -1277,7 +1586,7 @@ impl ArtifactLease {
                 modified_nanos(&self.file),
                 &current,
             );
-            if self.fingerprint.as_deref() != Some(current_fingerprint.as_str()) {
+            if self.integrity_fingerprint.as_deref() != Some(current_fingerprint.as_str()) {
                 return Err(format!(
                     "engine artifact metadata changed after validation: {}",
                     self.canonical_path.display()
@@ -1463,7 +1772,7 @@ pub fn bind_expected_artifacts(
             PathBuf::from(command[index].trim_start_matches("--model="))
         }
     };
-    let engine = ArtifactLease::open_authorized("engine", Path::new(&command[0]))?;
+    let engine = ArtifactLease::open_authorized_engine(Path::new(&command[0]))?;
     if engine.identity().artifact_id != expected_engine_artifact_id {
         return Err("DEPLOYMENT_ENGINE_IDENTITY_STALE: verified engine object changed".to_string());
     }
@@ -1643,6 +1952,72 @@ mod tests {
         let third = artifact_identity_for_path("engine", &engine).unwrap();
         assert_ne!(second.artifact_id, third.artifact_id);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_engine_snapshot_preserves_source_evidence_and_private_execution() {
+        let root = std::env::temp_dir().join(format!(
+            "lsm-managed-engine-snapshot-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let source_dir = root.join("source");
+        let data_dir = root.join("data");
+        crate::persistence::enforce_private_directory(&source_dir).unwrap();
+        let engine = source_dir.join("llama-server.exe");
+        let companion_dir = source_dir.join("backend");
+        crate::persistence::enforce_private_directory(&companion_dir).unwrap();
+        let companion = companion_dir.join("ggml-vulkan.dll");
+        fs::write(&engine, b"engine-v1").unwrap();
+        fs::write(&companion, b"companion-v1").unwrap();
+        crate::persistence::enforce_private_file(&engine).unwrap();
+        crate::persistence::enforce_private_file(&companion).unwrap();
+
+        let source_fingerprint = engine_fingerprint_for_path(&engine);
+        let mut source = ArtifactLease::open_owner_protected_executable(&engine).unwrap();
+        let source_identity = source.identity().clone();
+        let mut snapshot = source.stage_managed_engine_snapshot_at(&data_dir).unwrap();
+
+        assert!(snapshot.uses_managed_snapshot());
+        assert_eq!(snapshot.identity(), &source_identity);
+        assert_eq!(snapshot.fingerprint(), Some(source_fingerprint.as_str()));
+        assert!(crate::path_utils::path_is_within(
+            snapshot.launch_path(),
+            &data_dir.join("engine-snapshots")
+        ));
+        assert_ne!(snapshot.launch_path(), engine);
+        assert!(snapshot.launch_path().is_file());
+        assert!(snapshot
+            .launch_path()
+            .parent()
+            .unwrap()
+            .join("backend/ggml-vulkan.dll")
+            .is_file());
+        snapshot.verify_unchanged().unwrap();
+
+        let mut second_source = ArtifactLease::open_owner_protected_executable(&engine).unwrap();
+        let second_snapshot = second_source
+            .stage_managed_engine_snapshot_at(&data_dir)
+            .unwrap();
+        assert_eq!(second_snapshot.launch_path(), snapshot.launch_path());
+        assert_eq!(second_snapshot.identity(), snapshot.identity());
+
+        drop(second_snapshot);
+        drop(second_source);
+        drop(snapshot);
+        drop(source);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_acl_policy_errors_are_snapshot_eligible() {
+        assert!(is_owner_protection_error(
+            "artifact path is writable by another Windows principal: C:\\engine"
+        ));
+        assert!(!is_owner_protection_error(
+            "engine bundle exceeds 512 DLL members"
+        ));
     }
 
     #[cfg(windows)]

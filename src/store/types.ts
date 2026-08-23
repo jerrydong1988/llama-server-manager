@@ -269,6 +269,7 @@ export interface EngineCapabilities {
   reportedDefaultsVersion?: number
   helpHash: string
   executableFingerprint: string
+  executionSource?: 'direct' | 'managed-snapshot' | string
   probedAt?: number
   error?: string
   qualification?: EngineQualificationReport

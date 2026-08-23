@@ -349,6 +349,8 @@ pub struct EngineCapabilities {
     #[serde(default)]
     pub executable_fingerprint: String,
     #[serde(default)]
+    pub execution_source: String,
+    #[serde(default)]
     pub probed_at: Option<u64>,
     #[serde(default)]
     pub error: Option<String>,
@@ -375,6 +377,7 @@ impl Default for EngineCapabilities {
             reported_defaults_version: 0,
             help_hash: String::new(),
             executable_fingerprint: String::new(),
+            execution_source: String::new(),
             probed_at: None,
             error: None,
             qualification: EngineQualificationReport::default(),

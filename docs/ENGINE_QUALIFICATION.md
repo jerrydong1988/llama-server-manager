@@ -17,6 +17,7 @@ Old inventory rows remain readable after upgrade, but their qualification status
 The application re-probes the explicitly selected engine before launch. Version detection and complete `--help` capability evidence must pass first. The runtime profile then:
 
 - executes only the selected, scanned engine and selected, scanned primary generative model;
+- runs directly from an ACL-verified directory or, for an externally writable Windows directory, from the automatically verified managed private snapshot shown in Engine Manager;
 - binds to `127.0.0.1` on a temporary free port;
 - uses a 512-token context, two CPU threads, and zero GPU layers when those flags are available;
 - enables `--no-ui`, `--offline`, and `--log-disable` when the engine reports support;
@@ -28,7 +29,7 @@ This is a controlled compatibility baseline, not a performance benchmark and not
 
 ## Report and invalidation
 
-The persisted schema-2 report contains schema/profile versions, status, engine fingerprint, sampled engine artifact ID, detected engine version, capability-help hash, representative model artifact ID/size/modification time, timestamps, per-check duration and details, and a bounded diagnostic. A deterministic qualification evidence ID seals the terminal report. The fixed probe prompt is redacted from diagnostics.
+The persisted schema-2 report contains schema/profile versions, status, engine fingerprint, complete engine artifact ID, detected engine version, capability-help hash, representative model artifact ID/size/modification time, timestamps, per-check duration and details, and a bounded diagnostic. A deterministic qualification evidence ID seals the terminal report. The fixed probe prompt is redacted from diagnostics.
 
 Only a complete, current-profile **Passed** report whose fingerprint, engine artifact ID, and evidence seal still verify authorizes instance startup. The evidence ID becomes one component of the [versioned deployment identity](DEPLOYMENT_IDENTITY.md), so automatic crash recovery also refuses a replaced engine, changed primary model, changed configuration identity, tampered evidence, or legacy-unbound snapshot. A rescan or start-time check marks previous evidence **Stale** when the executable, version, or capability evidence changes while preserving the old report for diagnosis. Changing the representative model during the test fails that run.
 
@@ -59,4 +60,4 @@ No remote listener, arbitrary custom argument, user prompt, API credential, or p
 
 引擎资格认证是 Phase 1 的安全启动门：升级后的旧引擎记录会显示“未认证”，需要在“引擎管理”中选择一个已扫描的主生成模型并完成认证。认证只在 `127.0.0.1` 临时端口上以受控 CPU 基线启动所选引擎，依次验证版本、参数能力、进程启动、健康接口和一次固定提示词的代表性推理；成功、失败、超时或取消后都会终止整个临时进程树。
 
-schema 2 报告会持久保存引擎与代表模型的采样制品身份，并用确定性的资格证据 ID 封存。引擎文件、版本、`--help` 能力证据或报告内容发生变化时，旧报告会保留但不能通过启动门；资格证据 ID 还会进入版本化部署身份，供首次启动和后台恢复共同校验。该认证证明的是基线兼容性，不代表 GPU 性能，也不保证所有模型和运行参数组合。
+schema 2 报告会持久保存引擎与代表模型的完整制品身份，并用确定性的资格证据 ID 封存。Windows 外部目录的 ACL 如果允许其他主体写入，应用会自动使用已验证的私有引擎快照完成探测、认证、首次启动和后台恢复；原始路径与指纹仍是证据边界。引擎文件、版本、`--help` 能力证据或报告内容发生变化时，旧报告会保留但不能通过启动门。该认证证明的是基线兼容性，不代表 GPU 性能，也不保证所有模型和运行参数组合。

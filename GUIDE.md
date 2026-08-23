@@ -219,6 +219,10 @@ Engine Management scans `llama-server` executables, detects CUDA, ROCm, Vulkan, 
 
 New instances prefer the default engine, while each instance can override it. Rescan after a llama.cpp upgrade to keep versions side by side.
 
+Windows 上不要求把外部引擎移动到应用指定目录，也不需要手工修改原目录 ACL。探测时，如果原目录已满足严格 ACL，会直接运行；如果其他 Windows 主体也可写，应用会自动创建并校验仅当前所有者和 SYSTEM 可访问的内容寻址私有快照，后续认证、启动和后台恢复都使用该快照。引擎详情中的“运行来源”会显示当前采用哪一种方式。替换原始引擎后仍需重新扫描和认证。
+
+On Windows, external engines do not need to be moved into an application-specific folder, and their original ACLs do not need to be edited manually. LSM runs directly when the source ACL is strict enough; otherwise it automatically creates and verifies an owner-and-SYSTEM-only, content-addressed private snapshot for probing, qualification, launch, and recovery. Engine Details shows the selected execution source. Rescan and requalify after replacing the original engine.
+
 ---
 
 ## 实例管理 / Instance Management

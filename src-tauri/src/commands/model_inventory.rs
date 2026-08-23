@@ -7,10 +7,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 6;
-// Cache version 5 has the same required display fields as version 6. Version 6
-// adds versioned artifact identities that remain explicitly unverified until
-// the background refresh samples the file.
+const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 7;
+// Cache versions 5 and 6 have the same required display fields as version 7.
+// They remain visible during refresh, but current scan indexes exclude them so
+// every artifact is re-bound to a complete identity before incremental reuse.
 // Keep compatible rows visible during that refresh so an application update
 // never turns an existing inventory into a blank screen.
 const MIN_DISPLAYABLE_INVENTORY_CACHE_VERSION: i64 = 5;
