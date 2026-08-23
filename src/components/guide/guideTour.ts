@@ -60,9 +60,9 @@ export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
   {
     id: 'cluster',
     tab: 'cluster',
-    selector: '[data-guide="cluster-agent"]',
-    zh: { title: '集群管理', description: '注册并管理经过双向认证的 Secure Agent。' },
-    en: { title: 'Cluster', description: 'Enroll and manage mutually authenticated Secure Agents.' },
+    selector: '[data-guide="cluster-scan"]',
+    zh: { title: '集群管理', description: '发现或启动本地与远程 RPC Worker。' },
+    en: { title: 'Cluster', description: 'Discover or launch local and remote RPC workers.' },
   },
   {
     id: 'proxy',

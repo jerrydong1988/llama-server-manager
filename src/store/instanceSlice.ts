@@ -1,5 +1,5 @@
 import { invokeApp as invoke } from '../lib/ipc'
-import { confirm, message } from '@tauri-apps/plugin-dialog'
+import { message } from '@tauri-apps/plugin-dialog'
 import {
   loadAppBootstrap,
   normalizeStoredConfig,
@@ -9,21 +9,10 @@ import { createLatestSaveCoordinator } from './configSaveCoordinator'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import { runInstanceStart, runInstanceStop } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
-import type {
-  AppState,
-  ConfigRevisionHistory,
-  ConfigRevisionRollbackResponse,
-  DeploymentIdentityStatus,
-  DeploymentInspection,
-  GeneratedServerCommand,
-  InstanceConfig,
-  LogEntry,
-  ResourcePlan,
-} from './types'
+import type { AppState, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
 import { resolveEffectiveEngine } from './engineResolution'
 import { pathsEqual } from '../utils/path'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
-import { getResourcePlanLaunchCopy } from '../i18n/resourcePlanCopy'
 
 const MAX_LOG_ENTRIES = 1000
 const MAX_RECENT_LOG_ENTRIES = 2000
@@ -47,38 +36,25 @@ const mergeRecentLogs = (existing: LogEntry[], incoming: LogEntry[]) => {
 }
 
 const isStaleEngineCapabilityError = (error: unknown) => (
-  Boolean(error && typeof error === 'object' && [
-    'ENGINE_CAPABILITIES_STALE',
-    'ENGINE_QUALIFICATION_STALE',
-  ].includes((error as { code?: string }).code || ''))
+  Boolean(error && typeof error === 'object' && (error as { code?: string }).code === 'ENGINE_CAPABILITIES_STALE')
 )
 
 const invalidateEngineCapabilities = (set: AppStoreSet, engineExe: string) => {
   set(state => ({
-    engines: state.engines.map(engine => {
-      if (!pathsEqual(engine.exe, engineExe)) return engine
-      const qualification = engine.capabilities?.qualification
-      return {
-        ...engine,
-        version: '',
-        capabilities: {
-          status: 'unprobed',
-          versionStatus: 'unprobed',
-          supportedFlags: [],
-          helpHash: '',
-          executableFingerprint: '',
-          error: 'Engine executable changed; compatibility probe and qualification required.',
-          qualification: qualification && qualification.status !== 'unqualified'
-            ? {
-                ...qualification,
-                status: 'stale',
-                invalidatedAt: Math.floor(Date.now() / 1000),
-                diagnostic: 'Engine executable changed; qualification required.',
-              }
-            : qualification,
-        },
-      }
-    }),
+    engines: state.engines.map(engine => pathsEqual(engine.exe, engineExe)
+      ? {
+          ...engine,
+          version: '',
+          capabilities: {
+            status: 'unprobed',
+            versionStatus: 'unprobed',
+            supportedFlags: [],
+            helpHash: '',
+            executableFingerprint: '',
+            error: 'Engine executable changed; compatibility probe required.',
+          },
+        }
+      : engine),
   }))
 }
 type ConfigSaveSnapshot = {
@@ -122,17 +98,11 @@ export function createInstanceSlice(
   | 'addLogs'
   | 'clearLogs'
   | 'generateCommand'
-  | 'planResources'
   | 'startInstance'
   | 'stopInstance'
   | 'openBrowser'
   | 'saveConfig'
   | 'loadConfig'
-  | 'listConfigRevisions'
-  | 'inspectDeploymentIdentity'
-  | 'inspectDeployment'
-  | 'markConfigRevisionKnownGood'
-  | 'rollbackConfigRevision'
 > {
   return {
     addInstance: (instance) => {
@@ -219,10 +189,7 @@ export function createInstanceSlice(
         throw error
       }
     },
-    planResources: async (config: InstanceConfig, engineBackend: string) => (
-      invoke<ResourcePlan>('plan_instance_resources', { config, engineBackend })
-    ),
-    startInstance: (id, manualRecovery = true) => runInstanceStart(id, async () => {
+    startInstance: (id) => runInstanceStart(id, async () => {
       const timing = beginOperationTiming('instance.start')
       let outcome: OperationOutcome = 'failure'
       set(state => ({
@@ -251,31 +218,6 @@ export function createInstanceSlice(
         if (!normalized.config.engine_id) {
           normalized.config = { ...normalized.config, engine_id: engine.id }
         }
-        const resourcePlan = await get().planResources(normalized.config, engine.backend)
-        timing.mark('resource-plan')
-        const launchCopy = getResourcePlanLaunchCopy((() => {
-          try { return localStorage.getItem('lang') || 'zh-CN' } catch { return 'zh-CN' }
-        })())
-        if (resourcePlan.status === 'infeasible') {
-          await message(
-            launchCopy.infeasibleBody,
-            { title: launchCopy.infeasibleTitle, kind: 'error' },
-          )
-          outcome = 'cancelled'
-          return
-        }
-        if (resourcePlan.status === 'constrained' || resourcePlan.status === 'unknown') {
-          const proceed = await confirm(
-            resourcePlan.status === 'constrained'
-              ? launchCopy.constrainedBody
-              : launchCopy.unknownBody,
-            { title: launchCopy.riskTitle, kind: 'warning' },
-          )
-          if (!proceed) {
-            outcome = 'cancelled'
-            return
-          }
-        }
         if (normalized.changes.length > 0 || !pathsEqual(normalized.config.engine_id, instance.config.engine_id)) {
           set((state) => ({
             instances: state.instances.map((item) => (
@@ -293,7 +235,6 @@ export function createInstanceSlice(
           config: normalized.config,
           engineExe: engine.exe,
           engineBackend: engine.backend,
-          manualRecovery,
         })
         timing.mark('backend-start')
         get().updateInstance(id, { status: 'running', healthCheck: 'pending' })
@@ -329,7 +270,7 @@ export function createInstanceSlice(
       try {
         await invoke('stop_server', { instanceId: id })
         timing.mark('backend-stop')
-        get().updateInstance(id, { status: 'stopped', healthCheck: 'pending', recovery: undefined })
+        get().updateInstance(id, { status: 'stopped', healthCheck: 'pending' })
         outcome = 'success'
       } catch (error) {
         console.error('stop_server error:', error)
@@ -401,57 +342,6 @@ export function createInstanceSlice(
         () => get(),
         startupTimings,
       )
-    },
-    listConfigRevisions: async (instanceId) => {
-      await configSaveCoordinator.waitForIdle()
-      return invoke<ConfigRevisionHistory>('list_config_revisions', { instanceId })
-    },
-    inspectDeploymentIdentity: async (instanceId) => {
-      await configSaveCoordinator.waitForIdle()
-      return invoke<DeploymentIdentityStatus>('inspect_deployment_identity', { instanceId })
-    },
-    inspectDeployment: async (instanceId) => {
-      await configSaveCoordinator.waitForIdle()
-      return invoke<DeploymentInspection>('inspect_deployment', { instanceId })
-    },
-    markConfigRevisionKnownGood: async (instanceId, revisionId, expectedCurrentFingerprint) => {
-      await configSaveCoordinator.waitForIdle()
-      return invoke<ConfigRevisionHistory>('mark_config_revision_known_good', {
-        instanceId,
-        revisionId,
-        expectedCurrentFingerprint,
-      })
-    },
-    rollbackConfigRevision: async (instanceId, revisionId, expectedCurrentFingerprint) => {
-      await configSaveCoordinator.waitForIdle()
-      set(state => ({
-        instanceLifecycle: { ...state.instanceLifecycle, [instanceId]: 'rolling_back' },
-      }))
-      try {
-        const result = await invoke<ConfigRevisionRollbackResponse>('rollback_config_revision', {
-          instanceId,
-          revisionId,
-          expectedCurrentFingerprint,
-        })
-        set(state => ({
-          instances: state.instances.map(instance => (
-            instance.id === instanceId
-              ? synchronizeInstanceSummary({ ...instance, config: result.config })
-              : instance
-          )),
-        }))
-        return result
-      } catch (error) {
-        get().addRuntimeWarning(`配置回滚失败：${String(error)}`)
-        throw error
-      } finally {
-        set(state => {
-          if (state.instanceLifecycle[instanceId] !== 'rolling_back') return state
-          const instanceLifecycle = { ...state.instanceLifecycle }
-          delete instanceLifecycle[instanceId]
-          return { instanceLifecycle }
-        })
-      }
     },
   }
 }

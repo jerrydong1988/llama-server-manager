@@ -12,7 +12,6 @@ const INTENT_METADATA_FIELDS = new Set<keyof InstanceConfig>([
   'host',
   'port',
   'auto_start',
-  'restart_policy',
 ])
 
 const sameValue = (left: unknown, right: unknown) => {

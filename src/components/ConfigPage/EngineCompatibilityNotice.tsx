@@ -1,10 +1,6 @@
 import { AlertTriangle, LoaderCircle } from 'lucide-react'
 import type { EngineInfo } from '../../store'
-import {
-  normalizeEngineCapabilityStatus,
-  normalizeEngineQualificationStatus,
-  normalizeEngineVersionStatus,
-} from '../../engineCapabilities'
+import { normalizeEngineCapabilityStatus, normalizeEngineVersionStatus } from '../../engineCapabilities'
 import type { getConfigPageLabels } from '../../i18n/configPageCopy'
 
 type Props = {
@@ -37,28 +33,6 @@ export function EngineCompatibilityNotice({ engine, unsupportedFlags, probing, l
       <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
         <LoaderCircle className="h-4 w-4 shrink-0 animate-spin" />
         <span>{labels.engineCompatibilityChecking}</span>
-      </div>
-    )
-  }
-  const qualificationStatus = normalizeEngineQualificationStatus(engine.capabilities)
-  if (qualificationStatus !== 'passed') {
-    const description = qualificationStatus === 'stale'
-      ? labels.engineQualificationStaleDesc
-      : qualificationStatus === 'incomplete'
-        ? labels.engineQualificationIncompleteDesc
-        : qualificationStatus === 'failed' || qualificationStatus === 'cancelled'
-          ? labels.engineQualificationFailedDesc
-          : labels.engineQualificationRequiredDesc
-    const tone = qualificationStatus === 'unqualified'
-      ? 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200'
-      : 'border-red-200 bg-red-50 text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200'
-    return (
-      <div className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${tone}`} data-testid="engine-qualification-notice">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-        <div>
-          <p className="font-medium">{labels.engineQualificationRequired}</p>
-          <p className="mt-1 opacity-80">{description}</p>
-        </div>
       </div>
     )
   }

@@ -1,4 +1,4 @@
-import type { EngineCapabilities, EngineQualificationStatus } from './store'
+import type { EngineCapabilities } from './store'
 
 export const normalizeEngineCapabilityStatus = (capabilities?: EngineCapabilities) => (
   capabilities?.status || 'unprobed'
@@ -7,10 +7,6 @@ export const normalizeEngineCapabilityStatus = (capabilities?: EngineCapabilitie
 export const normalizeEngineVersionStatus = (capabilities?: EngineCapabilities) => (
   capabilities?.versionStatus || 'unprobed'
 )
-
-export const normalizeEngineQualificationStatus = (
-  capabilities?: EngineCapabilities,
-): EngineQualificationStatus => capabilities?.qualification?.status || 'unqualified'
 
 type EngineCapabilityErrorLabels = {
   executableChanged: string
@@ -22,8 +18,7 @@ export const localizeEngineCapabilityError = (
   labels: EngineCapabilityErrorLabels,
 ) => {
   const normalized = error.trim().replace(/[.\s]+$/g, '').toLowerCase()
-  if (normalized === 'engine executable changed; compatibility probe required'
-    || normalized === 'engine executable changed; compatibility probe and qualification required') {
+  if (normalized === 'engine executable changed; compatibility probe required') {
     return labels.executableChanged
   }
   if (normalized === 'engine executable changed while compatibility probing was in progress; probe again') {

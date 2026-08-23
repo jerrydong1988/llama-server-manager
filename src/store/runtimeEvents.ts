@@ -2,12 +2,10 @@ import { invokeApp as invoke } from '../lib/ipc'
 import { listen, type Event } from '@tauri-apps/api/event'
 import type { StoreApi } from 'zustand'
 import { formatStartupCommand } from './commandFormatting'
-import { instanceStatusFromRecovery } from './instanceRecovery'
 import type {
   AppState,
   DownloadProgress,
   InstanceConfig,
-  InstanceRecoveryStatus,
   MonitoringFrame,
   PerfUpdateEvent,
   SystemMetrics,
@@ -195,13 +193,11 @@ export function registerGlobalStoreListeners(
 
   registerListener<{
     running: Record<string, { pid: number; host: string; port: number; startTime: number }>
-    recovery?: Record<string, InstanceRecoveryStatus>
     previouslyManaged?: string[]
     lastError?: string | null
   }>(store, 'runtime-service-status', (event) => {
     const running = event.payload.running || {}
-    const recovery = event.payload.recovery || {}
-    const nextManagedIds = new Set([...Object.keys(running), ...Object.keys(recovery)])
+    const nextManagedIds = new Set(Object.keys(running))
     const previousManagedIds = new Set([
       ...runtimeManagedIds,
       ...(event.payload.previouslyManaged || []),
@@ -215,17 +211,6 @@ export function registerGlobalStoreListeners(
             ...instance,
             status: 'running',
             startTime: runtime.startTime > 0 ? runtime.startTime * 1000 : instance.startTime,
-            recovery: recovery[instance.id],
-          }
-        }
-        const recoveryStatus = recovery[instance.id]
-        if (recoveryStatus) {
-          const status = instanceStatusFromRecovery(recoveryStatus)
-          return {
-            ...instance,
-            status,
-            healthCheck: status === 'recovering' ? 'pending' : 'fail',
-            recovery: recoveryStatus,
           }
         }
         if (previousManagedIds.has(instance.id)) {
@@ -233,7 +218,6 @@ export function registerGlobalStoreListeners(
             ...instance,
             status: 'stopped',
             healthCheck: 'pending',
-            recovery: undefined,
           }
         }
         return instance
@@ -313,7 +297,6 @@ export function registerGlobalStoreListeners(
       state.updateInstance(event.payload.instanceId, {
         status: isError ? 'error' : 'stopped',
         healthCheck: isError ? 'fail' : 'pending',
-        ...(!isError ? { recovery: undefined } : {}),
       })
     }
     if (event.payload.expected !== true) {

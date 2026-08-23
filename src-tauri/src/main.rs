@@ -1,15 +1,25 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-pub use llama_server_manager::*;
+mod commands;
+mod error;
+mod models;
+mod operation_timing;
+mod path_utils;
+mod persistence;
+mod runtime_service;
+mod security;
+mod utils;
+mod vector_policy;
 
 use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
-use crate::commands::canary::ipc::{
-    abort_canary_rollout, create_canary_rollout, list_canary_rollouts, observe_canary_rollout,
-    promote_canary_rollout, rollback_canary_rollout, set_canary_weight,
+use crate::commands::cluster::{
+    add_worker, approve_worker, find_rpc_server_binary, generate_rpc_launch_cmd,
+    get_cluster_metrics, get_local_host, get_worker_info, get_workers, is_local_host, load_workers,
+    remove_worker, scan_workers_tcp, start_local_rpc, stop_local_worker, stop_worker, test_worker,
 };
-use crate::commands::cluster::ipc::get_workers;
-use crate::commands::cluster::{get_cluster_metrics, load_workers, remove_worker};
+use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
+use crate::commands::cluster_ssh::ipc::{ssh_launch_rpc, stop_ssh_tunnel};
 use crate::commands::config::{
     load_config, load_window_state, resolve_path, save_config, save_window_state,
     update_and_persist,
@@ -26,17 +36,11 @@ use crate::commands::download::{
     set_download_bandwidth_limit, set_download_concurrency, set_download_low_priority_throttle,
     set_download_resume_policy,
 };
-use crate::commands::engine_capabilities::ipc::{
-    cancel_engine_qualification, probe_engine_capabilities, qualify_engine,
-};
+use crate::commands::engine_capabilities::ipc::probe_engine_capabilities;
 use crate::commands::monitoring::get_monitoring_series;
 use crate::commands::proxy::{
-    generate_proxy_api_key, get_proxy_config, get_proxy_status, list_proxy_targets, restart_proxy,
-    save_proxy_config, start_proxy, stop_proxy, test_proxy_route,
-};
-use crate::commands::residency::{
-    begin_model_residency_drain, complete_model_residency_operation,
-    get_model_residency_drain_status, inspect_model_residency, save_model_residency_policy,
+    get_proxy_config, get_proxy_status, list_proxy_targets, restart_proxy, save_proxy_config,
+    start_proxy, stop_proxy, test_proxy_route,
 };
 use crate::commands::scanner::{
     delete_engine, delete_model_file, get_cached_scan, get_engines, get_models, load_app_data,
@@ -45,25 +49,17 @@ use crate::commands::scanner::{
 };
 use crate::commands::server::{
     check_port, generate_server_command, get_metrics, get_slots, get_system_health,
-    get_system_metrics, inspect_deployment, inspect_deployment_identity, open_browser,
-    open_external_guide_link, plan_instance_resources, start_server, stop_server, test_connection,
+    get_system_metrics, open_browser, start_server, stop_server, test_connection,
 };
 use crate::commands::telemetry::{
     get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_detail,
     get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
     list_telemetry_sessions, prune_telemetry,
 };
-use crate::commands::updater::verify_updater_release;
-use crate::commands::worker_agent::ipc::{
-    enroll_worker_agent, list_worker_agent_audit, start_worker_agent, stop_worker_agent,
-    test_worker_agent,
-};
-use crate::config_revision::{
-    list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
-};
-use crate::models::{AppState, WindowState};
+use crate::models::{AppState, WindowState, WorkerOrigin};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use tauri::{Emitter, Manager};
 
@@ -112,10 +108,23 @@ fn persist_runtime_state(app: &tauri::AppHandle) {
 
 fn finalize_app_exit(app: &tauri::AppHandle, keep_runtime: bool) {
     flush_download_manager_state(app);
-    crate::worker_agent::stop_all_manager_bridges();
     let failures = if keep_runtime {
         Vec::new()
     } else {
+        crate::commands::cluster_ssh::stop_all_ssh_tunnels();
+        let local_worker_ports = app
+            .try_state::<AppState>()
+            .and_then(|state| {
+                state.workers.lock().ok().map(|workers| {
+                    workers
+                        .iter()
+                        .filter(|worker| worker.origin == WorkerOrigin::Local)
+                        .map(|worker| worker.port)
+                        .collect::<Vec<_>>()
+                })
+            })
+            .unwrap_or_default();
+        crate::commands::cluster::stop_all_local_rpc_workers(&local_worker_ports);
         crate::commands::server::terminate_all_servers_for_exit(app)
     };
     if !failures.is_empty() {
@@ -181,6 +190,12 @@ async fn prepare_background_exit(
     enable_runtime: bool,
 ) -> Result<(), String> {
     let _handoff = ExitHandoffGuard::acquire()?;
+    if crate::commands::cluster_ssh::has_active_ssh_tunnels() {
+        return Err(
+            "仍有由主程序托管的 SSH Worker；请先停止这些 Worker，再退出并保留后台运行时"
+                .to_string(),
+        );
+    }
     let state = app.state::<AppState>();
     let _transition = state.proxy_lifecycle_lock.lock().await;
     let previous_config = state.proxy_config.lock().unwrap().clone();
@@ -385,7 +400,10 @@ fn main() {
     let data_dir = crate::utils::get_data_dir();
     let config_dir = data_dir.join("configs");
     let initial_config = crate::commands::config::read_config_from_disk(&config_dir);
-    if let Err(error) = crate::security::initialize_path_authority() {
+    if let Err(error) = crate::security::initialize_path_authority(
+        &initial_config.engine_dirs,
+        &initial_config.model_dirs,
+    ) {
         eprintln!("Path authority initialization failed: {error}");
     }
     let initial_workers = load_workers();
@@ -496,9 +514,7 @@ fn main() {
             let data_dir = crate::utils::get_data_dir();
             let config_dir = data_dir.join("configs");
             let config = crate::commands::config::read_config_from_disk(&config_dir);
-            let frontend_config = crate::models::FrontendGlobalConfig::from(&config);
-            let config_json =
-                serde_json::to_string(&frontend_config).unwrap_or_else(|_| "{}".to_string());
+            let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
             timings.push(("setup-config-read".into(), now()));
 
             // Create the window programmatically and inject config data.
@@ -534,16 +550,7 @@ fn main() {
                 *st.engine_names.lock().unwrap() = config.engine_names.clone();
                 *st.running.lock().unwrap() = config.running.clone();
                 *st.proxy_config.lock().unwrap() = config.proxy_config.clone();
-                *st.residency_draining.lock().unwrap() =
-                    crate::residency::draining_instance_ids(&config);
             }
-
-            // Recreate stable loopback bridges for persisted secure Agent workers.
-            // Credentials remain file-backed and are reloaded by each authenticated request.
-            let restore_app = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                crate::commands::worker_agent::restore_worker_agent_bridges(restore_app).await;
-            });
 
             // Restore log capture, metrics, and the single authoritative health monitor.
             let runtime_managed = crate::runtime_service::persisted_managed_instance_ids();
@@ -604,21 +611,52 @@ fn main() {
             }));
             Ok(())
         })
-        .manage(AppState::from_global_config(
-            config_dir,
-            &initial_config,
-            default_models,
-            default_engines,
-            initial_workers,
-        ))
+        .manage(AppState {
+            models: Mutex::new(default_models),
+            engines: Mutex::new(default_engines),
+            model_scan_generation: std::sync::atomic::AtomicU64::new(0),
+            engine_scan_generation: std::sync::atomic::AtomicU64::new(0),
+            engine_names: Mutex::new(HashMap::new()),
+            instances: Mutex::new(HashMap::new()),
+            running: Mutex::new(HashMap::new()),
+            starting: Mutex::new(std::collections::HashSet::new()),
+            config_dir: Mutex::new(config_dir),
+            cancel_flags: Mutex::new(HashMap::new()),
+            pause_flags: Mutex::new(HashMap::new()),
+            active_downloads: Mutex::new(std::collections::HashSet::new()),
+            active_download_paths: Mutex::new(std::collections::HashSet::new()),
+            download_queue: Mutex::new(Vec::new()),
+            download_active_batches: Mutex::new(std::collections::HashSet::new()),
+            download_active_entries: Mutex::new(HashMap::new()),
+            download_last_inflight_persist: Mutex::new(Instant::now()),
+            download_scheduler_lock: Mutex::new(()),
+            download_inflight_lock: Mutex::new(()),
+            download_shutting_down: std::sync::atomic::AtomicBool::new(false),
+            download_active_file_slots: std::sync::atomic::AtomicUsize::new(0),
+            download_slot_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+            download_max_concurrent: Mutex::new(initial_config.download_max_concurrent.max(1)),
+            download_bandwidth_limit_bytes_per_sec: Mutex::new(initial_config.download_bandwidth_limit_bytes_per_sec),
+            download_low_priority_throttle: Mutex::new(initial_config.download_low_priority_throttle),
+            download_bandwidth_limiter: Mutex::new(models::DownloadBandwidthLimiter::default()),
+            workers: Mutex::new(initial_workers),
+            usb4_adapters: Mutex::new(Vec::new()),
+            proxy_config: Mutex::new(initial_config.proxy_config),
+            proxy_shutdown: Mutex::new(None),
+            proxy_task: Mutex::new(None),
+            proxy_router_runtime: Mutex::new(None),
+            proxy_bound_addr: Mutex::new(None),
+            proxy_last_error: Mutex::new(None),
+            proxy_lifecycle_lock: tokio::sync::Mutex::new(()),
+            runtime_managed_instances: Mutex::new(std::collections::HashSet::new()),
+            restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
+        })
         .invoke_handler(tauri::generate_handler![
             scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata,
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
-            probe_engine_capabilities, qualify_engine, cancel_engine_qualification,
+            probe_engine_capabilities,
             load_app_data, get_cached_scan,
-            generate_server_command, inspect_deployment_identity, inspect_deployment, plan_instance_resources, start_server, stop_server, open_browser, open_external_guide_link,
+            generate_server_command, start_server, stop_server, open_browser,
             save_config, load_config,
-            list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file, delete_managed_local_file,
             enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue,
@@ -633,14 +671,17 @@ fn main() {
             test_connection, check_port,
             get_system_metrics, get_system_health, get_slots, get_metrics, get_monitoring_series,
             get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
-            generate_proxy_api_key, get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
-            list_canary_rollouts, create_canary_rollout, observe_canary_rollout, set_canary_weight, promote_canary_rollout, abort_canary_rollout, rollback_canary_rollout,
-            inspect_model_residency, save_model_residency_policy, begin_model_residency_drain, get_model_residency_drain_status, complete_model_residency_operation,
+            get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
             save_window_state, load_window_state,
             resolve_path,
-            remove_worker, get_workers, get_cluster_metrics,
+            scan_workers_tcp, test_worker, get_worker_info,
+            add_worker, approve_worker, remove_worker, get_workers,
+            find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics,
+            stop_local_worker, stop_worker, is_local_host, start_local_rpc, get_local_host,
             detect_usb4_adapters, get_usb4_adapters,
-            enroll_worker_agent, test_worker_agent, start_worker_agent, stop_worker_agent, list_worker_agent_audit,
+            start_mdns_discovery, stop_mdns_discovery,
+            ssh_launch_rpc,
+            stop_ssh_tunnel,
             enable_autostart, disable_autostart, is_autostart_enabled,
             get_startup_elapsed,
             show_window,
@@ -652,7 +693,6 @@ fn main() {
             crate::runtime_service::get_runtime_service_status,
             crate::runtime_service::clear_runtime_service_error,
             crate::security::pick_authorized_directory,
-            verify_updater_release,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

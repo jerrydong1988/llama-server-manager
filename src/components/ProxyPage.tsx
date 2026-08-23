@@ -6,7 +6,6 @@ import { formatHostPort, httpUrl } from '../utils/network'
 import { useI18n } from '../i18n'
 import { getProxyLabels } from '../i18n/pageLabels'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
-import { CanaryRolloutPanel } from './CanaryRollout/CanaryRolloutPanel'
 
 type ProxyRoute = {
   id: string
@@ -22,9 +21,7 @@ type ProxyApiKey = {
   id: string
   name: string
   key: string
-  keyConfigured: boolean
   enabled: boolean
-  strengthVerified: boolean
   scopes: string[]
   requestsPerMinute: number
 }
@@ -37,13 +34,9 @@ type ProxyConfig = {
   defaultInstanceId: string
   routingStrategy: string
   strictModelRouting: boolean
-  localityRoutingEnabled: boolean
-  localityTtlMs: number
-  localityMaxEntries: number
   connectTimeoutMs: number
   timeoutMs: number
   streamingIdleTimeoutMs: number
-  streamingMaxLifetimeMs: number
   healthCheckIntervalMs: number
   healthCheckTimeoutMs: number
   unhealthyThreshold: number
@@ -53,7 +46,6 @@ type ProxyConfig = {
   requestsPerMinute: number
   corsAllowedOrigins: string[]
   apiKeys: ProxyApiKey[]
-  allowAnonymous: boolean
   backgroundServiceMode: boolean
   runtimeServiceEnabled: boolean
   routes: ProxyRoute[]
@@ -67,42 +59,12 @@ type ProxyStatus = {
   unhealthyRoutes: number
   inFlightRequests: number
   totalRequests: number
-  operational: ProxyOperationalSnapshot
   lastError: string | null
 }
 
-type ProxyOperationalAlert = {
-  id: string
-  severity: 'warning' | 'critical'
-  observed: number
-  threshold: number
-}
-
-type ProxyOperationalSnapshot = {
-  windowSeconds: number
-  requestCount: number
-  failedRequestCount: number
-  errorRatePercent: number | null
-  queueDepth: number
-  queuedRequestsTotal: number
-  queueTimeoutsTotal: number
-  queueWaitP95Ms: number | null
-  ttftSampleCount: number
-  ttftP50Ms: number | null
-  ttftP95Ms: number | null
-  promptTokensObserved: number
-  cachedPromptTokens: number
-  cacheReusePercent: number | null
-  inFlightRequests: number
-  maxConcurrentRequests: number
-  saturationPercent: number
-  alerts: ProxyOperationalAlert[]
-}
-
-type NumericProxyConfigKey = 'connectTimeoutMs' | 'timeoutMs' | 'streamingIdleTimeoutMs' | 'streamingMaxLifetimeMs'
+type NumericProxyConfigKey = 'connectTimeoutMs' | 'timeoutMs' | 'streamingIdleTimeoutMs'
   | 'healthCheckIntervalMs' | 'healthCheckTimeoutMs' | 'unhealthyThreshold'
   | 'recoveryCooldownMs' | 'maxConcurrentRequests' | 'queueTimeoutMs' | 'requestsPerMinute'
-  | 'localityTtlMs' | 'localityMaxEntries'
 
 type RuntimeServiceView = {
   servicePid: number
@@ -153,13 +115,9 @@ const defaultConfig: ProxyConfig = {
   defaultInstanceId: '',
   routingStrategy: 'priorityFailover',
   strictModelRouting: true,
-  localityRoutingEnabled: true,
-  localityTtlMs: 1800000,
-  localityMaxEntries: 10000,
   connectTimeoutMs: 5000,
   timeoutMs: 600000,
   streamingIdleTimeoutMs: 300000,
-  streamingMaxLifetimeMs: 3600000,
   healthCheckIntervalMs: 5000,
   healthCheckTimeoutMs: 2000,
   unhealthyThreshold: 3,
@@ -169,7 +127,6 @@ const defaultConfig: ProxyConfig = {
   requestsPerMinute: 0,
   corsAllowedOrigins: [],
   apiKeys: [],
-  allowAnonymous: false,
   backgroundServiceMode: false,
   runtimeServiceEnabled: false,
   routes: [],
@@ -205,14 +162,6 @@ function getNumber(record: Record<string, unknown>, keys: string[], fallback = 0
   return fallback
 }
 
-function getOptionalNumber(record: Record<string, unknown>, keys: string[]) {
-  for (const key of keys) {
-    const value = record[key]
-    if (typeof value === 'number' && Number.isFinite(value)) return value
-  }
-  return null
-}
-
 function getBoolean(record: Record<string, unknown>, keys: string[], fallback = false) {
   for (const key of keys) {
     const value = record[key]
@@ -244,9 +193,7 @@ function normalizeApiKey(value: unknown, index: number): ProxyApiKey {
     id: getString(record, ['id'], `key-${index + 1}`),
     name: getString(record, ['name'], `API Key ${index + 1}`),
     key: getString(record, ['key']),
-    keyConfigured: getBoolean(record, ['key_configured', 'keyConfigured'], false),
     enabled: getBoolean(record, ['enabled'], true),
-    strengthVerified: getBoolean(record, ['strength_verified', 'strengthVerified'], false),
     scopes: Array.isArray(record.scopes) ? record.scopes.filter((scope): scope is string => typeof scope === 'string') : ['inference', 'discovery'],
     requestsPerMinute: getNumber(record, ['requests_per_minute', 'requestsPerMinute'], 0),
   }
@@ -279,13 +226,9 @@ function normalizeConfig(value: unknown): ProxyConfig {
     defaultInstanceId: getString(record, ['default_instance_id', 'defaultInstanceId', 'default_target_id', 'defaultTargetId']),
     routingStrategy: getString(record, ['routing_strategy', 'routingStrategy'], defaultConfig.routingStrategy),
     strictModelRouting: getBoolean(record, ['strict_model_routing', 'strictModelRouting'], defaultConfig.strictModelRouting),
-    localityRoutingEnabled: getBoolean(record, ['locality_routing_enabled', 'localityRoutingEnabled'], defaultConfig.localityRoutingEnabled),
-    localityTtlMs: getNumber(record, ['locality_ttl_ms', 'localityTtlMs'], defaultConfig.localityTtlMs),
-    localityMaxEntries: getNumber(record, ['locality_max_entries', 'localityMaxEntries'], defaultConfig.localityMaxEntries),
     connectTimeoutMs: getNumber(record, ['connect_timeout_ms', 'connectTimeoutMs'], defaultConfig.connectTimeoutMs),
     timeoutMs: getNumber(record, ['timeout_ms', 'timeoutMs'], defaultConfig.timeoutMs),
     streamingIdleTimeoutMs: getNumber(record, ['streaming_idle_timeout_ms', 'streamingIdleTimeoutMs'], defaultConfig.streamingIdleTimeoutMs),
-    streamingMaxLifetimeMs: getNumber(record, ['streaming_max_lifetime_ms', 'streamingMaxLifetimeMs'], defaultConfig.streamingMaxLifetimeMs),
     healthCheckIntervalMs: getNumber(record, ['health_check_interval_ms', 'healthCheckIntervalMs'], defaultConfig.healthCheckIntervalMs),
     healthCheckTimeoutMs: getNumber(record, ['health_check_timeout_ms', 'healthCheckTimeoutMs'], defaultConfig.healthCheckTimeoutMs),
     unhealthyThreshold: getNumber(record, ['unhealthy_threshold', 'unhealthyThreshold'], defaultConfig.unhealthyThreshold),
@@ -295,59 +238,22 @@ function normalizeConfig(value: unknown): ProxyConfig {
     requestsPerMinute: getNumber(record, ['requests_per_minute', 'requestsPerMinute'], defaultConfig.requestsPerMinute),
     corsAllowedOrigins: (Array.isArray(record.cors_allowed_origins) ? record.cors_allowed_origins : Array.isArray(record.corsAllowedOrigins) ? record.corsAllowedOrigins : []).filter((origin): origin is string => typeof origin === 'string'),
     apiKeys: apiKeysValue.map(normalizeApiKey),
-    allowAnonymous: getBoolean(record, ['allow_anonymous', 'allowAnonymous'], defaultConfig.allowAnonymous),
     backgroundServiceMode: getBoolean(record, ['background_service_mode', 'backgroundServiceMode'], defaultConfig.backgroundServiceMode),
     runtimeServiceEnabled: getBoolean(record, ['runtime_service_enabled', 'runtimeServiceEnabled'], defaultConfig.runtimeServiceEnabled),
     routes,
   }
 }
 
-function normalizeOperationalStatus(value: unknown, config: ProxyConfig, inFlightRequests: number): ProxyOperationalSnapshot {
-  const record = asRecord(value)
-  const alertsValue = Array.isArray(record.alerts) ? record.alerts : []
-  const maxConcurrentRequests = Math.max(1, getNumber(record, ['max_concurrent_requests', 'maxConcurrentRequests'], config.maxConcurrentRequests))
-  return {
-    windowSeconds: getNumber(record, ['window_seconds', 'windowSeconds'], 300),
-    requestCount: getNumber(record, ['request_count', 'requestCount']),
-    failedRequestCount: getNumber(record, ['failed_request_count', 'failedRequestCount']),
-    errorRatePercent: getOptionalNumber(record, ['error_rate_percent', 'errorRatePercent']),
-    queueDepth: getNumber(record, ['queue_depth', 'queueDepth']),
-    queuedRequestsTotal: getNumber(record, ['queued_requests_total', 'queuedRequestsTotal']),
-    queueTimeoutsTotal: getNumber(record, ['queue_timeouts_total', 'queueTimeoutsTotal']),
-    queueWaitP95Ms: getOptionalNumber(record, ['queue_wait_p95_ms', 'queueWaitP95Ms']),
-    ttftSampleCount: getNumber(record, ['ttft_sample_count', 'ttftSampleCount']),
-    ttftP50Ms: getOptionalNumber(record, ['ttft_p50_ms', 'ttftP50Ms']),
-    ttftP95Ms: getOptionalNumber(record, ['ttft_p95_ms', 'ttftP95Ms']),
-    promptTokensObserved: getNumber(record, ['prompt_tokens_observed', 'promptTokensObserved']),
-    cachedPromptTokens: getNumber(record, ['cached_prompt_tokens', 'cachedPromptTokens']),
-    cacheReusePercent: getOptionalNumber(record, ['cache_reuse_percent', 'cacheReusePercent']),
-    inFlightRequests: getNumber(record, ['in_flight_requests', 'inFlightRequests'], inFlightRequests),
-    maxConcurrentRequests,
-    saturationPercent: getNumber(record, ['saturation_percent', 'saturationPercent'], inFlightRequests / maxConcurrentRequests * 100),
-    alerts: alertsValue.map(value => {
-      const alert = asRecord(value)
-      return {
-        id: getString(alert, ['id'], 'unknown'),
-        severity: getString(alert, ['severity']) === 'critical' ? 'critical' as const : 'warning' as const,
-        observed: getNumber(alert, ['observed']),
-        threshold: getNumber(alert, ['threshold']),
-      }
-    }),
-  }
-}
-
 function normalizeStatus(value: unknown, config: ProxyConfig): ProxyStatus {
   const record = asRecord(value)
-  const inFlightRequests = getNumber(record, ['in_flight_requests', 'inFlightRequests'], 0)
   return {
     running: getBoolean(record, ['running', 'is_running', 'isRunning'], false),
     boundAddr: getString(record, ['bound_addr', 'boundAddr', 'endpoint', 'url'], formatHostPort(config.host, config.port)),
     activeRoutes: getNumber(record, ['active_routes', 'activeRoutes'], config.routes.filter(route => route.enabled).length),
     healthyRoutes: getNumber(record, ['healthy_routes', 'healthyRoutes'], 0),
     unhealthyRoutes: getNumber(record, ['unhealthy_routes', 'unhealthyRoutes'], 0),
-    inFlightRequests,
+    inFlightRequests: getNumber(record, ['in_flight_requests', 'inFlightRequests'], 0),
     totalRequests: getNumber(record, ['total_requests', 'totalRequests'], 0),
-    operational: normalizeOperationalStatus(record.operational, config, inFlightRequests),
     lastError: getString(record, ['last_error', 'lastError', 'error']) || null,
   }
 }
@@ -399,13 +305,9 @@ function toCommandConfig(config: ProxyConfig) {
     default_instance_id: config.defaultInstanceId,
     routing_strategy: config.routingStrategy,
     strict_model_routing: config.strictModelRouting,
-    locality_routing_enabled: config.localityRoutingEnabled,
-    locality_ttl_ms: config.localityTtlMs,
-    locality_max_entries: config.localityMaxEntries,
     connect_timeout_ms: config.connectTimeoutMs,
     timeout_ms: config.timeoutMs,
     streaming_idle_timeout_ms: config.streamingIdleTimeoutMs,
-    streaming_max_lifetime_ms: config.streamingMaxLifetimeMs,
     health_check_interval_ms: config.healthCheckIntervalMs,
     health_check_timeout_ms: config.healthCheckTimeoutMs,
     unhealthy_threshold: config.unhealthyThreshold,
@@ -418,13 +320,10 @@ function toCommandConfig(config: ProxyConfig) {
       id: apiKey.id,
       name: apiKey.name.trim(),
       key: apiKey.key.trim(),
-      key_configured: apiKey.keyConfigured,
       enabled: apiKey.enabled,
-      strength_verified: apiKey.strengthVerified,
       scopes: apiKey.scopes,
       requests_per_minute: apiKey.requestsPerMinute,
     })),
-    allow_anonymous: config.allowAnonymous,
     background_service_mode: config.backgroundServiceMode,
     runtime_service_enabled: config.runtimeServiceEnabled,
     routes: config.routes.map(route => ({
@@ -471,23 +370,6 @@ function routeAvailabilityView(kind: RouteAvailabilityKind, labels: ReturnType<t
     case 'pending': return { label: labels.routePendingSave, tone: 'amber' as const }
     case 'invalid': return { label: labels.routeIncomplete, tone: 'red' as const }
   }
-}
-
-function formatOperationalMs(value: number | null) {
-  return value == null ? '—' : `${Math.round(value).toLocaleString()} ms`
-}
-
-function formatOperationalPercent(value: number | null) {
-  return value == null ? '—' : `${value.toFixed(1)}%`
-}
-
-function operationalAlertCopy(id: string, labels: ReturnType<typeof getProxyLabels>) {
-  if (id === 'error_rate') return { title: labels.alertErrorRate, action: labels.alertErrorRateAction }
-  if (id === 'ttft_p95') return { title: labels.alertTtft, action: labels.alertTtftAction }
-  if (id === 'queue_wait_p95') return { title: labels.alertQueueWait, action: labels.alertQueueWaitAction }
-  if (id === 'queue_timeouts') return { title: labels.alertQueueTimeouts, action: labels.alertQueueTimeoutsAction }
-  if (id === 'saturation') return { title: labels.alertSaturation, action: labels.alertSaturationAction }
-  return { title: labels.alertUnknown, action: labels.alertUnknownAction }
 }
 
 export default function ProxyPage() {
@@ -550,7 +432,7 @@ export default function ProxyPage() {
     return normalized === '' || normalized === 'localhost' || normalized === '::1' || loopbackIpv4
   }
   const requiresLoopbackHost = !isLocalHost(draft.host)
-  const hasApiKeyIssues = draft.apiKeys.some(apiKey => apiKey.enabled && !apiKey.keyConfigured && apiKey.key.trim().length < 32)
+  const hasApiKeyIssues = draft.apiKeys.some(apiKey => apiKey.enabled && apiKey.key.trim().length < 16)
 
   const fallbackTargets = useMemo<ProxyTarget[]>(() => instances.map(instance => ({
     instanceId: instance.id,
@@ -783,17 +665,14 @@ export default function ProxyPage() {
     }))
   }
 
-  const addApiKey = async () => {
-    const generatedKey = await invoke<string>('generate_proxy_api_key')
+  const addApiKey = () => {
     setDraft(current => ({
       ...current,
       apiKeys: [...current.apiKeys, {
         id: crypto.randomUUID(),
         name: `API Key ${current.apiKeys.length + 1}`,
-        key: generatedKey,
-        keyConfigured: false,
+        key: `lsm_${crypto.randomUUID().replace(/-/g, '')}`,
         enabled: true,
-        strengthVerified: false,
         scopes: ['inference', 'discovery'],
         requestsPerMinute: 0,
       }],
@@ -1050,58 +929,6 @@ export default function ProxyPage() {
         <MetricCard label={labels.healthyRoutes} value={statusFresh ? `${status.healthyRoutes}/${status.activeRoutes}` : '—'} icon={<HeartPulse className="h-5 w-5" />} />
       </div>
 
-      <Surface as="section" className="p-5" data-testid="proxy-operational-metrics">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{labels.operationalMetrics}</h3>
-            <p className="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{labels.operationalMetricsHint}</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={statusFresh && status.running ? 'emerald' : 'slate'}>{statusFresh && status.running ? labels.liveWindow : labels.unavailable}</Badge>
-            <Badge tone="blue">{Math.round(status.operational.windowSeconds / 60)} min</Badge>
-          </div>
-        </div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-          {[
-            [labels.ttftP95, formatOperationalMs(status.operational.ttftP95Ms), `${status.operational.ttftSampleCount} ${labels.samples}`],
-            [labels.queueDepth, statusFresh ? status.operational.queueDepth.toLocaleString() : '—', `${labels.queueP95}: ${formatOperationalMs(status.operational.queueWaitP95Ms)}`],
-            [labels.cacheReuse, formatOperationalPercent(status.operational.cacheReusePercent), `${status.operational.cachedPromptTokens.toLocaleString()} / ${status.operational.promptTokensObserved.toLocaleString()} ${labels.tokens}`],
-            [labels.errorRate, formatOperationalPercent(status.operational.errorRatePercent), `${status.operational.failedRequestCount.toLocaleString()} / ${status.operational.requestCount.toLocaleString()}`],
-            [labels.saturation, formatOperationalPercent(statusFresh ? status.operational.saturationPercent : null), `${status.operational.inFlightRequests} / ${status.operational.maxConcurrentRequests}`],
-            [labels.windowRequests, statusFresh ? status.operational.requestCount.toLocaleString() : '—', `${status.operational.queueTimeoutsTotal.toLocaleString()} ${labels.queueTimeouts}`],
-          ].map(([label, value, detail]) => (
-            <div key={label} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 dark:border-slate-800 dark:bg-slate-950/70">
-              <div className="text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">{label}</div>
-              <div className="mt-1 text-lg font-semibold text-slate-950 dark:text-slate-50">{value}</div>
-              <div className="mt-1 text-xs text-slate-500 dark:text-slate-400">{detail}</div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 space-y-2" data-operational-alert-count={status.operational.alerts.length}>
-          {statusFresh && status.running && status.operational.alerts.length === 0 ? (
-            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-200">
-              {labels.noOperationalAlerts}
-            </div>
-          ) : null}
-          {status.operational.alerts.map(alert => {
-            const copy = operationalAlertCopy(alert.id, labels)
-            const critical = alert.severity === 'critical'
-            return (
-              <div key={`${alert.id}-${alert.severity}`} className={`rounded-lg border px-3 py-2 text-sm ${critical ? 'border-red-200 bg-red-50 text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'}`}>
-                <div className="flex flex-wrap items-center gap-2 font-semibold">
-                  <AlertTriangle className="h-4 w-4" />
-                  <span>{copy.title}</span>
-                  <Badge tone={critical ? 'red' : 'amber'}>{critical ? labels.critical : labels.warning}</Badge>
-                </div>
-                <p className="mt-1 text-xs leading-5 opacity-90">{copy.action}</p>
-              </div>
-            )
-          })}
-        </div>
-      </Surface>
-
-      <CanaryRolloutPanel proxyRunning={statusFresh && status.running} targets={effectiveTargets} />
-
       <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-5">
           <Surface as="section" className="p-5">
@@ -1199,7 +1026,6 @@ export default function ProxyPage() {
                 <button
                   type="button"
                   role="switch"
-                  aria-label={labels.strictRouting}
                   aria-checked={draft.strictModelRouting}
                   onClick={() => updateDraft({ strictModelRouting: !draft.strictModelRouting })}
                   className={`flex h-10 w-full items-center justify-between rounded-lg border px-3 text-sm transition ${draft.strictModelRouting ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}
@@ -1212,46 +1038,6 @@ export default function ProxyPage() {
               </div>
             </div>
             <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.strictRoutingHint}</p>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-[220px_minmax(0,1fr)_minmax(0,1fr)]">
-              <div className="min-w-0">
-                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.localityRouting}</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-label={labels.localityRouting}
-                  aria-checked={draft.localityRoutingEnabled}
-                  onClick={() => updateDraft({ localityRoutingEnabled: !draft.localityRoutingEnabled })}
-                  className={`flex h-10 w-full items-center justify-between rounded-lg border px-3 text-sm transition ${draft.localityRoutingEnabled ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-slate-300 text-slate-600 dark:border-slate-700 dark:text-slate-300'}`}
-                >
-                  <span>{draft.localityRoutingEnabled ? labels.enabled : labels.disabled}</span>
-                  <span className={`relative inline-flex h-6 w-11 rounded-full ${draft.localityRoutingEnabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
-                    <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${draft.localityRoutingEnabled ? 'left-6' : 'left-1'}`} />
-                  </span>
-                </button>
-              </div>
-              <label className="min-w-0">
-                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.localityTtl}</span>
-                <TextInput
-                  type="number"
-                  min={60000}
-                  max={86400000}
-                  value={draft.localityTtlMs}
-                  onChange={event => updateNumericDraft('localityTtlMs', Math.max(60000, Math.min(86400000, Number(event.target.value) || 60000)))}
-                />
-              </label>
-              <label className="min-w-0">
-                <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.localityCapacity}</span>
-                <TextInput
-                  type="number"
-                  min={1}
-                  max={100000}
-                  value={draft.localityMaxEntries}
-                  onChange={event => updateNumericDraft('localityMaxEntries', Math.max(1, Math.min(100000, Number(event.target.value) || 1)))}
-                />
-              </label>
-            </div>
-            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.localityRoutingHint}</p>
 
             {status.lastError ? (
               <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
@@ -1270,7 +1056,6 @@ export default function ProxyPage() {
                 ['timeoutMs', labels.timeout, 1000],
                 ['connectTimeoutMs', labels.connectTimeout, 100],
                 ['streamingIdleTimeoutMs', labels.streamingIdleTimeout, 1000],
-                ['streamingMaxLifetimeMs', labels.streamingMaxLifetime, 1000],
                 ['healthCheckIntervalMs', labels.healthCheckInterval, 1000],
                 ['healthCheckTimeoutMs', labels.healthCheckTimeout, 250],
                 ['unhealthyThreshold', labels.unhealthyThreshold, 1],
@@ -1324,23 +1109,6 @@ export default function ProxyPage() {
               />
               <span className="mt-1.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.corsOriginsHint}</span>
             </label>
-            <div className="mt-4 min-w-0">
-              <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.allowAnonymous}</span>
-              <button
-                type="button"
-                role="switch"
-                aria-label={labels.allowAnonymous}
-                aria-checked={draft.allowAnonymous}
-                onClick={() => updateDraft({ allowAnonymous: !draft.allowAnonymous })}
-                className={`flex h-10 w-full max-w-sm items-center justify-between rounded-lg border px-3 text-sm transition ${draft.allowAnonymous ? 'border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'}`}
-              >
-                <span>{draft.allowAnonymous ? labels.enabled : labels.disabled}</span>
-                <span className={`relative inline-flex h-6 w-11 rounded-full ${draft.allowAnonymous ? 'bg-amber-600' : 'bg-emerald-600'}`}>
-                  <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${draft.allowAnonymous ? 'left-6' : 'left-1'}`} />
-                </span>
-              </button>
-              <span className="mt-1.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.allowAnonymousHint}</span>
-            </div>
             <p className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">{labels.apiKeyRelationshipHint}</p>
             <div className="mt-4 space-y-3">
               {draft.apiKeys.length === 0 ? <EmptyPanel title={labels.noApiKeys} /> : draft.apiKeys.map(apiKey => (
@@ -1358,8 +1126,8 @@ export default function ProxyPage() {
                           type={revealedSecretId === `api:${apiKey.id}` && !isStoredApiKey(apiKey.key) ? 'text' : 'password'}
                           autoComplete="off"
                           value={apiKey.key}
-                          placeholder={apiKey.keyConfigured ? labels.apiKeyHashedHint : labels.apiKeyValue}
-                          onChange={event => updateApiKey(apiKey.id, { key: event.target.value, keyConfigured: false, strengthVerified: false })}
+                          placeholder={labels.apiKeyValue}
+                          onChange={event => updateApiKey(apiKey.id, { key: event.target.value })}
                           className="min-w-0 flex-1"
                         />
                         {apiKey.key && !isStoredApiKey(apiKey.key) ? (
@@ -1371,7 +1139,7 @@ export default function ProxyPage() {
                         ) : null}
                         {apiKey.key && !isStoredApiKey(apiKey.key) ? <IconButton label={labels.copyApiKey} onClick={() => void copyApiKey(apiKey)} icon={<Copy className="h-4 w-4" />} /> : null}
                       </div>
-                      {apiKey.keyConfigured || isStoredApiKey(apiKey.key) ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyHashedHint}</p> : null}
+                      {isStoredApiKey(apiKey.key) ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyHashedHint}</p> : null}
                     </div>
                     <label className="min-w-0">
                       <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.apiKeyRequestsPerMinute}</span>
@@ -1406,7 +1174,7 @@ export default function ProxyPage() {
                     ))}
                     <span className="ml-auto text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyRpmHint}</span>
                   </div>
-                  {apiKey.enabled && !apiKey.keyConfigured && apiKey.key.trim().length < 32 ? <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{labels.apiKeyValidation}</p> : null}
+                  {apiKey.enabled && apiKey.key.trim().length < 16 ? <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{labels.apiKeyValidation}</p> : null}
                 </div>
               ))}
             </div>

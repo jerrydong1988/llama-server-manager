@@ -15,7 +15,7 @@ import { canonicalConfigFields } from './configWorkspace'
  */
 export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): Set<keyof InstanceConfig> {
   if (config.launch_mode === 'manual') {
-    return new Set(config.manual_command.trim() || config.manual_command_configured ? ['manual_command'] : [])
+    return new Set(config.manual_command.trim() ? ['manual_command'] : [])
   }
 
   if (Array.isArray(config.explicit_overrides)) {
@@ -179,10 +179,10 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   }
 
    // ── Network ──
-   if (config.api_key || config.api_key_configured) a.add('api_key')
-   if (config.api_key_file || config.api_key_file_configured) a.add('api_key_file')
-   if (config.ssl_key_file || config.ssl_key_file_configured) a.add('ssl_key_file')
-   if (config.ssl_cert_file || config.ssl_cert_file_configured) a.add('ssl_cert_file')
+   if (config.api_key) a.add('api_key')
+   if (config.api_key_file) a.add('api_key_file')
+   if (config.ssl_key_file) a.add('ssl_key_file')
+   if (config.ssl_cert_file) a.add('ssl_cert_file')
    if (config.no_ui) a.add('no_ui')
    if (config.offline) a.add('offline')
    if (config.path_prefix) a.add('path_prefix')
@@ -191,13 +191,13 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
    if (config.cors_methods) a.add('cors_methods')
    if (config.cors_headers) a.add('cors_headers')
    if (config.cors_credentials) a.add('cors_credentials')
-   if (config.ui_config_file || config.ui_config_file_configured) a.add('ui_config_file')
-   if (config.ui_config || config.ui_config_configured) a.add('ui_config')
+   if (config.ui_config_file) a.add('ui_config_file')
+   if (config.ui_config) a.add('ui_config')
     if (config.ui_mcp_proxy) a.add('ui_mcp_proxy')
     if (config.agent) a.add('agent')
     if (config.tools_runtime) a.add('tools_runtime')
-    if (config.mcp_servers_config || config.mcp_servers_config_configured) a.add('mcp_servers_config')
-    if (config.mcp_servers_json || config.mcp_servers_json_configured) a.add('mcp_servers_json')
+    if (config.mcp_servers_config) a.add('mcp_servers_config')
+    if (config.mcp_servers_json) a.add('mcp_servers_json')
    // New server params
    if (config.rpc_servers) a.add('rpc_servers')
    if (Math.abs(config.sse_ping_interval - 30) > 0.001) a.add('sse_ping_interval')
@@ -288,7 +288,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.tools) a.add('tools')
 
   // ── Custom args ──
-  if (config.custom_args.length > 0 || config.custom_args_configured) a.add('custom_args')
+  if (config.custom_args.length > 0) a.add('custom_args')
 
   if (e) {
     for (const key of a) {

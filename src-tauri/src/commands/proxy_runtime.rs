@@ -1,32 +1,13 @@
-use crate::models::{ProxyOperationalAlert, ProxyOperationalSnapshot};
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::Notify;
 
-const LATENCY_BUCKETS_MS: [u64; 11] = [
-    10,
-    25,
-    50,
-    100,
-    250,
-    500,
-    1_000,
-    3_000,
-    5_000,
-    10_000,
-    u64::MAX,
-];
+const LATENCY_BUCKETS_MS: [u64; 9] = [10, 25, 50, 100, 250, 500, 1_000, 5_000, u64::MAX];
 const MAX_SCHEDULING_COUNTERS: usize = 4_096;
-const OPERATIONAL_WINDOW: Duration = Duration::from_secs(300);
-const MAX_OPERATIONAL_EVENTS: usize = 4_096;
-const MIN_ALERT_SAMPLES: usize = 5;
-const MAX_GLOBAL_QUEUE_DEPTH: usize = 4_096;
-const MAX_DISCOVERY_REQUESTS: usize = 16;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -99,45 +80,6 @@ pub(crate) struct RoutingCandidate {
     pub max_concurrent_requests: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LocalityDecision {
-    NotApplicable,
-    Hit,
-    Miss,
-    Fallback,
-}
-
-impl LocalityDecision {
-    pub(crate) fn header_value(self) -> Option<&'static str> {
-        match self {
-            Self::NotApplicable => None,
-            Self::Hit => Some("hit"),
-            Self::Miss => Some("miss"),
-            Self::Fallback => Some("fallback"),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RoutingSelection {
-    pub candidate: RoutingCandidate,
-    pub locality: LocalityDecision,
-}
-
-#[derive(Debug, Clone)]
-struct LocalityBinding {
-    instance_id: String,
-    expires_at_ms: u64,
-    generation: u64,
-}
-
-#[derive(Default)]
-struct LocalityStore {
-    bindings: HashMap<String, LocalityBinding>,
-    oldest_first: VecDeque<(u64, String)>,
-    generation: u64,
-}
-
 #[derive(Debug)]
 struct RateBucket {
     tokens: f64,
@@ -161,40 +103,6 @@ struct RouterMetrics {
     completed_requests: AtomicU64,
     duration_sum_ms: AtomicU64,
     latency_buckets: Mutex<[u64; LATENCY_BUCKETS_MS.len()]>,
-    queued_requests_total: AtomicU64,
-    queue_timeouts_total: AtomicU64,
-    queue_wait_sum_ms: AtomicU64,
-    queue_wait_buckets: Mutex<[u64; LATENCY_BUCKETS_MS.len()]>,
-    ttft_sum_ms: AtomicU64,
-    ttft_samples: AtomicU64,
-    ttft_buckets: Mutex<[u64; LATENCY_BUCKETS_MS.len()]>,
-    prompt_tokens_observed: AtomicU64,
-    cached_prompt_tokens: AtomicU64,
-    locality_hits: AtomicU64,
-    locality_misses: AtomicU64,
-    locality_fallbacks: AtomicU64,
-    recent: Mutex<VecDeque<OperationalEvent>>,
-}
-
-#[derive(Debug, Clone)]
-struct OperationalEvent {
-    completed_at: Instant,
-    queue_wait_ms: Option<u64>,
-    ttft_ms: Option<u64>,
-    prompt_tokens: Option<u64>,
-    cached_prompt_tokens: Option<u64>,
-    failed: bool,
-    queue_timeout: bool,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) struct RequestObservation {
-    pub duration_ms: u64,
-    pub queue_wait_ms: u64,
-    pub ttft_ms: Option<u64>,
-    pub prompt_tokens: Option<u64>,
-    pub cached_prompt_tokens: Option<u64>,
-    pub failed: bool,
 }
 
 struct DynamicConcurrencyLimiter {
@@ -211,23 +119,13 @@ impl Default for DynamicConcurrencyLimiter {
     }
 }
 
-pub struct RouterRuntime {
+pub(crate) struct RouterRuntime {
     started_at: Instant,
-    draining_targets: Mutex<HashSet<String>>,
     targets: Mutex<HashMap<String, TargetRuntime>>,
     scheduling_counters: Mutex<HashMap<String, u64>>,
     limiter: DynamicConcurrencyLimiter,
-    queue_depth: AtomicUsize,
-    discovery_round: Arc<Semaphore>,
-    discovery_requests: Arc<Semaphore>,
-    ingress_requests: Arc<Semaphore>,
-    auxiliary_requests: Arc<Semaphore>,
-    client_in_flight: Mutex<HashMap<String, usize>>,
     in_flight_body_bytes: AtomicUsize,
-    in_flight_response_bytes: AtomicUsize,
     rate_buckets: Mutex<HashMap<String, RateBucket>>,
-    locality_salt: [u8; 16],
-    locality_store: Mutex<LocalityStore>,
     metrics: RouterMetrics,
 }
 
@@ -235,21 +133,11 @@ impl Default for RouterRuntime {
     fn default() -> Self {
         Self {
             started_at: Instant::now(),
-            draining_targets: Mutex::new(HashSet::new()),
             targets: Mutex::new(HashMap::new()),
             scheduling_counters: Mutex::new(HashMap::new()),
             limiter: DynamicConcurrencyLimiter::default(),
-            queue_depth: AtomicUsize::new(0),
-            discovery_round: Arc::new(Semaphore::new(1)),
-            discovery_requests: Arc::new(Semaphore::new(MAX_DISCOVERY_REQUESTS)),
-            ingress_requests: Arc::new(Semaphore::new(8)),
-            auxiliary_requests: Arc::new(Semaphore::new(8)),
-            client_in_flight: Mutex::new(HashMap::new()),
             in_flight_body_bytes: AtomicUsize::new(0),
-            in_flight_response_bytes: AtomicUsize::new(0),
             rate_buckets: Mutex::new(HashMap::new()),
-            locality_salt: *uuid::Uuid::new_v4().as_bytes(),
-            locality_store: Mutex::new(LocalityStore::default()),
             metrics: RouterMetrics::default(),
         }
     }
@@ -257,61 +145,11 @@ impl Default for RouterRuntime {
 
 pub(crate) struct GlobalRequestPermit {
     runtime: Arc<RouterRuntime>,
-    queue_wait_ms: u64,
-}
-
-pub(crate) struct ClientRequestPermit {
-    runtime: Arc<RouterRuntime>,
-    key: String,
-}
-
-impl Drop for ClientRequestPermit {
-    fn drop(&mut self) {
-        if let Ok(mut clients) = self.runtime.client_in_flight.lock() {
-            let remove = if let Some(active) = clients.get_mut(&self.key) {
-                *active = active.saturating_sub(1);
-                *active == 0
-            } else {
-                false
-            };
-            if remove {
-                clients.remove(&self.key);
-            }
-        }
-    }
-}
-
-struct QueueDepthGuard {
-    runtime: Arc<RouterRuntime>,
-}
-
-impl Drop for QueueDepthGuard {
-    fn drop(&mut self) {
-        self.runtime.queue_depth.fetch_sub(1, Ordering::AcqRel);
-    }
 }
 
 pub(crate) struct InFlightBodyPermit {
     runtime: Arc<RouterRuntime>,
     bytes: usize,
-}
-
-struct ResponseMemoryLease {
-    runtime: Arc<RouterRuntime>,
-    bytes: usize,
-}
-
-impl Drop for ResponseMemoryLease {
-    fn drop(&mut self) {
-        self.runtime
-            .in_flight_response_bytes
-            .fetch_sub(self.bytes, Ordering::AcqRel);
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct InFlightResponsePermit {
-    _lease: Arc<ResponseMemoryLease>,
 }
 
 impl Drop for InFlightBodyPermit {
@@ -326,12 +164,6 @@ impl Drop for GlobalRequestPermit {
     fn drop(&mut self) {
         self.runtime.limiter.active.fetch_sub(1, Ordering::AcqRel);
         self.runtime.limiter.notify.notify_one();
-    }
-}
-
-impl GlobalRequestPermit {
-    pub(crate) fn queue_wait_ms(&self) -> u64 {
-        self.queue_wait_ms
     }
 }
 
@@ -351,106 +183,6 @@ impl Drop for TargetRequestPermit {
 }
 
 impl RouterRuntime {
-    pub(crate) fn try_acquire_client(
-        self: &Arc<Self>,
-        client_id: &str,
-        scope: &str,
-        limit: usize,
-    ) -> Option<Arc<ClientRequestPermit>> {
-        let key = format!("{scope}\u{1f}{client_id}");
-        let mut clients = self.client_in_flight.lock().ok()?;
-        let active = clients.entry(key.clone()).or_default();
-        if *active >= limit.max(1) {
-            return None;
-        }
-        *active += 1;
-        drop(clients);
-        Some(Arc::new(ClientRequestPermit {
-            runtime: self.clone(),
-            key,
-        }))
-    }
-
-    fn try_reserve_queue_slot(&self, limit: usize) -> bool {
-        loop {
-            let queued = self.queue_depth.load(Ordering::Acquire);
-            if queued >= limit {
-                return false;
-            }
-            if self
-                .queue_depth
-                .compare_exchange_weak(queued, queued + 1, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                return true;
-            }
-        }
-    }
-
-    pub(crate) fn try_acquire_discovery_round(&self) -> Option<OwnedSemaphorePermit> {
-        self.discovery_round.clone().try_acquire_owned().ok()
-    }
-
-    pub(crate) fn try_acquire_discovery_request(&self) -> Option<OwnedSemaphorePermit> {
-        self.discovery_requests.clone().try_acquire_owned().ok()
-    }
-
-    pub(crate) fn try_acquire_ingress_request(&self) -> Option<OwnedSemaphorePermit> {
-        self.ingress_requests.clone().try_acquire_owned().ok()
-    }
-
-    pub(crate) async fn acquire_auxiliary_request(&self) -> OwnedSemaphorePermit {
-        self.auxiliary_requests
-            .clone()
-            .acquire_owned()
-            .await
-            .expect("auxiliary request semaphore must remain open")
-    }
-
-    fn try_acquire_global_slot(&self, limit: usize) -> bool {
-        loop {
-            let active = self.limiter.active.load(Ordering::Acquire);
-            if active >= limit {
-                return false;
-            }
-            if self
-                .limiter
-                .active
-                .compare_exchange_weak(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                return true;
-            }
-        }
-    }
-
-    fn record_histogram(buckets: &Mutex<[u64; LATENCY_BUCKETS_MS.len()]>, value_ms: u64) {
-        if let Some(index) = LATENCY_BUCKETS_MS
-            .iter()
-            .position(|upper| value_ms <= *upper)
-        {
-            let mut buckets = buckets.lock().unwrap();
-            buckets[index] = buckets[index].saturating_add(1);
-        }
-    }
-
-    fn push_operational_event(&self, event: OperationalEvent) {
-        let cutoff = Instant::now()
-            .checked_sub(OPERATIONAL_WINDOW)
-            .unwrap_or_else(Instant::now);
-        let mut recent = self.metrics.recent.lock().unwrap();
-        while recent
-            .front()
-            .is_some_and(|existing| existing.completed_at < cutoff)
-        {
-            recent.pop_front();
-        }
-        recent.push_back(event);
-        while recent.len() > MAX_OPERATIONAL_EVENTS {
-            recent.pop_front();
-        }
-    }
-
     fn next_scheduling_ticket(&self, strategy: &str, routing_key: &str) -> u64 {
         let key = format!("{strategy}\u{1f}{routing_key}");
         let mut counters = self.scheduling_counters.lock().unwrap();
@@ -469,75 +201,33 @@ impl RouterRuntime {
         queue_timeout: Duration,
     ) -> Option<GlobalRequestPermit> {
         let limit = max_concurrent_requests.max(1) as usize;
-        if self.try_acquire_global_slot(limit) {
-            self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
-            Self::record_histogram(&self.metrics.queue_wait_buckets, 0);
-            return Some(GlobalRequestPermit {
-                runtime: self.clone(),
-                queue_wait_ms: 0,
-            });
-        }
-        let queue_limit = limit.saturating_mul(4).clamp(1, MAX_GLOBAL_QUEUE_DEPTH);
-        if !self.try_reserve_queue_slot(queue_limit) {
-            self.metrics
-                .rejected_requests
-                .fetch_add(1, Ordering::Relaxed);
-            return None;
-        }
-        self.metrics
-            .queued_requests_total
-            .fetch_add(1, Ordering::Relaxed);
-        let queue_guard = QueueDepthGuard {
-            runtime: self.clone(),
-        };
-        let queued_at = Instant::now();
         let acquire = async {
             loop {
-                if self.try_acquire_global_slot(limit) {
+                let active = self.limiter.active.load(Ordering::Acquire);
+                if active < limit
+                    && self
+                        .limiter
+                        .active
+                        .compare_exchange(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
+                        .is_ok()
+                {
                     self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
-                    return;
+                    return GlobalRequestPermit {
+                        runtime: self.clone(),
+                    };
                 }
                 self.limiter.notify.notified().await;
             }
         };
-        let result = match tokio::time::timeout(queue_timeout, acquire).await {
-            Ok(()) => {
-                let queue_wait_ms = queued_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
-                self.metrics
-                    .queue_wait_sum_ms
-                    .fetch_add(queue_wait_ms, Ordering::Relaxed);
-                Self::record_histogram(&self.metrics.queue_wait_buckets, queue_wait_ms);
-                Some(GlobalRequestPermit {
-                    runtime: self.clone(),
-                    queue_wait_ms,
-                })
-            }
+        match tokio::time::timeout(queue_timeout, acquire).await {
+            Ok(permit) => Some(permit),
             Err(_) => {
-                let queue_wait_ms = queued_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
                 self.metrics
                     .rejected_requests
                     .fetch_add(1, Ordering::Relaxed);
-                self.metrics
-                    .queue_timeouts_total
-                    .fetch_add(1, Ordering::Relaxed);
-                self.push_operational_event(OperationalEvent {
-                    completed_at: Instant::now(),
-                    queue_wait_ms: Some(queue_wait_ms),
-                    ttft_ms: None,
-                    prompt_tokens: None,
-                    cached_prompt_tokens: None,
-                    failed: true,
-                    queue_timeout: true,
-                });
                 None
             }
-        };
-        drop(queue_guard);
-        result
-    }
-
-    pub(crate) fn queue_depth(&self) -> usize {
-        self.queue_depth.load(Ordering::Acquire)
+        }
     }
 
     pub(crate) fn in_flight_requests(&self) -> usize {
@@ -570,36 +260,6 @@ impl RouterRuntime {
 
     pub(crate) fn in_flight_body_bytes(&self) -> usize {
         self.in_flight_body_bytes.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn try_acquire_response_bytes(
-        self: &Arc<Self>,
-        bytes: usize,
-        limit: usize,
-    ) -> Option<InFlightResponsePermit> {
-        loop {
-            let active = self.in_flight_response_bytes.load(Ordering::Acquire);
-            let next = active.checked_add(bytes)?;
-            if next > limit {
-                return None;
-            }
-            if self
-                .in_flight_response_bytes
-                .compare_exchange_weak(active, next, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                return Some(InFlightResponsePermit {
-                    _lease: Arc::new(ResponseMemoryLease {
-                        runtime: self.clone(),
-                        bytes,
-                    }),
-                });
-            }
-        }
-    }
-
-    pub(crate) fn in_flight_response_bytes(&self) -> usize {
-        self.in_flight_response_bytes.load(Ordering::Acquire)
     }
 
     pub(crate) fn total_requests(&self) -> u64 {
@@ -640,7 +300,9 @@ impl RouterRuntime {
                 retry_after_secs: 0,
             };
         }
-        self.record_rejected();
+        self.metrics
+            .rejected_requests
+            .fetch_add(1, Ordering::Relaxed);
         RateLimitDecision {
             allowed: false,
             limit,
@@ -655,42 +317,11 @@ impl RouterRuntime {
         strategy: &str,
         routing_key: &str,
     ) -> Option<RoutingCandidate> {
-        self.select_target_with_locality(candidates, strategy, routing_key, None)
-            .map(|selection| selection.candidate)
-    }
-
-    pub(crate) fn locality_key(
-        &self,
-        routing_key: &str,
-        authenticated_client_id: &str,
-        material: &[u8],
-    ) -> String {
-        let mut hasher = Sha256::new();
-        hasher.update(self.locality_salt);
-        hasher.update(authenticated_client_id.as_bytes());
-        hasher.update([0]);
-        hasher.update(routing_key.as_bytes());
-        hasher.update([0]);
-        hasher.update(material);
-        format!("{:x}", hasher.finalize())
-    }
-
-    pub(crate) fn select_target_with_locality(
-        &self,
-        candidates: &[RoutingCandidate],
-        strategy: &str,
-        routing_key: &str,
-        locality_key: Option<&str>,
-    ) -> Option<RoutingSelection> {
         let now = now_ms();
-        let draining_targets = self.draining_targets.lock().unwrap();
         let targets = self.targets.lock().unwrap();
         let mut eligible = candidates
             .iter()
             .filter(|candidate| {
-                if draining_targets.contains(&candidate.instance_id) {
-                    return false;
-                }
                 let state = targets.get(&candidate.instance_id);
                 let circuit_open =
                     state.is_some_and(|state| state.circuit_open_until_ms > now || !state.ready);
@@ -706,40 +337,7 @@ impl RouterRuntime {
         }
         let best_priority = eligible.iter().map(|candidate| candidate.priority).min()?;
         eligible.retain(|candidate| candidate.priority == best_priority);
-        let (locality, bound_instance) = if let Some(key) = locality_key {
-            let mut store = self.locality_store.lock().unwrap();
-            let bound_instance = match store.bindings.get(key) {
-                Some(binding) if binding.expires_at_ms > now => Some(binding.instance_id.clone()),
-                Some(_) => {
-                    store.bindings.remove(key);
-                    None
-                }
-                None => None,
-            };
-            let decision = match bound_instance.as_deref() {
-                Some(instance_id)
-                    if eligible.iter().any(|item| item.instance_id == instance_id) =>
-                {
-                    LocalityDecision::Hit
-                }
-                Some(_) => LocalityDecision::Fallback,
-                None => LocalityDecision::Miss,
-            };
-            (decision, bound_instance)
-        } else {
-            (LocalityDecision::NotApplicable, None)
-        };
-        if locality == LocalityDecision::Hit {
-            let bound_instance = bound_instance?;
-            let candidate = eligible
-                .into_iter()
-                .find(|candidate| candidate.instance_id == bound_instance)?;
-            return Some(RoutingSelection {
-                candidate,
-                locality: LocalityDecision::Hit,
-            });
-        }
-        let candidate = match strategy {
+        match strategy {
             "roundRobin" => {
                 let index =
                     self.next_scheduling_ticket(strategy, routing_key) as usize % eligible.len();
@@ -770,103 +368,23 @@ impl RouterRuntime {
                     .map(|candidate| candidate.weight.max(1) as u64)
                     .sum::<u64>();
                 let mut ticket = self.next_scheduling_ticket(strategy, routing_key) % total_weight;
-                let mut selected = None;
                 for candidate in eligible {
                     let weight = candidate.weight.max(1) as u64;
                     if ticket < weight {
-                        selected = Some(candidate);
-                        break;
+                        return Some(candidate);
                     }
                     ticket -= weight;
                 }
-                selected
+                None
             }
             _ => eligible.into_iter().next(),
-        }?;
-        Some(RoutingSelection {
-            candidate,
-            locality,
-        })
-    }
-
-    pub(crate) fn record_locality_selection(&self, decision: LocalityDecision) {
-        let counter = match decision {
-            LocalityDecision::Hit => Some(&self.metrics.locality_hits),
-            LocalityDecision::Miss => Some(&self.metrics.locality_misses),
-            LocalityDecision::Fallback => Some(&self.metrics.locality_fallbacks),
-            LocalityDecision::NotApplicable => None,
-        };
-        if let Some(counter) = counter {
-            counter.fetch_add(1, Ordering::Relaxed);
         }
-    }
-
-    pub(crate) fn record_locality_success(
-        &self,
-        locality_key: &str,
-        instance_id: &str,
-        ttl_ms: u64,
-        max_entries: usize,
-    ) {
-        if locality_key.is_empty() || instance_id.is_empty() || ttl_ms == 0 || max_entries == 0 {
-            return;
-        }
-        let now = now_ms();
-        let mut store = self.locality_store.lock().unwrap();
-        store.generation = store.generation.wrapping_add(1).max(1);
-        let generation = store.generation;
-        store.bindings.insert(
-            locality_key.to_string(),
-            LocalityBinding {
-                instance_id: instance_id.to_string(),
-                expires_at_ms: now.saturating_add(ttl_ms),
-                generation,
-            },
-        );
-        store
-            .oldest_first
-            .push_back((generation, locality_key.to_string()));
-        while store.bindings.len() > max_entries {
-            let Some((candidate_generation, candidate_key)) = store.oldest_first.pop_front() else {
-                break;
-            };
-            if store
-                .bindings
-                .get(&candidate_key)
-                .is_some_and(|binding| binding.generation == candidate_generation)
-            {
-                store.bindings.remove(&candidate_key);
-            }
-        }
-        let order_limit = max_entries.saturating_mul(4).max(1_024);
-        if store.oldest_first.len() > order_limit {
-            let mut current = store
-                .bindings
-                .iter()
-                .map(|(key, binding)| (binding.generation, key.clone()))
-                .collect::<Vec<_>>();
-            current.sort_by_key(|(generation, _)| *generation);
-            store.oldest_first = current.into();
-        }
-    }
-
-    fn active_locality_bindings(&self) -> usize {
-        let now = now_ms();
-        let mut store = self.locality_store.lock().unwrap();
-        store
-            .bindings
-            .retain(|_, binding| binding.expires_at_ms > now);
-        store.bindings.len()
     }
 
     pub(crate) fn acquire_target(
         self: &Arc<Self>,
         candidate: &RoutingCandidate,
     ) -> Option<TargetRequestPermit> {
-        let draining_targets = self.draining_targets.lock().unwrap();
-        if draining_targets.contains(&candidate.instance_id) {
-            return None;
-        }
         let mut targets = self.targets.lock().unwrap();
         let target = targets.entry(candidate.instance_id.clone()).or_default();
         if candidate.max_concurrent_requests > 0
@@ -879,24 +397,6 @@ impl RouterRuntime {
             runtime: self.clone(),
             instance_id: candidate.instance_id.clone(),
         })
-    }
-
-    pub(crate) fn set_target_draining(&self, instance_id: &str, draining: bool) {
-        let mut targets = self.draining_targets.lock().unwrap();
-        if draining {
-            targets.insert(instance_id.to_string());
-        } else {
-            targets.remove(instance_id);
-        }
-    }
-
-    pub(crate) fn target_active_requests(&self, instance_id: &str) -> usize {
-        self.targets
-            .lock()
-            .unwrap()
-            .get(instance_id)
-            .map(|target| target.active_requests)
-            .unwrap_or(0)
     }
 
     pub(crate) fn mark_probe_success(
@@ -954,184 +454,26 @@ impl RouterRuntime {
         self.mark_probe_failure(instance_id, error, unhealthy_threshold, recovery_cooldown);
     }
 
-    pub(crate) fn record_completed(&self, observation: RequestObservation) {
+    pub(crate) fn record_completed(&self, duration_ms: u64) {
         self.metrics
             .completed_requests
             .fetch_add(1, Ordering::Relaxed);
         self.metrics
             .duration_sum_ms
-            .fetch_add(observation.duration_ms, Ordering::Relaxed);
-        Self::record_histogram(&self.metrics.latency_buckets, observation.duration_ms);
-        if let Some(ttft_ms) = observation.ttft_ms {
-            self.metrics.ttft_samples.fetch_add(1, Ordering::Relaxed);
-            self.metrics
-                .ttft_sum_ms
-                .fetch_add(ttft_ms, Ordering::Relaxed);
-            Self::record_histogram(&self.metrics.ttft_buckets, ttft_ms);
+            .fetch_add(duration_ms, Ordering::Relaxed);
+        let mut buckets = self.metrics.latency_buckets.lock().unwrap();
+        if let Some(index) = LATENCY_BUCKETS_MS
+            .iter()
+            .position(|upper| duration_ms <= *upper)
+        {
+            buckets[index] = buckets[index].saturating_add(1);
         }
-        if let Some(prompt_tokens) = observation.prompt_tokens {
-            self.metrics
-                .prompt_tokens_observed
-                .fetch_add(prompt_tokens, Ordering::Relaxed);
-        }
-        if let Some(cached_prompt_tokens) = observation.cached_prompt_tokens {
-            self.metrics
-                .cached_prompt_tokens
-                .fetch_add(cached_prompt_tokens, Ordering::Relaxed);
-        }
-        self.push_operational_event(OperationalEvent {
-            completed_at: Instant::now(),
-            queue_wait_ms: Some(observation.queue_wait_ms),
-            ttft_ms: observation.ttft_ms,
-            prompt_tokens: observation.prompt_tokens,
-            cached_prompt_tokens: observation.cached_prompt_tokens,
-            failed: observation.failed,
-            queue_timeout: false,
-        });
     }
 
     pub(crate) fn record_rejected(&self) {
         self.metrics
             .rejected_requests
             .fetch_add(1, Ordering::Relaxed);
-        self.push_operational_event(OperationalEvent {
-            completed_at: Instant::now(),
-            queue_wait_ms: None,
-            ttft_ms: None,
-            prompt_tokens: None,
-            cached_prompt_tokens: None,
-            failed: true,
-            queue_timeout: false,
-        });
-    }
-
-    fn percentile(values: &mut [u64], percentile: f64) -> Option<u64> {
-        if values.is_empty() {
-            return None;
-        }
-        values.sort_unstable();
-        let index = ((values.len() - 1) as f64 * percentile).ceil() as usize;
-        values.get(index).copied()
-    }
-
-    pub(crate) fn operational_snapshot(
-        &self,
-        max_concurrent_requests: u32,
-    ) -> ProxyOperationalSnapshot {
-        let cutoff = Instant::now()
-            .checked_sub(OPERATIONAL_WINDOW)
-            .unwrap_or_else(Instant::now);
-        let mut recent = self.metrics.recent.lock().unwrap();
-        while recent
-            .front()
-            .is_some_and(|event| event.completed_at < cutoff)
-        {
-            recent.pop_front();
-        }
-        let events = recent.iter().cloned().collect::<Vec<_>>();
-        drop(recent);
-
-        let request_count = events.len() as u64;
-        let failed_request_count = events.iter().filter(|event| event.failed).count() as u64;
-        let error_rate_percent = (request_count > 0)
-            .then_some(failed_request_count as f64 / request_count as f64 * 100.0);
-        let mut queue_waits = events
-            .iter()
-            .filter_map(|event| event.queue_wait_ms)
-            .collect::<Vec<_>>();
-        let queue_wait_sample_count = queue_waits.len();
-        let mut ttft = events
-            .iter()
-            .filter_map(|event| event.ttft_ms)
-            .collect::<Vec<_>>();
-        let ttft_sample_count = ttft.len() as u64;
-        let queue_wait_p95_ms = Self::percentile(&mut queue_waits, 0.95);
-        let ttft_p50_ms = Self::percentile(&mut ttft.clone(), 0.50);
-        let ttft_p95_ms = Self::percentile(&mut ttft, 0.95);
-        let prompt_tokens_observed = events
-            .iter()
-            .filter_map(|event| event.prompt_tokens)
-            .fold(0_u64, u64::saturating_add);
-        let cached_prompt_tokens = events
-            .iter()
-            .filter_map(|event| event.cached_prompt_tokens)
-            .fold(0_u64, u64::saturating_add);
-        let cache_reuse_percent = (prompt_tokens_observed > 0).then_some(
-            cached_prompt_tokens.min(prompt_tokens_observed) as f64 / prompt_tokens_observed as f64
-                * 100.0,
-        );
-        let queue_timeouts = events.iter().filter(|event| event.queue_timeout).count();
-        let in_flight_requests = self.in_flight_requests();
-        let queue_depth = self.queue_depth();
-        let effective_limit = max_concurrent_requests.max(1);
-        let saturation_percent = in_flight_requests as f64 / effective_limit as f64 * 100.0;
-        let mut alerts = Vec::new();
-        let mut add_alert = |id: &str, severity: &str, observed: f64, threshold: f64| {
-            alerts.push(ProxyOperationalAlert {
-                id: id.to_string(),
-                severity: severity.to_string(),
-                observed,
-                threshold,
-            });
-        };
-        if events.len() >= MIN_ALERT_SAMPLES {
-            if let Some(error_rate) = error_rate_percent {
-                if error_rate >= 25.0 {
-                    add_alert("error_rate", "critical", error_rate, 25.0);
-                } else if error_rate >= 10.0 {
-                    add_alert("error_rate", "warning", error_rate, 10.0);
-                }
-            }
-        }
-        if ttft_sample_count as usize >= MIN_ALERT_SAMPLES {
-            if let Some(value) = ttft_p95_ms {
-                if value >= 10_000 {
-                    add_alert("ttft_p95", "critical", value as f64, 10_000.0);
-                } else if value >= 3_000 {
-                    add_alert("ttft_p95", "warning", value as f64, 3_000.0);
-                }
-            }
-        }
-        if queue_wait_sample_count >= MIN_ALERT_SAMPLES {
-            if let Some(value) = queue_wait_p95_ms {
-                if value >= 1_000 {
-                    add_alert("queue_wait_p95", "critical", value as f64, 1_000.0);
-                } else if value >= 250 {
-                    add_alert("queue_wait_p95", "warning", value as f64, 250.0);
-                }
-            }
-        }
-        if queue_timeouts >= 3 {
-            add_alert("queue_timeouts", "critical", queue_timeouts as f64, 3.0);
-        } else if queue_timeouts > 0 {
-            add_alert("queue_timeouts", "warning", queue_timeouts as f64, 1.0);
-        }
-        if saturation_percent >= 100.0 && queue_depth > 0 {
-            add_alert("saturation", "critical", saturation_percent, 100.0);
-        } else if saturation_percent >= 85.0 {
-            add_alert("saturation", "warning", saturation_percent, 85.0);
-        }
-
-        ProxyOperationalSnapshot {
-            window_seconds: OPERATIONAL_WINDOW.as_secs(),
-            request_count,
-            failed_request_count,
-            error_rate_percent,
-            queue_depth,
-            queued_requests_total: self.metrics.queued_requests_total.load(Ordering::Relaxed),
-            queue_timeouts_total: self.metrics.queue_timeouts_total.load(Ordering::Relaxed),
-            queue_wait_p95_ms,
-            ttft_sample_count,
-            ttft_p50_ms,
-            ttft_p95_ms,
-            prompt_tokens_observed,
-            cached_prompt_tokens,
-            cache_reuse_percent,
-            in_flight_requests,
-            max_concurrent_requests: effective_limit,
-            saturation_percent,
-            alerts,
-        }
     }
 
     pub(crate) fn capabilities_stale(&self, instance_id: &str, max_age: Duration) -> bool {
@@ -1144,21 +486,18 @@ impl RouterRuntime {
     }
 
     pub(crate) fn target_snapshot(&self, instance_id: &str) -> TargetHealthSnapshot {
-        let draining = self.draining_targets.lock().unwrap().contains(instance_id);
         let targets = self.targets.lock().unwrap();
         let target = targets.get(instance_id).cloned().unwrap_or_default();
         TargetHealthSnapshot {
             instance_id: instance_id.to_string(),
-            status: if draining {
-                "draining".to_string()
-            } else if target.ready {
+            status: if target.ready {
                 "ready".to_string()
             } else if target.circuit_open_until_ms > now_ms() {
                 "circuit_open".to_string()
             } else {
                 "unavailable".to_string()
             },
-            ready: !draining && target.ready && target.circuit_open_until_ms <= now_ms(),
+            ready: target.ready && target.circuit_open_until_ms <= now_ms(),
             consecutive_failures: target.consecutive_failures,
             circuit_open_until_ms: target.circuit_open_until_ms,
             last_checked_at_ms: target.last_checked_at_ms,
@@ -1185,27 +524,20 @@ impl RouterRuntime {
             .lock()
             .unwrap()
             .retain(|instance_id, _| instance_ids.contains(instance_id));
-        self.locality_store
-            .lock()
-            .unwrap()
-            .bindings
-            .retain(|_, binding| instance_ids.contains(&binding.instance_id));
     }
 
     pub(crate) fn route_health_counts(
         &self,
         route_instance_ids: impl IntoIterator<Item = String>,
     ) -> (usize, usize) {
-        let draining_targets = self.draining_targets.lock().unwrap();
         let targets = self.targets.lock().unwrap();
         let now = now_ms();
         route_instance_ids
             .into_iter()
             .fold((0, 0), |(healthy, unhealthy), id| {
-                let ready = !draining_targets.contains(&id)
-                    && targets
-                        .get(&id)
-                        .is_some_and(|target| target.ready && target.circuit_open_until_ms <= now);
+                let ready = targets
+                    .get(&id)
+                    .is_some_and(|target| target.ready && target.circuit_open_until_ms <= now);
                 if ready {
                     (healthy + 1, unhealthy)
                 } else {
@@ -1214,20 +546,13 @@ impl RouterRuntime {
             })
     }
 
-    pub(crate) fn prometheus_metrics(&self, max_concurrent_requests: u32) -> String {
+    pub(crate) fn prometheus_metrics(&self) -> String {
         let total = self.metrics.total_requests.load(Ordering::Relaxed);
         let completed = self.metrics.completed_requests.load(Ordering::Relaxed);
         let rejected = self.metrics.rejected_requests.load(Ordering::Relaxed);
         let upstream_errors = self.metrics.upstream_errors.load(Ordering::Relaxed);
         let duration_sum = self.metrics.duration_sum_ms.load(Ordering::Relaxed);
         let buckets = *self.metrics.latency_buckets.lock().unwrap();
-        let queue_wait_sum = self.metrics.queue_wait_sum_ms.load(Ordering::Relaxed);
-        let queue_wait_buckets = *self.metrics.queue_wait_buckets.lock().unwrap();
-        let ttft_sum = self.metrics.ttft_sum_ms.load(Ordering::Relaxed);
-        let ttft_samples = self.metrics.ttft_samples.load(Ordering::Relaxed);
-        let ttft_buckets = *self.metrics.ttft_buckets.lock().unwrap();
-        let operational = self.operational_snapshot(max_concurrent_requests);
-        let draining_targets = self.draining_targets.lock().unwrap();
         let targets = self.targets.lock().unwrap();
         let mut output = String::new();
         output.push_str("# HELP lsm_router_requests_total Total accepted router requests.\n");
@@ -1248,28 +573,10 @@ impl RouterRuntime {
             "lsm_router_in_flight_requests {}\n",
             self.in_flight_requests()
         ));
-        output.push_str("# HELP lsm_router_queue_depth Requests currently waiting for the global concurrency limiter.\n");
-        output.push_str("# TYPE lsm_router_queue_depth gauge\n");
-        output.push_str(&format!("lsm_router_queue_depth {}\n", self.queue_depth()));
-        output.push_str("# TYPE lsm_router_queued_requests_total counter\n");
-        output.push_str(&format!(
-            "lsm_router_queued_requests_total {}\n",
-            self.metrics.queued_requests_total.load(Ordering::Relaxed)
-        ));
-        output.push_str("# TYPE lsm_router_queue_timeouts_total counter\n");
-        output.push_str(&format!(
-            "lsm_router_queue_timeouts_total {}\n",
-            self.metrics.queue_timeouts_total.load(Ordering::Relaxed)
-        ));
         output.push_str("# TYPE lsm_router_in_flight_request_body_bytes gauge\n");
         output.push_str(&format!(
             "lsm_router_in_flight_request_body_bytes {}\n",
             self.in_flight_body_bytes()
-        ));
-        output.push_str("# TYPE lsm_router_in_flight_response_bytes gauge\n");
-        output.push_str(&format!(
-            "lsm_router_in_flight_response_bytes {}\n",
-            self.in_flight_response_bytes()
         ));
         output.push_str("# TYPE lsm_router_request_duration_milliseconds histogram\n");
         let mut cumulative = 0u64;
@@ -1287,109 +594,19 @@ impl RouterRuntime {
         output.push_str(&format!(
             "lsm_router_request_duration_milliseconds_sum {duration_sum}\nlsm_router_request_duration_milliseconds_count {completed}\n"
         ));
-        output.push_str("# HELP lsm_router_queue_wait_milliseconds Time spent waiting for global router admission.\n");
-        output.push_str("# TYPE lsm_router_queue_wait_milliseconds histogram\n");
-        let mut cumulative = 0u64;
-        for (index, upper) in LATENCY_BUCKETS_MS.iter().enumerate() {
-            cumulative = cumulative.saturating_add(queue_wait_buckets[index]);
-            let label = if *upper == u64::MAX {
-                "+Inf".to_string()
-            } else {
-                upper.to_string()
-            };
-            output.push_str(&format!(
-                "lsm_router_queue_wait_milliseconds_bucket{{le=\"{label}\"}} {cumulative}\n"
-            ));
-        }
-        output.push_str(&format!(
-            "lsm_router_queue_wait_milliseconds_sum {queue_wait_sum}\nlsm_router_queue_wait_milliseconds_count {total}\n"
-        ));
-        output.push_str("# HELP lsm_router_ttft_milliseconds Time from authenticated request admission to the first downstream response body chunk.\n");
-        output.push_str("# TYPE lsm_router_ttft_milliseconds histogram\n");
-        let mut cumulative = 0u64;
-        for (index, upper) in LATENCY_BUCKETS_MS.iter().enumerate() {
-            cumulative = cumulative.saturating_add(ttft_buckets[index]);
-            let label = if *upper == u64::MAX {
-                "+Inf".to_string()
-            } else {
-                upper.to_string()
-            };
-            output.push_str(&format!(
-                "lsm_router_ttft_milliseconds_bucket{{le=\"{label}\"}} {cumulative}\n"
-            ));
-        }
-        output.push_str(&format!(
-            "lsm_router_ttft_milliseconds_sum {ttft_sum}\nlsm_router_ttft_milliseconds_count {ttft_samples}\n"
-        ));
-        output.push_str("# HELP lsm_router_prompt_tokens_observed_total Prompt tokens explicitly reported by upstream responses.\n");
-        output.push_str("# TYPE lsm_router_prompt_tokens_observed_total counter\n");
-        output.push_str(&format!(
-            "lsm_router_prompt_tokens_observed_total {}\n",
-            self.metrics.prompt_tokens_observed.load(Ordering::Relaxed)
-        ));
-        output.push_str("# HELP lsm_router_prompt_tokens_cached_total Prompt tokens explicitly reported as cache-reused by upstream responses.\n");
-        output.push_str("# TYPE lsm_router_prompt_tokens_cached_total counter\n");
-        output.push_str(&format!(
-            "lsm_router_prompt_tokens_cached_total {}\n",
-            self.metrics.cached_prompt_tokens.load(Ordering::Relaxed)
-        ));
-        output.push_str("# HELP lsm_router_locality_hits_total Requests routed to an eligible existing locality binding.\n");
-        output.push_str("# TYPE lsm_router_locality_hits_total counter\n");
-        output.push_str(&format!(
-            "lsm_router_locality_hits_total {}\n",
-            self.metrics.locality_hits.load(Ordering::Relaxed)
-        ));
-        output.push_str("# HELP lsm_router_locality_misses_total Requests with a locality key but no live binding.\n");
-        output.push_str("# TYPE lsm_router_locality_misses_total counter\n");
-        output.push_str(&format!(
-            "lsm_router_locality_misses_total {}\n",
-            self.metrics.locality_misses.load(Ordering::Relaxed)
-        ));
-        output.push_str("# HELP lsm_router_locality_fallbacks_total Requests whose bound target was ineligible and used the configured scheduler.\n");
-        output.push_str("# TYPE lsm_router_locality_fallbacks_total counter\n");
-        output.push_str(&format!(
-            "lsm_router_locality_fallbacks_total {}\n",
-            self.metrics.locality_fallbacks.load(Ordering::Relaxed)
-        ));
-        output
-            .push_str("# HELP lsm_router_locality_bindings Active in-memory locality bindings.\n");
-        output.push_str("# TYPE lsm_router_locality_bindings gauge\n");
-        output.push_str(&format!(
-            "lsm_router_locality_bindings {}\n",
-            self.active_locality_bindings()
-        ));
-        output.push_str("# HELP lsm_router_saturation_ratio Current global in-flight requests divided by the configured limit.\n");
-        output.push_str("# TYPE lsm_router_saturation_ratio gauge\n");
-        output.push_str(&format!(
-            "lsm_router_saturation_ratio {:.6}\n",
-            operational.saturation_percent / 100.0
-        ));
-        output.push_str("# HELP lsm_router_operational_alert Active deterministic operational alerts by identifier and severity.\n");
-        output.push_str("# TYPE lsm_router_operational_alert gauge\n");
-        for alert in &operational.alerts {
-            output.push_str(&format!(
-                "lsm_router_operational_alert{{alert=\"{}\",severity=\"{}\"}} 1\n",
-                alert.id, alert.severity
-            ));
-        }
-        let ready_targets = targets
-            .iter()
-            .filter(|(instance_id, target)| {
-                !draining_targets.contains(*instance_id)
-                    && target.ready
-                    && target.circuit_open_until_ms <= now_ms()
-            })
-            .count();
-        let target_active_requests = targets
-            .values()
-            .map(|target| target.active_requests)
-            .sum::<usize>();
-        output.push_str("# TYPE lsm_router_targets_ready gauge\n");
-        output.push_str(&format!("lsm_router_targets_ready {ready_targets}\n"));
+        output.push_str("# TYPE lsm_router_target_ready gauge\n");
         output.push_str("# TYPE lsm_router_target_active_requests gauge\n");
-        output.push_str(&format!(
-            "lsm_router_target_active_requests {target_active_requests}\n"
-        ));
+        for (instance_id, target) in targets.iter() {
+            let label = instance_id.replace('\\', "\\\\").replace('"', "\\\"");
+            let ready = u8::from(target.ready && target.circuit_open_until_ms <= now_ms());
+            output.push_str(&format!(
+                "lsm_router_target_ready{{instance_id=\"{label}\"}} {ready}\n"
+            ));
+            output.push_str(&format!(
+                "lsm_router_target_active_requests{{instance_id=\"{label}\"}} {}\n",
+                target.active_requests
+            ));
+        }
         output.push_str("# TYPE lsm_router_uptime_seconds gauge\n");
         output.push_str(&format!(
             "lsm_router_uptime_seconds {}\n",
@@ -1410,27 +627,6 @@ mod tests {
             weight,
             max_concurrent_requests: 0,
         }
-    }
-
-    #[test]
-    fn per_client_concurrency_isolated_by_credential_and_scope() {
-        let runtime = Arc::new(RouterRuntime::default());
-        let first = runtime
-            .try_acquire_client("client-a", "inference", 1)
-            .unwrap();
-        assert!(runtime
-            .try_acquire_client("client-a", "inference", 1)
-            .is_none());
-        assert!(runtime
-            .try_acquire_client("client-b", "inference", 1)
-            .is_some());
-        assert!(runtime
-            .try_acquire_client("client-a", "discovery", 1)
-            .is_some());
-        drop(first);
-        assert!(runtime
-            .try_acquire_client("client-a", "inference", 1)
-            .is_some());
     }
 
     #[test]
@@ -1468,32 +664,6 @@ mod tests {
                 .instance_id,
             "primary"
         );
-    }
-
-    #[test]
-    fn draining_rejects_new_admissions_without_losing_existing_request_counts() {
-        let runtime = Arc::new(RouterRuntime::default());
-        let primary = candidate("primary", 0, 1);
-        let standby = candidate("standby", 10, 1);
-        let existing = runtime.acquire_target(&primary).unwrap();
-        assert_eq!(runtime.target_active_requests("primary"), 1);
-
-        runtime.set_target_draining("primary", true);
-        assert_eq!(
-            runtime
-                .select_target(&[primary.clone(), standby], "priorityFailover", "model-a")
-                .unwrap()
-                .instance_id,
-            "standby"
-        );
-        assert!(runtime.acquire_target(&primary).is_none());
-        assert_eq!(runtime.target_snapshot("primary").status, "draining");
-        assert_eq!(runtime.target_active_requests("primary"), 1);
-
-        drop(existing);
-        assert_eq!(runtime.target_active_requests("primary"), 0);
-        runtime.set_target_draining("primary", false);
-        assert!(runtime.acquire_target(&primary).is_some());
     }
 
     #[test]
@@ -1568,112 +738,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn locality_prefers_a_live_binding_but_never_overrides_priority_or_capacity() {
-        let runtime = Arc::new(RouterRuntime::default());
-        let primary = RoutingCandidate {
-            max_concurrent_requests: 1,
-            ..candidate("primary", 0, 1)
-        };
-        let peer = candidate("peer", 0, 1);
-        let standby = candidate("standby", 10, 1);
-        let key = runtime.locality_key("model-a", "client-a", b"session-a");
-
-        runtime.record_locality_success(&key, "peer", 60_000, 10);
-        let hit = runtime
-            .select_target_with_locality(
-                &[primary.clone(), peer.clone(), standby.clone()],
-                "roundRobin",
-                "model-a",
-                Some(&key),
-            )
-            .unwrap();
-        assert_eq!(hit.candidate.instance_id, "peer");
-        assert_eq!(hit.locality, LocalityDecision::Hit);
-
-        runtime.record_locality_success(&key, "standby", 60_000, 10);
-        let priority_fallback = runtime
-            .select_target_with_locality(
-                &[primary.clone(), peer.clone(), standby],
-                "priorityFailover",
-                "model-a",
-                Some(&key),
-            )
-            .unwrap();
-        assert_eq!(priority_fallback.candidate.instance_id, "primary");
-        assert_eq!(priority_fallback.locality, LocalityDecision::Fallback);
-
-        runtime.record_locality_success(&key, "primary", 60_000, 10);
-        let permit = runtime.acquire_target(&primary).unwrap();
-        let capacity_fallback = runtime
-            .select_target_with_locality(
-                &[primary, peer],
-                "priorityFailover",
-                "model-a",
-                Some(&key),
-            )
-            .unwrap();
-        assert_eq!(capacity_fallback.candidate.instance_id, "peer");
-        assert_eq!(capacity_fallback.locality, LocalityDecision::Fallback);
-        drop(permit);
-    }
-
-    #[test]
-    fn locality_bindings_expire_rebind_and_stay_bounded_without_raw_keys_in_metrics() {
-        let runtime = RouterRuntime::default();
-        let candidates = vec![candidate("one", 0, 1), candidate("two", 0, 1)];
-        let first_key = runtime.locality_key("model-a", "client-a", b"secret-session-one");
-        let second_key = runtime.locality_key("model-a", "client-a", b"secret-session-two");
-        assert_ne!(first_key, "secret-session-one");
-
-        let miss = runtime
-            .select_target_with_locality(
-                &candidates,
-                "priorityFailover",
-                "model-a",
-                Some(&first_key),
-            )
-            .unwrap();
-        assert_eq!(miss.locality, LocalityDecision::Miss);
-        runtime.record_locality_selection(miss.locality);
-        runtime.record_locality_success(&first_key, "one", 1, 1);
-        std::thread::sleep(Duration::from_millis(2));
-        let expired = runtime
-            .select_target_with_locality(
-                &candidates,
-                "priorityFailover",
-                "model-a",
-                Some(&first_key),
-            )
-            .unwrap();
-        assert_eq!(expired.locality, LocalityDecision::Miss);
-
-        runtime.record_locality_success(&first_key, "one", 60_000, 1);
-        runtime.record_locality_success(&second_key, "two", 60_000, 1);
-        for _ in 0..5_000 {
-            runtime.record_locality_success(&second_key, "two", 60_000, 1);
-        }
-        assert_eq!(runtime.active_locality_bindings(), 1);
-        assert!(runtime.locality_store.lock().unwrap().oldest_first.len() <= 1_024);
-        let rebound = runtime
-            .select_target_with_locality(
-                &candidates,
-                "priorityFailover",
-                "model-a",
-                Some(&second_key),
-            )
-            .unwrap();
-        assert_eq!(rebound.candidate.instance_id, "two");
-        assert_eq!(rebound.locality, LocalityDecision::Hit);
-        runtime.record_locality_selection(rebound.locality);
-
-        let metrics = runtime.prometheus_metrics(8);
-        assert!(metrics.contains("lsm_router_locality_hits_total 1"));
-        assert!(metrics.contains("lsm_router_locality_misses_total 1"));
-        assert!(metrics.contains("lsm_router_locality_bindings 1"));
-        assert!(!metrics.contains("secret-session"));
-    }
-
     #[tokio::test]
     async fn global_and_target_concurrency_limits_release_cleanly() {
         let runtime = Arc::new(RouterRuntime::default());
@@ -1717,84 +781,5 @@ mod tests {
         assert_eq!(runtime.in_flight_body_bytes(), 40);
         drop(second);
         assert_eq!(runtime.in_flight_body_bytes(), 0);
-    }
-
-    #[test]
-    fn operational_snapshot_uses_bounded_signals_and_deterministic_alerts() {
-        let runtime = RouterRuntime::default();
-        for _ in 0..5 {
-            runtime.record_completed(RequestObservation {
-                duration_ms: 15_000,
-                queue_wait_ms: 1_500,
-                ttft_ms: Some(12_000),
-                prompt_tokens: Some(100),
-                cached_prompt_tokens: Some(40),
-                failed: true,
-            });
-        }
-        let snapshot = runtime.operational_snapshot(8);
-        assert_eq!(snapshot.window_seconds, 300);
-        assert_eq!(snapshot.request_count, 5);
-        assert_eq!(snapshot.failed_request_count, 5);
-        assert_eq!(snapshot.ttft_p95_ms, Some(12_000));
-        assert_eq!(snapshot.queue_wait_p95_ms, Some(1_500));
-        assert_eq!(snapshot.cache_reuse_percent, Some(40.0));
-        assert!(snapshot
-            .alerts
-            .iter()
-            .any(|alert| alert.id == "error_rate" && alert.severity == "critical"));
-        assert!(snapshot
-            .alerts
-            .iter()
-            .any(|alert| alert.id == "ttft_p95" && alert.severity == "critical"));
-        assert!(snapshot
-            .alerts
-            .iter()
-            .any(|alert| alert.id == "queue_wait_p95" && alert.severity == "critical"));
-
-        let sparse_metrics = RouterRuntime::default();
-        sparse_metrics.record_completed(RequestObservation {
-            duration_ms: 15_000,
-            queue_wait_ms: 1_500,
-            ttft_ms: Some(12_000),
-            prompt_tokens: None,
-            cached_prompt_tokens: None,
-            failed: true,
-        });
-        for _ in 0..4 {
-            sparse_metrics.record_rejected();
-        }
-        let sparse_snapshot = sparse_metrics.operational_snapshot(8);
-        assert!(sparse_snapshot
-            .alerts
-            .iter()
-            .all(|alert| alert.id != "ttft_p95" && alert.id != "queue_wait_p95"));
-
-        let metrics = runtime.prometheus_metrics(8);
-        assert!(metrics.contains("lsm_router_ttft_milliseconds_bucket"));
-        assert!(metrics.contains("lsm_router_queue_wait_milliseconds_bucket"));
-        assert!(metrics.contains("lsm_router_prompt_tokens_cached_total 200"));
-        assert!(metrics.contains("alert=\"ttft_p95\",severity=\"critical\""));
-    }
-
-    #[tokio::test]
-    async fn queue_timeouts_release_depth_and_surface_an_alert() {
-        let runtime = Arc::new(RouterRuntime::default());
-        let first = runtime
-            .acquire_global(1, Duration::from_millis(20))
-            .await
-            .unwrap();
-        assert!(runtime
-            .acquire_global(1, Duration::from_millis(1))
-            .await
-            .is_none());
-        assert_eq!(runtime.queue_depth(), 0);
-        let snapshot = runtime.operational_snapshot(1);
-        assert_eq!(snapshot.queue_timeouts_total, 1);
-        assert!(snapshot
-            .alerts
-            .iter()
-            .any(|alert| alert.id == "queue_timeouts" && alert.severity == "warning"));
-        drop(first);
     }
 }

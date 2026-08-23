@@ -25,7 +25,7 @@ const RERANKER_HINTS = ['rerank', 'reranker', 'cross-encoder']
 
 export const VECTOR_ALLOWED_FIELDS = new Set<keyof InstanceConfig>([
   'launch_mode', 'manual_command', 'explicit_overrides',
-  'id', 'name', 'engine_id', 'model_path', 'alias', 'auto_start', 'restart_policy',
+  'id', 'name', 'engine_id', 'model_path', 'alias', 'auto_start',
   'ctx_size', 'ctx_size_auto', 'gpu_layers_auto', 'gpu_layers', 'threads',
   'threads_batch', 'threads_http', 'batch_size', 'ubatch_size', 'parallel',
   'cont_batching', 'warmup',

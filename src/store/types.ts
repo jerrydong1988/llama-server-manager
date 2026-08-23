@@ -25,17 +25,6 @@ export interface GgufMetadataSummary {
   context_length?: number
   quant_type?: string
   capabilities?: ModelCapabilities
-  resource?: GgufResourceMetadata
-}
-
-export interface GgufResourceMetadata {
-  block_count?: number
-  embedding_length?: number
-  attention_head_count?: number
-  attention_head_count_kv?: number
-  attention_key_length?: number
-  attention_value_length?: number
-  sliding_window?: number
 }
 
 export interface ModelInfo {
@@ -50,170 +39,6 @@ export interface ModelInfo {
   capabilities?: ModelCapabilities
   file_type: string
   is_shard?: boolean
-  artifact_identity?: ArtifactIdentity
-}
-
-export interface ArtifactIdentity {
-  schemaVersion: number
-  kind: 'engine' | 'model' | string
-  artifactId: string
-  algorithm: string
-  fileSize: number
-  sampleSize: number
-  sampleCount: number
-}
-
-export interface DeploymentIdentity {
-  schemaVersion: number
-  deploymentId: string
-  engineArtifactId: string
-  modelArtifactId: string
-  configRevisionId: string
-  configurationId: string
-  qualificationEvidenceId: string
-}
-
-export interface DeploymentIdentityStatus {
-  ready: boolean
-  errorCode?: string
-  message?: string
-  identity?: DeploymentIdentity
-}
-
-export type DeploymentState = 'unmaterialized' | 'ready' | 'stale' | 'invalid'
-
-export interface DeploymentRuntimePolicy {
-  autoStart: boolean
-  restartPolicy: 'never' | 'on-failure' | string
-}
-
-export interface DeploymentRouteSnapshot {
-  id: string
-  enabled: boolean
-  modelAlias: string
-  priority: number
-  weight: number
-  maxConcurrentRequests: number
-}
-
-export interface DeploymentRoutingSnapshot {
-  proxyEnabled: boolean
-  defaultTarget: boolean
-  routingStrategy: string
-  routes: DeploymentRouteSnapshot[]
-}
-
-export interface DeploymentRevisionSummary {
-  id: string
-  deploymentIdentity: DeploymentIdentity
-  runtimePolicy: DeploymentRuntimePolicy
-  routing: DeploymentRoutingSnapshot
-  createdAt: number
-  current: boolean
-  rollbackTarget: boolean
-  integrityValid: boolean
-}
-
-export interface DeploymentInspection {
-  instanceId: string
-  deploymentId: string
-  state: DeploymentState
-  message: string | null
-  currentRevisionId: string | null
-  rollbackTargetRevisionId: string | null
-  runningRevisionId: string | null
-  revisions: DeploymentRevisionSummary[]
-}
-
-export interface ResidencyIntent {
-  instanceId: string
-  priority: number
-  enabled: boolean
-}
-
-export interface ResidencyPolicy {
-  enabled: boolean
-  ramBudgetBytes: number
-  vramBudgetBytes: number
-  drainTimeoutSeconds: number
-  intents: ResidencyIntent[]
-}
-
-export type ResidencyPlacementPhase = 'evicted' | 'resident' | 'draining' | 'failed'
-export type ResidencyOperationKind = 'drain' | 'evict' | 'warm'
-
-export interface ResidencyPlacementRecord {
-  instanceId: string
-  deploymentId: string
-  revisionId: string
-  phase: ResidencyPlacementPhase
-  planId: string
-  updatedAt: number
-  routingDrained: boolean
-  lastError?: string
-}
-
-export interface ResidencyAuditEvent {
-  id: string
-  recordedAt: number
-  action: string
-  outcome: string
-  instanceId?: string
-  deploymentId?: string
-  revisionId?: string
-  planId?: string
-  message?: string
-}
-
-export interface ResidencyDecision {
-  instanceId: string
-  instanceName: string
-  priority: number
-  intentEnabled: boolean
-  selected: boolean
-  deploymentId: string | null
-  revisionId: string | null
-  runningRevisionId: string | null
-  resourceStatus: string
-  ramBytes: number
-  vramBytes: number
-  reasons: string[]
-}
-
-export interface ResidencyOperation {
-  sequence: number
-  kind: ResidencyOperationKind
-  instanceId: string
-  deploymentId: string
-  revisionId: string
-  reason: string
-}
-
-export interface ResidencyPlan {
-  schemaVersion: number
-  planId: string
-  generatedAt: number
-  ramBudgetBytes: number
-  ramUsedBytes: number
-  vramBudgetBytes: number
-  vramUsedBytes: number
-  decisions: ResidencyDecision[]
-  operations: ResidencyOperation[]
-}
-
-export interface ResidencyInspection {
-  policy: ResidencyPolicy
-  plan: ResidencyPlan
-  placements: ResidencyPlacementRecord[]
-  audit: ResidencyAuditEvent[]
-  registeredRpcWorkers: number
-  workerAgentAvailable: boolean
-}
-
-export interface ResidencyDrainStatus {
-  instanceId: string
-  routingDrained: boolean
-  activeRequests: number
 }
 
 export interface EngineInfo {
@@ -225,40 +50,10 @@ export interface EngineInfo {
   backend: string
   custom_name?: string
   capabilities?: EngineCapabilities
-  artifact_identity?: ArtifactIdentity
 }
 
 export type EngineCapabilityStatus = 'unprobed' | 'detected' | 'partial' | 'timeout' | 'failed'
 export type EngineVersionStatus = 'unprobed' | 'detected' | 'unknown'
-export type EngineQualificationStatus = 'unqualified' | 'passed' | 'failed' | 'incomplete' | 'cancelled' | 'stale'
-
-export interface EngineQualificationCheck {
-  name: 'version' | 'capabilities' | 'startup' | 'health' | 'inference' | string
-  status: 'passed' | 'failed' | 'skipped' | 'cancelled' | string
-  durationMs: number
-  detail?: string
-}
-
-export interface EngineQualificationReport {
-  schemaVersion: number
-  profileVersion: number
-  status: EngineQualificationStatus
-  executableFingerprint: string
-  engineArtifactId: string
-  engineVersion: string
-  helpHash: string
-  modelId: string
-  modelArtifactId: string
-  modelName: string
-  modelSize: number
-  modelModifiedAt?: number
-  startedAt?: number
-  completedAt?: number
-  invalidatedAt?: number
-  checks: EngineQualificationCheck[]
-  diagnostic?: string
-  evidenceId: string
-}
 
 export interface EngineCapabilities {
   status: EngineCapabilityStatus | string
@@ -271,7 +66,6 @@ export interface EngineCapabilities {
   executableFingerprint: string
   probedAt?: number
   error?: string
-  qualification?: EngineQualificationReport
 }
 
 export interface GeneratedServerCommand {
@@ -280,52 +74,10 @@ export interface GeneratedServerCommand {
   emittedOverrideKeys: Array<keyof InstanceConfig>
 }
 
-export type ResourcePlanStatus = 'feasible' | 'constrained' | 'infeasible' | 'unknown'
-export type ResourcePlanConfidence = 'high' | 'medium' | 'low'
-
-export interface ResourceRange {
-  minBytes: number
-  expectedBytes: number
-  maxBytes: number
-}
-
-export interface ResourceBudget {
-  required: ResourceRange
-  totalBytes: number | null
-  availableBytes: number | null
-  reservedBytes: number
-  expectedHeadroomBytes: number | null
-}
-
-export interface ResourceComponentEstimate {
-  kind: string
-  target: 'host' | 'accelerator' | string
-  required: ResourceRange
-  exact: boolean
-}
-
-export interface ResourcePlan {
-  schemaVersion: number
-  status: ResourcePlanStatus
-  confidence: ResourcePlanConfidence
-  ram: ResourceBudget
-  vram: ResourceBudget
-  components: ResourceComponentEstimate[]
-  facts: {
-    contextTokens: number
-    parallelSlots: number
-    modelShardsFound: number
-    modelShardsExpected: number
-    gpuOffloadPercent: number
-  }
-  reasons: string[]
-  assumptions: string[]
-}
-
 export interface InstanceConfig {
   // Launch policy. null explicit_overrides identifies a legacy config that has
   // not yet been migrated to intent-based command generation.
-  launch_mode: 'managed' | 'manual'; manual_command: string; manual_command_configured?: boolean;
+  launch_mode: 'managed' | 'manual'; manual_command: string;
   explicit_overrides: string[] | null;
   // Basic
   id: string; name: string; engine_id: string; model_path: string; alias: string;
@@ -361,12 +113,10 @@ export interface InstanceConfig {
   override_kv: string;
   // Server & Network
   host: string; port: number; api_key: string; api_key_file: string;
-  api_key_configured?: boolean; api_key_file_configured?: boolean;
-  ssl_key_file: string; ssl_key_file_configured?: boolean; ssl_cert_file: string; ssl_cert_file_configured?: boolean; path_prefix: string; api_prefix: string;
+  ssl_key_file: string; ssl_cert_file: string; path_prefix: string; api_prefix: string;
   cors_origins: string; cors_methods: string; cors_headers: string; cors_credentials: string;
-  no_ui: boolean; offline: boolean; ui_config_file: string; ui_config_file_configured?: boolean; ui_config: string; ui_config_configured?: boolean; ui_mcp_proxy: boolean; agent: boolean;
+  no_ui: boolean; offline: boolean; ui_config_file: string; ui_config: string; ui_mcp_proxy: boolean; agent: boolean;
   tools_runtime: string; mcp_servers_config: string; mcp_servers_json: string;
-  mcp_servers_config_configured?: boolean; mcp_servers_json_configured?: boolean;
   embedding: boolean; pooling: string; embd_normalize: number; reranking: boolean;
   metrics: boolean; props: boolean; slots_enabled: boolean;
   slot_save_path: string; log_prompts_dir: string; slot_prompt_similarity: number; prefill_assistant: boolean;
@@ -390,98 +140,24 @@ export interface InstanceConfig {
   adaptive_target: number; adaptive_decay: number; top_n_sigma: number;
   logit_bias: string; samplers: string; sampler_seq: string;
   // Misc
-  timeout: number; sleep_idle: number; verbose: boolean; custom_args: string[]; custom_args_configured?: boolean;
+  timeout: number; sleep_idle: number; verbose: boolean; custom_args: string[];
   // Server features (aligned with llama.cpp master)
   rpc_servers: string; sse_ping_interval: number; reuse_port: boolean;
   auto_start?: boolean;
-  restart_policy: 'never' | 'on-failure';
-}
-
-export type ConfigRevisionReason = 'migration' | 'created' | 'save' | 'system' | 'rollback'
-export type ConfigRevisionAuditAction = 'known_good_set' | 'known_good_invalidated'
-export type ConfigValueSummaryState = 'empty' | 'value' | 'set' | 'item_count'
-
-export interface ConfigValueSummary {
-  state: ConfigValueSummaryState
-  value?: string
-  itemCount?: number
-}
-
-export interface ConfigFieldChangeSummary {
-  field: string
-  before: ConfigValueSummary
-  after: ConfigValueSummary
-  redacted: boolean
-}
-
-export interface ConfigRevisionSummary {
-  id: string
-  fingerprint: string
-  identitySchemaVersion: number
-  configurationId: string
-  parentRevisionId: string | null
-  createdAt: number
-  reason: ConfigRevisionReason
-  rollbackOf: string | null
-  current: boolean
-  knownGood: boolean
-  integrityValid: boolean
-  diffTruncated: boolean
-  changes: ConfigFieldChangeSummary[]
-}
-
-export interface ConfigRevisionAuditSummary {
-  id: string
-  createdAt: number
-  action: ConfigRevisionAuditAction
-  revisionId: string | null
-  previousRevisionId: string | null
-}
-
-export interface ConfigRevisionHistory {
-  instanceId: string
-  currentFingerprint: string
-  currentRevisionId: string
-  currentConfigurationId: string
-  knownGoodRevisionId: string | null
-  revisions: ConfigRevisionSummary[]
-  audit: ConfigRevisionAuditSummary[]
-}
-
-export interface ConfigRevisionRollbackResponse {
-  config: InstanceConfig
-  history: ConfigRevisionHistory
-}
-
-export interface RuntimeFailure {
-  kind: 'startup_failure' | 'unexpected_exit'
-  message: string
-  exit_code: number | null
-  occurred_at: number
-}
-
-export interface InstanceRecoveryStatus {
-  phase: 'failed' | 'waiting' | 'monitoring' | 'restoring' | 'crash_loop'
-  restart_attempts: number
-  max_restart_attempts: number
-  next_retry_at: number | null
-  origin_failure: RuntimeFailure
-  last_failure: RuntimeFailure
 }
 
 export interface Instance {
   id: string
   name: string
-  status: 'running' | 'stopped' | 'error' | 'recovering' | 'crash_loop'
+  status: 'running' | 'stopped' | 'error'
   model: string
   port: number
   healthCheck: 'ok' | 'fail' | 'pending'
   startTime?: number
   config: InstanceConfig
-  recovery?: InstanceRecoveryStatus
 }
 
-export type InstanceLifecyclePhase = 'starting' | 'stopping' | 'rolling_back'
+export type InstanceLifecyclePhase = 'starting' | 'stopping'
 
 export interface LogEntry {
   instanceId: string
@@ -501,7 +177,6 @@ export interface MsFileEntry {
   version?: number
   status?: string
   error?: string
-  artifact_grant?: string
 }
 
 export interface WorkerDevice {
@@ -512,17 +187,7 @@ export interface WorkerDevice {
 }
 
 export type WorkerStatus = 'Online' | 'Offline' | 'Testing' | 'Unknown'
-export type WorkerOrigin = 'manual' | 'local' | 'ssh' | 'agent'
-
-export interface WorkerAgentConnection {
-  agent_id: string
-  control_host: string
-  control_port: number
-  tunnel_host: string
-  tunnel_port: number
-  tls_server_name: string
-  certificate_sha256: string
-}
+export type WorkerOrigin = 'manual' | 'local' | 'ssh'
 
 export interface WorkerInfo {
   id: string
@@ -534,7 +199,6 @@ export interface WorkerInfo {
   status: WorkerStatus
   last_seen?: string
   auto_discovered: boolean
-  agent?: WorkerAgentConnection
 }
 
 export interface Usb4Adapter {
@@ -565,7 +229,6 @@ export interface DownloadProgress {
   createdAt?: number
   updatedAt?: number
   completedAt?: number
-  managerOwned?: boolean
 }
 
 export interface DownloadQueueEntry {
@@ -689,9 +352,6 @@ export interface InferenceRequestSummary {
   target_instance_id: string | null
   http_status: number | null
   error_text: string | null
-  queue_time_ms: number | null
-  ttft_ms: number | null
-  cached_prompt_tokens: number | null
   prompt_tokens: number | null
   prompt_time_ms: number | null
   prompt_tps: number | null
@@ -892,25 +552,17 @@ export interface AppState {
 
   scanEngines: (paths: string[]) => Promise<void>
   probeEngineCapabilities: (id: string) => Promise<EngineInfo>
-  qualifyEngine: (id: string, modelId: string) => Promise<EngineInfo>
-  cancelEngineQualification: (id: string) => Promise<boolean>
   deleteEngine: (id: string) => Promise<void>
   renameEngine: (id: string, name: string) => void
   openEngineFolder: (dir: string) => Promise<void>
 
   generateCommand: (config: InstanceConfig, engineExe: string) => Promise<GeneratedServerCommand>
-  planResources: (config: InstanceConfig, engineBackend: string) => Promise<ResourcePlan>
-  startInstance: (id: string, manualRecovery?: boolean) => Promise<void>
+  startInstance: (id: string) => Promise<void>
   stopInstance: (id: string) => Promise<void>
   openBrowser: (instanceId: string, host: string, port: number, useTls?: boolean, apiPrefix?: string) => Promise<void>
 
   saveConfig: () => Promise<void>
   loadConfig: () => Promise<void>
-  listConfigRevisions: (instanceId: string) => Promise<ConfigRevisionHistory>
-  inspectDeploymentIdentity: (instanceId: string) => Promise<DeploymentIdentityStatus>
-  inspectDeployment: (instanceId: string) => Promise<DeploymentInspection>
-  markConfigRevisionKnownGood: (instanceId: string, revisionId: string, expectedCurrentFingerprint: string) => Promise<ConfigRevisionHistory>
-  rollbackConfigRevision: (instanceId: string, revisionId: string, expectedCurrentFingerprint: string) => Promise<ConfigRevisionRollbackResponse>
 
   browseModelscope: (repoId: string) => Promise<MsFileEntry[]>
   downloadModelscopeFiles: (repoId: string, files: MsFileEntry[], saveDir: string) => Promise<void>

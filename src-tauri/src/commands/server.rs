@@ -1,19 +1,16 @@
-use crate::bounded_http;
 use crate::commands::adlx;
 use crate::commands::engine_capabilities::{
     blocked_security_flags, capabilities_match_executable, command_for_capabilities,
-    executable_fingerprint, invalidate_engine_evidence, qualification_matches_executable,
     unsupported_command_flags,
 };
 use crate::commands::nvml;
 use crate::error::{AppError, AppResult};
 use crate::models::{
     ensure_managed_public_model_alias, migrate_legacy_load_mode, AppState, EngineCapabilities,
-    InstanceConfig, RunningInstance, SystemMetrics, WorkerOrigin, WorkerStatus,
+    InstanceConfig, RunningInstance, SystemMetrics,
 };
 use crate::path_utils::{path_identity_key, paths_equal};
 use crate::vector_policy::{normalize_for_launch, ModelWorkload};
-use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -21,7 +18,6 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{Emitter, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 pub(crate) const MAX_SERVER_LOG_BYTES: u64 = 32 * 1024 * 1024;
 pub(crate) const RETAINED_SERVER_LOG_BYTES: u64 = 8 * 1024 * 1024;
@@ -29,17 +25,7 @@ const MAX_TRACKED_PERF_TASKS: usize = 1_024;
 const LOG_REPLAY_LINES: usize = 2_000;
 const LOG_REPLAY_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const LOG_EVENT_BATCH_SIZE: usize = 200;
-static SERVER_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(std::time::Duration::from_secs(2))
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .expect("server monitoring HTTP client configuration must be valid")
-});
-const MAX_METRICS_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_SLOTS_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
-const MAX_SLOT_ENTRIES: usize = 4_096;
+static SERVER_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 
 struct CappedLogState {
     file: std::fs::File,
@@ -267,88 +253,28 @@ fn terminate_spawned_child(child: &mut std::process::Child) -> Result<(), String
 
 // Generate CLI command.
 
-const PREVIEW_GENERATED_KEY_FILE: &str = "<managed-secret:generated-on-start>";
-const PREVIEW_GENERATED_KEY: &str = "preview-only-managed-key-0123456789abcdef0123456789abcdef";
-
-fn redact_command_arguments(command: &[String]) -> Vec<String> {
-    const SENSITIVE_FLAGS: &[&str] = &[
-        "--api-key",
-        "--api-key-file",
-        "--ssl-key-file",
-        "--ssl-cert-file",
-        "--mcp-servers-json",
-        "--mcp-servers-config",
-        "--ui-config",
-        "--ui-config-file",
-        "--hf-token",
-        "-hft",
-    ];
+fn format_command_for_display(command: &[String]) -> String {
     let mut masked = Vec::with_capacity(command.len());
     let mut hide_next = false;
     for argument in command {
         let value = if hide_next {
             hide_next = false;
             "********".to_string()
-        } else if SENSITIVE_FLAGS.contains(&argument.as_str()) {
+        } else if argument == "--api-key" {
             hide_next = true;
             argument.clone()
-        } else if let Some(flag) = SENSITIVE_FLAGS
-            .iter()
-            .find(|flag| argument.starts_with(&format!("{flag}=")))
-        {
-            format!("{flag}=********")
+        } else if argument.starts_with("--api-key=") {
+            "--api-key=********".to_string()
         } else {
             argument.clone()
         };
-        masked.push(value);
-    }
-    masked
-}
-
-fn format_command_for_display(command: &[String]) -> String {
-    let masked = redact_command_arguments(command);
-    let mut formatted = Vec::with_capacity(masked.len());
-    for value in masked {
         if value.chars().any(char::is_whitespace) {
-            formatted.push(format!("\"{}\"", value.replace('"', "\\\"")));
+            masked.push(format!("\"{}\"", value.replace('"', "\\\"")));
         } else {
-            formatted.push(value);
+            masked.push(value);
         }
     }
-    formatted.join(" ")
-}
-
-fn safe_renderer_command(config: &InstanceConfig, command: &[String]) -> Vec<String> {
-    let executable = command
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "llama-server".to_string());
-    if uses_manual_command(config) {
-        return vec![executable, "<manual-arguments:redacted>".to_string()];
-    }
-    let mut safe = redact_command_arguments(command);
-    for row in &config.custom_args {
-        let Ok(tokens) = split_args_checked(row.trim()) else {
-            return vec![executable, "<custom-arguments:redacted>".to_string()];
-        };
-        if tokens.is_empty() {
-            continue;
-        }
-        if let Some(start) = safe
-            .windows(tokens.len())
-            .rposition(|window| window == tokens.as_slice())
-        {
-            safe.splice(
-                start..start + tokens.len(),
-                ["<custom-argument:redacted>".to_string()],
-            );
-        }
-    }
-    safe
-}
-
-fn safe_command_for_display(config: &InstanceConfig, command: &[String]) -> String {
-    format_command_for_display(&safe_renderer_command(config, command))
+    masked.join(" ")
 }
 
 pub(crate) fn effective_api_key(config: &InstanceConfig) -> String {
@@ -366,24 +292,19 @@ pub(crate) fn effective_api_key(config: &InstanceConfig) -> String {
         return String::new();
     }
 
-    crate::persistence::read_regular_file_nofollow_bounded(
-        std::path::Path::new(config.api_key_file.trim()),
-        64 * 1024,
-    )
-    .ok()
-    .flatten()
-    .and_then(|bytes| String::from_utf8(bytes).ok())
-    .and_then(|content| {
-        content.lines().find_map(|line| {
-            let key = line.trim().trim_start_matches('\u{feff}');
-            if key.is_empty() || key.starts_with('#') {
-                None
-            } else {
-                Some(key.to_string())
-            }
+    std::fs::read_to_string(config.api_key_file.trim())
+        .ok()
+        .and_then(|content| {
+            content.lines().find_map(|line| {
+                let key = line.trim().trim_start_matches('\u{feff}');
+                if key.is_empty() || key.starts_with('#') {
+                    None
+                } else {
+                    Some(key.to_string())
+                }
+            })
         })
-    })
-    .unwrap_or_default()
+        .unwrap_or_default()
 }
 
 pub(crate) fn effective_server_scheme(config: &InstanceConfig) -> &'static str {
@@ -404,491 +325,18 @@ fn validate_tls_configuration(config: &InstanceConfig) -> AppResult<()> {
             false,
         ));
     }
-    for (label, path) in [
-        ("TLS private key", config.ssl_key_file.trim()),
-        ("TLS certificate", config.ssl_cert_file.trim()),
-    ] {
-        if path.is_empty() {
-            continue;
-        }
-        let path = std::path::Path::new(path);
-        if !path.is_absolute() {
-            return Err(AppError::new(
-                "TLS_FILE_UNAVAILABLE",
-                format!("{label} path must be absolute: {}", path.display()),
-                false,
-            ));
-        }
-        let metadata = std::fs::symlink_metadata(path).map_err(|error| {
-            AppError::new(
-                "TLS_FILE_UNAVAILABLE",
-                format!("{label} file is unavailable: {error}"),
-                false,
-            )
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(AppError::new(
-                "TLS_FILE_UNAVAILABLE",
-                format!(
-                    "{label} must be a regular non-link file: {}",
-                    path.display()
-                ),
-                false,
-            ));
-        }
-    }
     Ok(())
-}
-
-fn read_api_keys_from_file(path: &str) -> AppResult<Vec<String>> {
-    let contents = crate::persistence::read_regular_file_nofollow_bounded(
-        std::path::Path::new(path),
-        1024 * 1024,
-    )
-    .and_then(|value| value.ok_or_else(|| "API key file does not exist".to_string()))
-    .and_then(|bytes| String::from_utf8(bytes).map_err(|error| error.to_string()))
-    .map_err(|error| {
-        AppError::new(
-            "API_KEY_FILE_UNAVAILABLE",
-            format!("Unable to read API key file {path}: {error}"),
-            false,
-        )
-    })?;
-    Ok(contents
-        .lines()
-        .map(|line| line.trim().trim_start_matches('\u{feff}'))
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_string)
-        .collect())
-}
-
-fn strip_command_options(command: &mut Vec<String>, flags: &[&str]) -> AppResult<()> {
-    let mut output = Vec::with_capacity(command.len());
-    if let Some(executable) = command.first() {
-        output.push(executable.clone());
-    }
-    let mut index = 1;
-    while index < command.len() {
-        let argument = &command[index];
-        if flags.contains(&argument.as_str()) {
-            if index + 1 >= command.len() {
-                return Err(AppError::new(
-                    "INVALID_API_KEY_ARGUMENT",
-                    format!("{argument} requires a value"),
-                    false,
-                ));
-            }
-            index += 2;
-            continue;
-        }
-        if flags
-            .iter()
-            .any(|flag| argument.starts_with(&format!("{flag}=")))
-        {
-            index += 1;
-            continue;
-        }
-        output.push(argument.clone());
-        index += 1;
-    }
-    *command = output;
-    Ok(())
-}
-
-fn materialize_launch_api_keys(
-    state: &AppState,
-    instance_id: &str,
-    config: &mut InstanceConfig,
-    command: &mut Vec<String>,
-) -> AppResult<()> {
-    validate_instance_id(instance_id)?;
-    let inline = manual_option_value(command, &["--api-key"])?;
-    let key_file = manual_option_value(command, &["--api-key-file"])?;
-    let mut keys = inline
-        .as_deref()
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if let Some(path) = key_file.as_deref().filter(|path| !path.trim().is_empty()) {
-        keys.extend(read_api_keys_from_file(path.trim())?);
-    }
-    if keys.is_empty() {
-        // Loopback sockets are host-wide, not user-private. Every instance gets
-        // a launch-scoped bearer capability even when the operator omitted one.
-        keys.push(format!(
-            "{}{}",
-            uuid::Uuid::new_v4().simple(),
-            uuid::Uuid::new_v4().simple()
-        ));
-    }
-    keys.sort();
-    keys.dedup();
-    let config_dir = state.config_dir.lock().unwrap().clone();
-    let credential_path = config_dir.join("credentials").join(format!(
-        "{instance_id}.{}.api-key",
-        uuid::Uuid::new_v4().simple()
-    ));
-    let mut serialized = keys.join("\n");
-    serialized.push('\n');
-    crate::persistence::atomic_write(&credential_path, serialized.as_bytes(), None)
-        .map_err(|message| AppError::new("API_KEY_MATERIALIZATION_FAILED", message, true))?;
-    crate::persistence::enforce_private_file(&credential_path).map_err(|message| {
-        let _ = std::fs::remove_file(&credential_path);
-        AppError::new("API_KEY_PROTECTION_FAILED", message, false)
-    })?;
-    strip_command_options(command, &["--api-key", "--api-key-file"])?;
-    command.extend([
-        "--api-key-file".to_string(),
-        credential_path.to_string_lossy().to_string(),
-    ]);
-    config.api_key.clear();
-    config.api_key_file = credential_path.to_string_lossy().to_string();
-    Ok(())
-}
-
-fn write_launch_credential(
-    state: &AppState,
-    instance_id: &str,
-    suffix: &str,
-    bytes: &[u8],
-) -> AppResult<std::path::PathBuf> {
-    validate_instance_id(instance_id)?;
-    let config_dir = state.config_dir.lock().unwrap().clone();
-    let credential_path = config_dir.join("credentials").join(format!(
-        "{instance_id}.{}.{suffix}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    crate::persistence::atomic_write(&credential_path, bytes, None)
-        .map_err(|message| AppError::new("CREDENTIAL_MATERIALIZATION_FAILED", message, true))?;
-    crate::persistence::enforce_private_file(&credential_path).map_err(|message| {
-        let _ = std::fs::remove_file(&credential_path);
-        AppError::new("CREDENTIAL_PROTECTION_FAILED", message, false)
-    })?;
-    Ok(credential_path)
-}
-
-fn materialize_mcp_configuration(
-    state: &AppState,
-    instance_id: &str,
-    config: &mut InstanceConfig,
-    command: &mut Vec<String>,
-) -> AppResult<()> {
-    validate_instance_id(instance_id)?;
-    let inline = manual_option_value(command, &["--mcp-servers-json"])?;
-    let configured_path = manual_option_value(command, &["--mcp-servers-config"])?;
-    let contents = if let Some(inline) = inline {
-        if inline.len() > 1024 * 1024 {
-            return Err(AppError::new(
-                "MCP_CONFIG_TOO_LARGE",
-                "内联 MCP 配置不能超过 1 MiB。",
-                false,
-            ));
-        }
-        inline.into_bytes()
-    } else if let Some(path) = configured_path.filter(|path| !path.trim().is_empty()) {
-        let path = std::path::Path::new(path.trim());
-        if !path.is_absolute() {
-            return Err(AppError::new(
-                "MCP_CONFIG_UNAVAILABLE",
-                "MCP 配置文件必须使用绝对路径。",
-                false,
-            ));
-        }
-        crate::persistence::read_regular_file_nofollow_bounded(path, 1024 * 1024)
-            .map_err(|message| AppError::new("MCP_CONFIG_UNAVAILABLE", message, false))?
-            .ok_or_else(|| AppError::new("MCP_CONFIG_UNAVAILABLE", "MCP 配置文件不存在。", false))?
-    } else {
-        return Ok(());
-    };
-    let _: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        AppError::new(
-            "MCP_CONFIG_INVALID",
-            format!("MCP 配置不是有效 JSON: {error}"),
-            false,
-        )
-    })?;
-    let credential_path = write_launch_credential(state, instance_id, "mcp.json", &contents)?;
-    strip_command_options(command, &["--mcp-servers-json", "--mcp-servers-config"])?;
-    command.extend([
-        "--mcp-servers-config".to_string(),
-        credential_path.to_string_lossy().to_string(),
-    ]);
-    config.mcp_servers_json.clear();
-    config.mcp_servers_config = credential_path.to_string_lossy().to_string();
-    Ok(())
-}
-
-fn materialize_tls_credentials(
-    state: &AppState,
-    instance_id: &str,
-    config: &mut InstanceConfig,
-    command: &mut Vec<String>,
-) -> AppResult<()> {
-    validate_tls_configuration(config)?;
-    if config.ssl_key_file.trim().is_empty() {
-        return Ok(());
-    }
-    let read = |path: &str, max_bytes| {
-        crate::persistence::read_regular_file_nofollow_bounded(
-            std::path::Path::new(path.trim()),
-            max_bytes,
-        )
-        .map_err(|message| AppError::new("TLS_FILE_UNAVAILABLE", message, false))?
-        .ok_or_else(|| AppError::new("TLS_FILE_UNAVAILABLE", "TLS 文件不存在。", false))
-    };
-    let key = read(&config.ssl_key_file, 1024 * 1024)?;
-    let certificate = read(&config.ssl_cert_file, 4 * 1024 * 1024)?;
-    let key_path = write_launch_credential(state, instance_id, "tls.key", &key)?;
-    let certificate_path =
-        match write_launch_credential(state, instance_id, "tls.crt", &certificate) {
-            Ok(path) => path,
-            Err(error) => {
-                let _ = std::fs::remove_file(&key_path);
-                return Err(error);
-            }
-        };
-    strip_command_options(command, &["--ssl-key-file", "--ssl-cert-file"])?;
-    command.extend([
-        "--ssl-key-file".to_string(),
-        key_path.to_string_lossy().to_string(),
-        "--ssl-cert-file".to_string(),
-        certificate_path.to_string_lossy().to_string(),
-    ]);
-    config.ssl_key_file = key_path.to_string_lossy().to_string();
-    config.ssl_cert_file = certificate_path.to_string_lossy().to_string();
-    Ok(())
-}
-
-fn materialize_ui_configuration(
-    state: &AppState,
-    instance_id: &str,
-    config: &mut InstanceConfig,
-    command: &mut Vec<String>,
-) -> AppResult<()> {
-    let inline = manual_option_value(command, &["--ui-config"])?;
-    let configured_path = manual_option_value(command, &["--ui-config-file"])?;
-    let contents = if let Some(inline) = inline {
-        if inline.len() > 1024 * 1024 {
-            return Err(AppError::new(
-                "UI_CONFIG_TOO_LARGE",
-                "内联 UI 配置不能超过 1 MiB。",
-                false,
-            ));
-        }
-        inline.into_bytes()
-    } else if let Some(path) = configured_path.filter(|path| !path.trim().is_empty()) {
-        crate::persistence::read_regular_file_nofollow_bounded(
-            std::path::Path::new(path.trim()),
-            1024 * 1024,
-        )
-        .map_err(|message| AppError::new("UI_CONFIG_UNAVAILABLE", message, false))?
-        .ok_or_else(|| AppError::new("UI_CONFIG_UNAVAILABLE", "UI 配置文件不存在。", false))?
-    } else {
-        return Ok(());
-    };
-    let _: serde_json::Value = serde_json::from_slice(&contents).map_err(|error| {
-        AppError::new(
-            "UI_CONFIG_INVALID",
-            format!("UI 配置不是有效 JSON: {error}"),
-            false,
-        )
-    })?;
-    let credential_path = write_launch_credential(state, instance_id, "ui.json", &contents)?;
-    strip_command_options(command, &["--ui-config", "--ui-config-file"])?;
-    command.extend([
-        "--ui-config-file".to_string(),
-        credential_path.to_string_lossy().to_string(),
-    ]);
-    config.ui_config.clear();
-    config.ui_config_file = credential_path.to_string_lossy().to_string();
-    Ok(())
-}
-
-fn reject_literal_argv_secrets(command: &[String]) -> AppResult<()> {
-    const SAFE_PRIVATE_FILE_FLAGS: &[&str] = &[
-        "--api-key-file",
-        "--ssl-key-file",
-        "--ssl-cert-file",
-        "--mcp-servers-config",
-        "--ui-config-file",
-    ];
-    let mut index = 1;
-    while index < command.len() {
-        let argument = &command[index];
-        if SAFE_PRIVATE_FILE_FLAGS.contains(&argument.as_str()) {
-            let value = command.get(index + 1).ok_or_else(|| {
-                AppError::new(
-                    "PRIVATE_FILE_ARGUMENT_MISSING",
-                    format!("{argument} requires a private file path"),
-                    false,
-                )
-            })?;
-            if value.trim().is_empty() || value.starts_with("--") {
-                return Err(AppError::new(
-                    "PRIVATE_FILE_ARGUMENT_INVALID",
-                    format!("{argument} requires a private file path"),
-                    false,
-                ));
-            }
-            index += 2;
-            continue;
-        }
-        let flag = argument
-            .split_once('=')
-            .map_or(argument.as_str(), |(flag, _)| flag);
-        if SAFE_PRIVATE_FILE_FLAGS.contains(&flag) {
-            index += 1;
-            continue;
-        }
-        let lower = flag.to_ascii_lowercase();
-        if [
-            "token",
-            "password",
-            "passwd",
-            "secret",
-            "credential",
-            "cookie",
-            "bearer",
-        ]
-        .iter()
-        .any(|marker| lower.contains(marker))
-            || matches!(lower.as_str(), "-hft" | "--api-key")
-        {
-            return Err(AppError::new(
-                "LITERAL_SECRET_ARGUMENT_REJECTED",
-                format!(
-                    "参数 {flag} 会把凭据暴露在操作系统进程命令行中；请改用受保护的私有文件通道。"
-                ),
-                false,
-            ));
-        }
-        index += 1;
-    }
-    Ok(())
-}
-
-fn credential_directory() -> std::path::PathBuf {
-    crate::utils::get_data_dir()
-        .join("configs")
-        .join("credentials")
-}
-
-fn credential_name_belongs_to_instance(name: &str, instance_id: &str) -> bool {
-    name == format!("{instance_id}.api-key")
-        || (name.starts_with(&format!("{instance_id}."))
-            && (name.ends_with(".api-key")
-                || name.ends_with(".mcp.json")
-                || name.ends_with(".tls.key")
-                || name.ends_with(".tls.crt")
-                || name.ends_with(".ui.json")))
-}
-
-pub(crate) fn remove_launch_api_credential(instance_id: &str, config: &InstanceConfig) {
-    if validate_instance_id(instance_id).is_err() {
-        return;
-    }
-    let expected_parent = credential_directory();
-    for value in [
-        &config.api_key_file,
-        &config.mcp_servers_config,
-        &config.ssl_key_file,
-        &config.ssl_cert_file,
-        &config.ui_config_file,
-    ] {
-        if value.trim().is_empty() {
-            continue;
-        }
-        let path = std::path::PathBuf::from(value.trim());
-        let belongs = path
-            .parent()
-            .is_some_and(|parent| crate::path_utils::paths_equal(parent, &expected_parent))
-            && path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| credential_name_belongs_to_instance(name, instance_id));
-        if !belongs {
-            continue;
-        }
-        match crate::persistence::enforce_private_file(&path) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(path);
-            }
-            Err(_) if !path.exists() => {}
-            Err(_) => {}
-        }
-    }
-}
-
-pub(crate) fn remove_instance_api_credential(instance_id: &str) {
-    if validate_instance_id(instance_id).is_err() {
-        return;
-    }
-    let directory = credential_directory();
-    let Ok(entries) = std::fs::read_dir(&directory) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if credential_name_belongs_to_instance(name, instance_id) {
-            let path = entry.path();
-            if crate::persistence::enforce_private_file(&path).is_ok() {
-                let _ = std::fs::remove_file(path);
-            }
-        }
-    }
-}
-
-pub(crate) fn remove_running_api_credential(instance_id: &str, running: &RunningInstance) {
-    if let Some(config) = running.launch_config.as_ref() {
-        remove_launch_api_credential(instance_id, config);
-    } else {
-        remove_instance_api_credential(instance_id);
-    }
-}
-
-struct LaunchCredentialCleanup {
-    instance_id: String,
-    config: InstanceConfig,
-    armed: std::sync::atomic::AtomicBool,
-}
-
-impl LaunchCredentialCleanup {
-    fn new(instance_id: &str, config: &InstanceConfig) -> Self {
-        Self {
-            instance_id: instance_id.to_string(),
-            config: config.clone(),
-            armed: std::sync::atomic::AtomicBool::new(true),
-        }
-    }
-
-    fn disarm(&self) {
-        self.armed
-            .store(false, std::sync::atomic::Ordering::Release);
-    }
-}
-
-impl Drop for LaunchCredentialCleanup {
-    fn drop(&mut self) {
-        if self.armed.swap(false, std::sync::atomic::Ordering::AcqRel) {
-            remove_launch_api_credential(&self.instance_id, &self.config);
-        }
-    }
 }
 
 pub(crate) fn telemetry_config_hash(config: &InstanceConfig) -> String {
     let mut hasher = DefaultHasher::new();
-    serde_json::to_string(&crate::models::redact_instance_for_frontend(config))
+    serde_json::to_string(config)
         .unwrap_or_default()
         .hash(&mut hasher);
     format!("{:016x}", hasher.finish())
 }
 
+#[cfg(test)]
 pub fn generate_command(config: &InstanceConfig, engine_path: &str) -> Vec<String> {
     prepare_launch(config.clone(), engine_path).2
 }
@@ -2221,21 +1669,6 @@ fn prepare_manual_launch(
         ));
     }
 
-    for argument in &arguments {
-        let flag = argument
-            .split_once('=')
-            .map_or(argument.as_str(), |(flag, _)| flag);
-        if matches!(flag, "--rpc" | "--rpc-server-host" | "--rpc-server-port") {
-            return Err(AppError::new(
-                "MANUAL_COMMAND_RPC_FLAG_RESERVED",
-                format!(
-                    "手动启动命令不允许配置 RPC 参数 {flag}；远程 RPC 只能使用通过身份校验的 Secure Agent 工作节点。"
-                ),
-                false,
-            ));
-        }
-    }
-
     if !arguments[0].starts_with('-') {
         let supplied_executable = arguments.remove(0);
         if !same_executable(&supplied_executable, engine_path) {
@@ -2291,7 +1724,6 @@ fn prepare_manual_launch(
         manual_option_value(&arguments, &["--ssl-cert-file"])?.unwrap_or_default();
     config.path_prefix = manual_option_value(&arguments, &["--path"])?.unwrap_or_default();
     config.api_prefix = manual_option_value(&arguments, &["--api-prefix"])?.unwrap_or_default();
-    config.cors_origins = manual_option_value(&arguments, &["--cors-origins"])?.unwrap_or_default();
 
     let reranking = arguments.iter().any(|argument| argument == "--reranking");
     let embedding = reranking || arguments.iter().any(|argument| argument == "--embedding");
@@ -2329,26 +1761,6 @@ fn prepare_launch_checked(
 }
 
 const SECURITY_SENSITIVE_CUSTOM_FLAGS: &[&str] = &[
-    "-m",
-    "--model",
-    "-md",
-    "--model-draft",
-    "--model-vocoder",
-    "--models-dir",
-    "--models-preset",
-    "--mmproj",
-    "--mmproj-url",
-    "--lora",
-    "--lora-scaled",
-    "--chat-template-file",
-    "--grammar-file",
-    "--json-schema-file",
-    "--slot-save-path",
-    "--log-file",
-    "--media-path",
-    "--rpc",
-    "--rpc-server-host",
-    "--rpc-server-port",
     "--host",
     "--port",
     "--api-key",
@@ -2417,166 +1829,11 @@ pub(crate) fn validate_effective_launch_security(
     }
     effective.api_key = manual_option_value(command, &["--api-key"])?.unwrap_or_default();
     effective.api_key_file = manual_option_value(command, &["--api-key-file"])?.unwrap_or_default();
-    if effective.api_key_file == PREVIEW_GENERATED_KEY_FILE {
-        effective.api_key = PREVIEW_GENERATED_KEY.to_string();
-        effective.api_key_file.clear();
-    }
     effective.ssl_key_file = manual_option_value(command, &["--ssl-key-file"])?.unwrap_or_default();
     effective.ssl_cert_file =
         manual_option_value(command, &["--ssl-cert-file"])?.unwrap_or_default();
-    effective.cors_origins = manual_option_value(command, &["--cors-origins"])?.unwrap_or_default();
     validate_tls_configuration(&effective)?;
     validate_public_bind_auth(&effective)
-}
-
-fn privileged_launch_reasons(config: &InstanceConfig) -> Vec<&'static str> {
-    let mut reasons = Vec::new();
-    let mut add = |condition: bool, label: &'static str| {
-        if condition && !reasons.contains(&label) {
-            reasons.push(label);
-        }
-    };
-    add(uses_manual_command(config), "manual command");
-    add(!config.custom_args.is_empty(), "custom arguments");
-    add(!config.lora_path.trim().is_empty(), "LoRA file");
-    add(
-        !config.chat_template_file.trim().is_empty(),
-        "chat-template file",
-    );
-    add(!config.grammar_file.trim().is_empty(), "grammar file");
-    add(
-        !config.lookup_cache_static.trim().is_empty()
-            || !config.lookup_cache_dynamic.trim().is_empty(),
-        "lookup-cache file",
-    );
-    add(!config.path_prefix.trim().is_empty(), "server content path");
-    add(!config.ui_config_file.trim().is_empty(), "UI config file");
-    add(!config.ui_config.trim().is_empty(), "inline UI config");
-    add(config.ui_mcp_proxy, "UI MCP proxy");
-    add(config.agent, "Agent mode");
-    add(!config.tools_runtime.trim().is_empty(), "tools runtime");
-    add(
-        !config.mcp_servers_config.trim().is_empty() || !config.mcp_servers_json.trim().is_empty(),
-        "MCP server configuration",
-    );
-    add(
-        !config.slot_save_path.trim().is_empty(),
-        "slot storage directory",
-    );
-    add(
-        !config.log_prompts_dir.trim().is_empty(),
-        "prompt log directory",
-    );
-    add(
-        !config.models_dir.trim().is_empty(),
-        "multi-model directory",
-    );
-    add(
-        !config.models_preset.trim().is_empty(),
-        "multi-model preset",
-    );
-    add(!config.mmproj_url.trim().is_empty(), "remote projector URL");
-    add(!config.media_path.trim().is_empty(), "media directory");
-    add(!config.tools.trim().is_empty(), "host tools");
-    add(
-        !config.json_schema_file.trim().is_empty(),
-        "JSON schema file",
-    );
-    add(
-        !is_loopback_bind_host(&config.host),
-        "non-loopback network exposure",
-    );
-    add(
-        config
-            .cors_origins
-            .split(',')
-            .any(|origin| origin.trim() == "*"),
-        "wildcard CORS",
-    );
-    reasons
-}
-
-fn launch_command_digest(command: &[String]) -> String {
-    let mut digest = Sha256::new();
-    digest.update(b"llama-server-manager:privileged-launch:v1\0");
-    for argument in command {
-        digest.update((argument.len() as u64).to_le_bytes());
-        digest.update(argument.as_bytes());
-    }
-    format!("sha256:{:x}", digest.finalize())
-}
-
-fn launch_command_for_native_review(command: &[String]) -> String {
-    let mut output = String::new();
-    for argument in redact_command_arguments(command) {
-        if !output.is_empty() {
-            output.push(' ');
-        }
-        let argument = argument
-            .chars()
-            .map(|character| {
-                if character.is_control() {
-                    '�'
-                } else {
-                    character
-                }
-            })
-            .take(512)
-            .collect::<String>();
-        output.push_str(&argument);
-        if output.len() >= 8_192 {
-            output.truncate(8_192);
-            output.push_str(" …");
-            break;
-        }
-    }
-    output
-}
-
-async fn confirm_privileged_launch(
-    app: &tauri::AppHandle,
-    config: &InstanceConfig,
-    command: &[String],
-) -> AppResult<()> {
-    let reasons = privileged_launch_reasons(config);
-    if reasons.is_empty() {
-        return Ok(());
-    }
-    let digest = launch_command_digest(command);
-    let review = launch_command_for_native_review(command);
-    let message = format!(
-        "此实例请求高权限 llama-server 能力：\n- {}\n\n这些能力可能读取、写入或提供本机文件，启动工具，或暴露网络服务。请核对下面经过密钥脱敏的最终命令；本次批准仅适用于该命令摘要并在一次启动后失效。\n\nCommand digest: {digest}\n\n{review}\n\nThis instance requests privileged llama-server capabilities. Approval is native, single-use, and bound to the exact final command digest above.",
-        reasons.join("\n- ")
-    );
-    let app = app.clone();
-    let approved = tokio::task::spawn_blocking(move || {
-        app.dialog()
-            .message(message)
-            .title("确认高权限实例启动 / Confirm privileged launch")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "批准本次启动 / Approve once".to_string(),
-                "取消 / Cancel".to_string(),
-            ))
-            .blocking_show()
-    })
-    .await
-    .map_err(|error| {
-        AppError::new(
-            "PRIVILEGED_LAUNCH_CONFIRMATION_FAILED",
-            format!("无法显示高权限启动确认: {error}"),
-            true,
-        )
-    })?;
-    if approved {
-        Ok(())
-    } else {
-        Err(AppError::new(
-            "PRIVILEGED_LAUNCH_NOT_APPROVED",
-            "高权限实例启动未获原生确认。",
-            false,
-        ))
-    }
 }
 
 enum EngineCapabilityResolution {
@@ -2618,160 +1875,14 @@ fn is_loopback_bind_host(host: &str) -> bool {
             .is_ok_and(|address| address.is_loopback())
 }
 
-fn all_effective_api_keys(config: &InstanceConfig) -> AppResult<Vec<String>> {
-    let mut keys = config
-        .api_key
-        .split(',')
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if !config.api_key_file.trim().is_empty() {
-        keys.extend(read_api_keys_from_file(config.api_key_file.trim())?);
-    }
-    keys.sort();
-    keys.dedup();
-    Ok(keys)
-}
-
-fn api_key_has_minimum_strength(key: &str) -> bool {
-    if key.len() < 32 {
-        return false;
-    }
-    let unique = key.chars().collect::<std::collections::HashSet<_>>().len();
-    unique >= 10
-        && !matches!(
-            key.to_ascii_lowercase().as_str(),
-            "passwordpasswordpasswordpassword"
-                | "changemechangemechangemechangeme"
-                | "01234567890123456789012345678901"
-        )
-}
-
-fn normalize_rpc_endpoint(value: &str) -> AppResult<String> {
-    let value = value.trim();
-    let (host, port) = if let Ok(address) = value.parse::<std::net::SocketAddr>() {
-        (address.ip().to_string(), address.port())
-    } else {
-        let (host, port) = value.rsplit_once(':').ok_or_else(|| {
-            AppError::new(
-                "RPC_ENDPOINT_INVALID",
-                "RPC endpoint must be host:port",
-                false,
-            )
-        })?;
-        let port = port.parse::<u16>().map_err(|_| {
-            AppError::new(
-                "RPC_ENDPOINT_INVALID",
-                "RPC endpoint port is invalid",
-                false,
-            )
-        })?;
-        let host = host.trim().trim_start_matches('[').trim_end_matches(']');
-        if host.is_empty()
-            || host.len() > 255
-            || host.chars().any(|character| character.is_control())
-        {
-            return Err(AppError::new(
-                "RPC_ENDPOINT_INVALID",
-                "RPC endpoint host is invalid",
-                false,
-            ));
-        }
-        (host.to_string(), port)
-    };
-    if port == 0 {
-        return Err(AppError::new(
-            "RPC_ENDPOINT_INVALID",
-            "RPC endpoint port must be non-zero",
-            false,
-        ));
-    }
-    Ok(crate::utils::format_host_port(&host, port))
-}
-
-fn validate_secure_rpc_workers(state: &AppState, config: &InstanceConfig) -> AppResult<()> {
-    if config.rpc_servers.trim().is_empty() {
-        return Ok(());
-    }
-    let requested = config
-        .rpc_servers
-        .split([',', ' '])
-        .filter(|value| !value.trim().is_empty())
-        .map(normalize_rpc_endpoint)
-        .collect::<AppResult<std::collections::HashSet<_>>>()?;
-    let workers = state.workers.lock().map_err(|_| {
-        AppError::new(
-            "WORKER_STATE_UNAVAILABLE",
-            "Worker state is unavailable",
-            true,
-        )
-    })?;
-    let approved = workers
-        .iter()
-        .filter(|worker| {
-            !worker.auto_discovered
-                && worker.origin == WorkerOrigin::Agent
-                && worker.agent.is_some()
-                && worker.status == WorkerStatus::Online
-        })
-        .map(|worker| crate::utils::format_host_port(&worker.host, worker.port))
-        .collect::<std::collections::HashSet<_>>();
-    if let Some(endpoint) = requested
-        .iter()
-        .find(|endpoint| !approved.contains(*endpoint))
-    {
-        return Err(AppError::new(
-            "RPC_WORKER_IDENTITY_REQUIRED",
-            format!(
-                "RPC endpoint {endpoint} is not an online cryptographically enrolled Secure Worker Agent"
-            ),
-            false,
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) fn validate_public_bind_auth(config: &InstanceConfig) -> AppResult<()> {
-    let keys = all_effective_api_keys(config)?;
-    if keys.iter().any(|key| !api_key_has_minimum_strength(key)) {
+    if !is_loopback_bind_host(&config.host) && effective_api_key(config).is_empty() {
         return Err(AppError::new(
-            "SERVER_API_KEY_TOO_WEAK",
-            "每个实例 API key 都必须至少 32 字节、包含至少 10 个不同字符，且不能是常见弱值。",
+            "PUBLIC_SERVER_REQUIRES_API_KEY",
+            "llama-server 监听非本机地址时必须配置 --api-key 或 --api-key-file。",
             false,
         ));
     }
-    if keys.is_empty() {
-        return Err(AppError::new(
-            "SERVER_REQUIRES_API_KEY",
-            "每个 llama-server 实例都必须使用实例 API key；未配置时管理器会在实际启动时自动生成。",
-            false,
-        ));
-    }
-    if !is_loopback_bind_host(&config.host) && effective_server_scheme(config) != "https" {
-        return Err(AppError::new(
-            "PUBLIC_SERVER_REQUIRES_TLS",
-            "llama-server 监听非本机地址时必须同时配置 TLS 私钥和证书。",
-            false,
-        ));
-    }
-    Ok(())
-}
-
-fn apply_safe_loopback_cors_default(
-    config: &mut InstanceConfig,
-    command: &mut Vec<String>,
-) -> AppResult<()> {
-    if !is_loopback_bind_host(&config.host) || !config.cors_origins.trim().is_empty() {
-        return Ok(());
-    }
-    let scheme = effective_server_scheme(config);
-    config.cors_origins = format!(
-        "{scheme}://127.0.0.1:{port},{scheme}://localhost:{port},{scheme}://[::1]:{port}",
-        port = config.port
-    );
-    strip_command_options(command, &["--cors-origins"])?;
-    command.extend(["--cors-origins".to_string(), config.cors_origins.clone()]);
     Ok(())
 }
 
@@ -2801,10 +1912,11 @@ fn trusted_engine_capabilities(
     if capabilities_match_executable(engine_exe, &engine.capabilities) {
         return EngineCapabilityResolution::Available(Box::new(engine.capabilities.clone()));
     }
-    invalidate_engine_evidence(
-        engine,
-        "engine executable changed; compatibility probe and qualification required",
-    );
+    engine.version.clear();
+    engine.capabilities = EngineCapabilities {
+        error: Some("engine executable changed; compatibility probe required".to_string()),
+        ..EngineCapabilities::default()
+    };
     let _ = crate::commands::model_inventory::update_engine_probe(engine);
     EngineCapabilityResolution::Stale
 }
@@ -2848,314 +1960,6 @@ fn validate_configured_engine(
     crate::security::require_path_within_root(std::path::Path::new(engine_exe), &authorized_root)
         .map_err(|message| AppError::new("CONFIGURED_ENGINE_UNAUTHORIZED", message, false))?;
     Ok(())
-}
-
-struct ValidatedEngineQualification {
-    fingerprint: String,
-    profile_version: u8,
-    engine_artifact_id: String,
-    evidence_id: String,
-}
-
-fn validate_engine_qualification(
-    state: &AppState,
-    config: &InstanceConfig,
-    engine_exe: &str,
-) -> AppResult<ValidatedEngineQualification> {
-    let mut engines = state.engines.lock().unwrap();
-    let engine = engines
-        .iter_mut()
-        .find(|engine| {
-            paths_equal(
-                std::path::Path::new(&engine.id),
-                std::path::Path::new(&config.engine_id),
-            )
-        })
-        .ok_or_else(|| {
-            AppError::new(
-                "ENGINE_QUALIFICATION_REQUIRED",
-                "实例引用的引擎没有可用的资格认证证据。",
-                false,
-            )
-        })?;
-    if !paths_equal(
-        &normalized_engine_path(&engine.exe),
-        &normalized_engine_path(engine_exe),
-    ) {
-        return Err(AppError::new(
-            "ENGINE_QUALIFICATION_STALE",
-            "引擎路径已变化，请重新完成能力探测和资格认证。",
-            false,
-        ));
-    }
-
-    let qualification_fingerprint = engine
-        .capabilities
-        .qualification
-        .executable_fingerprint
-        .clone();
-    let current_fingerprint = executable_fingerprint(engine_exe);
-    if !qualification_fingerprint.is_empty() && qualification_fingerprint != current_fingerprint {
-        invalidate_engine_evidence(
-            engine,
-            "engine executable changed; compatibility probe and qualification required",
-        );
-        let _ = crate::commands::model_inventory::update_engine_probe(engine);
-    }
-
-    let qualification = &engine.capabilities.qualification;
-    if let Some(error) = qualification_gate_error(
-        qualification.status.as_str(),
-        qualification_matches_executable(engine_exe, qualification),
-    ) {
-        return Err(error);
-    }
-    Ok(ValidatedEngineQualification {
-        fingerprint: qualification.executable_fingerprint.clone(),
-        profile_version: qualification.profile_version,
-        engine_artifact_id: qualification.engine_artifact_id.clone(),
-        evidence_id: qualification.evidence_id.clone(),
-    })
-}
-
-fn build_deployment_identity(
-    state: &AppState,
-    instance_id: &str,
-    config: &InstanceConfig,
-    engine_exe: &str,
-    qualification: &ValidatedEngineQualification,
-    launch_command: Option<&[String]>,
-) -> AppResult<crate::deployment_identity::DeploymentIdentity> {
-    let engine_identity = crate::deployment_identity::artifact_identity_for_path(
-        "engine",
-        std::path::Path::new(engine_exe),
-    )
-    .map_err(|message| AppError::new("DEPLOYMENT_ENGINE_IDENTITY_FAILED", message, true))?;
-    if engine_identity.artifact_id != qualification.engine_artifact_id {
-        return Err(AppError::new(
-            "DEPLOYMENT_ENGINE_IDENTITY_STALE",
-            "引擎制品身份与资格证据不一致，请重新扫描并认证。",
-            false,
-        ));
-    }
-    let model_path =
-        crate::security::require_authorized_model_path(std::path::Path::new(&config.model_path))
-            .map_err(|message| AppError::new("DEPLOYMENT_MODEL_UNAUTHORIZED", message, false))?;
-    let model_identity =
-        crate::deployment_identity::artifact_identity_for_path("model", &model_path)
-            .map_err(|message| AppError::new("DEPLOYMENT_MODEL_IDENTITY_FAILED", message, true))?;
-    let inventory_identity = state
-        .models
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|model| paths_equal(std::path::Path::new(&model.path), &model_path))
-        .map(|model| model.artifact_identity.clone())
-        .ok_or_else(|| {
-            AppError::new(
-                "DEPLOYMENT_MODEL_NOT_SCANNED",
-                "当前模型不在已扫描清单中，请先刷新模型清单。",
-                true,
-            )
-        })?;
-    if !inventory_identity.is_verified() || inventory_identity != model_identity {
-        return Err(AppError::new(
-            "DEPLOYMENT_MODEL_IDENTITY_STALE",
-            "模型制品身份尚未验证或已变化，请重新扫描模型。",
-            true,
-        ));
-    }
-    let command_has_flag = |flags: &[&str]| match launch_command {
-        None => true,
-        Some(command) => command.iter().skip(1).any(|argument| {
-            flags.contains(&argument.as_str())
-                || flags
-                    .iter()
-                    .any(|flag| argument.starts_with(&format!("{flag}=")))
-        }),
-    };
-    let mut auxiliary_artifacts = Vec::new();
-    for (role, path, flags) in [
-        (
-            "draft_model",
-            config.draft_model_path.as_str(),
-            &["-md", "--draft-model", "--model-draft"][..],
-        ),
-        ("mmproj", config.mmproj_path.as_str(), &["--mmproj"][..]),
-    ] {
-        if path.trim().is_empty() || !command_has_flag(flags) {
-            continue;
-        }
-        let canonical = crate::security::require_authorized_model_path(std::path::Path::new(path))
-            .map_err(|message| {
-                AppError::new("DEPLOYMENT_AUXILIARY_UNAUTHORIZED", message, false)
-            })?;
-        let artifact_identity = crate::deployment_identity::artifact_identity_for_path(
-            "model", &canonical,
-        )
-        .map_err(|message| AppError::new("DEPLOYMENT_AUXILIARY_IDENTITY_FAILED", message, true))?;
-        let inventory_identity = state
-            .models
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|model| paths_equal(std::path::Path::new(&model.path), &canonical))
-            .map(|model| model.artifact_identity.clone())
-            .ok_or_else(|| {
-                AppError::new(
-                    "DEPLOYMENT_AUXILIARY_NOT_SCANNED",
-                    format!("{role} model is not in the scanned inventory"),
-                    true,
-                )
-            })?;
-        if !inventory_identity.is_verified() || inventory_identity != artifact_identity {
-            return Err(AppError::new(
-                "DEPLOYMENT_AUXILIARY_IDENTITY_STALE",
-                format!("{role} model identity is stale; refresh the model inventory"),
-                true,
-            ));
-        }
-        auxiliary_artifacts.push(crate::deployment_identity::AuxiliaryArtifactIdentity {
-            role: role.to_string(),
-            artifact_id: artifact_identity.artifact_id,
-        });
-    }
-    let config_identity =
-        crate::config_revision::resolve_current_config_identity(state, instance_id, config)?;
-    crate::deployment_identity::DeploymentIdentity::new_with_auxiliary(
-        engine_identity.artifact_id,
-        model_identity.artifact_id,
-        auxiliary_artifacts,
-        config_identity.revision_id,
-        config_identity.configuration_id,
-        qualification.evidence_id.clone(),
-    )
-    .map_err(|message| AppError::new("DEPLOYMENT_IDENTITY_FAILED", message, false))
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DeploymentIdentityStatus {
-    pub ready: bool,
-    pub error_code: Option<String>,
-    pub message: Option<String>,
-    pub identity: Option<crate::deployment_identity::DeploymentIdentity>,
-}
-
-fn resolve_deployment_identity(
-    state: &AppState,
-    instance_id: &str,
-) -> AppResult<crate::deployment_identity::DeploymentIdentity> {
-    validate_instance_id(instance_id)?;
-    let config = state
-        .instances
-        .lock()
-        .unwrap()
-        .get(instance_id)
-        .cloned()
-        .ok_or_else(|| AppError::new("DEPLOYMENT_INSTANCE_NOT_FOUND", "未找到实例配置。", false))?;
-    let engine_exe = state
-        .engines
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|engine| {
-            paths_equal(
-                std::path::Path::new(&engine.id),
-                std::path::Path::new(&config.engine_id),
-            )
-        })
-        .map(|engine| engine.exe.clone())
-        .ok_or_else(|| {
-            AppError::new(
-                "DEPLOYMENT_ENGINE_NOT_FOUND",
-                "实例引用的引擎不在已扫描清单中。",
-                true,
-            )
-        })?;
-    let qualification = validate_engine_qualification(state, &config, &engine_exe)?;
-    build_deployment_identity(
-        state,
-        instance_id,
-        &config,
-        &engine_exe,
-        &qualification,
-        None,
-    )
-}
-
-#[tauri::command]
-pub fn inspect_deployment_identity(
-    instance_id: String,
-    state: tauri::State<'_, AppState>,
-) -> DeploymentIdentityStatus {
-    let result = resolve_deployment_identity(state.inner(), &instance_id);
-    match result {
-        Ok(identity) => DeploymentIdentityStatus {
-            ready: true,
-            error_code: None,
-            message: None,
-            identity: Some(identity),
-        },
-        Err(error) => DeploymentIdentityStatus {
-            ready: false,
-            error_code: Some(error.code),
-            message: Some(error.message),
-            identity: None,
-        },
-    }
-}
-
-#[tauri::command]
-pub fn inspect_deployment(
-    instance_id: String,
-    state: tauri::State<'_, AppState>,
-) -> AppResult<crate::deployment::DeploymentInspection> {
-    let preflight = resolve_deployment_identity(state.inner(), &instance_id);
-    let (identity, error) = match preflight {
-        Ok(identity) => (Some(identity), None),
-        Err(error) => (None, Some(error.message)),
-    };
-    crate::commands::config::inspect_deployment_catalog(
-        state.inner(),
-        &instance_id,
-        identity.as_ref(),
-        error,
-    )
-    .map_err(|message| AppError::new("DEPLOYMENT_INSPECTION_FAILED", message, true))
-}
-
-fn qualification_gate_error(status: &str, evidence_is_current: bool) -> Option<AppError> {
-    if evidence_is_current {
-        return None;
-    }
-    Some(match status {
-        "stale" => AppError::new(
-            "ENGINE_QUALIFICATION_STALE",
-            "引擎制品已变化，之前的资格认证证据已失效；请重新探测并认证。",
-            false,
-        ),
-        "incomplete" => AppError::new(
-            "ENGINE_QUALIFICATION_INCOMPLETE",
-            "引擎资格认证不完整；版本或能力证据未通过，禁止启动实例。",
-            false,
-        ),
-        "failed" | "cancelled" => AppError::new(
-            "ENGINE_QUALIFICATION_FAILED",
-            "引擎资格认证未通过；请查看报告、修复问题并重新认证。",
-            false,
-        ),
-        "unqualified" => AppError::new(
-            "ENGINE_QUALIFICATION_REQUIRED",
-            "引擎尚未完成资格认证；请先在引擎管理中运行认证。",
-            false,
-        ),
-        _ => AppError::new(
-            "ENGINE_QUALIFICATION_INCOMPLETE",
-            "引擎资格认证状态未知，禁止启动实例。",
-            false,
-        ),
-    })
 }
 
 fn stale_engine_error() -> AppError {
@@ -3231,30 +2035,19 @@ pub async fn generate_server_command(
 ) -> AppResult<GeneratedServerCommand> {
     let mut timing = crate::operation_timing::OperationTiming::new("generate_server_command");
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
-    validate_secure_rpc_workers(state.inner(), &config)?;
     let manual = uses_manual_command(&config);
+    let (config, _, command) = prepare_launch_checked(config, &engine_exe)?;
+    validate_tls_configuration(&config)?;
+    validate_public_bind_auth(&config)?;
+    timing.mark("prepare");
     if manual {
         timing.finish("success");
         return Ok(GeneratedServerCommand {
-            command: vec![engine_exe, "<manual-arguments:redacted>".to_string()],
+            command,
             unsupported_flags: Vec::new(),
             emitted_override_keys: Vec::new(),
         });
     }
-    let (mut config, _, mut command) = prepare_launch_checked(config, &engine_exe)?;
-    apply_safe_loopback_cors_default(&mut config, &mut command)?;
-    if manual_option_value(&command, &["--api-key"])?.is_none()
-        && manual_option_value(&command, &["--api-key-file"])?.is_none()
-    {
-        config.api_key = PREVIEW_GENERATED_KEY.to_string();
-        command.extend([
-            "--api-key-file".to_string(),
-            PREVIEW_GENERATED_KEY_FILE.to_string(),
-        ]);
-    }
-    validate_tls_configuration(&config)?;
-    validate_public_bind_auth(&config)?;
-    timing.mark("prepare");
     let capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
         EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
         EngineCapabilityResolution::Missing => None,
@@ -3284,99 +2077,45 @@ pub async fn generate_server_command(
         emitted_override_keys(&config, &engine_exe, capabilities.as_deref(), &command);
     timing.finish("success");
     Ok(GeneratedServerCommand {
-        command: safe_renderer_command(&config, &command),
+        command,
         unsupported_flags,
         emitted_override_keys,
     })
 }
 
-struct PreparedServerLaunch {
-    persisted_config: InstanceConfig,
+#[tauri::command]
+pub async fn start_server(
+    instance_id: String,
     config: InstanceConfig,
-    workload: ModelWorkload,
-    command: Vec<String>,
-    command_display: String,
-    engine_qualification: ValidatedEngineQualification,
-    deployment_identity: crate::deployment_identity::DeploymentIdentity,
-    deployment_revision: crate::deployment::DeploymentRevision,
-    credential_cleanup: LaunchCredentialCleanup,
-}
-
-fn prepare_server_launch(
-    state: &AppState,
-    instance_id: &str,
-    mut config: InstanceConfig,
-    engine_exe: &str,
-    engine_backend: &str,
-) -> AppResult<PreparedServerLaunch> {
-    let current = state.instances.lock().unwrap().get(instance_id).cloned();
-    crate::models::merge_frontend_secrets(&mut config, current.as_ref());
-    validate_configured_engine(state, &config, engine_exe)?;
-    validate_secure_rpc_workers(state, &config)?;
-    let engine_qualification = validate_engine_qualification(state, &config, engine_exe)?;
+    engine_exe: String,
+    engine_backend: String,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> AppResult<()> {
+    let mut timing = crate::operation_timing::OperationTiming::new("start_server");
+    validate_configured_engine(state.inner(), &config, &engine_exe)?;
+    validate_instance_id(&instance_id)?;
+    let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
     let manual = uses_manual_command(&config);
-    let (mut config, workload, mut generated_command) = prepare_launch_checked(config, engine_exe)?;
-    authorize_resource_plan_model_paths(state, &mut config)?;
-    let persisted_config = config.clone();
-    apply_safe_loopback_cors_default(&mut config, &mut generated_command)?;
-    materialize_launch_api_keys(state, instance_id, &mut config, &mut generated_command)?;
-    if let Err(error) =
-        materialize_mcp_configuration(state, instance_id, &mut config, &mut generated_command)
-    {
-        remove_launch_api_credential(instance_id, &config);
-        return Err(error);
-    }
-    if let Err(error) =
-        materialize_tls_credentials(state, instance_id, &mut config, &mut generated_command)
-    {
-        remove_launch_api_credential(instance_id, &config);
-        return Err(error);
-    }
-    if let Err(error) =
-        materialize_ui_configuration(state, instance_id, &mut config, &mut generated_command)
-    {
-        remove_launch_api_credential(instance_id, &config);
-        return Err(error);
-    }
-    reject_literal_argv_secrets(&generated_command)?;
-    let credential_cleanup = LaunchCredentialCleanup::new(instance_id, &config);
-    let resource_plan = crate::resource_planner::plan_instance_resources(
-        &config,
-        engine_backend,
-        current_capacity_snapshot(),
-    );
-    if resource_plan.explicitly_infeasible() {
-        return Err(AppError::new(
-            "RESOURCE_PLAN_INFEASIBLE",
-            "资源规划器判定当前可用内存不足；配置未启动，请释放资源或调整上下文、缓存或卸载设置。",
-            true,
-        )
-        .with_context(
-            "ramExpectedBytes",
-            resource_plan.ram.required.expected_bytes.to_string(),
-        )
-        .with_context(
-            "vramExpectedBytes",
-            resource_plan.vram.required.expected_bytes.to_string(),
-        ));
-    }
+    let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
-    let command = if manual {
-        generated_command
+    let cmd = if manual {
+        generated_cmd
     } else {
-        let engine_capabilities = match trusted_engine_capabilities(state, &config, engine_exe) {
-            EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
-            EngineCapabilityResolution::Missing => None,
-            EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
-        };
+        let engine_capabilities =
+            match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
+                EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
+                EngineCapabilityResolution::Missing => None,
+                EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
+            };
         validate_custom_argument_capabilities(&config, engine_capabilities.as_deref())?;
-        let generated_command = adapt_managed_arguments_for_capabilities(
-            &generated_command,
+        let generated_cmd = adapt_managed_arguments_for_capabilities(
+            &generated_cmd,
             engine_capabilities.as_deref(),
         );
         if let Some(capabilities) = engine_capabilities.as_deref() {
-            let unsupported = unsupported_command_flags(&generated_command, capabilities);
+            let unsupported = unsupported_command_flags(&generated_cmd, capabilities);
             if !unsupported.is_empty() {
                 return Err(AppError::new(
                     "ENGINE_PARAMETER_UNSUPPORTED",
@@ -3388,7 +2127,7 @@ fn prepare_server_launch(
                 ));
             }
         }
-        let blocked = blocked_security_flags(&generated_command, engine_capabilities.as_deref());
+        let blocked = blocked_security_flags(&generated_cmd, engine_capabilities.as_deref());
         if !blocked.is_empty() {
             return Err(AppError::new(
                 "ENGINE_SECURITY_PARAMETER_UNVERIFIED",
@@ -3399,229 +2138,75 @@ fn prepare_server_launch(
                 false,
             ));
         }
-        command_for_capabilities(&generated_command, engine_capabilities.as_deref())
+        command_for_capabilities(&generated_cmd, engine_capabilities.as_deref())
     };
-    let deployment_identity = build_deployment_identity(
-        state,
-        instance_id,
-        &persisted_config,
-        engine_exe,
-        &engine_qualification,
-        Some(&command),
-    )?;
-    validate_effective_launch_security(&config, &command)?;
-    let command_display = safe_command_for_display(&config, &command);
-    let deployment_revision = crate::commands::config::materialize_deployment_revision(
-        state,
-        instance_id,
-        &deployment_identity,
-    )
-    .map_err(|message| {
-        AppError::new("DEPLOYMENT_REVISION_PERSIST_FAILED", message, true)
-            .with_context("instanceId", instance_id)
-    })?;
-
-    Ok(PreparedServerLaunch {
-        persisted_config,
-        config,
-        workload,
-        command,
-        command_display,
-        engine_qualification,
-        deployment_identity,
-        deployment_revision,
-        credential_cleanup,
-    })
-}
-
-async fn start_prepared_runtime_instance(
-    state: &AppState,
-    instance_id: &str,
-    engine_backend: &str,
-    prepared: &PreparedServerLaunch,
-    manual_recovery: bool,
-) -> AppResult<RunningInstance> {
-    let running = crate::runtime_service::start_instance(
-        crate::runtime_service::RuntimeLaunchSpec {
-            instance_id: instance_id.to_string(),
-            config: prepared.config.clone(),
-            launch_config_stale: false,
-            engine_qualification_fingerprint: prepared.engine_qualification.fingerprint.clone(),
-            engine_qualification_profile_version: prepared.engine_qualification.profile_version,
-            deployment_identity: prepared.deployment_identity.clone(),
-            deployment_revision: prepared.deployment_revision.clone(),
-            engine_backend: engine_backend.to_string(),
-            command: prepared.command.clone(),
-            command_display: prepared.command_display.clone(),
-            workload: prepared.workload.as_str().to_string(),
-            working_directory: std::env::current_dir()
-                .ok()
-                .map(|path| path.to_string_lossy().to_string()),
-        },
-        manual_recovery,
-    )
-    .await
-    .map_err(AppError::from)?;
-
-    let previous_instance = {
-        state
-            .running
-            .lock()
-            .unwrap()
-            .insert(instance_id.to_string(), running.clone());
-        let previous = state
-            .instances
-            .lock()
-            .unwrap()
-            .insert(instance_id.to_string(), prepared.persisted_config.clone());
-        state
-            .runtime_managed_instances
-            .lock()
-            .unwrap()
-            .insert(instance_id.to_string());
-        previous
-    };
-    let running_snapshot = state.running.lock().unwrap().clone();
-    let persisted_instance_id = instance_id.to_string();
-    let persisted_config = prepared.persisted_config.clone();
-    if let Err(error) = crate::commands::config::update_and_persist(state, |global| {
-        global.running = running_snapshot;
-        global
-            .instances
-            .insert(persisted_instance_id, persisted_config);
-    }) {
-        let _ = crate::runtime_service::stop_instance(instance_id.to_string()).await;
-        state.running.lock().unwrap().remove(instance_id);
-        state
-            .runtime_managed_instances
-            .lock()
-            .unwrap()
-            .remove(instance_id);
-        let mut instances = state.instances.lock().unwrap();
-        if let Some(previous) = previous_instance {
-            instances.insert(instance_id.to_string(), previous);
-        } else {
-            instances.remove(instance_id);
-        }
-        return Err(AppError::new(
-            "RUNTIME_STATE_PERSIST_FAILED",
-            format!("后台运行时已回滚实例启动，因为配置持久化失败: {error}"),
-            true,
-        ));
-    }
-    prepared.credential_cleanup.disarm();
-    Ok(running)
-}
-
-pub async fn start_configured_runtime_instance(
-    state: &AppState,
-    instance_id: &str,
-) -> AppResult<RunningInstance> {
-    validate_instance_id(instance_id)?;
-    let _reservation = reserve_instance_start(state, instance_id)?;
-    let config = state
-        .instances
-        .lock()
-        .unwrap()
-        .get(instance_id)
-        .cloned()
-        .ok_or_else(|| {
-            AppError::new("INSTANCE_NOT_FOUND", "找不到指定的实例配置。", false)
-                .with_context("instanceId", instance_id)
-        })?;
-    let engine = state
-        .engines
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|engine| {
-            paths_equal(
-                std::path::Path::new(&engine.id),
-                std::path::Path::new(&config.engine_id),
-            )
-        })
-        .cloned()
-        .ok_or_else(|| {
-            AppError::new(
-                "CONFIGURED_ENGINE_NOT_FOUND",
-                "实例配置引用的 llama-server 引擎已不存在，请重新扫描或选择引擎。",
-                false,
-            )
-            .with_context("instanceId", instance_id)
-        })?;
-    crate::runtime_service::sync_app_config(state)
-        .await
-        .map_err(AppError::from)?;
-    let prepared = prepare_server_launch(state, instance_id, config, &engine.exe, &engine.backend)?;
-    start_prepared_runtime_instance(state, instance_id, &engine.backend, &prepared, true).await
-}
-
-pub async fn stop_configured_runtime_instance(
-    state: &AppState,
-    instance_id: &str,
-) -> AppResult<()> {
-    validate_instance_id(instance_id)?;
-    let status = crate::runtime_service::ensure_runtime_service()
-        .await
-        .map_err(AppError::from)?;
-    let configured = state.instances.lock().unwrap().contains_key(instance_id);
-    let runtime_known =
-        status.running.contains_key(instance_id) || status.recovery.contains_key(instance_id);
-    if !configured && !runtime_known {
-        return Err(
-            AppError::new("INSTANCE_NOT_FOUND", "找不到指定的实例。", false)
-                .with_context("instanceId", instance_id),
-        );
-    }
-
-    crate::runtime_service::stop_instance(instance_id.to_string())
-        .await
-        .map_err(AppError::from)?;
-    state.running.lock().unwrap().remove(instance_id);
-    state
-        .runtime_managed_instances
-        .lock()
-        .unwrap()
-        .remove(instance_id);
-    crate::commands::config::update_and_persist(state, |global| {
-        global.running.remove(instance_id);
-    })
-    .map_err(AppError::from)
-}
-
-#[tauri::command]
-pub async fn start_server(
-    instance_id: String,
-    config: InstanceConfig,
-    engine_exe: String,
-    engine_backend: String,
-    manual_recovery: Option<bool>,
-    state: tauri::State<'_, AppState>,
-    app: tauri::AppHandle,
-) -> AppResult<()> {
-    let mut timing = crate::operation_timing::OperationTiming::new("start_server");
-    validate_instance_id(&instance_id)?;
-    let _reservation = reserve_instance_start(state.inner(), &instance_id)?;
-    let prepared = prepare_server_launch(
-        state.inner(),
-        &instance_id,
-        config,
-        &engine_exe,
-        &engine_backend,
-    )?;
-    confirm_privileged_launch(&app, &prepared.config, &prepared.command).await?;
+    validate_effective_launch_security(&config, &cmd)?;
+    let cmd_display = format_command_for_display(&cmd);
     timing.mark("preflight");
 
     if crate::runtime_service::manages_instances() {
-        let running = start_prepared_runtime_instance(
-            state.inner(),
-            &instance_id,
-            &engine_backend,
-            &prepared,
-            manual_recovery.unwrap_or(true),
-        )
-        .await?;
+        let running =
+            crate::runtime_service::start_instance(crate::runtime_service::RuntimeLaunchSpec {
+                instance_id: instance_id.clone(),
+                config: config.clone(),
+                engine_backend: engine_backend.clone(),
+                command: cmd.clone(),
+                command_display: cmd_display.clone(),
+                workload: workload.as_str().to_string(),
+                working_directory: std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().to_string()),
+            })
+            .await
+            .map_err(AppError::from)?;
         timing.mark("runtime-start");
+
+        let previous_instance = {
+            state
+                .running
+                .lock()
+                .unwrap()
+                .insert(instance_id.clone(), running.clone());
+            let previous = state
+                .instances
+                .lock()
+                .unwrap()
+                .insert(instance_id.clone(), config.clone());
+            state
+                .runtime_managed_instances
+                .lock()
+                .unwrap()
+                .insert(instance_id.clone());
+            previous
+        };
+        let running_snapshot = state.running.lock().unwrap().clone();
+        let persisted_instance_id = instance_id.clone();
+        let persisted_config = config.clone();
+        if let Err(error) = crate::commands::config::update_and_persist(&state, |global| {
+            global.running = running_snapshot;
+            global
+                .instances
+                .insert(persisted_instance_id, persisted_config);
+        }) {
+            let _ = crate::runtime_service::stop_instance(instance_id.clone()).await;
+            state.running.lock().unwrap().remove(&instance_id);
+            state
+                .runtime_managed_instances
+                .lock()
+                .unwrap()
+                .remove(&instance_id);
+            let mut instances = state.instances.lock().unwrap();
+            if let Some(previous) = previous_instance {
+                instances.insert(instance_id.clone(), previous);
+            } else {
+                instances.remove(&instance_id);
+            }
+            return Err(AppError::new(
+                "RUNTIME_STATE_PERSIST_FAILED",
+                format!("后台运行时已回滚实例启动，因为配置持久化失败: {error}"),
+                true,
+            ));
+        }
         timing.mark("persist-main");
 
         app.emit(
@@ -3629,22 +2214,22 @@ pub async fn start_server(
             serde_json::json!({
                 "instanceId": instance_id,
                 "pid": running.pid,
-                "port": prepared.config.port,
-                "host": prepared.config.host,
-                "command": prepared.command_display,
+                "port": config.port,
+                "host": config.host,
+                "command": cmd_display,
                 "effectiveConfig": {
-                    "model_path": prepared.config.model_path,
-                    "alias": prepared.config.alias,
-                    "host": prepared.config.host,
-                    "port": prepared.config.port,
-                    "api_key_configured": true,
-                    "api_key_file_configured": true,
-                    "ssl_key_file_configured": !prepared.config.ssl_key_file.is_empty(),
-                    "ssl_cert_file_configured": !prepared.config.ssl_cert_file.is_empty(),
-                    "path_prefix": prepared.config.path_prefix,
-                    "api_prefix": prepared.config.api_prefix,
-                    "embedding": prepared.config.embedding,
-                    "reranking": prepared.config.reranking,
+                    "model_path": config.model_path,
+                    "alias": config.alias,
+                    "host": config.host,
+                    "port": config.port,
+                    "api_key": config.api_key,
+                    "api_key_file": config.api_key_file,
+                    "ssl_key_file": config.ssl_key_file,
+                    "ssl_cert_file": config.ssl_cert_file,
+                    "path_prefix": config.path_prefix,
+                    "api_prefix": config.api_prefix,
+                    "embedding": config.embedding,
+                    "reranking": config.reranking,
                 },
             }),
         )
@@ -3656,34 +2241,6 @@ pub async fn start_server(
         }
         timing.finish("success");
         return Ok(());
-    }
-
-    let PreparedServerLaunch {
-        persisted_config,
-        config,
-        workload,
-        command: cmd,
-        command_display: cmd_display,
-        engine_qualification,
-        deployment_identity,
-        deployment_revision,
-        credential_cleanup,
-    } = prepared;
-
-    let (bound_cmd, mut artifact_leases) =
-        crate::deployment_identity::bind_launch_artifacts(&cmd, &deployment_identity).map_err(
-            |error| {
-                AppError::new("DEPLOYMENT_ARTIFACT_BIND_FAILED", error, false)
-                    .with_context("instanceId", &instance_id)
-            },
-        )?;
-    if artifact_leases.engine_fingerprint() != engine_qualification.fingerprint {
-        return Err(AppError::new(
-            "ENGINE_QUALIFICATION_STALE",
-            "runtime engine artifact no longer matches qualification evidence",
-            false,
-        )
-        .with_context("instanceId", instance_id));
     }
 
     // Create a log file; llama-server writes here directly without pipe forwarding.
@@ -3701,12 +2258,8 @@ pub async fn start_server(
     );
 
     let mut child = {
-        let mut c = Command::new(&bound_cmd[0]);
-        c.args(&bound_cmd[1..])
-            .env_clear()
-            .envs(crate::utils::sanitized_engine_environment(
-                std::iter::empty::<(&str, &str)>(),
-            ))
+        let mut c = Command::new(&cmd[0]);
+        c.args(&cmd[1..])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         #[cfg(windows)]
@@ -3742,23 +2295,6 @@ pub async fn start_server(
                 .with_context("instanceId", instance_id));
         }
     };
-    let launch_process_authorization =
-        crate::deployment_identity::register_authorized_launch_process(
-            &instance_id,
-            pid,
-            start_time,
-            &executable_path,
-        );
-    if let Err(error) = artifact_leases.verify_unchanged() {
-        let message = match terminate_spawned_child(&mut child) {
-            Ok(()) => error,
-            Err(cleanup_error) => format!("{error}; {cleanup_error}"),
-        };
-        return Err(
-            AppError::new("DEPLOYMENT_ARTIFACT_CHANGED_DURING_START", message, false)
-                .with_context("instanceId", instance_id),
-        );
-    }
     let telemetry_session_id = crate::commands::telemetry::begin_run_session(
         &instance_id,
         &config,
@@ -3787,9 +2323,6 @@ pub async fn start_server(
                     telemetry_session_id: telemetry_session_id.clone(),
                     workload: workload.as_str().to_string(),
                     launch_config: Some(config.clone()),
-                    deployment_identity: deployment_identity.clone(),
-                    deployment_id: deployment_revision.deployment_id.clone(),
-                    deployment_revision_id: deployment_revision.id.clone(),
                 },
             );
             false
@@ -3815,10 +2348,10 @@ pub async fn start_server(
         .instances
         .lock()
         .unwrap()
-        .insert(instance_id.clone(), persisted_config.clone());
+        .insert(instance_id.clone(), config.clone());
     let running_snapshot = state.running.lock().unwrap().clone();
     let persisted_instance_id = instance_id.clone();
-    let persisted_config = persisted_config.clone();
+    let persisted_config = config.clone();
     if let Err(persist_error) = crate::commands::config::update_and_persist(&state, |global| {
         global.running = running_snapshot;
         global
@@ -3860,10 +2393,6 @@ pub async fn start_server(
             .with_context("instanceId", instance_id));
     }
 
-    credential_cleanup.disarm();
-    crate::deployment_identity::retain_launch_artifacts(&instance_id, artifact_leases);
-    launch_process_authorization.disarm();
-
     app.emit(
         "server-started",
         serde_json::json!({
@@ -3877,10 +2406,10 @@ pub async fn start_server(
                 "alias": config.alias,
                 "host": config.host,
                 "port": config.port,
-                "api_key_configured": true,
-                "api_key_file_configured": true,
-                "ssl_key_file_configured": !config.ssl_key_file.is_empty(),
-                "ssl_cert_file_configured": !config.ssl_cert_file.is_empty(),
+                "api_key": config.api_key,
+                "api_key_file": config.api_key_file,
+                "ssl_key_file": config.ssl_key_file,
+                "ssl_cert_file": config.ssl_cert_file,
                 "path_prefix": config.path_prefix,
                 "api_prefix": config.api_prefix,
                 "embedding": config.embedding,
@@ -3912,7 +2441,6 @@ pub async fn start_server(
     let app_clone = app.clone();
     let log_path_mon = log_path.clone();
     let telemetry_session_monitor = telemetry_session_id.clone();
-    let launch_config = config.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(1));
         match child.try_wait() {
@@ -3920,8 +2448,6 @@ pub async fn start_server(
                 let _ = stdout_pump.join();
                 let _ = stderr_pump.join();
                 let st = app_clone.state::<AppState>();
-                crate::deployment_identity::release_launch_artifacts(&id);
-                remove_launch_api_credential(&id, &launch_config);
                 {
                     let mut r = st.running.lock().unwrap();
                     if r.get(&id).map(|ri| ri.pid == pid).unwrap_or(false) {
@@ -3987,8 +2513,6 @@ pub async fn start_server(
             }
         };
         if removed {
-            crate::deployment_identity::release_launch_artifacts(&id);
-            remove_launch_api_credential(&id, &launch_config);
             {
                 let mut restored = st2.restored_runtime_instances.lock().unwrap();
                 restored.remove(&format!("{}:{}", id, pid));
@@ -4071,28 +2595,6 @@ pub(crate) struct InstanceMonitorSample {
     pub slots: Option<Vec<crate::commands::telemetry::SlotSnapshotRecord>>,
 }
 
-fn read_blocking_response_bounded(
-    mut response: reqwest::blocking::Response,
-    limit: usize,
-) -> Result<Vec<u8>, String> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit as u64)
-    {
-        return Err(format!("monitoring response exceeds {limit} bytes"));
-    }
-    let mut body = Vec::new();
-    response
-        .by_ref()
-        .take(limit as u64 + 1)
-        .read_to_end(&mut body)
-        .map_err(|error| error.to_string())?;
-    if body.len() > limit {
-        return Err(format!("monitoring response exceeds {limit} bytes"));
-    }
-    Ok(body)
-}
-
 pub(crate) fn collect_instance_monitor_sample(
     client: &reqwest::blocking::Client,
     endpoint_base: &str,
@@ -4143,23 +2645,13 @@ pub(crate) fn collect_instance_monitor_sample(
         .send()
         .ok()
         .filter(|response| response.status().is_success())
-        .and_then(|response| {
-            read_blocking_response_bounded(response, MAX_METRICS_RESPONSE_BYTES).ok()
-        })
-        .and_then(|body| {
-            std::str::from_utf8(&body)
-                .ok()
-                .and_then(|text| parse_llama_metric_sample(text).ok())
-        });
+        .and_then(|response| response.text().ok())
+        .and_then(|body| parse_llama_metric_sample(&body).ok());
     let slots = authenticated_get(&format!("{endpoint_base}/slots"))
         .send()
         .ok()
         .filter(|response| response.status().is_success())
-        .and_then(|response| {
-            read_blocking_response_bounded(response, MAX_SLOTS_RESPONSE_BYTES).ok()
-        })
-        .and_then(|body| serde_json::from_slice::<Vec<serde_json::Value>>(&body).ok())
-        .filter(|values| values.len() <= MAX_SLOT_ENTRIES)
+        .and_then(|response| response.json::<Vec<serde_json::Value>>().ok())
         .map(|values| {
             values
                 .iter()
@@ -4260,12 +2752,7 @@ fn monitor_loop(
             .unwrap_or(false)
     };
 
-    let client = reqwest::blocking::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .connect_timeout(std::time::Duration::from_secs(2))
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .expect("server monitor HTTP client configuration must be valid");
+    let client = reqwest::blocking::Client::new();
 
     // Startup timestamp used to compute uptime.
     let start_instant = std::time::Instant::now();
@@ -4389,10 +2876,7 @@ pub(crate) fn terminate_running_instance(ri: &RunningInstance) -> bool {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        let Ok(utility) = crate::utils::windows_system_utility("taskkill.exe") else {
-            return !running_instance_matches_live_process(ri);
-        };
-        CommandExt::creation_flags(&mut Command::new(utility), 0x08000000)
+        CommandExt::creation_flags(&mut Command::new("taskkill"), 0x08000000)
             .args(["/F", "/T", "/PID", &ri.pid.to_string()])
             .output()
             .map(|output| {
@@ -4408,7 +2892,7 @@ pub(crate) fn terminate_running_instance(ri: &RunningInstance) -> bool {
     }
 }
 
-pub fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<String> {
+pub(crate) fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<String> {
     let state = app.state::<AppState>();
     let running = state.running.lock().unwrap().clone();
     let mut failures = Vec::new();
@@ -4431,8 +2915,6 @@ pub fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<String> {
             }
         };
         if let Some(removed) = removed {
-            crate::deployment_identity::release_launch_artifacts(&instance_id);
-            remove_running_api_credential(&instance_id, &removed);
             let _ = crate::commands::telemetry::finish_run_session(
                 removed.telemetry_session_id.as_deref(),
                 None,
@@ -4465,6 +2947,9 @@ pub async fn stop_server(
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let ri = state.running.lock().unwrap().get(&instance_id).cloned();
+    if ri.is_none() {
+        return Ok(());
+    }
     let runtime_managed = state
         .runtime_managed_instances
         .lock()
@@ -4484,7 +2969,6 @@ pub async fn stop_server(
             restored.retain(|key| !key.starts_with(&prefix));
         }
         if let Some(removed) = removed {
-            remove_running_api_credential(&instance_id, &removed);
             crate::commands::config::update_and_persist(&state, |global| {
                 if global
                     .running
@@ -4505,9 +2989,6 @@ pub async fn stop_server(
             }),
         )
         .ok();
-        return Ok(());
-    }
-    if ri.is_none() {
         return Ok(());
     }
     state
@@ -4536,18 +3017,18 @@ pub async fn stop_server(
                 None
             }
         };
-        let Some(removed) = removed else {
+        if removed.is_none() {
             return Ok(());
-        };
-        crate::deployment_identity::release_launch_artifacts(&instance_id);
-        remove_running_api_credential(&instance_id, &removed);
+        }
         {
             let mut restored = state.restored_runtime_instances.lock().unwrap();
             let prefix = format!("{}:", instance_id);
             restored.retain(|key| !key.starts_with(&prefix));
         }
         let _ = crate::commands::telemetry::finish_run_session(
-            removed.telemetry_session_id.as_deref(),
+            removed
+                .as_ref()
+                .and_then(|item| item.telemetry_session_id.as_deref()),
             None,
             "manual-stop",
         );
@@ -4703,8 +3184,6 @@ fn cleanup_running_instance(
     let Some(ri) = removed else {
         return false;
     };
-    crate::deployment_identity::release_launch_artifacts(instance_id);
-    remove_running_api_credential(instance_id, &ri);
     {
         let mut restored = state.restored_runtime_instances.lock().unwrap();
         let prefix = format!("{}:", instance_id);
@@ -4780,91 +3259,44 @@ fn browser_url_for_host(
     ))
 }
 
-fn validate_external_guide_link(raw_url: &str) -> Result<String, String> {
-    let url = reqwest::Url::parse(raw_url).map_err(|_| "Invalid guide link".to_string())?;
-    if url.scheme() != "https"
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.port().is_some()
-    {
-        return Err("Guide links must use approved HTTPS origins".into());
-    }
-    let host = url.host_str().unwrap_or_default();
-    let path = url.path().trim_end_matches('/');
-    let approved = match host {
-        "docs.cnzone.net" => path == "/docs" || path.starts_with("/docs/"),
-        "download.cnzone.net" => path.is_empty(),
-        "github.com" => path == "/jerrydong1988/llama-server-manager/releases/latest",
-        _ => false,
-    };
-    if !approved {
-        return Err("Guide link origin or path is not approved".into());
-    }
-    Ok(url.to_string())
-}
-
-pub async fn open_external_guide_link(url: String) -> Result<(), String> {
-    let url = validate_external_guide_link(&url)?;
-    #[cfg(target_os = "windows")]
-    {
-        std::os::windows::process::CommandExt::creation_flags(
-            &mut std::process::Command::new(crate::utils::windows_system_utility("explorer.exe")?),
-            0x08000000,
-        )
-        .arg(&url)
-        .spawn()
-        .map_err(|error| error.to_string())?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&url)
-            .spawn()
-            .map_err(|error| error.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&url)
-            .spawn()
-            .map_err(|error| error.to_string())?;
-    }
-    Ok(())
-}
-
 pub async fn open_browser(
-    _host: String,
-    _port: u16,
-    _use_tls: Option<bool>,
-    _api_prefix: Option<String>,
+    host: String,
+    port: u16,
+    use_tls: Option<bool>,
+    api_prefix: Option<String>,
     instance_id: Option<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let instance_id = instance_id
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            "A running instance identity is required to open its browser URL".to_string()
-        })?;
-    let launch_config = {
+    let launch_config = instance_id.as_deref().and_then(|instance_id| {
         state
             .running
             .lock()
             .unwrap()
             .get(instance_id)
             .and_then(|running| running.launch_config.clone())
-    }
-    .ok_or_else(|| "The instance is not running with a native-validated launch URL".to_string())?;
+    });
     let url = browser_url_for_host(
-        &launch_config.host,
-        launch_config.port,
-        effective_server_scheme(&launch_config) == "https",
-        &launch_config.api_prefix,
+        launch_config
+            .as_ref()
+            .map(|config| config.host.as_str())
+            .unwrap_or(&host),
+        launch_config
+            .as_ref()
+            .map(|config| config.port)
+            .unwrap_or(port),
+        launch_config
+            .as_ref()
+            .map(|config| effective_server_scheme(config) == "https")
+            .unwrap_or_else(|| use_tls.unwrap_or(false)),
+        launch_config
+            .as_ref()
+            .map(|config| config.api_prefix.as_str())
+            .unwrap_or_else(|| api_prefix.as_deref().unwrap_or("")),
     )?;
     #[cfg(target_os = "windows")]
     {
         std::os::windows::process::CommandExt::creation_flags(
-            &mut std::process::Command::new(crate::utils::windows_system_utility("explorer.exe")?),
+            &mut std::process::Command::new("explorer.exe"),
             0x08000000,
         )
         .arg(&url)
@@ -4999,98 +3431,6 @@ struct GpuSystemSnapshot {
     system_cpu_percent: Option<f32>,
     system_memory_total_mb: Option<f64>,
     system_memory_used_mb: Option<f64>,
-}
-
-fn mib_to_bytes(value: Option<f64>) -> Option<u64> {
-    value.and_then(|value| {
-        let bytes = value * 1024.0 * 1024.0;
-        if bytes.is_finite() && bytes >= 0.0 && bytes <= u64::MAX as f64 {
-            Some(bytes.round() as u64)
-        } else {
-            None
-        }
-    })
-}
-
-fn current_capacity_snapshot() -> crate::resource_planner::CapacitySnapshot {
-    let snapshot = collect_gpu_and_system();
-    let ram_total_bytes = mib_to_bytes(snapshot.system_memory_total_mb);
-    let ram_used_bytes = mib_to_bytes(snapshot.system_memory_used_mb);
-    let vram_total_bytes = mib_to_bytes(snapshot.vram_total_mb);
-    let vram_used_bytes = mib_to_bytes(snapshot.vram_used_mb);
-    crate::resource_planner::CapacitySnapshot {
-        ram_total_bytes,
-        ram_available_bytes: ram_total_bytes
-            .zip(ram_used_bytes)
-            .map(|(total, used)| total.saturating_sub(used)),
-        vram_total_bytes,
-        vram_available_bytes: vram_total_bytes
-            .zip(vram_used_bytes)
-            .map(|(total, used)| total.saturating_sub(used)),
-    }
-}
-
-fn authorize_resource_plan_model_paths(
-    state: &AppState,
-    config: &mut InstanceConfig,
-) -> AppResult<()> {
-    let inventory = state.models.lock().unwrap().clone();
-    let authorize = |label: &str, value: &mut String, required: bool| -> AppResult<()> {
-        if value.trim().is_empty() {
-            if required {
-                return Err(AppError::new(
-                    "RESOURCE_PLAN_MODEL_REQUIRED",
-                    format!("资源规划缺少{label}。"),
-                    false,
-                ));
-            }
-            return Ok(());
-        }
-        let canonical = crate::security::require_authorized_model_path(std::path::Path::new(value))
-            .map_err(|message| AppError::new("RESOURCE_PLAN_MODEL_UNAUTHORIZED", message, false))?;
-        let inventory_entry = inventory.iter().find(|model| {
-            paths_equal(std::path::Path::new(&model.path), &canonical)
-                && model.artifact_identity.is_verified()
-        });
-        if inventory_entry.is_none() {
-            return Err(AppError::new(
-                "RESOURCE_PLAN_MODEL_NOT_SCANNED",
-                format!("{label}不在已验证的模型清单中，请先刷新模型扫描。"),
-                true,
-            ));
-        }
-        *value = canonical.to_string_lossy().to_string();
-        Ok(())
-    };
-
-    authorize("主模型", &mut config.model_path, true)?;
-    authorize("草稿模型", &mut config.draft_model_path, false)?;
-    authorize("多模态投影模型", &mut config.mmproj_path, false)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn plan_instance_resources(
-    mut config: InstanceConfig,
-    engine_backend: String,
-    state: tauri::State<'_, AppState>,
-) -> AppResult<crate::resource_planner::ResourcePlan> {
-    authorize_resource_plan_model_paths(state.inner(), &mut config)?;
-    tokio::task::spawn_blocking(move || {
-        crate::resource_planner::plan_instance_resources(
-            &config,
-            &engine_backend,
-            current_capacity_snapshot(),
-        )
-    })
-    .await
-    .map_err(|error| {
-        AppError::new(
-            "RESOURCE_PLAN_FAILED",
-            format!("资源规划失败: {error}"),
-            true,
-        )
-    })
 }
 
 /// Collect GPU + system-level metrics. Uses cached System instance, no sleep.
@@ -5297,18 +3637,7 @@ pub async fn get_slots(
         .send()
         .await
         .map_err(|e| format!("请求失败: {}", e))?;
-    let (body, _) = bounded_http::collect_response(
-        resp,
-        MAX_SLOTS_RESPONSE_BYTES,
-        std::time::Duration::from_secs(2),
-        std::time::Duration::from_secs(5),
-    )
-    .await?;
-    let arr: Vec<serde_json::Value> =
-        serde_json::from_slice(&body).map_err(|error| format!("解析失败: {error}"))?;
-    if arr.len() > MAX_SLOT_ENTRIES {
-        return Err(format!("slot response exceeds {MAX_SLOT_ENTRIES} entries"));
-    }
+    let arr: Vec<serde_json::Value> = resp.json().await.unwrap_or_default();
     Ok(arr
         .iter()
         .enumerate()
@@ -5362,15 +3691,8 @@ pub async fn get_metrics(
         Ok(r) if r.status().as_u16() == 404 => return Ok(None),
         _ => return Ok(None),
     };
-    let (body, _) = bounded_http::collect_response(
-        resp,
-        MAX_METRICS_RESPONSE_BYTES,
-        std::time::Duration::from_secs(2),
-        std::time::Duration::from_secs(5),
-    )
-    .await?;
-    let body = std::str::from_utf8(&body).map_err(|e| format!("读取失败: {e}"))?;
-    let sample = parse_llama_metric_sample(body)?;
+    let body = resp.text().await.map_err(|e| format!("读取失败: {}", e))?;
+    let sample = parse_llama_metric_sample(&body)?;
     Ok(Some(MetricsInfo {
         tokens_per_sec: sample.tokens_per_sec,
         prompt_tokens: sample.prompt_tokens,
@@ -6348,39 +4670,6 @@ fn split_args_checked(input: &str) -> Result<Vec<String>, String> {
 mod perf_parser_tests {
     use super::*;
 
-    fn create_test_tls_pair(
-        prefix: &str,
-    ) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "llama-server-manager-{prefix}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let key = dir.join("server.key");
-        let cert = dir.join("server.crt");
-        std::fs::write(&key, b"test-private-key").unwrap();
-        std::fs::write(&cert, b"test-certificate").unwrap();
-        (dir, key, cert)
-    }
-
-    #[test]
-    fn qualification_gate_fails_closed_with_stable_error_codes() {
-        for (status, expected_code) in [
-            ("unqualified", "ENGINE_QUALIFICATION_REQUIRED"),
-            ("incomplete", "ENGINE_QUALIFICATION_INCOMPLETE"),
-            ("failed", "ENGINE_QUALIFICATION_FAILED"),
-            ("cancelled", "ENGINE_QUALIFICATION_FAILED"),
-            ("stale", "ENGINE_QUALIFICATION_STALE"),
-            ("passed", "ENGINE_QUALIFICATION_INCOMPLETE"),
-            ("unexpected", "ENGINE_QUALIFICATION_INCOMPLETE"),
-        ] {
-            let error = qualification_gate_error(status, false)
-                .expect("non-current qualification evidence must block startup");
-            assert_eq!(error.code, expected_code);
-        }
-        assert!(qualification_gate_error("passed", true).is_none());
-    }
-
     #[test]
     fn current_process_identity_is_available() {
         let (start_time, executable) = read_process_identity(std::process::id())
@@ -6895,61 +5184,9 @@ mod perf_parser_tests {
         ];
         assert!(validate_effective_launch_security(&config, &unsafe_command).is_err());
 
-        let (tls_dir, tls_key, tls_cert) = create_test_tls_pair("effective-argv");
         let mut authenticated = unsafe_command;
-        authenticated.extend([
-            "--api-key".into(),
-            "strong-runtime-key-0123456789-abcdef".into(),
-            "--ssl-key-file".into(),
-            tls_key.to_string_lossy().to_string(),
-            "--ssl-cert-file".into(),
-            tls_cert.to_string_lossy().to_string(),
-        ]);
+        authenticated.extend(["--api-key".into(), "secret".into()]);
         assert!(validate_effective_launch_security(&config, &authenticated).is_ok());
-        let _ = std::fs::remove_dir_all(tls_dir);
-    }
-
-    #[test]
-    fn privileged_launch_review_covers_manual_custom_path_and_host_capabilities() {
-        assert!(privileged_launch_reasons(&InstanceConfig::default()).is_empty());
-
-        let privileged = InstanceConfig {
-            launch_mode: "manual".into(),
-            manual_command: "llama-server --path C:/sensitive".into(),
-            custom_args: vec!["--future-file-flag=C:/secret".into()],
-            lora_path: "C:/models/adapter.gguf".into(),
-            slot_save_path: "C:/state/slots".into(),
-            agent: true,
-            tools_runtime: "host".into(),
-            mcp_servers_json: r#"{"mcpServers":{}}"#.into(),
-            host: "0.0.0.0".into(),
-            cors_origins: "*".into(),
-            ..InstanceConfig::default()
-        };
-        let reasons = privileged_launch_reasons(&privileged);
-        for expected in [
-            "manual command",
-            "custom arguments",
-            "LoRA file",
-            "slot storage directory",
-            "Agent mode",
-            "tools runtime",
-            "MCP server configuration",
-            "non-loopback network exposure",
-            "wildcard CORS",
-        ] {
-            assert!(reasons.contains(&expected), "missing reason: {expected}");
-        }
-    }
-
-    #[test]
-    fn privileged_launch_digest_is_argument_boundary_sensitive_and_review_is_redacted() {
-        let left = vec!["llama-server".into(), "--api-key".into(), "secret".into()];
-        let right = vec!["llama-server".into(), "--api-key=secret".into()];
-        assert_ne!(launch_command_digest(&left), launch_command_digest(&right));
-        let review = launch_command_for_native_review(&left);
-        assert!(!review.contains("secret"));
-        assert!(review.contains("********"));
     }
 
     #[test]
@@ -7065,33 +5302,6 @@ mod perf_parser_tests {
             ..InstanceConfig::default()
         };
         assert!(prepare_launch_checked(zero_port, "llama-server").is_err());
-    }
-
-    #[test]
-    fn manual_command_rejects_every_rpc_flag_representation() {
-        for command in [
-            "-m model.gguf --rpc 10.0.0.7:50052",
-            "-m model.gguf --rpc=10.0.0.7:50052",
-            "-m model.gguf --rpc-server-host 10.0.0.7",
-            "-m model.gguf --rpc-server-host=10.0.0.7",
-            "-m model.gguf --rpc-server-port 50052",
-            "-m model.gguf --rpc-server-port=50052",
-        ] {
-            let config = InstanceConfig {
-                launch_mode: "manual".into(),
-                manual_command: command.into(),
-                ..InstanceConfig::default()
-            };
-            let error = prepare_launch_checked(config, "llama-server").unwrap_err();
-            assert_eq!(error.code, "MANUAL_COMMAND_RPC_FLAG_RESERVED");
-        }
-
-        let local = InstanceConfig {
-            launch_mode: "manual".into(),
-            manual_command: "-m model.gguf --host 127.0.0.1 --port 8080".into(),
-            ..InstanceConfig::default()
-        };
-        assert!(prepare_launch_checked(local, "llama-server").is_ok());
     }
 
     #[test]
@@ -7572,28 +5782,6 @@ mod perf_parser_tests {
     }
 
     #[test]
-    fn guide_links_are_restricted_to_documented_https_destinations() {
-        for allowed in [
-            "https://docs.cnzone.net/docs",
-            "https://docs.cnzone.net/docs/guide/start",
-            "https://download.cnzone.net/",
-            "https://github.com/jerrydong1988/llama-server-manager/releases/latest",
-        ] {
-            assert!(validate_external_guide_link(allowed).is_ok(), "{allowed}");
-        }
-        for blocked in [
-            "http://docs.cnzone.net/docs",
-            "https://docs.cnzone.net.evil.example/docs",
-            "https://docs.cnzone.net@evil.example/docs",
-            "https://download.cnzone.net/redirect",
-            "https://github.com/other/repository/releases/latest",
-            "file:///C:/Windows/System32/calc.exe",
-        ] {
-            assert!(validate_external_guide_link(blocked).is_err(), "{blocked}");
-        }
-    }
-
-    #[test]
     fn command_display_masks_api_keys_as_argument_values() {
         assert_eq!(
             format_command_for_display(&[
@@ -7612,78 +5800,6 @@ mod perf_parser_tests {
             ]),
             "llama-server --api-key=********"
         );
-        assert_eq!(
-            redact_command_arguments(&[
-                "llama-server".into(),
-                "--hf-token=hf-secret".into(),
-                "-hft".into(),
-                "short-secret".into(),
-                "--ssl-cert-file".into(),
-                "private-cert.pem".into(),
-            ]),
-            vec![
-                "llama-server",
-                "--hf-token=********",
-                "-hft",
-                "********",
-                "--ssl-cert-file",
-                "********",
-            ]
-        );
-    }
-
-    #[test]
-    fn telemetry_config_hash_excludes_secret_values_but_keeps_configuration_shape() {
-        let first = InstanceConfig {
-            api_key: "first-secret".into(),
-            manual_command: "-m model.gguf --hf-token first-token".into(),
-            custom_args: vec!["--future-secret first-value".into()],
-            port: 8080,
-            ..InstanceConfig::default()
-        };
-        let mut rotated = first.clone();
-        rotated.api_key = "rotated-secret".into();
-        rotated.manual_command = "-m model.gguf --hf-token rotated-token".into();
-        rotated.custom_args = vec!["--future-secret rotated-value".into()];
-        assert_eq!(
-            telemetry_config_hash(&first),
-            telemetry_config_hash(&rotated)
-        );
-
-        rotated.port = 8081;
-        assert_ne!(
-            telemetry_config_hash(&first),
-            telemetry_config_hash(&rotated)
-        );
-    }
-
-    #[test]
-    fn argv_secret_guard_accepts_private_file_values_but_rejects_literal_credentials() {
-        assert!(reject_literal_argv_secrets(&[
-            "llama-server".into(),
-            "--api-key-file".into(),
-            "/private/credentials/instance.api-key".into(),
-            "--ssl-key-file=/private/credentials/server.secret.key".into(),
-        ])
-        .is_ok());
-        assert!(reject_literal_argv_secrets(&[
-            "llama-server".into(),
-            "--api-key".into(),
-            "literal-secret".into(),
-        ])
-        .is_err());
-        assert!(reject_literal_argv_secrets(&[
-            "llama-server".into(),
-            "--future-secret".into(),
-            "literal-secret".into(),
-        ])
-        .is_err());
-        assert!(reject_literal_argv_secrets(&[
-            "llama-server".into(),
-            "--api-key-file".into(),
-            "--future-secret".into(),
-        ])
-        .is_err());
     }
 
     #[test]
@@ -7724,15 +5840,13 @@ mod perf_parser_tests {
         };
         assert!(validate_tls_configuration(&key_only).is_err());
 
-        let (tls_dir, tls_key, tls_cert) = create_test_tls_pair("tls-pair");
         let complete = InstanceConfig {
-            ssl_key_file: tls_key.to_string_lossy().to_string(),
-            ssl_cert_file: tls_cert.to_string_lossy().to_string(),
+            ssl_key_file: "server.key".into(),
+            ssl_cert_file: "server.crt".into(),
             ..InstanceConfig::default()
         };
         assert!(validate_tls_configuration(&complete).is_ok());
         assert_eq!(effective_server_scheme(&complete), "https");
-        let _ = std::fs::remove_dir_all(tls_dir);
     }
 
     #[test]
@@ -7774,17 +5888,14 @@ mod perf_parser_tests {
 
     #[test]
     fn non_loopback_server_bind_requires_an_api_key() {
-        let (tls_dir, tls_key, tls_cert) = create_test_tls_pair("public-bind");
         let public = InstanceConfig {
             host: "0.0.0.0".into(),
-            ssl_key_file: tls_key.to_string_lossy().to_string(),
-            ssl_cert_file: tls_cert.to_string_lossy().to_string(),
             ..InstanceConfig::default()
         };
         assert!(validate_public_bind_auth(&public).is_err());
 
         let authenticated = InstanceConfig {
-            api_key: "strong-public-key-0123456789-abcdef".into(),
+            api_key: "secret".into(),
             ..public
         };
         assert!(validate_public_bind_auth(&authenticated).is_ok());
@@ -7793,71 +5904,20 @@ mod perf_parser_tests {
             "llama-server-manager-exposure-key-{}",
             uuid::Uuid::new_v4()
         ));
-        std::fs::write(&key_file, b"strong-file-key-0123456789-abcdef\n").unwrap();
+        std::fs::write(&key_file, b"file-secret\n").unwrap();
         let file_authenticated = InstanceConfig {
             host: "::".into(),
             api_key_file: key_file.to_string_lossy().to_string(),
-            ssl_key_file: tls_key.to_string_lossy().to_string(),
-            ssl_cert_file: tls_cert.to_string_lossy().to_string(),
             ..InstanceConfig::default()
         };
         assert!(validate_public_bind_auth(&file_authenticated).is_ok());
         let _ = std::fs::remove_file(key_file);
-        let _ = std::fs::remove_dir_all(tls_dir);
 
         let loopback = InstanceConfig {
             host: "127.0.0.1".into(),
             ..InstanceConfig::default()
         };
-        assert!(validate_public_bind_auth(&loopback).is_err());
-
-        let restricted_loopback = InstanceConfig {
-            cors_origins: "http://127.0.0.1:8080,http://localhost:8080".into(),
-            ..loopback
-        };
-        assert!(validate_public_bind_auth(&restricted_loopback).is_err());
-    }
-
-    #[test]
-    fn authenticated_loopback_launch_receives_exact_local_cors_origins() {
-        let mut config = InstanceConfig {
-            host: "127.0.0.1".into(),
-            port: 18_080,
-            api_key: "strong-loopback-key-0123456789-abcdef".into(),
-            ..InstanceConfig::default()
-        };
-        let mut command = vec!["llama-server".into(), "--host".into(), config.host.clone()];
-        apply_safe_loopback_cors_default(&mut config, &mut command).unwrap();
-
-        assert_eq!(
-            config.cors_origins,
-            "http://127.0.0.1:18080,http://localhost:18080,http://[::1]:18080"
-        );
-        assert!(has_flag_value(
-            &command,
-            "--cors-origins",
-            &config.cors_origins
-        ));
-        assert!(validate_public_bind_auth(&config).is_ok());
-    }
-
-    #[test]
-    fn launch_only_cors_policy_does_not_mutate_the_persisted_configuration() {
-        let original = InstanceConfig {
-            host: "127.0.0.1".into(),
-            port: 18_081,
-            api_key: "strong-loopback-key-0123456789-abcdef".into(),
-            ..InstanceConfig::default()
-        };
-        let persisted = original.clone();
-        let mut effective = original;
-        let mut command = vec!["llama-server".into()];
-
-        apply_safe_loopback_cors_default(&mut effective, &mut command).unwrap();
-
-        assert!(persisted.cors_origins.is_empty());
-        assert!(!effective.cors_origins.is_empty());
-        assert!(validate_public_bind_auth(&effective).is_ok());
+        assert!(validate_public_bind_auth(&loopback).is_ok());
     }
 
     #[test]
@@ -7880,9 +5940,6 @@ mod perf_parser_tests {
             telemetry_session_id: None,
             workload: "inference".into(),
             launch_config: None,
-            deployment_identity: Default::default(),
-            deployment_id: String::new(),
-            deployment_revision_id: String::new(),
         };
 
         assert!(!process_identity_matches(
@@ -8038,13 +6095,6 @@ pub mod ipc {
         state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<()> {
         super::open_browser(host, port, use_tls, api_prefix, instance_id, state)
-            .await
-            .map_err(crate::error::AppError::from)
-    }
-
-    #[tauri::command]
-    pub async fn open_external_guide_link(url: String) -> crate::error::AppResult<()> {
-        super::open_external_guide_link(url)
             .await
             .map_err(crate::error::AppError::from)
     }

@@ -483,7 +483,7 @@ export default function DownloadManager() {
               </>
             )}
 
-            {(task.status === 'completed' || task.status === 'cancelled') && task.path && task.managerOwned !== false && (
+            {(task.status === 'completed' || task.status === 'cancelled') && task.path && (
               <button
                 onClick={() => void handleDeleteCompleted(task)}
                 className="rounded-lg p-2 text-slate-500 transition hover:bg-slate-100 hover:text-rose-500 dark:hover:bg-slate-800"

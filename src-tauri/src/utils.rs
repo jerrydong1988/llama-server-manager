@@ -1,6 +1,5 @@
-use crate::models::{GgufMetadataSummary, GgufResourceMetadata, ModelCapabilities};
+use crate::models::{GgufMetadataSummary, ModelCapabilities};
 use crate::vector_policy::{classify_model_workload, ModelWorkload};
-use std::ffi::{OsStr, OsString};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -14,140 +13,12 @@ const MAX_GGUF_TAG_ARRAY_ITEMS: u64 = 4_096;
 const MAX_GGUF_STORED_TAGS: u64 = 256;
 const MAX_GGUF_TAG_BYTES: u64 = 4_096;
 const MAX_GGUF_TAG_TOTAL_BYTES: u64 = 65_536;
-const MAX_GGUF_ARCHITECTURE_BYTES: usize = 128;
-const MAX_GGUF_NAME_BYTES: usize = 1_024;
-const MAX_GGUF_REPOSITORY_BYTES: usize = 2_048;
-const MAX_GGUF_PROJECTOR_TYPE_BYTES: usize = 256;
 static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
 pub const DEFAULT_MODELS_DIR_NAME: &str = "models";
-
-#[cfg(windows)]
-pub fn windows_system_utility(name: &str) -> Result<PathBuf, String> {
-    use windows_sys::Win32::System::SystemInformation::{
-        GetSystemDirectoryW, GetWindowsDirectoryW,
-    };
-    let (directory_kind, relative) = match name.to_ascii_lowercase().as_str() {
-        "reg.exe" => ("system", PathBuf::from("reg.exe")),
-        "taskkill.exe" => ("system", PathBuf::from("taskkill.exe")),
-        "powershell.exe" => (
-            "system",
-            PathBuf::from("WindowsPowerShell")
-                .join("v1.0")
-                .join("powershell.exe"),
-        ),
-        "explorer.exe" => ("windows", PathBuf::from("explorer.exe")),
-        _ => return Err("unsupported Windows system utility".to_string()),
-    };
-    let mut buffer = vec![0_u16; 32_768];
-    let length = unsafe {
-        if directory_kind == "system" {
-            GetSystemDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32)
-        } else {
-            GetWindowsDirectoryW(buffer.as_mut_ptr(), buffer.len() as u32)
-        }
-    };
-    if length == 0 || length as usize >= buffer.len() {
-        return Err("cannot resolve the trusted Windows system directory".to_string());
-    }
-    let directory = PathBuf::from(String::from_utf16_lossy(&buffer[..length as usize]));
-    let utility = directory.join(relative);
-    if !utility.is_absolute() || !utility.is_file() {
-        return Err(format!(
-            "trusted Windows utility is unavailable: {}",
-            utility.display()
-        ));
-    }
-    Ok(utility)
-}
-
-fn engine_environment_name_allowed(name: &str) -> bool {
-    let upper = name.to_ascii_uppercase();
-    if [
-        "TOKEN",
-        "PASSWORD",
-        "PASSWD",
-        "SECRET",
-        "CREDENTIAL",
-        "COOKIE",
-        "AUTH",
-        "PRIVATE_KEY",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-    ]
-    .iter()
-    .any(|marker| upper.contains(marker))
-    {
-        return false;
-    }
-    matches!(
-        upper.as_str(),
-        "SYSTEMROOT"
-            | "WINDIR"
-            | "COMSPEC"
-            | "PATHEXT"
-            | "PATH"
-            | "TEMP"
-            | "TMP"
-            | "TMPDIR"
-            | "HOME"
-            | "USERPROFILE"
-            | "LOCALAPPDATA"
-            | "APPDATA"
-            | "PROGRAMDATA"
-            | "PROGRAMFILES"
-            | "PROGRAMFILES(X86)"
-            | "PROGRAMW6432"
-            | "LANG"
-            | "LANGUAGE"
-            | "LC_ALL"
-            | "TZ"
-            | "XDG_CACHE_HOME"
-            | "XDG_CONFIG_HOME"
-            | "CUDA_PATH"
-            | "CUDA_HOME"
-            | "CUDA_VISIBLE_DEVICES"
-            | "ROCM_PATH"
-            | "HIP_PATH"
-            | "HIP_VISIBLE_DEVICES"
-            | "ROCR_VISIBLE_DEVICES"
-            | "GPU_DEVICE_ORDINAL"
-            | "HSA_OVERRIDE_GFX_VERSION"
-            | "HSA_ENABLE_SDMA"
-            | "VK_ICD_FILENAMES"
-            | "OCL_ICD_VENDORS"
-            | "ONEAPI_ROOT"
-    ) || upper.starts_with("LC_")
-        || upper.starts_with("GGML_")
-}
-
-/// Return the documented minimal parent environment forwarded to user-selected engines.
-/// Credential-like and proxy variables always fail closed, including in explicit overrides.
-pub fn sanitized_engine_environment<I, K, V>(overrides: I) -> Vec<(OsString, OsString)>
-where
-    I: IntoIterator<Item = (K, V)>,
-    K: AsRef<OsStr>,
-    V: AsRef<OsStr>,
-{
-    let mut values = std::collections::BTreeMap::<String, (OsString, OsString)>::new();
-    for (key, value) in std::env::vars_os().chain(
-        overrides
-            .into_iter()
-            .map(|(key, value)| (key.as_ref().to_os_string(), value.as_ref().to_os_string())),
-    ) {
-        let Some(name) = key.to_str() else { continue };
-        if engine_environment_name_allowed(name) {
-            values.insert(name.to_ascii_uppercase(), (key, value));
-        }
-    }
-    values.into_values().collect()
-}
 
 struct GgufParseBudget {
     remaining_string_items: u64,
     remaining_string_bytes: u64,
-    deadline: Option<std::time::Instant>,
 }
 
 impl Default for GgufParseBudget {
@@ -155,31 +26,12 @@ impl Default for GgufParseBudget {
         Self {
             remaining_string_items: MAX_GGUF_STRING_ITEMS,
             remaining_string_bytes: MAX_GGUF_TOTAL_STRING_BYTES,
-            deadline: None,
         }
     }
 }
 
 impl GgufParseBudget {
-    fn with_deadline(deadline: std::time::Instant) -> Self {
-        Self {
-            deadline: Some(deadline),
-            ..Self::default()
-        }
-    }
-
-    fn check_deadline(&self) -> Result<(), String> {
-        if self
-            .deadline
-            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
-        {
-            return Err("GGUF metadata parsing exceeded the scan work deadline".into());
-        }
-        Ok(())
-    }
-
     fn consume_string(&mut self, len: u64) -> Result<(), String> {
-        self.check_deadline()?;
         if len > MAX_GGUF_STRING_BYTES {
             return Err("GGUF string is too large".into());
         }
@@ -195,15 +47,6 @@ impl GgufParseBudget {
     }
 }
 
-fn retain_selected_metadata(value: String, limit: usize, field: &str) -> Result<String, String> {
-    if value.len() > limit {
-        return Err(format!(
-            "GGUF {field} exceeds the {limit}-byte retention limit"
-        ));
-    }
-    Ok(value)
-}
-
 pub fn set_data_dir_override(path: PathBuf) -> Result<(), String> {
     if !path.is_absolute() {
         return Err("runtime data directory override must be absolute".into());
@@ -214,44 +57,7 @@ pub fn set_data_dir_override(path: PathBuf) -> Result<(), String> {
 }
 
 pub fn parse_gguf_metadata(path: &Path) -> Result<GgufMetadataSummary, String> {
-    parse_gguf_metadata_inner(path, None)
-}
-
-pub fn parse_gguf_metadata_with_deadline(
-    path: &Path,
-    deadline: std::time::Instant,
-) -> Result<GgufMetadataSummary, String> {
-    parse_gguf_metadata_inner(path, Some(deadline))
-}
-
-fn parse_gguf_metadata_inner(
-    path: &Path,
-    deadline: Option<std::time::Instant>,
-) -> Result<GgufMetadataSummary, String> {
-    let file = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
-    parse_gguf_metadata_from_file(file, path, deadline)
-}
-
-pub fn parse_gguf_metadata_from_open_file(
-    file: std::fs::File,
-    display_path: &Path,
-) -> Result<GgufMetadataSummary, String> {
-    parse_gguf_metadata_from_file(file, display_path, None)
-}
-
-pub fn parse_gguf_metadata_from_open_file_with_deadline(
-    file: std::fs::File,
-    display_path: &Path,
-    deadline: std::time::Instant,
-) -> Result<GgufMetadataSummary, String> {
-    parse_gguf_metadata_from_file(file, display_path, Some(deadline))
-}
-
-fn parse_gguf_metadata_from_file(
-    mut file: std::fs::File,
-    path: &Path,
-    deadline: Option<std::time::Instant>,
-) -> Result<GgufMetadataSummary, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| format!("{}", e))?;
     let file_size = file.metadata().map(|m| m.len()).unwrap_or(0);
     if file_size < 24 {
         return Err("file is too small".into());
@@ -273,15 +79,12 @@ fn parse_gguf_metadata_from_file(
     }
     let metadata_kv_count = usize::try_from(metadata_kv_count)
         .map_err(|_| "GGUF metadata entry count is invalid".to_string())?;
-    let mut budget = deadline
-        .map(GgufParseBudget::with_deadline)
-        .unwrap_or_default();
+    let mut budget = GgufParseBudget::default();
     let mut architecture: Option<String> = None;
     let mut context_length: Option<u32> = None;
     let mut file_type: Option<u32> = None;
     let mut mtp_layers: Option<u32> = None;
     let mut has_swa: Option<bool> = None;
-    let mut resource = GgufResourceMetadata::default();
     let mut general_type: Option<String> = None;
     let mut model_name: Option<String> = None;
     let mut model_basename: Option<String> = None;
@@ -300,7 +103,6 @@ fn parse_gguf_metadata_from_file(
         .and_then(detect_model_family);
 
     for _ in 0..metadata_kv_count {
-        budget.check_deadline()?;
         let key = read_gguf_string(&mut file, &mut budget)?;
         let key_lower = key.to_lowercase();
         let value_type = read_u32(&mut file)?;
@@ -334,61 +136,17 @@ fn parse_gguf_metadata_from_file(
             8 => {
                 let value = read_gguf_string(&mut file, &mut budget)?;
                 if key_lower == "general.architecture" {
-                    architecture = Some(retain_selected_metadata(
-                        value.clone(),
-                        MAX_GGUF_ARCHITECTURE_BYTES,
-                        "architecture",
-                    )?);
+                    architecture = Some(value.clone());
                 }
                 match key_lower.as_str() {
-                    "general.type" => {
-                        general_type = Some(retain_selected_metadata(
-                            value.clone(),
-                            MAX_GGUF_NAME_BYTES,
-                            "type",
-                        )?)
-                    }
-                    "general.name" => {
-                        model_name = Some(retain_selected_metadata(
-                            value.clone(),
-                            MAX_GGUF_NAME_BYTES,
-                            "name",
-                        )?)
-                    }
-                    "general.basename" => {
-                        model_basename = Some(retain_selected_metadata(
-                            value.clone(),
-                            MAX_GGUF_NAME_BYTES,
-                            "basename",
-                        )?)
-                    }
-                    "general.repo_url" => {
-                        model_repo = Some(retain_selected_metadata(
-                            value.clone(),
-                            MAX_GGUF_REPOSITORY_BYTES,
-                            "repository",
-                        )?)
-                    }
-                    "general.base_model.0.name" => {
-                        base_model_name = Some(retain_selected_metadata(
-                            value.clone(),
-                            MAX_GGUF_NAME_BYTES,
-                            "base model name",
-                        )?)
-                    }
-                    "general.base_model.0.repo_url" => {
-                        base_model_repo = Some(retain_selected_metadata(
-                            value.clone(),
-                            MAX_GGUF_REPOSITORY_BYTES,
-                            "base repository",
-                        )?)
-                    }
+                    "general.type" => general_type = Some(value.clone()),
+                    "general.name" => model_name = Some(value.clone()),
+                    "general.basename" => model_basename = Some(value.clone()),
+                    "general.repo_url" => model_repo = Some(value.clone()),
+                    "general.base_model.0.name" => base_model_name = Some(value.clone()),
+                    "general.base_model.0.repo_url" => base_model_repo = Some(value.clone()),
                     "clip.projector_type" | "clip.vision.projector_type" => {
-                        projector_type = Some(retain_selected_metadata(
-                            value.clone(),
-                            MAX_GGUF_PROJECTOR_TYPE_BYTES,
-                            "projector type",
-                        )?)
+                        projector_type = Some(value.clone())
                     }
                     "tokenizer.chat_template" => {
                         template_has_vision = chat_template_has_vision_markers(&value)
@@ -404,7 +162,6 @@ fn parse_gguf_metadata_from_file(
             }
             4 => {
                 let value = read_u32(&mut file)?;
-                record_resource_metadata(&key_lower, value as u64, &mut resource);
                 if key == "general.file_type" {
                     file_type = Some(value);
                 }
@@ -420,9 +177,6 @@ fn parse_gguf_metadata_from_file(
             }
             5 => {
                 let value = read_i32(&mut file)?;
-                if value > 0 {
-                    record_resource_metadata(&key_lower, value as u64, &mut resource);
-                }
                 if key_lower.contains("context_length") && value > 0 {
                     context_length = Some(value as u32);
                 }
@@ -435,7 +189,6 @@ fn parse_gguf_metadata_from_file(
             }
             10 => {
                 let value = read_u64(&mut file)?;
-                record_resource_metadata(&key_lower, value, &mut resource);
                 if key_lower.contains("context_length") {
                     context_length = Some(value as u32);
                 }
@@ -448,9 +201,6 @@ fn parse_gguf_metadata_from_file(
             }
             11 => {
                 let value = read_i64(&mut file)?;
-                if value > 0 {
-                    record_resource_metadata(&key_lower, value as u64, &mut resource);
-                }
                 if key_lower.contains("context_length") && value > 0 {
                     context_length = Some(value as u32);
                 }
@@ -546,24 +296,7 @@ fn parse_gguf_metadata_from_file(
             base_model_repo,
             tags,
         },
-        resource,
     })
-}
-
-fn record_resource_metadata(key: &str, value: u64, resource: &mut GgufResourceMetadata) {
-    let value = u32::try_from(value).ok().filter(|value| *value > 0);
-    match key {
-        key if key.ends_with(".block_count") => resource.block_count = value,
-        key if key.ends_with(".embedding_length") => resource.embedding_length = value,
-        key if key.ends_with(".attention.head_count") => resource.attention_head_count = value,
-        key if key.ends_with(".attention.head_count_kv") => {
-            resource.attention_head_count_kv = value
-        }
-        key if key.ends_with(".attention.key_length") => resource.attention_key_length = value,
-        key if key.ends_with(".attention.value_length") => resource.attention_value_length = value,
-        key if key.ends_with(".attention.sliding_window") => resource.sliding_window = value,
-        _ => {}
-    }
 }
 
 fn read_u32(file: &mut std::fs::File) -> Result<u32, String> {
@@ -1158,30 +891,6 @@ mod tests {
     }
 
     #[test]
-    fn metadata_scan_observes_an_expired_deadline() {
-        let dir = std::env::temp_dir().join(format!(
-            "lsm-metadata-deadline-test-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("model.gguf");
-        write_test_gguf(
-            &path,
-            &[("general.architecture", TestMetadataValue::String("llama"))],
-        );
-
-        let result = parse_gguf_metadata_with_deadline(
-            &path,
-            std::time::Instant::now() - std::time::Duration::from_millis(1),
-        );
-        assert!(result
-            .unwrap_err()
-            .contains("exceeded the scan work deadline"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
     fn multimodal_metadata_uses_tags_templates_and_projector_source_identity() {
         let dir = std::env::temp_dir().join(format!(
             "lsm-multimodal-capability-test-{}",
@@ -1602,39 +1311,6 @@ mod tests {
                 .has_swa,
             Some(false)
         );
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn parsed_metadata_exposes_bounded_resource_scalars() {
-        let dir =
-            std::env::temp_dir().join(format!("lsm-resource-metadata-test-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("resource.gguf");
-        write_test_gguf(
-            &path,
-            &[
-                ("llama.block_count", TestMetadataValue::U32(32)),
-                ("llama.embedding_length", TestMetadataValue::U32(4096)),
-                ("llama.attention.head_count", TestMetadataValue::U32(32)),
-                ("llama.attention.head_count_kv", TestMetadataValue::U32(8)),
-                ("llama.attention.key_length", TestMetadataValue::U32(128)),
-                ("llama.attention.value_length", TestMetadataValue::U32(128)),
-                (
-                    "llama.attention.sliding_window",
-                    TestMetadataValue::U32(4096),
-                ),
-            ],
-        );
-
-        let resource = parse_gguf_metadata(&path).unwrap().resource;
-        assert_eq!(resource.block_count, Some(32));
-        assert_eq!(resource.embedding_length, Some(4096));
-        assert_eq!(resource.attention_head_count, Some(32));
-        assert_eq!(resource.attention_head_count_kv, Some(8));
-        assert_eq!(resource.attention_key_length, Some(128));
-        assert_eq!(resource.attention_value_length, Some(128));
-        assert_eq!(resource.sliding_window, Some(4096));
         let _ = std::fs::remove_dir_all(dir);
     }
 

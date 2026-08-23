@@ -2,7 +2,7 @@ import type { InstanceConfig } from './types'
 
 export function defaultInstanceConfig(): InstanceConfig {
   return {
-    launch_mode: 'managed', manual_command: '', manual_command_configured: false, explicit_overrides: [],
+    launch_mode: 'managed', manual_command: '', explicit_overrides: [],
     id: '', name: '', engine_id: '', model_path: '', alias: '',
     lora_path: '', mmproj_path: '', lora_init_without_apply: false, lora_scaled: '',
     chat_template: '', chat_template_file: '', skip_chat_parsing: false,
@@ -32,12 +32,10 @@ export function defaultInstanceConfig(): InstanceConfig {
     device: '', split_mode: '', tensor_split: '', main_gpu: 0,
     override_kv: '',
     host: '127.0.0.1', port: 8080, api_key: '', api_key_file: '',
-    api_key_configured: false, api_key_file_configured: false,
-    ssl_key_file: '', ssl_key_file_configured: false, ssl_cert_file: '', ssl_cert_file_configured: false, path_prefix: '', api_prefix: '',
+    ssl_key_file: '', ssl_cert_file: '', path_prefix: '', api_prefix: '',
     cors_origins: '', cors_methods: '', cors_headers: '', cors_credentials: '',
-    no_ui: false, offline: false, ui_config_file: '', ui_config_file_configured: false, ui_config: '', ui_config_configured: false, ui_mcp_proxy: false, agent: false,
+    no_ui: false, offline: false, ui_config_file: '', ui_config: '', ui_mcp_proxy: false, agent: false,
     tools_runtime: '', mcp_servers_config: '', mcp_servers_json: '',
-    mcp_servers_config_configured: false, mcp_servers_json_configured: false,
     embedding: false, pooling: '', embd_normalize: 2, reranking: false,
     metrics: true, props: true, slots_enabled: true,
     slot_save_path: '', log_prompts_dir: '', slot_prompt_similarity: 0.1, prefill_assistant: true,
@@ -57,8 +55,7 @@ export function defaultInstanceConfig(): InstanceConfig {
     dry_sequence_breaker: '',
     adaptive_target: -1, adaptive_decay: 0.9, top_n_sigma: -1,
     logit_bias: '', samplers: '', sampler_seq: '',
-    timeout: 3600, sleep_idle: -1, verbose: false, custom_args: [], custom_args_configured: false,
+    timeout: 3600, sleep_idle: -1, verbose: false, custom_args: [],
     rpc_servers: '', sse_ping_interval: 30, reuse_port: false, auto_start: false,
-    restart_policy: 'never',
   }
 }

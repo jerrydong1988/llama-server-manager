@@ -29,12 +29,11 @@ export function Surface({
 export function InsetSurface({
   className = '',
   children,
-  ...elementProps
 }: {
   className?: string
   children: ReactNode
-} & Omit<HTMLAttributes<HTMLDivElement>, 'children' | 'className'>) {
-  return <div {...elementProps} className={`${insetSurfaceClassName} ${className}`}>{children}</div>
+}) {
+  return <div className={`${insetSurfaceClassName} ${className}`}>{children}</div>
 }
 
 export function MetricCard({

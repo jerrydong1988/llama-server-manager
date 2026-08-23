@@ -85,21 +85,6 @@ Token 计数端点由目标 llama-server 提供。如果目标版本不支持、
 
 每条路由的 `maxConcurrentRequests` 可限制单个目标；设为 `0` 时继承全局容量。路由器定时请求 `/health`，并缓存 `/props` 与 `/slots` 能力。连续失败达到 `unhealthyThreshold` 后打开熔断器，`recoveryCooldownMs` 冷却期间排除目标；后续健康探测成功才恢复。网络错误、上游 `5xx` 和 `429` 都会计入目标故障状态，当前已经收到的 HTTP 错误会按相应协议返回，后续请求自动避开已熔断目标。
 
-### 会话与提示缓存 locality
-
-启用 `localityRoutingEnabled` 后，路由器会在不改变上述安全和容量约束的前提下，优先选择最近成功处理同一会话或稳定提示词前缀的目标。locality 只在当前最高可用优先级层内参与选择；目标不健康、正在排空、熔断未恢复或达到 `maxConcurrentRequests` 时，立即回退到已配置的 `priorityFailover`、`roundRobin`、`leastBusy` 或 `weighted` 策略。回退请求获得成功的 `2xx` 上游响应后才迁移绑定；连接失败、`429`、`5xx` 和客户端错误不会让失败目标捕获会话。locality 是命中 KV/prompt cache 的概率优化，不是缓存命中保证，也不会读取、复制或持久化 llama.cpp 的 KV cache。
-
-请求键按以下顺序产生：
-
-1. 调用方显式发送 `x-lsm-session-id`（UTF-8，1–256 字节）。此头在代理边界被移除，不会转发给目标。
-2. OpenAI Responses 的 `conversation`，或 `metadata.session_id` / `metadata.conversation_id`。
-3. Chat/Messages/Responses 数组中最初的 system/developer 消息和第一条非 system 消息。
-4. Completions/Responses 的 `prompt` 或 `input` 前缀。
-
-公开模型/工作负载路由组也参与键计算，因此同一调用方标识不会跨模型误绑定。路由器使用每次进程启动时生成的随机盐，只在内存中保存摘要、目标 ID、过期时间和最近成功时间；不保存或记录原始会话 ID、提示词、消息或请求体。`localityTtlMs` 控制成功绑定的滑动有效期（60,000–86,400,000 毫秒），`localityMaxEntries` 控制内存上限（1–100,000）。达到上限时淘汰最久未成功使用的绑定。重启路由器会有意清空全部绑定，基础路由配置不会丢失；旧配置升级后默认保持关闭，新建配置默认开启。
-
-有可用 locality 键时，响应头 `x-lsm-locality` 返回 `miss`、`hit` 或 `fallback`。关闭功能或无法安全派生键时不返回该头。Prometheus 同时提供聚合计数与当前绑定数，且不包含键值。对于已经发送到上游的流式或具副作用请求，路由器不会因中途失败自动重放。
-
 ## 超时、并发和限流
 
 - `connectTimeoutMs`：建立上游连接的上限。
@@ -148,4 +133,4 @@ CORS 只接受逗号分隔的精确 HTTP(S) Origin，例如 `http://localhost:30
 
 ## Production router summary
 
-The router exposes native OpenAI Chat Completions, Responses, Completions, embeddings and rerank endpoints together with Anthropic Messages and token counting. Messages requests require `anthropic-version: 2023-06-01`, and raw SSE responses preserve `text/event-stream`. Model discovery publishes `context_length`, `context_window`, and vLLM-compatible `max_model_len` using the safe minimum across failover targets. Exact token-count preflight rejects oversized generation requests in OpenAI or Anthropic error format when the target supports counting, while unsupported counters fail open to the target's own validation. Exact public model IDs form a strict security boundary. Priority tiers, round-robin/least-busy/weighted scheduling, privacy-preserving session/prompt-prefix locality, active probes, circuit breaking, independent streaming timeouts, concurrency queues, scoped hashed API keys, exact-origin CORS, safe `/props` and `/slots` discovery, request IDs, and Prometheus metrics are built in. Locality never overrides priority, health, draining, circuit, or capacity eligibility and falls back observably. The listener remains loopback-only; terminate TLS at a trusted local reverse proxy or tunnel for remote access.
+The router exposes native OpenAI Chat Completions, Responses, Completions, embeddings and rerank endpoints together with Anthropic Messages and token counting. Messages requests require `anthropic-version: 2023-06-01`, and raw SSE responses preserve `text/event-stream`. Model discovery publishes `context_length`, `context_window`, and vLLM-compatible `max_model_len` using the safe minimum across failover targets. Exact token-count preflight rejects oversized generation requests in OpenAI or Anthropic error format when the target supports counting, while unsupported counters fail open to the target's own validation. Exact public model IDs form a strict security boundary. Priority tiers, round-robin/least-busy/weighted scheduling, active probes, circuit breaking, independent streaming timeouts, concurrency queues, scoped hashed API keys, exact-origin CORS, safe `/props` and `/slots` discovery, request IDs, and Prometheus metrics are built in. The listener remains loopback-only; terminate TLS at a trusted local reverse proxy or tunnel for remote access.

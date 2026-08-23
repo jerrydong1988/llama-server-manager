@@ -1,17 +1,13 @@
 use super::protocol::{
-    InstanceRecoveryPhase, InstanceRecoveryStatus, PersistedRuntimeState, RuntimeCommand,
-    RuntimeFailure, RuntimeFailureKind, RuntimeLaunchSpec, RuntimeReply, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, CANARY_ROUTING_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY,
-    DEPLOYMENT_REVISION_CAPABILITY, INSTANCE_RECOVERY_BACKOFF_SECS, INSTANCE_RECOVERY_CAPABILITY,
-    INSTANCE_RECOVERY_MAX_ATTEMPTS, INSTANCE_RECOVERY_STABLE_SECS, RUNTIME_ERROR_ACK_CAPABILITY,
+    PersistedRuntimeState, RuntimeCommand, RuntimeLaunchSpec, RuntimeReply, RuntimeServiceStatus,
+    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
     RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
-use crate::commands::engine_capabilities::QUALIFICATION_PROFILE_VERSION;
 use crate::commands::proxy::{
     normalize_and_validate_proxy_config, proxy_request_resolution_from,
-    proxy_router_from_source_with_runtime, serve_hardened_proxy, status_with_runtime,
-    ProxyDataSource, ProxyRequestResolution, ProxyRuntimeSnapshot,
+    proxy_router_from_source_with_runtime, status_with_runtime, ProxyDataSource,
+    ProxyRequestResolution, ProxyRuntimeSnapshot,
 };
 use crate::commands::proxy_runtime::RouterRuntime;
 use crate::commands::server::{
@@ -36,227 +32,10 @@ fn sorted_ids<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<String> {
     ids
 }
 
-fn is_instance_recovery_error(error: &str, instance_id: &str) -> bool {
+fn is_instance_exit_error(error: &str, instance_id: &str) -> bool {
     error.starts_with(&format!(
         "instance {instance_id} exited unexpectedly (code "
-    )) || error.starts_with(&format!("instance {instance_id} failed to start: "))
-}
-
-fn unix_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-fn validate_runtime_engine_qualification(
-    spec: &RuntimeLaunchSpec,
-    artifacts: &crate::deployment_identity::LaunchArtifactLeases,
-) -> Result<(), String> {
-    if spec.engine_qualification_fingerprint.is_empty()
-        || spec.engine_qualification_profile_version == 0
-    {
-        return Err(
-            "ENGINE_QUALIFICATION_REQUIRED: runtime launch snapshot has no qualification binding"
-                .to_string(),
-        );
-    }
-    if spec.engine_qualification_profile_version != QUALIFICATION_PROFILE_VERSION {
-        return Err(format!(
-            "ENGINE_QUALIFICATION_INCOMPLETE: runtime launch snapshot uses qualification profile {} but profile {} is required",
-            spec.engine_qualification_profile_version, QUALIFICATION_PROFILE_VERSION
-        ));
-    }
-    if artifacts.engine_fingerprint() != spec.engine_qualification_fingerprint {
-        return Err(
-            "ENGINE_QUALIFICATION_STALE: runtime engine artifact no longer matches qualification evidence"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-fn validate_runtime_deployment_identity(
-    spec: &RuntimeLaunchSpec,
-    artifacts: &crate::deployment_identity::LaunchArtifactLeases,
-    persisted_config: &crate::models::InstanceConfig,
-) -> Result<(), String> {
-    if !spec.deployment_identity.is_valid() {
-        return Err(
-            "DEPLOYMENT_IDENTITY_INVALID: runtime launch snapshot has no valid deployment identity"
-                .to_string(),
-        );
-    }
-    if artifacts.engine_identity().artifact_id != spec.deployment_identity.engine_artifact_id {
-        return Err(
-            "DEPLOYMENT_ENGINE_IDENTITY_STALE: runtime engine artifact identity changed"
-                .to_string(),
-        );
-    }
-    if artifacts.model_identity().artifact_id != spec.deployment_identity.model_artifact_id {
-        return Err(
-            "DEPLOYMENT_MODEL_IDENTITY_STALE: runtime model artifact identity changed".to_string(),
-        );
-    }
-    let fingerprint = crate::config_revision::deployment_config_fingerprint(persisted_config)
-        .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
-    let configuration_id = crate::config_revision::configuration_id_from_fingerprint(&fingerprint)
-        .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
-    if configuration_id != spec.deployment_identity.configuration_id {
-        return Err(format!(
-            "DEPLOYMENT_CONFIG_IDENTITY_STALE: runtime configuration identity changed (expected {}, found {})",
-            spec.deployment_identity.configuration_id, configuration_id
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn validate_runtime_engine_qualification_from_paths(
-    spec: &RuntimeLaunchSpec,
-) -> Result<(), String> {
-    if spec.engine_qualification_fingerprint.is_empty()
-        || spec.engine_qualification_profile_version == 0
-    {
-        return Err(
-            "ENGINE_QUALIFICATION_REQUIRED: runtime launch snapshot has no qualification binding"
-                .to_string(),
-        );
-    }
-    if spec.engine_qualification_profile_version != QUALIFICATION_PROFILE_VERSION {
-        return Err("ENGINE_QUALIFICATION_INCOMPLETE: runtime profile mismatch".to_string());
-    }
-    let executable = spec.command.first().map(String::as_str).unwrap_or_default();
-    if crate::commands::engine_capabilities::executable_fingerprint(executable)
-        != spec.engine_qualification_fingerprint
-    {
-        return Err(
-            "ENGINE_QUALIFICATION_STALE: runtime engine artifact no longer matches qualification evidence"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-fn validate_runtime_deployment_identity_from_paths(spec: &RuntimeLaunchSpec) -> Result<(), String> {
-    let engine = crate::deployment_identity::artifact_identity_for_path(
-        "engine",
-        std::path::Path::new(spec.command.first().map(String::as_str).unwrap_or_default()),
-    )?;
-    if engine.artifact_id != spec.deployment_identity.engine_artifact_id {
-        return Err("DEPLOYMENT_ENGINE_IDENTITY_STALE".to_string());
-    }
-    let model = crate::deployment_identity::artifact_identity_for_path(
-        "model",
-        std::path::Path::new(&spec.config.model_path),
-    )?;
-    if model.artifact_id != spec.deployment_identity.model_artifact_id {
-        return Err("DEPLOYMENT_MODEL_IDENTITY_STALE".to_string());
-    }
-    Ok(())
-}
-
-fn validate_runtime_deployment_revision(
-    spec: &RuntimeLaunchSpec,
-    proxy_config: &crate::models::ProxyConfig,
-) -> Result<(), String> {
-    crate::deployment::validate_runtime_revision(
-        &spec.deployment_revision,
-        &spec.instance_id,
-        &spec.config,
-        &spec.deployment_identity,
-        proxy_config,
-    )
-}
-
-fn instance_recovery_enabled(spec: &RuntimeLaunchSpec) -> bool {
-    !spec.launch_config_stale
-        && spec
-            .config
-            .restart_policy
-            .trim()
-            .eq_ignore_ascii_case("on-failure")
-}
-
-fn runtime_deployment_config_matches(
-    deployment_identity: &crate::deployment_identity::DeploymentIdentity,
-    current_config: &crate::models::InstanceConfig,
-) -> bool {
-    crate::config_revision::deployment_config_fingerprint(current_config)
-        .and_then(|fingerprint| {
-            crate::config_revision::configuration_id_from_fingerprint(&fingerprint)
-        })
-        .is_ok_and(|configuration_id| configuration_id == deployment_identity.configuration_id)
-}
-
-fn sync_desired_launch_config(
-    spec: &mut RuntimeLaunchSpec,
-    current_config: &crate::models::InstanceConfig,
-    proxy_config: &crate::models::ProxyConfig,
-) {
-    spec.launch_config_stale =
-        !runtime_deployment_config_matches(&spec.deployment_identity, current_config)
-            || validate_runtime_deployment_revision(spec, proxy_config).is_err();
-}
-
-fn next_recovery_delay(restart_attempts: u32) -> Option<u64> {
-    INSTANCE_RECOVERY_BACKOFF_SECS
-        .get(restart_attempts as usize)
-        .copied()
-}
-
-fn recovery_status_after_failure(
-    recovery_enabled: bool,
-    active: Option<&InstanceRecoveryStatus>,
-    failure: RuntimeFailure,
-    now: u64,
-) -> InstanceRecoveryStatus {
-    let active = active.filter(|status| {
-        matches!(
-            status.phase,
-            InstanceRecoveryPhase::Waiting
-                | InstanceRecoveryPhase::Monitoring
-                | InstanceRecoveryPhase::Restoring
-        )
-    });
-    let restart_attempts = active.map(|status| status.restart_attempts).unwrap_or(0);
-    let origin_failure = active
-        .map(|status| status.origin_failure.clone())
-        .unwrap_or_else(|| failure.clone());
-    let next_retry_at = recovery_enabled
-        .then(|| next_recovery_delay(restart_attempts))
-        .flatten()
-        .map(|delay| now.saturating_add(delay));
-    let phase = if !recovery_enabled {
-        InstanceRecoveryPhase::Failed
-    } else if next_retry_at.is_some() {
-        InstanceRecoveryPhase::Waiting
-    } else {
-        InstanceRecoveryPhase::CrashLoop
-    };
-    InstanceRecoveryStatus {
-        phase,
-        restart_attempts,
-        max_restart_attempts: INSTANCE_RECOVERY_MAX_ATTEMPTS,
-        next_retry_at,
-        origin_failure,
-        last_failure: failure,
-    }
-}
-
-fn recovery_budget_is_stable(start_time: u64, now: u64) -> bool {
-    start_time > 0 && now.saturating_sub(start_time) >= INSTANCE_RECOVERY_STABLE_SECS
-}
-
-fn scheduled_recovery_matches(
-    status: &InstanceRecoveryStatus,
-    expected_restart_attempts: u32,
-    expected_retry_at: u64,
-) -> bool {
-    status.phase == InstanceRecoveryPhase::Waiting
-        && status.restart_attempts == expected_restart_attempts
-        && status.next_retry_at == Some(expected_retry_at)
+    ))
 }
 
 fn validate_background_detach_inventory(
@@ -299,20 +78,14 @@ fn validate_background_detach_inventory(
     Ok(())
 }
 
-fn validate_runtime_state(
-    mut state: PersistedRuntimeState,
-) -> Result<PersistedRuntimeState, String> {
-    match state.schema_version {
-        RUNTIME_STATE_SCHEMA_VERSION => Ok(state),
-        1..=3 => {
-            state.schema_version = RUNTIME_STATE_SCHEMA_VERSION;
-            Ok(state)
-        }
-        found => Err(format!(
-            "unsupported runtime state schema: expected {} or migratable schema 1, 2, or 3, found {found}",
-            RUNTIME_STATE_SCHEMA_VERSION
-        )),
+fn validate_runtime_state(state: PersistedRuntimeState) -> Result<PersistedRuntimeState, String> {
+    if state.schema_version != RUNTIME_STATE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported runtime state schema: expected {}, found {}",
+            RUNTIME_STATE_SCHEMA_VERSION, state.schema_version
+        ));
     }
+    Ok(state)
 }
 
 enum RuntimeStateReadError {
@@ -461,7 +234,6 @@ impl RuntimeSupervisor {
                 unhealthy_routes: active_routes,
                 in_flight_requests: 0,
                 total_requests: 0,
-                operational: Default::default(),
                 last_error: None,
             }),
             proxy_runtime: tokio::sync::Mutex::new(None),
@@ -478,11 +250,10 @@ impl RuntimeSupervisor {
     }
 
     pub fn status(&self, registered_for_login: bool) -> RuntimeServiceStatus {
-        let (running, recovery, background_enabled, config_revision) = {
+        let (running, background_enabled, config_revision) = {
             let state = self.state.lock().unwrap();
             (
                 state.running.clone(),
-                state.recovery.clone(),
                 state.background_enabled,
                 state.config_revision,
             )
@@ -514,10 +285,7 @@ impl RuntimeSupervisor {
             service_pid: std::process::id(),
             capabilities: vec![
                 BACKGROUND_DETACH_CAPABILITY.to_string(),
-                CANARY_ROUTING_CAPABILITY.to_string(),
                 CONFIG_SYNC_ACK_CAPABILITY.to_string(),
-                DEPLOYMENT_REVISION_CAPABILITY.to_string(),
-                INSTANCE_RECOVERY_CAPABILITY.to_string(),
                 RUNTIME_ERROR_ACK_CAPABILITY.to_string(),
             ],
             config_revision,
@@ -529,7 +297,6 @@ impl RuntimeSupervisor {
             health: self.health.lock().unwrap().clone(),
             monitoring,
             performance,
-            recovery,
         }
     }
 
@@ -601,34 +368,10 @@ impl RuntimeSupervisor {
                 state.config_revision,
                 state.proxy_config.clone(),
                 state.instances.clone(),
-                state.desired_instances.clone(),
-                state.recovery.clone(),
             );
             state.config_revision = revision;
             state.proxy_config = proxy_config.clone();
             state.instances = instances;
-            let current_configs = state.instances.clone();
-            let current_proxy = state.proxy_config.clone();
-            for (instance_id, spec) in &mut state.desired_instances {
-                if let Some(config) = current_configs.get(instance_id) {
-                    sync_desired_launch_config(spec, config, &current_proxy);
-                }
-            }
-            let disabled = state
-                .desired_instances
-                .iter()
-                .filter_map(|(instance_id, spec)| {
-                    (!instance_recovery_enabled(spec)).then_some(instance_id.clone())
-                })
-                .collect::<Vec<_>>();
-            for instance_id in disabled {
-                if let Some(recovery) = state.recovery.get_mut(&instance_id) {
-                    if recovery.phase == InstanceRecoveryPhase::Waiting {
-                        recovery.phase = InstanceRecoveryPhase::Failed;
-                        recovery.next_retry_at = None;
-                    }
-                }
-            }
             previous
         };
         let previous_proxy_status = {
@@ -650,8 +393,6 @@ impl RuntimeSupervisor {
             state.config_revision = previous_config.0;
             state.proxy_config = previous_config.1;
             state.instances = previous_config.2;
-            state.desired_instances = previous_config.3;
-            state.recovery = previous_config.4;
             drop(state);
             *self.proxy_status.lock().unwrap() = previous_proxy_status;
             return Err(error);
@@ -805,7 +546,6 @@ impl RuntimeSupervisor {
                     if !is_current || !running_instance_matches_live_process(&running) {
                         break;
                     }
-                    supervisor.clear_stable_instance_recovery(&instance_id, expected_pid);
 
                     let sample = collect_instance_monitor_sample(
                         &client,
@@ -879,59 +619,14 @@ impl RuntimeSupervisor {
     pub fn start_instance(
         self: &Arc<Self>,
         spec: RuntimeLaunchSpec,
-        manual_recovery: bool,
     ) -> Result<RunningInstance, String> {
         let _lifecycle = self.instance_lifecycle.lock().unwrap();
-        if self
-            .state
-            .lock()
-            .unwrap()
-            .running
-            .get(&spec.instance_id)
-            .is_some_and(running_instance_matches_live_process)
-        {
-            return Err("该实例已在运行中".into());
-        }
-        if !manual_recovery
-            && self
-                .state
-                .lock()
-                .unwrap()
-                .recovery
-                .contains_key(&spec.instance_id)
-        {
-            return Err(format!(
-                "automatic start skipped for instance {} because a recovery incident requires operator action or its scheduled retry",
-                spec.instance_id
-            ));
-        }
-        if manual_recovery {
-            let mut state = self.state.lock().unwrap();
-            if let Some(recovery) = state.recovery.get_mut(&spec.instance_id) {
-                recovery.phase = InstanceRecoveryPhase::Monitoring;
-                recovery.restart_attempts = 0;
-                recovery.next_retry_at = None;
-            }
-            state.desired_instances.remove(&spec.instance_id);
-        }
-        match self.start_instance_locked(spec.clone(), manual_recovery) {
-            Ok(running) => Ok(running),
-            Err(error) => {
-                self.record_instance_failure_locked(
-                    spec,
-                    RuntimeFailureKind::StartupFailure,
-                    error.clone(),
-                    None,
-                );
-                Err(error)
-            }
-        }
+        self.start_instance_locked(spec)
     }
 
     fn start_instance_locked(
         self: &Arc<Self>,
         spec: RuntimeLaunchSpec,
-        clear_runtime_error: bool,
     ) -> Result<RunningInstance, String> {
         crate::commands::server::validate_instance_id(&spec.instance_id)
             .map_err(|error| error.to_string())?;
@@ -940,24 +635,6 @@ impl RuntimeSupervisor {
         if spec.command.is_empty() || spec.command[0].trim().is_empty() {
             return Err("runtime launch command is empty".into());
         }
-        let (bound_command, mut artifact_leases) =
-            crate::deployment_identity::bind_launch_artifacts(
-                &spec.command,
-                &spec.deployment_identity,
-            )?;
-        validate_runtime_engine_qualification(&spec, &artifact_leases)?;
-        let (proxy_config, persisted_config) = {
-            let state = self.state.lock().unwrap();
-            let persisted_config = state.instances.get(&spec.instance_id).cloned().ok_or_else(|| {
-                format!(
-                    "DEPLOYMENT_CONFIG_NOT_SYNCED: no persisted configuration is synchronized for instance {}",
-                    spec.instance_id
-                )
-            })?;
-            (state.proxy_config.clone(), persisted_config)
-        };
-        validate_runtime_deployment_identity(&spec, &artifact_leases, &persisted_config)?;
-        validate_runtime_deployment_revision(&spec, &proxy_config)?;
         crate::commands::server::validate_effective_launch_security(&spec.config, &spec.command)
             .map_err(|error| error.to_string())?;
         {
@@ -970,9 +647,7 @@ impl RuntimeSupervisor {
                 return Err("该实例已在运行中".into());
             }
         }
-        if clear_runtime_error {
-            self.clear_retried_instance_error(&spec.instance_id);
-        }
+        self.clear_retried_instance_error(&spec.instance_id);
 
         let log_dir = crate::utils::get_data_dir().join("configs").join("logs");
         std::fs::create_dir_all(&log_dir).map_err(|error| format!("无法创建日志目录: {error}"))?;
@@ -982,13 +657,9 @@ impl RuntimeSupervisor {
                 .map_err(|error| format!("无法创建日志文件: {error}"))?,
         );
 
-        let mut command = Command::new(&bound_command[0]);
+        let mut command = Command::new(&spec.command[0]);
         command
-            .args(&bound_command[1..])
-            .env_clear()
-            .envs(crate::utils::sanitized_engine_environment(
-                std::iter::empty::<(&str, &str)>(),
-            ))
+            .args(&spec.command[1..])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(working_directory) = spec
@@ -1025,18 +696,6 @@ impl RuntimeSupervisor {
                 return Err("Unable to verify the started server process identity".into());
             }
         };
-        let launch_process_authorization =
-            crate::deployment_identity::register_authorized_launch_process(
-                &spec.instance_id,
-                pid,
-                start_time,
-                &executable_path,
-            );
-        if let Err(error) = artifact_leases.verify_unchanged() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(format!("DEPLOYMENT_ARTIFACT_CHANGED_DURING_START: {error}"));
-        }
         let workload = ModelWorkload::from_storage(&spec.workload);
         let telemetry_session_id = crate::commands::telemetry::begin_run_session(
             &spec.instance_id,
@@ -1057,9 +716,6 @@ impl RuntimeSupervisor {
             telemetry_session_id,
             workload: spec.workload.clone(),
             launch_config: Some(spec.config.clone()),
-            deployment_identity: spec.deployment_identity.clone(),
-            deployment_id: spec.deployment_revision.deployment_id.clone(),
-            deployment_revision_id: spec.deployment_revision.id.clone(),
         };
         let perf_tracker = Arc::new(Mutex::new(RuntimePerfTracker::new(
             spec.instance_id.clone(),
@@ -1106,9 +762,6 @@ impl RuntimeSupervisor {
             ));
         }
 
-        crate::deployment_identity::retain_launch_artifacts(&spec.instance_id, artifact_leases);
-        launch_process_authorization.disarm();
-
         let supervisor = Arc::downgrade(self);
         let instance_id = spec.instance_id.clone();
         let process_monitor = std::thread::Builder::new()
@@ -1124,7 +777,6 @@ impl RuntimeSupervisor {
             });
         if let Err(error) = process_monitor {
             let _ = terminate_running_instance(&running);
-            crate::deployment_identity::release_launch_artifacts(&spec.instance_id);
             let mut state = self.state.lock().unwrap();
             state.running.remove(&spec.instance_id);
             state.desired_instances.remove(&spec.instance_id);
@@ -1141,7 +793,6 @@ impl RuntimeSupervisor {
 
         if let Err(error) = self.spawn_instance_monitor(running.clone(), spec.config.clone()) {
             let _ = terminate_running_instance(&running);
-            crate::deployment_identity::release_launch_artifacts(&spec.instance_id);
             let mut state = self.state.lock().unwrap();
             state.running.remove(&spec.instance_id);
             state.desired_instances.remove(&spec.instance_id);
@@ -1159,187 +810,36 @@ impl RuntimeSupervisor {
         Ok(running)
     }
 
-    fn record_instance_failure_locked(
-        self: &Arc<Self>,
-        spec: RuntimeLaunchSpec,
-        kind: RuntimeFailureKind,
-        message: String,
-        exit_code: Option<i32>,
-    ) {
-        let now = unix_timestamp();
-        let failure = RuntimeFailure {
-            kind,
-            message: message.clone(),
-            exit_code,
-            occurred_at: now,
-        };
-        let runtime_error = match kind {
-            RuntimeFailureKind::StartupFailure => {
-                format!("instance {} failed to start: {message}", spec.instance_id)
-            }
-            RuntimeFailureKind::UnexpectedExit => message.clone(),
-        };
-        let (restart_attempts, next_retry_at) = {
-            let mut state = self.state.lock().unwrap();
-            let recovery = recovery_status_after_failure(
-                instance_recovery_enabled(&spec),
-                state.recovery.get(&spec.instance_id),
-                failure,
-                now,
-            );
-            let restart_attempts = recovery.restart_attempts;
-            let next_retry_at = recovery.next_retry_at;
-            state
-                .desired_instances
-                .insert(spec.instance_id.clone(), spec.clone());
-            state.recovery.insert(spec.instance_id.clone(), recovery);
-            (restart_attempts, next_retry_at)
-        };
-        *self.last_error.lock().unwrap() = Some(runtime_error);
-        if let Err(error) = self.persist() {
-            if let Some(recovery) = self
-                .state
-                .lock()
-                .unwrap()
-                .recovery
-                .get_mut(&spec.instance_id)
-            {
-                recovery.phase = InstanceRecoveryPhase::CrashLoop;
-                recovery.next_retry_at = None;
-            }
-            *self.last_error.lock().unwrap() = Some(format!(
-                "failed to persist recovery state for instance {}: {error}",
-                spec.instance_id
-            ));
-            return;
-        }
-        if let Some(next_retry_at) = next_retry_at {
-            self.schedule_instance_recovery(&spec.instance_id, restart_attempts, next_retry_at);
-        }
-    }
-
-    fn schedule_instance_recovery(
-        self: &Arc<Self>,
-        instance_id: &str,
-        expected_restart_attempts: u32,
-        next_retry_at: u64,
-    ) {
-        let supervisor = Arc::downgrade(self);
-        let scheduled_instance_id = instance_id.to_string();
-        let thread_instance_id = scheduled_instance_id.clone();
-        let result = std::thread::Builder::new()
-            .name(format!("runtime-recovery-{thread_instance_id}"))
-            .spawn(move || {
-                let delay = next_retry_at.saturating_sub(unix_timestamp());
-                if delay > 0 {
-                    std::thread::sleep(std::time::Duration::from_secs(delay));
-                }
-                if let Some(supervisor) = supervisor.upgrade() {
-                    supervisor.run_scheduled_instance_recovery(
-                        &thread_instance_id,
-                        expected_restart_attempts,
-                        next_retry_at,
-                    );
-                }
-            });
-        if let Err(error) = result {
-            let mut state = self.state.lock().unwrap();
-            if let Some(recovery) = state.recovery.get_mut(&scheduled_instance_id) {
-                if scheduled_recovery_matches(recovery, expected_restart_attempts, next_retry_at) {
-                    recovery.phase = InstanceRecoveryPhase::CrashLoop;
-                    recovery.next_retry_at = None;
-                    recovery.last_failure.message = format!(
-                        "{}; failed to schedule recovery: {error}",
-                        recovery.last_failure.message
-                    );
-                }
-            }
-            drop(state);
-            *self.last_error.lock().unwrap() = Some(format!(
-                "failed to schedule recovery for instance {scheduled_instance_id}: {error}"
-            ));
-            let _ = self.persist();
-        }
-    }
-
-    fn run_scheduled_instance_recovery(
-        self: &Arc<Self>,
-        instance_id: &str,
-        expected_restart_attempts: u32,
-        expected_retry_at: u64,
-    ) {
-        let _lifecycle = self.instance_lifecycle.lock().unwrap();
-        let spec = {
-            let mut state = self.state.lock().unwrap();
-            if state.running.contains_key(instance_id) {
-                return;
-            }
-            let Some(recovery) = state.recovery.get_mut(instance_id) else {
-                return;
-            };
-            if !scheduled_recovery_matches(recovery, expected_restart_attempts, expected_retry_at) {
-                return;
-            }
-            recovery.restart_attempts = recovery.restart_attempts.saturating_add(1);
-            recovery.phase = InstanceRecoveryPhase::Monitoring;
-            recovery.next_retry_at = None;
-            state.desired_instances.get(instance_id).cloned()
-        };
-        let Some(spec) = spec else {
-            return;
-        };
-        if let Err(error) = self.persist() {
-            if let Some(recovery) = self.state.lock().unwrap().recovery.get_mut(instance_id) {
-                recovery.phase = InstanceRecoveryPhase::CrashLoop;
-            }
-            *self.last_error.lock().unwrap() = Some(format!(
-                "recovery of instance {instance_id} stopped because its attempt could not be persisted: {error}"
-            ));
-            return;
-        }
-        if let Err(error) = self.start_instance_locked(spec.clone(), false) {
-            self.record_instance_failure_locked(
-                spec,
-                RuntimeFailureKind::StartupFailure,
-                error,
-                None,
-            );
-        }
-    }
-
-    fn record_process_exit(self: &Arc<Self>, instance_id: &str, pid: u32, exit_code: Option<i32>) {
-        let _lifecycle = self.instance_lifecycle.lock().unwrap();
+    fn record_process_exit(&self, instance_id: &str, pid: u32, exit_code: Option<i32>) {
         let stop_intent = self.stop_intents.lock().unwrap().remove(instance_id);
         let expected_stop = stop_intent.is_some();
         let preserve_desired = stop_intent
             .as_ref()
             .is_some_and(|intent| intent.preserve_desired);
-        let (removed, desired) = {
+        let removed = {
             let mut state = self.state.lock().unwrap();
-            let desired = state.desired_instances.get(instance_id).cloned();
             if state
                 .running
                 .get(instance_id)
                 .is_some_and(|running| running.pid == pid)
             {
-                if expected_stop && !preserve_desired {
+                if !preserve_desired {
                     state.desired_instances.remove(instance_id);
-                    state.recovery.remove(instance_id);
                 }
-                (state.running.remove(instance_id), desired)
+                state.running.remove(instance_id)
             } else {
-                (None, desired)
+                None
             }
         };
         if let Some(running) = removed {
-            let failure_message = (!expected_stop).then(|| {
-                format!(
+            if !expected_stop {
+                *self.last_error.lock().unwrap() = Some(format!(
                     "instance {instance_id} exited unexpectedly (code {})",
                     exit_code
                         .map(|code| code.to_string())
                         .unwrap_or_else(|| "unknown".into())
-                )
-            });
+                ));
+            }
             let _ = crate::commands::telemetry::finish_run_session(
                 running.telemetry_session_id.as_deref(),
                 exit_code,
@@ -1348,91 +848,15 @@ impl RuntimeSupervisor {
                     .map(|intent| intent.telemetry_reason.as_str())
                     .unwrap_or("process-exited"),
             );
-            if expected_stop {
-                if let Err(error) = self.persist() {
-                    *self.last_error.lock().unwrap() = Some(format!(
-                        "failed to persist exit of instance {instance_id}: {error}"
-                    ));
-                }
-            } else if let Some(message) = failure_message {
-                if recovery_budget_is_stable(running.start_time, unix_timestamp()) {
-                    self.state.lock().unwrap().recovery.remove(instance_id);
-                }
-                if let Some(spec) = desired {
-                    self.record_instance_failure_locked(
-                        spec,
-                        RuntimeFailureKind::UnexpectedExit,
-                        message,
-                        exit_code,
-                    );
-                } else {
-                    let failure = RuntimeFailure {
-                        kind: RuntimeFailureKind::UnexpectedExit,
-                        message: message.clone(),
-                        exit_code,
-                        occurred_at: unix_timestamp(),
-                    };
-                    self.state.lock().unwrap().recovery.insert(
-                        instance_id.to_string(),
-                        InstanceRecoveryStatus {
-                            phase: InstanceRecoveryPhase::Failed,
-                            restart_attempts: 0,
-                            max_restart_attempts: INSTANCE_RECOVERY_MAX_ATTEMPTS,
-                            next_retry_at: None,
-                            origin_failure: failure.clone(),
-                            last_failure: failure,
-                        },
-                    );
-                    *self.last_error.lock().unwrap() = Some(message);
-                    if let Err(error) = self.persist() {
-                        *self.last_error.lock().unwrap() = Some(format!(
-                            "failed to persist unexpected exit of instance {instance_id}: {error}"
-                        ));
-                    }
-                }
+            if let Err(error) = self.persist() {
+                *self.last_error.lock().unwrap() = Some(format!(
+                    "failed to persist exit of instance {instance_id}: {error}"
+                ));
             }
         }
         self.health.lock().unwrap().remove(instance_id);
         self.perf_trackers.lock().unwrap().remove(instance_id);
-        crate::deployment_identity::release_launch_artifacts(instance_id);
         crate::commands::monitoring::remove_instance(instance_id);
-    }
-
-    fn clear_stable_instance_recovery(&self, instance_id: &str, expected_pid: u32) {
-        let _lifecycle = self.instance_lifecycle.lock().unwrap();
-        let removed = {
-            let mut state = self.state.lock().unwrap();
-            let stable_current_process = state.running.get(instance_id).is_some_and(|running| {
-                running.pid == expected_pid
-                    && recovery_budget_is_stable(running.start_time, unix_timestamp())
-            });
-            let monitored_incident = state
-                .recovery
-                .get(instance_id)
-                .is_some_and(|recovery| recovery.phase == InstanceRecoveryPhase::Monitoring);
-            (stable_current_process && monitored_incident)
-                .then(|| state.recovery.remove(instance_id))
-                .flatten()
-        };
-        let Some(recovery) = removed else {
-            return;
-        };
-        if let Err(error) = self.persist() {
-            let mut state = self.state.lock().unwrap();
-            let still_current = state
-                .running
-                .get(instance_id)
-                .is_some_and(|running| running.pid == expected_pid);
-            if still_current && !state.recovery.contains_key(instance_id) {
-                state.recovery.insert(instance_id.to_string(), recovery);
-            }
-            drop(state);
-            *self.last_error.lock().unwrap() = Some(format!(
-                "failed to persist stable recovery completion for instance {instance_id}: {error}"
-            ));
-            return;
-        }
-        self.clear_retried_instance_error(instance_id);
     }
 
     pub fn stop_instance(&self, instance_id: &str) -> Result<(), String> {
@@ -1458,31 +882,13 @@ impl RuntimeSupervisor {
         let running = self.state.lock().unwrap().running.get(instance_id).cloned();
         let Some(running) = running else {
             if !preserve_desired {
-                let previous = {
-                    let mut state = self.state.lock().unwrap();
-                    (
-                        state.desired_instances.remove(instance_id),
-                        state.recovery.remove(instance_id),
-                    )
-                };
-                if previous.0.is_none() && previous.1.is_none() {
-                    return Ok(());
-                }
-                if let Err(error) = self.persist() {
-                    let mut state = self.state.lock().unwrap();
-                    if let Some(desired) = previous.0 {
-                        state
-                            .desired_instances
-                            .insert(instance_id.to_string(), desired);
-                    }
-                    if let Some(recovery) = previous.1 {
-                        state.recovery.insert(instance_id.to_string(), recovery);
-                    }
-                    return Err(error);
-                }
-                crate::commands::server::remove_instance_api_credential(instance_id);
+                self.state
+                    .lock()
+                    .unwrap()
+                    .desired_instances
+                    .remove(instance_id);
             }
-            return Ok(());
+            return self.persist();
         };
         self.stop_intents.lock().unwrap().insert(
             instance_id.to_string(),
@@ -1503,10 +909,6 @@ impl RuntimeSupervisor {
             let mut state = self.state.lock().unwrap();
             if !preserve_desired {
                 state.desired_instances.remove(instance_id);
-                state.recovery.remove(instance_id);
-            } else if let Some(recovery) = state.recovery.get_mut(instance_id) {
-                recovery.phase = InstanceRecoveryPhase::Restoring;
-                recovery.next_retry_at = None;
             }
             state.running.remove(instance_id)
         };
@@ -1514,11 +916,7 @@ impl RuntimeSupervisor {
         if removed.is_some() {
             self.health.lock().unwrap().remove(instance_id);
             self.perf_trackers.lock().unwrap().remove(instance_id);
-            crate::deployment_identity::release_launch_artifacts(instance_id);
             crate::commands::monitoring::remove_instance(instance_id);
-            if !preserve_desired {
-                crate::commands::server::remove_running_api_credential(instance_id, &running);
-            }
             let _ = crate::commands::telemetry::finish_run_session(
                 running.telemetry_session_id.as_deref(),
                 None,
@@ -1538,22 +936,11 @@ impl RuntimeSupervisor {
         telemetry_reason: &str,
     ) -> Vec<String> {
         let _lifecycle = self.instance_lifecycle.lock().unwrap();
-        let instance_ids = {
-            let state = self.state.lock().unwrap();
-            let mut ids = state
-                .running
-                .keys()
-                .chain(state.desired_instances.keys())
-                .cloned()
-                .collect::<Vec<_>>();
-            ids.sort();
-            ids.dedup();
-            ids
-        };
+        let running = self.state.lock().unwrap().running.clone();
         let mut failures = Vec::new();
-        for instance_id in instance_ids {
+        for instance_id in running.keys() {
             if let Err(error) =
-                self.stop_instance_locked(&instance_id, preserve_desired, telemetry_reason)
+                self.stop_instance_locked(instance_id, preserve_desired, telemetry_reason)
             {
                 failures.push(error);
             }
@@ -1562,10 +949,7 @@ impl RuntimeSupervisor {
     }
 
     fn restore_missing_desired_instances(self: &Arc<Self>) -> Vec<String> {
-        let (desired, recovery) = {
-            let state = self.state.lock().unwrap();
-            (state.desired_instances.clone(), state.recovery.clone())
-        };
+        let desired = self.state.lock().unwrap().desired_instances.clone();
         let mut failures = Vec::new();
         for (instance_id, spec) in desired {
             let is_running = self
@@ -1575,61 +959,9 @@ impl RuntimeSupervisor {
                 .running
                 .get(&instance_id)
                 .is_some_and(running_instance_matches_live_process);
-            if is_running {
-                continue;
-            }
-            match recovery.get(&instance_id).map(|status| status.phase) {
-                Some(InstanceRecoveryPhase::CrashLoop | InstanceRecoveryPhase::Failed) => {}
-                Some(InstanceRecoveryPhase::Waiting) => {
-                    if let Some(status) = recovery.get(&instance_id) {
-                        if let Some(next_retry_at) = status.next_retry_at {
-                            self.schedule_instance_recovery(
-                                &instance_id,
-                                status.restart_attempts,
-                                next_retry_at,
-                            );
-                        }
-                    }
-                }
-                Some(InstanceRecoveryPhase::Monitoring) => {
-                    let _lifecycle = self.instance_lifecycle.lock().unwrap();
-                    self.record_instance_failure_locked(
-                        spec,
-                        RuntimeFailureKind::UnexpectedExit,
-                        format!("instance {instance_id} was absent while restoring runtime state"),
-                        None,
-                    );
-                }
-                Some(InstanceRecoveryPhase::Restoring) => {
-                    let _lifecycle = self.instance_lifecycle.lock().unwrap();
-                    if let Err(error) = self.start_instance_locked(spec.clone(), false) {
-                        self.record_instance_failure_locked(
-                            spec,
-                            RuntimeFailureKind::StartupFailure,
-                            error.clone(),
-                            None,
-                        );
-                        failures.push(format!("failed to restore instance {instance_id}: {error}"));
-                    } else {
-                        if let Some(recovery) =
-                            self.state.lock().unwrap().recovery.get_mut(&instance_id)
-                        {
-                            recovery.phase = InstanceRecoveryPhase::Monitoring;
-                        }
-                        let _ = self.persist();
-                    }
-                }
-                None => {
-                    let _lifecycle = self.instance_lifecycle.lock().unwrap();
-                    if let Err(error) = self.start_instance_locked(spec.clone(), false) {
-                        self.record_instance_failure_locked(
-                            spec,
-                            RuntimeFailureKind::StartupFailure,
-                            error.clone(),
-                            None,
-                        );
-                        failures.push(format!("failed to restore instance {instance_id}: {error}"));
-                    }
+            if !is_running {
+                if let Err(error) = self.start_instance(spec) {
+                    failures.push(format!("failed to restore instance {instance_id}: {error}"));
                 }
             }
         }
@@ -1649,7 +981,7 @@ impl RuntimeSupervisor {
         let mut last_error = self.last_error.lock().unwrap();
         if last_error
             .as_deref()
-            .is_some_and(|error| is_instance_recovery_error(error, instance_id))
+            .is_some_and(|error| is_instance_exit_error(error, instance_id))
         {
             *last_error = None;
         }
@@ -1761,10 +1093,11 @@ impl RuntimeSupervisor {
         *self.proxy_router_runtime.lock().unwrap() = Some(router_runtime);
         let supervisor = self.clone();
         let task = tokio::spawn(async move {
-            let result = serve_hardened_proxy(listener, router, async move {
-                let _ = receiver.await;
-            })
-            .await;
+            let result = axum::serve(listener, router)
+                .with_graceful_shutdown(async move {
+                    let _ = receiver.await;
+                })
+                .await;
             let restart = result.is_err();
             let runtime_error = result
                 .as_ref()
@@ -1998,11 +1331,8 @@ impl RuntimeSupervisor {
                 .await
                 .map(Box::new)
                 .map(RuntimeReply::Status),
-            RuntimeCommand::StartInstance {
-                spec,
-                manual_recovery,
-            } => self
-                .start_instance(*spec, manual_recovery)
+            RuntimeCommand::StartInstance { spec } => self
+                .start_instance(*spec)
                 .map(Box::new)
                 .map(RuntimeReply::Instance),
             RuntimeCommand::StopInstance { instance_id } => {
@@ -2019,16 +1349,8 @@ impl RuntimeSupervisor {
                     self.status(registered_for_login),
                 )))
             }
-            RuntimeCommand::StartProxy => self
-                .start_proxy()
-                .await
-                .map(Box::new)
-                .map(RuntimeReply::ProxyStatus),
-            RuntimeCommand::StopProxy => self
-                .stop_proxy()
-                .await
-                .map(Box::new)
-                .map(RuntimeReply::ProxyStatus),
+            RuntimeCommand::StartProxy => self.start_proxy().await.map(RuntimeReply::ProxyStatus),
+            RuntimeCommand::StopProxy => self.stop_proxy().await.map(RuntimeReply::ProxyStatus),
             RuntimeCommand::Shutdown { stop_instances } => {
                 if stop_instances {
                     let mut failures = Vec::new();
@@ -2123,38 +1445,16 @@ fn should_stop_for_missing_gui(background_enabled: bool, heartbeat_expired: bool
 #[cfg(test)]
 mod tests {
     use super::{
-        gui_owner_is_alive, is_instance_recovery_error, recovery_budget_is_stable,
-        recovery_status_after_failure, runtime_config_matches, runtime_deployment_config_matches,
-        scheduled_recovery_matches, should_stop_for_missing_gui, sync_desired_launch_config,
-        validate_background_detach_inventory, validate_runtime_deployment_identity_from_paths,
-        validate_runtime_engine_qualification_from_paths, validate_runtime_state, GuiOwner,
-        QUALIFICATION_PROFILE_VERSION,
+        gui_owner_is_alive, is_instance_exit_error, runtime_config_matches,
+        should_stop_for_missing_gui, validate_background_detach_inventory, validate_runtime_state,
+        GuiOwner,
     };
-    use crate::commands::engine_capabilities::executable_fingerprint;
     use crate::commands::server::read_process_identity;
     use crate::models::{InstanceConfig, RunningInstance};
     use crate::runtime_service::protocol::{
-        InstanceRecoveryPhase, PersistedRuntimeState, RuntimeFailure, RuntimeFailureKind,
-        RuntimeLaunchSpec, INSTANCE_RECOVERY_MAX_ATTEMPTS, INSTANCE_RECOVERY_STABLE_SECS,
-        RUNTIME_STATE_SCHEMA_VERSION,
+        PersistedRuntimeState, RuntimeLaunchSpec, RUNTIME_STATE_SCHEMA_VERSION,
     };
     use std::collections::HashMap;
-
-    fn test_deployment_identity(
-        config: &InstanceConfig,
-    ) -> crate::deployment_identity::DeploymentIdentity {
-        let fingerprint = crate::config_revision::deployment_config_fingerprint(config).unwrap();
-        let configuration_id =
-            crate::config_revision::configuration_id_from_fingerprint(&fingerprint).unwrap();
-        crate::deployment_identity::DeploymentIdentity::new(
-            "urn:lsm:engine:v1:sha256:test".into(),
-            "urn:lsm:model:v1:sha256:test".into(),
-            "revision-test".into(),
-            configuration_id,
-            "urn:lsm:qualification:v2:sha256:test".into(),
-        )
-        .unwrap()
-    }
 
     fn detach_instance(pid: u32) -> RunningInstance {
         RunningInstance {
@@ -2167,247 +1467,19 @@ mod tests {
             telemetry_session_id: None,
             workload: "inference".into(),
             launch_config: None,
-            deployment_identity: Default::default(),
-            deployment_id: String::new(),
-            deployment_revision_id: String::new(),
         }
     }
 
     fn detach_spec() -> RuntimeLaunchSpec {
-        let config = InstanceConfig {
-            id: "instance-1".into(),
-            ..InstanceConfig::default()
-        };
-        let deployment_identity = test_deployment_identity(&config);
-        let deployment_revision = crate::deployment::test_revision(
-            "instance-1",
-            &config,
-            &deployment_identity,
-            &crate::models::ProxyConfig::default(),
-        );
         RuntimeLaunchSpec {
             instance_id: "instance-1".into(),
-            config,
-            launch_config_stale: false,
-            engine_qualification_fingerprint: "test-fingerprint".into(),
-            engine_qualification_profile_version: QUALIFICATION_PROFILE_VERSION,
-            deployment_identity,
-            deployment_revision,
+            config: InstanceConfig::default(),
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
             workload: "inference".into(),
             working_directory: None,
         }
-    }
-
-    #[test]
-    fn runtime_recovery_revalidates_the_complete_deployment_identity() {
-        let dir = std::env::temp_dir().join(format!(
-            "lsm-runtime-deployment-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let engine_path = dir.join("llama-server");
-        let model_path = dir.join("model.gguf");
-        std::fs::write(&engine_path, vec![b'e'; 128 * 1024]).unwrap();
-        std::fs::write(&model_path, vec![b'm'; 128 * 1024]).unwrap();
-        let engine =
-            crate::deployment_identity::artifact_identity_for_path("engine", &engine_path).unwrap();
-        let model =
-            crate::deployment_identity::artifact_identity_for_path("model", &model_path).unwrap();
-        let config = InstanceConfig {
-            id: "instance-1".into(),
-            model_path: model_path.to_string_lossy().to_string(),
-            ..InstanceConfig::default()
-        };
-        let fingerprint = crate::config_revision::deployment_config_fingerprint(&config).unwrap();
-        let configuration_id =
-            crate::config_revision::configuration_id_from_fingerprint(&fingerprint).unwrap();
-        let deployment_identity = crate::deployment_identity::DeploymentIdentity::new(
-            engine.artifact_id,
-            model.artifact_id,
-            "revision-1".into(),
-            configuration_id,
-            "urn:lsm:qualification:v2:sha256:qualification-1".into(),
-        )
-        .unwrap();
-        let deployment_revision = crate::deployment::test_revision(
-            "instance-1",
-            &config,
-            &deployment_identity,
-            &crate::models::ProxyConfig::default(),
-        );
-        let spec = RuntimeLaunchSpec {
-            instance_id: "instance-1".into(),
-            config,
-            launch_config_stale: false,
-            engine_qualification_fingerprint: executable_fingerprint(
-                &engine_path.to_string_lossy(),
-            ),
-            engine_qualification_profile_version: QUALIFICATION_PROFILE_VERSION,
-            deployment_identity,
-            deployment_revision,
-            engine_backend: "test".into(),
-            command: vec![engine_path.to_string_lossy().to_string()],
-            command_display: "llama-server".into(),
-            workload: "inference".into(),
-            working_directory: None,
-        };
-        validate_runtime_deployment_identity_from_paths(&spec).unwrap();
-        std::fs::write(&model_path, vec![b'x'; 128 * 1024]).unwrap();
-        assert!(validate_runtime_deployment_identity_from_paths(&spec)
-            .unwrap_err()
-            .starts_with("DEPLOYMENT_MODEL_IDENTITY_STALE"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    fn failure(message: &str, occurred_at: u64) -> RuntimeFailure {
-        RuntimeFailure {
-            kind: RuntimeFailureKind::UnexpectedExit,
-            message: message.into(),
-            exit_code: Some(1),
-            occurred_at,
-        }
-    }
-
-    #[test]
-    fn disabled_recovery_records_failure_without_scheduling() {
-        let status = recovery_status_after_failure(false, None, failure("origin", 100), 100);
-        assert_eq!(status.phase, InstanceRecoveryPhase::Failed);
-        assert_eq!(status.restart_attempts, 0);
-        assert_eq!(status.max_restart_attempts, INSTANCE_RECOVERY_MAX_ATTEMPTS);
-        assert_eq!(status.next_retry_at, None);
-        assert_eq!(status.origin_failure.message, "origin");
-    }
-
-    #[test]
-    fn runtime_recovery_is_bound_to_the_qualified_engine_artifact() {
-        let mut spec = detach_spec();
-        spec.engine_qualification_fingerprint.clear();
-        spec.engine_qualification_profile_version = 0;
-        assert!(validate_runtime_engine_qualification_from_paths(&spec)
-            .unwrap_err()
-            .starts_with("ENGINE_QUALIFICATION_REQUIRED:"));
-
-        let directory = std::env::temp_dir().join(format!(
-            "lsm-runtime-qualified-engine-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        crate::persistence::enforce_private_directory(&directory).unwrap();
-        let executable = directory.join("llama-server.exe");
-        std::fs::write(&executable, vec![b'a'; 128 * 1024]).unwrap();
-        spec.command = vec![executable.to_string_lossy().to_string()];
-        spec.engine_qualification_fingerprint =
-            executable_fingerprint(&executable.to_string_lossy());
-        spec.engine_qualification_profile_version = QUALIFICATION_PROFILE_VERSION;
-        validate_runtime_engine_qualification_from_paths(&spec).unwrap();
-
-        std::fs::write(&executable, vec![b'b'; 128 * 1024]).unwrap();
-        assert!(validate_runtime_engine_qualification_from_paths(&spec)
-            .unwrap_err()
-            .starts_with("ENGINE_QUALIFICATION_STALE:"));
-        let _ = std::fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn launch_snapshot_staleness_uses_persisted_identity_instead_of_materialized_credentials() {
-        let mut spec = detach_spec();
-        spec.config.restart_policy = "on-failure".into();
-        spec.deployment_identity = test_deployment_identity(&spec.config);
-        spec.deployment_revision = crate::deployment::test_revision(
-            "instance-1",
-            &spec.config,
-            &spec.deployment_identity,
-            &crate::models::ProxyConfig::default(),
-        );
-        let mut current = spec.config.clone();
-        current.name = "renamed".into();
-
-        assert!(runtime_deployment_config_matches(
-            &spec.deployment_identity,
-            &current
-        ));
-        spec.config.api_key.clear();
-        spec.config.api_key_file = "/private/runtime/api-key".into();
-        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
-        assert!(!spec.launch_config_stale);
-        assert!(super::instance_recovery_enabled(&spec));
-
-        current.auto_start = true;
-        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
-        assert!(spec.launch_config_stale);
-        assert!(!super::instance_recovery_enabled(&spec));
-        current.auto_start = spec.config.auto_start;
-
-        current.api_key = "a-different-persisted-api-key".into();
-        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
-        assert!(spec.launch_config_stale);
-        assert!(!super::instance_recovery_enabled(&spec));
-        current.api_key.clear();
-
-        current.port = current.port.saturating_add(1);
-        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
-        assert!(spec.launch_config_stale);
-        assert!(!super::instance_recovery_enabled(&spec));
-        assert_ne!(spec.config.port, current.port);
-
-        current.port = spec.config.port;
-        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
-        assert!(!spec.launch_config_stale);
-        assert!(super::instance_recovery_enabled(&spec));
-    }
-
-    #[test]
-    fn recovery_backoff_is_bounded_and_preserves_the_originating_failure() {
-        let first = recovery_status_after_failure(true, None, failure("origin", 100), 100);
-        assert_eq!(first.phase, InstanceRecoveryPhase::Waiting);
-        assert_eq!(first.next_retry_at, Some(102));
-        assert!(scheduled_recovery_matches(&first, 0, 102));
-
-        let mut after_first_attempt = first.clone();
-        after_first_attempt.phase = InstanceRecoveryPhase::Monitoring;
-        after_first_attempt.restart_attempts = 1;
-        after_first_attempt.next_retry_at = None;
-        let second = recovery_status_after_failure(
-            true,
-            Some(&after_first_attempt),
-            failure("retry one failed", 110),
-            110,
-        );
-        assert_eq!(second.next_retry_at, Some(120));
-        assert_eq!(second.origin_failure.message, "origin");
-        assert_eq!(second.last_failure.message, "retry one failed");
-
-        let mut exhausted = second;
-        exhausted.phase = InstanceRecoveryPhase::Monitoring;
-        exhausted.restart_attempts = INSTANCE_RECOVERY_MAX_ATTEMPTS;
-        exhausted.next_retry_at = None;
-        let crash_loop = recovery_status_after_failure(
-            true,
-            Some(&exhausted),
-            failure("retry three failed", 140),
-            140,
-        );
-        assert_eq!(crash_loop.phase, InstanceRecoveryPhase::CrashLoop);
-        assert_eq!(crash_loop.next_retry_at, None);
-        assert_eq!(crash_loop.origin_failure.message, "origin");
-        assert!(!scheduled_recovery_matches(&crash_loop, 3, 170));
-    }
-
-    #[test]
-    fn stable_runtime_resets_only_after_the_full_stability_window() {
-        assert!(!recovery_budget_is_stable(
-            100,
-            100 + INSTANCE_RECOVERY_STABLE_SECS - 1
-        ));
-        assert!(recovery_budget_is_stable(
-            100,
-            100 + INSTANCE_RECOVERY_STABLE_SECS
-        ));
-        assert!(!recovery_budget_is_stable(0, u64::MAX));
     }
 
     #[test]
@@ -2434,15 +1506,11 @@ mod tests {
     }
 
     #[test]
-    fn retry_only_recognizes_the_same_instances_recovery_error() {
+    fn retry_only_recognizes_the_same_instances_exit_error() {
         let error = "instance instance-1 exited unexpectedly (code 1)";
-        assert!(is_instance_recovery_error(error, "instance-1"));
-        assert!(is_instance_recovery_error(
-            "instance instance-1 failed to start: missing executable",
-            "instance-1"
-        ));
-        assert!(!is_instance_recovery_error(error, "instance-2"));
-        assert!(!is_instance_recovery_error(
+        assert!(is_instance_exit_error(error, "instance-1"));
+        assert!(!is_instance_exit_error(error, "instance-2"));
+        assert!(!is_instance_exit_error(
             "failed to persist exit of instance instance-1",
             "instance-1"
         ));
@@ -2457,39 +1525,6 @@ mod tests {
         assert!(validate_runtime_state(state)
             .unwrap_err()
             .contains("unsupported runtime state schema"));
-    }
-
-    #[test]
-    fn first_runtime_state_schema_migrates_without_recovery_incidents() {
-        let state = PersistedRuntimeState {
-            schema_version: 1,
-            ..PersistedRuntimeState::default()
-        };
-        let migrated = validate_runtime_state(state).unwrap();
-        assert_eq!(migrated.schema_version, RUNTIME_STATE_SCHEMA_VERSION);
-        assert!(migrated.recovery.is_empty());
-    }
-
-    #[test]
-    fn schema_three_runtime_state_migrates_but_legacy_specs_remain_unbound() {
-        let mut state = PersistedRuntimeState {
-            schema_version: 3,
-            ..PersistedRuntimeState::default()
-        };
-        state
-            .desired_instances
-            .insert("instance-1".into(), detach_spec());
-        state
-            .desired_instances
-            .get_mut("instance-1")
-            .unwrap()
-            .deployment_revision = Default::default();
-        let migrated = validate_runtime_state(state).unwrap();
-        assert_eq!(migrated.schema_version, RUNTIME_STATE_SCHEMA_VERSION);
-        let legacy = &migrated.desired_instances["instance-1"];
-        assert!(
-            super::validate_runtime_deployment_revision(legacy, &migrated.proxy_config).is_err()
-        );
     }
 
     #[test]

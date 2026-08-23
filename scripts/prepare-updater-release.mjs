@@ -1,18 +1,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import crypto from 'node:crypto'
 
 const root = path.resolve(import.meta.dirname, '..')
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
-const version = process.env.RELEASE_VERSION || packageJson.version
-const tag = process.env.RELEASE_TAG || process.env.GITHUB_REF_NAME || `v${version}`
+const version = packageJson.version
+const tag = process.env.GITHUB_REF_NAME || `v${version}`
 const mode = process.argv[2]
 const inputRoot = path.resolve(process.env.UPDATER_INPUT_DIR || path.join(root, 'updater-input'))
 const outputRoot = path.resolve(process.env.UPDATER_OUTPUT_DIR || path.join(root, 'updater-publish'))
 const releaseRoot = path.join(outputRoot, 'releases', `v${version}`)
 const releaseMapPath = path.join(outputRoot, '.release-map.json')
-const sourceSha = (process.env.SOURCE_SHA || '').toLowerCase()
 
 if (tag !== `v${version}`) {
   throw new Error(`release tag ${tag} must match package version v${version}`)
@@ -111,22 +109,6 @@ function createManifest() {
   }
 
   const releaseMap = JSON.parse(fs.readFileSync(releaseMapPath, 'utf8'))
-  if (!/^[0-9a-f]{40}$/.test(sourceSha)) {
-    throw new Error('SOURCE_SHA must be the exact 40-character release commit SHA')
-  }
-  const versionParts = version.split('.').map(part => Number(part))
-  if (
-    versionParts.length !== 3
-    || versionParts.some(part => !Number.isSafeInteger(part) || part < 0 || part > 999_999)
-  ) {
-    throw new Error(`package version ${version} is outside the monotonic release-counter contract`)
-  }
-  const releaseCounter = versionParts[0] * 1_000_000_000_000
-    + versionParts[1] * 1_000_000
-    + versionParts[2]
-  if (!Number.isSafeInteger(releaseCounter) || releaseCounter <= 0) {
-    throw new Error(`package version ${version} has no valid monotonic release counter`)
-  }
   const platforms = {}
   for (const [platform, fileName] of Object.entries(releaseMap)) {
     const payloadPath = path.join(releaseRoot, fileName)
@@ -139,7 +121,6 @@ function createManifest() {
     platforms[platform] = {
       signature,
       url: `${publicBaseUrl}/releases/v${version}/${encodeURIComponent(fileName)}`,
-      sha256: crypto.createHash('sha256').update(fs.readFileSync(payloadPath)).digest('hex'),
     }
   }
 
@@ -151,13 +132,10 @@ function createManifest() {
     version,
     notes,
     pub_date: new Date().toISOString(),
-    release_tag: tag,
-    source_sha: sourceSha,
-    release_counter: releaseCounter,
     platforms,
   }
-  fs.writeFileSync(path.join(outputRoot, 'release-envelope.json'), `${JSON.stringify(manifest)}\n`, 'utf8')
-  console.log(`Created release-envelope.json for ${Object.keys(platforms).join(', ')}.`)
+  fs.writeFileSync(path.join(outputRoot, 'latest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  console.log(`Created latest.json for ${Object.keys(platforms).join(', ')}.`)
 }
 
 if (mode === '--stage') stageRelease()

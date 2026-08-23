@@ -1,0 +1,89 @@
+name: Publish release downloads
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Published release tag to backfill, for example v2.9.40
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: release-r2
+    steps:
+      - name: Validate protected R2 secrets
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+        run: |
+          missing=()
+          for name in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_ENDPOINT R2_BUCKET R2_PUBLIC_BASE_URL; do
+            if [ -z "$(printenv "$name")" ]; then missing+=("$name"); fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            echo "Missing protected release-r2 secret(s): ${missing[*]}" >&2
+            exit 1
+          fi
+      - name: Download exact manual packages from the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          release_state="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease --jq '[.isDraft, .isPrerelease] | @tsv')"
+          if [[ "$release_state" != $'false\tfalse' ]]; then
+            echo "Release must be published and not a prerelease: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          destination="manual-downloads/$RELEASE_TAG"
+          mkdir -p "$destination"
+          expected=(
+            "LlamaServerManager_${version}_aarch64-adhoc.dmg"
+            "LlamaServerManager_${version}_amd64.deb"
+            "LlamaServerManager_${version}_arm64.deb"
+          )
+          for name in "${expected[@]}"; do
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$name" --dir "$destination"
+            test -s "$destination/$name"
+          done
+      - name: Upload and verify immutable R2 download objects
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_REGION: auto
+          AWS_EC2_METADATA_DISABLED: 'true'
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE_URL: ${{ secrets.R2_PUBLIC_BASE_URL }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          source_dir="manual-downloads/$RELEASE_TAG"
+          aws s3 cp "$source_dir/" "s3://$R2_BUCKET/downloads/$RELEASE_TAG/" \
+            --recursive \
+            --endpoint-url "$R2_ENDPOINT" \
+            --cache-control 'public,max-age=31536000,immutable'
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            remote_file="$(mktemp)"
+            public_file="$(mktemp)"
+            aws s3 cp "s3://$R2_BUCKET/downloads/$RELEASE_TAG/$name" "$remote_file" \
+              --endpoint-url "$R2_ENDPOINT"
+            cmp "$file" "$remote_file"
+            curl --fail --silent --show-error --location \
+              "$R2_PUBLIC_BASE_URL/downloads/$RELEASE_TAG/$name?verify=$GITHUB_RUN_ID" \
+              --output "$public_file"
+            cmp "$file" "$public_file"
+            rm -f "$remote_file" "$public_file"
+          done < <(find "$source_dir" -maxdepth 1 -type f -print0)

@@ -26,96 +26,6 @@ test('routing page documents OpenAI and Anthropic endpoints and compatibility bo
   await expect(compatibility).toContainText('32 MiB')
 })
 
-test('operational metrics keep unknown states explicit and surface actionable alerts', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('lang', 'zh-CN')
-    localStorage.setItem('lastTab', 'proxy')
-  })
-  await page.goto('/?scenario=operational-metrics')
-
-  const panel = page.getByTestId('proxy-operational-metrics')
-  await expect(panel).toContainText('运营指标与告警')
-  await expect(panel).toContainText('3,500 ms')
-  await expect(panel).toContainText('420 ms')
-  await expect(panel).toContainText('40.0%')
-  await expect(panel).toContainText('15.0%')
-  await expect(panel).toContainText('90.6%')
-  await expect(panel).toContainText('代理错误率升高')
-  await expect(panel).toContainText('先检查目标健康')
-  await expect(panel).toContainText('首响应延迟升高')
-  await expect(panel).toContainText('路由并发接近饱和')
-  await expect(panel).not.toContainText('缓存复用率过低')
-
-})
-
-test('operational metrics and alert actions are available in English', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('lang', 'en-US')
-    localStorage.setItem('lastTab', 'proxy')
-  })
-  await page.goto('/?scenario=operational-metrics')
-
-  const panel = page.getByTestId('proxy-operational-metrics')
-  await expect(panel).toContainText('Operational metrics and alerts')
-  await expect(panel).toContainText('Elevated proxy error rate')
-  await expect(panel).toContainText('Inspect target health')
-})
-
-test('canary rollout remains operator controlled from observation through promotion and rollback', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('lang', 'zh-CN')
-    localStorage.setItem('lastTab', 'proxy')
-  })
-  await page.goto('/?scenario=canary-rollout')
-
-  const panel = page.getByTestId('canary-rollout-panel')
-  await expect(panel).toContainText('模型与引擎金丝雀发布')
-  await panel.getByRole('combobox', { name: '稳定版本' }).selectOption('browser-test-instance')
-  await panel.getByRole('combobox', { name: '候选版本' }).selectOption('browser-stopped-instance')
-  await panel.getByRole('textbox', { name: '对外模型名' }).fill('public-canary-model')
-  await panel.getByRole('spinbutton', { name: '候选流量' }).fill('10')
-  await panel.getByRole('button', { name: '启动金丝雀' }).click()
-
-  await expect(panel).toContainText('金丝雀发布已启动')
-  await expect(panel).toContainText('public-canary-model')
-  await expect(panel).toContainText('90%')
-  await expect(panel).toContainText('10%')
-  await expect(panel.getByRole('button', { name: '提升候选版本' })).toBeEnabled()
-
-  await panel.getByRole('button', { name: '采集观察快照' }).click()
-  await expect(panel).toContainText('观察快照已写入审计记录')
-  await expect(panel).toContainText('100.0%')
-  await expect(panel).toContainText('1,200 ms')
-  await expect(panel).toContainText('80 ms')
-  await expect(panel).toContainText('37.5%')
-
-  const share = panel.getByRole('spinbutton', { name: '候选流量' })
-  await share.fill('25')
-  await panel.getByRole('button', { name: '应用流量比例' }).click()
-  await expect(panel).toContainText('候选流量比例已更新')
-  await expect(panel).toContainText('75%')
-  await expect(panel).toContainText('25%')
-
-  page.once('dialog', dialog => dialog.accept())
-  await panel.getByRole('button', { name: '提升候选版本' }).click()
-  await expect(panel).toContainText('已提升，可回滚')
-  await expect(panel).toContainText('候选版本已接收全部流量')
-
-  page.once('dialog', dialog => dialog.accept())
-  await panel.getByRole('button', { name: '回滚提升' }).click()
-  await expect(panel).toContainText('已回滚')
-  await expect(panel).toContainText('提升已回滚')
-
-  const commands = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.map(call => call.command))
-  expect(commands).toEqual(expect.arrayContaining([
-    'create_canary_rollout',
-    'observe_canary_rollout',
-    'set_canary_weight',
-    'promote_canary_rollout',
-    'rollback_canary_rollout',
-  ]))
-})
-
 test('route switches expose current state and saving refreshes runtime health', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
@@ -181,12 +91,9 @@ test('production scheduling and scoped API keys round-trip through the settings 
   await expect(page.getByText('旧版单一 API Key（可选）')).toHaveCount(0)
 
   await page.getByRole('combobox', { name: '调度策略' }).selectOption('weighted')
-  await expect(page.getByRole('switch', { name: '严格模型路由' })).toBeChecked()
-  await expect(page.getByRole('switch', { name: '会话/缓存感知路由' })).toBeChecked()
-  await page.getByRole('spinbutton', { name: '绑定有效期（毫秒）' }).fill('120000')
-  await page.getByRole('spinbutton', { name: '最大绑定数' }).fill('99')
+  await expect(page.getByRole('switch', { name: '已启用' })).toBeChecked()
   await page.getByRole('button', { name: '添加 API Key' }).click()
-  const keyInput = page.getByRole('textbox', { name: 'API Key（至少 32 字符）' })
+  const keyInput = page.getByRole('textbox', { name: 'API Key（至少 16 字符）' })
   await expect(keyInput).toHaveAttribute('type', 'password')
   const generatedKey = await keyInput.inputValue()
   expect(generatedKey).toMatch(/^lsm_[0-9a-f]{32}$/)
@@ -234,9 +141,6 @@ test('production scheduling and scoped API keys round-trip through the settings 
   expect(savedConfig).toMatchObject({
     routing_strategy: 'weighted',
     strict_model_routing: true,
-    locality_routing_enabled: true,
-    locality_ttl_ms: 120_000,
-    locality_max_entries: 99,
     max_concurrent_requests: 64,
     queue_timeout_ms: 1000,
     cors_allowed_origins: ['https://app.example.com'],

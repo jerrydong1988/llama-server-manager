@@ -11,8 +11,6 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 const RUNTIME_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(10);
 const RUNTIME_RESPONSE_TIMEOUT: Duration = Duration::from_secs(300);
-const MAX_RUNTIME_PREAUTH_CONNECTIONS: usize = 16;
-const RUNTIME_HANDSHAKE_DOMAIN: &[u8] = b"llama-server-manager:runtime-handshake:v1\0";
 #[cfg(any(unix, test))]
 const MAX_RUNTIME_SOCKET_PATH_BYTES: usize = 90;
 #[cfg(any(unix, test))]
@@ -46,96 +44,6 @@ pub fn service_log_path() -> PathBuf {
 
 pub fn runtime_lock_path() -> PathBuf {
     runtime_dir().join("runtime-service.lock")
-}
-
-pub fn service_pid_path() -> PathBuf {
-    runtime_dir().join("runtime-service.pid")
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct RuntimeHandshakeRequest {
-    protocol_version: u32,
-    nonce: String,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct RuntimeHandshakeResponse {
-    protocol_version: u32,
-    nonce: String,
-    service_pid: u32,
-    proof: String,
-}
-
-fn handshake_proof(control_token: &str, nonce: &str, service_pid: u32) -> String {
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(RUNTIME_HANDSHAKE_DOMAIN);
-    digest.update(control_token.as_bytes());
-    digest.update([0]);
-    digest.update(nonce.as_bytes());
-    digest.update([0]);
-    digest.update(service_pid.to_le_bytes());
-    format!("{:x}", digest.finalize())
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.iter()
-        .zip(right)
-        .fold(0_u8, |difference, (left, right)| {
-            difference | (left ^ right)
-        })
-        == 0
-}
-
-fn persist_service_pid() -> Result<(), String> {
-    crate::persistence::atomic_write(
-        &service_pid_path(),
-        std::process::id().to_string().as_bytes(),
-        None,
-    )
-}
-
-fn expected_service_pid() -> Result<u32, String> {
-    crate::persistence::enforce_private_file(&service_pid_path())?;
-    std::fs::read_to_string(service_pid_path())
-        .map_err(|error| format!("failed to read runtime service identity: {error}"))?
-        .trim()
-        .parse::<u32>()
-        .map_err(|_| "runtime service identity is invalid".to_string())
-}
-
-async fn authenticate_runtime_server<S>(stream: &mut S, control_token: &str) -> Result<(), String>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
-{
-    let nonce = uuid::Uuid::new_v4().to_string();
-    let handshake = RuntimeHandshakeRequest {
-        protocol_version: RUNTIME_PROTOCOL_VERSION,
-        nonce: nonce.clone(),
-    };
-    let handshake = serde_json::to_vec(&handshake)
-        .map_err(|error| format!("failed to encode runtime handshake: {error}"))?;
-    tokio::time::timeout(RUNTIME_IO_TIMEOUT, write_frame(stream, &handshake))
-        .await
-        .map_err(|_| "timed out writing runtime handshake".to_string())??;
-    let handshake = tokio::time::timeout(RUNTIME_IO_TIMEOUT, read_frame(stream))
-        .await
-        .map_err(|_| "timed out reading runtime handshake".to_string())??;
-    let handshake: RuntimeHandshakeResponse = serde_json::from_slice(&handshake)
-        .map_err(|error| format!("failed to decode runtime handshake: {error}"))?;
-    let expected_pid = expected_service_pid()?;
-    let expected_proof = handshake_proof(control_token, &nonce, expected_pid);
-    if handshake.protocol_version != RUNTIME_PROTOCOL_VERSION
-        || handshake.nonce != nonce
-        || handshake.service_pid != expected_pid
-        || !constant_time_eq(handshake.proof.as_bytes(), expected_proof.as_bytes())
-    {
-        return Err("runtime server authentication failed before sending credentials".into());
-    }
-    Ok(())
 }
 
 pub(super) fn acquire_runtime_lock() -> Result<Option<File>, String> {
@@ -197,7 +105,7 @@ fn control_socket_path_for(
     }
     let data_suffix = stable_path_hash(&data_dir.to_string_lossy());
     let fallback = temp_dir
-        .join(format!("lsm-{data_suffix:016x}-{suffix}"))
+        .join(format!("llama-server-manager-{data_suffix:016x}"))
         .join(format!("control-{suffix}.sock"));
     if socket_path_fits(&fallback) {
         return fallback;
@@ -205,7 +113,7 @@ fn control_socket_path_for(
     // macOS per-user temp directories can be too long for sockaddr_un. The
     // child directory below is still ownership-checked and restricted to 0700.
     std::path::Path::new(SHORT_RUNTIME_SOCKET_ROOT)
-        .join(format!("lsm-{suffix}"))
+        .join(format!("llama-server-manager-{data_suffix:016x}"))
         .join(format!("control-{suffix}.sock"))
 }
 
@@ -345,36 +253,12 @@ where
         .map_err(|error| format!("failed to flush runtime frame: {error}"))
 }
 
-async fn handle_connection<S, H, F>(mut stream: S, control_token: String, handler: H)
+async fn handle_connection<S, H, F>(mut stream: S, handler: H)
 where
     S: AsyncRead + AsyncWrite + Unpin,
     H: Fn(RuntimeRequest) -> F,
     F: Future<Output = RuntimeResponse>,
 {
-    let handshake = match tokio::time::timeout(RUNTIME_IO_TIMEOUT, read_frame(&mut stream)).await {
-        Ok(Ok(payload)) => serde_json::from_slice::<RuntimeHandshakeRequest>(&payload).ok(),
-        _ => None,
-    };
-    let Some(handshake) = handshake.filter(|handshake| {
-        handshake.protocol_version == RUNTIME_PROTOCOL_VERSION
-            && !handshake.nonce.is_empty()
-            && handshake.nonce.len() <= 128
-    }) else {
-        return;
-    };
-    let handshake_response = RuntimeHandshakeResponse {
-        protocol_version: RUNTIME_PROTOCOL_VERSION,
-        nonce: handshake.nonce.clone(),
-        service_pid: std::process::id(),
-        proof: handshake_proof(&control_token, &handshake.nonce, std::process::id()),
-    };
-    let Ok(payload) = serde_json::to_vec(&handshake_response) else {
-        return;
-    };
-    match tokio::time::timeout(RUNTIME_IO_TIMEOUT, write_frame(&mut stream, &payload)).await {
-        Ok(Ok(())) => {}
-        _ => return,
-    }
     let response = match tokio::time::timeout(RUNTIME_IO_TIMEOUT, read_frame(&mut stream)).await {
         Ok(Ok(payload)) => match serde_json::from_slice::<RuntimeRequest>(&payload) {
             Ok(request) => handler(request).await,
@@ -422,9 +306,6 @@ where
     std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
         .map_err(|error| format!("failed to protect runtime control socket: {error}"))?;
     initializer().await?;
-    persist_service_pid()?;
-    let preauth_limit =
-        std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_RUNTIME_PREAUTH_CONNECTIONS));
 
     loop {
         let (stream, _) = listener
@@ -432,15 +313,7 @@ where
             .await
             .map_err(|error| format!("runtime control socket failed: {error}"))?;
         let handler = handler.clone();
-        let control_token = control_token.clone();
-        let Ok(permit) = preauth_limit.clone().try_acquire_owned() else {
-            drop(stream);
-            continue;
-        };
-        tokio::spawn(async move {
-            let _permit = permit;
-            handle_connection(stream, control_token, handler).await
-        });
+        tokio::spawn(async move { handle_connection(stream, handler).await });
     }
 }
 
@@ -458,76 +331,30 @@ where
     F: Future<Output = RuntimeResponse> + Send + 'static,
 {
     use tokio::net::windows::named_pipe::ServerOptions;
-    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
 
     let pipe_name = control_pipe_name(&control_token);
     let mut first_instance = true;
     let mut initializer = Some(initializer);
-    let preauth_limit =
-        std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_RUNTIME_PREAUTH_CONNECTIONS));
     loop {
         let mut options = ServerOptions::new();
         options.reject_remote_clients(true);
         if first_instance {
             options.first_pipe_instance(true);
         }
-        let server = crate::persistence::with_private_security_descriptor(|descriptor| {
-            let mut attributes = SECURITY_ATTRIBUTES {
-                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-                lpSecurityDescriptor: descriptor,
-                bInheritHandle: 0,
-            };
-            unsafe {
-                options.create_with_security_attributes_raw(
-                    &pipe_name,
-                    (&mut attributes as *mut SECURITY_ATTRIBUTES).cast(),
-                )
-            }
-            .map_err(|error| format!("failed to create private runtime control pipe: {error}"))
-        })?;
+        let server = options
+            .create(&pipe_name)
+            .map_err(|error| format!("failed to create runtime control pipe: {error}"))?;
         first_instance = false;
         if let Some(initializer) = initializer.take() {
             initializer().await?;
-            persist_service_pid()?;
         }
         server
             .connect()
             .await
             .map_err(|error| format!("runtime control pipe failed: {error}"))?;
-        if validate_named_pipe_client(&server).is_err() {
-            drop(server);
-            continue;
-        }
-        let Ok(permit) = preauth_limit.clone().try_acquire_owned() else {
-            drop(server);
-            continue;
-        };
         let handler = handler.clone();
-        let control_token = control_token.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            handle_connection(server, control_token, handler).await
-        });
+        tokio::spawn(async move { handle_connection(server, handler).await });
     }
-}
-
-#[cfg(windows)]
-fn validate_named_pipe_client(
-    server: &tokio::net::windows::named_pipe::NamedPipeServer,
-) -> Result<(), String> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::System::Pipes::GetNamedPipeClientProcessId;
-    let mut pid = 0_u32;
-    let ok = unsafe { GetNamedPipeClientProcessId(server.as_raw_handle() as _, &mut pid) };
-    if ok == 0 || pid == 0 {
-        return Err("failed to identify runtime pipe client".into());
-    }
-    if crate::persistence::windows_process_sid(Some(pid))?
-        != crate::persistence::windows_process_sid(None)?
-    {
-        return Err("runtime pipe client belongs to another OS user".into());
-    }
-    Ok(())
 }
 
 #[cfg(unix)]
@@ -549,10 +376,7 @@ async fn connect(
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
         match ClientOptions::new().open(&pipe_name) {
-            Ok(client) => {
-                validate_named_pipe_server(&client)?;
-                return Ok(client);
-            }
+            Ok(client) => return Ok(client),
             Err(error) if std::time::Instant::now() < deadline => {
                 let _ = error;
                 tokio::time::sleep(Duration::from_millis(40)).await;
@@ -564,28 +388,6 @@ async fn connect(
     }
 }
 
-#[cfg(windows)]
-fn validate_named_pipe_server(
-    client: &tokio::net::windows::named_pipe::NamedPipeClient,
-) -> Result<(), String> {
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::System::Pipes::GetNamedPipeServerProcessId;
-    let mut pid = 0_u32;
-    let ok = unsafe { GetNamedPipeServerProcessId(client.as_raw_handle() as _, &mut pid) };
-    if ok == 0 || pid == 0 {
-        return Err("failed to identify runtime pipe server".into());
-    }
-    if pid != expected_service_pid()? {
-        return Err("runtime pipe server PID does not match the private service identity".into());
-    }
-    if crate::persistence::windows_process_sid(Some(pid))?
-        != crate::persistence::windows_process_sid(None)?
-    {
-        return Err("runtime pipe server belongs to another OS user".into());
-    }
-    Ok(())
-}
-
 pub async fn send_request(request: &RuntimeRequest) -> Result<RuntimeResponse, String> {
     if request.protocol_version != RUNTIME_PROTOCOL_VERSION {
         return Err("runtime request protocol version is invalid".into());
@@ -595,7 +397,6 @@ pub async fn send_request(request: &RuntimeRequest) -> Result<RuntimeResponse, S
     let mut stream = tokio::time::timeout(RUNTIME_CONNECT_TIMEOUT, connect(&request.token))
         .await
         .map_err(|_| "timed out connecting to runtime service".to_string())??;
-    authenticate_runtime_server(&mut stream, &request.token).await?;
     tokio::time::timeout(RUNTIME_IO_TIMEOUT, write_frame(&mut stream, &payload))
         .await
         .map_err(|_| "timed out writing to runtime service".to_string())??;
@@ -619,13 +420,8 @@ pub async fn send_request(request: &RuntimeRequest) -> Result<RuntimeResponse, S
 pub async fn wait_until_ready(control_token: &str, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        if let Ok(mut stream) = connect(control_token).await {
-            if authenticate_runtime_server(&mut stream, control_token)
-                .await
-                .is_ok()
-            {
-                return true;
-            }
+        if connect(control_token).await.is_ok() {
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -635,16 +431,8 @@ pub async fn wait_until_ready(control_token: &str, timeout: Duration) -> bool {
 pub async fn wait_until_stopped(control_token: &str, timeout: Duration) -> bool {
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
-        match connect(control_token).await {
-            Err(_) => return true,
-            Ok(mut stream) => {
-                if authenticate_runtime_server(&mut stream, control_token)
-                    .await
-                    .is_err()
-                {
-                    return true;
-                }
-            }
+        if connect(control_token).await.is_err() {
+            return true;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -693,20 +481,6 @@ mod tests {
             control_socket_path("token-a"),
             control_socket_path("token-b")
         );
-    }
-
-    #[test]
-    fn runtime_handshake_proof_binds_token_nonce_and_service_pid() {
-        let baseline = handshake_proof("token-a", "nonce-a", 100);
-        assert_eq!(baseline, handshake_proof("token-a", "nonce-a", 100));
-        assert_ne!(baseline, handshake_proof("token-b", "nonce-a", 100));
-        assert_ne!(baseline, handshake_proof("token-a", "nonce-b", 100));
-        assert_ne!(baseline, handshake_proof("token-a", "nonce-a", 101));
-        assert!(constant_time_eq(baseline.as_bytes(), baseline.as_bytes()));
-        assert!(!constant_time_eq(
-            baseline.as_bytes(),
-            handshake_proof("token-b", "nonce-a", 100).as_bytes()
-        ));
     }
 
     #[tokio::test]

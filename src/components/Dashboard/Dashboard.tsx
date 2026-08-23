@@ -82,17 +82,15 @@ function meterColor(tone: MeterTone) {
   return 'bg-blue-500'
 }
 
-function statusTone(instance: Instance): 'slate' | 'emerald' | 'amber' | 'red' {
+function statusTone(instance: Instance): 'slate' | 'emerald' | 'red' {
   if (instance.status === 'running') return 'emerald'
-  if (instance.status === 'recovering') return 'amber'
-  if (instance.status === 'error' || instance.status === 'crash_loop') return 'red'
+  if (instance.status === 'error') return 'red'
   return 'slate'
 }
 
 function healthDotClass(instance: Instance) {
   if (instance.status === 'stopped') return 'bg-slate-500'
-  if (instance.status === 'recovering') return 'bg-amber-500'
-  if (instance.status === 'error' || instance.status === 'crash_loop' || instance.healthCheck === 'fail') return 'bg-rose-500'
+  if (instance.status === 'error' || instance.healthCheck === 'fail') return 'bg-rose-500'
   if (instance.healthCheck === 'ok') return 'bg-emerald-500'
   return 'bg-amber-500'
 }
@@ -213,10 +211,10 @@ export default function Dashboard() {
   const labels = getDashboardLabels(lang, t.dashboard?.title)
 
   const runningCount = instances.filter(instance => instance.status === 'running').length
-  const stoppedCount = instances.filter(instance => instance.status === 'stopped').length
-  const erroredCount = instances.filter(instance => instance.status === 'error' || instance.status === 'crash_loop').length
+  const stoppedCount = instances.filter(instance => instance.status !== 'running').length
+  const erroredCount = instances.filter(instance => instance.status === 'error').length
   const healthyCount = instances.filter(instance => instance.status === 'running' && instance.healthCheck === 'ok').length
-  const attentionCount = instances.filter(instance => ['error', 'recovering', 'crash_loop'].includes(instance.status) || (instance.status === 'running' && instance.healthCheck === 'fail')).length
+  const attentionCount = instances.filter(instance => instance.status === 'error' || (instance.status === 'running' && instance.healthCheck === 'fail')).length
   const autoStartCount = instances.filter(instance => instance.config.auto_start).length
   const modelCount = models.filter(model => !model.is_shard && model.file_type === 'model').length
   const downloadItems = Object.values(downloadTasks)
@@ -233,8 +231,7 @@ export default function Dashboard() {
 
   const healthText = (instance: Instance) => {
     if (instance.status === 'stopped') return labels.offline
-    if (instance.status === 'recovering') return t.instanceWorkspace.recovering
-    if (instance.status === 'error' || instance.status === 'crash_loop') return t.instance.error
+    if (instance.status === 'error') return t.instance.error
     if (instance.healthCheck === 'ok') return labels.healthy
     if (instance.healthCheck === 'fail') return labels.fail
     return labels.pending
@@ -584,7 +581,6 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
                   {filteredInstances.map(instance => {
                     const isRunning = instance.status === 'running'
-                    const isRecovering = instance.status === 'recovering'
                     const lifecyclePhase = instanceLifecycle[instance.id]
                     const isLifecycleBusy = Boolean(lifecyclePhase)
                     const endpoint = formatHostPort(instance.config.host, instance.config.port)
@@ -607,15 +603,7 @@ export default function Dashboard() {
                               ? t.instance.starting
                               : lifecyclePhase === 'stopping'
                                 ? t.instance.stopping
-                                : isRunning
-                                  ? t.instance.running
-                                  : instance.status === 'stopped'
-                                    ? t.instance.stopped
-                                    : isRecovering
-                                      ? t.instanceWorkspace.recovering
-                                      : instance.status === 'crash_loop'
-                                        ? t.instanceWorkspace.crashLoop
-                                        : t.instance.error}
+                                : isRunning ? t.instance.running : instance.status === 'stopped' ? t.instance.stopped : t.instance.error}
                           </Badge>
                         </td>
                         <td className="px-5 py-3 align-middle">
@@ -629,7 +617,7 @@ export default function Dashboard() {
                         </td>
                         <td className="px-5 py-3 align-middle">
                           <div className="ml-auto grid w-[172px] grid-cols-[92px_34px_34px] items-center justify-end gap-2">
-                            {isRunning || isRecovering ? (
+                            {isRunning ? (
                               <Button
                                 onClick={() => void stopInstance(instance.id).catch(() => {})}
                                 disabled={isLifecycleBusy}
@@ -638,7 +626,7 @@ export default function Dashboard() {
                                 className="h-8 whitespace-nowrap px-2"
                                 icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
                               >
-                                {lifecyclePhase === 'stopping' ? t.instance.stopping : isRecovering ? t.instanceWorkspace.cancelRecovery : t.instance.stop}
+                                {lifecyclePhase === 'stopping' ? t.instance.stopping : t.instance.stop}
                               </Button>
                             ) : (
                               <Button
@@ -649,7 +637,7 @@ export default function Dashboard() {
                                 className="h-8 whitespace-nowrap px-2"
                                 icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
                               >
-                                {lifecyclePhase === 'starting' ? t.instance.starting : instance.status === 'crash_loop' ? t.instanceWorkspace.retryNow : t.instance.start}
+                                {lifecyclePhase === 'starting' ? t.instance.starting : t.instance.start}
                               </Button>
                             )}
                             <ActionIconButton

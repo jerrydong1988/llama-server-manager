@@ -3,18 +3,12 @@ import { emit } from '@tauri-apps/api/event'
 import { defaultInstanceConfig } from '../src/store/defaults'
 import type { GlobalConfigShape } from '../src/store/bootstrap'
 import type {
-  ConfigRevisionHistory,
-  ConfigRevisionRollbackResponse,
   EngineInfo,
   GeneratedServerCommand,
   InstanceConfig,
   MsFileEntry,
   ModelInfo,
   MonitoringFrame,
-  ResourcePlan,
-  ResidencyAuditEvent,
-  ResidencyInspection,
-  ResidencyPolicy,
   SystemMetrics,
   WorkerInfo,
 } from '../src/store/types'
@@ -28,8 +22,6 @@ const HAS_PROXY_DATA = [
   'proxy-routing',
   'proxy-route-health',
   'proxy-route-legacy-ids',
-  'canary-rollout',
-  'operational-metrics',
   'docs-screenshots',
 ].includes(BROWSER_SCENARIO ?? '')
 const INSTANCE_ID = 'browser-test-instance'
@@ -178,7 +170,7 @@ const engine: EngineInfo = {
     status: 'detected',
     versionStatus: 'detected',
     supportedFlags: [
-      '--model', '--host', '--port', '--temp', '--top-k', '--top-p', '--threads', '--kv-unified',
+      '--temp', '--top-k', '--top-p', '--threads', '--kv-unified',
       '--mmap', '--no-mmap', '--perf', '--no-perf',
       '--models-autoload', '--no-models-autoload', '--image-min-tokens', '--mmproj',
     ],
@@ -191,45 +183,6 @@ const engine: EngineInfo = {
     helpHash: 'browser-test-help',
     executableFingerprint: 'browser-test-engine-fingerprint',
     probedAt: IS_DOCS_SCENARIO ? Date.UTC(2026, 6, 31, 12, 0, 0) / 1000 : 1,
-    qualification: BROWSER_SCENARIO === 'engine-qualification'
-      ? {
-          schemaVersion: 2,
-          profileVersion: 1,
-          status: 'unqualified',
-          executableFingerprint: '',
-          engineArtifactId: '',
-          engineVersion: '',
-          helpHash: '',
-          modelId: '',
-          modelArtifactId: '',
-          modelName: '',
-          modelSize: 0,
-          checks: [],
-          evidenceId: '',
-        }
-      : {
-          schemaVersion: 2,
-          profileVersion: 1,
-          status: 'passed',
-          executableFingerprint: 'browser-test-engine-fingerprint',
-          engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
-          engineVersion: IS_DOCS_SCENARIO ? 'version: 10042 (6d2f8e1)' : 'version: 10042 (browser-test)',
-          helpHash: 'browser-test-help',
-          modelId: models[0].id,
-          modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
-          modelName: models[0].name,
-          modelSize: models[0].size,
-          startedAt: 1,
-          completedAt: 2,
-          evidenceId: 'urn:lsm:qualification:v2:sha256:browser-evidence',
-          checks: [
-            { name: 'version', status: 'passed', durationMs: 10 },
-            { name: 'capabilities', status: 'passed', durationMs: 10 },
-            { name: 'startup', status: 'passed', durationMs: 20 },
-            { name: 'health', status: 'passed', durationMs: 30 },
-            { name: 'inference', status: 'passed', durationMs: 40 },
-          ],
-        },
   },
 }
 
@@ -349,9 +302,6 @@ type BrowserProxyConfig = {
   default_instance_id: string
   routing_strategy: string
   strict_model_routing: boolean
-  locality_routing_enabled: boolean
-  locality_ttl_ms: number
-  locality_max_entries: number
   connect_timeout_ms: number
   timeout_ms: number
   streaming_idle_timeout_ms: number
@@ -377,9 +327,6 @@ const proxyConfig: BrowserProxyConfig = {
   default_instance_id: IS_DOCS_SCENARIO ? INSTANCE_ID : '',
   routing_strategy: 'priorityFailover',
   strict_model_routing: true,
-  locality_routing_enabled: true,
-  locality_ttl_ms: 1_800_000,
-  locality_max_entries: 10_000,
   connect_timeout_ms: 5_000,
   timeout_ms: 600_000,
   streaming_idle_timeout_ms: 300_000,
@@ -457,58 +404,11 @@ const proxyConfig: BrowserProxyConfig = {
 const proxyStatus = {
   running: HAS_PROXY_DATA,
   bound_addr: '127.0.0.1:11435',
-  active_routes: IS_DOCS_SCENARIO ? 3 : BROWSER_SCENARIO === 'canary-rollout' ? 2 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : ['proxy-routing', 'operational-metrics'].includes(BROWSER_SCENARIO ?? '') ? 1 : 0,
-  healthy_routes: BROWSER_SCENARIO === 'canary-rollout' ? 2 : HAS_PROXY_DATA ? 1 : 0,
+  active_routes: IS_DOCS_SCENARIO ? 3 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : BROWSER_SCENARIO === 'proxy-routing' ? 1 : 0,
+  healthy_routes: HAS_PROXY_DATA ? 1 : 0,
   unhealthy_routes: IS_DOCS_SCENARIO ? 2 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 1 : 0,
   in_flight_requests: 0,
   total_requests: IS_DOCS_SCENARIO ? 42 : 0,
-  operational: BROWSER_SCENARIO === 'operational-metrics'
-    ? {
-        window_seconds: 300,
-        request_count: 20,
-        failed_request_count: 3,
-        error_rate_percent: 15,
-        queue_depth: 2,
-        queued_requests_total: 8,
-        queue_timeouts_total: 1,
-        queue_wait_p95_ms: 420,
-        ttft_sample_count: 18,
-        ttft_p50_ms: 620,
-        ttft_p95_ms: 3500,
-        prompt_tokens_observed: 1000,
-        cached_prompt_tokens: 400,
-        cache_reuse_percent: 40,
-        in_flight_requests: 58,
-        max_concurrent_requests: 64,
-        saturation_percent: 90.625,
-        alerts: [
-          { id: 'error_rate', severity: 'warning', observed: 15, threshold: 10 },
-          { id: 'ttft_p95', severity: 'warning', observed: 3500, threshold: 3000 },
-          { id: 'queue_wait_p95', severity: 'warning', observed: 420, threshold: 250 },
-          { id: 'queue_timeouts', severity: 'warning', observed: 1, threshold: 1 },
-          { id: 'saturation', severity: 'warning', observed: 90.625, threshold: 85 },
-        ],
-      }
-    : {
-        window_seconds: 300,
-        request_count: 0,
-        failed_request_count: 0,
-        error_rate_percent: null,
-        queue_depth: 0,
-        queued_requests_total: 0,
-        queue_timeouts_total: 0,
-        queue_wait_p95_ms: null,
-        ttft_sample_count: 0,
-        ttft_p50_ms: null,
-        ttft_p95_ms: null,
-        prompt_tokens_observed: 0,
-        cached_prompt_tokens: 0,
-        cache_reuse_percent: null,
-        in_flight_requests: 0,
-        max_concurrent_requests: 64,
-        saturation_percent: 0,
-        alerts: [],
-      },
   last_error: null,
 }
 const runningProxyTarget = {
@@ -539,15 +439,6 @@ const proxyTargets = IS_DOCS_SCENARIO
         running: false,
       },
     ]
-  : BROWSER_SCENARIO === 'canary-rollout'
-  ? [runningProxyTarget, {
-      instance_id: STOPPED_INSTANCE_ID,
-      name: 'Candidate Engine Revision',
-      alias: 'browser-candidate',
-      host: '127.0.0.1',
-      port: 18082,
-      running: true,
-    }]
   : BROWSER_SCENARIO === 'proxy-routing'
   ? [runningProxyTarget]
   : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '')
@@ -560,45 +451,6 @@ const proxyTargets = IS_DOCS_SCENARIO
       running: false,
     }, runningProxyTarget]
     : []
-
-type BrowserCanaryRollout = Record<string, unknown> & {
-  id: string
-  state: 'active' | 'promoted' | 'aborted' | 'rolled_back'
-  candidateWeight: number
-  updatedAt: number
-  events: Array<Record<string, unknown>>
-}
-let canaryRollouts: BrowserCanaryRollout[] = []
-let canaryObservationRound = 0
-
-function canaryHealth(instanceId: string) {
-  return { instanceId, status: 'ready', ready: true }
-}
-
-function canaryEvidence(total: number, failed: number) {
-  return {
-    total,
-    succeeded: total - failed,
-    failed,
-    latestCompletedAt: Date.now(),
-    ttftP95Ms: 1200,
-    queueWaitP95Ms: 80,
-    cacheReuseBasisPoints: 3750,
-  }
-}
-
-function appendCanaryEvent(rollout: BrowserCanaryRollout, kind: string, summary: string) {
-  rollout.updatedAt = Date.now()
-  rollout.events.unshift({
-    sequence: rollout.events.length + 1,
-    occurredAt: rollout.updatedAt,
-    kind,
-    summary,
-    stableEvidence: rollout.stableEvidence ?? null,
-    candidateEvidence: rollout.candidateEvidence ?? null,
-    integrityValid: true,
-  })
-}
 const runtimeStatus = {
   servicePid: 4242,
   serviceVersion: IS_DOCS_SCENARIO ? '2.9.37' : '2.9.30-browser-test',
@@ -702,88 +554,6 @@ if (BROWSER_SCENARIO === 'instance-connection') {
   }
 }
 
-const revisionHistories = new Map<string, ConfigRevisionHistory>()
-const revisionSnapshots = new Map<string, InstanceConfig>()
-
-const ensureRevisionHistory = (instanceId: string) => {
-  const existing = revisionHistories.get(instanceId)
-  if (existing) return existing
-  const currentConfig = state.instances[instanceId]
-  if (!currentConfig) throw new Error(`browser test revision instance not found: ${instanceId}`)
-  const baselineConfig = {
-    ...clone(currentConfig),
-    port: Math.max(1, currentConfig.port - 1),
-    temp: 0.5,
-    api_key: 'historical-browser-secret',
-    custom_args: ['--historical-secret', 'must-not-render'],
-  }
-  const baselineId = `revision-baseline-${instanceId}`
-  const currentId = `revision-current-${instanceId}`
-  revisionSnapshots.set(baselineId, baselineConfig)
-  revisionSnapshots.set(currentId, clone(currentConfig))
-  const history: ConfigRevisionHistory = {
-    instanceId,
-    currentFingerprint: `sha256:current-${instanceId}`,
-    currentRevisionId: currentId,
-    currentConfigurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
-    knownGoodRevisionId: null,
-    revisions: [
-      {
-        id: currentId,
-        fingerprint: `sha256:current-${instanceId}`,
-        identitySchemaVersion: 1,
-        configurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
-        parentRevisionId: baselineId,
-        createdAt: 1_787_000_100,
-        reason: 'save',
-        rollbackOf: null,
-        current: true,
-        knownGood: false,
-        integrityValid: true,
-        diffTruncated: false,
-        changes: [
-          {
-            field: 'port',
-            before: { state: 'value', value: String(baselineConfig.port) },
-            after: { state: 'value', value: String(currentConfig.port) },
-            redacted: false,
-          },
-          {
-            field: 'api_key',
-            before: { state: 'set' },
-            after: { state: currentConfig.api_key ? 'set' : 'empty' },
-            redacted: true,
-          },
-          {
-            field: 'custom_args',
-            before: { state: 'item_count', itemCount: 2 },
-            after: { state: 'item_count', itemCount: currentConfig.custom_args.length },
-            redacted: true,
-          },
-        ],
-      },
-      {
-        id: baselineId,
-        fingerprint: `sha256:baseline-${instanceId}`,
-        identitySchemaVersion: 1,
-        configurationId: `urn:lsm:configuration:v1:sha256:baseline-${instanceId}`,
-        parentRevisionId: null,
-        createdAt: 1_787_000_000,
-        reason: 'migration',
-        rollbackOf: null,
-        current: false,
-        knownGood: false,
-        integrityValid: true,
-        diffTruncated: false,
-        changes: [],
-      },
-    ],
-    audit: [],
-  }
-  revisionHistories.set(instanceId, history)
-  return history
-}
-
 type BrowserTestControl = {
   marker: string
   calls: Array<{ command: string; payload: unknown; at: number }>
@@ -799,6 +569,7 @@ type BrowserTestControl = {
   releaseBrowse: (repoId: string, files: MsFileEntry[]) => void
   releasePortCheck: (port: number, available: boolean) => void
   releaseStart: () => void
+  releaseWorkerScan: (workers: WorkerInfo[]) => void
 }
 
 declare global {
@@ -811,93 +582,19 @@ let releasePendingStart: (() => void) | null = null
 let delayedInventoryCacheLoaded = false
 const pendingBrowses: Array<{ repoId: string; resolve: (files: MsFileEntry[]) => void }> = []
 const pendingPortChecks: Array<{ port: number; resolve: (available: boolean) => void }> = []
+const pendingWorkerScans: Array<(workers: WorkerInfo[]) => void> = []
 const clusterWorkers: WorkerInfo[] = BROWSER_SCENARIO === 'cluster-worker'
   ? [{
-      id: 'browser-secure-agent',
-      host: '127.0.0.1',
-      port: 50152,
-      name: 'Browser Secure Agent',
-      origin: 'agent',
+      id: 'browser-cluster-worker',
+      host: '192.168.50.10',
+      port: 50052,
+      name: 'Browser Cluster Worker',
+      origin: 'manual',
       devices: [{ device_type: 'Vulkan', name: 'Browser GPU', vram_mb: 16_384, free_mb: 12_288 }],
       status: 'Offline',
       auto_discovered: false,
-      agent: {
-        agent_id: 'browser-secure-agent',
-        control_host: 'worker.example.net',
-        control_port: 7443,
-        tunnel_host: 'worker.example.net',
-        tunnel_port: 7444,
-        tls_server_name: 'worker.example.net',
-        certificate_sha256: 'b'.repeat(64),
-      },
     }]
   : []
-let residencyPolicy: ResidencyPolicy = {
-  enabled: false,
-  ramBudgetBytes: 0,
-  vramBudgetBytes: 0,
-  drainTimeoutSeconds: 120,
-  intents: [],
-}
-const residencyAudit: ResidencyAuditEvent[] = []
-
-const residencyInspection = (): ResidencyInspection => {
-  const decisions = residencyPolicy.intents.map(intent => {
-    const running = Boolean(state.running[intent.instanceId])
-    return {
-      instanceId: intent.instanceId,
-      instanceName: state.instances[intent.instanceId]?.name || intent.instanceId,
-      priority: intent.priority,
-      intentEnabled: intent.enabled,
-      selected: residencyPolicy.enabled && intent.enabled,
-      deploymentId: `urn:lsm:managed-deployment:${intent.instanceId}`,
-      revisionId: `urn:lsm:deployment-revision:${intent.instanceId}`,
-      runningRevisionId: running ? `urn:lsm:deployment-revision:${intent.instanceId}` : null,
-      resourceStatus: 'feasible',
-      ramBytes: 2 * 1024 ** 3,
-      vramBytes: 0,
-      reasons: residencyPolicy.enabled && intent.enabled ? ['selected_within_budget'] : ['intent_disabled'],
-    }
-  })
-  const operations = decisions
-    .filter(decision => decision.selected && !decision.runningRevisionId)
-    .map((decision, index) => ({
-      sequence: index + 1,
-      kind: 'warm' as const,
-      instanceId: decision.instanceId,
-      deploymentId: decision.deploymentId || '',
-      revisionId: decision.revisionId || '',
-      reason: 'selected_revision_not_running',
-    }))
-  return {
-    policy: clone(residencyPolicy),
-    plan: {
-      schemaVersion: 1,
-      planId: 'sha256:browser-residency-plan',
-      generatedAt: Math.floor(Date.now() / 1000),
-      ramBudgetBytes: residencyPolicy.ramBudgetBytes,
-      ramUsedBytes: decisions.filter(decision => decision.selected).length * 2 * 1024 ** 3,
-      vramBudgetBytes: residencyPolicy.vramBudgetBytes,
-      vramUsedBytes: 0,
-      decisions,
-      operations,
-    },
-    placements: decisions
-      .filter(decision => decision.selected && decision.runningRevisionId)
-      .map(decision => ({
-        instanceId: decision.instanceId,
-        deploymentId: decision.deploymentId || '',
-        revisionId: decision.revisionId || '',
-        phase: 'resident' as const,
-        planId: 'sha256:browser-residency-plan',
-        updatedAt: Math.floor(Date.now() / 1000),
-        routingDrained: false,
-      })),
-    audit: clone(residencyAudit).reverse(),
-    registeredRpcWorkers: clusterWorkers.filter(worker => !worker.auto_discovered).length,
-    workerAgentAvailable: false,
-  }
-}
 
 const control: BrowserTestControl = {
   marker: BROWSER_TEST_MARKER,
@@ -924,32 +621,11 @@ const control: BrowserTestControl = {
     resolve(available)
   },
   releaseStart: () => releasePendingStart?.(),
-}
-
-const updaterPlatforms: Record<string, { url: string; signature: string; sha256: string }> = {
-  'windows-x86_64-nsis': {
-    url: 'https://updates.cnzone.net/releases/v2.9.37/LlamaServerManager_2.9.37_windows-x86_64-nsis-setup.exe',
-    signature: 'browser-test-nsis-signature',
-    sha256: 'a'.repeat(64),
+  releaseWorkerScan: (workers) => {
+    const resolve = pendingWorkerScans.shift()
+    if (!resolve) throw new Error('No pending browser-test worker scan')
+    resolve(clone(workers))
   },
-  'windows-x86_64-msi': {
-    url: 'https://updates.cnzone.net/releases/v2.9.37/LlamaServerManager_2.9.37_windows-x86_64-msi.msi',
-    signature: 'browser-test-msi-signature',
-    sha256: 'b'.repeat(64),
-  },
-  'darwin-aarch64': {
-    url: 'https://updates.cnzone.net/releases/v2.9.37/LlamaServerManager_2.9.37_aarch64.app.tar.gz',
-    signature: 'browser-test-macos-signature',
-    sha256: 'c'.repeat(64),
-  },
-}
-
-const updaterRawJson = {
-  version: '2.9.37',
-  release_tag: 'v2.9.37',
-  source_sha: 'd'.repeat(40),
-  release_counter: 2_000_009_000_037,
-  platforms: updaterPlatforms,
 }
 
 const syncAutomationProbe = () => {
@@ -1016,41 +692,6 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
     else if (field === 'mmproj_path' && config.mmproj_path) command.push('--mmproj', config.mmproj_path)
   }
   return { command, unsupportedFlags: [], emittedOverrideKeys: emitted }
-}
-
-const resourcePlan = (): ResourcePlan => {
-  const status = BROWSER_SCENARIO === 'resource-plan-infeasible' ? 'infeasible' : 'feasible'
-  const range = { minBytes: 5_368_709_120, expectedBytes: 6_442_450_944, maxBytes: 7_516_192_768 }
-  const vramRange = { minBytes: 3_221_225_472, expectedBytes: 4_294_967_296, maxBytes: 5_368_709_120 }
-  return {
-    schemaVersion: 1,
-    status,
-    confidence: 'medium',
-    ram: {
-      required: range,
-      totalBytes: 34_359_738_368,
-      availableBytes: status === 'infeasible' ? 1_073_741_824 : 25_769_803_776,
-      reservedBytes: 1_717_986_918,
-      expectedHeadroomBytes: status === 'infeasible' ? -7_086_695_936 : 17_609_365_914,
-    },
-    vram: {
-      required: vramRange,
-      totalBytes: 8_589_934_592,
-      availableBytes: status === 'infeasible' ? 536_870_912 : 8_321_499_136,
-      reservedBytes: 536_870_912,
-      expectedHeadroomBytes: status === 'infeasible' ? -4_294_967_296 : 3_489_660_928,
-    },
-    components: [],
-    facts: {
-      contextTokens: 131_072,
-      parallelSlots: 1,
-      modelShardsFound: 1,
-      modelShardsExpected: 1,
-      gpuOffloadPercent: 72,
-    },
-    reasons: status === 'infeasible' ? ['insufficient_available_ram', 'insufficient_available_vram'] : ['llama_fit_may_reduce_unset_parameters'],
-    assumptions: ['automatic_gpu_layers_follow_current_free_vram', 'prompt_cache_is_demand_driven_up_to_configured_limit'],
-  }
 }
 
 const systemMetrics: SystemMetrics = {
@@ -1218,19 +859,6 @@ mockIPC((command, payload) => {
 
   switch (command) {
     case 'plugin:app|bundle_type': return 'nsis'
-    case 'verify_updater_release': {
-      const target = String(args.target ?? '')
-      const platform = updaterPlatforms[target]
-      if (!platform) throw new Error('browser test updater target is unavailable')
-      return {
-        version: updaterRawJson.version,
-        releaseTag: updaterRawJson.release_tag,
-        sourceSha: updaterRawJson.source_sha,
-        releaseCounter: updaterRawJson.release_counter,
-        target,
-        platform: clone(platform),
-      }
-    }
     case 'plugin:updater|check':
       control.updaterCheckCount += 1
       if (BROWSER_SCENARIO === 'updater-retry' && control.updaterCheckCount === 1) {
@@ -1243,7 +871,7 @@ mockIPC((command, payload) => {
           version: '2.9.37',
           date: '2026-07-31T00:00:00Z',
           body: 'Browser updater test',
-          rawJson: clone(updaterRawJson),
+          rawJson: {},
         }
       }
       return null
@@ -1273,176 +901,6 @@ mockIPC((command, payload) => {
       }
       return [clone(models), clone(engines)]
     case 'load_config': return clone(control.state)
-    case 'list_config_revisions': {
-      const instanceId = String(args.instanceId ?? '')
-      return clone(ensureRevisionHistory(instanceId))
-    }
-    case 'inspect_deployment_identity': {
-      const instanceId = String(args.instanceId ?? '')
-      if (BROWSER_SCENARIO === 'deployment-identity-incomplete') {
-        return {
-          ready: false,
-          errorCode: 'ENGINE_QUALIFICATION_INCOMPLETE',
-          message: 'browser mock detail must not be required for localized rendering',
-        }
-      }
-      if (BROWSER_SCENARIO === 'deployment-identity-stale') {
-        return {
-          ready: false,
-          errorCode: 'DEPLOYMENT_MODEL_IDENTITY_STALE',
-          message: 'stale browser mock detail must not be rendered',
-        }
-      }
-      if (BROWSER_SCENARIO === 'deployment-identity-legacy') {
-        return {
-          ready: false,
-          errorCode: 'DEPLOYMENT_IDENTITY_INVALID',
-          message: 'legacy browser mock detail must not be rendered',
-        }
-      }
-      return {
-        ready: true,
-        identity: {
-          schemaVersion: 1,
-          deploymentId: `urn:lsm:deployment:v1:sha256:browser-${instanceId}`,
-          engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
-          modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
-          configRevisionId: `revision-current-${instanceId}`,
-          configurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
-          qualificationEvidenceId: 'urn:lsm:qualification:v2:sha256:browser-evidence',
-        },
-      }
-    }
-    case 'inspect_deployment': {
-      const instanceId = String(args.instanceId ?? '')
-      const deploymentId = `urn:lsm:managed-deployment:v1:sha256:browser-${instanceId}`
-      if (BROWSER_SCENARIO === 'deployment-unmaterialized') {
-        return {
-          instanceId,
-          deploymentId,
-          state: 'unmaterialized',
-          message: 'browser mock unmaterialized detail',
-          currentRevisionId: null,
-          rollbackTargetRevisionId: null,
-          runningRevisionId: null,
-          revisions: [],
-        }
-      }
-      const state = BROWSER_SCENARIO === 'deployment-stale'
-        ? 'stale'
-        : BROWSER_SCENARIO === 'deployment-invalid' ? 'invalid' : 'ready'
-      const revisionId = `urn:lsm:deployment-revision:v1:sha256:browser-${instanceId}`
-      return {
-        instanceId,
-        deploymentId,
-        state,
-        message: state === 'ready' ? null : 'browser mock state detail',
-        currentRevisionId: revisionId,
-        rollbackTargetRevisionId: state === 'ready' ? `urn:lsm:deployment-revision:v1:sha256:previous-${instanceId}` : null,
-        runningRevisionId: control.state.running[instanceId] ? revisionId : null,
-        revisions: [{
-          id: revisionId,
-          deploymentIdentity: {
-            schemaVersion: 1,
-            deploymentId: `urn:lsm:deployment:v1:sha256:browser-${instanceId}`,
-            engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
-            modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
-            configRevisionId: `revision-current-${instanceId}`,
-            configurationId: `urn:lsm:configuration:v1:sha256:current-${instanceId}`,
-            qualificationEvidenceId: 'urn:lsm:qualification:v2:sha256:browser-evidence',
-          },
-          runtimePolicy: { autoStart: false, restartPolicy: 'never' },
-          routing: {
-            proxyEnabled: false,
-            defaultTarget: false,
-            routingStrategy: 'priorityFailover',
-            routes: [],
-          },
-          createdAt: 1_787_059_200,
-          current: true,
-          rollbackTarget: false,
-          integrityValid: state !== 'invalid',
-        }],
-      }
-    }
-    case 'mark_config_revision_known_good': {
-      const instanceId = String(args.instanceId ?? '')
-      const revisionId = String(args.revisionId ?? '')
-      const expectedFingerprint = String(args.expectedCurrentFingerprint ?? '')
-      const history = ensureRevisionHistory(instanceId)
-      if (history.currentFingerprint !== expectedFingerprint) {
-        throw new Error('CONFIG_REVISION_STALE: browser mock fingerprint changed')
-      }
-      const target = history.revisions.find(revision => revision.id === revisionId)
-      if (!target) throw new Error('CONFIG_REVISION_NOT_FOUND: browser mock revision missing')
-      const previousRevisionId = history.knownGoodRevisionId
-      history.knownGoodRevisionId = revisionId
-      history.revisions = history.revisions.map(revision => ({
-        ...revision,
-        knownGood: revision.id === revisionId,
-      }))
-      history.audit.unshift({
-        id: `audit-${history.audit.length + 1}`,
-        createdAt: 1_787_000_200 + history.audit.length,
-        action: 'known_good_set',
-        revisionId,
-        previousRevisionId,
-      })
-      return clone(history)
-    }
-    case 'rollback_config_revision': {
-      const instanceId = String(args.instanceId ?? '')
-      const revisionId = String(args.revisionId ?? '')
-      const expectedFingerprint = String(args.expectedCurrentFingerprint ?? '')
-      const history = ensureRevisionHistory(instanceId)
-      if (BROWSER_SCENARIO === 'config-revision-stale' || history.currentFingerprint !== expectedFingerprint) {
-        throw new Error('CONFIG_REVISION_STALE: browser mock fingerprint changed')
-      }
-      const target = history.revisions.find(revision => revision.id === revisionId)
-      const snapshot = revisionSnapshots.get(revisionId)
-      const current = state.instances[instanceId]
-      if (!target || !snapshot || !current) {
-        throw new Error('CONFIG_REVISION_NOT_FOUND: browser mock rollback target missing')
-      }
-      const restored = {
-        ...clone(snapshot),
-        id: current.id,
-        name: current.name,
-      }
-      const previousPort = current.port
-      state.instances[instanceId] = clone(restored)
-      const rollbackId = `revision-rollback-${instanceId}-${history.revisions.length}`
-      history.revisions = history.revisions.map(revision => ({ ...revision, current: false }))
-      history.revisions.unshift({
-        id: rollbackId,
-        fingerprint: target.fingerprint,
-        identitySchemaVersion: 1,
-        configurationId: target.configurationId,
-        parentRevisionId: history.currentRevisionId,
-        createdAt: 1_787_000_300,
-        reason: 'rollback',
-        rollbackOf: revisionId,
-        current: true,
-        knownGood: false,
-        integrityValid: true,
-        diffTruncated: false,
-        changes: [{
-          field: 'port',
-          before: { state: 'value', value: String(previousPort) },
-          after: { state: 'value', value: String(restored.port) },
-          redacted: false,
-        }],
-      })
-      history.currentRevisionId = rollbackId
-      history.currentFingerprint = target.fingerprint
-      history.currentConfigurationId = target.configurationId
-      revisionSnapshots.set(rollbackId, clone(restored))
-      const response: ConfigRevisionRollbackResponse = {
-        config: clone(restored),
-        history: clone(history),
-      }
-      return response
-    }
     case 'scan_models':
       if (BROWSER_SCENARIO === 'delayed-inventory-cache') {
         return new Promise((resolve) => window.setTimeout(() => resolve(clone(models)), 3_000))
@@ -1480,41 +938,6 @@ mockIPC((command, payload) => {
       return null
     }
     case 'probe_engine_capabilities': return clone(engine)
-    case 'qualify_engine': {
-      const engineId = String(args.engineId ?? '')
-      const modelId = String(args.modelId ?? '')
-      const target = engines.find(candidate => candidate.id === engineId)
-      const qualificationModel = models.find(candidate => candidate.id === modelId)
-      if (!target || !qualificationModel) throw new Error('browser test qualification target not found')
-      target.capabilities = {
-        ...target.capabilities!,
-        qualification: {
-          schemaVersion: 2,
-          profileVersion: 1,
-          status: 'passed',
-          executableFingerprint: target.capabilities!.executableFingerprint,
-          engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
-          engineVersion: target.version,
-          helpHash: target.capabilities!.helpHash,
-          modelId: qualificationModel.id,
-          modelArtifactId: 'urn:lsm:model:v1:sha256:browser-model',
-          modelName: qualificationModel.name,
-          modelSize: qualificationModel.size,
-          startedAt: 10,
-          completedAt: 11,
-          evidenceId: 'urn:lsm:qualification:v2:sha256:browser-evidence',
-          checks: [
-            { name: 'version', status: 'passed', durationMs: 10, detail: 'engine version was detected' },
-            { name: 'capabilities', status: 'passed', durationMs: 10, detail: 'required flags were confirmed' },
-            { name: 'startup', status: 'passed', durationMs: 20, detail: 'qualification server remained running' },
-            { name: 'health', status: 'passed', durationMs: 30, detail: 'GET /health returned HTTP 200 OK' },
-            { name: 'inference', status: 'passed', durationMs: 40, detail: 'POST /completion returned predicted output' },
-          ],
-        },
-      }
-      return clone(target)
-    }
-    case 'cancel_engine_qualification': return true
     case 'get_download_manager_snapshot':
       if (IS_DOCS_SCENARIO) {
         return {
@@ -1621,57 +1044,30 @@ mockIPC((command, payload) => {
         diagnostics: [],
       }
     case 'list_inference_requests': return []
-    case 'enroll_worker_agent': {
-      const enrollment = (args.enrollment ?? {}) as Record<string, unknown>
-      const id = 'agent-browser-secure-worker'
-      const existing = clusterWorkers.find(worker => worker.id === id)
-      const worker: WorkerInfo = {
-        id,
-        host: '127.0.0.1',
-        port: Number(enrollment.localPort ?? 50152) || 50152,
-        name: String(enrollment.name ?? '') || 'Secure Browser Agent',
-        origin: 'agent',
-        devices: [],
-        status: 'Offline',
-        auto_discovered: false,
-        agent: {
-          agent_id: 'browser-secure-worker',
-          control_host: String(enrollment.controlHost ?? 'worker.example.net'),
-          control_port: Number(enrollment.controlPort ?? 7443),
-          tunnel_host: String(enrollment.tunnelHost ?? 'worker.example.net'),
-          tunnel_port: Number(enrollment.tunnelPort ?? 7444),
-          tls_server_name: String(enrollment.tlsServerName ?? 'worker.example.net'),
-          certificate_sha256: 'a'.repeat(64),
-        },
+    case 'scan_workers_tcp':
+      if (BROWSER_SCENARIO === 'cluster-scan-race') {
+        return new Promise<WorkerInfo[]>((resolve) => pendingWorkerScans.push(resolve))
       }
-      if (existing) Object.assign(existing, worker)
-      else clusterWorkers.push(worker)
-      return clone(worker)
+      return clone(clusterWorkers)
+    case 'add_worker': {
+      const host = String(args.host ?? '')
+      const port = Number(args.port ?? 50052)
+      const name = String(args.name ?? '') || host
+      const existing = clusterWorkers.find(worker => worker.host === host && worker.port === port)
+      if (!existing) {
+        clusterWorkers.push({
+          id: `browser-worker-${clusterWorkers.length + 1}`,
+          host,
+          port,
+          name,
+          origin: 'manual',
+          devices: [],
+          status: 'Offline',
+          auto_discovered: false,
+        })
+      }
+      return null
     }
-    case 'test_worker_agent': {
-      const worker = clusterWorkers.find(worker => worker.id === args.id)
-      if (worker) worker.status = 'Online'
-      return { rpc_running: worker?.status === 'Online' }
-    }
-    case 'start_worker_agent': {
-      const worker = clusterWorkers.find(worker => worker.id === args.id)
-      if (worker) worker.status = 'Online'
-      return { rpc_running: true }
-    }
-    case 'stop_worker_agent': {
-      const worker = clusterWorkers.find(worker => worker.id === args.id)
-      if (worker) worker.status = 'Offline'
-      return { rpc_running: false }
-    }
-    case 'list_worker_agent_audit':
-      return [{
-        sequence: 1,
-        timestamp: new Date().toISOString(),
-        event: 'status',
-        outcome: 'allowed',
-        detail: 'request completed',
-        hash: 'b'.repeat(64),
-      }]
     case 'get_workers':
       return IS_DOCS_SCENARIO
         ? [
@@ -1698,42 +1094,8 @@ mockIPC((command, payload) => {
             },
           ]
         : clone(clusterWorkers)
-    case 'inspect_model_residency': return residencyInspection()
-    case 'save_model_residency_policy': {
-      residencyPolicy = clone(args.policy as ResidencyPolicy)
-      residencyAudit.push({
-        id: `browser-residency-audit-${residencyAudit.length + 1}`,
-        recordedAt: Math.floor(Date.now() / 1000),
-        action: 'policy_updated',
-        outcome: 'success',
-      })
-      return residencyInspection()
-    }
-    case 'begin_model_residency_drain': return {
-      instanceId: String(args.instanceId ?? ''),
-      routingDrained: true,
-      activeRequests: 0,
-    }
-    case 'get_model_residency_drain_status': return {
-      instanceId: String(args.instanceId ?? ''),
-      routingDrained: true,
-      activeRequests: 0,
-    }
-    case 'complete_model_residency_operation': {
-      residencyAudit.push({
-        id: `browser-residency-audit-${residencyAudit.length + 1}`,
-        recordedAt: Math.floor(Date.now() / 1000),
-        action: String(args.action ?? ''),
-        outcome: args.success ? 'success' : 'failed',
-        instanceId: String(args.instanceId ?? ''),
-        deploymentId: String(args.deploymentId ?? ''),
-        revisionId: String(args.revisionId ?? ''),
-        planId: String(args.planId ?? ''),
-        message: args.error ? String(args.error) : undefined,
-      })
-      return residencyInspection()
-    }
     case 'is_local_host': return false
+    case 'test_worker': return { ok: true, latency_ms: 12, devices: [] }
     case 'check_port':
       if (BROWSER_SCENARIO === 'port-check-race') {
         const port = Number(args.port ?? 0)
@@ -1742,88 +1104,7 @@ mockIPC((command, payload) => {
       return true
     case 'test_connection': return 'HTTP 200'
     case 'process_download_queue': return null
-    case 'list_canary_rollouts': return clone(canaryRollouts)
-    case 'create_canary_rollout': {
-      const stableInstanceId = String(args.stableInstanceId ?? '')
-      const candidateInstanceId = String(args.candidateInstanceId ?? '')
-      const candidateWeight = Number(args.candidateWeight ?? 10)
-      const now = Date.now()
-      const rollout: BrowserCanaryRollout = {
-        id: 'browser-canary-rollout',
-        modelAlias: String(args.modelAlias ?? ''),
-        state: 'active',
-        stableInstanceId,
-        candidateInstanceId,
-        stableRevisionId: 'urn:lsm:deployment-revision:v1:sha256:stable-browser-revision',
-        candidateRevisionId: 'urn:lsm:deployment-revision:v1:sha256:candidate-browser-revision',
-        stableWeight: 100 - candidateWeight,
-        candidateWeight,
-        createdAt: now,
-        updatedAt: now,
-        integrityValid: true,
-        drift: [],
-        canChangeTraffic: true,
-        canPromote: true,
-        canAbort: true,
-        canRollback: false,
-        stableHealth: canaryHealth(stableInstanceId),
-        candidateHealth: canaryHealth(candidateInstanceId),
-        stableEvidence: null,
-        candidateEvidence: null,
-        events: [],
-      }
-      appendCanaryEvent(rollout, 'created', `canary activated at ${candidateWeight}% candidate traffic`)
-      canaryRollouts = [rollout]
-      return clone(rollout)
-    }
-    case 'observe_canary_rollout': {
-      const rollout = canaryRollouts.find(item => item.id === String(args.rolloutId ?? ''))
-      if (!rollout) throw new Error('browser canary rollout not found')
-      canaryObservationRound += 1
-      rollout.stableEvidence = canaryEvidence(20 + canaryObservationRound, 1)
-      rollout.candidateEvidence = canaryEvidence(4 + canaryObservationRound, 0)
-      appendCanaryEvent(rollout, 'observed', 'browser observation captured')
-      return clone(rollout)
-    }
-    case 'set_canary_weight': {
-      const rollout = canaryRollouts.find(item => item.id === String(args.rolloutId ?? ''))
-      if (!rollout) throw new Error('browser canary rollout not found')
-      const candidateWeight = Number(args.candidateWeight ?? rollout.candidateWeight)
-      rollout.candidateWeight = candidateWeight
-      rollout.stableWeight = 100 - candidateWeight
-      appendCanaryEvent(rollout, 'traffic_changed', `candidate traffic changed to ${candidateWeight}%`)
-      return clone(rollout)
-    }
-    case 'promote_canary_rollout': {
-      const rollout = canaryRollouts.find(item => item.id === String(args.rolloutId ?? ''))
-      if (!rollout) throw new Error('browser canary rollout not found')
-      rollout.state = 'promoted'
-      rollout.stableWeight = 0
-      rollout.candidateWeight = 100
-      rollout.canChangeTraffic = false
-      rollout.canPromote = false
-      rollout.canAbort = false
-      rollout.canRollback = true
-      appendCanaryEvent(rollout, 'promoted', 'candidate promoted to 100% traffic')
-      return clone(rollout)
-    }
-    case 'abort_canary_rollout':
-    case 'rollback_canary_rollout': {
-      const rollout = canaryRollouts.find(item => item.id === String(args.rolloutId ?? ''))
-      if (!rollout) throw new Error('browser canary rollout not found')
-      const rollback = command === 'rollback_canary_rollout'
-      rollout.state = rollback ? 'rolled_back' : 'aborted'
-      rollout.stableWeight = 0
-      rollout.candidateWeight = 0
-      rollout.canChangeTraffic = false
-      rollout.canPromote = false
-      rollout.canAbort = false
-      rollout.canRollback = false
-      appendCanaryEvent(rollout, rollback ? 'rolled_back' : 'aborted', 'base routing restored')
-      return clone(rollout)
-    }
     case 'get_proxy_config': return clone(proxyConfig)
-    case 'generate_proxy_api_key': return `lsm_${'e'.repeat(32)}`
     case 'get_proxy_status':
       if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')
       return clone(proxyStatus)
@@ -1881,7 +1162,6 @@ mockIPC((command, payload) => {
       syncAutomationProbe()
       return generated
     }
-    case 'plan_instance_resources': return resourcePlan()
     case 'save_config': {
       const instances = clone(args.instances as Record<string, InstanceConfig>)
       control.state.instances = instances
@@ -1912,11 +1192,6 @@ mockIPC((command, payload) => {
         })
       }
       completeStart()
-      return null
-    }
-    case 'stop_server': {
-      const instanceId = String(args.instanceId ?? '')
-      delete control.state.running[instanceId]
       return null
     }
     case 'get_download_resume_policy': return IS_DOCS_SCENARIO ? 'auto_on_launch' : 'manual'

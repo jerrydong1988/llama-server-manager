@@ -109,54 +109,50 @@ test('only the latest port availability response updates the create dialog', asy
   await expect(page.getByText('端口已被占用', { exact: true })).toHaveCount(0)
 })
 
-test('cluster exposes only the authenticated Secure Agent enrollment path', async ({ page }) => {
-  await openTab(page, 'cluster')
+test('a cancelled cluster scan cannot overwrite or stop its replacement', async ({ page }) => {
+  await openTab(page, 'cluster', 'cluster-scan-race')
 
-  await expect(page.locator('[data-guide="cluster-agent"]')).toBeVisible()
-  await expect(page.getByText('0 Secure Agents', { exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '扫描局域网', exact: true })).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '添加 Worker', exact: true })).toHaveCount(0)
-  const legacyCalls = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => (
-    ['scan_workers_tcp', 'add_worker', 'test_worker'].includes(call.command)
-  )))
-  expect(legacyCalls).toEqual([])
+  await page.getByRole('button', { name: '扫描局域网', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'scan_workers_tcp').length
+  ))).toBe(1)
+  await page.getByRole('button', { name: '停止扫描', exact: true }).click()
+  await page.getByRole('button', { name: '扫描局域网', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'scan_workers_tcp').length
+  ))).toBe(2)
+
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.releaseWorkerScan([{
+    id: 'old-worker', host: '192.168.1.10', port: 50052, name: 'Old Worker', origin: 'manual',
+    devices: [], status: 'Offline', auto_discovered: false,
+  }]))
+  await expect(page.getByRole('button', { name: '停止扫描', exact: true })).toBeVisible()
+  await expect(page.getByText('Old Worker', { exact: true })).toHaveCount(0)
+
+  await page.evaluate(() => window.__TAURI_BROWSER_TEST__.releaseWorkerScan([{
+    id: 'new-worker', host: '192.168.1.11', port: 50052, name: 'New Worker', origin: 'manual',
+    devices: [], status: 'Online', auto_discovered: false,
+  }]))
+  await expect(page.getByText('New Worker', { exact: true }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '扫描局域网', exact: true })).toBeVisible()
 })
 
-test('secure Worker Agent enrollment uses pinned file metadata and compute stays fail-closed', async ({ page }) => {
+test('a newly added cluster worker is immediately connection-tested', async ({ page }) => {
   await openTab(page, 'cluster', 'cluster-add-worker')
 
-  await page.getByRole('button', { name: '安全 Agent', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '注册安全 Worker Agent' })
+  await page.getByRole('button', { name: '添加 Worker', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '添加 Worker' })
   const inputs = dialog.locator('input')
-  await inputs.nth(0).fill('Secure GPU Worker')
-  await inputs.nth(1).fill('worker.example.net')
-  await inputs.nth(2).fill('7443')
-  await inputs.nth(3).fill('worker.example.net')
-  await inputs.nth(4).fill('7444')
-  await inputs.nth(5).fill('worker.example.net')
-  await inputs.nth(6).fill('C:\\secure\\worker-agent.crt')
-  await inputs.nth(7).fill('C:\\secure\\worker-agent.token')
-  await inputs.nth(8).fill('50152')
-  await dialog.getByRole('button', { name: '注册 Agent', exact: true }).click()
+  await inputs.nth(0).fill('192.168.50.20')
+  await inputs.nth(1).fill('50053')
+  await inputs.nth(2).fill('Added Worker')
+  await dialog.getByRole('button', { name: '保存', exact: true }).click()
 
-  await expect(page.getByText('Secure GPU Worker', { exact: true }).first()).toBeVisible()
-  const startButton = page.getByTitle(/Secure Agent 计算暂不可用/)
-  await expect(startButton).toBeDisabled()
-  const lifecycleCalls = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => (
-    ['start_worker_agent', 'stop_worker_agent'].includes(call.command)
-  )))
-  expect(lifecycleCalls).toEqual([])
-
-  const enrollment = await page.evaluate(() => (
-    window.__TAURI_BROWSER_TEST__.calls.find(call => call.command === 'enroll_worker_agent')?.payload
-  )) as { enrollment?: Record<string, unknown> } | undefined
-  expect(enrollment?.enrollment).toMatchObject({
-    controlHost: 'worker.example.net',
-    tlsServerName: 'worker.example.net',
-    tlsCertPath: 'C:\\secure\\worker-agent.crt',
-    tokenPath: 'C:\\secure\\worker-agent.token',
-  })
-  expect(enrollment?.enrollment).not.toHaveProperty('token')
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'test_worker').length
+  ))).toBe(1)
+  await expect(page.getByText('Added Worker', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('在线', { exact: true }).first()).toBeVisible()
 })
 
 test('download browsing ignores stale responses and composing Enter', async ({ page }) => {

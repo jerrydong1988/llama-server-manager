@@ -77,13 +77,8 @@ export function useDownloadBrowse(saveDir: string) {
       await forEachConcurrent(result, LOCAL_FILE_CHECK_CONCURRENCY, async file => {
         const localPath = pathJoin(resolvedDir, trimmedRepoId, file.path || file.name)
         try {
-          const checked = await invoke<{ taskId: string | null, size: number, managerOwned: boolean } | null>('check_local_file', {
-            saveDir: browseSaveDir,
-            repoId: trimmedRepoId,
-            remotePath: file.path || file.name,
-          })
-          if (file.size <= 0 || checked?.size !== file.size) return
-          const actualSize = checked.size
+          const actualSize = await invoke<number | null>('check_local_file', { path: localPath })
+          if (file.size <= 0 || actualSize !== file.size) return
           const existing = Object.values(allTasks).find(task => (
             task.source === browseSource
             && task.repoId === trimmedRepoId
@@ -91,9 +86,8 @@ export function useDownloadBrowse(saveDir: string) {
             && pathsEqual(task.saveDir, browseSaveDir)
           ))
           const completedAt = Date.now()
-          const observedId = `observed:${browseSource}:${resolvedDir}:${trimmedRepoId}:${file.path || file.name}`
           completedTasks.push({
-            id: checked.taskId ?? observedId,
+            id: existing?.id || crypto.randomUUID(),
             fileName: file.name,
             remotePath: file.path || file.name,
             fileType: file.file_type,
@@ -109,7 +103,6 @@ export function useDownloadBrowse(saveDir: string) {
             createdAt: existing?.createdAt ?? completedAt,
             updatedAt: completedAt,
             completedAt: existing?.completedAt ?? completedAt,
-            managerOwned: checked.managerOwned,
           })
         } catch {
           // Missing local files remain available for download.
