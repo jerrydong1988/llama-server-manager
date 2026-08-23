@@ -21,6 +21,7 @@ export const InstanceRecoveryPanel = ({
   const recovery = instance.recovery
   if (!recovery) return null
 
+  const automaticRecoveryEnabled = instance.config.restart_policy === 'on-failure'
   const isTerminal = recovery.phase === 'crash_loop' || recovery.phase === 'failed'
   const failureLabel = (kind: 'startup_failure' | 'unexpected_exit') => (
     kind === 'startup_failure' ? labels.startupFailure : labels.unexpectedExit
@@ -50,13 +51,17 @@ export const InstanceRecoveryPanel = ({
         <div className="flex min-w-0 items-center gap-2">
           <TriangleAlert className={`h-4 w-4 shrink-0 ${isTerminal ? 'text-rose-600 dark:text-rose-300' : 'text-amber-600 dark:text-amber-300'}`} />
           <div>
-            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">{labels.recoveryStatus}</div>
-            <div className="mt-1 text-[11px] text-slate-600 dark:text-slate-300">
-              {formatMessage(labels.recoveryAttempts, {
-                current: recovery.restart_attempts,
-                max: recovery.max_restart_attempts,
-              })}
+            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">
+              {automaticRecoveryEnabled ? labels.recoveryStatus : labels.runtimeFailureStatus}
             </div>
+            {automaticRecoveryEnabled && (
+              <div className="mt-1 text-[11px] text-slate-600 dark:text-slate-300">
+                {formatMessage(labels.recoveryAttempts, {
+                  current: recovery.restart_attempts,
+                  max: recovery.max_restart_attempts,
+                })}
+              </div>
+            )}
           </div>
         </div>
         <Badge tone={isTerminal ? 'red' : 'amber'}>{statusLabel}</Badge>
@@ -89,7 +94,7 @@ export const InstanceRecoveryPanel = ({
           className="mt-3"
           icon={<Square className="h-3.5 w-3.5" />}
         >
-          {labels.cancelRecovery}
+          {automaticRecoveryEnabled ? labels.cancelRecovery : labels.dismissFailure}
         </Button>
       )}
     </div>

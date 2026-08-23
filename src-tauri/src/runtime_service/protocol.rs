@@ -11,6 +11,11 @@ pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
 pub const INSTANCE_RECOVERY_CAPABILITY: &str = "instance_recovery_v1";
 pub const DEPLOYMENT_REVISION_CAPABILITY: &str = "deployment_revision_v1";
 pub const CANARY_ROUTING_CAPABILITY: &str = "canary_routing_v1";
+/// Runtime daemons shipped before qualification became advisory still require
+/// this legacy wire marker. The authoritative qualification profile remains in
+/// deployment evidence; current daemons validate the bound engine fingerprint
+/// instead of this compatibility-only field.
+pub const LEGACY_QUALIFICATION_WIRE_PROFILE_VERSION: u8 = 2;
 pub const INSTANCE_RECOVERY_MAX_ATTEMPTS: u32 = 3;
 pub const INSTANCE_RECOVERY_BACKOFF_SECS: [u64; 3] = [2, 10, 30];
 pub const INSTANCE_RECOVERY_STABLE_SECS: u64 = 5 * 60;
@@ -32,6 +37,8 @@ pub struct RuntimeLaunchSpec {
     /// fingerprint remains a hard launch and recovery boundary.
     #[serde(default)]
     pub engine_qualification_fingerprint: String,
+    /// Deprecated compatibility field for already-running v1 daemons. Do not
+    /// use this value as the qualification evidence profile.
     #[serde(default)]
     pub engine_qualification_profile_version: u8,
     #[serde(default)]

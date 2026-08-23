@@ -35,6 +35,37 @@ assert.match(protocolSource, /pub launch_config_stale: bool/)
 assert.match(protocolSource, /pub deployment_identity: crate::deployment_identity::DeploymentIdentity/)
 assert.match(protocolSource, /pub deployment_revision: crate::deployment::DeploymentRevision/)
 assert.match(protocolSource, /DEPLOYMENT_REVISION_CAPABILITY: &str = "deployment_revision_v1"/)
+assert.match(protocolSource, /LEGACY_QUALIFICATION_WIRE_PROFILE_VERSION: u8 = 2/)
+
+const serverSource = read('src-tauri/src/commands/server.rs')
+assert.match(
+  serverSource,
+  /engine_qualification_profile_version:\s*crate::runtime_service::protocol::LEGACY_QUALIFICATION_WIRE_PROFILE_VERSION/,
+  'an updated GUI must remain compatible with an already-running profile-2 daemon',
+)
+assert.match(
+  serverSource,
+  /resolve_scanned_model_identity\([\s\S]*?launch_command\.is_some\(\)/,
+  'deployment inspection must reuse verified model identity instead of hashing the whole model',
+)
+assert.match(
+  serverSource,
+  /if inventory_identity\.is_verified\(\) \{\s*return Ok\(inventory_identity\);\s*\}[\s\S]*?artifact_identity_for_path\(\s*"engine"/,
+  'deployment inspection must reuse a verified engine bundle identity before considering a full bundle hash',
+)
+
+const recoveryPanelSource = read('src/components/InstanceManager/InstanceRecoveryPanel.tsx')
+assert.match(recoveryPanelSource, /instance\.config\.restart_policy === 'on-failure'/)
+assert.match(
+  recoveryPanelSource,
+  /automaticRecoveryEnabled \? labels\.recoveryStatus : labels\.runtimeFailureStatus/,
+  'a failure with automatic recovery disabled must not be labelled as a recovery incident',
+)
+assert.match(
+  recoveryPanelSource,
+  /automaticRecoveryEnabled \? labels\.cancelRecovery : labels\.dismissFailure/,
+  'the terminal incident action must describe clearing a plain failure when recovery is disabled',
+)
 
 const supervisorSource = read('src-tauri/src/runtime_service/supervisor.rs')
 assert.match(supervisorSource, /InstanceRecoveryPhase::CrashLoop/)

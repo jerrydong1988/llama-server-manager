@@ -312,7 +312,10 @@ function executableFingerprint(executable) {
 function engineQualificationBinding(command) {
   return {
     engine_qualification_fingerprint: executableFingerprint(command[0]),
-    engine_qualification_profile_version: 3,
+    // Keep the direct protocol fixture compatible with a daemon that remained
+    // alive across an in-place GUI update. Profile 3 stays in deployment
+    // qualification evidence; this field is a legacy daemon wire marker.
+    engine_qualification_profile_version: 2,
   }
 }
 

@@ -2938,11 +2938,7 @@ fn build_deployment_identity(
     qualification: &ValidatedEngineQualification,
     launch_command: Option<&[String]>,
 ) -> AppResult<crate::deployment_identity::DeploymentIdentity> {
-    let engine_identity = crate::deployment_identity::artifact_identity_for_path(
-        "engine",
-        std::path::Path::new(engine_exe),
-    )
-    .map_err(|message| AppError::new("DEPLOYMENT_ENGINE_IDENTITY_FAILED", message, true))?;
+    let engine_identity = resolve_scanned_engine_identity(state, config, engine_exe)?;
     if !qualification.engine_artifact_id.is_empty()
         && engine_identity.artifact_id != qualification.engine_artifact_id
     {
@@ -2955,10 +2951,13 @@ fn build_deployment_identity(
     let model_path =
         crate::security::require_authorized_model_path(std::path::Path::new(&config.model_path))
             .map_err(|message| AppError::new("DEPLOYMENT_MODEL_UNAUTHORIZED", message, false))?;
-    let model_identity =
-        crate::deployment_identity::artifact_identity_for_path("model", &model_path)
-            .map_err(|message| AppError::new("DEPLOYMENT_MODEL_IDENTITY_FAILED", message, true))?;
-    reconcile_scanned_model_identity(state, &model_path, &model_identity, "model")?;
+    let model_identity = resolve_scanned_model_identity(
+        state,
+        &model_path,
+        "model",
+        "DEPLOYMENT_MODEL_IDENTITY_FAILED",
+        launch_command.is_some(),
+    )?;
     let command_has_flag = |flags: &[&str]| match launch_command {
         None => true,
         Some(command) => command.iter().skip(1).any(|argument| {
@@ -2984,11 +2983,13 @@ fn build_deployment_identity(
             .map_err(|message| {
                 AppError::new("DEPLOYMENT_AUXILIARY_UNAUTHORIZED", message, false)
             })?;
-        let artifact_identity = crate::deployment_identity::artifact_identity_for_path(
-            "model", &canonical,
-        )
-        .map_err(|message| AppError::new("DEPLOYMENT_AUXILIARY_IDENTITY_FAILED", message, true))?;
-        reconcile_scanned_model_identity(state, &canonical, &artifact_identity, role)?;
+        let artifact_identity = resolve_scanned_model_identity(
+            state,
+            &canonical,
+            role,
+            "DEPLOYMENT_AUXILIARY_IDENTITY_FAILED",
+            launch_command.is_some(),
+        )?;
         auxiliary_artifacts.push(crate::deployment_identity::AuxiliaryArtifactIdentity {
             role: role.to_string(),
             artifact_id: artifact_identity.artifact_id,
@@ -3018,6 +3019,160 @@ fn build_deployment_identity(
         qualification_evidence_id,
     )
     .map_err(|message| AppError::new("DEPLOYMENT_IDENTITY_FAILED", message, false))
+}
+
+fn resolve_scanned_engine_identity(
+    state: &AppState,
+    config: &InstanceConfig,
+    engine_exe: &str,
+) -> AppResult<crate::deployment_identity::ArtifactIdentity> {
+    let inventory_identity = state
+        .engines
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.id),
+                std::path::Path::new(&config.engine_id),
+            ) && paths_equal(
+                &normalized_engine_path(&engine.exe),
+                &normalized_engine_path(engine_exe),
+            )
+        })
+        .map(|engine| engine.artifact_identity.clone())
+        .ok_or_else(|| {
+            AppError::new(
+                "DEPLOYMENT_ENGINE_NOT_SCANNED",
+                "engine is not in the scanned inventory",
+                true,
+            )
+        })?;
+    let metadata = std::fs::metadata(engine_exe).map_err(|error| {
+        AppError::new(
+            "DEPLOYMENT_ENGINE_IDENTITY_FAILED",
+            format!("failed to inspect engine artifact: {error}"),
+            true,
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(AppError::new(
+            "DEPLOYMENT_ENGINE_IDENTITY_FAILED",
+            "engine artifact is not a regular file",
+            true,
+        ));
+    }
+    if inventory_identity.is_verified() {
+        return Ok(inventory_identity);
+    }
+
+    let current_identity = crate::deployment_identity::artifact_identity_for_path(
+        "engine",
+        std::path::Path::new(engine_exe),
+    )
+    .map_err(|message| AppError::new("DEPLOYMENT_ENGINE_IDENTITY_FAILED", message, true))?;
+    let updated_engine = {
+        let engines = state.engines.lock().unwrap();
+        let engine = engines
+            .iter()
+            .find(|engine| {
+                paths_equal(
+                    std::path::Path::new(&engine.id),
+                    std::path::Path::new(&config.engine_id),
+                ) && paths_equal(
+                    &normalized_engine_path(&engine.exe),
+                    &normalized_engine_path(engine_exe),
+                )
+            })
+            .ok_or_else(|| {
+                AppError::new(
+                    "DEPLOYMENT_ENGINE_NOT_SCANNED",
+                    "engine was removed from the scanned inventory",
+                    true,
+                )
+            })?;
+        let mut updated = engine.clone();
+        updated.artifact_identity = current_identity.clone();
+        updated
+    };
+    crate::commands::model_inventory::update_engine_probe(&updated_engine).map_err(|message| {
+        AppError::new("DEPLOYMENT_ENGINE_IDENTITY_PERSIST_FAILED", message, true)
+    })?;
+    let mut engines = state.engines.lock().unwrap();
+    let engine = engines
+        .iter_mut()
+        .find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.id),
+                std::path::Path::new(&config.engine_id),
+            ) && paths_equal(
+                &normalized_engine_path(&engine.exe),
+                &normalized_engine_path(engine_exe),
+            )
+        })
+        .ok_or_else(|| {
+            AppError::new(
+                "DEPLOYMENT_ENGINE_NOT_SCANNED",
+                "engine was removed from the scanned inventory",
+                true,
+            )
+        })?;
+    engine.artifact_identity = current_identity.clone();
+    Ok(current_identity)
+}
+
+fn resolve_scanned_model_identity(
+    state: &AppState,
+    path: &std::path::Path,
+    role: &str,
+    identity_failure_code: &'static str,
+    allow_certification: bool,
+) -> AppResult<crate::deployment_identity::ArtifactIdentity> {
+    let inventory_identity = state
+        .models
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|model| paths_equal(std::path::Path::new(&model.path), path))
+        .map(|model| model.artifact_identity.clone())
+        .ok_or_else(|| {
+            AppError::new(
+                "DEPLOYMENT_MODEL_NOT_SCANNED",
+                format!("{role} model is not in the scanned inventory"),
+                true,
+            )
+        })?;
+    if inventory_identity.is_verified() {
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            AppError::new(
+                identity_failure_code,
+                format!("failed to inspect {role} model artifact: {error}"),
+                true,
+            )
+        })?;
+        if !metadata.is_file() || metadata.len() != inventory_identity.file_size {
+            return Err(AppError::new(
+                "DEPLOYMENT_MODEL_IDENTITY_STALE",
+                format!("{role} model size changed after its last verification"),
+                true,
+            ));
+        }
+        return Ok(inventory_identity);
+    }
+    if !allow_certification {
+        return Err(AppError::new(
+            "DEPLOYMENT_MODEL_IDENTITY_REQUIRED",
+            format!(
+                "{role} model has no verified content identity; start once or run qualification to certify it"
+            ),
+            true,
+        ));
+    }
+
+    let current_identity = crate::deployment_identity::artifact_identity_for_path("model", path)
+        .map_err(|message| AppError::new(identity_failure_code, message, true))?;
+    reconcile_scanned_model_identity(state, path, &current_identity, role)?;
+    Ok(current_identity)
 }
 
 fn reconcile_scanned_model_identity(
@@ -3471,7 +3626,11 @@ async fn start_prepared_runtime_instance(
             config: prepared.config.clone(),
             launch_config_stale: false,
             engine_qualification_fingerprint: prepared.engine_qualification.fingerprint.clone(),
-            engine_qualification_profile_version: prepared.engine_qualification.profile_version,
+            // An already-running daemon from the pre-advisory release line
+            // still requires profile 2 here. The actual profile 3 evidence is
+            // carried by deployment_identity.qualification_evidence_id.
+            engine_qualification_profile_version:
+                crate::runtime_service::protocol::LEGACY_QUALIFICATION_WIRE_PROFILE_VERSION,
             deployment_identity: prepared.deployment_identity.clone(),
             deployment_revision: prepared.deployment_revision.clone(),
             engine_backend: engine_backend.to_string(),
