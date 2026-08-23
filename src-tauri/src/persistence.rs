@@ -1,7 +1,7 @@
 #[cfg(unix)]
 use std::fs::File;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 fn parent_dir(path: &Path) -> &Path {
@@ -28,40 +28,7 @@ fn protect_directory(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("failed to protect directory {}: {error}", path.display()))
 }
 
-#[cfg(windows)]
-fn protect_directory(path: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Security::{
-        SetFileSecurityW, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    };
-    if path == Path::new(".") {
-        return Ok(());
-    }
-    let path = path
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    with_private_security_descriptor(|descriptor| {
-        let result = unsafe {
-            SetFileSecurityW(
-                path.as_ptr(),
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                descriptor,
-            )
-        };
-        if result == 0 {
-            Err(format!(
-                "failed to protect private Windows directory: {}",
-                std::io::Error::last_os_error()
-            ))
-        } else {
-            Ok(())
-        }
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn protect_directory(_path: &Path) -> Result<(), String> {
     Ok(())
 }
@@ -73,199 +40,9 @@ fn protect_file(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("failed to protect file {}: {error}", path.display()))
 }
 
-#[cfg(windows)]
-pub(crate) fn with_private_security_descriptor<T>(
-    operation: impl FnOnce(windows_sys::Win32::Security::PSECURITY_DESCRIPTOR) -> Result<T, String>,
-) -> Result<T, String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
-    };
-    let sddl = std::ffi::OsStr::new("D:P(A;;FA;;;SY)(A;;FA;;;OW)")
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    let mut descriptor = std::ptr::null_mut();
-    let converted = unsafe {
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            sddl.as_ptr(),
-            SDDL_REVISION_1,
-            &mut descriptor,
-            std::ptr::null_mut(),
-        )
-    };
-    if converted == 0 {
-        return Err(format!(
-            "failed to create private Windows security descriptor: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let result = operation(descriptor);
-    unsafe {
-        LocalFree(descriptor as _);
-    }
-    result
-}
-
-#[cfg(windows)]
-pub(crate) fn windows_process_sid(process_id: Option<u32>) -> Result<String, String> {
-    use std::os::windows::ffi::OsStringExt;
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_INSUFFICIENT_BUFFER};
-    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
-    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
-    use windows_sys::Win32::System::Threading::{
-        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
-
-    unsafe {
-        let process = process_id
-            .map(|pid| OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid))
-            .unwrap_or_else(|| GetCurrentProcess());
-        if process.is_null() {
-            return Err("failed to open Windows process".into());
-        }
-        let mut token = std::ptr::null_mut();
-        if OpenProcessToken(process, TOKEN_QUERY, &mut token) == 0 {
-            if process_id.is_some() {
-                CloseHandle(process);
-            }
-            return Err("failed to open Windows process token".into());
-        }
-        if process_id.is_some() {
-            CloseHandle(process);
-        }
-        let mut needed = 0_u32;
-        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
-        if GetLastError() != ERROR_INSUFFICIENT_BUFFER || needed == 0 {
-            CloseHandle(token);
-            return Err("failed to size Windows process token".into());
-        }
-        let mut buffer = vec![0_u8; needed as usize];
-        if GetTokenInformation(
-            token,
-            TokenUser,
-            buffer.as_mut_ptr().cast(),
-            needed,
-            &mut needed,
-        ) == 0
-        {
-            CloseHandle(token);
-            return Err("failed to inspect Windows process token".into());
-        }
-        CloseHandle(token);
-        let sid = (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid;
-        let mut text = std::ptr::null_mut();
-        if ConvertSidToStringSidW(sid, &mut text) == 0 {
-            return Err("failed to format Windows process SID".into());
-        }
-        let mut length = 0_usize;
-        while *text.add(length) != 0 {
-            length += 1;
-        }
-        let value = std::ffi::OsString::from_wide(std::slice::from_raw_parts(text, length))
-            .to_string_lossy()
-            .into_owned();
-        windows_sys::Win32::Foundation::LocalFree(text.cast());
-        Ok(value)
-    }
-}
-
-#[cfg(windows)]
-fn protect_file(path: &Path) -> Result<(), String> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Security::{
-        SetFileSecurityW, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
-    };
-    let path = path
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    with_private_security_descriptor(|descriptor| {
-        let result = unsafe {
-            SetFileSecurityW(
-                path.as_ptr(),
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                descriptor,
-            )
-        };
-        if result == 0 {
-            Err(format!(
-                "failed to protect private Windows file: {}",
-                std::io::Error::last_os_error()
-            ))
-        } else {
-            Ok(())
-        }
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
+#[cfg(not(unix))]
 fn protect_file(_path: &Path) -> Result<(), String> {
     Ok(())
-}
-
-#[cfg(unix)]
-fn create_private_file_new(path: &Path) -> Result<std::fs::File, String> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut options = OpenOptions::new();
-    options.create_new(true).write(true).mode(0o600);
-    options
-        .open(path)
-        .map_err(|error| format!("failed to create private file {}: {error}", path.display()))
-}
-
-#[cfg(windows)]
-fn create_private_file_new(path: &Path) -> Result<std::fs::File, String> {
-    use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::io::FromRawHandle;
-    use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE};
-    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
-    use windows_sys::Win32::Storage::FileSystem::{
-        CreateFileW, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
-    };
-    let path_wide = path
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
-    with_private_security_descriptor(|descriptor| {
-        let attributes = SECURITY_ATTRIBUTES {
-            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-            lpSecurityDescriptor: descriptor,
-            bInheritHandle: 0,
-        };
-        let handle = unsafe {
-            CreateFileW(
-                path_wide.as_ptr(),
-                GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_READ,
-                &attributes,
-                CREATE_NEW,
-                FILE_ATTRIBUTE_NORMAL,
-                std::ptr::null_mut(),
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE {
-            Err(format!(
-                "failed to create private Windows file {}: {}",
-                path.display(),
-                std::io::Error::last_os_error()
-            ))
-        } else {
-            Ok(unsafe { std::fs::File::from_raw_handle(handle as _) })
-        }
-    })
-}
-
-#[cfg(not(any(unix, windows)))]
-fn create_private_file_new(path: &Path) -> Result<std::fs::File, String> {
-    OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(path)
-        .map_err(|error| format!("failed to create private file {}: {error}", path.display()))
 }
 
 pub fn enforce_private_file(path: &Path) -> Result<(), String> {
@@ -286,172 +63,6 @@ pub fn enforce_private_file(path: &Path) -> Result<(), String> {
             path.display()
         )),
     }
-}
-
-/// Read an application-owned private file through one non-following, stable
-/// handle. Missing files are represented as `Ok(None)`; insecure or oversized
-/// files fail closed before any bytes are consumed.
-pub fn read_private_file_bounded(path: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>, String> {
-    enforce_private_file(path)?;
-    read_regular_file_nofollow_bounded(path, max_bytes)
-}
-
-/// Read caller-selected input without following or mutating it. Callers must
-/// copy accepted bytes into application-owned private storage before use.
-pub fn read_regular_file_nofollow_bounded(
-    path: &Path,
-    max_bytes: u64,
-) -> Result<Option<Vec<u8>>, String> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        const FILE_SHARE_READ: u32 = 0x0000_0001;
-        options
-            .share_mode(FILE_SHARE_READ)
-            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let mut file = match options.open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(format!(
-                "failed to open private state file {}: {error}",
-                path.display()
-            ));
-        }
-    };
-    let metadata = file.metadata().map_err(|error| {
-        format!(
-            "failed to inspect private state file {}: {error}",
-            path.display()
-        )
-    })?;
-    if !metadata.is_file() || metadata.len() > max_bytes {
-        return Err(format!(
-            "private state file is not a regular file within the {max_bytes}-byte limit: {}",
-            path.display()
-        ));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.nlink() != 1 {
-            return Err(format!(
-                "private state file has multiple hard links: {}",
-                path.display()
-            ));
-        }
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{
-            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
-        };
-        let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
-        // SAFETY: the handle remains owned by `file` and `info` is writable.
-        if unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } == 0 {
-            return Err(format!(
-                "failed to inspect private state identity {}: {}",
-                path.display(),
-                std::io::Error::last_os_error()
-            ));
-        }
-        if info.nNumberOfLinks != 1 {
-            return Err(format!(
-                "private state file has multiple hard links: {}",
-                path.display()
-            ));
-        }
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    std::io::Read::by_ref(&mut file)
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| {
-            format!(
-                "failed to read private state file {}: {error}",
-                path.display()
-            )
-        })?;
-    if bytes.len() as u64 > max_bytes {
-        return Err(format!(
-            "private state file exceeds the {max_bytes}-byte limit: {}",
-            path.display()
-        ));
-    }
-    Ok(Some(bytes))
-}
-
-pub fn enforce_private_directory(path: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(path).map_err(|error| {
-        format!(
-            "failed to create private directory {}: {error}",
-            path.display()
-        )
-    })?;
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
-            "private state directory cannot be a symlink: {}",
-            path.display()
-        )),
-        Ok(metadata) if metadata.is_dir() => protect_directory(path),
-        Ok(_) => Err(format!(
-            "private state path is not a directory: {}",
-            path.display()
-        )),
-        Err(error) => Err(format!(
-            "failed to inspect private state directory {}: {error}",
-            path.display()
-        )),
-    }
-}
-
-/// Creates a security-sensitive state file with owner-only access before a
-/// library such as SQLite reopens it by pathname. The protected parent makes
-/// the create/open handoff inaccessible to other local principals.
-pub fn prepare_private_file(path: &Path) -> Result<(), String> {
-    let parent = parent_dir(path);
-    enforce_private_directory(parent)?;
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
-            "private state file cannot be a symlink: {}",
-            path.display()
-        )),
-        Ok(metadata) if metadata.is_file() => enforce_private_file(path),
-        Ok(_) => Err(format!(
-            "private state path is not a file: {}",
-            path.display()
-        )),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            drop(create_private_file_new(path)?);
-            enforce_private_file(path)
-        }
-        Err(error) => Err(format!(
-            "failed to inspect private state file {}: {error}",
-            path.display()
-        )),
-    }
-}
-
-pub fn protect_sqlite_files(path: &Path) -> Result<(), String> {
-    prepare_private_file(path)?;
-    let base = path.to_string_lossy();
-    for suffix in ["-wal", "-shm"] {
-        let sidecar = PathBuf::from(format!("{base}{suffix}"));
-        if sidecar.exists() {
-            enforce_private_file(&sidecar)?;
-        }
-    }
-    Ok(())
 }
 
 fn sync_file(path: &Path) -> Result<(), String> {
@@ -616,7 +227,19 @@ pub fn atomic_write(path: &Path, contents: &[u8], backup: Option<&Path>) -> Resu
     protect_directory(parent_dir(path))?;
     let temporary = temporary_path(path);
     let result = (|| {
-        let mut file = create_private_file_new(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary).map_err(|error| {
+            format!(
+                "failed to create temporary file {}: {error}",
+                temporary.display()
+            )
+        })?;
         file.write_all(contents).map_err(|error| {
             format!(
                 "failed to write temporary file {}: {error}",
@@ -654,7 +277,19 @@ pub fn atomic_write_artifact_state(path: &Path, contents: &[u8]) -> Result<(), S
     })?;
     let temporary = temporary_path(path);
     let result = (|| {
-        let mut file = create_private_file_new(&temporary)?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary).map_err(|error| {
+            format!(
+                "failed to create temporary file {}: {error}",
+                temporary.display()
+            )
+        })?;
         file.write_all(contents).map_err(|error| {
             format!(
                 "failed to write temporary file {}: {error}",

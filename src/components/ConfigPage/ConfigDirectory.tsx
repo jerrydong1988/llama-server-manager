@@ -11,7 +11,7 @@ export function ConfigDirectory({ title, groups }: { title: string; groups: Conf
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   return (
-    <Surface as="aside" className="h-fit p-4 2xl:sticky 2xl:top-4">
+    <Surface as="aside" className="h-fit p-4 xl:sticky xl:top-4">
       <SectionHeader title={title} />
       <nav className="mt-4 space-y-1">
         {groups.map(group => (

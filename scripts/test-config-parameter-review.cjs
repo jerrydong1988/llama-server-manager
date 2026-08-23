@@ -13,12 +13,9 @@ const search = read('src/components/ConfigPage/ParameterSearch.tsx')
 const panel = read('src/components/ConfigPage/ConfigChangePanel.tsx')
 const directory = read('src/components/ConfigPage/ConfigDirectory.tsx')
 const workspace = read('src/components/ConfigPage/configWorkspace.ts')
-const revisions = read('src/components/ConfigPage/ConfigRevisionPanel.tsx')
 const hook = read('src/components/ConfigPage/useEngineCompatibility.ts')
 const server = read('src-tauri/src/commands/server.rs')
-const revisionBackend = read('src-tauri/src/config_revision.rs')
 const types = read('src/store/types.ts')
-const instanceSlice = read('src/store/instanceSlice.ts')
 
 const localGuardIndex = configPage.indexOf('if (!local)')
 assert.ok(localGuardIndex > 0, 'ConfigPage must retain an explicit empty-selection guard')
@@ -63,23 +60,6 @@ assert.match(workspace, /ctx_size: \['ctx_size', 'ctx_size_auto'\]/, 'automatic 
 assert.match(workspace, /kv_unified_mode: \['kv_unified_mode', 'kv_unified'\]/, 'legacy KV aliases must collapse into one review field')
 assert.match(workspace, /canonicalConfigFields/, 'review counts must deduplicate compatibility aliases')
 assert.match(workspace, /restoreReviewField/, 'single-field undo must restore every compatibility alias')
-assert.match(workspace, /SENSITIVE_CONFIG_FIELDS/, 'unsaved change review must centralize secret-bearing fields')
-for (const field of [
-  'api_key',
-  'api_key_file',
-  'ssl_key_file',
-  'ssl_cert_file',
-  'manual_command',
-  'custom_args',
-  'mcp_servers_config',
-  'mcp_servers_json',
-  'ui_config',
-  'ui_config_file',
-]) {
-  assert.match(workspace, new RegExp(`['"]${field}['"]`), `${field} must stay redacted in unsaved change review`)
-  assert.match(revisionBackend, new RegExp(`"${field}"`), `${field} must stay redacted in historical revision summaries`)
-}
-assert.match(workspace, /labels\.redactedValue/, 'secret-bearing unsaved changes must show presence instead of content')
 assert.match(configPage, /restoreReviewField\(current, savedBaseline, key\)/, 'the review panel must use alias-aware undo')
 assert.match(configPage, /reviewOverrideKeys\.flatMap\(reviewFieldKeys\)/, 'inherit-all must clear every compatibility alias behind each review field')
 assert.match(configPage, /overrideKeys=\{reviewOverrideKeys\}/, 'launch-mode override counts must deduplicate compatibility aliases')
@@ -99,12 +79,6 @@ assert.match(panel, /'changes' \| 'emitted'/, 'review panel must separate draft 
 assert.match(panel, /onLocate/, 'review rows must support locating their field')
 assert.match(panel, /onUndo/, 'change rows must support a single-field undo')
 assert.doesNotMatch(panel, /slice\(0, 8\)/, 'review panel must not hide changes after the eighth row')
-assert.match(revisions, /listConfigRevisions/, 'configuration history must load through the typed store boundary')
-assert.match(revisions, /history\.currentFingerprint/, 'revision actions must carry the currently displayed fingerprint')
-assert.match(instanceSlice, /expectedCurrentFingerprint/, 'rollback and known-good IPC must use optimistic concurrency')
-assert.match(revisions, /integrityValid/, 'corrupt revisions must be visible but action-blocked')
-assert.match(revisions, /revisionRollbackDesc/, 'rollback must require an explicit confirmation dialog')
-assert.doesNotMatch(revisions, /snapshot|api_key|manual_command/, 'revision UI must never receive or name raw historical snapshot fields')
 
 assert.match(server, /fn emitted_override_keys\(/, 'backend must derive emission metadata from generated commands')
 assert.match(server, /fn canonical_override_key\(/, 'backend emission metadata must collapse compatibility aliases')

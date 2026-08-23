@@ -3,85 +3,22 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 pub const RUNTIME_PROTOCOL_VERSION: u32 = 1;
-pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 4;
+pub const RUNTIME_STATE_SCHEMA_VERSION: u32 = 1;
 pub const MAX_RUNTIME_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
 pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
-pub const INSTANCE_RECOVERY_CAPABILITY: &str = "instance_recovery_v1";
-pub const DEPLOYMENT_REVISION_CAPABILITY: &str = "deployment_revision_v1";
-pub const CANARY_ROUTING_CAPABILITY: &str = "canary_routing_v1";
-pub const INSTANCE_RECOVERY_MAX_ATTEMPTS: u32 = 3;
-pub const INSTANCE_RECOVERY_BACKOFF_SECS: [u64; 3] = [2, 10, 30];
-pub const INSTANCE_RECOVERY_STABLE_SECS: u64 = 5 * 60;
-
-fn default_manual_recovery() -> bool {
-    true
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLaunchSpec {
     pub instance_id: String,
     pub config: InstanceConfig,
-    /// The persisted command is an exact launch snapshot. A later configuration
-    /// edit must not make failure recovery start that stale command again.
-    #[serde(default)]
-    pub launch_config_stale: bool,
-    /// Automatic recovery may only execute the exact engine artifact whose
-    /// complete qualification evidence was accepted by the GUI preflight.
-    #[serde(default)]
-    pub engine_qualification_fingerprint: String,
-    #[serde(default)]
-    pub engine_qualification_profile_version: u8,
-    #[serde(default)]
-    pub deployment_identity: crate::deployment_identity::DeploymentIdentity,
-    /// Complete immutable deployment revision used to validate recovery.
-    #[serde(default)]
-    pub deployment_revision: crate::deployment::DeploymentRevision,
     pub engine_backend: String,
     pub command: Vec<String>,
     pub command_display: String,
     pub workload: String,
     #[serde(default)]
     pub working_directory: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RuntimeFailureKind {
-    StartupFailure,
-    UnexpectedExit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InstanceRecoveryPhase {
-    Failed,
-    Waiting,
-    Monitoring,
-    Restoring,
-    CrashLoop,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RuntimeFailure {
-    pub kind: RuntimeFailureKind,
-    pub message: String,
-    pub exit_code: Option<i32>,
-    pub occurred_at: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct InstanceRecoveryStatus {
-    pub phase: InstanceRecoveryPhase,
-    /// Number of automatic restart attempts already started for this incident.
-    pub restart_attempts: u32,
-    pub max_restart_attempts: u32,
-    pub next_retry_at: Option<u64>,
-    /// The first failure in the active incident is immutable across retries.
-    pub origin_failure: RuntimeFailure,
-    /// The most recent failure is kept separately for current diagnostics.
-    pub last_failure: RuntimeFailure,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,8 +44,6 @@ pub struct RuntimeServiceStatus {
     pub monitoring: HashMap<String, crate::commands::monitoring::MonitoringFrame>,
     #[serde(default)]
     pub performance: HashMap<String, serde_json::Value>,
-    #[serde(default)]
-    pub recovery: HashMap<String, InstanceRecoveryStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,10 +69,6 @@ pub enum RuntimeCommand {
     },
     StartInstance {
         spec: Box<RuntimeLaunchSpec>,
-        /// Older GUI clients only issued operator-triggered starts, so a
-        /// missing field must retain that behavior across an in-place upgrade.
-        #[serde(default = "default_manual_recovery")]
-        manual_recovery: bool,
     },
     StopInstance {
         instance_id: String,
@@ -168,7 +99,7 @@ pub enum RuntimeReply {
     Ack,
     Status(Box<RuntimeServiceStatus>),
     Instance(Box<RunningInstance>),
-    ProxyStatus(Box<ProxyStatus>),
+    ProxyStatus(ProxyStatus),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,7 +140,6 @@ pub struct PersistedRuntimeState {
     pub instances: HashMap<String, InstanceConfig>,
     pub desired_instances: HashMap<String, RuntimeLaunchSpec>,
     pub running: HashMap<String, RunningInstance>,
-    pub recovery: HashMap<String, InstanceRecoveryStatus>,
 }
 
 impl Default for PersistedRuntimeState {
@@ -222,7 +152,6 @@ impl Default for PersistedRuntimeState {
             instances: HashMap::new(),
             desired_instances: HashMap::new(),
             running: HashMap::new(),
-            recovery: HashMap::new(),
         }
     }
 }
@@ -264,50 +193,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_start_command_defaults_to_operator_recovery() {
-        let spec = RuntimeLaunchSpec {
-            instance_id: "instance-1".into(),
-            config: InstanceConfig::default(),
-            launch_config_stale: false,
-            engine_qualification_fingerprint: String::new(),
-            engine_qualification_profile_version: 0,
-            deployment_identity: Default::default(),
-            deployment_revision: Default::default(),
-            engine_backend: "test".into(),
-            command: vec!["llama-server".into()],
-            command_display: "llama-server".into(),
-            workload: "inference".into(),
-            working_directory: None,
-        };
-        let request = serde_json::json!({
-            "protocol_version": RUNTIME_PROTOCOL_VERSION,
-            "request_id": "legacy-start",
-            "token": "secret",
-            "command": {
-                "command": "start_instance",
-                "payload": { "spec": spec }
-            }
-        });
-        let decoded: RuntimeRequest = serde_json::from_value(request).unwrap();
-        let RuntimeCommand::StartInstance {
-            spec,
-            manual_recovery,
-        } = decoded.command
-        else {
-            panic!("expected start command");
-        };
-        assert!(manual_recovery);
-        assert!(spec.engine_qualification_fingerprint.is_empty());
-        assert_eq!(spec.engine_qualification_profile_version, 0);
-    }
-
-    #[test]
     fn persisted_state_accepts_missing_future_fields() {
         let state: PersistedRuntimeState = serde_json::from_str("{}").unwrap();
-        assert_eq!(state.schema_version, RUNTIME_STATE_SCHEMA_VERSION);
+        assert_eq!(state.schema_version, 1);
         assert!(!state.background_enabled);
         assert!(state.desired_instances.is_empty());
-        assert!(state.recovery.is_empty());
     }
 
     #[test]
@@ -318,15 +208,15 @@ mod tests {
             "service_pid": 42,
             "background_enabled": false,
             "registered_for_login": false,
-            "proxy": {
-                "running": false,
-                "bound_addr": "127.0.0.1:11435",
-                "active_routes": 0,
-                "healthy_routes": 0,
-                "unhealthy_routes": 0,
-                "in_flight_requests": 0,
-                "total_requests": 0,
-                "last_error": null,
+            "proxy": ProxyStatus {
+                running: false,
+                bound_addr: "127.0.0.1:11435".into(),
+                active_routes: 0,
+                healthy_routes: 0,
+                unhealthy_routes: 0,
+                in_flight_requests: 0,
+                total_requests: 0,
+                last_error: None,
             },
             "running": {},
         });
@@ -337,8 +227,6 @@ mod tests {
         assert!(status.health.is_empty());
         assert!(status.monitoring.is_empty());
         assert!(status.performance.is_empty());
-        assert!(status.recovery.is_empty());
-        assert_eq!(status.proxy.operational.request_count, 0);
     }
 
     #[test]
@@ -353,9 +241,6 @@ mod tests {
             telemetry_session_id: None,
             workload: "inference".into(),
             launch_config: None,
-            deployment_identity: Default::default(),
-            deployment_id: String::new(),
-            deployment_revision_id: String::new(),
         };
         let request = RuntimeRequest {
             protocol_version: RUNTIME_PROTOCOL_VERSION,

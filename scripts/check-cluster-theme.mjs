@@ -3,29 +3,28 @@ import path from 'node:path'
 
 const relativePath = 'src/components/ClusterPage/ClusterPage.tsx'
 const source = fs.readFileSync(path.join(process.cwd(), relativePath), 'utf8')
-const securityPanelPattern = /<div className="([^"]+)">\s*\{t\.clusterPage\.agentSecurityNote\}\s*<\/div>/g
-const securityPanels = [...source.matchAll(securityPanelPattern)].map(match => match[1].split(/\s+/))
+const warningPattern = /<div className="([^"]+)">\s*\{t\.clusterPage\.sshWarning\}\s*<\/div>/g
+const warningClasses = [...source.matchAll(warningPattern)].map(match => match[1].split(/\s+/))
 const failures = []
 
 const requiredClasses = [
-  'border-violet-500/20',
-  'bg-violet-500/10',
-  'text-violet-200',
+  'border-amber-200',
+  'bg-amber-50',
+  'text-amber-800',
+  'dark:border-amber-500/20',
+  'dark:bg-amber-500/10',
+  'dark:text-amber-200',
 ]
 
-if (securityPanels.length !== 1) {
-  failures.push(`${relativePath}: expected 1 Secure Agent security panel, found ${securityPanels.length}.`)
+if (warningClasses.length !== 2) {
+  failures.push(`${relativePath}: expected 2 SSH warning panels, found ${warningClasses.length}.`)
 }
 
-for (const classes of securityPanels) {
+for (const [index, classes] of warningClasses.entries()) {
   const missing = requiredClasses.filter(className => !classes.includes(className))
   if (missing.length > 0) {
-    failures.push(`${relativePath}: Secure Agent security panel is missing ${missing.join(', ')}.`)
+    failures.push(`${relativePath}: SSH warning panel ${index + 1} is missing ${missing.join(', ')}.`)
   }
-}
-
-if (!source.includes('data-guide="cluster-agent"')) {
-  failures.push(`${relativePath}: Secure Agent enrollment action must remain available to the guide.`)
 }
 
 if (failures.length > 0) {

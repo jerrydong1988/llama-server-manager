@@ -1,6 +1,4 @@
-use crate::commands::engine_capabilities::{
-    capabilities_match_executable, invalidate_engine_evidence,
-};
+use crate::commands::engine_capabilities::capabilities_match_executable;
 use crate::commands::model_inventory::{
     self, InventoryDirectoryRecord, InventoryEngineRecord, InventoryModelRecord,
 };
@@ -11,12 +9,6 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, LazyLock};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
-
-static GGUF_WORK_SLOTS: LazyLock<Arc<tokio::sync::Semaphore>> =
-    LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(4)));
-const GGUF_WORK_ADMISSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 fn file_mtime(path: &Path) -> u64 {
     path.metadata()
@@ -79,6 +71,7 @@ struct DirectoryEntryFingerprint {
     is_file: bool,
     is_symlink: bool,
     size: u64,
+    mtime: u64,
     mtime_ns: u128,
 }
 
@@ -86,170 +79,6 @@ struct DirectoryEntryFingerprint {
 struct DirectoryFingerprint {
     signature: String,
     entries: Vec<DirectoryEntryFingerprint>,
-}
-
-const MAX_SCAN_DIRECTORIES: usize = 20_000;
-const MAX_SCAN_ROOTS: usize = 256;
-const MAX_SCAN_ENTRIES: usize = 200_000;
-const MAX_SCAN_FILES: usize = 100_000;
-const MAX_SCAN_RESULTS: usize = 10_000;
-const MAX_SCAN_PARSES: usize = 2_048;
-const MAX_SCAN_METADATA_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_SCAN_RETAINED_METADATA_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_SCAN_DURATION: std::time::Duration = std::time::Duration::from_secs(120);
-
-struct ScanBudget {
-    started: std::time::Instant,
-    directories: usize,
-    entries: usize,
-    files: usize,
-    results: usize,
-    parses: usize,
-    metadata_bytes: u64,
-    retained_metadata_bytes: u64,
-    visited_directories: HashSet<String>,
-}
-
-impl Default for ScanBudget {
-    fn default() -> Self {
-        Self {
-            started: std::time::Instant::now(),
-            directories: 0,
-            entries: 0,
-            files: 0,
-            results: 0,
-            parses: 0,
-            metadata_bytes: 0,
-            retained_metadata_bytes: 0,
-            visited_directories: HashSet::new(),
-        }
-    }
-}
-
-impl ScanBudget {
-    fn deadline(&self) -> std::time::Instant {
-        self.started + MAX_SCAN_DURATION
-    }
-
-    fn check_time(&self) -> Result<(), String> {
-        if self.started.elapsed() > MAX_SCAN_DURATION {
-            return Err("scan exceeded its 120-second work budget".into());
-        }
-        Ok(())
-    }
-
-    fn enter_directory(&mut self, path: &Path, root: &Path) -> Result<PathBuf, String> {
-        self.check_time()?;
-        let metadata = std::fs::symlink_metadata(path)
-            .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
-        if metadata_is_link_like(&metadata) {
-            return Err(format!("{} is link-like and was skipped", path.display()));
-        }
-        let canonical = std::fs::canonicalize(path)
-            .map_err(|error| format!("failed to resolve {}: {error}", path.display()))?;
-        let canonical_root = std::fs::canonicalize(root)
-            .map_err(|error| format!("failed to resolve scan root {}: {error}", root.display()))?;
-        if !paths_equal(&canonical, &canonical_root) && !path_is_within(&canonical, &canonical_root)
-        {
-            return Err(format!(
-                "{} escaped the authorized scan root",
-                path.display()
-            ));
-        }
-        let identity = path_identity_key(&canonical);
-        if !self.visited_directories.insert(identity) {
-            return Err(format!("{} was already visited", path.display()));
-        }
-        self.directories = self
-            .directories
-            .checked_add(1)
-            .ok_or_else(|| "scan directory counter overflow".to_string())?;
-        if self.directories > MAX_SCAN_DIRECTORIES {
-            return Err(format!(
-                "scan exceeded the {MAX_SCAN_DIRECTORIES}-directory budget"
-            ));
-        }
-        Ok(canonical)
-    }
-
-    fn observe_entry(&mut self, metadata: &std::fs::Metadata) -> Result<(), String> {
-        self.check_time()?;
-        self.entries = self
-            .entries
-            .checked_add(1)
-            .ok_or_else(|| "scan entry counter overflow".to_string())?;
-        if self.entries > MAX_SCAN_ENTRIES {
-            return Err(format!("scan exceeded the {MAX_SCAN_ENTRIES}-entry budget"));
-        }
-        if metadata.is_file() {
-            self.files = self
-                .files
-                .checked_add(1)
-                .ok_or_else(|| "scan file counter overflow".to_string())?;
-            if self.files > MAX_SCAN_FILES {
-                return Err(format!("scan exceeded the {MAX_SCAN_FILES}-file budget"));
-            }
-        }
-        self.metadata_bytes = self
-            .metadata_bytes
-            .checked_add(std::mem::size_of_val(metadata) as u64)
-            .ok_or_else(|| "scan metadata budget overflow".to_string())?;
-        if self.metadata_bytes > MAX_SCAN_METADATA_BYTES {
-            return Err("scan exceeded its metadata allocation budget".into());
-        }
-        Ok(())
-    }
-
-    fn add_result(&mut self) -> Result<(), String> {
-        self.results = self
-            .results
-            .checked_add(1)
-            .ok_or_else(|| "scan result counter overflow".to_string())?;
-        if self.results > MAX_SCAN_RESULTS {
-            return Err(format!(
-                "scan exceeded the {MAX_SCAN_RESULTS}-result budget"
-            ));
-        }
-        Ok(())
-    }
-
-    fn retain_metadata(&mut self, bytes: usize) -> Result<(), String> {
-        self.retained_metadata_bytes = self
-            .retained_metadata_bytes
-            .checked_add(bytes as u64)
-            .ok_or_else(|| "scan retained-metadata budget overflow".to_string())?;
-        if self.retained_metadata_bytes > MAX_SCAN_RETAINED_METADATA_BYTES {
-            return Err(format!(
-                "scan exceeded the {MAX_SCAN_RETAINED_METADATA_BYTES}-byte retained metadata budget"
-            ));
-        }
-        Ok(())
-    }
-
-    fn add_parse(&mut self) -> Result<(), String> {
-        self.parses = self
-            .parses
-            .checked_add(1)
-            .ok_or_else(|| "scan parse counter overflow".to_string())?;
-        if self.parses > MAX_SCAN_PARSES {
-            return Err(format!("scan exceeded the {MAX_SCAN_PARSES}-parse budget"));
-        }
-        Ok(())
-    }
-}
-
-fn metadata_is_link_like(metadata: &std::fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
-        metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
-    }
-    #[cfg(not(windows))]
-    false
 }
 
 fn stable_hash(parts: &[String]) -> String {
@@ -265,33 +94,28 @@ fn stable_hash(parts: &[String]) -> String {
     format!("{hash:016x}")
 }
 
-fn read_directory_fingerprint(
-    path: &Path,
-    root: &Path,
-    budget: &mut ScanBudget,
-) -> Result<DirectoryFingerprint, String> {
-    let _canonical = budget.enter_directory(path, root)?;
+fn read_directory_fingerprint(path: &Path) -> Result<DirectoryFingerprint, String> {
     let mut entries = Vec::new();
     for entry in
         std::fs::read_dir(path).map_err(|e| format!("failed to read {}: {}", path.display(), e))?
     {
         let entry = entry.map_err(|e| format!("failed to read {} entry: {}", path.display(), e))?;
-        let metadata = std::fs::symlink_metadata(entry.path())
-            .map_err(|e| format!("failed to inspect {} metadata: {e}", entry.path().display()))?;
-        budget.observe_entry(&metadata)?;
-        let link_like = metadata_is_link_like(&metadata);
-        let file_type = metadata.file_type();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("failed to read {} file type: {}", entry.path().display(), e))?;
+        let metadata = entry.metadata().ok();
         let modified = metadata
-            .modified()
-            .ok()
+            .as_ref()
+            .and_then(|metadata| metadata.modified().ok())
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok());
         entries.push(DirectoryEntryFingerprint {
             path: entry.path(),
             name: entry.file_name().to_string_lossy().to_string(),
-            is_dir: file_type.is_dir() && !link_like,
-            is_file: file_type.is_file() && !link_like,
-            is_symlink: link_like,
-            size: metadata.len(),
+            is_dir: file_type.is_dir(),
+            is_file: file_type.is_file(),
+            is_symlink: file_type.is_symlink(),
+            size: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+            mtime: modified.map(|duration| duration.as_secs()).unwrap_or(0),
             mtime_ns: modified.map(|duration| duration.as_nanos()).unwrap_or(0),
         });
     }
@@ -322,7 +146,33 @@ fn read_directory_fingerprint(
     })
 }
 
-#[cfg(test)]
+fn read_directory_tree_signature(path: &Path, max_depth: usize) -> Result<String, String> {
+    fn collect(
+        path: &Path,
+        depth: usize,
+        max_depth: usize,
+        parts: &mut Vec<String>,
+    ) -> Result<(), String> {
+        let fingerprint = read_directory_fingerprint(path)?;
+        let dir_key = canonical_key(path);
+        parts.push(format!("dir|{}|{}", dir_key, fingerprint.signature));
+        if depth >= max_depth {
+            return Ok(());
+        }
+        for entry in fingerprint.entries {
+            if entry.is_dir && !entry.is_symlink {
+                collect(&entry.path, depth + 1, max_depth, parts)?;
+            }
+        }
+        Ok(())
+    }
+
+    let mut parts = Vec::new();
+    collect(path, 0, max_depth, &mut parts)?;
+    parts.sort();
+    Ok(stable_hash(&parts))
+}
+
 fn path_is_under_directory(path: &Path, directory: &Path) -> bool {
     !paths_equal(path, directory) && path_is_within(path, directory)
 }
@@ -334,6 +184,18 @@ fn saved_engine_name<'a>(names: &'a HashMap<String, String>, id: &str) -> Option
             .find(|(saved_id, _)| paths_equal(Path::new(saved_id), Path::new(id)))
             .map(|(_, name)| name)
     })
+}
+
+fn cached_models_under_directory(
+    dir_key: &str,
+    inventory: &HashMap<String, InventoryModelRecord>,
+) -> Vec<InventoryModelRecord> {
+    let dir = Path::new(dir_key);
+    inventory
+        .values()
+        .filter(|record| path_is_under_directory(Path::new(&record.path), dir))
+        .cloned()
+        .collect()
 }
 
 const MAX_MODEL_SCAN_DEPTH: usize = 32;
@@ -407,10 +269,9 @@ fn push_indexed_engine(
     scan_root_key: &str,
     inventory: &HashMap<String, InventoryEngineRecord>,
     seen_inventory_ids: &mut HashSet<String>,
-    output: (&mut Vec<EngineInfo>, &mut Vec<InventoryEngineRecord>),
-    budget: &mut ScanBudget,
-) -> Result<(), String> {
-    let (engines, engine_records) = output;
+    engines: &mut Vec<EngineInfo>,
+    engine_records: &mut Vec<InventoryEngineRecord>,
+) {
     let cache_key = canonical_key(dir);
     let exe_mtime = file_mtime(exe);
     seen_inventory_ids.insert(cache_key.clone());
@@ -424,11 +285,11 @@ fn push_indexed_engine(
                 scan_root_key.to_string(),
             ));
             engines.push(info);
-            return Ok(());
+            return;
         }
     }
 
-    if let Some(info) = build_engine_info(dir, exe, "", budget.deadline()) {
+    if let Some(info) = build_engine_info(dir, exe, "") {
         engine_records.push(InventoryEngineRecord::from_engine(
             &info,
             exe_mtime,
@@ -436,7 +297,6 @@ fn push_indexed_engine(
         ));
         engines.push(info);
     }
-    budget.check_time()
 }
 
 fn merge_scanned_engine_capabilities(scanned: &mut [EngineInfo], current: &[EngineInfo]) {
@@ -444,10 +304,11 @@ fn merge_scanned_engine_capabilities(scanned: &mut [EngineInfo], current: &[Engi
         if !engine.capabilities.executable_fingerprint.is_empty()
             && !capabilities_match_executable(&engine.exe, &engine.capabilities)
         {
-            invalidate_engine_evidence(
-                engine,
-                "engine executable changed; compatibility probe and qualification required",
-            );
+            engine.version.clear();
+            engine.capabilities = crate::models::EngineCapabilities {
+                error: Some("engine executable changed; compatibility probe required".to_string()),
+                ..crate::models::EngineCapabilities::default()
+            };
         }
 
         let Some(active) = current.iter().find(|candidate| {
@@ -469,35 +330,67 @@ fn merge_scanned_engine_capabilities(scanned: &mut [EngineInfo], current: &[Engi
 #[allow(clippy::too_many_arguments)]
 fn scan_model_directory_incremental(
     dir: &Path,
-    scan_root: &Path,
     scan_root_key: &str,
     depth: usize,
     inventory: &HashMap<String, InventoryModelRecord>,
-    _directory_inventory: &HashMap<String, InventoryDirectoryRecord>,
+    directory_inventory: &HashMap<String, InventoryDirectoryRecord>,
     models: &mut Vec<ModelInfo>,
     seen_display_paths: &mut HashSet<String>,
     seen_inventory_paths: &mut HashSet<String>,
     seen_directory_keys: &mut HashSet<String>,
     inventory_meta: &mut HashMap<usize, (String, String, u64)>,
-    fresh_files: &mut Vec<(usize, crate::deployment_identity::ArtifactLease)>,
+    fresh_files: &mut Vec<(usize, PathBuf)>,
     directory_records: &mut Vec<InventoryDirectoryRecord>,
     errors: &mut Vec<String>,
-    budget: &mut ScanBudget,
 ) -> usize {
     let dir_key = canonical_key(dir);
     seen_directory_keys.insert(dir_key.clone());
 
-    let fingerprint = match read_directory_fingerprint(dir, scan_root, budget) {
+    let fingerprint = match read_directory_fingerprint(dir) {
         Ok(fingerprint) => fingerprint,
         Err(err) => {
             errors.push(err);
             return 0;
         }
     };
-    // Directory signatures are intentionally local. Reusing a complete subtree from a
-    // parent-only signature allowed descendant changes to be missed and required repeated
-    // full-subtree walks. Individual unchanged files are still reused below.
-    let tree_signature = fingerprint.signature.clone();
+    let tree_signature =
+        match read_directory_tree_signature(dir, MAX_MODEL_SCAN_DEPTH.saturating_sub(depth)) {
+            Ok(signature) => signature,
+            Err(error) => {
+                errors.push(error);
+                return 0;
+            }
+        };
+
+    if directory_inventory
+        .get(&dir_key)
+        .map(|record| record.signature == tree_signature)
+        .unwrap_or(false)
+    {
+        let mut reused = 0;
+        for record in cached_models_under_directory(&dir_key, inventory) {
+            let mut model = record.to_model_info();
+            if !seen_display_paths.insert(path_identity_key(Path::new(&model.path))) {
+                continue;
+            }
+            model.is_shard = false;
+            let idx = models.len();
+            seen_inventory_paths.insert(record.path.clone());
+            models.push(model);
+            inventory_meta.insert(
+                idx,
+                (record.path.clone(), record.scan_root.clone(), record.mtime),
+            );
+            reused += 1;
+        }
+        directory_records.push(InventoryDirectoryRecord::new(
+            "model",
+            dir_key,
+            scan_root_key.to_string(),
+            tree_signature,
+        ));
+        return reused;
+    }
 
     let mut file_count = 0;
     for entry in fingerprint.entries {
@@ -513,11 +406,10 @@ fn scan_model_directory_incremental(
             if depth < MAX_MODEL_SCAN_DEPTH {
                 file_count += scan_model_directory_incremental(
                     &entry.path,
-                    scan_root,
                     scan_root_key,
                     depth + 1,
                     inventory,
-                    _directory_inventory,
+                    directory_inventory,
                     models,
                     seen_display_paths,
                     seen_inventory_paths,
@@ -526,7 +418,6 @@ fn scan_model_directory_incremental(
                     fresh_files,
                     directory_records,
                     errors,
-                    budget,
                 );
             } else {
                 errors.push(format!(
@@ -552,121 +443,45 @@ fn scan_model_directory_incremental(
             continue;
         }
 
-        let candidate_metadata = match std::fs::symlink_metadata(&entry.path) {
-            Ok(metadata) if metadata.is_file() && !metadata_is_link_like(&metadata) => metadata,
-            Ok(_) => {
-                errors.push(format!(
-                    "{} became link-like and was skipped",
-                    entry.path.display()
-                ));
-                continue;
-            }
-            Err(error) => {
-                errors.push(format!(
-                    "{} could not be revalidated: {error}",
-                    entry.path.display()
-                ));
-                continue;
-            }
-        };
-        let canonical_entry = match std::fs::canonicalize(&entry.path) {
-            Ok(path) if path_is_within(&path, scan_root) => path,
-            Ok(_) => {
-                errors.push(format!(
-                    "{} escaped the authorized scan root",
-                    entry.path.display()
-                ));
-                continue;
-            }
-            Err(error) => {
-                errors.push(format!(
-                    "{} could not be resolved: {error}",
-                    entry.path.display()
-                ));
-                continue;
-            }
-        };
-        let candidate_mtime = candidate_metadata
-            .modified()
-            .ok()
-            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|duration| duration.as_secs())
-            .unwrap_or(0);
-
-        let file_path = canonical_entry.to_string_lossy().to_string();
+        let file_path = entry.path.to_string_lossy().to_string();
         if !seen_display_paths.insert(path_identity_key(Path::new(&file_path))) {
             continue;
         }
 
-        let cache_key = canonical_key(&canonical_entry);
+        let cache_key = canonical_key(&entry.path);
         seen_inventory_paths.insert(cache_key.clone());
         file_count += 1;
 
         if let Some(record) = inventory.get(&cache_key) {
-            if record.mtime == candidate_mtime && record.size == candidate_metadata.len() {
-                if let Err(error) = budget.add_result() {
-                    errors.push(error);
-                    break;
-                }
+            if record.mtime == entry.mtime && record.size == entry.size {
                 let idx = models.len();
                 let mut model = record.to_model_info();
                 model.name = entry.name.clone();
                 model.path = file_path;
-                model.size = candidate_metadata.len();
+                model.size = entry.size;
                 model.is_shard = false;
                 models.push(model);
-                inventory_meta.insert(idx, (cache_key, scan_root_key.to_string(), candidate_mtime));
+                inventory_meta.insert(idx, (cache_key, scan_root_key.to_string(), entry.mtime));
                 continue;
             }
         }
 
-        if let Err(error) = budget.add_result().and_then(|_| budget.add_parse()) {
-            errors.push(error);
-            break;
-        }
         let idx = models.len();
-        let artifact_lease =
-            match crate::deployment_identity::ArtifactLease::open_beneath_authorized_root_with_deadline(
-                "model",
-                &canonical_entry,
-                scan_root,
-                budget.deadline(),
-            ) {
-                Ok(lease) => Some(lease),
-                Err(error) => {
-                    if let Err(budget_error) = budget.check_time() {
-                        errors.push(budget_error);
-                        break;
-                    }
-                    errors.push(format!(
-                        "{} identity scan failed: {error}",
-                        canonical_entry.display()
-                    ));
-                    None
-                }
-            };
-        let artifact_identity = artifact_lease
-            .as_ref()
-            .map(|lease| lease.identity().clone())
-            .unwrap_or_default();
         models.push(ModelInfo {
             id: uuid::Uuid::new_v4().to_string(),
             name: entry.name,
             path: file_path,
-            size: candidate_metadata.len(),
+            size: entry.size,
             architecture: None,
             context_length: None,
             quant_type: None,
             has_mtp_head: false,
             capabilities: ModelCapabilities::default(),
-            file_type: utils::classify_gguf_file(&canonical_entry).to_string(),
+            file_type: utils::classify_gguf_file(&entry.path).to_string(),
             is_shard: false,
-            artifact_identity,
         });
-        inventory_meta.insert(idx, (cache_key, scan_root_key.to_string(), candidate_mtime));
-        if let Some(lease) = artifact_lease {
-            fresh_files.push((idx, lease));
-        }
+        inventory_meta.insert(idx, (cache_key, scan_root_key.to_string(), entry.mtime));
+        fresh_files.push((idx, entry.path));
     }
 
     directory_records.push(InventoryDirectoryRecord::new(
@@ -720,51 +535,46 @@ struct EngineTreeInspection {
     executables: Vec<(PathBuf, PathBuf)>,
 }
 
-fn inspect_engine_tree(
-    root: &Path,
-    max_depth: usize,
-    budget: &mut ScanBudget,
-) -> Result<EngineTreeInspection, String> {
+fn inspect_engine_tree(root: &Path, max_depth: usize) -> Result<EngineTreeInspection, String> {
     // The marker guarantees that inventory created by the former two-level algorithm is not
     // reused after upgrading to recursive engine discovery.
     let mut signature_parts = vec!["engine-tree-signature-v2".to_string()];
     let mut executables = Vec::new();
     let mut pending = vec![(root.to_path_buf(), 0usize)];
-    let canonical_root = std::fs::canonicalize(root)
-        .map_err(|error| format!("failed to resolve engine root {}: {error}", root.display()))?;
+    let mut visited = HashSet::new();
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
 
     while let Some((dir, depth)) = pending.pop() {
-        let canonical_dir = match budget.enter_directory(&dir, &canonical_root) {
-            Ok(path) => path,
-            Err(error) if depth == 0 => return Err(error),
-            Err(error) => {
-                signature_parts.push(format!("skipped|{}|{error}", path_identity_key(&dir)));
-                continue;
-            }
-        };
+        let canonical_dir = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
+        if !paths_equal(&canonical_dir, &canonical_root)
+            && !path_is_within(&canonical_dir, &canonical_root)
+        {
+            continue;
+        }
         let identity = path_identity_key(&canonical_dir);
+        if !visited.insert(identity.clone()) {
+            continue;
+        }
         signature_parts.push(format!("dir|{identity}"));
 
         let exe = dir.join(ENGINE_EXE_NAME);
-        if let Ok(metadata) = std::fs::symlink_metadata(&exe) {
-            if metadata.is_file() && !metadata_is_link_like(&metadata) {
-                if let Ok(canonical_exe) = std::fs::canonicalize(&exe) {
-                    if path_is_within(&canonical_exe, &canonical_root) {
-                        budget.add_result()?;
-                        let modified_ns = metadata
-                            .modified()
-                            .ok()
-                            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-                            .map(|duration| duration.as_nanos())
-                            .unwrap_or(0);
-                        signature_parts.push(format!(
-                            "exe|{}|{}|{}",
-                            canonical_key(&canonical_exe),
-                            metadata.len(),
-                            modified_ns
-                        ));
-                        executables.push((dir.clone(), exe));
-                    }
+        if let Ok(metadata) = exe.metadata() {
+            if metadata.is_file() {
+                let canonical_exe = std::fs::canonicalize(&exe).unwrap_or_else(|_| exe.clone());
+                if path_is_within(&canonical_exe, &canonical_root) {
+                    let modified_ns = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_nanos())
+                        .unwrap_or(0);
+                    signature_parts.push(format!(
+                        "exe|{}|{}|{}",
+                        canonical_key(&canonical_exe),
+                        metadata.len(),
+                        modified_ns
+                    ));
+                    executables.push((dir.clone(), exe));
                 }
             }
         }
@@ -789,20 +599,14 @@ fn inspect_engine_tree(
                 signature_parts.push(format!("entry-error|{identity}"));
                 continue;
             };
-            let Ok(metadata) = std::fs::symlink_metadata(entry.path()) else {
+            let Ok(file_type) = entry.file_type() else {
                 signature_parts.push(format!("type-error|{}", path_identity_key(&entry.path())));
                 continue;
             };
-            budget.observe_entry(&metadata)?;
-            if metadata.is_dir() && !metadata_is_link_like(&metadata) {
+            if file_type.is_dir() && !file_type.is_symlink() {
                 let child = entry.path();
-                if let Ok(canonical_child) = std::fs::canonicalize(&child) {
-                    if path_is_within(&canonical_child, &canonical_root) {
-                        signature_parts
-                            .push(format!("child|{}", path_identity_key(&canonical_child)));
-                        children.push(child);
-                    }
-                }
+                signature_parts.push(format!("child|{}", engine_path_identity(&child)));
+                children.push(child);
             }
         }
         children.sort();
@@ -817,12 +621,7 @@ fn inspect_engine_tree(
 }
 
 // Engine info construction.
-pub fn build_engine_info(
-    dir: &Path,
-    exe: &Path,
-    _source: &str,
-    deadline: std::time::Instant,
-) -> Option<EngineInfo> {
+pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<EngineInfo> {
     let name = dir
         .file_name()
         .and_then(|s| s.to_str())
@@ -835,10 +634,6 @@ pub fn build_engine_info(
         .unwrap_or_else(|_| dir.to_path_buf())
         .to_string_lossy()
         .to_string();
-    let artifact_identity = crate::deployment_identity::artifact_identity_for_path_with_deadline(
-        "engine", exe, deadline,
-    )
-    .ok()?;
     Some(EngineInfo {
         id,
         name: format!("{} ({})", name, backend),
@@ -848,7 +643,6 @@ pub fn build_engine_info(
         backend,
         custom_name: None,
         capabilities: Default::default(),
-        artifact_identity,
     })
 }
 
@@ -858,9 +652,6 @@ pub async fn scan_models(
     state: tauri::State<'_, AppState>,
     _app: tauri::AppHandle,
 ) -> Result<Vec<ModelInfo>, String> {
-    if paths.len() > MAX_SCAN_ROOTS {
-        return Err(format!("scan exceeds the {MAX_SCAN_ROOTS}-root budget"));
-    }
     let generation = state.model_scan_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let app_dir = utils::get_data_dir();
     let default_path = utils::get_default_models_dir();
@@ -897,16 +688,7 @@ pub async fn scan_models(
         .filter(|path| seen_scan_roots.insert(path_identity_key(path)))
         .collect::<Vec<_>>();
 
-    let work_permit = tokio::time::timeout(
-        GGUF_WORK_ADMISSION_TIMEOUT,
-        GGUF_WORK_SLOTS.clone().acquire_owned(),
-    )
-    .await
-    .map_err(|_| "GGUF inspection capacity is busy; retry later".to_string())?
-    .map_err(|_| "GGUF inspection capacity is unavailable".to_string())?;
-
     let result = tokio::task::spawn_blocking(move || -> Result<Vec<ModelInfo>, Vec<String>> {
-        let _work_permit = work_permit;
         let (inventory, directory_inventory) =
             model_inventory::load_model_scan_indexes().map_err(|err| vec![err])?;
         let mut models: Vec<ModelInfo> = Vec::new();
@@ -916,9 +698,8 @@ pub async fn scan_models(
         let mut scan_root_keys = HashSet::new();
         let mut inventory_meta: HashMap<usize, (String, String, u64)> = HashMap::new();
         let mut errors = Vec::new();
-        let mut fresh_files: Vec<(usize, crate::deployment_identity::ArtifactLease)> = Vec::new();
+        let mut fresh_files: Vec<(usize, PathBuf)> = Vec::new();
         let mut directory_records: Vec<InventoryDirectoryRecord> = Vec::new();
-        let mut budget = ScanBudget::default();
 
         for scan_root in &scan_paths {
             let root_str = scan_root.display().to_string();
@@ -938,7 +719,6 @@ pub async fn scan_models(
             scan_root_keys.insert(scan_root_key.clone());
             let file_count = scan_model_directory_incremental(
                 scan_root,
-                scan_root,
                 &scan_root_key,
                 0,
                 &inventory,
@@ -951,7 +731,6 @@ pub async fn scan_models(
                 &mut fresh_files,
                 &mut directory_records,
                 &mut errors,
-                &mut budget,
             );
 
             if file_count == 0 {
@@ -959,50 +738,31 @@ pub async fn scan_models(
             }
         }
 
-        if errors.iter().any(|error| error.contains("scan exceeded")) {
-            return Err(errors);
-        }
-
         if !fresh_files.is_empty() {
-            budget.check_time().map_err(|error| vec![error])?;
-            let parse_deadline = budget.deadline();
             const MAX_GGUF_PARSE_WORKERS: usize = 4;
             let worker_count = std::thread::available_parallelism()
                 .map(|value| value.get())
                 .unwrap_or(MAX_GGUF_PARSE_WORKERS)
                 .clamp(1, MAX_GGUF_PARSE_WORKERS)
                 .min(fresh_files.len());
+            let chunk_size = fresh_files.len().div_ceil(worker_count);
             type MetadataParseResult = (
                 usize,
                 PathBuf,
                 Result<crate::models::GgufMetadataSummary, String>,
             );
-            let mut metadata_budget_error = None;
             std::thread::scope(|scope| {
                 let (sender, receiver) =
                     std::sync::mpsc::sync_channel::<MetadataParseResult>(worker_count);
-                let mut chunks = (0..worker_count).map(|_| Vec::new()).collect::<Vec<_>>();
-                for (index, item) in fresh_files.drain(..).enumerate() {
-                    chunks[index % worker_count].push(item);
-                }
-                for chunk in chunks {
+                for chunk in fresh_files.chunks(chunk_size) {
+                    let chunk: Vec<_> = chunk.to_vec();
                     let sender = sender.clone();
                     scope.spawn(move || {
-                        for (model_idx, mut lease) in chunk {
-                            let path = lease.canonical_path().to_path_buf();
-                            let result = lease.try_clone_file().and_then(|file| {
-                                utils::parse_gguf_metadata_from_open_file_with_deadline(
-                                    file,
-                                    &path,
-                                    parse_deadline,
-                                )
-                            });
-                            let result = result.and_then(|summary| {
-                                lease
-                                    .verify_unchanged_with_deadline(parse_deadline)
-                                    .map(|_| summary)
-                            });
-                            if sender.send((model_idx, path, result)).is_err() {
+                        for (model_idx, path) in chunk {
+                            if sender
+                                .send((model_idx, path.clone(), utils::parse_gguf_metadata(&path)))
+                                .is_err()
+                            {
                                 break;
                             }
                         }
@@ -1025,18 +785,6 @@ pub async fn scan_models(
                             continue;
                         }
                     };
-                    let retained = match serde_json::to_vec(&summary) {
-                        Ok(retained) => retained,
-                        Err(error) => {
-                            metadata_budget_error =
-                                Some(format!("cannot size retained GGUF metadata: {error}"));
-                            break;
-                        }
-                    };
-                    if let Err(error) = budget.retain_metadata(retained.len()) {
-                        metadata_budget_error = Some(error);
-                        break;
-                    }
                     let model = &mut models[model_idx];
                     model.architecture = summary.architecture;
                     model.context_length = summary.context_length;
@@ -1045,10 +793,6 @@ pub async fn scan_models(
                     model.capabilities = summary.capabilities;
                 }
             });
-            if let Some(error) = metadata_budget_error {
-                return Err(vec![error]);
-            }
-            budget.check_time().map_err(|error| vec![error])?;
         }
 
         mark_sharded_models(&mut models);
@@ -1164,7 +908,6 @@ pub async fn get_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelIn
 pub async fn delete_model_file(
     path: String,
     state: tauri::State<'_, AppState>,
-    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     if std::fs::symlink_metadata(p)
@@ -1181,69 +924,24 @@ pub async fn delete_model_file(
     {
         return Err("只能删除 .gguf 文件".to_string());
     }
-    let work_permit = tokio::time::timeout(
-        GGUF_WORK_ADMISSION_TIMEOUT,
-        GGUF_WORK_SLOTS.clone().acquire_owned(),
-    )
-    .await
-    .map_err(|_| "GGUF deletion capacity is busy; retry later".to_string())?
-    .map_err(|_| "GGUF deletion capacity is unavailable".to_string())?;
-    let deadline = std::time::Instant::now() + MAX_SCAN_DURATION;
-    let lease_path = path.clone();
-    let mut lease = tokio::task::spawn_blocking(move || {
-        crate::deployment_identity::ArtifactLease::open_authorized_for_removal_with_deadline(
-            "model",
-            Path::new(&lease_path),
-            deadline,
-        )
-    })
-    .await
-    .map_err(|error| format!("GGUF deletion worker failed: {error}"))??;
-    let canonical = lease.canonical_path().to_path_buf();
-    let is_known = {
-        let state_models = state.models.lock().unwrap();
-        state_models
-            .iter()
-            .filter_map(|model| std::fs::canonicalize(&model.path).ok())
-            .any(|model_path| paths_equal(&model_path, &canonical))
-    };
+    let canonical = crate::security::require_authorized_model_path(p)?;
+    let state_models = state.models.lock().unwrap();
+    let is_known = state_models
+        .iter()
+        .filter_map(|model| std::fs::canonicalize(&model.path).ok())
+        .any(|model_path| paths_equal(&model_path, &canonical));
+    drop(state_models);
     if !is_known {
         return Err("文件不在已扫描的模型列表中".to_string());
     }
-    let referenced_by = {
-        let instances = state.instances.lock().unwrap();
-        instances_referencing_model(&instances, &canonical)
-    };
+    let referenced_by = instances_referencing_model(&state.instances.lock().unwrap(), &canonical);
     if !referenced_by.is_empty() {
         return Err(format!(
             "模型文件正被实例引用，无法删除: {}",
             referenced_by.join(", ")
         ));
     }
-    let confirmation_path = canonical.display().to_string();
-    let approved = tokio::task::spawn_blocking(move || {
-        app.dialog()
-            .message(format!(
-                "确认永久删除已验证模型？\n\n{confirmation_path}\n\n此操作无法撤销。"
-            ))
-            .title("确认删除模型")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::OkCancelCustom(
-                "永久删除".to_string(),
-                "取消".to_string(),
-            ))
-            .blocking_show()
-    })
-    .await
-    .map_err(|error| format!("model deletion confirmation failed: {error}"))?;
-    if !approved {
-        return Err("Model deletion was not approved".to_string());
-    }
-    tokio::task::spawn_blocking(move || lease.remove_verified_with_deadline(deadline))
-        .await
-        .map_err(|error| format!("GGUF deletion worker failed: {error}"))?
-        .map_err(|error| format!("删除文件失败: {error}"))?;
-    drop(work_permit);
+    std::fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
     let _ = model_inventory::delete_model(&canonical.to_string_lossy());
     let mut models = state.models.lock().unwrap();
     models.retain(|model| {
@@ -1284,32 +982,10 @@ pub async fn open_model_folder(path: String) -> Result<(), String> {
 pub async fn read_gguf_metadata(
     path: String,
 ) -> Result<crate::models::GgufMetadataSummary, String> {
-    let work_permit = tokio::time::timeout(
-        GGUF_WORK_ADMISSION_TIMEOUT,
-        GGUF_WORK_SLOTS.clone().acquire_owned(),
-    )
-    .await
-    .map_err(|_| "GGUF inspection capacity is busy; retry later".to_string())?
-    .map_err(|_| "GGUF inspection capacity is unavailable".to_string())?;
-    let deadline = std::time::Instant::now() + MAX_SCAN_DURATION;
-    tokio::task::spawn_blocking(move || {
-        let _work_permit = work_permit;
-        let mut lease = crate::deployment_identity::ArtifactLease::open_authorized_with_deadline(
-            "model",
-            Path::new(&path),
-            deadline,
-        )?;
-        let file = lease.try_clone_file()?;
-        let result = utils::parse_gguf_metadata_from_open_file_with_deadline(
-            file,
-            lease.canonical_path(),
-            deadline,
-        )?;
-        lease.verify_unchanged_with_deadline(deadline)?;
-        Ok(result)
-    })
-    .await
-    .map_err(|error| format!("GGUF metadata worker failed: {error}"))?
+    let canonical = crate::security::require_authorized_model_path(Path::new(&path))?;
+    tokio::task::spawn_blocking(move || utils::parse_gguf_metadata(&canonical))
+        .await
+        .map_err(|error| format!("GGUF metadata worker failed: {error}"))?
 }
 
 // Engine scanning.
@@ -1317,9 +993,6 @@ pub async fn scan_engines(
     paths: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<EngineInfo>, String> {
-    if paths.len() > MAX_SCAN_ROOTS {
-        return Err(format!("scan exceeds the {MAX_SCAN_ROOTS}-root budget"));
-    }
     let generation = state.engine_scan_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let paths = paths
         .into_iter()
@@ -1343,13 +1016,12 @@ pub async fn scan_engines(
         let mut seen_directory_keys = HashSet::new();
         let mut scan_root_keys = HashSet::new();
         let app_dir = utils::get_data_dir();
-        let mut budget = ScanBudget::default();
 
         let engines_dir = app_dir.join("engines");
         if engines_dir.exists() {
             let scan_root_key = canonical_key(&engines_dir);
             scan_root_keys.insert(scan_root_key.clone());
-            let inspection = inspect_engine_tree(&engines_dir, MAX_ENGINE_SCAN_DEPTH, &mut budget)?;
+            let inspection = inspect_engine_tree(&engines_dir, MAX_ENGINE_SCAN_DEPTH)?;
             if try_reuse_engine_root(
                 &scan_root_key,
                 &inspection.signature,
@@ -1372,9 +1044,9 @@ pub async fn scan_engines(
                             &scan_root_key,
                             &inventory,
                             &mut seen_inventory_ids,
-                            (&mut engines, &mut engine_records),
-                            &mut budget,
-                        )?;
+                            &mut engines,
+                            &mut engine_records,
+                        );
                     }
                 }
             }
@@ -1387,7 +1059,7 @@ pub async fn scan_engines(
             }
             let scan_root_key = canonical_key(&root);
             scan_root_keys.insert(scan_root_key.clone());
-            let inspection = inspect_engine_tree(&root, MAX_ENGINE_SCAN_DEPTH, &mut budget)?;
+            let inspection = inspect_engine_tree(&root, MAX_ENGINE_SCAN_DEPTH)?;
             if try_reuse_engine_root(
                 &scan_root_key,
                 &inspection.signature,
@@ -1410,9 +1082,9 @@ pub async fn scan_engines(
                         &scan_root_key,
                         &inventory,
                         &mut seen_inventory_ids,
-                        (&mut engines, &mut engine_records),
-                        &mut budget,
-                    )?;
+                        &mut engines,
+                        &mut engine_records,
+                    );
                 }
             }
         }
@@ -1476,11 +1148,11 @@ mod incremental_scan_tests {
     #[test]
     fn directory_fingerprint_changes_when_model_file_is_added() {
         let dir = temp_test_dir("fingerprint");
-        let initial = read_directory_fingerprint(&dir, &dir, &mut ScanBudget::default()).unwrap();
+        let initial = read_directory_fingerprint(&dir).unwrap();
 
         std::fs::write(dir.join("model.gguf"), b"test").unwrap();
 
-        let updated = read_directory_fingerprint(&dir, &dir, &mut ScanBudget::default()).unwrap();
+        let updated = read_directory_fingerprint(&dir).unwrap();
         assert_ne!(initial.signature, updated.signature);
 
         let _ = std::fs::remove_dir_all(dir);
@@ -1516,27 +1188,8 @@ mod incremental_scan_tests {
                 version_status: "detected".to_string(),
                 executable_fingerprint: fingerprint,
                 probed_at: Some(100),
-                qualification: crate::models::EngineQualificationReport {
-                    status: "passed".to_string(),
-                    executable_fingerprint:
-                        crate::commands::engine_capabilities::executable_fingerprint(
-                            &exe.to_string_lossy(),
-                        ),
-                    checks: vec![crate::models::EngineQualificationCheck {
-                        name: "inference".to_string(),
-                        status: "passed".to_string(),
-                        duration_ms: 10,
-                        detail: None,
-                    }],
-                    completed_at: Some(100),
-                    ..crate::models::EngineQualificationReport::default()
-                },
                 ..crate::models::EngineCapabilities::default()
             },
-            artifact_identity: crate::deployment_identity::artifact_identity_for_path(
-                "engine", &exe,
-            )
-            .unwrap(),
         };
         let mut scanned = vec![EngineInfo {
             capabilities: crate::models::EngineCapabilities::default(),
@@ -1546,14 +1199,11 @@ mod incremental_scan_tests {
         merge_scanned_engine_capabilities(&mut scanned, &[current.clone()]);
         assert_eq!(scanned[0].version, "version: 100");
         assert_eq!(scanned[0].capabilities.status, "detected");
-        assert_eq!(scanned[0].capabilities.qualification.status, "passed");
 
         std::fs::write(&exe, vec![b'b'; 128 * 1024]).unwrap();
         current.capabilities.probed_at = Some(200);
         merge_scanned_engine_capabilities(&mut scanned, &[current]);
         assert_eq!(scanned[0].capabilities.status, "unprobed");
-        assert_eq!(scanned[0].capabilities.qualification.status, "stale");
-        assert_eq!(scanned[0].capabilities.qualification.checks.len(), 1);
         assert!(scanned[0].version.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -1563,13 +1213,13 @@ mod incremental_scan_tests {
         let dir = temp_test_dir("engine-tree");
         let nested = dir.join("vendor").join("backend").join("bin");
         std::fs::create_dir_all(&nested).unwrap();
-        let initial = inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH, &mut ScanBudget::default())
+        let initial = inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH)
             .unwrap()
             .signature;
 
         std::fs::write(nested.join(ENGINE_EXE_NAME), b"exe").unwrap();
 
-        let updated = inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH, &mut ScanBudget::default())
+        let updated = inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH)
             .unwrap()
             .signature;
         assert_ne!(initial, updated);
@@ -1588,10 +1238,9 @@ mod incremental_scan_tests {
             std::fs::write(engine_dir.join(ENGINE_EXE_NAME), b"exe").unwrap();
         }
 
-        let discovered =
-            inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH, &mut ScanBudget::default())
-                .unwrap()
-                .executables;
+        let discovered = inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH)
+            .unwrap()
+            .executables;
         let discovered_dirs = discovered
             .iter()
             .map(|(engine_dir, _)| engine_path_identity(engine_dir))
@@ -1615,34 +1264,28 @@ mod incremental_scan_tests {
         std::fs::create_dir_all(&too_deep).unwrap();
         std::fs::write(too_deep.join(ENGINE_EXE_NAME), b"exe").unwrap();
 
-        assert!(
-            inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH, &mut ScanBudget::default())
-                .unwrap()
-                .executables
-                .is_empty()
-        );
+        assert!(inspect_engine_tree(&dir, MAX_ENGINE_SCAN_DEPTH)
+            .unwrap()
+            .executables
+            .is_empty());
 
         let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
-    fn local_signature_changes_when_a_deep_model_is_rewritten() {
+    fn tree_signature_changes_when_a_deep_model_is_rewritten() {
         let dir = temp_test_dir("model-tree");
         let nested = dir.join("vendor").join("family").join("quant");
         std::fs::create_dir_all(&nested).unwrap();
         let model = nested.join("model.gguf");
         std::fs::write(&model, b"first-model-payload").unwrap();
-        let initial = read_directory_fingerprint(&nested, &dir, &mut ScanBudget::default())
-            .unwrap()
-            .signature;
+        let initial = read_directory_tree_signature(&dir, MAX_MODEL_SCAN_DEPTH).unwrap();
 
         // Use a different size so the assertion stays valid on filesystems whose
         // modification timestamps are coarser than the test's execution time.
         std::fs::write(&model, b"other-longer-model-payload").unwrap();
 
-        let updated = read_directory_fingerprint(&nested, &dir, &mut ScanBudget::default())
-            .unwrap()
-            .signature;
+        let updated = read_directory_tree_signature(&dir, MAX_MODEL_SCAN_DEPTH).unwrap();
         assert_ne!(initial, updated);
 
         let _ = std::fs::remove_dir_all(dir);
@@ -1651,17 +1294,8 @@ mod incremental_scan_tests {
     #[test]
     fn unchanged_failed_metadata_record_is_reused_without_reparsing() {
         let dir = temp_test_dir("malformed-model-cache");
-        crate::persistence::enforce_private_directory(&dir).unwrap();
-        let malformed = dir.join("malformed.gguf");
-        std::fs::write(&malformed, b"not-a-gguf").unwrap();
-        crate::persistence::enforce_private_file(&malformed).unwrap();
-        // Windows runners can expose the temporary directory through an 8.3 alias while
-        // canonicalizing its children to the long path. Mirror the production scan entry
-        // point by passing the canonical root to the incremental scanner.
-        let canonical_dir = std::fs::canonicalize(&dir).unwrap();
-        let canonical_malformed = std::fs::canonicalize(&malformed).unwrap();
-        assert!(path_is_within(&canonical_malformed, &canonical_dir));
-        let scan_root_key = canonical_key(&canonical_dir);
+        std::fs::write(dir.join("malformed.gguf"), b"not-a-gguf").unwrap();
+        let scan_root_key = canonical_key(&dir);
         let mut models = Vec::new();
         let mut seen_display_paths = HashSet::new();
         let mut seen_inventory_paths = HashSet::new();
@@ -1670,11 +1304,9 @@ mod incremental_scan_tests {
         let mut fresh_files = Vec::new();
         let mut directory_records = Vec::new();
         let mut errors = Vec::new();
-        let mut budget = ScanBudget::default();
 
         scan_model_directory_incremental(
-            &canonical_dir,
-            &canonical_dir,
+            &dir,
             &scan_root_key,
             0,
             &HashMap::new(),
@@ -1687,9 +1319,8 @@ mod incremental_scan_tests {
             &mut fresh_files,
             &mut directory_records,
             &mut errors,
-            &mut budget,
         );
-        assert_eq!(fresh_files.len(), 1, "{errors:?}");
+        assert_eq!(fresh_files.len(), 1);
         let (cache_key, stored_root, mtime) = inventory_meta.get(&0).unwrap().clone();
         let cached =
             InventoryModelRecord::from_model(&models[0], cache_key.clone(), stored_root, mtime);
@@ -1703,10 +1334,8 @@ mod incremental_scan_tests {
         fresh_files.clear();
         directory_records.clear();
         errors.clear();
-        let mut budget = ScanBudget::default();
         scan_model_directory_incremental(
-            &canonical_dir,
-            &canonical_dir,
+            &dir,
             &scan_root_key,
             0,
             &inventory,
@@ -1719,7 +1348,6 @@ mod incremental_scan_tests {
             &mut fresh_files,
             &mut directory_records,
             &mut errors,
-            &mut budget,
         );
 
         assert_eq!(models.len(), 1);
@@ -1835,50 +1463,25 @@ pub async fn rename_engine(
     Ok(())
 }
 
-pub async fn open_engine_folder(
-    engine_id: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    let executable = state
-        .engines
-        .lock()
-        .map_err(|_| "engine state lock is poisoned".to_string())?
-        .iter()
-        .find(|engine| paths_equal(Path::new(&engine.id), Path::new(&engine_id)))
-        .map(|engine| PathBuf::from(&engine.exe))
-        .ok_or_else(|| "未找到受管理的引擎".to_string())?;
-    let (canonical_executable, _) =
-        crate::security::require_authorized_artifact_path("engine", &executable)?;
-    let dir = canonical_executable
-        .parent()
-        .ok_or_else(|| "引擎可执行文件没有父目录".to_string())?;
-    let metadata =
-        std::fs::symlink_metadata(dir).map_err(|error| format!("无法检查引擎目录: {error}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err("引擎目录必须是本地非链接目录".to_string());
-    }
-    #[cfg(windows)]
-    if dir.to_string_lossy().starts_with(r"\\") {
-        return Err("拒绝打开 UNC 或网络引擎目录".to_string());
-    }
+pub async fn open_engine_folder(dir: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
-            .arg(dir)
+            .arg(&dir)
             .spawn()
             .map_err(|e| format!("{}", e))?;
     }
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
-            .arg(dir)
+            .arg(&dir)
             .spawn()
             .map_err(|e| format!("{}", e))?;
     }
     #[cfg(target_os = "linux")]
     {
         std::process::Command::new("xdg-open")
-            .arg(dir)
+            .arg(&dir)
             .spawn()
             .map_err(|e| format!("{}", e))?;
     }
@@ -1936,9 +1539,8 @@ pub mod ipc {
     pub async fn delete_model_file(
         path: String,
         state: tauri::State<'_, AppState>,
-        app: tauri::AppHandle,
     ) -> crate::error::AppResult<()> {
-        super::delete_model_file(path, state, app)
+        super::delete_model_file(path, state)
             .await
             .map_err(crate::error::AppError::from)
     }
@@ -2000,11 +1602,8 @@ pub mod ipc {
     }
 
     #[tauri::command]
-    pub async fn open_engine_folder(
-        engine_id: String,
-        state: tauri::State<'_, AppState>,
-    ) -> crate::error::AppResult<()> {
-        super::open_engine_folder(engine_id, state)
+    pub async fn open_engine_folder(dir: String) -> crate::error::AppResult<()> {
+        super::open_engine_folder(dir)
             .await
             .map_err(crate::error::AppError::from)
     }

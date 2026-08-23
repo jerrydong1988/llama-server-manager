@@ -38,8 +38,6 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
   | 'readGgufMetadata'
   | 'scanEngines'
   | 'probeEngineCapabilities'
-  | 'qualifyEngine'
-  | 'cancelEngineQualification'
   | 'deleteEngine'
   | 'renameEngine'
   | 'openEngineFolder'
@@ -182,14 +180,6 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       }))
       return engine
     },
-    qualifyEngine: async (id, modelId) => {
-      const engine = await invoke<EngineInfo>('qualify_engine', { engineId: id, modelId })
-      set((state) => ({
-        engines: state.engines.map((item) => pathsEqual(item.id, engine.id) ? engine : item),
-      }))
-      return engine
-    },
-    cancelEngineQualification: async (id) => invoke<boolean>('cancel_engine_qualification', { engineId: id }),
     deleteEngine: async (id) => {
       await invoke('delete_engine', { id })
       set((state) => ({ engines: state.engines.filter((engine) => !pathsEqual(engine.id, id)) }))
@@ -214,8 +204,8 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         get().addRuntimeWarning(`Engine rename failed: ${String(error)}`)
       })
     },
-    openEngineFolder: async (engineId) => {
-      await invoke('open_engine_folder', { engineId })
+    openEngineFolder: async (dir) => {
+      await invoke('open_engine_folder', { dir })
     },
   }
 }

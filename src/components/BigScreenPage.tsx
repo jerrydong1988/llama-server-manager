@@ -128,8 +128,7 @@ export default function BigScreenPage() {
   const allDownloads = useMemo(() => Object.values(downloadTasks), [downloadTasks])
   const runningInstances = useMemo(() => instances.filter(instance => instance.status === 'running'), [instances])
   const stoppedCount = instances.filter(instance => instance.status === 'stopped').length
-  const recoveringCount = instances.filter(instance => instance.status === 'recovering').length
-  const errorCount = instances.filter(instance => instance.status === 'error' || instance.status === 'crash_loop').length
+  const errorCount = instances.filter(instance => instance.status === 'error').length
   const runningInstanceIds = useMemo(
     () => runningInstances.map(instance => instance.id),
     [runningInstances],
@@ -364,10 +363,10 @@ export default function BigScreenPage() {
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
         <WallKpi label={labels.serviceStatus} value={statusLabel} detail={statusDetail} tone={statusTone} icon={<CheckCircle2 className="h-8 w-8" />} />
-        <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount} · ${labels.recovering} ${recoveringCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
+        <WallKpi label={labels.runningInstances} value={`${runningInstances.length} / ${instances.length}`} detail={`${labels.stopped} ${stoppedCount}`} tone="blue" icon={<Server className="h-8 w-8" />} />
         <WallKpi label={labels.currentThroughput} value={formatRate(currentTps, fleetThroughput.unit)} detail={`${currentThroughputDetail} · ${labels.peak} ${formatRate(peakTps, fleetThroughput.unit)}`} tone="cyan" icon={<Gauge className="h-8 w-8" />} />
         <WallKpi label={labels.requestPressure} value={pressure.percent == null ? '--' : `${pressure.percent}%`} detail={formatRequestPressureDetail(pressure, labels)} tone={pressure.level === 'high' ? 'amber' : pressure.level === 'medium' ? 'cyan' : pressure.level === 'unknown' ? 'blue' : 'emerald'} icon={<Zap className="h-8 w-8" />} />
-        <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.recovering} ${recoveringCount} · ${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
+        <WallKpi label={labels.alerts} value={serviceStatus.alertCount} detail={`${labels.error} ${errorCount} · ${labels.failed} ${downloadStats.failed}`} tone={serviceStatus.alertCount > 0 ? 'red' : 'emerald'} icon={<AlertTriangle className="h-8 w-8" />} />
       </section>
 
       <section className="grid gap-3 xl:grid-cols-[minmax(0,1.08fr)_minmax(420px,0.92fr)]">
@@ -431,7 +430,7 @@ export default function BigScreenPage() {
         <WallPanel
           title={labels.instanceStatus}
           icon={<Server className="h-5 w-5" />}
-          action={<div className="flex gap-3 text-sm"><span className="text-emerald-700 dark:text-emerald-300">{labels.running} {runningInstances.length}</span><span className="text-amber-700 dark:text-amber-300">{labels.recovering} {recoveringCount}</span><span className="text-slate-500 dark:text-slate-400">{labels.stopped} {stoppedCount}</span><span className="text-red-700 dark:text-red-300">{labels.error} {errorCount}</span></div>}
+          action={<div className="flex gap-3 text-sm"><span className="text-emerald-700 dark:text-emerald-300">{labels.running} {runningInstances.length}</span><span className="text-slate-500 dark:text-slate-400">{labels.stopped} {stoppedCount}</span><span className="text-red-700 dark:text-red-300">{labels.error} {errorCount}</span></div>}
         >
           <div className="space-y-2">
             {instances.length === 0 ? (
@@ -627,19 +626,10 @@ function InstanceWallRow({
 }) {
   const isRunning = instance.status === 'running'
   const latestSession = sessions.find(session => session.instance_id === instance.id)
-  const tone = instance.status === 'recovering' ? 'amber' : instance.status === 'error' || instance.status === 'crash_loop' ? 'red' : isRunning ? 'emerald' : 'slate'
-  const statusText = isRunning
-    ? labels.running
-    : instance.status === 'recovering'
-      ? labels.recovering
-      : instance.status === 'crash_loop'
-        ? labels.crashLoop
-        : instance.status === 'error'
-          ? labels.error
-          : labels.stopped
+  const tone = instance.status === 'error' ? 'red' : isRunning ? 'emerald' : 'slate'
   return (
     <div className="grid min-w-0 grid-cols-[84px_minmax(0,1fr)_112px] items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950/50">
-      <Badge tone={tone}>{statusText}</Badge>
+      <Badge tone={tone}>{isRunning ? labels.running : instance.status === 'error' ? labels.error : labels.stopped}</Badge>
       <div className="min-w-0">
         <div className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100" title={instance.name}>{instance.name}</div>
         <div className="truncate font-mono text-xs text-slate-500">{instance.config.host}:{instance.config.port}</div>

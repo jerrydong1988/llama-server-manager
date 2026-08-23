@@ -34,7 +34,7 @@ $adapters = Get-NetAdapter | ForEach-Object {
 $adapters | ConvertTo-Json -Compress
 "#;
 
-    let output = Command::new(crate::utils::windows_system_utility("powershell.exe")?)
+    let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", ps_script])
         .output()
         .map_err(|e| format!("PowerShell 执行失败: {}", e))?;

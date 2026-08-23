@@ -1,7 +1,7 @@
 const fs = require('node:fs')
 
 const workflow = fs.readFileSync('.github/workflows/build.yml', 'utf8')
-const protectedReleaseWorkflow = fs.readFileSync('.github/workflows/publish-release.yml', 'utf8')
+const manualDownloadsWorkflow = fs.readFileSync('.github/workflows/publish-release-downloads.yml', 'utf8')
 const dependencyReviewWorkflow = fs.readFileSync('.github/workflows/dependency-review.yml', 'utf8')
 const tauriConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'))
 const updaterBuildConfig = JSON.parse(fs.readFileSync('src-tauri/tauri.updater.conf.json', 'utf8'))
@@ -20,6 +20,7 @@ const reviewedActionPins = new Map([
   ['actions/upload-artifact', new Set(['043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'])],
   ['dtolnay/rust-toolchain', new Set(['4360b52568e2003a75bf9bc1d59f33a8e3fc893c'])],
   ['RustSec/audit-check', new Set([rustsecNode24Commit])],
+  ['signpath/github-action-submit-signing-request', new Set(['b9d91eadd323de506c0c81cf0c7fe7438f3360fd'])],
   ['Swatinem/rust-cache', new Set(['6323deb102c322ba6fcbdcafc7e3dddab59af2b6'])],
 ])
 const approvedRustsecAdvisories = [
@@ -42,17 +43,13 @@ const approvedRustsecAdvisories = [
   'RUSTSEC-2025-0100',
 ]
 
-function workflowJobBody(document, name) {
+function jobBody(name) {
   const marker = `  ${name}:`
-  const start = document.indexOf(marker)
+  const start = workflow.indexOf(marker)
   if (start < 0) return ''
-  const rest = document.slice(start + marker.length)
+  const rest = workflow.slice(start + marker.length)
   const next = rest.search(/^  [a-zA-Z0-9_-]+:/m)
   return next < 0 ? rest : rest.slice(0, next)
-}
-
-function jobBody(name) {
-  return workflowJobBody(workflow, name)
 }
 
 const workflowDirectory = '.github/workflows'
@@ -117,17 +114,16 @@ if (!qualityJob.includes('check-npm-supply-chain.cjs --installed-only')) {
 if (!qualityJob.includes('node node_modules/playwright/cli.js install chromium') || qualityJob.includes('npx playwright')) {
   failures.push('quality job may fetch an undeclared Playwright package')
 }
-if (!qualityJob.includes('cargo install cargo-audit --version 0.22.2 --locked')) {
-  failures.push('quality job does not install the exact reviewed cargo-audit release')
+if (!qualityJob.includes(`RustSec/audit-check@${rustsecNode24Commit}`)) {
+  failures.push('quality job does not pin the reviewed Node 24 RustSec action commit')
 }
-if (!qualityJob.includes('cargo audit --file src-tauri/Cargo.lock')) {
+if (!qualityJob.includes('working-directory: src-tauri')) {
   failures.push('RustSec audit is not scoped to the Tauri Cargo.lock')
 }
-if (qualityJob.includes('checks: write') || qualityJob.includes('GITHUB_TOKEN') || /^\s+[a-z-]+:\s+write\s*$/m.test(qualityJob)) {
-  failures.push('pull-request quality job exposes a write-capable token after candidate code execution')
-}
-const configuredAdvisories = [...qualityJob.matchAll(/--ignore\s+(RUSTSEC-\d{4}-\d{4})/g)]
-  .map(match => match[1])
+const rustsecIgnoreMatch = qualityJob.match(/^\s+ignore:\s*([^\r\n]+)$/m)
+const configuredAdvisories = rustsecIgnoreMatch
+  ? rustsecIgnoreMatch[1].split(',').map(value => value.trim()).filter(Boolean)
+  : []
 const uniqueConfiguredAdvisories = [...new Set(configuredAdvisories)].sort()
 const expectedAdvisories = [...approvedRustsecAdvisories].sort()
 if (JSON.stringify(uniqueConfiguredAdvisories) !== JSON.stringify(expectedAdvisories)) {
@@ -151,123 +147,138 @@ if (workflow.includes('::warning::')) {
   failures.push('expected code-signing fallbacks must not emit warning annotations')
 }
 
-if (workflow.includes('environment: release-r2') || workflow.includes('secrets.TAURI_SIGNING_PRIVATE_KEY') || workflow.includes('secrets.R2_')) {
-  failures.push('tag-selected Build workflow must not cross the protected release-secret boundary')
+const finalizeJob = jobBody('finalize-release')
+for (const command of [
+  'gh release view "$tag" --repo "$GITHUB_REPOSITORY"',
+  'gh release edit "$tag" --repo "$GITHUB_REPOSITORY"',
+]) {
+  if (!finalizeJob.includes(command)) {
+    failures.push(`release finalizer must select the repository explicitly: ${command}`)
+  }
 }
-if (workflow.includes('publish-updater:') || workflow.includes('finalize-release:')) {
-  failures.push('tag-selected Build workflow still contains release publication jobs')
+if (!finalizeJob.includes('needs: [build-windows, build-macos, build-linux, build-linux-arm64, publish-updater]')) {
+  failures.push('release finalizer does not wait for the protected updater publication job')
 }
 
-const protectedQualifyJob = workflowJobBody(protectedReleaseWorkflow, 'qualify')
-const protectedStageJob = workflowJobBody(protectedReleaseWorkflow, 'stage')
-const protectedPublishJob = workflowJobBody(protectedReleaseWorkflow, 'publish')
+const updaterJob = jobBody('publish-updater')
 for (const token of [
-  'workflow_run:',
-  'workflows: [Build]',
-  'ref: ${{ github.workflow_sha }}',
-  'SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}',
-  'SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}',
-  'PUBLISHER_SHA: ${{ github.workflow_sha }}',
-  'git rev-list --first-parent',
-  'git tag --points-at "$SOURCE_SHA"',
-  'publisher_sha: ${{ steps.provenance.outputs.publisher_sha }}',
-  'rebuild-windows:',
-  'rebuild-macos:',
-  'rebuild-linux:',
-  'Stage fixed-name inert release inputs at the immutable publisher revision',
-  'protected-release-stage',
   'environment: release-r2',
-  'Verify immutable staged inputs before any secret use',
-  'Install exact integrity-pinned Tauri signer without repository code',
-  'Sign exact rebuilt updater payloads and release envelope',
-  'release counter exceeds the signed updater range',
-  'Publish exact GitHub Release assets without replacement',
-  'Publish immutable R2 objects and atomically advance updater state',
-  '--if-match "$latest_etag"',
-  "--if-none-match '*'",
-  "cache-control 'public,max-age=31536000,immutable'",
-  "cache-control 'no-cache, max-age=0, must-revalidate'",
+  'Validate protected updater secrets',
+  'Install integrity-verified Tauri signer only',
+  'install-tauri-signer.cjs "$RUNNER_TEMP/tauri-signer"',
+  'check-npm-supply-chain.cjs --installed-only --node-modules "$RUNNER_TEMP/tauri-signer/node_modules"',
+  'node "$RUNNER_TEMP/tauri-signer/node_modules/@tauri-apps/cli/tauri.js" signer sign',
+  'Remove temporary Tauri signer',
   'TAURI_SIGNING_PRIVATE_KEY',
   'TAURI_SIGNING_PRIVATE_KEY_PASSWORD',
   'R2_ACCESS_KEY_ID',
   'R2_SECRET_ACCESS_KEY',
+  'R2_ENDPOINT',
+  'R2_BUCKET',
+  'R2_PUBLIC_BASE_URL',
+  'Ensure release notes are present before manifest generation',
+  'Ensure GitHub Release exists',
+  'Upload exact platform packages to GitHub Release',
+  'Expected exactly five GitHub release packages',
+  'Sign exact updater payloads',
+  'prepare-updater-release.mjs --manifest',
+  'Stage manual download packages',
+  '_aarch64-adhoc.dmg',
+  '_amd64.deb',
+  '_arm64.deb',
+  'manual-downloads/$GITHUB_REF_NAME',
+  'downloads/$GITHUB_REF_NAME/',
+  'Publish immutable updater payloads to R2',
+  'Publish updater manifest to R2 last',
+  "cache-control 'public,max-age=31536000,immutable'",
+  "cache-control 'no-cache, max-age=0, must-revalidate'",
+  'cmp updater-publish/latest.json "$remote_manifest"',
 ]) {
-  if (!protectedReleaseWorkflow.includes(token)) failures.push(`protected release publication is missing ${token}`)
+  if (!updaterJob.includes(token)) failures.push(`protected updater publication is missing ${token}`)
 }
-if (!protectedQualifyJob.includes('persist-credentials: false') || !protectedStageJob.includes('persist-credentials: false')) {
-  failures.push('protected qualification or staging checkout persists repository credentials')
+if (updaterJob.includes('npm ci') || updaterJob.includes('npm install') || updaterJob.includes('npm run tauri')) {
+  failures.push('protected updater publication installs or runs the full npm dependency tree')
 }
-if (protectedPublishJob.includes('actions/checkout') || protectedPublishJob.includes('npm ci') || protectedPublishJob.includes('npm install') || protectedPublishJob.includes('npm run')) {
-  failures.push('secret-bearing publisher checks out or executes repository dependency code')
+if (!updaterJob.includes('persist-credentials: false')) {
+  failures.push('protected updater publication persists checkout credentials')
 }
-if (protectedPublishJob.includes('--clobber')) {
-  failures.push('protected publisher can replace mutable GitHub Release assets')
+if (
+  updaterJob.indexOf('Ensure release notes are present before manifest generation')
+  > updaterJob.indexOf('Create signed updater manifest')
+) {
+  failures.push('release notes must exist before the updater manifest is generated')
 }
-for (const job of ['qualify', 'rebuild-windows', 'rebuild-macos', 'rebuild-linux', 'stage']) {
-  if (/\$\{\{\s*secrets\./.test(workflowJobBody(protectedReleaseWorkflow, job))) {
-    failures.push(`${job} crosses the protected release-secret boundary`)
-  }
-}
-if (!/\$\{\{\s*secrets\.TAURI_SIGNING_PRIVATE_KEY\s*\}\}/.test(protectedPublishJob)
-  || !/\$\{\{\s*secrets\.R2_ACCESS_KEY_ID\s*\}\}/.test(protectedPublishJob)) {
-  failures.push('secret-bearing publisher is missing the exact protected signing or R2 credentials')
-}
-if (fs.existsSync('.github/workflows/publish-release-downloads.yml')) {
-  failures.push('legacy direct-dispatch release backfill workflow must remain removed')
+
+for (const token of [
+  'workflow_dispatch:',
+  'environment: release-r2',
+  'RELEASE_TAG: ${{ inputs.tag }}',
+  'gh release download "$RELEASE_TAG"',
+  '_aarch64-adhoc.dmg',
+  '_amd64.deb',
+  '_arm64.deb',
+  'downloads/$RELEASE_TAG/',
+  'R2_PUBLIC_BASE_URL',
+  '?verify=$GITHUB_RUN_ID',
+  'cmp "$file" "$public_file"',
+]) {
+  if (!manualDownloadsWorkflow.includes(token)) failures.push(`manual release download backfill is missing ${token}`)
 }
 
 const windowsJob = jobBody('build-windows')
+if (!windowsJob.includes('actions: read')) failures.push('Windows SignPath job cannot read GitHub Actions build metadata')
 for (const token of [
-  'Build Tauri release and updater payload',
-  'artifacts remain explicitly unsigned',
-  '-unsigned$([IO.Path]::GetExtension($name))',
-  'Generate ephemeral updater packaging key',
-  'Prepare exact Windows updater payload',
-  'updater-windows',
-]) {
-  if (!windowsJob.includes(token)) failures.push(`Windows unsigned tag build is missing ${token}`)
-}
-for (const token of [
+  'Detect SignPath configuration',
+  'Upload unsigned Windows installers for signing',
+  'Submit Windows installers to SignPath',
+  'signpath/github-action-submit-signing-request@b9d91eadd323de506c0c81cf0c7fe7438f3360fd',
   'SIGNPATH_API_TOKEN',
   'SIGNPATH_ORGANIZATION_ID',
   'SIGNPATH_PROJECT_SLUG',
   'SIGNPATH_SIGNING_POLICY_SLUG',
   'SIGNPATH_ARTIFACT_CONFIGURATION_SLUG',
-  'signpath/github-action-submit-signing-request',
+  '-unsigned$([IO.Path]::GetExtension($name))',
+  'Generate ephemeral updater packaging key',
+  'Prepare exact Windows updater payload',
+  'updater-windows',
+]) {
+  if (!windowsJob.includes(token)) failures.push(`Windows optional SignPath flow is missing ${token}`)
+}
+for (const token of [
   'WINDOWS_CERTIFICATE',
   'WINDOWS_CERTIFICATE_PASSWORD',
   'WINDOWS_CERTIFICATE_THUMBPRINT',
   'Import-PfxCertificate',
 ]) {
-  if (windowsJob.includes(token)) failures.push(`Windows tag-selected job still contains signing credential token ${token}`)
+  if (windowsJob.includes(token)) failures.push(`Windows workflow still contains obsolete PFX signing token ${token}`)
 }
-if (/\bsecrets\./.test(windowsJob)) failures.push('Windows tag-selected job must not consume repository or environment secrets')
 
 const macJob = jobBody('build-macos')
 if (!macJob.includes('runs-on: macos-15')) failures.push('macOS runner is not pinned and may migrate without review')
 for (const token of [
+  'Detect Apple signing configuration',
+  'Import Apple signing certificate',
   'Build ad-hoc signed Tauri package',
-  'Build ad-hoc signed Tauri release and updater payload',
-  '-adhoc',
-  'Generate ephemeral updater packaging key',
-  'Prepare exact macOS updater payload',
-  'updater-macos',
-]) {
-  if (!macJob.includes(token)) failures.push(`macOS ad-hoc tag build is missing ${token}`)
-}
-for (const token of [
+  'Build signed and notarized Tauri release',
   'APPLE_CERTIFICATE',
   'APPLE_CERTIFICATE_PASSWORD',
   'APPLE_SIGNING_IDENTITY',
   'APPLE_ID',
   'APPLE_PASSWORD',
   'APPLE_TEAM_ID',
-  'Import Apple signing certificate',
-  'Build signed and notarized Tauri release',
+  '-adhoc',
+  'Generate ephemeral updater packaging key',
+  'Prepare exact macOS updater payload',
+  'updater-macos',
 ]) {
-  if (macJob.includes(token)) failures.push(`macOS tag-selected job still contains signing credential token ${token}`)
+  if (!macJob.includes(token)) failures.push(`macOS optional signing flow is missing ${token}`)
 }
-if (/\bsecrets\./.test(macJob)) failures.push('macOS tag-selected job must not consume repository or environment secrets')
+if (macJob.includes('Validate macOS signing secrets')) {
+  failures.push('macOS workflow still blocks tag releases when Apple signing secrets are unavailable')
+}
+if (!macJob.includes('building an ad-hoc signed macOS package')) {
+  failures.push('macOS workflow does not explain the unsigned release fallback')
+}
 if (!macJob.includes('Prepare exact macOS GitHub release asset') || !macJob.includes('release-macos')) {
   failures.push('macOS build does not stage an isolated GitHub release artifact')
 }
@@ -334,7 +345,7 @@ for (const job of ['build-linux', 'build-linux-arm64']) {
   }
 }
 for (const forbidden of ['AppImage', 'updater-linux-x86_64', 'updater-linux-aarch64']) {
-  if (protectedReleaseWorkflow.includes(forbidden)) {
+  if (updaterJob.includes(forbidden)) {
     failures.push(`protected updater publication still contains suspended Linux updater token ${forbidden}`)
   }
 }
@@ -344,14 +355,11 @@ if (!workflow.includes('npm run tauri build -- --config src-tauri/tauri.updater.
 if (jobBody('build-macos').includes('mapfile')) {
   failures.push('macOS release preparation uses mapfile, which is unavailable in the runner Bash 3.2')
 }
-if (workflowJobBody(protectedReleaseWorkflow, 'rebuild-macos').includes('mapfile')) {
-  failures.push('protected macOS rebuild uses mapfile, which is unavailable in the runner Bash 3.2')
-}
 if (!macJob.includes('Build ad-hoc signed Tauri package and updater smoke payload')) {
   failures.push('macOS pull-request builds do not exercise updater artifact generation')
 }
-if ((macJob.match(/npm run tauri build -- --config src-tauri\/tauri\.updater\.conf\.json/g) || []).length < 2) {
-  failures.push('macOS updater build config is not used by both pull-request and ad-hoc tag paths')
+if ((macJob.match(/npm run tauri build -- --config src-tauri\/tauri\.updater\.conf\.json/g) || []).length < 3) {
+  failures.push('macOS updater build config is not used by pull-request and both release signing paths')
 }
 if (!/- name: Generate ephemeral updater packaging key\r?\n\s+run: \|/.test(macJob)) {
   failures.push('macOS pull-request builds do not generate an isolated updater smoke-test key')

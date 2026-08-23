@@ -1,11 +1,11 @@
 import { expect, test, type Page } from '@playwright/test'
 
-async function openEngineManager(page: Page, scenario?: string) {
+async function openEngineManager(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
     localStorage.setItem('lastTab', 'engine')
   })
-  await page.goto(scenario ? `/?scenario=${scenario}` : '/')
+  await page.goto('/')
   await expect(page.locator('html')).toHaveAttribute(
     'data-tauri-browser-test',
     '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__',
@@ -14,36 +14,6 @@ async function openEngineManager(page: Page, scenario?: string) {
 
 test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
-})
-
-test('engine qualification turns fail-closed evidence into a passing report', async ({ page }) => {
-  await openEngineManager(page, 'engine-qualification')
-
-  await page.getByRole('button', { name: '实例管理', exact: true }).click()
-  await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
-  await expect(page.getByTestId('engine-qualification-notice')).toBeVisible()
-  await expect(page.getByTestId('engine-qualification-notice')).toContainText('实例启动会被安全阻止')
-  await page.getByRole('button', { name: '引擎管理', exact: true }).click()
-
-  const panel = page.getByTestId('engine-qualification-panel')
-  await expect(panel.getByText('未认证', { exact: true })).toBeVisible()
-  await expect(page.getByTestId('qualification-no-report')).toBeVisible()
-  await page.getByTestId('run-engine-qualification').click()
-
-  await expect(panel.getByText('已通过', { exact: true })).toBeVisible()
-  await expect(page.getByTestId('qualification-report')).toBeVisible()
-  await expect(page.getByTestId('qualification-report').getByText(/^通过 ·/)).toHaveCount(5)
-  await expect.poll(() => page.evaluate(() => (
-    window.__TAURI_BROWSER_TEST__.calls
-      .filter(call => call.command === 'qualify_engine')
-      .map(call => call.payload)
-  ))).toEqual([{
-    engineId: 'browser-test-engine',
-    modelId: 'browser-test-model',
-  }])
-
-  await page.getByRole('button', { name: '参数配置', exact: true }).click()
-  await expect(page.getByTestId('engine-qualification-notice')).toBeHidden()
 })
 
 test('engine rename commits after a prior Escape cancellation', async ({ page }) => {
@@ -124,23 +94,6 @@ test('instance start reports an immediate transient state while the backend is p
   await expect(page.getByRole('button', { name: '停止', exact: true }).first()).toBeEnabled()
 })
 
-test('an explicitly infeasible resource plan blocks launch before persistence or process start', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('lang', 'zh-CN')
-    localStorage.setItem('lastTab', 'instances')
-  })
-  await page.goto('/?scenario=resource-plan-infeasible')
-
-  await page.getByRole('button', { name: '启动', exact: true }).first().click()
-  await expect.poll(() => page.evaluate(() => (
-    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'plan_instance_resources').length
-  ))).toBe(1)
-  expect(await page.evaluate(() => (
-    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'start_server').length
-  ))).toBe(0)
-  await expect(page.getByRole('button', { name: '启动', exact: true }).first()).toBeEnabled()
-})
-
 test('a transient updater failure is visible and a manual retry discovers the update', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('lang', 'zh-CN'))
   await page.goto('/?scenario=updater-retry')
@@ -196,17 +149,17 @@ test('paused downloads restore from the backend snapshot and can resume', async 
   ))).toBe(true)
 })
 
-test('Secure Agent workers load from persistence and an authenticated test refreshes their status', async ({ page }) => {
+test('cluster workers load from persistence and a connection test refreshes their status', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
     localStorage.setItem('lastTab', 'cluster')
   })
   await page.goto('/?scenario=cluster-worker')
 
-  await expect(page.getByText('Browser Secure Agent', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Browser Cluster Worker', { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '测试连接' }).click()
   await expect.poll(() => page.evaluate(() => (
-    window.__TAURI_BROWSER_TEST__.calls.some(call => call.command === 'test_worker_agent')
+    window.__TAURI_BROWSER_TEST__.calls.some(call => call.command === 'test_worker')
   ))).toBe(true)
   await expect(page.getByText('在线', { exact: true }).first()).toBeVisible()
 })

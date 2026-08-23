@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 8;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
@@ -91,9 +91,6 @@ pub struct InferenceRequestSummary {
     pub target_instance_id: Option<String>,
     pub http_status: Option<u16>,
     pub error_text: Option<String>,
-    pub queue_time_ms: Option<f64>,
-    pub ttft_ms: Option<f64>,
-    pub cached_prompt_tokens: Option<u64>,
     pub prompt_tokens: Option<u64>,
     pub prompt_time_ms: Option<f64>,
     pub prompt_tps: Option<f64>,
@@ -219,10 +216,6 @@ pub struct ProxyRequestRecord {
     pub target_instance_id: String,
     pub http_status: Option<u16>,
     pub duration_ms: f64,
-    pub queue_time_ms: f64,
-    pub ttft_ms: Option<f64>,
-    pub prompt_tokens: Option<u64>,
-    pub cached_prompt_tokens: Option<u64>,
     pub error_text: Option<String>,
     pub api_format: String,
 }
@@ -307,21 +300,20 @@ pub fn current_time_ms() -> i64 {
 
 fn open_raw_connection() -> Result<Connection, String> {
     let path = telemetry_db_path();
-    crate::persistence::prepare_private_file(&path)
-        .map_err(|e| format!("无法保护遥测数据库: {e}"))?;
-    let conn = Connection::open(&path).map_err(|e| format!("无法打开遥测数据库: {}", e))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("无法创建遥测数据目录: {}", e))?;
+    }
+    let conn = Connection::open(path).map_err(|e| format!("无法打开遥测数据库: {}", e))?;
     conn.busy_timeout(Duration::from_secs(5))
         .map_err(|e| format!("failed to configure telemetry busy timeout: {e}"))?;
     conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(|e| format!("无法启用遥测数据库外键: {}", e))?;
     conn.pragma_update(None, "synchronous", "NORMAL")
         .map_err(|e| format!("failed to configure telemetry synchronous mode: {e}"))?;
-    crate::persistence::protect_sqlite_files(&path)
-        .map_err(|e| format!("无法保护遥测数据库文件: {e}"))?;
     Ok(conn)
 }
 
-pub fn initialize_telemetry_storage() -> Result<(), String> {
+pub(crate) fn initialize_telemetry_storage() -> Result<(), String> {
     if TELEMETRY_SCHEMA_READY.load(Ordering::Acquire) {
         return Ok(());
     }
@@ -332,8 +324,6 @@ pub fn initialize_telemetry_storage() -> Result<(), String> {
     let conn = open_raw_connection()?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("无法启用遥测数据库 WAL: {}", e))?;
-    crate::persistence::protect_sqlite_files(&telemetry_db_path())
-        .map_err(|e| format!("无法保护遥测数据库文件: {e}"))?;
     init_schema(&conn)?;
     TELEMETRY_SCHEMA_READY.store(true, Ordering::Release);
     Ok(())
@@ -413,9 +403,6 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             target_instance_id TEXT,
             http_status INTEGER,
             error_text TEXT,
-            queue_time_ms REAL,
-            ttft_ms REAL,
-            cached_prompt_tokens INTEGER,
             prompt_tokens INTEGER,
             prompt_time_ms REAL,
             prompt_tps REAL,
@@ -488,13 +475,6 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         migrate_inference_request_columns(conn)?;
         migrate_vector_schema(conn)?;
     }
-    if stored_version < 10 {
-        conn.execute(
-            "UPDATE run_sessions SET command_line = '[legacy command redacted]'",
-            [],
-        )
-        .map_err(|e| format!("failed to scrub legacy command telemetry: {e}"))?;
-    }
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_inference_requests_source_completed
             ON inference_requests(source, completed_at DESC)",
@@ -527,9 +507,6 @@ fn migrate_inference_request_columns(conn: &Connection) -> Result<(), String> {
         ("target_instance_id", "TEXT"),
         ("http_status", "INTEGER"),
         ("error_text", "TEXT"),
-        ("queue_time_ms", "REAL"),
-        ("ttft_ms", "REAL"),
-        ("cached_prompt_tokens", "INTEGER"),
     ];
     for (name, definition) in additions {
         if !columns.iter().any(|column| column == name) {
@@ -779,7 +756,7 @@ fn enqueue_telemetry(write: TelemetryWrite) -> Result<(), String> {
     }
 }
 
-pub fn flush_telemetry_writer() -> Result<(), String> {
+pub(crate) fn flush_telemetry_writer() -> Result<(), String> {
     let (sender, receiver) = mpsc::channel();
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let mut flush = TelemetryWrite::Flush(sender);
@@ -816,12 +793,6 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
             return;
         }
     };
-    let startup_before = now_ms() - 14_i64 * 24 * 60 * 60 * 1000;
-    if let Err(error) = prune_connection(&mut conn, startup_before)
-        .and_then(|_| enforce_runtime_telemetry_quota(&conn))
-    {
-        eprintln!("Telemetry writer startup quota maintenance failed: {error}");
-    }
     let mut pending_control = None;
     let mut last_write_error: Option<String> = None;
     loop {
@@ -918,7 +889,6 @@ fn write_telemetry_batch_with_retry(
                     }
                 }
             }
-            enforce_runtime_telemetry_quota(&transaction)?;
             transaction.commit().map_err(|error| {
                 format!("Telemetry writer failed to commit transaction: {error}")
             })?;
@@ -936,33 +906,6 @@ fn write_telemetry_batch_with_retry(
     }
     let error = last_error.unwrap_or_else(|| "Telemetry writer failed without an error".into());
     writes.iter().map(|_| error.clone()).collect::<Vec<_>>()
-}
-
-fn enforce_runtime_telemetry_quota(conn: &Connection) -> Result<(), String> {
-    const TABLE_QUOTAS: &[(&str, &str, i64)] = &[
-        ("inference_requests", "completed_at", 100_000),
-        ("metric_samples", "ts", 500_000),
-        ("slot_snapshots", "ts", 250_000),
-        ("vector_activity_events", "completed_at", 100_000),
-    ];
-    for (table, order_column, max_rows) in TABLE_QUOTAS {
-        let count = conn
-            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-                row.get::<_, i64>(0)
-            })
-            .map_err(|error| format!("failed to count {table} telemetry quota: {error}"))?;
-        let excess = count.saturating_sub(*max_rows);
-        if excess > 0 {
-            conn.execute(
-                &format!(
-                    "DELETE FROM {table} WHERE rowid IN (SELECT rowid FROM {table} ORDER BY {order_column} ASC, rowid ASC LIMIT ?1)"
-                ),
-                params![excess],
-            )
-            .map_err(|error| format!("failed to enforce {table} telemetry quota: {error}"))?;
-        }
-    }
-    Ok(())
 }
 
 fn apply_telemetry_write(conn: &Connection, write: &TelemetryWrite) -> Result<(), String> {
@@ -1177,9 +1120,8 @@ fn insert_proxy_request(
     conn.execute(
         "INSERT INTO inference_requests
             (session_id, task_id, slot_id, completed_at, source, api_format, model,
-             target_instance_id, http_status, error_text, total_time_ms, queue_time_ms,
-             ttft_ms, prompt_tokens, cached_prompt_tokens)
-         VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+             target_instance_id, http_status, error_text, total_time_ms)
+         VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(session_id, task_id) DO UPDATE SET
              completed_at = excluded.completed_at,
              source = excluded.source,
@@ -1188,11 +1130,7 @@ fn insert_proxy_request(
              target_instance_id = excluded.target_instance_id,
              http_status = excluded.http_status,
              error_text = excluded.error_text,
-             total_time_ms = excluded.total_time_ms,
-             queue_time_ms = excluded.queue_time_ms,
-             ttft_ms = excluded.ttft_ms,
-             prompt_tokens = excluded.prompt_tokens,
-             cached_prompt_tokens = excluded.cached_prompt_tokens",
+             total_time_ms = excluded.total_time_ms",
         params![
             session_id,
             record.task_id,
@@ -1203,10 +1141,6 @@ fn insert_proxy_request(
             record.http_status.map(|v| v as i64),
             record.error_text.as_deref(),
             record.duration_ms,
-            record.queue_time_ms,
-            record.ttft_ms,
-            record.prompt_tokens.map(|value| value as i64),
-            record.cached_prompt_tokens.map(|value| value as i64),
         ],
     )
     .map_err(|e| format!("failed to write proxy request telemetry: {}", e))?;
@@ -1545,7 +1479,7 @@ fn prune_connection(conn: &mut Connection, before: i64) -> Result<u32, String> {
     Ok(affected)
 }
 
-pub fn prune_telemetry_storage(retention_days: u32) -> Result<u32, String> {
+pub(crate) fn prune_telemetry_storage(retention_days: u32) -> Result<u32, String> {
     let days = retention_days.clamp(1, 365);
     let before = now_ms() - days as i64 * 24 * 60 * 60 * 1000;
     let (sender, receiver) = mpsc::channel();
@@ -2840,101 +2774,6 @@ pub async fn list_inference_requests(
     .map_err(|e| format!("推理请求查询失败: {}", e))?
 }
 
-fn request_evidence_for_target(
-    conn: &Connection,
-    target_instance_id: &str,
-    since_ms: i64,
-) -> Result<crate::canary::CanaryRequestEvidence, String> {
-    let (mut evidence, prompt_tokens, cached_prompt_tokens) = conn.query_row(
-        "SELECT COUNT(*),
-                COALESCE(SUM(CASE WHEN error_text IS NULL AND http_status >= 200 AND http_status < 400 THEN 1 ELSE 0 END), 0),
-                COALESCE(SUM(CASE WHEN error_text IS NOT NULL OR http_status IS NULL OR http_status < 200 OR http_status >= 400 THEN 1 ELSE 0 END), 0),
-                MAX(completed_at),
-                COALESCE(SUM(prompt_tokens), 0),
-                COALESCE(SUM(cached_prompt_tokens), 0)
-         FROM inference_requests
-         WHERE source = 'proxy' AND target_instance_id = ?1 AND completed_at >= ?2",
-        params![target_instance_id, since_ms],
-        |row| {
-            Ok((
-                crate::canary::CanaryRequestEvidence {
-                    total: row.get::<_, i64>(0)?.max(0) as u64,
-                    succeeded: row.get::<_, i64>(1)?.max(0) as u64,
-                    failed: row.get::<_, i64>(2)?.max(0) as u64,
-                    latest_completed_at: row.get(3)?,
-                    ..Default::default()
-                },
-                row.get::<_, i64>(4)?.max(0) as u64,
-                row.get::<_, i64>(5)?.max(0) as u64,
-            ))
-        },
-    )
-    .map_err(|error| format!("failed to query canary request evidence: {error}"))?;
-
-    let percentile = |column: &str| -> Result<Option<u64>, String> {
-        let count = conn
-            .query_row(
-                &format!(
-                    "SELECT COUNT(*) FROM inference_requests
-                     WHERE source = 'proxy' AND target_instance_id = ?1 AND completed_at >= ?2
-                       AND {column} IS NOT NULL"
-                ),
-                params![target_instance_id, since_ms],
-                |row| row.get::<_, i64>(0),
-            )
-            .map_err(|error| format!("failed to count canary {column} evidence: {error}"))?;
-        if count <= 0 {
-            return Ok(None);
-        }
-        let offset = (((count - 1) as f64) * 0.95).ceil() as i64;
-        conn.query_row(
-            &format!(
-                "SELECT CAST({column} AS INTEGER) FROM inference_requests
-                 WHERE source = 'proxy' AND target_instance_id = ?1 AND completed_at >= ?2
-                   AND {column} IS NOT NULL
-                 ORDER BY {column} ASC LIMIT 1 OFFSET ?3"
-            ),
-            params![target_instance_id, since_ms, offset],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map(|value| value.map(|value| value.max(0) as u64))
-        .map_err(|error| format!("failed to query canary {column} percentile: {error}"))
-    };
-
-    evidence.ttft_p95_ms = percentile("ttft_ms")?;
-    evidence.queue_wait_p95_ms = percentile("queue_time_ms")?;
-    evidence.cache_reuse_basis_points = (prompt_tokens > 0).then_some(
-        ((cached_prompt_tokens.min(prompt_tokens) as f64 / prompt_tokens as f64) * 10_000.0)
-            .round()
-            .clamp(0.0, 10_000.0) as u32,
-    );
-    Ok(evidence)
-}
-
-pub(crate) async fn canary_request_evidence(
-    stable_instance_id: String,
-    candidate_instance_id: String,
-    since_ms: i64,
-) -> Result<
-    (
-        crate::canary::CanaryRequestEvidence,
-        crate::canary::CanaryRequestEvidence,
-    ),
-    String,
-> {
-    flush_telemetry_writer()?;
-    tokio::task::spawn_blocking(move || {
-        let conn = open_connection()?;
-        Ok((
-            request_evidence_for_target(&conn, &stable_instance_id, since_ms)?,
-            request_evidence_for_target(&conn, &candidate_instance_id, since_ms)?,
-        ))
-    })
-    .await
-    .map_err(|error| format!("canary request evidence query failed: {error}"))?
-}
-
 fn inference_requests_for_session(
     conn: &Connection,
     session_id: &str,
@@ -2943,7 +2782,7 @@ fn inference_requests_for_session(
     let mut stmt = conn
         .prepare(
             "SELECT session_id, task_id, slot_id, completed_at, source, api_format, model, target_instance_id, http_status, error_text,
-                    queue_time_ms, ttft_ms, cached_prompt_tokens, prompt_tokens, prompt_time_ms, prompt_tps,
+                    prompt_tokens, prompt_time_ms, prompt_tps,
                     generated_tokens, generation_time_ms, generation_tps, total_tokens, total_time_ms,
                     spec_accept_rate, spec_accepted, spec_generated, spec_gen_time_ms
              FROM inference_requests
@@ -2967,21 +2806,18 @@ fn inference_requests_for_session(
                 target_instance_id: row.get(7)?,
                 http_status: row.get::<_, Option<i64>>(8)?.map(|v| v as u16),
                 error_text: row.get(9)?,
-                queue_time_ms: row.get(10)?,
-                ttft_ms: row.get(11)?,
-                cached_prompt_tokens: row.get::<_, Option<i64>>(12)?.map(|v| v as u64),
-                prompt_tokens: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
-                prompt_time_ms: row.get(14)?,
-                prompt_tps: row.get(15)?,
-                generated_tokens: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
-                generation_time_ms: row.get(17)?,
-                generation_tps: row.get(18)?,
-                total_tokens: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
-                total_time_ms: row.get(20)?,
-                spec_accept_rate: row.get(21)?,
-                spec_accepted: row.get::<_, Option<i64>>(22)?.map(|v| v as u64),
-                spec_generated: row.get::<_, Option<i64>>(23)?.map(|v| v as u64),
-                spec_gen_time_ms: row.get(24)?,
+                prompt_tokens: row.get::<_, Option<i64>>(10)?.map(|v| v as u64),
+                prompt_time_ms: row.get(11)?,
+                prompt_tps: row.get(12)?,
+                generated_tokens: row.get::<_, Option<i64>>(13)?.map(|v| v as u64),
+                generation_time_ms: row.get(14)?,
+                generation_tps: row.get(15)?,
+                total_tokens: row.get::<_, Option<i64>>(16)?.map(|v| v as u64),
+                total_time_ms: row.get(17)?,
+                spec_accept_rate: row.get(18)?,
+                spec_accepted: row.get::<_, Option<i64>>(19)?.map(|v| v as u64),
+                spec_generated: row.get::<_, Option<i64>>(20)?.map(|v| v as u64),
+                spec_gen_time_ms: row.get(21)?,
             })
         })
         .map_err(|e| format!("无法查询推理请求: {}", e))?;
@@ -3241,86 +3077,6 @@ mod tests {
             session_workload_from_connection(&conn, "missing").unwrap(),
             None
         );
-    }
-
-    #[test]
-    fn canary_evidence_is_target_scoped_time_bounded_and_classifies_failures() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_schema(&conn).unwrap();
-        for (session_id, instance_id) in [
-            ("stable-session", "stable"),
-            ("candidate-session", "candidate"),
-        ] {
-            insert_run_session(
-                &conn,
-                &RunSessionStart {
-                    id: session_id,
-                    instance_id,
-                    instance_name: instance_id,
-                    model_path: "model.gguf",
-                    engine_id: "engine",
-                    backend: "cpu",
-                    config_hash: "hash",
-                    command_line: "llama-server",
-                    workload: ModelWorkload::Inference,
-                    started_at: 0,
-                },
-            )
-            .unwrap();
-        }
-        for (session, task, completed, target, status, error) in [
-            ("stable-session", 1, 90, "stable", Some(200), None),
-            ("stable-session", 2, 110, "stable", Some(200), None),
-            (
-                "stable-session",
-                3,
-                120,
-                "stable",
-                Some(500),
-                Some("upstream"),
-            ),
-            ("candidate-session", 4, 130, "candidate", Some(204), None),
-            (
-                "candidate-session",
-                5,
-                140,
-                "candidate",
-                None,
-                Some("transport"),
-            ),
-        ] {
-            conn.execute(
-                "INSERT INTO inference_requests
-                 (session_id, task_id, slot_id, completed_at, source, target_instance_id, http_status, error_text)
-                 VALUES (?1, ?2, 0, ?3, 'proxy', ?4, ?5, ?6)",
-                params![session, task, completed, target, status, error],
-            )
-            .unwrap();
-        }
-        conn.execute(
-            "UPDATE inference_requests
-             SET ttft_ms = task_id * 1000, queue_time_ms = task_id * 10,
-                 prompt_tokens = 100, cached_prompt_tokens = CASE WHEN target_instance_id = 'stable' THEN 50 ELSE 20 END
-             WHERE completed_at >= 100",
-            [],
-        )
-        .unwrap();
-
-        let stable = request_evidence_for_target(&conn, "stable", 100).unwrap();
-        let candidate = request_evidence_for_target(&conn, "candidate", 100).unwrap();
-        assert_eq!((stable.total, stable.succeeded, stable.failed), (2, 1, 1));
-        assert_eq!(stable.latest_completed_at, Some(120));
-        assert_eq!(stable.ttft_p95_ms, Some(3_000));
-        assert_eq!(stable.queue_wait_p95_ms, Some(30));
-        assert_eq!(stable.cache_reuse_basis_points, Some(5_000));
-        assert_eq!(
-            (candidate.total, candidate.succeeded, candidate.failed),
-            (2, 1, 1)
-        );
-        assert_eq!(candidate.latest_completed_at, Some(140));
-        assert_eq!(candidate.ttft_p95_ms, Some(5_000));
-        assert_eq!(candidate.queue_wait_p95_ms, Some(50));
-        assert_eq!(candidate.cache_reuse_basis_points, Some(2_000));
     }
 
     #[test]
@@ -4196,11 +3952,6 @@ mod tests {
         assert!(column_names(&conn, "inference_requests")
             .iter()
             .any(|column| column == "api_format"));
-        for column in ["queue_time_ms", "ttft_ms", "cached_prompt_tokens"] {
-            assert!(column_names(&conn, "inference_requests")
-                .iter()
-                .any(|existing| existing == column));
-        }
         for index_name in [
             "idx_vector_activity_session_completed",
             "idx_vector_activity_session_source_completed",
@@ -4293,10 +4044,6 @@ mod tests {
                 target_instance_id: "anthropic-instance".into(),
                 http_status: Some(200),
                 duration_ms: 12.5,
-                queue_time_ms: 2.5,
-                ttft_ms: Some(8.0),
-                prompt_tokens: Some(32),
-                cached_prompt_tokens: Some(16),
                 error_text: None,
                 api_format: "anthropic".into(),
             },
@@ -4308,9 +4055,6 @@ mod tests {
         assert_eq!(requests[0].source, "proxy");
         assert_eq!(requests[0].api_format.as_deref(), Some("anthropic"));
         assert_eq!(requests[0].model.as_deref(), Some("local-claude"));
-        assert_eq!(requests[0].queue_time_ms, Some(2.5));
-        assert_eq!(requests[0].ttft_ms, Some(8.0));
-        assert_eq!(requests[0].cached_prompt_tokens, Some(16));
     }
 
     #[test]

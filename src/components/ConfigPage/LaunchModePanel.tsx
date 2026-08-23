@@ -59,7 +59,7 @@ export function LaunchModePanel({ config, engine, labels, overrideKeys, inheritK
             <textarea
               value={config.manual_command}
               onChange={event => set('manual_command', event.target.value)}
-              placeholder={config.manual_command_configured ? 'Configured · enter a complete replacement' : labels.manualCommandPlaceholder}
+              placeholder={labels.manualCommandPlaceholder}
               spellCheck={false}
               className="min-h-40 w-full resize-y rounded-xl border border-slate-200 bg-white px-4 py-3 font-mono text-sm leading-6 text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
             />

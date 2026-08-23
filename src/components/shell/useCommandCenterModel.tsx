@@ -21,7 +21,7 @@ export function useCommandCenterModel() {
   const productIssues = useMemo<ProductIssue[]>(() => {
     const issues: ProductIssue[] = []
     const unhealthy = instances.filter(instance => instance.status === 'running' && instance.healthCheck === 'fail').length
-    const errored = instances.filter(instance => instance.status === 'error' || instance.status === 'crash_loop').length
+    const errored = instances.filter(instance => instance.status === 'error').length
     const modelCount = models.filter(model => !model.is_shard && model.file_type === 'model').length
     const failedDownloads = Object.values(downloadTasks).filter(task => task.status === 'error').length
 
@@ -54,7 +54,7 @@ export function useCommandCenterModel() {
       { id: 'logs', title: actionsCopy.logsTitle, description: actionsCopy.logsDescription, group: actionsCopy.groupDiagnostics, icon: <Terminal className="h-4 w-4" />, action: go('logs') },
       { id: 'refresh', title: actionsCopy.refreshTitle, description: actionsCopy.refreshDescription, group: actionsCopy.groupMaintenance, icon: <RefreshCw className="h-4 w-4" />, action: () => void loadInitialData() },
     ]
-    const firstStopped = instances.find(instance => instance.status === 'stopped' && !instanceLifecycle[instance.id])
+    const firstStopped = instances.find(instance => instance.status !== 'running' && !instanceLifecycle[instance.id])
     const firstRunning = instances.find(instance => instance.status === 'running' && !instanceLifecycle[instance.id])
     if (firstStopped) actions.push({ id: 'start-first', title: `${actionsCopy.startPrefix} ${firstStopped.name}`, description: actionsCopy.startDescription, group: actionsCopy.groupRuntime, icon: <Play className="h-4 w-4" />, action: () => void startInstance(firstStopped.id).catch(() => {}) })
     if (firstRunning) actions.push({ id: 'stop-first', title: `${actionsCopy.stopPrefix} ${firstRunning.name}`, description: actionsCopy.stopDescription, group: actionsCopy.groupRuntime, icon: <Square className="h-4 w-4" />, action: () => void stopInstance(firstRunning.id).catch(() => {}) })

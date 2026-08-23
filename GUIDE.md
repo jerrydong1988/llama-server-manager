@@ -26,8 +26,7 @@ Visit the [documentation site](https://docs.cnzone.net/docs) for the latest onli
 10. [性能监控 / Performance Monitoring](#性能监控-performance-monitoring)
 11. [监控大屏 / Monitoring Wall](#监控大屏-monitoring-wall)
 12. [服务器日志 / Server Logs](#服务器日志-server-logs)
-13. [Headless CLI / Command-line Automation](#headless-cli-command-line-automation)
-14. [常见问题 / FAQ](#常见问题-faq)
+13. [常见问题 / FAQ](#常见问题-faq)
 
 ---
 
@@ -248,38 +247,18 @@ An instance combines a model, engine, port, and independent configuration into a
 ### 运行控制 / Runtime Controls
 
 - 启动前会生成命令、检查端口和必要路径。
-- 状态可能为已停止、启动中、运行中、正在自愈、错误或崩溃循环。
+- 状态依次可能为已停止、启动中、运行中或错误。
 - “测试连接”使用实例鉴权设置检查健康或模型接口。
 - “打开 API 页面”会把通配监听地址转换为本机可访问地址。
 - 命令预览可复制完整启动参数，便于复现问题。
 - 可重命名、排序或删除实例；删除前会原生确认。
 
 - Startup generates the command and validates ports and required paths.
-- Status may be stopped, starting, running, recovering, error, or Crash Loop.
+- Status may be stopped, starting, running, or error.
 - Test Connection checks health or model endpoints using the instance authentication settings.
 - Open API maps wildcard bind hosts to a local browser address.
 - Command Preview copies the complete launch command for diagnosis.
 - Instances can be renamed, reordered, or deleted with confirmation.
-
-### 故障自愈与崩溃循环 / Failure Recovery and Crash Loop
-
-在实例详情中启用“故障自愈”后，启动失败或意外退出会按 2 秒、10 秒、30 秒退避自动重启，最多三次。第三次自动尝试仍失败时进入“崩溃循环”，不会继续自动启动。自动启动不会绕过正在处理的故障或崩溃循环。
-
-The Failure Recovery switch retries a startup failure or unexpected exit after 2, 10, and 30 seconds, with at most three automatic attempts. A failed third attempt enters Crash Loop and stops automatic starts. Auto Start never bypasses an active incident or Crash Loop.
-
-- “取消自愈”执行预期停止并取消计划中的重试。
-- “立即重试”重置自动尝试预算，但保留当前事件的起始故障证据。
-- 起始故障与最新故障会分别显示；完整进程输出仍保留在服务器日志中。
-- 实例连续运行至少五分钟后，之后发生的故障才使用新的重试预算。
-
-- **Cancel Recovery** performs an expected stop and cancels a scheduled retry.
-- **Retry Now** resets the automatic-attempt budget while preserving the incident's originating failure.
-- The originating and latest failures remain separate; complete process output stays in Server Logs.
-- A later failure receives a fresh budget only after at least five minutes of continuous runtime.
-
-完整策略、持久化和排障说明见[实例故障自愈文档](docs/INSTANCE_RECOVERY.md)。
-
-See [Instance Recovery and Crash Loop Protection](docs/INSTANCE_RECOVERY.md) for the complete policy, persistence, and troubleshooting contract.
 
 ![启动、健康检查、性能和日志诊断流程 / Start, health, performance, and log diagnosis](public/docs/guide/flow-02-start-and-diagnose.png)
 
@@ -311,20 +290,6 @@ Configuration is stored per instance and covers structured options for models, g
 4. Review tooltips and the active-parameter summary.
 5. Save and address red, amber, or blue validation findings.
 
-### 配置修订与回滚 / Configuration Revisions and Rollback
-
-右侧“配置修订”面板按实例显示不可变历史和脱敏字段差异。部署配置发生实际变化时才创建修订；仅重命名实例不会创建修订。可把一个完整性有效的修订标记为“已知良好”，该标记只用于人工识别，不会自动发布或回滚。
-
-The Configuration Revisions panel shows immutable per-instance history and redacted field changes. A revision is created only for an effective deployment-configuration change; renaming an instance alone does not create one. One integrity-valid revision may be marked known good for operator reference, without automatic promotion or rollback.
-
-回滚前必须停止实例、取消故障自愈并等待启动或保存操作结束。确认后，管理器保留当前显示名称，先原子持久化恢复后的配置，再刷新界面并创建新的“回滚生成”修订；不会自动重启实例。遇到配置已变化提示时先刷新历史，完整性失败的修订不能回滚。
-
-Before rollback, stop the instance, cancel recovery, and wait for active start or save work to finish. Confirmation preserves the current display name, durably commits the restored configuration before refreshing the UI, and creates a new rollback revision; it does not restart the instance. Refresh after a stale-configuration warning, and never restore a revision that fails integrity validation.
-
-历史最多保留 50 个修订，同时保护当前与已知良好修订。历史快照不会发送到前端，但本机 `instances.json` 与备份仍包含精确恢复所需的敏感配置，应按敏感文件保护。完整操作与排障说明见[配置修订与回滚文档](docs/CONFIG_REVISIONS.md)。
-
-History retains at most 50 revisions while protecting the current and known-good entries. Raw snapshots never reach the frontend, but local configuration and backup files still contain sensitive data required for exact recovery. See [Configuration Revisions and Rollback](docs/CONFIG_REVISIONS.md) for the full privacy, safety, and troubleshooting contract.
-
 ### 关键配置 / Important Settings
 
 - 上下文越大，KV 缓存占用越高；显存紧张时优先降低上下文、批大小或 GPU 层数。
@@ -345,27 +310,33 @@ History retains at most 50 revisions while protecting the current and known-good
 
 ## 集群管理 / Cluster Management
 
-集群管理用于登记经过 TLS 身份固定的 Secure Worker Agent，检查状态和设备清单，并查看带 SHA-256 链的审计记录。未经认证的手动、本机、SSH 和局域网发现路径已移除。
+集群管理用于发现和维护 llama.cpp RPC Worker，并把 Worker 地址写入实例的 RPC 配置。支持局域网发现、TCP 扫描、本机启动和 SSH 远程启动。
 
-Cluster Management enrolls TLS identity-pinned Secure Worker Agents, checks status and device inventory, and reads SHA-256-chained audit records. Unauthenticated manual, local, SSH, and LAN-discovery paths have been removed.
+Cluster Management discovers and maintains llama.cpp RPC workers and feeds worker addresses into instance RPC configuration. It supports LAN discovery, TCP scanning, local launch, and SSH launch.
 
 ![Worker 发现、网络信息和启动方式 / Worker discovery, network details, and launch methods](public/docs/guide/07-cluster-manager.png)
 
 ### 使用步骤 / Workflow
 
-1. 在 Worker 主机上初始化 Agent，并通过受信通道把证书和文件令牌复制到管理器。
-2. 经系统原生确认后登记 Agent，然后测试 TLS 身份、令牌、设备和在线状态。
-3. 查看审计记录，并在轮换凭据或移除 Agent 时使用安全清理。
-4. 当前上游 `rpc-server` 没有已认证或操作系统私有的子进程通道，因此 Agent 计算启动会安全拒绝，且不会创建未认证的 loopback RPC 端点。
+1. 扫描局域网 Worker，或手动添加主机和端口。
+2. 测试连接并检查设备、内存和在线状态。
+3. 本机 Worker 可选择引擎后启动；远程 Worker 需填写 SSH 连接与远端可执行路径。
+4. 在实例参数配置中选择 Worker，生成 `rpc_servers`。
+5. 启动实例后从日志确认 RPC 设备已连接。
 
-1. Initialize the Agent on the Worker host, then copy its certificate and file-backed token to the manager through a trusted channel.
-2. Approve enrollment in the native system dialog, then test the pinned TLS identity, token, device inventory, and online status.
-3. Review audit records and use safe cleanup when rotating credentials or removing an Agent.
-4. The current upstream `rpc-server` has no authenticated or OS-private child transport, so Agent compute startup fails closed and does not create an unauthenticated loopback RPC endpoint.
+1. Scan the LAN or manually add a worker host and port.
+2. Test connectivity and review device, memory, and online state.
+3. Launch a local worker from an engine, or provide SSH and remote executable details.
+4. Select workers in instance configuration to generate `rpc_servers`.
+5. Confirm RPC devices in logs after starting the instance.
 
-控制和隧道端点支持 IPv4、主机名和 IPv6。IPv6 需使用独立主机字段和端口字段；TLS 服务器名必须与证书 SAN 匹配。
+USB4 适配器信息用于识别高速直连网络，但不会替代操作系统网络配置。扫描不到 Worker 时检查同网段、防火墙、RPC 端口和远端进程。
 
-Control and tunnel endpoints support IPv4, hostnames, and IPv6. IPv6 uses separate host and port fields, and the TLS server name must match the certificate SAN.
+USB4 adapter details help identify high-speed direct links but do not replace OS network configuration. Check subnet, firewall, RPC port, and remote process when discovery fails.
+
+Worker 地址支持 IPv4、主机名和 IPv6。手动填写带端口的 IPv6 地址时使用 `[::1]:50052` 形式，避免与 IPv6 地址自身的冒号混淆。
+
+Worker addresses support IPv4, hostnames, and IPv6. When entering an IPv6 address with a port manually, use `[::1]:50052` so the port is unambiguous.
 
 ---
 
@@ -408,16 +379,6 @@ Instance Routing exposes native OpenAI and Anthropic formats on one listener, ro
 | Anthropic 输入 Token 计数 / Input token counting | `POST /v1/messages/count_tokens` |
 | 上下文与槽位发现 / Context and slots | `GET /props?model=...`、`GET /slots?model=...` |
 | 存活、就绪与指标 / Liveness, readiness, metrics | `GET /live`、`GET /ready`、`GET /metrics` |
-
-### 运营指标与告警 / Operational Metrics and Alerts
-
-路由页使用同一个 5 分钟实时窗口显示首响应 P95、当前排队与排队 P95、已观测提示缓存复用、错误率和全局并发饱和度。`—` 表示上游没有提供可用证据，不代表 0。告警给出检查顺序，但不会自动提高并发、改变金丝雀流量、提升候选版本或回滚部署。
-
-The routing page uses one five-minute live window for TTFT P95, queue depth and queue P95, observed prompt-cache reuse, error rate, and global concurrency saturation. `—` means the upstream supplied no usable evidence, not zero. Alerts provide an investigation order but never raise concurrency, change canary traffic, promote, or roll back automatically.
-
-`GET /metrics` 提供相同定义的 Prometheus counter、gauge 和 histogram。TTFT 从代理鉴权/准入开始，到第一个非空下游响应正文块可发送时结束；排队时间单独计量。缓存比例只使用上游明确返回的数值字段，本功能不会保留提示词、输出、请求体或 API Key。完整阈值、兼容性与调查顺序见[运营指标与告警](docs/OPERATIONAL_METRICS.md)。
-
-`GET /metrics` exposes Prometheus counters, gauges, and histograms with the same definitions. TTFT begins at authenticated proxy admission and ends when the first non-empty downstream body chunk is ready; queue wait is measured separately. Cache ratios use only explicit numeric upstream fields, and this feature retains no prompts, outputs, request bodies, or API keys. See [Operational Metrics and Alerts](docs/OPERATIONAL_METRICS.md) for thresholds, compatibility, and the investigation order.
 
 Anthropic 路径支持文本、图片、thinking、工具调用、工具结果和流式事件。工具调用要求目标实例启用 `--jinja`。Claude Code 应把 `ANTHROPIC_BASE_URL` 指向统一路由根地址（不要附加 `/v1`），并将 `ANTHROPIC_MODEL` 设为已配置的公开模型名；配置代理密钥时同时设置 `ANTHROPIC_AUTH_TOKEN`。
 
@@ -552,37 +513,6 @@ Server Logs collects instance stdout and stderr, startup commands, PIDs, health 
 常见信号：`address already in use` 表示端口冲突；模型文件打开失败表示路径或权限问题；GPU 分配失败通常需要降低 GPU 层数、上下文或批大小；健康接口暂时返回错误但模型接口可用时，连接测试会使用兼容回退判断。
 
 Common signals include port conflicts, model path or permission errors, GPU allocation failures, and transient health endpoint errors. Connection tests can use compatible model endpoint fallback when appropriate.
-
----
-
-## Headless CLI / Command-line Automation
-
-安装包同时提供 `lsm` 命令行工具，用于在不打开桌面窗口时查询运行时、列出或启停已配置实例，以及查询或启停统一路由。Windows 的 `lsm.exe` 位于应用安装目录且安装器不会自动修改 `PATH`；macOS 可使用 `/Applications/LlamaServerManager.app/Contents/MacOS/lsm`，Linux DEB 安装到 `/usr/bin/lsm`。
-
-The package includes an `lsm` command-line tool for runtime status, configured instance lifecycle, and routing lifecycle without opening the desktop window. On Windows, `lsm.exe` is in the application directory and the installer does not change `PATH`; use `/Applications/LlamaServerManager.app/Contents/MacOS/lsm` on macOS and `/usr/bin/lsm` after a Linux DEB installation.
-
-常用命令 / Common commands:
-
-```text
-lsm --output json status
-lsm --output json instance list
-lsm --output json instance start <INSTANCE>
-lsm --output json instance stop <INSTANCE>
-lsm --output json proxy start
-lsm --output json proxy stop
-```
-
-CLI 复用桌面端已保存的模型、引擎资格证据、配置修订和部署前置检查；它不会绕过过期配置、资源约束或鉴权安全门。请先在界面中完成资源扫描、引擎认证、实例配置与保存，再自动化生命周期。启动后的工作负载会在 CLI 退出后保持运行；最后一个工作负载停止时释放 CLI 驻留，而登录恢复仍由界面的“独立后台运行时”设置控制。
-
-The CLI reuses saved models, engine qualification evidence, configuration revisions, and deployment preflight. It does not bypass stale configuration, resource feasibility, or authentication gates. Configure and save resources in the UI before automating lifecycle. Started workloads remain alive after the CLI exits; CLI residency is released after the final workload stops, while login recovery remains controlled by the independent-runtime setting.
-
-`--output json` 对成功和失败都输出单个 schema v1 JSON 文档。脚本应同时检查 `ok` 和进程退出码：`0` 成功、`2` 参数错误、`3` 未找到、`4` 前置条件或冲突、`5` 暂时不可用、`6` 安全拒绝，其他内部故障为 `1`。实例输出不包含模型路径、启动参数、API Key、凭据文件或运行时控制 token；CLI 也不接受 token 参数。
-
-With `--output json`, both success and failure produce one schema-v1 JSON document. Automation should inspect both `ok` and the process exit code: `0` success, `2` usage, `3` not found, `4` precondition or conflict, `5` unavailable, `6` security rejection, and `1` for other internal failures. Instance output excludes model paths, launch arguments, API keys, credential files, and the runtime control token; the CLI has no token argument.
-
-完整命令、JSON 契约、退出码与 PowerShell / shell 示例见 [`docs/HEADLESS_CLI.md`](docs/HEADLESS_CLI.md)。
-
-See [`docs/HEADLESS_CLI.md`](docs/HEADLESS_CLI.md) for the full command, JSON, exit-code, PowerShell, and shell contracts.
 
 ---
 

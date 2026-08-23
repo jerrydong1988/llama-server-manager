@@ -6,8 +6,7 @@ mod transport;
 use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, CANARY_ROUTING_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY,
-    DEPLOYMENT_REVISION_CAPABILITY, INSTANCE_RECOVERY_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
+    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
     RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
@@ -31,10 +30,7 @@ const MAX_RUNTIME_SERVICE_LOG_BYTES: u64 = 4 * 1024 * 1024;
 fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
     [
         BACKGROUND_DETACH_CAPABILITY,
-        CANARY_ROUTING_CAPABILITY,
         CONFIG_SYNC_ACK_CAPABILITY,
-        DEPLOYMENT_REVISION_CAPABILITY,
-        INSTANCE_RECOVERY_CAPABILITY,
         RUNTIME_ERROR_ACK_CAPABILITY,
     ]
     .iter()
@@ -101,11 +97,9 @@ pub fn persisted_managed_instance_ids() -> std::collections::HashSet<String> {
 
 pub async fn start_instance(
     spec: RuntimeLaunchSpec,
-    manual_recovery: bool,
 ) -> Result<crate::models::RunningInstance, String> {
     match call_recovering(RuntimeCommand::StartInstance {
         spec: Box::new(spec),
-        manual_recovery,
     })
     .await?
     {
@@ -130,14 +124,14 @@ pub async fn clear_last_error() -> Result<(), String> {
 
 pub async fn start_proxy() -> Result<crate::models::ProxyStatus, String> {
     match call_recovering(RuntimeCommand::StartProxy).await? {
-        RuntimeReply::ProxyStatus(status) => Ok(*status),
+        RuntimeReply::ProxyStatus(status) => Ok(status),
         _ => Err("runtime service returned an unexpected proxy response".into()),
     }
 }
 
 pub async fn stop_proxy() -> Result<crate::models::ProxyStatus, String> {
     match call_recovering(RuntimeCommand::StopProxy).await? {
-        RuntimeReply::ProxyStatus(status) => Ok(*status),
+        RuntimeReply::ProxyStatus(status) => Ok(status),
         _ => Err("runtime service returned an unexpected proxy response".into()),
     }
 }
@@ -457,66 +451,6 @@ async fn ping_with_token(token: String) -> bool {
     )
 }
 
-#[cfg(windows)]
-struct StandardHandleInheritanceGuard {
-    handles: Vec<(windows_sys::Win32::Foundation::HANDLE, u32)>,
-}
-
-#[cfg(windows)]
-impl StandardHandleInheritanceGuard {
-    fn acquire() -> Result<Self, String> {
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Foundation::{
-            GetHandleInformation, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
-        };
-
-        let handles = [
-            std::io::stdin().as_raw_handle() as HANDLE,
-            std::io::stdout().as_raw_handle() as HANDLE,
-            std::io::stderr().as_raw_handle() as HANDLE,
-        ];
-        let mut protected = Vec::new();
-        for handle in handles {
-            let mut flags = 0_u32;
-            if unsafe { GetHandleInformation(handle, &mut flags) } == 0
-                || flags & HANDLE_FLAG_INHERIT == 0
-            {
-                continue;
-            }
-            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, 0) } == 0 {
-                for (protected_handle, protected_flags) in &protected {
-                    unsafe {
-                        SetHandleInformation(
-                            *protected_handle,
-                            HANDLE_FLAG_INHERIT,
-                            *protected_flags & HANDLE_FLAG_INHERIT,
-                        );
-                    }
-                }
-                return Err(format!(
-                    "failed to protect runtime service handle inheritance: {}",
-                    std::io::Error::last_os_error()
-                ));
-            }
-            protected.push((handle, flags));
-        }
-        Ok(Self { handles: protected })
-    }
-}
-
-#[cfg(windows)]
-impl Drop for StandardHandleInheritanceGuard {
-    fn drop(&mut self) {
-        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
-
-        for (handle, flags) in &self.handles {
-            unsafe {
-                SetHandleInformation(*handle, HANDLE_FLAG_INHERIT, *flags & HANDLE_FLAG_INHERIT);
-            }
-        }
-    }
-}
-
 fn spawn_runtime_process() -> Result<(), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("failed to locate runtime executable: {error}"))?;
@@ -564,8 +498,6 @@ fn spawn_runtime_process() -> Result<(), String> {
             Ok(())
         });
     }
-    #[cfg(windows)]
-    let _inheritance_guard = StandardHandleInheritanceGuard::acquire()?;
     command
         .spawn()
         .map(|_| ())
@@ -780,14 +712,13 @@ fn runtime_status_payload(
         "proxy": status.proxy,
         "running": running,
         "health": status.health,
-        "recovery": status.recovery,
         "previouslyManaged": previously_managed
             .map(|ids| ids.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default(),
     })
 }
 
-pub fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus) {
+pub(crate) fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStatus) {
     use tauri::{Emitter, Manager};
 
     let state = app.state::<crate::models::AppState>();
@@ -795,7 +726,6 @@ pub fn reconcile_app_runtime(app: &tauri::AppHandle, status: &RuntimeServiceStat
     let next_managed = status
         .running
         .keys()
-        .chain(status.recovery.keys())
         .cloned()
         .collect::<std::collections::HashSet<_>>();
     let mut changed = false;
@@ -965,10 +895,7 @@ mod tests {
             service_pid: 1,
             capabilities: vec![
                 BACKGROUND_DETACH_CAPABILITY.into(),
-                CANARY_ROUTING_CAPABILITY.into(),
                 CONFIG_SYNC_ACK_CAPABILITY.into(),
-                DEPLOYMENT_REVISION_CAPABILITY.into(),
-                INSTANCE_RECOVERY_CAPABILITY.into(),
                 RUNTIME_ERROR_ACK_CAPABILITY.into(),
             ],
             config_revision: 1,
@@ -983,14 +910,12 @@ mod tests {
                 unhealthy_routes: 0,
                 in_flight_requests: 0,
                 total_requests: 0,
-                operational: Default::default(),
                 last_error: None,
             },
             running: Default::default(),
             health: Default::default(),
             monitoring: Default::default(),
             performance: Default::default(),
-            recovery: Default::default(),
         };
         let previously_managed = ["stale-instance".to_string()].into_iter().collect();
         let payload = runtime_status_payload(&status, Some(&previously_managed));

@@ -7,7 +7,6 @@ use tauri_plugin_dialog::DialogExt;
 use crate::path_utils::{path_identity_key, path_is_within as shared_path_is_within};
 
 const PATH_AUTHORITY_FILE: &str = "authorized-paths.json";
-const MAX_PATH_AUTHORITY_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct PathAuthority {
@@ -35,20 +34,10 @@ fn normalize_authority(authority: PathAuthority) -> PathAuthority {
 }
 
 static PATH_AUTHORITY: LazyLock<Mutex<PathAuthority>> = LazyLock::new(|| {
-    let authority = match crate::persistence::read_private_file_bounded(
-        &path_authority_path(),
-        MAX_PATH_AUTHORITY_BYTES,
-    ) {
-        Ok(Some(bytes)) => serde_json::from_slice(&bytes).unwrap_or_else(|error| {
-            eprintln!("Ignoring invalid private path authority state: {error}");
-            PathAuthority::default()
-        }),
-        Ok(None) => PathAuthority::default(),
-        Err(error) => {
-            eprintln!("Ignoring untrusted path authority state: {error}");
-            PathAuthority::default()
-        }
-    };
+    let authority = std::fs::read(path_authority_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
     Mutex::new(normalize_authority(authority))
 });
 
@@ -110,16 +99,8 @@ fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
     let root = canonical_directory(root)?;
     let key = normalized_authority_key(&root);
     let mut authority = PATH_AUTHORITY.lock().unwrap();
-    let overlaps = |candidate: &Path, roots: &BTreeSet<String>| {
-        roots.iter().map(PathBuf::from).any(|existing| {
-            path_is_within(candidate, &existing) || path_is_within(&existing, candidate)
-        })
-    };
     match purpose {
         "engine" => {
-            if overlaps(&root, &authority.download_roots) {
-                return Err("引擎目录不能与任何下载目录重叠".to_string());
-            }
             authority.engine_roots.insert(key);
         }
         "model" => {
@@ -129,9 +110,6 @@ fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
             let app_data_root = canonical_directory(&crate::utils::get_data_dir())
                 .unwrap_or_else(|_| crate::utils::get_data_dir());
             validate_download_root_boundary(&root, &app_data_root)?;
-            if overlaps(&root, &authority.engine_roots) {
-                return Err("下载目录不能与任何引擎目录重叠".to_string());
-            }
             authority.download_roots.insert(key);
         }
         _ => return Err("未知的目录授权用途".to_string()),
@@ -139,36 +117,39 @@ fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
     persist_authority(&authority)
 }
 
-pub fn initialize_path_authority() -> Result<(), String> {
-    let authority = PATH_AUTHORITY.lock().unwrap();
-    persist_authority(&authority)
-}
-
-pub fn validate_configured_roots(
-    engine_roots: &[String],
-    model_roots: &[String],
+pub fn initialize_path_authority(
+    legacy_engine_roots: &[String],
+    legacy_model_roots: &[String],
 ) -> Result<(), String> {
-    for root in engine_roots {
-        require_authorized_engine_root(Path::new(root))?;
-    }
     let app_data_root = crate::utils::get_data_dir();
-    for root in model_roots {
+    let mut authority = PATH_AUTHORITY.lock().unwrap();
+    for root in legacy_engine_roots {
+        let root = PathBuf::from(root);
+        if let Ok(canonical) = canonical_directory(&root) {
+            authority
+                .engine_roots
+                .insert(normalized_authority_key(&canonical));
+        }
+    }
+    for root in legacy_model_roots {
         let root = PathBuf::from(root);
         let root = if root.is_relative() {
             app_data_root.join(root)
         } else {
             root
         };
-        require_authorized_model_root(&root)?;
+        if let Ok(canonical) = canonical_directory(&root) {
+            authority
+                .model_roots
+                .insert(normalized_authority_key(&canonical));
+        }
     }
-    Ok(())
+    persist_authority(&authority)
 }
 
 pub fn require_authorized_engine_root(path: &Path) -> Result<PathBuf, String> {
     let canonical = canonical_directory(path)?;
     let managed_root = crate::utils::get_data_dir().join("engines");
-    let managed_root =
-        canonical_directory(&managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
     if path_is_within(&canonical, &managed_root) {
         return Ok(canonical);
     }
@@ -199,57 +180,27 @@ pub fn require_authorized_model_root(path: &Path) -> Result<PathBuf, String> {
 }
 
 pub fn require_authorized_model_path(path: &Path) -> Result<PathBuf, String> {
-    require_authorized_artifact_path("model", path).map(|(canonical, _)| canonical)
-}
-
-fn matching_authorized_root(
-    candidate: &Path,
-    managed_root: PathBuf,
-    authorized_roots: &BTreeSet<String>,
-) -> Option<PathBuf> {
-    let mut roots = authorized_roots
-        .iter()
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
-    roots.push(managed_root);
-    roots
-        .into_iter()
-        .filter_map(|root| canonical_directory(&root).ok())
-        .filter(|root| path_is_within(candidate, root))
-        .max_by_key(|root| root.components().count())
-}
-
-pub fn require_authorized_artifact_path(
-    kind: &str,
-    path: &Path,
-) -> Result<(PathBuf, PathBuf), String> {
-    if !matches!(kind, "engine" | "model") {
-        return Err(format!("未知的制品授权用途: {kind}"));
-    }
     let canonical = std::fs::canonicalize(path)
-        .map_err(|error| format!("无法解析{kind}制品路径 {}: {error}", path.display()))?;
+        .map_err(|error| format!("无法解析模型路径 {}: {error}", path.display()))?;
     let metadata = std::fs::metadata(&canonical)
-        .map_err(|error| format!("无法访问{kind}制品路径 {}: {error}", canonical.display()))?;
+        .map_err(|error| format!("无法访问模型路径 {}: {error}", canonical.display()))?;
     if !metadata.is_file() {
-        return Err(format!("{kind}制品路径不是文件: {}", canonical.display()));
+        return Err(format!("模型路径不是文件: {}", canonical.display()));
     }
 
-    let managed_root = if kind == "engine" {
-        crate::utils::get_data_dir().join("engines")
-    } else {
-        crate::utils::get_default_models_dir()
-    };
+    let managed_root = crate::utils::get_default_models_dir();
     let managed_root =
         canonical_directory(&managed_root).unwrap_or_else(|_| managed_root.to_path_buf());
+    if path_is_within(&canonical, &managed_root) {
+        return Ok(canonical);
+    }
+
     let authority = PATH_AUTHORITY.lock().unwrap();
-    let roots = if kind == "engine" {
-        &authority.engine_roots
+    if is_authorized_by_roots(&canonical, &authority.model_roots) {
+        Ok(canonical)
     } else {
-        &authority.model_roots
-    };
-    matching_authorized_root(&canonical, managed_root, roots)
-        .map(|root| (canonical, root))
-        .ok_or_else(|| format!("{kind}制品不在已授权目录中；请使用应用内的目录选择按钮重新选择。"))
+        Err("模型文件不在已授权目录中；请使用应用内的目录选择按钮重新选择。".to_string())
+    }
 }
 
 pub fn require_path_within_root(path: &Path, root: &Path) -> Result<PathBuf, String> {
@@ -343,8 +294,6 @@ pub fn create_download_directory_within_root(
     root: &Path,
     destination: &Path,
 ) -> Result<PathBuf, String> {
-    use cap_fs_ext::DirExt;
-
     ensure_download_path_within_root(destination, root)?;
     let canonical_root = canonical_directory(root)?;
     let relative = destination.strip_prefix(root).map_err(|_| {
@@ -354,41 +303,62 @@ pub fn create_download_directory_within_root(
             root.display()
         )
     })?;
-    let mut current =
-        cap_std::fs::Dir::open_ambient_dir(&canonical_root, cap_std::ambient_authority())
-            .map_err(|error| format!("无法绑定授权下载根目录: {error}"))?;
-    let mut resolved = canonical_root.clone();
+    let mut current = canonical_root.clone();
     for component in relative.components() {
         let Component::Normal(segment) = component else {
             continue;
         };
-        let next = match current.open_dir_nofollow(segment) {
-            Ok(directory) => directory,
+        current.push(segment);
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(format!(
+                        "下载目录包含不允许的符号链接: {}",
+                        current.display()
+                    ));
+                }
+                let canonical = std::fs::canonicalize(&current)
+                    .map_err(|error| format!("无法解析下载目录 {}: {error}", current.display()))?;
+                if !path_is_within(&canonical, &canonical_root) {
+                    return Err(format!(
+                        "下载目录 {} 越过了已授权目录 {}",
+                        canonical.display(),
+                        canonical_root.display()
+                    ));
+                }
+                if !std::fs::metadata(&canonical)
+                    .map_err(|error| format!("无法访问下载目录 {}: {error}", canonical.display()))?
+                    .is_dir()
+                {
+                    return Err(format!("下载路径不是目录: {}", canonical.display()));
+                }
+                current = canonical;
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                current.create_dir(segment).map_err(|create_error| {
+                std::fs::create_dir(&current).map_err(|create_error| {
+                    format!("无法创建下载目录 {}: {create_error}", current.display())
+                })?;
+                let canonical = std::fs::canonicalize(&current).map_err(|canonical_error| {
                     format!(
-                        "无法在已绑定的授权目录中创建下载子目录 {}: {create_error}",
-                        segment.to_string_lossy()
+                        "无法解析新建下载目录 {}: {canonical_error}",
+                        current.display()
                     )
                 })?;
-                current.open_dir_nofollow(segment).map_err(|open_error| {
-                    format!(
-                        "无法绑定新建下载子目录 {}: {open_error}",
-                        segment.to_string_lossy()
-                    )
-                })?
+                if !path_is_within(&canonical, &canonical_root) {
+                    return Err(format!(
+                        "新建下载目录 {} 越过了已授权目录 {}",
+                        canonical.display(),
+                        canonical_root.display()
+                    ));
+                }
+                current = canonical;
             }
             Err(error) => {
-                return Err(format!(
-                    "下载路径包含链接、联接或非目录组件 {}: {error}",
-                    segment.to_string_lossy()
-                ));
+                return Err(format!("无法检查下载目录 {}: {error}", current.display()));
             }
-        };
-        resolved.push(segment);
-        current = next;
+        }
     }
-    Ok(resolved)
+    Ok(current)
 }
 
 #[tauri::command]

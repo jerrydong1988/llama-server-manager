@@ -41,8 +41,6 @@ const toolsEnabled = (config: InstanceConfig) => Boolean(
   || config.agent
   || config.mcp_servers_config.trim()
   || config.mcp_servers_json.trim()
-  || config.mcp_servers_config_configured
-  || config.mcp_servers_json_configured
 )
 
 const b10068 = (zh: string, en: string) => ({ 10068: text(zh, en) })

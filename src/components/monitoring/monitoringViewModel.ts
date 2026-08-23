@@ -345,8 +345,7 @@ export function buildServiceStatus(options: {
   now?: number
   logWindowMs?: number
 }): { status: ServiceStatus; alertCount: number } {
-  const errorInstances = options.instances.filter(instance => instance.status === 'error' || instance.status === 'crash_loop')
-  const recoveringInstances = options.instances.filter(instance => instance.status === 'recovering')
+  const errorInstances = options.instances.filter(instance => instance.status === 'error')
   const unhealthyInstances = options.instances.filter(instance => (
     instance.status === 'running' && instance.healthCheck === 'fail'
   ))
@@ -356,11 +355,11 @@ export function buildServiceStatus(options: {
   const criticalLogs = recentLogs.filter(entry => entry.level === 'error')
   const warningLogs = recentLogs.filter(entry => entry.level === 'warning')
   const telemetryUnhealthy = Boolean(options.telemetryError || options.lastWriteError || (options.droppedWrites || 0) > 0)
-  const alertCount = errorInstances.length + recoveringInstances.length + unhealthyInstances.length + failedDownloads.length + criticalLogs.length + warningLogs.length + (telemetryUnhealthy ? 1 : 0)
+  const alertCount = errorInstances.length + unhealthyInstances.length + failedDownloads.length + criticalLogs.length + warningLogs.length + (telemetryUnhealthy ? 1 : 0)
   if (telemetryUnhealthy || errorInstances.length > 0 || unhealthyInstances.length > 0 || criticalLogs.length > 0) {
     return { status: 'critical', alertCount }
   }
-  if (recoveringInstances.length > 0 || failedDownloads.length > 0 || warningLogs.length > 0) {
+  if (failedDownloads.length > 0 || warningLogs.length > 0) {
     return { status: 'attention', alertCount }
   }
   return { status: 'healthy', alertCount }

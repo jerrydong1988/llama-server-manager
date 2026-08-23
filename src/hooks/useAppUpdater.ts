@@ -21,59 +21,6 @@ interface AppUpdaterCopy {
   updateFailedDescription: string
 }
 
-interface VerifiedUpdaterPlatform {
-  url: string
-  signature: string
-  sha256: string
-}
-
-interface VerifiedUpdaterRelease {
-  version: string
-  releaseTag: string
-  sourceSha: string
-  releaseCounter: number
-  target: string
-  platform: VerifiedUpdaterPlatform
-}
-
-function requireUpdaterPlatform(rawJson: Record<string, unknown>, target: string): VerifiedUpdaterPlatform {
-  const platforms = rawJson.platforms
-  if (!platforms || typeof platforms !== 'object' || Array.isArray(platforms)) {
-    throw new Error('Updater manifest has no platform map')
-  }
-  const platform = (platforms as Record<string, unknown>)[target]
-  if (!platform || typeof platform !== 'object' || Array.isArray(platform)) {
-    throw new Error('Updater manifest has no matching platform')
-  }
-  const record = platform as Record<string, unknown>
-  if (typeof record.url !== 'string' || typeof record.signature !== 'string' || typeof record.sha256 !== 'string') {
-    throw new Error('Updater platform identity is incomplete')
-  }
-  return { url: record.url, signature: record.signature, sha256: record.sha256 }
-}
-
-function assertVerifiedUpdateTuple(
-  update: Update,
-  verified: VerifiedUpdaterRelease,
-  target: string,
-) {
-  const raw = update.rawJson
-  const platform = requireUpdaterPlatform(raw, target)
-  if (
-    update.version !== verified.version
-    || raw.version !== verified.version
-    || raw.release_tag !== verified.releaseTag
-    || raw.source_sha !== verified.sourceSha
-    || raw.release_counter !== verified.releaseCounter
-    || verified.target !== target
-    || platform.url !== verified.platform.url
-    || platform.signature !== verified.platform.signature
-    || platform.sha256 !== verified.platform.sha256
-  ) {
-    throw new Error('Updater metadata does not match the authenticated release envelope')
-  }
-}
-
 const UPDATE_RETRY_DELAYS_MS = [5_000, 30_000, 120_000]
 const UPDATE_PERIODIC_CHECK_MS = 6 * 60 * 60_000
 
@@ -95,30 +42,12 @@ export function useAppUpdater(hasRunningInstances: boolean, copy: AppUpdaterCopy
       const bundleType = await getBundleType()
       const update = await (async () => {
         if (bundleType === BundleType.Deb || bundleType === BundleType.Rpm) return null
-        const requestedTarget = bundleType === BundleType.Nsis
+        const target = bundleType === BundleType.Nsis
           ? 'windows-x86_64-nsis'
           : bundleType === BundleType.Msi
             ? 'windows-x86_64-msi'
             : undefined
-        const candidate = await check({ timeout: 15_000, target: requestedTarget })
-        if (!candidate) return null
-        const target = requestedTarget ?? (() => {
-          const platforms = candidate.rawJson.platforms
-          if (!platforms || typeof platforms !== 'object' || Array.isArray(platforms)) {
-            throw new Error('Updater manifest has no platform map')
-          }
-          const darwinTargets = Object.keys(platforms).filter(name => /^darwin-(aarch64|x86_64)$/.test(name))
-          if (darwinTargets.length !== 1) throw new Error('Updater manifest has no unique macOS target')
-          return darwinTargets[0]
-        })()
-        const verified = await invoke<VerifiedUpdaterRelease>('verify_updater_release', { target })
-        try {
-          assertVerifiedUpdateTuple(candidate, verified, target)
-          return candidate
-        } catch (error) {
-          await candidate.close().catch(() => {})
-          throw error
-        }
+        return check({ timeout: 15_000, target })
       })()
 
       if (disposedRef.current) {

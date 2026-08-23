@@ -637,17 +637,16 @@ export const RESET_MAP: Record<string, Partial<InstanceConfig>> = {
     threads_http: -1,
   },
   advancedServerBasic: {
-    api_key: '', api_key_file: '', api_key_configured: false, api_key_file_configured: false, no_ui: false,
+    api_key: '', api_key_file: '', no_ui: false,
     path_prefix: '', api_prefix: '', timeout: 600, sleep_idle: -1, verbose: false,
     cors_origins: '', cors_methods: '', cors_headers: '', cors_credentials: '',
-    ssl_key_file: '', ssl_key_file_configured: false, ssl_cert_file: '', ssl_cert_file_configured: false,
+    ssl_key_file: '', ssl_cert_file: '',
   },
   advancedServerExt: {
     slots_enabled: true, metrics: false, props: false,
     slot_save_path: '', log_prompts_dir: '', slot_prompt_similarity: 0.1, prefill_assistant: false,
-    ui_config_file: '', ui_config_file_configured: false, ui_config: '', ui_config_configured: false, ui_mcp_proxy: false, agent: false,
+    ui_config_file: '', ui_config: '', ui_mcp_proxy: false, agent: false,
     tools_runtime: '', mcp_servers_config: '', mcp_servers_json: '',
-    mcp_servers_config_configured: false, mcp_servers_json_configured: false,
     rpc_servers: '', sse_ping_interval: 30, reuse_port: false,
   },
   advancedMulti: {

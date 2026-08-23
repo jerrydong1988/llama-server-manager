@@ -1,6 +1,6 @@
 use axum::{
     body::{Body, Bytes},
-    extract::{DefaultBodyLimit, Extension, Path, Request, State},
+    extract::{rejection::BytesRejection, DefaultBodyLimit, Extension, Path, Request, State},
     http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -12,26 +12,21 @@ use futures_util::{StreamExt, TryStreamExt};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
-use std::future::Future;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::Manager;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tokio_util::io::StreamReader;
-use tower::ServiceExt;
-use tower_http::timeout::RequestBodyTimeoutLayer;
 
-use crate::bounded_http;
 use crate::commands::config::update_and_persist;
 use crate::commands::proxy_protocol::{
     add_format_header, context_limit_error_response, ensure_request_id_header, error_response,
     request_format, response_request_id, rewrite_json_response, rewrite_sse_line, ProxyApiFormat,
 };
 use crate::commands::proxy_runtime::{
-    ClientRequestPermit, GlobalRequestPermit, InFlightBodyPermit, InFlightResponsePermit,
-    RequestObservation, RouterRuntime, RoutingCandidate, TargetCapabilities, TargetHealthSnapshot,
-    TargetRequestPermit,
+    GlobalRequestPermit, InFlightBodyPermit, RouterRuntime, RoutingCandidate, TargetCapabilities,
+    TargetHealthSnapshot, TargetRequestPermit,
 };
 use crate::commands::server::{effective_api_key, effective_server_scheme};
 use crate::commands::telemetry::{
@@ -47,36 +42,18 @@ use crate::vector_policy::ModelWorkload;
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
 static PROXY_HTTP_CLIENTS: LazyLock<Mutex<HashMap<u64, reqwest::Client>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-static PENDING_PROXY_API_KEYS: LazyLock<Mutex<HashMap<String, Instant>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
 const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
-const MAX_PROXY_REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PROXY_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PROXY_JSON_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_TOKEN_COUNT_RESPONSE_BYTES: usize = 64 * 1024;
 const MAX_COMPLETION_PREFLIGHT_PROMPTS: usize = 16;
 const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
-const MAX_ANTHROPIC_REQUEST_BODY_BYTES: usize = 8 * 1024 * 1024;
-const MAX_PROXY_IN_FLIGHT_BODY_BYTES: usize = 64 * 1024 * 1024;
-const MAX_PROXY_IN_FLIGHT_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
-const MAX_PROXY_SSE_LINE_BYTES: usize = 256 * 1024;
-const MAX_PROXY_STREAM_CHUNK_BYTES: usize = 1024 * 1024;
-const MAX_PROXY_JSON_DEPTH: usize = 64;
-const MAX_PROXY_JSON_STRUCTURAL_TOKENS: usize = 100_000;
-const MAX_PROXY_JSON_STRING_BYTES: usize = 1024 * 1024;
-const MAX_PROXY_JSON_DECODED_ESTIMATE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_ANTHROPIC_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
+const MAX_PROXY_IN_FLIGHT_BODY_BYTES: usize = 256 * 1024 * 1024;
 const TARGET_CAPABILITY_MAX_AGE: Duration = Duration::from_secs(60);
 const PROXY_API_KEY_HASH_PREFIX: &str = "sha256:";
 const SUPPORTED_ANTHROPIC_VERSION: &str = "2023-06-01";
-const LSM_SESSION_HEADER: &str = "x-lsm-session-id";
-const MAX_LOCALITY_SESSION_ID_BYTES: usize = 256;
-const MAX_LOCALITY_PREFIX_BYTES: usize = 4 * 1024;
-const MAX_DISCOVERY_RESPONSE_BYTES: usize = 512 * 1024;
-const MAX_DISCOVERY_TARGETS: usize = 128;
-const DISCOVERY_PROBE_CONCURRENCY: usize = 4;
-const MAX_DISCOVERY_REQUESTS_PER_MINUTE: u32 = 6_000;
-const MAX_FAILED_PROXY_AUTH_PER_MINUTE: u32 = 120;
-const MAX_STREAMING_RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn proxy_http_client(connect_timeout_ms: u64) -> reqwest::Client {
     let connect_timeout_ms = connect_timeout_ms.clamp(100, 60_000);
@@ -85,7 +62,6 @@ fn proxy_http_client(connect_timeout_ms: u64) -> reqwest::Client {
         .entry(connect_timeout_ms)
         .or_insert_with(|| {
             reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
                 .connect_timeout(Duration::from_millis(connect_timeout_ms))
                 .pool_idle_timeout(Duration::from_secs(90))
                 .tcp_keepalive(Duration::from_secs(30))
@@ -114,30 +90,6 @@ fn is_hashed_proxy_api_key(value: &str) -> bool {
         })
 }
 
-fn consume_native_generated_proxy_api_key(key: &str) -> bool {
-    let digest = hash_proxy_api_key(key);
-    let now = Instant::now();
-    let mut pending = PENDING_PROXY_API_KEYS.lock().unwrap();
-    pending.retain(|_, created| now.duration_since(*created) <= Duration::from_secs(5 * 60));
-    pending.remove(&digest).is_some()
-}
-
-#[tauri::command]
-pub fn generate_proxy_api_key() -> String {
-    let mut bytes = [0_u8; 32];
-    bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-    bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
-    let key = format!(
-        "lsm_{}",
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-    );
-    PENDING_PROXY_API_KEYS
-        .lock()
-        .unwrap()
-        .insert(hash_proxy_api_key(&key), Instant::now());
-    key
-}
-
 fn proxy_api_key_matches(stored: &str, presented: &str) -> bool {
     let candidate = if is_hashed_proxy_api_key(stored) {
         hash_proxy_api_key(presented)
@@ -145,79 +97,6 @@ fn proxy_api_key_matches(stored: &str, presented: &str) -> bool {
         presented.to_string()
     };
     constant_time_eq(stored.as_bytes(), candidate.as_bytes())
-}
-
-fn parse_bounded_proxy_json(body: &[u8]) -> Result<serde_json::Value, String> {
-    let mut depth = 0usize;
-    let mut structural_tokens = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-    let mut string_bytes = 0usize;
-    for byte in body {
-        if in_string {
-            if escaped {
-                escaped = false;
-                string_bytes = string_bytes.saturating_add(1);
-                continue;
-            }
-            match *byte {
-                b'\\' => escaped = true,
-                b'"' => {
-                    in_string = false;
-                    structural_tokens = structural_tokens.saturating_add(1);
-                }
-                _ => string_bytes = string_bytes.saturating_add(1),
-            }
-            if string_bytes > MAX_PROXY_JSON_STRING_BYTES {
-                return Err(format!(
-                    "JSON string exceeds the {MAX_PROXY_JSON_STRING_BYTES}-byte limit"
-                ));
-            }
-            continue;
-        }
-        match *byte {
-            b'"' => {
-                in_string = true;
-                string_bytes = 0;
-            }
-            b'{' | b'[' => {
-                depth = depth.saturating_add(1);
-                structural_tokens = structural_tokens.saturating_add(1);
-                if depth > MAX_PROXY_JSON_DEPTH {
-                    return Err(format!(
-                        "JSON nesting exceeds {MAX_PROXY_JSON_DEPTH} levels"
-                    ));
-                }
-            }
-            b'}' | b']' => {
-                depth = depth.saturating_sub(1);
-                structural_tokens = structural_tokens.saturating_add(1);
-            }
-            b',' | b':' => structural_tokens = structural_tokens.saturating_add(1),
-            _ => {}
-        }
-        if structural_tokens > MAX_PROXY_JSON_STRUCTURAL_TOKENS {
-            return Err(format!(
-                "JSON structure exceeds the {MAX_PROXY_JSON_STRUCTURAL_TOKENS}-token limit"
-            ));
-        }
-    }
-    if in_string || depth != 0 {
-        return Err("request body must be valid JSON".to_string());
-    }
-    let decoded_estimate = body
-        .len()
-        .checked_add(structural_tokens.saturating_mul(64))
-        .ok_or_else(|| "JSON decoded-size estimate overflowed".to_string())?;
-    if decoded_estimate > MAX_PROXY_JSON_DECODED_ESTIMATE_BYTES {
-        return Err("JSON decoded representation exceeds the memory budget".to_string());
-    }
-    let value = serde_json::from_slice::<serde_json::Value>(body)
-        .map_err(|_| "request body must be a valid JSON object".to_string())?;
-    if !value.is_object() {
-        return Err("request body must be a JSON object".to_string());
-    }
-    Ok(value)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,35 +124,18 @@ fn embedding_item_count(value: &serde_json::Value) -> u64 {
     }
 }
 
-#[cfg(test)]
 fn vector_request_metadata(path: &str, body: &[u8]) -> Option<VectorRequestMetadata> {
     let workload = classify_vector_endpoint(path)?;
-    let parsed = parse_bounded_proxy_json(body).ok();
-    let item_count = parsed
-        .as_ref()
-        .and_then(|value| vector_request_metadata_from_value(path, value))
-        .map(|metadata| metadata.item_count)
-        .unwrap_or(0);
-    Some(VectorRequestMetadata {
-        workload,
-        endpoint: path.to_string(),
-        item_count,
-    })
-}
-
-fn vector_request_metadata_from_value(
-    path: &str,
-    parsed: &serde_json::Value,
-) -> Option<VectorRequestMetadata> {
-    let workload = classify_vector_endpoint(path)?;
+    let parsed = serde_json::from_slice::<serde_json::Value>(body).ok();
     let item_count = match workload {
         ModelWorkload::Embedding => parsed
-            .get("input")
-            .or_else(|| parsed.get("content"))
+            .as_ref()
+            .and_then(|value| value.get("input").or_else(|| value.get("content")))
             .map(embedding_item_count)
             .unwrap_or(0),
         ModelWorkload::Reranker => parsed
-            .get("documents")
+            .as_ref()
+            .and_then(|value| value.get("documents"))
             .and_then(serde_json::Value::as_array)
             .map(|documents| documents.len() as u64)
             .unwrap_or(0),
@@ -343,7 +205,6 @@ struct ResolvedProxyTarget {
 pub(crate) struct ProxyRequestResolution {
     config: ProxyConfig,
     candidates: Vec<ResolvedProxyTarget>,
-    routing_strategy: String,
 }
 
 #[derive(Clone)]
@@ -382,8 +243,6 @@ pub(crate) trait ProxyDataSource: Send + Sync {
 struct ProxyRouterState {
     source: Arc<dyn ProxyDataSource>,
     runtime: Arc<RouterRuntime>,
-    request_body_limit: usize,
-    anthropic_request_body_limit: usize,
 }
 
 #[derive(Clone)]
@@ -451,9 +310,6 @@ struct ProxyTelemetryGuard {
     http_status: u16,
     started_at: std::time::Instant,
     started_at_ms: i64,
-    queue_time_ms: u64,
-    ttft_ms: Option<u64>,
-    usage: ProxyUsageObservation,
     vector_metadata: Option<VectorRequestMetadata>,
     api_format: ProxyApiFormat,
     recorded: bool,
@@ -461,87 +317,27 @@ struct ProxyTelemetryGuard {
     _global_permit: Option<GlobalRequestPermit>,
     _body_permit: Option<InFlightBodyPermit>,
     _target_permit: Option<TargetRequestPermit>,
-    _client_permit: Option<Arc<ClientRequestPermit>>,
 }
 
-struct StreamingPermits {
-    _global: GlobalRequestPermit,
-    _body: InFlightBodyPermit,
-    _target: TargetRequestPermit,
-    _client: Arc<ClientRequestPermit>,
+struct ProxyAdmissionGuards {
+    global: GlobalRequestPermit,
+    body: InFlightBodyPermit,
 }
 
-struct ResponseBodyGuards {
-    _permits: StreamingPermits,
-    _response_memory: Option<InFlightResponsePermit>,
-}
+#[derive(Clone)]
+struct ProxyAdmissionPermit(Arc<Mutex<Option<ProxyAdmissionGuards>>>);
 
-impl ResponseBodyGuards {
-    fn take(
-        telemetry: &mut ProxyTelemetryGuard,
-        response_memory: Option<InFlightResponsePermit>,
-    ) -> Self {
-        Self {
-            _permits: StreamingPermits {
-                _global: telemetry
-                    ._global_permit
-                    .take()
-                    .expect("response body must own a global permit"),
-                _body: telemetry
-                    ._body_permit
-                    .take()
-                    .expect("response body must own a request body permit"),
-                _target: telemetry
-                    ._target_permit
-                    .take()
-                    .expect("response body must own a target permit"),
-                _client: telemetry
-                    ._client_permit
-                    .take()
-                    .expect("response body must own a client permit"),
-            },
-            _response_memory: response_memory,
-        }
+impl ProxyAdmissionPermit {
+    fn new(global: GlobalRequestPermit, body: InFlightBodyPermit) -> Self {
+        Self(Arc::new(Mutex::new(Some(ProxyAdmissionGuards {
+            global,
+            body,
+        }))))
     }
-}
 
-fn pump_guarded_response_stream<S>(
-    stream: S,
-    guards: ResponseBodyGuards,
-    deadline: std::time::Instant,
-) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>>
-where
-    S: futures_util::Stream<Item = Result<Bytes, std::io::Error>> + Send + 'static,
-{
-    let (sender, receiver) = tokio::sync::mpsc::channel(1);
-    let guards = Arc::new(guards);
-    let pump_guards = guards.clone();
-    tokio::spawn(async move {
-        let _guards = pump_guards;
-        let mut stream = Box::pin(stream);
-        while let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) {
-            let send_slot = match tokio::time::timeout(remaining, sender.reserve()).await {
-                Ok(Ok(slot)) => slot,
-                Ok(Err(_)) | Err(_) => break,
-            };
-            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
-                break;
-            };
-            match tokio::time::timeout(remaining, stream.as_mut().next()).await {
-                Ok(Some(item)) => {
-                    let terminal = item.is_err();
-                    send_slot.send(item);
-                    if terminal {
-                        break;
-                    }
-                }
-                Ok(None) | Err(_) => break,
-            }
-        }
-    });
-    futures_util::stream::unfold((receiver, guards), |(mut receiver, guards)| async move {
-        receiver.recv().await.map(|item| (item, (receiver, guards)))
-    })
+    fn take(&self) -> Option<ProxyAdmissionGuards> {
+        self.0.lock().ok()?.take()
+    }
 }
 
 struct ProxyTelemetryRecord {
@@ -551,152 +347,18 @@ struct ProxyTelemetryRecord {
     http_status: Option<u16>,
     started_at_ms: i64,
     duration_ms: f64,
-    queue_time_ms: f64,
-    ttft_ms: Option<f64>,
-    prompt_tokens: Option<u64>,
-    cached_prompt_tokens: Option<u64>,
     error_text: Option<String>,
     api_format: ProxyApiFormat,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct ProxyUsageObservation {
-    prompt_tokens: Option<u64>,
-    cached_prompt_tokens: Option<u64>,
-}
-
-impl ProxyUsageObservation {
-    fn merge(&mut self, other: Self) {
-        self.prompt_tokens = match (self.prompt_tokens, other.prompt_tokens) {
-            (Some(left), Some(right)) => Some(left.max(right)),
-            (left, right) => left.or(right),
-        };
-        self.cached_prompt_tokens = match (self.cached_prompt_tokens, other.cached_prompt_tokens) {
-            (Some(left), Some(right)) => Some(left.max(right)),
-            (left, right) => left.or(right),
-        };
-    }
-}
-
-fn json_u64(value: Option<&serde_json::Value>) -> Option<u64> {
-    value.and_then(|value| {
-        value.as_u64().or_else(|| {
-            value
-                .as_i64()
-                .and_then(|number| (number >= 0).then_some(number as u64))
-        })
-    })
-}
-
-fn usage_from_object(object: &serde_json::Map<String, serde_json::Value>) -> ProxyUsageObservation {
-    let cached_from_details = object
-        .get("prompt_tokens_details")
-        .or_else(|| object.get("input_tokens_details"))
-        .and_then(serde_json::Value::as_object)
-        .and_then(|details| json_u64(details.get("cached_tokens")));
-    let cache_read = json_u64(object.get("cache_read_input_tokens"));
-    let cache_creation = json_u64(object.get("cache_creation_input_tokens"));
-    let cached_prompt_tokens = cached_from_details
-        .or_else(|| json_u64(object.get("cached_tokens")))
-        .or_else(|| json_u64(object.get("cache_n")))
-        .or(cache_read);
-    let prompt_tokens = json_u64(object.get("prompt_tokens"))
-        .or_else(|| {
-            json_u64(object.get("input_tokens")).map(|input| {
-                input
-                    .saturating_add(cache_read.unwrap_or(0))
-                    .saturating_add(cache_creation.unwrap_or(0))
-            })
-        })
-        .or_else(|| {
-            json_u64(object.get("prompt_n")).map(|processed| {
-                processed.saturating_add(json_u64(object.get("cache_n")).unwrap_or(0))
-            })
-        });
-    ProxyUsageObservation {
-        prompt_tokens,
-        cached_prompt_tokens,
-    }
-}
-
-fn proxy_usage_from_json(value: &serde_json::Value) -> ProxyUsageObservation {
-    let mut observed = ProxyUsageObservation::default();
-    match value {
-        serde_json::Value::Object(object) => {
-            observed.merge(usage_from_object(object));
-            for key in ["usage", "timings", "message", "response"] {
-                if let Some(value) = object.get(key) {
-                    observed.merge(proxy_usage_from_json(value));
-                }
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for value in values {
-                observed.merge(proxy_usage_from_json(value));
-            }
-        }
-        _ => {}
-    }
-    observed
-}
-
-fn proxy_usage_from_bytes(bytes: &[u8]) -> ProxyUsageObservation {
-    serde_json::from_slice::<serde_json::Value>(bytes)
-        .map(|value| proxy_usage_from_json(&value))
-        .unwrap_or_default()
-}
-
-fn proxy_usage_from_sse_line(line: &str) -> ProxyUsageObservation {
-    let payload = line
-        .strip_prefix("data:")
-        .map(str::trim)
-        .unwrap_or_default();
-    if payload.is_empty() || payload == "[DONE]" {
-        return ProxyUsageObservation::default();
-    }
-    proxy_usage_from_bytes(payload.as_bytes())
-}
-
 impl ProxyTelemetryGuard {
-    fn observe_response_at(
-        &mut self,
-        bytes: &[u8],
-        usage: ProxyUsageObservation,
-        observed_at: std::time::Instant,
-    ) {
-        if bytes.is_empty() {
-            return;
-        }
-        if self.ttft_ms.is_none() {
-            self.ttft_ms = Some(
-                observed_at
-                    .saturating_duration_since(self.started_at)
-                    .as_millis()
-                    .min(u64::MAX as u128) as u64,
-            );
-        }
-        self.usage.merge(usage);
-    }
-
-    fn observe_response_chunk(&mut self, bytes: &[u8], usage: ProxyUsageObservation) {
-        self.observe_response_at(bytes, usage, std::time::Instant::now());
-    }
-
     fn record_once(&mut self, error_text: Option<String>) {
         if self.recorded {
             return;
         }
         self.recorded = true;
-        let duration_ms = self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        let failed = error_text.is_some() || !(200..400).contains(&self.http_status);
-        self.runtime.record_completed(RequestObservation {
-            duration_ms,
-            queue_wait_ms: self.queue_time_ms,
-            ttft_ms: self.ttft_ms,
-            prompt_tokens: self.usage.prompt_tokens,
-            cached_prompt_tokens: self.usage.cached_prompt_tokens,
-            failed,
-        });
+        self.runtime
+            .record_completed(self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
         let _ = record_proxy_telemetry(
             self.session_id.as_deref(),
             &ProxyTelemetryRecord {
@@ -705,11 +367,7 @@ impl ProxyTelemetryGuard {
                 target_instance_id: self.target_instance_id.clone(),
                 http_status: Some(self.http_status),
                 started_at_ms: self.started_at_ms,
-                duration_ms: duration_ms as f64,
-                queue_time_ms: self.queue_time_ms as f64,
-                ttft_ms: self.ttft_ms.map(|value| value as f64),
-                prompt_tokens: self.usage.prompt_tokens,
-                cached_prompt_tokens: self.usage.cached_prompt_tokens,
+                duration_ms: self.started_at.elapsed().as_secs_f64() * 1000.0,
                 error_text,
                 api_format: self.api_format,
             },
@@ -773,10 +431,6 @@ fn record_proxy_telemetry(
             target_instance_id: record.target_instance_id.clone(),
             http_status: record.http_status,
             duration_ms: record.duration_ms,
-            queue_time_ms: record.queue_time_ms,
-            ttft_ms: record.ttft_ms,
-            prompt_tokens: record.prompt_tokens,
-            cached_prompt_tokens: record.cached_prompt_tokens,
             error_text: record.error_text.clone(),
             api_format: record.api_format.as_str().to_string(),
         },
@@ -891,12 +545,7 @@ fn is_local_bind_host(host: &str) -> bool {
 fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
     let config = state.proxy_config.lock().unwrap().clone();
     let running = state.proxy_shutdown.lock().unwrap().is_some();
-    let active_routes = config
-        .routes
-        .iter()
-        .chain(config.canary_routes.iter())
-        .filter(|route| route.enabled)
-        .count();
+    let active_routes = config.routes.iter().filter(|route| route.enabled).count();
     let last_error = state.proxy_last_error.lock().unwrap().clone();
     let actual_bound_addr = state.proxy_bound_addr.lock().unwrap().clone();
     let bound_addr = actual_bound_addr.unwrap_or_else(|| proxy_bound_addr(&config));
@@ -920,7 +569,6 @@ fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
         unhealthy_routes: active_routes,
         in_flight_requests: 0,
         total_requests: 0,
-        operational: Default::default(),
         last_error,
     }
 }
@@ -930,7 +578,6 @@ fn proxy_status_from_snapshot(snapshot: &ProxyRuntimeSnapshot) -> ProxyStatus {
         .config
         .routes
         .iter()
-        .chain(snapshot.config.canary_routes.iter())
         .filter(|route| route.enabled)
         .count();
     ProxyStatus {
@@ -941,7 +588,6 @@ fn proxy_status_from_snapshot(snapshot: &ProxyRuntimeSnapshot) -> ProxyStatus {
         unhealthy_routes: active_routes,
         in_flight_requests: 0,
         total_requests: 0,
-        operational: Default::default(),
         last_error: snapshot.last_error.clone(),
     }
 }
@@ -952,47 +598,14 @@ fn route_is_configured(route: &ProxyRoute) -> bool {
         && !route.target_instance_id.trim().is_empty()
 }
 
-fn all_proxy_routes(config: &ProxyConfig) -> impl Iterator<Item = &ProxyRoute> {
-    config.routes.iter().chain(config.canary_routes.iter())
-}
-
-fn canary_routes_for_model<'a>(
-    config: &'a ProxyConfig,
-    model: &str,
-) -> Vec<(usize, &'a ProxyRoute)> {
-    config
-        .canary_routes
-        .iter()
-        .enumerate()
-        .filter(|(_, route)| route_is_configured(route) && route.model_alias.trim() == model)
-        .collect()
-}
-
-fn has_canary_overlay(config: &ProxyConfig, model: &str) -> bool {
-    config
-        .canary_routes
-        .iter()
-        .any(|route| route.model_alias.trim() == model)
-}
-
-fn effective_routing_strategy(config: &ProxyConfig, requested_model: Option<&str>) -> String {
-    if requested_model
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-        .is_some_and(|model| has_canary_overlay(config, model))
-    {
-        "weighted".into()
-    } else {
-        config.routing_strategy.clone()
-    }
-}
-
 fn preferred_public_route<'a>(
     config: &'a ProxyConfig,
     target_instance_id: &str,
 ) -> Option<&'a ProxyRoute> {
     let target_instance_id = target_instance_id.trim();
-    all_proxy_routes(config)
+    config
+        .routes
+        .iter()
         .filter(|route| {
             route_is_configured(route) && route.target_instance_id.trim() == target_instance_id
         })
@@ -1026,34 +639,18 @@ pub(crate) fn normalize_and_validate_proxy_config(
     config.streaming_idle_timeout_ms = config
         .streaming_idle_timeout_ms
         .clamp(1_000, 24 * 60 * 60 * 1_000);
-    config.streaming_max_lifetime_ms = config
-        .streaming_max_lifetime_ms
-        .clamp(config.streaming_idle_timeout_ms, 24 * 60 * 60 * 1_000);
     config.health_check_interval_ms = config.health_check_interval_ms.clamp(1_000, 300_000);
     config.health_check_timeout_ms = config
         .health_check_timeout_ms
         .clamp(250, config.health_check_interval_ms.max(250));
     config.unhealthy_threshold = config.unhealthy_threshold.clamp(1, 100);
     config.recovery_cooldown_ms = config.recovery_cooldown_ms.clamp(1_000, 3_600_000);
-    config.locality_ttl_ms = config.locality_ttl_ms.clamp(60_000, 24 * 60 * 60 * 1_000);
-    config.locality_max_entries = config.locality_max_entries.clamp(1, 100_000);
     config.max_concurrent_requests = config.max_concurrent_requests.clamp(1, 100_000);
     config.queue_timeout_ms = config.queue_timeout_ms.clamp(10, 300_000);
-    config.requests_per_minute = if config.requests_per_minute == 0 {
-        6_000
-    } else {
-        config.requests_per_minute.min(10_000_000)
-    };
+    config.requests_per_minute = config.requests_per_minute.min(10_000_000);
 
     let legacy_key = config.public_api_key.trim();
     if !legacy_key.is_empty() {
-        let legacy_verified = !is_hashed_proxy_api_key(legacy_key)
-            && consume_native_generated_proxy_api_key(legacy_key);
-        if !is_hashed_proxy_api_key(legacy_key) && !legacy_verified {
-            return Err(
-                "旧版代理 API Key 不符合当前强度要求；请轮换为至少 32 个字符的高熵 Key".to_string(),
-            );
-        }
         let legacy_hash = if is_hashed_proxy_api_key(legacy_key) {
             legacy_key.to_string()
         } else {
@@ -1068,17 +665,14 @@ pub(crate) fn normalize_and_validate_proxy_config(
             };
             candidate_hash == legacy_hash
         }) {
-            existing.strength_verified |= legacy_verified;
-            existing.enabled = existing.strength_verified;
+            existing.enabled = true;
             existing.scopes = vec!["inference".into(), "discovery".into()];
         } else {
             config.api_keys.push(crate::models::ProxyApiKey {
                 id: "migrated-legacy-key".into(),
                 name: "Migrated legacy key".into(),
                 key: legacy_hash,
-                key_configured: false,
-                enabled: legacy_verified,
-                strength_verified: legacy_verified,
+                enabled: true,
                 scopes: vec!["inference".into(), "discovery".into()],
                 requests_per_minute: 0,
             });
@@ -1116,7 +710,6 @@ pub(crate) fn normalize_and_validate_proxy_config(
     let mut key_ids = HashSet::new();
     let mut key_values = HashSet::new();
     for api_key in &mut config.api_keys {
-        api_key.key_configured = false;
         api_key.id = api_key.id.trim().to_string();
         api_key.name = api_key.name.trim().to_string();
         api_key.key = api_key.key.trim().to_string();
@@ -1146,56 +739,19 @@ pub(crate) fn normalize_and_validate_proxy_config(
             return Err(format!("API Key {} 包含不支持的权限范围", api_key.name));
         }
         api_key.requests_per_minute = api_key.requests_per_minute.min(10_000_000);
-        if api_key.enabled && api_key.scopes.is_empty() {
-            return Err(format!(
-                "API Key {} 已启用但没有任何权限范围；请授予权限或先禁用该 Key",
-                api_key.name
-            ));
+        if api_key.enabled && !is_hashed_proxy_api_key(&api_key.key) && api_key.key.len() < 16 {
+            return Err(format!("API Key {} 至少需要 16 个字符", api_key.name));
         }
-        if !api_key.key.is_empty() && !is_hashed_proxy_api_key(&api_key.key) {
-            if !consume_native_generated_proxy_api_key(&api_key.key) {
-                return Err(format!(
-                    "API Key {} 必须由后端安全生成；请使用“添加 API Key”重新生成并保存",
-                    api_key.name
-                ));
-            }
+        if api_key.key.len() >= 16 && !is_hashed_proxy_api_key(&api_key.key) {
             api_key.key = hash_proxy_api_key(&api_key.key);
-            api_key.strength_verified = true;
-        } else if is_hashed_proxy_api_key(&api_key.key) && !api_key.strength_verified {
-            // A one-way digest does not prove that the original plaintext was
-            // strong. Legacy hashes remain stored for identification, but are
-            // disabled until the operator supplies and validates a new key.
-            api_key.enabled = false;
         }
         if api_key.enabled && !key_values.insert(api_key.key.clone()) {
             return Err("启用的代理 API Key 不能重复".to_string());
         }
     }
 
-    let enabled_key_count = config
-        .api_keys
-        .iter()
-        .filter(|key| key.enabled && !key.key.trim().is_empty())
-        .count();
-    if config.enabled && enabled_key_count == 0 && !config.allow_anonymous {
-        return Err(
-            "代理已启用但没有可用的本地 API Key；请添加 Key，或显式启用匿名访问策略".to_string(),
-        );
-    }
-    if config.allow_anonymous
-        && instances
-            .values()
-            .any(|instance| !effective_api_key(instance).is_empty())
-    {
-        return Err("匿名代理不能委托受上游 API Key 保护的实例；请配置本地代理 Key".to_string());
-    }
-
     let mut route_ids = HashSet::new();
-    for route in config
-        .routes
-        .iter_mut()
-        .chain(config.canary_routes.iter_mut())
-    {
+    for route in &mut config.routes {
         route.id = route.id.trim().to_string();
         route.model_alias = route.model_alias.trim().to_string();
         route.target_instance_id = route.target_instance_id.trim().to_string();
@@ -1212,7 +768,7 @@ pub(crate) fn normalize_and_validate_proxy_config(
         }
     }
 
-    for (index, route) in all_proxy_routes(&config).enumerate() {
+    for (index, route) in config.routes.iter().enumerate() {
         if !route.enabled {
             continue;
         }
@@ -1225,20 +781,6 @@ pub(crate) fn normalize_and_validate_proxy_config(
         if !instances.contains_key(route.target_instance_id.trim()) {
             return Err(format!("第 {} 条已启用路由的目标实例不存在", index + 1));
         }
-    }
-    if config
-        .routes
-        .iter()
-        .any(|route| !route.required_deployment_revision_id.trim().is_empty())
-    {
-        return Err("普通代理路由不能声明金丝雀部署修订绑定".into());
-    }
-    if config
-        .canary_routes
-        .iter()
-        .any(|route| route.required_deployment_revision_id.trim().is_empty())
-    {
-        return Err("金丝雀路由必须绑定部署修订".into());
     }
     Ok(config)
 }
@@ -1322,16 +864,12 @@ fn resolved_target_for_id(
     running: &HashMap<String, crate::models::RunningInstance>,
     id: &str,
     endpoint_workload: Option<ModelWorkload>,
-    route: Option<&ProxyRoute>,
+    route_priority: i32,
+    route_weight: u32,
+    route_max_concurrent_requests: u32,
 ) -> Option<ResolvedProxyTarget> {
     let stored_config = instances.get(id)?;
     let running_info = running.get(id)?;
-    if route.is_some_and(|route| {
-        !route.required_deployment_revision_id.trim().is_empty()
-            && running_info.deployment_revision_id != route.required_deployment_revision_id.trim()
-    }) {
-        return None;
-    }
     let config = running_info.launch_config.as_ref().unwrap_or(stored_config);
     if !stored_target_matches_endpoint(config, &running_info.workload, endpoint_workload) {
         return None;
@@ -1358,9 +896,9 @@ fn resolved_target_for_id(
             .then_some(config.ctx_size as u64),
         telemetry_session_id: running_info.telemetry_session_id.clone(),
         workload,
-        route_priority: route.map_or(0, |route| route.priority),
-        route_weight: route.map_or(1, |route| route.weight.max(1)),
-        route_max_concurrent_requests: route.map_or(0, |route| route.max_concurrent_requests),
+        route_priority,
+        route_weight: route_weight.max(1),
+        route_max_concurrent_requests,
     })
 }
 
@@ -1376,34 +914,12 @@ fn resolve_proxy_candidates_from(
         .filter(|model| !model.is_empty());
 
     if let Some(model) = requested_model {
-        let canary_overlay = has_canary_overlay(proxy_config, model);
-        if canary_overlay
-            && proxy_config
-                .canary_routes
-                .iter()
-                .filter(|route| route.enabled && route.model_alias.trim() == model)
-                .any(|route| {
-                    let required = route.required_deployment_revision_id.trim();
-                    required.is_empty()
-                        || running
-                            .get(route.target_instance_id.trim())
-                            .map_or(true, |instance| instance.deployment_revision_id != required)
-                })
-        {
-            return Vec::new();
-        }
-        let matching_routes = if canary_overlay {
-            canary_routes_for_model(proxy_config, model)
-        } else {
-            proxy_config
-                .routes
-                .iter()
-                .enumerate()
-                .filter(|(_, route)| {
-                    route_is_configured(route) && route.model_alias.trim() == model
-                })
-                .collect::<Vec<_>>()
-        };
+        let matching_routes = proxy_config
+            .routes
+            .iter()
+            .enumerate()
+            .filter(|(_, route)| route_is_configured(route) && route.model_alias.trim() == model)
+            .collect::<Vec<_>>();
         if !matching_routes.is_empty() {
             let mut candidates = matching_routes
                 .into_iter()
@@ -1413,7 +929,9 @@ fn resolve_proxy_candidates_from(
                         running,
                         route.target_instance_id.trim(),
                         endpoint_workload,
-                        Some(route),
+                        route.priority,
+                        route.weight,
+                        route.max_concurrent_requests,
                     )
                     .map(|target| (route.priority, index, target))
                 })
@@ -1424,15 +942,14 @@ fn resolve_proxy_candidates_from(
                 .map(|(_, _, target)| target)
                 .collect();
         }
-        if canary_overlay {
-            return Vec::new();
-        }
 
-        let has_explicit_routes = all_proxy_routes(proxy_config).any(route_is_configured);
-        if has_explicit_routes {
+        let has_explicit_routes = proxy_config.routes.iter().any(route_is_configured);
+        if proxy_config.strict_model_routing && has_explicit_routes {
             return Vec::new();
         }
-        let routed_ids = all_proxy_routes(proxy_config)
+        let routed_ids = proxy_config
+            .routes
+            .iter()
             .filter(|route| route_is_configured(route))
             .map(|route| route.target_instance_id.trim())
             .collect::<HashSet<_>>();
@@ -1446,10 +963,28 @@ fn resolve_proxy_candidates_from(
                 .and_then(|running_info| running_info.launch_config.as_ref())
                 .unwrap_or(stored_config);
             let public_match = public_model_id(config) == model;
-            if public_match && !routed_ids.contains(id.as_str()) {
+            let legacy_match = !proxy_config.strict_model_routing
+                && (config.name.trim() == model || id.as_str() == model);
+            if (public_match || legacy_match) && !routed_ids.contains(id.as_str()) {
                 if let Some(target) =
-                    resolved_target_for_id(instances, running, id, endpoint_workload, None)
+                    resolved_target_for_id(instances, running, id, endpoint_workload, 0, 1, 0)
                 {
+                    candidates.push(target);
+                }
+            }
+        }
+        if candidates.is_empty() && !proxy_config.strict_model_routing {
+            let default_instance_id = proxy_config.default_instance_id.trim();
+            if !default_instance_id.is_empty() {
+                if let Some(target) = resolved_target_for_id(
+                    instances,
+                    running,
+                    default_instance_id,
+                    endpoint_workload,
+                    0,
+                    1,
+                    0,
+                ) {
                     candidates.push(target);
                 }
             }
@@ -1464,13 +999,17 @@ fn resolve_proxy_candidates_from(
             running,
             default_instance_id,
             endpoint_workload,
-            None,
+            0,
+            1,
+            0,
         ) {
             return vec![target];
         }
     }
 
-    let routed_ids = all_proxy_routes(proxy_config)
+    let routed_ids = proxy_config
+        .routes
+        .iter()
         .filter(|route| route_is_configured(route))
         .map(|route| route.target_instance_id.trim())
         .collect::<HashSet<_>>();
@@ -1479,7 +1018,7 @@ fn resolve_proxy_candidates_from(
     let mut candidates = ids
         .into_iter()
         .filter(|id| !routed_ids.contains(id.as_str()))
-        .filter_map(|id| resolved_target_for_id(instances, running, id, endpoint_workload, None))
+        .filter_map(|id| resolved_target_for_id(instances, running, id, endpoint_workload, 0, 1, 0))
         .collect::<Vec<_>>();
     if proxy_config.strict_model_routing && candidates.len() != 1 {
         candidates.clear();
@@ -1510,7 +1049,7 @@ fn all_resolved_targets(snapshot: &ProxyRuntimeSnapshot) -> Vec<ResolvedProxyTar
     ids.sort();
     ids.into_iter()
         .filter_map(|id| {
-            resolved_target_for_id(&snapshot.instances, &snapshot.running, id, None, None)
+            resolved_target_for_id(&snapshot.instances, &snapshot.running, id, None, 0, 1, 0)
         })
         .collect()
 }
@@ -1529,122 +1068,15 @@ pub(crate) fn proxy_request_resolution_from(
         requested_model,
         endpoint_workload,
     );
-    let routing_strategy = effective_routing_strategy(&config, requested_model);
-    ProxyRequestResolution {
-        config,
-        candidates,
-        routing_strategy,
-    }
+    ProxyRequestResolution { config, candidates }
 }
 
-fn bounded_locality_material(kind: &str, bytes: &[u8]) -> Vec<u8> {
-    let mut material =
-        Vec::with_capacity(kind.len() + 1 + bytes.len().min(MAX_LOCALITY_PREFIX_BYTES));
-    material.extend_from_slice(kind.as_bytes());
-    material.push(0);
-    material.extend_from_slice(&bytes[..bytes.len().min(MAX_LOCALITY_PREFIX_BYTES)]);
-    material
-}
-
-fn locality_identifier(value: &serde_json::Value) -> Option<&str> {
-    value
-        .as_str()
-        .or_else(|| value.as_object()?.get("id")?.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-fn stable_message_material(value: &serde_json::Value, field: &str) -> Option<Vec<u8>> {
-    let messages = value.get(field)?.as_array()?;
-    let mut prefix = Vec::new();
-    for message in messages {
-        let role = message
-            .get("role")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        prefix.push(message);
-        if !matches!(role, "system" | "developer") {
-            break;
-        }
-    }
-    if prefix.is_empty() {
-        return None;
-    }
-    let serialized = serde_json::to_vec(&(value.get("system"), prefix)).ok()?;
-    Some(bounded_locality_material("message-prefix", &serialized))
-}
-
-#[cfg(test)]
-fn request_locality_material(headers: &HeaderMap, body: &[u8]) -> Result<Option<Vec<u8>>, String> {
-    let value = parse_bounded_proxy_json(body)?;
-    request_locality_material_from_value(headers, &value)
-}
-
-fn request_locality_material_from_value(
-    headers: &HeaderMap,
-    value: &serde_json::Value,
-) -> Result<Option<Vec<u8>>, String> {
-    if let Some(value) = headers.get(LSM_SESSION_HEADER) {
-        let value = value
-            .to_str()
-            .map_err(|_| format!("{LSM_SESSION_HEADER} must be valid ASCII/UTF-8"))?
-            .trim();
-        if value.is_empty() {
-            return Err(format!("{LSM_SESSION_HEADER} must not be empty"));
-        }
-        if value.len() > MAX_LOCALITY_SESSION_ID_BYTES {
-            return Err(format!(
-                "{LSM_SESSION_HEADER} exceeds the {MAX_LOCALITY_SESSION_ID_BYTES} byte limit"
-            ));
-        }
-        return Ok(Some(bounded_locality_material(
-            "explicit-session",
-            value.as_bytes(),
-        )));
-    }
-
-    if let Some(conversation) = value.get("conversation").and_then(locality_identifier) {
-        return Ok(Some(bounded_locality_material(
-            "conversation",
-            conversation.as_bytes(),
-        )));
-    }
-    if let Some(metadata) = value.get("metadata") {
-        for field in ["session_id", "conversation_id"] {
-            if let Some(identifier) = metadata.get(field).and_then(locality_identifier) {
-                return Ok(Some(bounded_locality_material(
-                    field,
-                    identifier.as_bytes(),
-                )));
-            }
-        }
-    }
-    if let Some(material) = stable_message_material(value, "messages")
-        .or_else(|| stable_message_material(value, "input"))
-    {
-        return Ok(Some(material));
-    }
-    for field in ["prompt", "input"] {
-        if let Some(prompt) = value.get(field) {
-            let serialized = match prompt.as_str() {
-                Some(prompt) => prompt.as_bytes().to_vec(),
-                None => serde_json::to_vec(prompt).unwrap_or_default(),
-            };
-            if !serialized.is_empty() {
-                return Ok(Some(bounded_locality_material(field, &serialized)));
-            }
-        }
-    }
-    Ok(None)
-}
-
-#[cfg(test)]
 fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
-    let value = parse_bounded_proxy_json(body)?;
-    requested_model_from_value(&value)
-}
-
-fn requested_model_from_value(value: &serde_json::Value) -> Result<Option<String>, String> {
+    let value = serde_json::from_slice::<serde_json::Value>(body)
+        .map_err(|_| "request body must be a valid JSON object".to_string())?;
+    if !value.is_object() {
+        return Err("request body must be a JSON object".to_string());
+    }
     let Some(model) = value.get("model").and_then(|model| model.as_str()) else {
         return Ok(None);
     };
@@ -1657,8 +1089,11 @@ fn requested_model_from_value(value: &serde_json::Value) -> Result<Option<String
     Ok(Some(model.to_string()))
 }
 
-fn request_uses_streaming_value(value: &serde_json::Value) -> Option<bool> {
-    value.get("stream").and_then(serde_json::Value::as_bool)
+fn request_uses_streaming(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| value.get("stream").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1682,10 +1117,8 @@ struct ContextLimitViolation {
     context_window: u64,
 }
 
-fn context_preflight_spec_from_value(
-    path: &str,
-    value: &serde_json::Value,
-) -> Option<ContextPreflightSpec> {
+fn context_preflight_spec(path: &str, body: &[u8]) -> Option<ContextPreflightSpec> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     let output_tokens = |names: &[&str]| {
         names
             .iter()
@@ -1718,7 +1151,8 @@ fn context_preflight_spec_from_value(
     }
 }
 
-fn completion_tokenize_bodies_from_value(value: &serde_json::Value) -> Option<Vec<Bytes>> {
+fn completion_tokenize_bodies(body: &[u8]) -> Option<Vec<Bytes>> {
+    let value = serde_json::from_slice::<serde_json::Value>(body).ok()?;
     let prompt = value.get("prompt")?;
     let prompts = match prompt {
         serde_json::Value::Array(items)
@@ -1745,22 +1179,13 @@ fn completion_tokenize_bodies_from_value(value: &serde_json::Value) -> Option<Ve
         .collect()
 }
 
-#[cfg(test)]
 fn rewrite_request_model(body: &Bytes, upstream_model_id: &str) -> Bytes {
-    let Ok(mut value) = parse_bounded_proxy_json(body) else {
-        return body.clone();
-    };
-    rewrite_request_model_from_value(body, &mut value, upstream_model_id)
-}
-
-fn rewrite_request_model_from_value(
-    body: &Bytes,
-    value: &mut serde_json::Value,
-    upstream_model_id: &str,
-) -> Bytes {
     if upstream_model_id.trim().is_empty() {
         return body.clone();
     }
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return body.clone();
+    };
     let Some(object) = value.as_object_mut() else {
         return body.clone();
     };
@@ -1782,7 +1207,7 @@ fn public_response_model(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     if let Some(requested) = requested {
-        let route_is_public = all_proxy_routes(proxy_config).any(|route| {
+        let route_is_public = proxy_config.routes.iter().any(|route| {
             route.enabled
                 && route.target_instance_id.trim() == target.instance_id.trim()
                 && route.model_alias.trim() == requested
@@ -1874,7 +1299,7 @@ fn authenticate_proxy_request(
         .filter(|api_key| api_key.enabled && !api_key.key.trim().is_empty())
         .collect::<Vec<_>>();
     if enabled_keys.is_empty() {
-        return config.allow_anonymous.then(|| ProxyAuthContext {
+        return Some(ProxyAuthContext {
             client_id: "anonymous".into(),
             requests_per_minute: config.requests_per_minute,
             scopes: vec!["inference".into(), "discovery".into()],
@@ -1960,13 +1385,13 @@ fn apply_cors_headers(response: &mut Response, origin: Option<&str>) {
     response.headers_mut().insert(
         "access-control-allow-headers",
         HeaderValue::from_static(
-            "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-request-id, x-lsm-session-id, openai-organization, openai-project",
+            "authorization, content-type, x-api-key, anthropic-version, anthropic-beta, x-request-id, openai-organization, openai-project",
         ),
     );
     response.headers_mut().insert(
         "access-control-expose-headers",
         HeaderValue::from_static(
-            "request-id, x-request-id, x-lsm-locality, retry-after, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining",
+            "request-id, x-request-id, retry-after, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining",
         ),
     );
     response
@@ -1997,12 +1422,6 @@ fn apply_rate_headers(response: &mut Response, format: ProxyApiFormat, limit: u3
     }
 }
 
-fn close_pre_authenticated_connection(response: &mut Response) {
-    response
-        .headers_mut()
-        .insert("connection", HeaderValue::from_static("close"));
-}
-
 fn validate_anthropic_version(path: &str, headers: &HeaderMap) -> Result<(), String> {
     if !matches!(path, "/v1/messages" | "/v1/messages/count_tokens") {
         return Ok(());
@@ -2024,6 +1443,31 @@ fn validate_anthropic_version(path: &str, headers: &HeaderMap) -> Result<(), Str
     Ok(())
 }
 
+fn request_body_limit(path: &str) -> usize {
+    if matches!(path, "/v1/messages" | "/v1/messages/count_tokens") {
+        MAX_ANTHROPIC_REQUEST_BODY_BYTES
+    } else {
+        MAX_PROXY_REQUEST_BODY_BYTES
+    }
+}
+
+fn request_body_reservation(path: &str, headers: &HeaderMap) -> Result<usize, String> {
+    let limit = request_body_limit(path);
+    let Some(value) = headers.get("content-length") else {
+        return Ok(limit);
+    };
+    let declared = value
+        .to_str()
+        .map_err(|_| "content-length header must be valid ASCII".to_string())?
+        .trim()
+        .parse::<usize>()
+        .map_err(|_| "content-length header must be a non-negative integer".to_string())?;
+    if declared > limit {
+        return Err(format!("request body exceeds the {limit} byte limit"));
+    }
+    Ok(declared)
+}
+
 async fn proxy_security_middleware(
     State(router_state): State<ProxyRouterState>,
     mut request: Request,
@@ -2036,119 +1480,38 @@ async fn proxy_security_middleware(
     );
     let origin = match cors_origin(&config, request.headers()) {
         Ok(origin) => origin,
-        Err(error) => {
-            let mut response = error_response(format, StatusCode::FORBIDDEN, &error);
-            close_pre_authenticated_connection(&mut response);
-            return response;
-        }
+        Err(error) => return error_response(format, StatusCode::FORBIDDEN, &error),
     };
     if request.method() == Method::OPTIONS {
         let mut response = StatusCode::NO_CONTENT.into_response();
         apply_cors_headers(&mut response, origin.as_deref());
         ensure_request_id_header(&mut response, format);
-        close_pre_authenticated_connection(&mut response);
         return response;
     }
     let Some(auth) = authenticate_proxy_request(&config, request.uri().path(), request.headers())
     else {
-        let failed_auth = router_state
-            .runtime
-            .check_rate_limit("proxy:failed-auth", MAX_FAILED_PROXY_AUTH_PER_MINUTE);
-        let status = if failed_auth.allowed {
-            StatusCode::UNAUTHORIZED
-        } else {
-            StatusCode::TOO_MANY_REQUESTS
-        };
-        let mut response = error_response(
-            format,
-            status,
-            if failed_auth.allowed {
-                "unauthorized"
-            } else {
-                "authentication failure rate limit exceeded"
-            },
-        );
-        if !failed_auth.allowed {
-            if let Ok(value) = HeaderValue::from_str(&failed_auth.retry_after_secs.to_string()) {
-                response.headers_mut().insert("retry-after", value);
-            }
-        }
+        let mut response = error_response(format, StatusCode::UNAUTHORIZED, "unauthorized");
         apply_cors_headers(&mut response, origin.as_deref());
-        close_pre_authenticated_connection(&mut response);
         return response;
     };
-    let scope = request_scope(request.uri().path());
-    if !auth.scopes.iter().any(|granted| granted == scope) {
+    if !auth.scopes.is_empty()
+        && !auth
+            .scopes
+            .iter()
+            .any(|scope| scope == request_scope(request.uri().path()))
+    {
         let mut response = error_response(format, StatusCode::FORBIDDEN, "API key scope denied");
         apply_cors_headers(&mut response, origin.as_deref());
         return response;
     }
-    let per_client_limit = if scope == "discovery" {
-        2
-    } else {
-        let global_limit = config.max_concurrent_requests.max(1) as usize;
-        if global_limit == 1 {
-            1
-        } else {
-            global_limit.div_ceil(2).min(8)
-        }
-    };
-    let Some(client_permit) =
-        router_state
-            .runtime
-            .try_acquire_client(&auth.client_id, scope, per_client_limit)
-    else {
-        let mut response = error_response(
-            format,
-            StatusCode::TOO_MANY_REQUESTS,
-            "per-client concurrency limit exceeded",
-        );
-        response
-            .headers_mut()
-            .insert("retry-after", HeaderValue::from_static("1"));
-        apply_cors_headers(&mut response, origin.as_deref());
-        return response;
-    };
-    request.extensions_mut().insert(client_permit.clone());
-    request.extensions_mut().insert(auth.clone());
     if let Err(error) = validate_anthropic_version(request.uri().path(), request.headers()) {
         let mut response = error_response(format, StatusCode::BAD_REQUEST, &error);
         apply_cors_headers(&mut response, origin.as_deref());
         return response;
     }
-    let discovery_permit = if scope == "discovery" {
-        let Some(permit) = router_state.runtime.try_acquire_discovery_request() else {
-            let mut response = error_response(
-                format,
-                StatusCode::TOO_MANY_REQUESTS,
-                "discovery request capacity exceeded",
-            );
-            response
-                .headers_mut()
-                .insert("retry-after", HeaderValue::from_static("1"));
-            apply_cors_headers(&mut response, origin.as_deref());
-            return response;
-        };
-        Some(permit)
-    } else {
-        None
-    };
-    let (rate_client_id, rate_limit) = if scope == "discovery" {
-        (
-            format!("{}:discovery", auth.client_id),
-            if auth.requests_per_minute == 0 {
-                MAX_DISCOVERY_REQUESTS_PER_MINUTE
-            } else {
-                auth.requests_per_minute
-                    .min(MAX_DISCOVERY_REQUESTS_PER_MINUTE)
-            },
-        )
-    } else {
-        (auth.client_id.clone(), auth.requests_per_minute)
-    };
     let rate = router_state
         .runtime
-        .check_rate_limit(&rate_client_id, rate_limit);
+        .check_rate_limit(&auth.client_id, auth.requests_per_minute);
     if !rate.allowed {
         let mut response =
             error_response(format, StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
@@ -2159,11 +1522,69 @@ async fn proxy_security_middleware(
         apply_cors_headers(&mut response, origin.as_deref());
         return response;
     }
+    if request.method() == Method::POST && request_scope(request.uri().path()) == "inference" {
+        let Some(permit) = router_state
+            .runtime
+            .acquire_global(
+                config.max_concurrent_requests,
+                Duration::from_millis(config.queue_timeout_ms),
+            )
+            .await
+        else {
+            let mut response = error_response(
+                format,
+                StatusCode::TOO_MANY_REQUESTS,
+                "router concurrency limit exceeded",
+            );
+            if let Ok(value) = HeaderValue::from_str(
+                &config
+                    .queue_timeout_ms
+                    .saturating_add(999)
+                    .div_ceil(1_000)
+                    .to_string(),
+            ) {
+                response.headers_mut().insert("retry-after", value);
+            }
+            ensure_request_id_header(&mut response, format);
+            apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
+            apply_cors_headers(&mut response, origin.as_deref());
+            return response;
+        };
+        let reservation = match request_body_reservation(request.uri().path(), request.headers()) {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let mut response = error_response(format, StatusCode::PAYLOAD_TOO_LARGE, &error);
+                ensure_request_id_header(&mut response, format);
+                apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
+                apply_cors_headers(&mut response, origin.as_deref());
+                return response;
+            }
+        };
+        let Some(body_permit) = router_state
+            .runtime
+            .try_acquire_body_bytes(reservation, MAX_PROXY_IN_FLIGHT_BODY_BYTES)
+        else {
+            router_state.runtime.record_rejected();
+            let mut response = error_response(
+                format,
+                StatusCode::TOO_MANY_REQUESTS,
+                "router in-flight request body budget exceeded",
+            );
+            response
+                .headers_mut()
+                .insert("retry-after", HeaderValue::from_static("1"));
+            ensure_request_id_header(&mut response, format);
+            apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
+            apply_cors_headers(&mut response, origin.as_deref());
+            return response;
+        };
+        request
+            .extensions_mut()
+            .insert(ProxyAdmissionPermit::new(permit, body_permit));
+    }
     request.headers_mut().remove("authorization");
     request.headers_mut().remove("x-api-key");
     let mut response = next.run(request).await;
-    drop(client_permit);
-    drop(discovery_permit);
     ensure_request_id_header(&mut response, format);
     apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
     apply_cors_headers(&mut response, origin.as_deref());
@@ -2248,32 +1669,8 @@ fn is_hop_by_hop_header(name: &str, connection_tokens: &HashSet<String>) -> bool
 fn should_forward_request_header(name: &str, connection_tokens: &HashSet<String>) -> bool {
     !matches!(
         name,
-        "host"
-            | "content-length"
-            | "accept-encoding"
-            | "authorization"
-            | "x-api-key"
-            | "x-lsm-session-id"
-            | "cookie"
-            | "x-forwarded-user"
-            | "x-forwarded-email"
-            | "x-auth-request-user"
-            | "x-auth-request-email"
+        "host" | "content-length" | "accept-encoding" | "authorization" | "x-api-key"
     ) && !is_hop_by_hop_header(name, connection_tokens)
-}
-
-fn should_forward_response_header(
-    name: &str,
-    connection_tokens: &HashSet<String>,
-    status_success: bool,
-    api_format: ProxyApiFormat,
-) -> bool {
-    name != "content-length"
-        && name != "x-lsm-locality"
-        && name != "set-cookie"
-        && (status_success || name != "content-type")
-        && (!api_format.is_anthropic() || status_success || name != "request-id")
-        && !is_hop_by_hop_header(name, connection_tokens)
 }
 
 fn apply_target_request_headers(
@@ -2294,7 +1691,6 @@ fn apply_target_request_headers(
     request
 }
 
-#[cfg(test)]
 fn append_bounded_response_chunk(
     body: &mut Vec<u8>,
     chunk: &[u8],
@@ -2310,14 +1706,20 @@ fn append_bounded_response_chunk(
 async fn collect_bounded_response_body(
     response: reqwest::Response,
     limit: usize,
-) -> Result<(Bytes, Option<std::time::Instant>), String> {
-    bounded_http::collect_response(
-        response,
-        limit,
-        Duration::from_secs(30),
-        Duration::from_secs(120),
-    )
-    .await
+) -> Result<Bytes, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit as u64)
+    {
+        return Err(format!("upstream JSON response exceeds {limit} bytes"));
+    }
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| error.to_string())?;
+        append_bounded_response_chunk(&mut body, &chunk, limit)?;
+    }
+    Ok(Bytes::from(body))
 }
 
 async fn fetch_token_count_value(
@@ -2346,16 +1748,13 @@ async fn fetch_token_count_value(
     if !response.status().is_success() {
         return None;
     }
-    let (body, _) = collect_bounded_response_body(response, MAX_TOKEN_COUNT_RESPONSE_BYTES)
+    let body = collect_bounded_response_body(response, MAX_TOKEN_COUNT_RESPONSE_BYTES)
         .await
         .ok()?;
     serde_json::from_slice(&body).ok()
 }
 
-#[allow(clippy::too_many_arguments)] // Keeps protocol-specific preflight inputs explicit.
 async fn fetch_input_token_count(
-    runtime: &RouterRuntime,
-    parsed: &serde_json::Value,
     client: &reqwest::Client,
     target: &ResolvedProxyTarget,
     headers: &HeaderMap,
@@ -2364,35 +1763,26 @@ async fn fetch_input_token_count(
     proxy_config: &ProxyConfig,
 ) -> Option<u64> {
     match counter {
-        InputTokenCounter::Native(path) => {
-            let _auxiliary = runtime.acquire_auxiliary_request().await;
-            fetch_token_count_value(
-                client,
-                target,
-                headers,
-                path,
-                upstream_body.clone(),
-                proxy_config,
-            )
-            .await?
-            .get("input_tokens")
-            .and_then(serde_json::Value::as_u64)
-        }
+        InputTokenCounter::Native(path) => fetch_token_count_value(
+            client,
+            target,
+            headers,
+            path,
+            upstream_body.clone(),
+            proxy_config,
+        )
+        .await?
+        .get("input_tokens")
+        .and_then(serde_json::Value::as_u64),
         InputTokenCounter::Completion => {
-            let bodies = completion_tokenize_bodies_from_value(parsed)?;
+            let bodies = completion_tokenize_bodies(upstream_body)?;
+            let counts = futures_util::future::join_all(bodies.into_iter().map(|body| {
+                fetch_token_count_value(client, target, headers, "/tokenize", body, proxy_config)
+            }))
+            .await;
             let mut maximum = None;
-            for body in bodies {
-                let _auxiliary = runtime.acquire_auxiliary_request().await;
-                let value = fetch_token_count_value(
-                    client,
-                    target,
-                    headers,
-                    "/tokenize",
-                    body,
-                    proxy_config,
-                )
-                .await?;
-                let count = value
+            for value in counts {
+                let count = value?
                     .get("tokens")
                     .and_then(serde_json::Value::as_array)?
                     .len() as u64;
@@ -2403,10 +1793,7 @@ async fn fetch_input_token_count(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // Mirrors the complete context-admission decision.
 async fn context_limit_violation(
-    runtime: &RouterRuntime,
-    parsed: &serde_json::Value,
     client: &reqwest::Client,
     target: &ResolvedProxyTarget,
     headers: &HeaderMap,
@@ -2418,7 +1805,7 @@ async fn context_limit_violation(
     if context_window == 0 {
         return None;
     }
-    let spec = context_preflight_spec_from_value(path, parsed)?;
+    let spec = context_preflight_spec(path, upstream_body)?;
     if spec.requested_output_tokens > context_window {
         return Some(ContextLimitViolation {
             error_param: spec.error_param,
@@ -2428,8 +1815,6 @@ async fn context_limit_violation(
         });
     }
     let input_tokens = fetch_input_token_count(
-        runtime,
-        parsed,
         client,
         target,
         headers,
@@ -2500,7 +1885,7 @@ fn select_resolved_target(
     let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
     let selected = router_state.runtime.select_target(
         &scheduling,
-        &effective_routing_strategy(&snapshot.config, requested_model),
+        &snapshot.config.routing_strategy,
         &routing_group_key(requested_model, endpoint_workload),
     )?;
     let target = candidates
@@ -2524,27 +1909,11 @@ async fn fetch_target_json(
     if !target.api_key.trim().is_empty() {
         request = request.bearer_auth(target.api_key.trim());
     }
-    let response = request.send().await.map_err(|error| {
-        if error.is_timeout() {
-            "upstream request timed out".to_string()
-        } else if error.is_connect() {
-            "upstream is unavailable".to_string()
-        } else {
-            "upstream request failed".to_string()
-        }
-    })?;
+    let response = request.send().await.map_err(|error| error.to_string())?;
     if !response.status().is_success() {
         return Err(format!("upstream returned {}", response.status().as_u16()));
     }
-    let (body, _) = bounded_http::collect_response(
-        response,
-        MAX_DISCOVERY_RESPONSE_BYTES,
-        Duration::from_millis(config.health_check_timeout_ms.max(250)),
-        Duration::from_millis(config.health_check_timeout_ms.max(250)),
-    )
-    .await
-    .map_err(|_| "upstream response failed validation".to_string())?;
-    serde_json::from_slice(&body).map_err(|_| "upstream returned invalid JSON".to_string())
+    response.json().await.map_err(|error| error.to_string())
 }
 
 fn capabilities_from_values(
@@ -2632,26 +2001,18 @@ async fn probe_target(
 }
 
 async fn probe_snapshot_targets(source: Arc<dyn ProxyDataSource>, runtime: Arc<RouterRuntime>) {
-    let Some(_round_permit) = runtime.try_acquire_discovery_round() else {
-        return;
-    };
     let snapshot = source.proxy_snapshot();
-    let targets = all_resolved_targets(&snapshot)
-        .into_iter()
-        .take(MAX_DISCOVERY_TARGETS)
-        .collect::<Vec<_>>();
+    let targets = all_resolved_targets(&snapshot);
     let target_ids = targets
         .iter()
         .map(|target| target.public.instance_id.clone())
         .collect::<HashSet<_>>();
     runtime.retain_targets(&target_ids);
-    futures_util::stream::iter(
+    futures_util::future::join_all(
         targets
             .into_iter()
             .map(|target| probe_target(runtime.clone(), target, snapshot.config.clone())),
     )
-    .buffer_unordered(DISCOVERY_PROBE_CONCURRENCY)
-    .collect::<Vec<_>>()
     .await;
 }
 
@@ -2680,7 +2041,6 @@ pub(crate) fn status_with_runtime(
         .config
         .routes
         .iter()
-        .chain(snapshot.config.canary_routes.iter())
         .filter(|route| route_is_configured(route))
         .map(|route| route.target_instance_id.clone())
         .collect::<Vec<_>>();
@@ -2698,20 +2058,12 @@ pub(crate) fn status_with_runtime(
     status.unhealthy_routes = unhealthy;
     status.in_flight_requests = runtime.in_flight_requests();
     status.total_requests = runtime.total_requests();
-    status.operational = runtime.operational_snapshot(snapshot.config.max_concurrent_requests);
     status
 }
 
-async fn proxy_health(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
+async fn proxy_health(State(router_state): State<ProxyRouterState>) -> Json<ProxyStatus> {
     let snapshot = router_state.source.proxy_snapshot();
-    let status = status_with_runtime(&snapshot, &router_state.runtime);
-    Json(json!({
-        "status": if status.running { "ok" } else { "unavailable" },
-        "healthy_routes": status.healthy_routes,
-        "unhealthy_routes": status.unhealthy_routes,
-        "in_flight_requests": status.in_flight_requests,
-        "total_requests": status.total_requests,
-    }))
+    Json(status_with_runtime(&snapshot, &router_state.runtime))
 }
 
 async fn proxy_live(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
@@ -2724,19 +2076,11 @@ async fn proxy_live(State(router_state): State<ProxyRouterState>) -> Json<serde_
 }
 
 async fn proxy_ready(State(router_state): State<ProxyRouterState>) -> Response {
-    // Readiness is a cached discovery view. Active probing is coalesced by the
-    // scheduled health loop so discovery-scoped callers cannot amplify one GET
-    // into a full upstream probe round.
+    probe_snapshot_targets(router_state.source.clone(), router_state.runtime.clone()).await;
     let snapshot = router_state.source.proxy_snapshot();
     let status = status_with_runtime(&snapshot, &router_state.runtime);
     let target_ids = snapshot.running.keys().cloned().collect::<Vec<_>>();
     let targets = router_state.runtime.snapshots(target_ids);
-    let target_summary = json!({
-        "total": targets.len(),
-        "ready": targets.iter().filter(|target| target.ready).count(),
-        "active_requests": targets.iter().map(|target| target.active_requests).sum::<usize>(),
-        "maximum_latency_ms": targets.iter().filter_map(|target| target.latency_ms).fold(0.0_f64, f64::max),
-    });
     let ready = status.healthy_routes > 0;
     let code = if ready {
         StatusCode::OK
@@ -2749,22 +2093,17 @@ async fn proxy_ready(State(router_state): State<ProxyRouterState>) -> Response {
             "status": if ready { "ready" } else { "unavailable" },
             "healthy_routes": status.healthy_routes,
             "unhealthy_routes": status.unhealthy_routes,
-            "targets": target_summary,
+            "targets": targets,
         })),
     )
         .into_response()
 }
 
 async fn proxy_metrics(State(router_state): State<ProxyRouterState>) -> Response {
-    let max_concurrent_requests = router_state.source.proxy_config().max_concurrent_requests;
     Response::builder()
         .status(StatusCode::OK)
         .header("content-type", "text/plain; version=0.0.4; charset=utf-8")
-        .body(Body::from(
-            router_state
-                .runtime
-                .prometheus_metrics(max_concurrent_requests),
-        ))
+        .body(Body::from(router_state.runtime.prometheus_metrics()))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -2809,11 +2148,7 @@ fn sanitized_slots(value: &serde_json::Value) -> serde_json::Value {
     )
 }
 
-async fn proxy_props(
-    State(router_state): State<ProxyRouterState>,
-    Extension(auth): Extension<ProxyAuthContext>,
-    uri: Uri,
-) -> Response {
+async fn proxy_props(State(router_state): State<ProxyRouterState>, uri: Uri) -> Response {
     let requested_model = query_parameter(&uri, "model");
     let Some((config, target)) =
         select_resolved_target(&router_state, requested_model.as_deref(), None)
@@ -2824,13 +2159,6 @@ async fn proxy_props(
             "no ready model matches the selector",
         );
     };
-    if auth.client_id == "anonymous" && !target.api_key.trim().is_empty() {
-        return error_response(
-            ProxyApiFormat::OpenAi,
-            StatusCode::FORBIDDEN,
-            "anonymous proxy access cannot delegate an upstream API key",
-        );
-    }
     match fetch_target_json(&target, "/props", &config).await {
         Ok(value) => {
             let public_model =
@@ -2844,19 +2172,15 @@ async fn proxy_props(
             ))
             .into_response()
         }
-        Err(_) => error_response(
+        Err(error) => error_response(
             ProxyApiFormat::OpenAi,
             StatusCode::BAD_GATEWAY,
-            "upstream props request failed",
+            &format!("upstream props request failed: {error}"),
         ),
     }
 }
 
-async fn proxy_slots(
-    State(router_state): State<ProxyRouterState>,
-    Extension(auth): Extension<ProxyAuthContext>,
-    uri: Uri,
-) -> Response {
+async fn proxy_slots(State(router_state): State<ProxyRouterState>, uri: Uri) -> Response {
     let requested_model = query_parameter(&uri, "model");
     let Some((config, target)) =
         select_resolved_target(&router_state, requested_model.as_deref(), None)
@@ -2867,13 +2191,6 @@ async fn proxy_slots(
             "no ready model matches the selector",
         );
     };
-    if auth.client_id == "anonymous" && !target.api_key.trim().is_empty() {
-        return error_response(
-            ProxyApiFormat::OpenAi,
-            StatusCode::FORBIDDEN,
-            "anonymous proxy access cannot delegate an upstream API key",
-        );
-    }
     let upstream_path = if query_parameter(&uri, "fail_on_no_slot").as_deref() == Some("1") {
         "/slots?fail_on_no_slot=1"
     } else {
@@ -2881,10 +2198,10 @@ async fn proxy_slots(
     };
     match fetch_target_json(&target, upstream_path, &config).await {
         Ok(value) => Json(sanitized_slots(&value)).into_response(),
-        Err(_) => error_response(
+        Err(error) => error_response(
             ProxyApiFormat::OpenAi,
             StatusCode::BAD_GATEWAY,
-            "upstream slots request failed",
+            &format!("upstream slots request failed: {error}"),
         ),
     }
 }
@@ -3110,11 +2427,15 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
         .filter(|target| target.running)
         .map(|target| target.instance_id.as_str())
         .collect::<HashSet<_>>();
-    let routed_target_ids = all_proxy_routes(config)
+    let routed_target_ids = config
+        .routes
+        .iter()
         .filter(|route| route_is_configured(route))
         .map(|route| route.target_instance_id.trim())
         .collect::<HashSet<_>>();
-    let mut ids = all_proxy_routes(config)
+    let mut ids = config
+        .routes
+        .iter()
         .filter(|route| {
             route.enabled
                 && !route.model_alias.trim().is_empty()
@@ -3140,179 +2461,63 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
 
 async fn proxy_upstream(
     State(router_state): State<ProxyRouterState>,
-    Extension(auth): Extension<ProxyAuthContext>,
-    Extension(client_permit): Extension<Arc<ClientRequestPermit>>,
-    request: Request,
+    Extension(admission): Extension<ProxyAdmissionPermit>,
+    method: Method,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
-    let request_started_at = std::time::Instant::now();
-    let admission_config = router_state.source.proxy_config();
-    let admission_deadline = request_started_at
-        + Duration::from_millis(
-            admission_config
-                .timeout_ms
-                .max(admission_config.streaming_max_lifetime_ms)
-                .max(1_000),
-        );
-    let method = request.method().clone();
-    let uri = request.uri().clone();
-    let headers = request.headers().clone();
     let api_format = ProxyApiFormat::from_path(uri.path());
+    let Some(admission_guards) = admission.take() else {
+        return error_response(
+            api_format,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "router admission permit is unavailable",
+        );
+    };
+    let ProxyAdmissionGuards {
+        global: global_permit,
+        body: body_permit,
+    } = admission_guards;
     if api_format.is_anthropic() && method != Method::POST {
-        router_state.runtime.record_rejected();
         return error_response(
             api_format,
             StatusCode::METHOD_NOT_ALLOWED,
             "Anthropic Messages endpoints require POST",
         );
     }
-    let Some(ingress_permit) = router_state.runtime.try_acquire_ingress_request() else {
-        router_state.runtime.record_rejected();
-        return error_response(
-            api_format,
-            StatusCode::TOO_MANY_REQUESTS,
-            "router request ingress capacity exceeded",
-        );
-    };
-    let body_limit = if matches!(uri.path(), "/v1/messages" | "/v1/messages/count_tokens") {
-        router_state.anthropic_request_body_limit
-    } else {
-        router_state.request_body_limit
-    };
-    let Some(upload_budget) = admission_deadline
-        .checked_duration_since(std::time::Instant::now())
-        .map(|remaining| remaining.min(Duration::from_secs(30)))
-    else {
-        router_state.runtime.record_rejected();
-        return error_response(
-            api_format,
-            StatusCode::REQUEST_TIMEOUT,
-            "request exceeded its end-to-end deadline before body upload",
-        );
-    };
-    let body = match tokio::time::timeout(
-        upload_budget,
-        axum::body::to_bytes(request.into_body(), body_limit),
-    )
-    .await
-    {
-        Ok(Ok(body)) => body,
-        Ok(Err(_)) => {
-            router_state.runtime.record_rejected();
-            return error_response(
-                api_format,
-                StatusCode::PAYLOAD_TOO_LARGE,
-                &format!("request body exceeds the {body_limit} byte limit"),
-            );
-        }
-        Err(_) => {
-            router_state.runtime.record_rejected();
-            return error_response(
-                api_format,
-                StatusCode::REQUEST_TIMEOUT,
-                "request body upload exceeded the 30 second deadline",
-            );
+    let body = match body {
+        Ok(body) => body,
+        Err(rejection) => {
+            let status = rejection.into_response().status();
+            let message = if status == StatusCode::PAYLOAD_TOO_LARGE {
+                format!(
+                    "request body exceeds the {} byte limit",
+                    MAX_ANTHROPIC_REQUEST_BODY_BYTES
+                )
+            } else {
+                "failed to read request body".to_string()
+            };
+            return error_response(api_format, status, &message);
         }
     };
-    // Charge every fully materialized request body before it can wait in the
-    // global concurrency queue. Otherwise queued requests retain unaccounted
-    // Bytes allocations and can exceed the aggregate memory budget.
-    let Some(body_permit) = router_state
-        .runtime
-        .try_acquire_body_bytes(body.len(), MAX_PROXY_IN_FLIGHT_BODY_BYTES)
-    else {
-        router_state.runtime.record_rejected();
-        return error_response(
-            api_format,
-            StatusCode::TOO_MANY_REQUESTS,
-            "router in-flight request body budget exceeded",
-        );
-    };
-    drop(ingress_permit);
-    let started_at = std::time::Instant::now();
-    let started_at_ms = current_time_ms();
-    let Some(queue_budget) = admission_deadline
-        .checked_duration_since(std::time::Instant::now())
-        .map(|remaining| remaining.min(Duration::from_millis(admission_config.queue_timeout_ms)))
-    else {
-        router_state.runtime.record_rejected();
-        return error_response(
-            api_format,
-            StatusCode::GATEWAY_TIMEOUT,
-            "request exceeded its end-to-end deadline before admission",
-        );
-    };
-    let Some(global_permit) = router_state
-        .runtime
-        .acquire_global(admission_config.max_concurrent_requests, queue_budget)
-        .await
-    else {
-        router_state.runtime.record_rejected();
-        return error_response(
-            api_format,
-            StatusCode::TOO_MANY_REQUESTS,
-            "router concurrency limit exceeded",
-        );
-    };
-    let queue_time_ms = global_permit.queue_wait_ms();
-    let mut parsed_request = match parse_bounded_proxy_json(&body) {
-        Ok(parsed) => parsed,
-        Err(error) => {
-            router_state.runtime.record_rejected();
-            return error_response(api_format, StatusCode::BAD_REQUEST, &error);
-        }
-    };
-    let requested_model = match requested_model_from_value(&parsed_request) {
+    let requested_model = match requested_model_from_body(&body) {
         Ok(model) => model,
-        Err(error) => {
-            router_state.runtime.record_rejected();
-            return error_response(api_format, StatusCode::BAD_REQUEST, &error);
-        }
+        Err(error) => return error_response(api_format, StatusCode::BAD_REQUEST, &error),
     };
-    let request_streaming = request_uses_streaming_value(&parsed_request).unwrap_or(false);
-    let vector_metadata = vector_request_metadata_from_value(uri.path(), &parsed_request);
+    let request_streaming = request_uses_streaming(&body);
+    let vector_metadata = vector_request_metadata(uri.path(), &body);
     let resolution = router_state.source.resolve_proxy_request(
         requested_model.as_deref(),
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
     let proxy_config = resolution.config;
-    let request_deadline = request_started_at
-        + Duration::from_millis(if request_streaming {
-            proxy_config.streaming_max_lifetime_ms.max(1_000)
-        } else {
-            proxy_config.timeout_ms.max(1_000)
-        });
-    if request_deadline <= std::time::Instant::now() {
-        router_state.runtime.record_rejected();
-        return error_response(
-            api_format,
-            StatusCode::GATEWAY_TIMEOUT,
-            "request exceeded its end-to-end deadline before routing",
-        );
-    }
-    let routing_strategy = resolution.routing_strategy;
     let mut candidates = resolution.candidates;
     let routing_key = routing_group_key(
         requested_model.as_deref(),
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
-    let locality_key = if proxy_config.locality_routing_enabled && vector_metadata.is_none() {
-        match request_locality_material_from_value(&headers, &parsed_request) {
-            Ok(Some(material)) => Some(router_state.runtime.locality_key(
-                &routing_key,
-                &auth.client_id,
-                &material,
-            )),
-            Ok(None) => None,
-            Err(error) => {
-                router_state.runtime.record_rejected();
-                return error_response(api_format, StatusCode::BAD_REQUEST, &error);
-            }
-        }
-    } else {
-        None
-    };
     if candidates.is_empty() {
-        router_state.runtime.record_rejected();
         return error_response(
             api_format,
             if requested_model.is_some() {
@@ -3323,15 +2528,13 @@ async fn proxy_upstream(
             "no public route matches the requested model",
         );
     }
-    let (target, target_permit, locality_decision) = loop {
+    let (target, target_permit) = loop {
         let scheduling = candidates.iter().map(routing_candidate).collect::<Vec<_>>();
-        let Some(selected) = router_state.runtime.select_target_with_locality(
+        let Some(selected) = router_state.runtime.select_target(
             &scheduling,
-            &routing_strategy,
+            &proxy_config.routing_strategy,
             &routing_key,
-            locality_key.as_deref(),
         ) else {
-            router_state.runtime.record_rejected();
             return error_response(
                 api_format,
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -3340,9 +2543,8 @@ async fn proxy_upstream(
         };
         let Some(index) = candidates
             .iter()
-            .position(|target| target.public.instance_id == selected.candidate.instance_id)
+            .position(|target| target.public.instance_id == selected.instance_id)
         else {
-            router_state.runtime.record_rejected();
             return error_response(
                 api_format,
                 StatusCode::BAD_GATEWAY,
@@ -3350,11 +2552,10 @@ async fn proxy_upstream(
             );
         };
         let target = candidates.remove(index);
-        if let Some(permit) = router_state.runtime.acquire_target(&selected.candidate) {
-            break (target, permit, selected.locality);
+        if let Some(permit) = router_state.runtime.acquire_target(&selected) {
+            break (target, permit);
         }
         if candidates.is_empty() {
-            router_state.runtime.record_rejected();
             return error_response(
                 api_format,
                 StatusCode::TOO_MANY_REQUESTS,
@@ -3362,22 +2563,10 @@ async fn proxy_upstream(
             );
         }
     };
-    router_state
-        .runtime
-        .record_locality_selection(locality_decision);
-    if auth.client_id == "anonymous" && !target.api_key.trim().is_empty() {
-        router_state.runtime.record_rejected();
-        return error_response(
-            api_format,
-            StatusCode::FORBIDDEN,
-            "anonymous proxy access cannot delegate an upstream API key",
-        );
-    }
     if !vector_endpoint_matches_target(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
         target.workload,
     ) {
-        router_state.runtime.record_rejected();
         return error_response(
             api_format,
             StatusCode::BAD_REQUEST,
@@ -3386,9 +2575,9 @@ async fn proxy_upstream(
     }
     let response_model =
         public_response_model(&proxy_config, &target.public, requested_model.as_deref());
-    let upstream_body =
-        rewrite_request_model_from_value(&body, &mut parsed_request, &target.upstream_model_id);
-    let upstream_started_at = std::time::Instant::now();
+    let upstream_body = rewrite_request_model(&body, &target.upstream_model_id);
+    let started_at = std::time::Instant::now();
+    let started_at_ms = current_time_ms();
     let proxy_task_id = next_proxy_task_id();
     let client = proxy_http_client(proxy_config.connect_timeout_ms);
 
@@ -3400,42 +2589,17 @@ async fn proxy_upstream(
         .or(target.configured_context_length)
         .filter(|value| *value > 0);
     if let Some(context_window) = context_window {
-        let Some(remaining) = request_deadline.checked_duration_since(std::time::Instant::now())
-        else {
-            router_state.runtime.record_rejected();
-            return error_response(
-                api_format,
-                StatusCode::GATEWAY_TIMEOUT,
-                "request exceeded its end-to-end deadline during preflight",
-            );
-        };
-        let violation = match tokio::time::timeout(
-            remaining,
-            context_limit_violation(
-                &router_state.runtime,
-                &parsed_request,
-                &client,
-                &target,
-                &headers,
-                uri.path(),
-                &upstream_body,
-                &proxy_config,
-                context_window,
-            ),
+        if let Some(violation) = context_limit_violation(
+            &client,
+            &target,
+            &headers,
+            uri.path(),
+            &upstream_body,
+            &proxy_config,
+            context_window,
         )
         .await
         {
-            Ok(violation) => violation,
-            Err(_) => {
-                router_state.runtime.record_rejected();
-                return error_response(
-                    api_format,
-                    StatusCode::GATEWAY_TIMEOUT,
-                    "request exceeded its end-to-end deadline during preflight",
-                );
-            }
-        };
-        if let Some(violation) = violation {
             router_state.runtime.record_rejected();
             let error_text = format!(
                 "context window exceeded: input_tokens={:?}, requested_output_tokens={}, context_window={}",
@@ -3452,10 +2616,6 @@ async fn proxy_upstream(
                     http_status: Some(StatusCode::BAD_REQUEST.as_u16()),
                     started_at_ms,
                     duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
-                    queue_time_ms: queue_time_ms as f64,
-                    ttft_ms: None,
-                    prompt_tokens: None,
-                    cached_prompt_tokens: None,
                     error_text: Some(error_text),
                     api_format,
                 },
@@ -3474,75 +2634,34 @@ async fn proxy_upstream(
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
         Ok(method) => method,
         Err(err) => {
-            router_state.runtime.record_rejected();
             return error_response(
                 api_format,
                 StatusCode::BAD_REQUEST,
                 &format!("invalid method: {}", err),
-            );
+            )
         }
     };
 
     let mut request = client
         .request(reqwest_method, target_url(&target, &uri))
         .header("accept-encoding", "identity");
-    let Some(upstream_budget) = request_deadline.checked_duration_since(std::time::Instant::now())
-    else {
-        router_state.runtime.record_rejected();
-        return error_response(
-            api_format,
-            StatusCode::GATEWAY_TIMEOUT,
-            "request exceeded its end-to-end deadline before upstream dispatch",
-        );
-    };
-    request = request.timeout(upstream_budget);
+    if !request_streaming {
+        request = request.timeout(Duration::from_millis(proxy_config.timeout_ms.max(1_000)));
+    }
     request = apply_target_request_headers(request, &headers, &target);
 
-    let streaming_deadline = request_streaming.then_some(request_deadline);
-    let send = request.body(upstream_body).send();
-    let response_result = if request_streaming {
-        let header_timeout = Duration::from_millis(proxy_config.timeout_ms.max(1_000))
-            .min(MAX_STREAMING_RESPONSE_HEADER_TIMEOUT)
-            .min(upstream_budget);
-        match tokio::time::timeout(header_timeout, send).await {
-            Ok(result) => result.map_err(|error| {
-                if error.is_timeout() {
-                    "upstream request timed out".to_string()
-                } else if error.is_connect() {
-                    "upstream is unavailable".to_string()
-                } else {
-                    "upstream request failed".to_string()
-                }
-            }),
-            Err(_) => Err("upstream response header timeout".to_string()),
-        }
-    } else {
-        send.await.map_err(|error| {
-            if error.is_timeout() {
-                "upstream request timed out".to_string()
-            } else if error.is_connect() {
-                "upstream is unavailable".to_string()
-            } else {
-                "upstream request failed".to_string()
-            }
-        })
-    };
-    let response = match response_result {
+    let response = match request.body(upstream_body).send().await {
         Ok(response) => response,
         Err(err) => {
             router_state.runtime.mark_request_failure(
                 &target.public.instance_id,
-                err.clone(),
+                err.to_string(),
                 proxy_config.unhealthy_threshold,
                 Duration::from_millis(proxy_config.recovery_cooldown_ms),
             );
-            let duration_ms = started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
-            router_state.runtime.record_completed(RequestObservation {
-                duration_ms,
-                queue_wait_ms: queue_time_ms,
-                failed: true,
-                ..Default::default()
-            });
+            router_state
+                .runtime
+                .record_completed(started_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
             let _ = record_proxy_telemetry(
                 target.telemetry_session_id.as_deref(),
                 &ProxyTelemetryRecord {
@@ -3551,12 +2670,8 @@ async fn proxy_upstream(
                     target_instance_id: target.public.instance_id.clone(),
                     http_status: None,
                     started_at_ms,
-                    duration_ms: duration_ms as f64,
-                    queue_time_ms: queue_time_ms as f64,
-                    ttft_ms: None,
-                    prompt_tokens: None,
-                    cached_prompt_tokens: None,
-                    error_text: Some(err.clone()),
+                    duration_ms: started_at.elapsed().as_secs_f64() * 1000.0,
+                    error_text: Some(err.to_string()),
                     api_format,
                 },
                 vector_metadata.as_ref(),
@@ -3564,7 +2679,7 @@ async fn proxy_upstream(
             return error_response(
                 api_format,
                 StatusCode::BAD_GATEWAY,
-                "upstream request failed",
+                &format!("upstream request failed: {}", err),
             );
         }
     };
@@ -3580,7 +2695,7 @@ async fn proxy_upstream(
     } else {
         router_state.runtime.mark_probe_success(
             &target.public.instance_id,
-            upstream_started_at.elapsed().as_secs_f64() * 1_000.0,
+            started_at.elapsed().as_secs_f64() * 1_000.0,
             None,
         );
     }
@@ -3594,25 +2709,14 @@ async fn proxy_upstream(
     let response_is_sse = response_content_type.contains("text/event-stream");
     let response_is_json = response_content_type.contains("json");
     let status_success = status.is_success();
-    if status_success {
-        if let Some(locality_key) = locality_key.as_deref() {
-            router_state.runtime.record_locality_success(
-                locality_key,
-                &target.public.instance_id,
-                proxy_config.locality_ttl_ms,
-                proxy_config.locality_max_entries as usize,
-            );
-        }
-    }
     let response_connection_tokens = connection_header_tokens(response.headers());
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
-        if !should_forward_response_header(
-            &lower,
-            &response_connection_tokens,
-            status_success,
-            api_format,
-        ) {
+        if lower == "content-length"
+            || (!status_success && lower == "content-type")
+            || (api_format.is_anthropic() && !status_success && lower == "request-id")
+            || is_hop_by_hop_header(&lower, &response_connection_tokens)
+        {
             continue;
         }
         if let (Ok(header_name), Ok(header_value)) = (
@@ -3625,9 +2729,6 @@ async fn proxy_upstream(
     if !status_success {
         builder = builder.header("content-type", "application/json");
     }
-    if let Some(value) = locality_decision.header_value() {
-        builder = builder.header("x-lsm-locality", value);
-    }
 
     let http_status = status.as_u16();
     let mut telemetry_guard = ProxyTelemetryGuard {
@@ -3638,9 +2739,6 @@ async fn proxy_upstream(
         http_status,
         started_at,
         started_at_ms,
-        queue_time_ms,
-        ttft_ms: None,
-        usage: ProxyUsageObservation::default(),
         vector_metadata,
         api_format,
         recorded: false,
@@ -3648,101 +2746,33 @@ async fn proxy_upstream(
         _global_permit: Some(global_permit),
         _body_permit: Some(body_permit),
         _target_permit: Some(target_permit),
-        _client_permit: Some(client_permit),
     };
     if (response_is_json && !response_is_sse) || (api_format.is_anthropic() && !status_success) {
-        let Some(response_memory) = router_state.runtime.try_acquire_response_bytes(
-            MAX_PROXY_JSON_RESPONSE_BYTES,
-            MAX_PROXY_IN_FLIGHT_RESPONSE_BYTES,
-        ) else {
-            telemetry_guard.record_once(Some(
-                "router in-flight response memory budget exceeded".to_string(),
-            ));
-            return error_response(
-                api_format,
-                StatusCode::TOO_MANY_REQUESTS,
-                "router in-flight response memory budget exceeded",
-            );
-        };
-        let Some(remaining) = request_deadline.checked_duration_since(std::time::Instant::now())
-        else {
-            telemetry_guard.record_once(Some(
-                "request exceeded its end-to-end deadline before response collection".to_string(),
-            ));
-            return error_response(
-                api_format,
-                StatusCode::GATEWAY_TIMEOUT,
-                "request exceeded its end-to-end deadline",
-            );
-        };
-        let (response_body, first_chunk_at) = match tokio::time::timeout(
-            remaining,
-            collect_bounded_response_body(response, MAX_PROXY_JSON_RESPONSE_BYTES),
-        )
-        .await
-        {
-            Ok(Ok(result)) => result,
-            Ok(Err(error_text)) => {
-                telemetry_guard.record_once(Some(error_text.clone()));
-                return error_response(
-                    api_format,
-                    StatusCode::BAD_GATEWAY,
-                    &format!("proxy response error: {error_text}"),
-                );
-            }
-            Err(_) => {
-                telemetry_guard.record_once(Some(
-                    "request exceeded its end-to-end deadline during response collection"
-                        .to_string(),
-                ));
-                return error_response(
-                    api_format,
-                    StatusCode::GATEWAY_TIMEOUT,
-                    "request exceeded its end-to-end deadline",
-                );
-            }
-        };
-        if let Some(first_chunk_at) = first_chunk_at {
-            let usage = proxy_usage_from_bytes(&response_body);
-            telemetry_guard.observe_response_at(&response_body, usage, first_chunk_at);
-        }
+        let response_body =
+            match collect_bounded_response_body(response, MAX_PROXY_JSON_RESPONSE_BYTES).await {
+                Ok(bytes) => bytes,
+                Err(error_text) => {
+                    telemetry_guard.record_once(Some(error_text.clone()));
+                    return error_response(
+                        api_format,
+                        StatusCode::BAD_GATEWAY,
+                        &format!("proxy response error: {error_text}"),
+                    );
+                }
+            };
         telemetry_guard.record_once(if status_success {
             None
         } else {
             Some(format!("upstream returned {}", http_status))
         });
-        if let Err(error) = parse_bounded_proxy_json(&response_body) {
-            telemetry_guard.record_once(Some(format!(
-                "upstream JSON response exceeded structural limits: {error}"
-            )));
-            return error_response(
-                api_format,
-                StatusCode::BAD_GATEWAY,
-                "upstream JSON response exceeded structural memory limits",
-            );
-        }
         let response_body =
             rewrite_json_response(response_body, &response_model, api_format, status);
-        if response_body.len() > MAX_PROXY_JSON_RESPONSE_BYTES {
-            telemetry_guard.record_once(Some(
-                "rewritten upstream JSON response exceeded output limit".to_string(),
-            ));
-            return error_response(
-                api_format,
-                StatusCode::BAD_GATEWAY,
-                "rewritten upstream JSON response exceeded output limit",
-            );
-        }
         if api_format.is_anthropic() && !status_success {
             if let Some(request_id) = response_request_id(&response_body) {
                 builder = builder.header("request-id", request_id);
             }
         }
-        let guards = ResponseBodyGuards::take(&mut telemetry_guard, Some(response_memory));
-        let body_stream =
-            futures_util::stream::once(async move { Ok::<_, std::io::Error>(response_body) });
-        let body_stream = pump_guarded_response_stream(body_stream, guards, request_deadline);
-        return match builder.body(Body::from_stream(body_stream)) {
+        return match builder.body(Body::from(response_body)) {
             Ok(mut response) => {
                 add_format_header(&mut response, api_format);
                 response
@@ -3756,41 +2786,13 @@ async fn proxy_upstream(
     }
 
     if response_is_sse {
-        let Some(response_memory) = router_state.runtime.try_acquire_response_bytes(
-            MAX_PROXY_SSE_LINE_BYTES,
-            MAX_PROXY_IN_FLIGHT_RESPONSE_BYTES,
-        ) else {
-            telemetry_guard.record_once(Some(
-                "router in-flight response memory budget exceeded".to_string(),
-            ));
-            return error_response(
-                api_format,
-                StatusCode::TOO_MANY_REQUESTS,
-                "router in-flight response memory budget exceeded",
-            );
-        };
-        let deadline = streaming_deadline.unwrap_or_else(|| {
-            std::time::Instant::now()
-                + Duration::from_millis(proxy_config.streaming_max_lifetime_ms)
-        });
-        if deadline <= std::time::Instant::now() {
-            telemetry_guard.record_once(Some(
-                "upstream stream exceeded its maximum lifetime before headers".to_string(),
-            ));
-            return error_response(
-                api_format,
-                StatusCode::GATEWAY_TIMEOUT,
-                "upstream stream exceeded its maximum lifetime",
-            );
-        }
         let upstream_stream = response
             .bytes_stream()
-            .map_err(|_| std::io::Error::other("upstream response stream failed"));
+            .map_err(|err| std::io::Error::other(err.to_string()));
         let line_stream = Box::pin(FramedRead::new(
             StreamReader::new(upstream_stream),
-            LinesCodec::new_with_max_length(MAX_PROXY_SSE_LINE_BYTES),
+            LinesCodec::new_with_max_length(16 * 1024 * 1024),
         ));
-        let guards = ResponseBodyGuards::take(&mut telemetry_guard, Some(response_memory));
         let stream = futures_util::stream::unfold(
             (
                 line_stream,
@@ -3799,7 +2801,6 @@ async fn proxy_upstream(
                 response_model,
                 api_format,
                 Duration::from_millis(proxy_config.streaming_idle_timeout_ms),
-                deadline,
             ),
             move |(
                 mut line_stream,
@@ -3808,41 +2809,15 @@ async fn proxy_upstream(
                 response_model,
                 api_format,
                 idle_timeout,
-                deadline,
             )| async move {
                 if finalized {
                     return None;
                 }
-                let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now())
-                else {
-                    let error_text = "upstream stream exceeded its maximum lifetime".to_string();
-                    telemetry_guard.record_once(Some(error_text.clone()));
-                    return Some((
-                        Err(std::io::Error::new(
-                            std::io::ErrorKind::TimedOut,
-                            error_text,
-                        )),
-                        (
-                            line_stream,
-                            true,
-                            telemetry_guard,
-                            response_model,
-                            api_format,
-                            idle_timeout,
-                            deadline,
-                        ),
-                    ));
-                };
-                match tokio::time::timeout(idle_timeout.min(remaining), line_stream.as_mut().next())
-                    .await
-                {
+                match tokio::time::timeout(idle_timeout, line_stream.as_mut().next()).await {
                     Ok(Some(Ok(line))) => {
-                        let usage = proxy_usage_from_sse_line(&line);
                         let line = rewrite_sse_line(&line, &response_model, api_format);
-                        let bytes = Bytes::from(format!("{line}\n"));
-                        telemetry_guard.observe_response_chunk(&bytes, usage);
                         Some((
-                            Ok::<_, std::io::Error>(bytes),
+                            Ok::<_, std::io::Error>(Bytes::from(format!("{line}\n"))),
                             (
                                 line_stream,
                                 false,
@@ -3850,7 +2825,6 @@ async fn proxy_upstream(
                                 response_model,
                                 api_format,
                                 idle_timeout,
-                                deadline,
                             ),
                         ))
                     }
@@ -3866,7 +2840,6 @@ async fn proxy_upstream(
                                 response_model,
                                 api_format,
                                 idle_timeout,
-                                deadline,
                             ),
                         ))
                     }
@@ -3896,14 +2869,12 @@ async fn proxy_upstream(
                                 response_model,
                                 api_format,
                                 idle_timeout,
-                                deadline,
                             ),
                         ))
                     }
                 }
             },
         );
-        let stream = pump_guarded_response_stream(stream, guards, deadline);
         return match builder.body(Body::from_stream(stream)) {
             Ok(mut response) => {
                 add_format_header(&mut response, api_format);
@@ -3917,99 +2888,25 @@ async fn proxy_upstream(
         };
     }
 
-    let Some(response_memory) = router_state.runtime.try_acquire_response_bytes(
-        MAX_PROXY_STREAM_CHUNK_BYTES,
-        MAX_PROXY_IN_FLIGHT_RESPONSE_BYTES,
-    ) else {
-        telemetry_guard.record_once(Some(
-            "router in-flight response memory budget exceeded".to_string(),
-        ));
-        return error_response(
-            api_format,
-            StatusCode::TOO_MANY_REQUESTS,
-            "router in-flight response memory budget exceeded",
-        );
-    };
     let upstream_stream = Box::pin(response.bytes_stream());
     let idle_timeout = Duration::from_millis(proxy_config.streaming_idle_timeout_ms);
-    let deadline = request_deadline;
-    let guards = ResponseBodyGuards::take(&mut telemetry_guard, Some(response_memory));
     let stream = futures_util::stream::unfold(
-        (
-            upstream_stream,
-            false,
-            telemetry_guard,
-            idle_timeout,
-            deadline,
-        ),
-        move |(mut upstream_stream, finalized, mut telemetry_guard, idle_timeout, deadline)| async move {
+        (upstream_stream, false, telemetry_guard, idle_timeout),
+        move |(mut upstream_stream, finalized, mut telemetry_guard, idle_timeout)| async move {
             if finalized {
                 return None;
             }
-            let Some(remaining) = deadline.checked_duration_since(std::time::Instant::now()) else {
-                let error_text = "upstream stream exceeded its maximum lifetime".to_string();
-                telemetry_guard.record_once(Some(error_text.clone()));
-                return Some((
-                    Err(std::io::Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        error_text,
-                    )),
-                    (
-                        upstream_stream,
-                        true,
-                        telemetry_guard,
-                        idle_timeout,
-                        deadline,
-                    ),
-                ));
-            };
-            match tokio::time::timeout(idle_timeout.min(remaining), upstream_stream.as_mut().next())
-                .await
-            {
-                Ok(Some(Ok(bytes))) => {
-                    if bytes.len() > MAX_PROXY_STREAM_CHUNK_BYTES {
-                        let error_text = format!(
-                            "upstream response chunk exceeds {} bytes",
-                            MAX_PROXY_STREAM_CHUNK_BYTES
-                        );
-                        telemetry_guard.record_once(Some(error_text.clone()));
-                        return Some((
-                            Err(std::io::Error::other(error_text)),
-                            (
-                                upstream_stream,
-                                true,
-                                telemetry_guard,
-                                idle_timeout,
-                                deadline,
-                            ),
-                        ));
-                    }
-                    let usage = proxy_usage_from_bytes(&bytes);
-                    telemetry_guard.observe_response_chunk(&bytes, usage);
-                    Some((
-                        Ok(bytes),
-                        (
-                            upstream_stream,
-                            false,
-                            telemetry_guard,
-                            idle_timeout,
-                            deadline,
-                        ),
-                    ))
-                }
+            match tokio::time::timeout(idle_timeout, upstream_stream.as_mut().next()).await {
+                Ok(Some(Ok(bytes))) => Some((
+                    Ok(bytes),
+                    (upstream_stream, false, telemetry_guard, idle_timeout),
+                )),
                 Ok(Some(Err(err))) => {
-                    let _ = err;
-                    let error_text = "upstream response stream failed".to_string();
+                    let error_text = err.to_string();
                     telemetry_guard.record_once(Some(error_text.clone()));
                     Some((
                         Err(std::io::Error::other(error_text)),
-                        (
-                            upstream_stream,
-                            true,
-                            telemetry_guard,
-                            idle_timeout,
-                            deadline,
-                        ),
+                        (upstream_stream, true, telemetry_guard, idle_timeout),
                     ))
                 }
                 Ok(None) => {
@@ -4031,19 +2928,12 @@ async fn proxy_upstream(
                             std::io::ErrorKind::TimedOut,
                             error_text,
                         )),
-                        (
-                            upstream_stream,
-                            true,
-                            telemetry_guard,
-                            idle_timeout,
-                            deadline,
-                        ),
+                        (upstream_stream, true, telemetry_guard, idle_timeout),
                     ))
                 }
             }
         },
     );
-    let stream = pump_guarded_response_stream(stream, guards, deadline);
     match builder.body(Body::from_stream(stream)) {
         Ok(mut response) => {
             add_format_header(&mut response, api_format);
@@ -4065,12 +2955,7 @@ fn proxy_router_from_source_with_runtime_and_limits(
 ) -> Router {
     let weak_source: Weak<dyn ProxyDataSource> = Arc::downgrade(&source);
     spawn_health_probe_loop(weak_source, Arc::downgrade(&runtime));
-    let router_state = ProxyRouterState {
-        source,
-        runtime,
-        request_body_limit,
-        anthropic_request_body_limit,
-    };
+    let router_state = ProxyRouterState { source, runtime };
     let security_layer =
         middleware::from_fn_with_state(router_state.clone(), proxy_security_middleware);
     Router::new()
@@ -4104,75 +2989,8 @@ fn proxy_router_from_source_with_runtime_and_limits(
         .route("/v1/rerank", post(proxy_upstream))
         .route("/v1/reranking", post(proxy_upstream))
         .route_layer(security_layer)
-        .layer(RequestBodyTimeoutLayer::new(Duration::from_secs(5)))
         .layer(DefaultBodyLimit::max(request_body_limit))
         .with_state(router_state)
-}
-
-/// Serve the loopback router with pre-authentication connection admission and
-/// protocol-level header deadlines. Both GUI and detached runtime modes use
-/// this one boundary so their resource controls cannot drift.
-pub(crate) async fn serve_hardened_proxy<F>(
-    listener: tokio::net::TcpListener,
-    router: Router,
-    shutdown: F,
-) -> std::io::Result<()>
-where
-    F: Future<Output = ()> + Send,
-{
-    const MAX_PROXY_CONNECTIONS: usize = 128;
-    const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(5);
-    const CONNECTION_LIFETIME: Duration = Duration::from_secs(60 * 60);
-    let connections = Arc::new(tokio::sync::Semaphore::new(MAX_PROXY_CONNECTIONS));
-    let mut tasks = tokio::task::JoinSet::new();
-    tokio::pin!(shutdown);
-
-    loop {
-        tokio::select! {
-            _ = &mut shutdown => break,
-            accepted = listener.accept() => {
-                let (stream, _) = accepted?;
-                let Ok(connection_permit) = connections.clone().try_acquire_owned() else {
-                    drop(stream);
-                    continue;
-                };
-                stream.set_nodelay(true)?;
-                let service = router.clone().map_request(
-                    |request: hyper::Request<hyper::body::Incoming>| {
-                        request.map(Body::new)
-                    },
-                );
-                tasks.spawn(async move {
-                    let _connection_permit = connection_permit;
-                    let io = hyper_util::rt::TokioIo::new(stream);
-                    let service = hyper_util::service::TowerToHyperService::new(service);
-                    let mut builder = hyper::server::conn::http1::Builder::new();
-                    builder
-                        .timer(hyper_util::rt::TokioTimer::new())
-                        .header_read_timeout(HEADER_READ_TIMEOUT)
-                        .max_headers(64)
-                        .max_buf_size(64 * 1024);
-                    let connection = builder.serve_connection(io, service).with_upgrades();
-                    let _ = tokio::time::timeout(CONNECTION_LIFETIME, connection).await;
-                });
-            }
-            Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
-        }
-    }
-
-    let graceful_deadline = tokio::time::sleep(PROXY_SHUTDOWN_TIMEOUT);
-    tokio::pin!(graceful_deadline);
-    while !tasks.is_empty() {
-        tokio::select! {
-            _ = &mut graceful_deadline => {
-                tasks.abort_all();
-                break;
-            }
-            _ = tasks.join_next() => {}
-        }
-    }
-    while tasks.join_next().await.is_some() {}
-    Ok(())
 }
 
 #[cfg(test)]
@@ -4212,45 +3030,19 @@ pub(crate) fn proxy_router_from_source(source: Arc<dyn ProxyDataSource>) -> Rout
 }
 
 pub async fn get_proxy_config(state: tauri::State<'_, AppState>) -> Result<ProxyConfig, String> {
-    Ok(crate::models::redact_proxy_config_for_frontend(
-        &state.proxy_config.lock().unwrap(),
-    ))
+    Ok(state.proxy_config.lock().unwrap().clone())
 }
 
 pub async fn save_proxy_config(
-    mut config: ProxyConfig,
+    config: ProxyConfig,
     state: tauri::State<'_, AppState>,
 ) -> Result<ProxyConfig, String> {
-    let _transition = state.proxy_lifecycle_lock.lock().await;
-    let current = state.proxy_config.lock().unwrap().clone();
-    crate::models::merge_frontend_proxy_secrets(&mut config, &current)?;
-    // Canary routes are owned exclusively by the rollout state machine. The
-    // general proxy editor neither exposes nor removes them.
-    config.canary_routes = current.canary_routes.clone();
     let config = {
         let instances = state.instances.lock().unwrap();
         normalize_and_validate_proxy_config(config, &instances)?
     };
-    let deployment_routing_changes = {
-        let instances = state.instances.lock().unwrap();
-        crate::deployment::routing_changed_instance_ids(
-            &current,
-            &config,
-            instances.keys().cloned(),
-        )
-    };
-    let lifecycle_conflict = {
-        let starting = state.starting.lock().unwrap();
-        deployment_routing_changes
-            .iter()
-            .find(|instance_id| starting.contains(instance_id.as_str()))
-            .cloned()
-    };
-    if let Some(instance_id) = lifecycle_conflict {
-        return Err(format!(
-            "实例 {instance_id} 正在启动，部署路由状态暂时不能修改；请等待启动完成后重试"
-        ));
-    }
+    let _transition = state.proxy_lifecycle_lock.lock().await;
+    let current = state.proxy_config.lock().unwrap().clone();
     let runtime_status = if crate::runtime_service::manages_instances() {
         Some(crate::runtime_service::ensure_runtime_service().await?)
     } else {
@@ -4287,7 +3079,9 @@ pub async fn save_proxy_config(
 
     let sync_generation = crate::runtime_service::mark_config_sync_pending();
     let apply_result = async {
-        crate::commands::config::update_proxy_config_and_persist(&state, &config)?;
+        update_and_persist(&state, |global| {
+            global.proxy_config = config.clone();
+        })?;
         *state.proxy_config.lock().unwrap() = config.clone();
         if crate::runtime_service::manages_instances() {
             crate::runtime_service::sync_app_config(&state).await?;
@@ -4353,7 +3147,7 @@ pub async fn save_proxy_config(
         };
     }
     crate::runtime_service::mark_config_sync_complete(sync_generation);
-    Ok(crate::models::redact_proxy_config_for_frontend(&config))
+    Ok(config)
 }
 
 pub async fn get_proxy_status(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
@@ -4447,15 +3241,13 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
     let app_for_server = app.clone();
     let source: Arc<dyn ProxyDataSource> = Arc::new(TauriProxyDataSource { app: app.clone() });
     let (router, router_runtime) = proxy_router_from_source_with_runtime(source);
-    for instance_id in state.residency_draining.lock().unwrap().iter() {
-        router_runtime.set_target_draining(instance_id, true);
-    }
     *state.proxy_router_runtime.lock().unwrap() = Some(router_runtime);
     let server_task = tokio::spawn(async move {
-        let result = serve_hardened_proxy(listener, router, async move {
-            let _ = shutdown_rx.await;
-        })
-        .await;
+        let result = axum::serve(listener, router)
+            .with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+            })
+            .await;
         if let Some(state) = app_for_server.try_state::<AppState>() {
             if let Err(err) = result {
                 *state.proxy_last_error.lock().unwrap() =
@@ -4472,85 +3264,68 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
     Ok(proxy_status_from_state(&state))
 }
 
-pub async fn set_runtime_proxy_enabled(
-    state: &AppState,
-    enabled: bool,
-) -> Result<ProxyStatus, String> {
+pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
+    let state = app.state::<AppState>();
     let _transition = state.proxy_lifecycle_lock.lock().await;
-    let previous = state.proxy_config.lock().unwrap().clone();
-    let mut config = if enabled {
-        match normalize_proxy_config_for_state(state, previous.clone()) {
+    if crate::runtime_service::manages_instances() {
+        let previous = state.proxy_config.lock().unwrap().clone();
+        let mut config = match normalize_proxy_config_for_state(state.inner(), previous.clone()) {
             Ok(config) => config,
             Err(error) => {
                 *state.proxy_last_error.lock().unwrap() = Some(error.clone());
                 return Err(error);
             }
-        }
-    } else {
-        previous.clone()
-    };
-    let was_running = crate::runtime_service::ensure_runtime_service()
-        .await?
-        .proxy
-        .running;
-    config.enabled = enabled;
-    update_and_persist(state, |global| global.proxy_config = config.clone())?;
-    *state.proxy_config.lock().unwrap() = config;
-    let sync_generation = crate::runtime_service::mark_config_sync_pending();
-    let transition_result = async {
-        crate::runtime_service::sync_app_config(state).await?;
-        if enabled {
+        };
+        let was_running = crate::runtime_service::ensure_runtime_service()
+            .await?
+            .proxy
+            .running;
+        config.enabled = true;
+        update_and_persist(&state, |global| global.proxy_config = config.clone())?;
+        *state.proxy_config.lock().unwrap() = config.clone();
+        let sync_generation = crate::runtime_service::mark_config_sync_pending();
+        let start_result = async {
+            crate::runtime_service::sync_app_config(&state).await?;
             crate::runtime_service::start_proxy().await
-        } else {
-            crate::runtime_service::stop_proxy().await
         }
-    }
-    .await;
-    match transition_result {
-        Ok(status) => {
-            crate::runtime_service::mark_config_sync_complete(sync_generation);
-            Ok(status)
-        }
-        Err(error) => {
-            *state.proxy_config.lock().unwrap() = previous.clone();
-            let rollback_generation = crate::runtime_service::mark_config_sync_pending();
-            let mut rollback_errors = Vec::new();
-            if let Err(rollback_error) = update_and_persist(state, |global| {
-                global.proxy_config = previous.clone();
-            }) {
-                rollback_errors.push(rollback_error);
+        .await;
+        match start_result {
+            Ok(status) => {
+                crate::runtime_service::mark_config_sync_complete(sync_generation);
+                return Ok(status);
             }
-            if let Err(rollback_error) = crate::runtime_service::sync_app_config(state).await {
-                rollback_errors.push(rollback_error);
-            } else {
-                let lifecycle_result = if was_running {
-                    crate::runtime_service::start_proxy().await.map(|_| ())
-                } else {
-                    crate::runtime_service::stop_proxy().await.map(|_| ())
-                };
-                if let Err(rollback_error) = lifecycle_result {
+            Err(error) => {
+                *state.proxy_config.lock().unwrap() = previous.clone();
+                let rollback_generation = crate::runtime_service::mark_config_sync_pending();
+                let mut rollback_errors = Vec::new();
+                if let Err(rollback_error) = update_and_persist(&state, |global| {
+                    global.proxy_config = previous.clone();
+                }) {
                     rollback_errors.push(rollback_error);
                 }
+                if let Err(rollback_error) = crate::runtime_service::sync_app_config(&state).await {
+                    rollback_errors.push(rollback_error);
+                } else {
+                    let lifecycle_result = if was_running {
+                        crate::runtime_service::start_proxy().await.map(|_| ())
+                    } else {
+                        crate::runtime_service::stop_proxy().await.map(|_| ())
+                    };
+                    if let Err(rollback_error) = lifecycle_result {
+                        rollback_errors.push(rollback_error);
+                    }
+                }
+                if rollback_errors.is_empty() {
+                    crate::runtime_service::mark_config_sync_complete(rollback_generation);
+                    return Err(error);
+                }
+                return Err(format!(
+                    "{error}; 回滚路由启动状态时又发生错误：{}",
+                    rollback_errors.join("; ")
+                ));
             }
-            if rollback_errors.is_empty() {
-                crate::runtime_service::mark_config_sync_complete(rollback_generation);
-                return Err(error);
-            }
-            let operation = if enabled { "启动" } else { "停止" };
-            Err(format!(
-                "{error}; 回滚路由{operation}状态时又发生错误：{}",
-                rollback_errors.join("; ")
-            ))
         }
     }
-}
-
-pub async fn start_proxy_for_app(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
-    let state = app.state::<AppState>();
-    if crate::runtime_service::manages_instances() {
-        return set_runtime_proxy_enabled(state.inner(), true).await;
-    }
-    let _transition = state.proxy_lifecycle_lock.lock().await;
     let app_for_start = app.clone();
     start_proxy_locked(app_for_start).await
 }
@@ -4560,10 +3335,60 @@ pub async fn start_proxy(app: tauri::AppHandle) -> Result<ProxyStatus, String> {
 }
 
 pub async fn stop_proxy(state: tauri::State<'_, AppState>) -> Result<ProxyStatus, String> {
-    if crate::runtime_service::manages_instances() {
-        return set_runtime_proxy_enabled(state.inner(), false).await;
-    }
     let _transition = state.proxy_lifecycle_lock.lock().await;
+    if crate::runtime_service::manages_instances() {
+        let previous = state.proxy_config.lock().unwrap().clone();
+        let was_running = crate::runtime_service::ensure_runtime_service()
+            .await?
+            .proxy
+            .running;
+        let mut config = previous.clone();
+        config.enabled = false;
+        update_and_persist(&state, |global| global.proxy_config = config.clone())?;
+        *state.proxy_config.lock().unwrap() = config.clone();
+        let sync_generation = crate::runtime_service::mark_config_sync_pending();
+        let stop_result = async {
+            crate::runtime_service::sync_app_config(&state).await?;
+            crate::runtime_service::stop_proxy().await
+        }
+        .await;
+        match stop_result {
+            Ok(status) => {
+                crate::runtime_service::mark_config_sync_complete(sync_generation);
+                return Ok(status);
+            }
+            Err(error) => {
+                *state.proxy_config.lock().unwrap() = previous.clone();
+                let rollback_generation = crate::runtime_service::mark_config_sync_pending();
+                let mut rollback_errors = Vec::new();
+                if let Err(rollback_error) = update_and_persist(&state, |global| {
+                    global.proxy_config = previous.clone();
+                }) {
+                    rollback_errors.push(rollback_error);
+                }
+                if let Err(rollback_error) = crate::runtime_service::sync_app_config(&state).await {
+                    rollback_errors.push(rollback_error);
+                } else {
+                    let lifecycle_result = if was_running {
+                        crate::runtime_service::start_proxy().await.map(|_| ())
+                    } else {
+                        crate::runtime_service::stop_proxy().await.map(|_| ())
+                    };
+                    if let Err(rollback_error) = lifecycle_result {
+                        rollback_errors.push(rollback_error);
+                    }
+                }
+                if rollback_errors.is_empty() {
+                    crate::runtime_service::mark_config_sync_complete(rollback_generation);
+                    return Err(error);
+                }
+                return Err(format!(
+                    "{error}; 回滚路由停止状态时又发生错误：{}",
+                    rollback_errors.join("; ")
+                ));
+            }
+        }
+    }
     shutdown_proxy_runtime(state.inner()).await?;
     {
         let mut config = state.proxy_config.lock().unwrap();
@@ -4647,7 +3472,7 @@ mod tests {
     use crate::vector_policy::ModelWorkload;
     use axum::body::Body;
     use axum::extract::State;
-    use axum::http::{HeaderMap, HeaderValue, StatusCode, Uri};
+    use axum::http::{HeaderMap, StatusCode, Uri};
     use axum::response::{IntoResponse, Response};
     use axum::routing::post;
     use axum::{Json, Router};
@@ -4667,66 +3492,6 @@ mod tests {
         fn proxy_snapshot(&self) -> super::ProxyRuntimeSnapshot {
             self.snapshot.clone()
         }
-    }
-
-    #[test]
-    fn proxy_usage_extracts_openai_anthropic_and_llama_cache_fields() {
-        let openai = super::proxy_usage_from_bytes(
-            br#"{"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":40}}}"#,
-        );
-        assert_eq!(openai.prompt_tokens, Some(100));
-        assert_eq!(openai.cached_prompt_tokens, Some(40));
-
-        let anthropic = super::proxy_usage_from_sse_line(
-            r#"data: {"type":"message_start","message":{"usage":{"input_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":10}}}"#,
-        );
-        assert_eq!(anthropic.prompt_tokens, Some(60));
-        assert_eq!(anthropic.cached_prompt_tokens, Some(30));
-
-        let llama = super::proxy_usage_from_bytes(br#"{"timings":{"prompt_n":24,"cache_n":8}}"#);
-        assert_eq!(llama.prompt_tokens, Some(32));
-        assert_eq!(llama.cached_prompt_tokens, Some(8));
-    }
-
-    #[test]
-    fn locality_material_prefers_explicit_sessions_and_keeps_growing_chats_stable() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            super::LSM_SESSION_HEADER,
-            "operator-session".parse().unwrap(),
-        );
-        let explicit = super::request_locality_material(
-            &headers,
-            br#"{"messages":[{"role":"user","content":"ignored"}]}"#,
-        )
-        .unwrap()
-        .unwrap();
-        assert!(explicit.starts_with(b"explicit-session\0"));
-        assert!(explicit.ends_with(b"operator-session"));
-        assert!(!super::should_forward_request_header(
-            super::LSM_SESSION_HEADER,
-            &std::collections::HashSet::new()
-        ));
-
-        let initial = super::request_locality_material(
-            &HeaderMap::new(),
-            br#"{"messages":[{"role":"system","content":"safe"},{"role":"user","content":"first"}]}"#,
-        )
-        .unwrap();
-        let continued = super::request_locality_material(
-            &HeaderMap::new(),
-            br#"{"messages":[{"role":"system","content":"safe"},{"role":"user","content":"first"},{"role":"assistant","content":"reply"},{"role":"user","content":"next"}]}"#,
-        )
-        .unwrap();
-        assert_eq!(initial, continued);
-
-        headers.insert(
-            super::LSM_SESSION_HEADER,
-            "x".repeat(super::MAX_LOCALITY_SESSION_ID_BYTES + 1)
-                .parse()
-                .unwrap(),
-        );
-        assert!(super::request_locality_material(&headers, b"{}").is_err());
     }
 
     async fn spawn_test_router(
@@ -4870,40 +3635,6 @@ mod tests {
             StatusCode::NOT_FOUND,
             "unsupported mock endpoint",
         )
-    }
-
-    #[derive(Clone)]
-    struct LocalityUpstreamState {
-        id: String,
-        received_session_headers: Arc<Mutex<Vec<Option<String>>>>,
-    }
-
-    async fn mock_locality_upstream(
-        State(state): State<LocalityUpstreamState>,
-        uri: Uri,
-        headers: HeaderMap,
-    ) -> Response {
-        if uri.path() == "/health" {
-            return Json(json!({ "status": "ok" })).into_response();
-        }
-        state.received_session_headers.lock().unwrap().push(
-            headers
-                .get(super::LSM_SESSION_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string),
-        );
-        let mut response = Json(json!({
-            "id": format!("chatcmpl-{}", state.id),
-            "object": "chat.completion",
-            "model": format!("upstream-{}", state.id),
-            "upstream": state.id,
-            "choices": []
-        }))
-        .into_response();
-        response
-            .headers_mut()
-            .insert("x-lsm-locality", HeaderValue::from_static("spoofed"));
-        response
     }
 
     #[derive(Default)]
@@ -5100,9 +3831,6 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(instance),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: String::new(),
                 },
             )]),
             bound_addr: String::new(),
@@ -5137,7 +3865,6 @@ mod tests {
         super::ProxyRuntimeSnapshot {
             config: ProxyConfig {
                 enabled: true,
-                allow_anonymous: api_key.is_empty(),
                 api_keys,
                 routes: vec![ProxyRoute {
                     model_alias: "local-openai".into(),
@@ -5159,71 +3886,8 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(instance),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: String::new(),
                 },
             )]),
-            bound_addr: String::new(),
-            last_error: None,
-        }
-    }
-
-    fn locality_proxy_snapshot(
-        upstreams: &[(&str, std::net::SocketAddr)],
-    ) -> super::ProxyRuntimeSnapshot {
-        let mut instances = HashMap::new();
-        let mut running = HashMap::new();
-        let mut routes = Vec::new();
-        for (index, (id, address)) in upstreams.iter().enumerate() {
-            let instance = InstanceConfig {
-                id: (*id).to_string(),
-                name: format!("Locality target {id}"),
-                model_path: format!(r"C:\private\{id}.gguf"),
-                alias: format!("upstream-{id}"),
-                host: address.ip().to_string(),
-                port: address.port(),
-                ..InstanceConfig::default()
-            };
-            instances.insert((*id).to_string(), instance.clone());
-            running.insert(
-                (*id).to_string(),
-                RunningInstance {
-                    instance_id: (*id).to_string(),
-                    pid: std::process::id(),
-                    port: address.port(),
-                    host: address.ip().to_string(),
-                    start_time: 0,
-                    executable_path: String::new(),
-                    telemetry_session_id: None,
-                    workload: "inference".into(),
-                    launch_config: Some(instance),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: String::new(),
-                },
-            );
-            routes.push(ProxyRoute {
-                id: format!("locality-route-{index}"),
-                model_alias: "locality-model".into(),
-                target_instance_id: (*id).to_string(),
-                priority: 0,
-                ..ProxyRoute::default()
-            });
-        }
-        super::ProxyRuntimeSnapshot {
-            config: ProxyConfig {
-                enabled: true,
-                allow_anonymous: true,
-                routing_strategy: "roundRobin".into(),
-                locality_routing_enabled: true,
-                locality_ttl_ms: 60_000,
-                locality_max_entries: 100,
-                routes,
-                ..ProxyConfig::default()
-            },
-            instances,
-            running,
             bound_addr: String::new(),
             last_error: None,
         }
@@ -5366,13 +4030,10 @@ mod tests {
     #[test]
     fn production_router_settings_are_normalized_and_security_boundaries_rejected() {
         let instances = HashMap::new();
-        let generated_key = super::generate_proxy_api_key();
         let normalized = super::normalize_and_validate_proxy_config(
             ProxyConfig {
                 routing_strategy: "firstHealthy".into(),
                 connect_timeout_ms: 1,
-                locality_ttl_ms: 1,
-                locality_max_entries: 0,
                 max_concurrent_requests: 0,
                 cors_allowed_origins: vec![
                     " https://app.example.com/ ".into(),
@@ -5381,10 +4042,8 @@ mod tests {
                 api_keys: vec![ProxyApiKey {
                     id: " key-id ".into(),
                     name: " Browser client ".into(),
-                    key: format!(" {generated_key} "),
-                    key_configured: false,
+                    key: " 0123456789abcdef ".into(),
                     enabled: true,
-                    strength_verified: false,
                     scopes: vec!["Discovery".into(), "discovery".into()],
                     requests_per_minute: 50,
                 }],
@@ -5395,8 +4054,6 @@ mod tests {
         .unwrap();
         assert_eq!(normalized.routing_strategy, "priorityFailover");
         assert_eq!(normalized.connect_timeout_ms, 100);
-        assert_eq!(normalized.locality_ttl_ms, 60_000);
-        assert_eq!(normalized.locality_max_entries, 1);
         assert_eq!(normalized.max_concurrent_requests, 1);
         assert_eq!(
             normalized.cors_allowed_origins,
@@ -5408,12 +4065,9 @@ mod tests {
         assert!(normalized.api_keys[0]
             .key
             .starts_with(super::PROXY_API_KEY_HASH_PREFIX));
-        assert!(!normalized.api_keys[0].key.contains(&generated_key));
+        assert!(!normalized.api_keys[0].key.contains("0123456789abcdef"));
         let mut hashed_headers = HeaderMap::new();
-        hashed_headers.insert(
-            "authorization",
-            format!("Bearer {generated_key}").parse().unwrap(),
-        );
+        hashed_headers.insert("authorization", "Bearer 0123456789abcdef".parse().unwrap());
         assert!(super::is_proxy_authorized(
             &normalized.api_keys[0].key,
             &hashed_headers
@@ -5461,120 +4115,10 @@ mod tests {
     }
 
     #[test]
-    fn proxy_auth_policy_fails_closed_for_disabled_empty_and_delegating_keys() {
-        let instances = HashMap::new();
-        let no_keys = ProxyConfig {
-            enabled: true,
-            ..ProxyConfig::default()
-        };
-        assert!(super::normalize_and_validate_proxy_config(no_keys, &instances).is_err());
-
-        let all_disabled = ProxyConfig {
-            enabled: true,
-            api_keys: vec![ProxyApiKey {
-                enabled: false,
-                key: "0123456789abcdef-strong-disabled-key".into(),
-                ..ProxyApiKey::default()
-            }],
-            ..ProxyConfig::default()
-        };
-        assert!(super::normalize_and_validate_proxy_config(all_disabled, &instances).is_err());
-
-        let empty_scopes = ProxyConfig {
-            enabled: true,
-            api_keys: vec![ProxyApiKey {
-                key: "0123456789abcdef-strong-enabled-key".into(),
-                scopes: Vec::new(),
-                ..ProxyApiKey::default()
-            }],
-            ..ProxyConfig::default()
-        };
-        assert!(super::normalize_and_validate_proxy_config(empty_scopes, &instances).is_err());
-
-        let protected_instances = HashMap::from([(
-            "protected".to_string(),
-            InstanceConfig {
-                id: "protected".into(),
-                api_key: "upstream-secret".into(),
-                ..InstanceConfig::default()
-            },
-        )]);
-        let anonymous = ProxyConfig {
-            enabled: true,
-            allow_anonymous: true,
-            ..ProxyConfig::default()
-        };
-        assert!(super::normalize_and_validate_proxy_config(
-            anonymous.clone(),
-            &protected_instances
-        )
-        .is_err());
-        assert!(super::normalize_and_validate_proxy_config(anonymous, &instances).is_ok());
-    }
-
-    #[tokio::test]
-    async fn response_guards_remain_charged_until_the_downstream_body_is_released() {
-        let runtime = Arc::new(super::RouterRuntime::default());
-        let global = runtime
-            .acquire_global(1, std::time::Duration::from_millis(20))
-            .await
-            .unwrap();
-        let body = runtime.try_acquire_body_bytes(64, 64).unwrap();
-        let candidate = super::RoutingCandidate {
-            instance_id: "stream-target".into(),
-            priority: 0,
-            weight: 1,
-            max_concurrent_requests: 1,
-        };
-        let target = runtime.acquire_target(&candidate).unwrap();
-        let client = runtime
-            .try_acquire_client("test-client", "inference", 1)
-            .unwrap();
-        let guards = super::ResponseBodyGuards {
-            _permits: super::StreamingPermits {
-                _global: global,
-                _body: body,
-                _target: target,
-                _client: client,
-            },
-            _response_memory: None,
-        };
-        let stream = super::pump_guarded_response_stream(
-            futures_util::stream::pending(),
-            guards,
-            std::time::Instant::now() + std::time::Duration::from_millis(30),
-        );
-
-        assert!(runtime
-            .acquire_global(1, std::time::Duration::from_millis(1))
-            .await
-            .is_none());
-        assert!(runtime.try_acquire_body_bytes(1, 64).is_none());
-        assert!(runtime.acquire_target(&candidate).is_none());
-
-        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-        assert!(runtime
-            .acquire_global(1, std::time::Duration::from_millis(1))
-            .await
-            .is_none());
-        assert!(runtime.try_acquire_body_bytes(1, 64).is_none());
-        assert!(runtime.acquire_target(&candidate).is_none());
-
-        drop(stream);
-        assert!(runtime
-            .acquire_global(1, std::time::Duration::from_millis(20))
-            .await
-            .is_some());
-        assert!(runtime.try_acquire_body_bytes(64, 64).is_some());
-        assert!(runtime.acquire_target(&candidate).is_some());
-    }
-
-    #[test]
     fn legacy_single_key_is_migrated_once_into_a_scoped_hashed_key() {
-        let legacy_key = super::generate_proxy_api_key();
         let normalized = super::normalize_and_validate_proxy_config(
             ProxyConfig {
-                public_api_key: legacy_key.clone(),
+                public_api_key: "legacy-secret".into(),
                 ..ProxyConfig::default()
             },
             &HashMap::new(),
@@ -5592,10 +4136,7 @@ mod tests {
             .key
             .starts_with(super::PROXY_API_KEY_HASH_PREFIX));
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            format!("Bearer {legacy_key}").parse().unwrap(),
-        );
+        headers.insert("authorization", "Bearer legacy-secret".parse().unwrap());
         assert!(
             super::authenticate_proxy_request(&normalized, "/v1/chat/completions", &headers)
                 .is_some()
@@ -5670,19 +4211,14 @@ mod tests {
         let configured_limit = std::hint::black_box(super::MAX_PROXY_REQUEST_BODY_BYTES);
         assert!(configured_limit > 2 * 1024 * 1024);
         let snapshot = super::ProxyRuntimeSnapshot {
-            config: ProxyConfig {
-                allow_anonymous: true,
-                ..ProxyConfig::default()
-            },
+            config: ProxyConfig::default(),
             instances: HashMap::new(),
             running: HashMap::new(),
             bound_addr: String::new(),
             last_error: None,
         };
-        let runtime = Arc::new(super::RouterRuntime::default());
-        let router = super::proxy_router_from_source_with_runtime_and_limits(
+        let router = super::proxy_router_from_source_with_limits(
             Arc::new(TestProxySource { snapshot }),
-            runtime.clone(),
             1_024,
             super::MAX_ANTHROPIC_REQUEST_BODY_BYTES,
         );
@@ -5720,23 +4256,18 @@ mod tests {
             .unwrap()
             .status();
         assert_eq!(rejected_status, StatusCode::PAYLOAD_TOO_LARGE);
-        let operational =
-            runtime.operational_snapshot(ProxyConfig::default().max_concurrent_requests);
-        assert_eq!(operational.request_count, 2);
-        assert_eq!(operational.failed_request_count, 2);
 
         task.abort();
     }
 
     #[tokio::test]
-    async fn security_regression_partial_upload_does_not_consume_inference_permits() {
+    async fn security_regression_global_permit_is_acquired_before_request_body_buffering() {
         use futures_util::StreamExt;
 
         let snapshot = super::ProxyRuntimeSnapshot {
             config: ProxyConfig {
                 max_concurrent_requests: 1,
                 queue_timeout_ms: 50,
-                allow_anonymous: true,
                 ..ProxyConfig::default()
             },
             instances: HashMap::new(),
@@ -5765,9 +4296,14 @@ mod tests {
                 .await
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-        assert_eq!(runtime.in_flight_requests(), 0);
-        assert_eq!(runtime.in_flight_body_bytes(), 0);
+        let mut observed_admission = false;
+        for _ in 0..50 {
+            if runtime.in_flight_requests() == 1 {
+                observed_admission = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
 
         request_task.abort();
         server_task.abort();
@@ -5778,78 +4314,21 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         }
 
+        assert!(
+            observed_admission,
+            "the concurrency budget must cover clients while their request bodies are still arriving"
+        );
         assert_eq!(
             runtime.in_flight_requests(),
             0,
-            "a partially uploaded request must never acquire an inference permit"
+            "cancelling a partially uploaded request must release its permit"
         );
-    }
-
-    #[tokio::test]
-    async fn security_regression_queued_bodies_count_toward_the_aggregate_budget() {
-        let snapshot = super::ProxyRuntimeSnapshot {
-            config: ProxyConfig {
-                max_concurrent_requests: 1,
-                queue_timeout_ms: 5_000,
-                allow_anonymous: true,
-                ..ProxyConfig::default()
-            },
-            instances: HashMap::new(),
-            running: HashMap::new(),
-            bound_addr: String::new(),
-            last_error: None,
-        };
-        let runtime = Arc::new(super::RouterRuntime::default());
-        let blocker = runtime
-            .acquire_global(1, std::time::Duration::from_millis(20))
-            .await
-            .unwrap();
-        let router = super::proxy_router_from_source_with_runtime_and_limits(
-            Arc::new(TestProxySource { snapshot }),
-            runtime.clone(),
-            super::MAX_PROXY_REQUEST_BODY_BYTES,
-            super::MAX_ANTHROPIC_REQUEST_BODY_BYTES,
-        );
-        let (address, server_task) = spawn_test_router(router).await;
-        let body = r#"{"model":"queued"}"#;
-        let body_len = body.len();
-        let request_task = tokio::spawn(async move {
-            reqwest::Client::new()
-                .post(format!("http://{address}/v1/chat/completions"))
-                .header("content-type", "application/json")
-                .body(body)
-                .send()
-                .await
-        });
-
-        for _ in 0..50 {
-            if runtime.queue_depth() == 1 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert_eq!(runtime.queue_depth(), 1);
-        assert_eq!(runtime.in_flight_body_bytes(), body_len);
-
-        request_task.abort();
-        drop(blocker);
-        server_task.abort();
-        for _ in 0..50 {
-            if runtime.in_flight_body_bytes() == 0 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert_eq!(runtime.in_flight_body_bytes(), 0);
     }
 
     #[tokio::test]
     async fn anthropic_request_limit_returns_the_anthropic_413_shape() {
         let snapshot = super::ProxyRuntimeSnapshot {
-            config: ProxyConfig {
-                allow_anonymous: true,
-                ..ProxyConfig::default()
-            },
+            config: ProxyConfig::default(),
             instances: HashMap::new(),
             running: HashMap::new(),
             bound_addr: String::new(),
@@ -6063,9 +4542,6 @@ mod tests {
                 telemetry_session_id: None,
                 workload: "inference".into(),
                 launch_config: Some(instance),
-                deployment_identity: Default::default(),
-                deployment_id: String::new(),
-                deployment_revision_id: String::new(),
             },
         )]);
         let config = ProxyConfig {
@@ -6131,9 +4607,6 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(primary),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: String::new(),
                 },
             ),
             (
@@ -6148,9 +4621,6 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(backup),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: String::new(),
                 },
             ),
         ]);
@@ -6200,111 +4670,6 @@ mod tests {
             None,
         )
         .is_none());
-    }
-
-    #[test]
-    fn canary_overlay_replaces_only_its_public_alias_and_forces_weighted_scheduling() {
-        let stable_id = "stable-instance".to_string();
-        let candidate_id = "candidate-instance".to_string();
-        let stable = InstanceConfig {
-            id: stable_id.clone(),
-            alias: "stable-upstream".into(),
-            ..InstanceConfig::default()
-        };
-        let candidate = InstanceConfig {
-            id: candidate_id.clone(),
-            alias: "candidate-upstream".into(),
-            ..InstanceConfig::default()
-        };
-        let instances = HashMap::from([
-            (stable_id.clone(), stable.clone()),
-            (candidate_id.clone(), candidate.clone()),
-        ]);
-        let running = [
-            (stable_id.clone(), stable, 18080_u16, "stable-revision"),
-            (
-                candidate_id.clone(),
-                candidate,
-                18081_u16,
-                "candidate-revision",
-            ),
-        ]
-        .into_iter()
-        .map(|(id, config, port, revision_id)| {
-            (
-                id.clone(),
-                RunningInstance {
-                    instance_id: id,
-                    pid: 1,
-                    port,
-                    host: "127.0.0.1".into(),
-                    start_time: 0,
-                    executable_path: String::new(),
-                    telemetry_session_id: None,
-                    workload: "inference".into(),
-                    launch_config: Some(config),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: revision_id.into(),
-                },
-            )
-        })
-        .collect::<HashMap<_, _>>();
-        let config = ProxyConfig {
-            routing_strategy: "priorityFailover".into(),
-            routes: vec![ProxyRoute {
-                model_alias: "public-model".into(),
-                target_instance_id: stable_id.clone(),
-                ..ProxyRoute::default()
-            }],
-            canary_routes: vec![
-                ProxyRoute {
-                    model_alias: "public-model".into(),
-                    target_instance_id: stable_id.clone(),
-                    required_deployment_revision_id: "stable-revision".into(),
-                    weight: 90,
-                    ..ProxyRoute::default()
-                },
-                ProxyRoute {
-                    model_alias: "public-model".into(),
-                    target_instance_id: candidate_id.clone(),
-                    required_deployment_revision_id: "candidate-revision".into(),
-                    weight: 10,
-                    ..ProxyRoute::default()
-                },
-            ],
-            ..ProxyConfig::default()
-        };
-
-        let resolution = super::proxy_request_resolution_from(
-            config.clone(),
-            &instances,
-            &running,
-            Some("public-model"),
-            None,
-        );
-        assert_eq!(resolution.routing_strategy, "weighted");
-        assert_eq!(resolution.candidates.len(), 2);
-        assert_eq!(resolution.candidates[0].route_weight, 90);
-        assert_eq!(resolution.candidates[1].route_weight, 10);
-        let mut drifted = running.clone();
-        drifted
-            .get_mut(&candidate_id)
-            .unwrap()
-            .deployment_revision_id = "unexpected-revision".into();
-        assert!(super::proxy_request_resolution_from(
-            config.clone(),
-            &instances,
-            &drifted,
-            Some("public-model"),
-            None,
-        )
-        .candidates
-        .is_empty());
-        assert_eq!(
-            super::effective_routing_strategy(&config, Some("another-model")),
-            "priorityFailover"
-        );
     }
 
     #[test]
@@ -6421,9 +4786,6 @@ mod tests {
                 telemetry_session_id: None,
                 workload: "inference".into(),
                 launch_config: Some(instance),
-                deployment_identity: Default::default(),
-                deployment_id: String::new(),
-                deployment_revision_id: String::new(),
             },
         )]);
         let config = ProxyConfig {
@@ -6487,9 +4849,6 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(launched),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: String::new(),
                 },
             ),
             (
@@ -6504,9 +4863,6 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(fallback),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: String::new(),
                 },
             ),
         ]);
@@ -6560,9 +4916,6 @@ mod tests {
                 telemetry_session_id: None,
                 workload: "inference".into(),
                 launch_config: Some(fallback),
-                deployment_identity: Default::default(),
-                deployment_id: String::new(),
-                deployment_revision_id: String::new(),
             },
         )]);
         let config = ProxyConfig {
@@ -6592,14 +4945,15 @@ mod tests {
             strict_model_routing: false,
             ..config
         };
-        assert!(super::resolve_proxy_target_from(
+        let fallback = super::resolve_proxy_target_from(
             &legacy_config,
             &instances,
             &running,
             Some("unknown-model"),
             None,
         )
-        .is_none());
+        .expect("legacy permissive routing may still use the configured default instance");
+        assert_eq!(fallback.public.instance_id, fallback_id);
     }
 
     #[tokio::test]
@@ -6622,7 +4976,6 @@ mod tests {
         };
         let proxy_config = ProxyConfig {
             enabled: true,
-            allow_anonymous: true,
             default_instance_id: instance_id.clone(),
             routes: vec![ProxyRoute {
                 model_alias: "route-model".into(),
@@ -6646,9 +4999,6 @@ mod tests {
                     telemetry_session_id: None,
                     workload: "inference".into(),
                     launch_config: Some(instance),
-                    deployment_identity: Default::default(),
-                    deployment_id: String::new(),
-                    deployment_revision_id: String::new(),
                 },
             )]),
             bound_addr: String::new(),
@@ -6710,218 +5060,6 @@ mod tests {
         );
         proxy_task.abort();
         upstream_task.abort();
-    }
-
-    #[tokio::test]
-    async fn locality_routing_reuses_falls_back_rebinds_and_exposes_no_session_secret() {
-        let received_one = Arc::new(Mutex::new(Vec::new()));
-        let received_two = Arc::new(Mutex::new(Vec::new()));
-        let (address_one, task_one) = spawn_test_router(
-            Router::new()
-                .fallback(axum::routing::any(mock_locality_upstream))
-                .with_state(LocalityUpstreamState {
-                    id: "one".into(),
-                    received_session_headers: received_one.clone(),
-                }),
-        )
-        .await;
-        let (address_two, task_two) = spawn_test_router(
-            Router::new()
-                .fallback(axum::routing::any(mock_locality_upstream))
-                .with_state(LocalityUpstreamState {
-                    id: "two".into(),
-                    received_session_headers: received_two.clone(),
-                }),
-        )
-        .await;
-        let snapshot = locality_proxy_snapshot(&[("one", address_one), ("two", address_two)]);
-        let (router, runtime) =
-            super::proxy_router_from_source_with_runtime(Arc::new(TestProxySource { snapshot }));
-        let (proxy_address, proxy_task) = spawn_test_router(router).await;
-        let client = reqwest::Client::new();
-
-        let request = || {
-            client
-                .post(format!("http://{proxy_address}/v1/chat/completions"))
-                .header(super::LSM_SESSION_HEADER, "private-session")
-                .json(&json!({
-                    "model": "locality-model",
-                    "messages": [{ "role": "user", "content": "hello" }]
-                }))
-        };
-        let first = request().send().await.unwrap();
-        assert_eq!(
-            first
-                .headers()
-                .get("x-lsm-locality")
-                .and_then(|value| value.to_str().ok()),
-            Some("miss")
-        );
-        assert_eq!(
-            first.json::<serde_json::Value>().await.unwrap()["upstream"],
-            "one"
-        );
-
-        let second = request().send().await.unwrap();
-        assert_eq!(
-            second
-                .headers()
-                .get("x-lsm-locality")
-                .and_then(|value| value.to_str().ok()),
-            Some("hit")
-        );
-        assert_eq!(
-            second.json::<serde_json::Value>().await.unwrap()["upstream"],
-            "one"
-        );
-
-        runtime.set_target_draining("one", true);
-        let fallback = request().send().await.unwrap();
-        assert_eq!(
-            fallback
-                .headers()
-                .get("x-lsm-locality")
-                .and_then(|value| value.to_str().ok()),
-            Some("fallback")
-        );
-        assert_eq!(
-            fallback.json::<serde_json::Value>().await.unwrap()["upstream"],
-            "two"
-        );
-        runtime.set_target_draining("one", false);
-
-        let rebound = request().send().await.unwrap();
-        assert_eq!(
-            rebound
-                .headers()
-                .get("x-lsm-locality")
-                .and_then(|value| value.to_str().ok()),
-            Some("hit")
-        );
-        assert_eq!(
-            rebound.json::<serde_json::Value>().await.unwrap()["upstream"],
-            "two"
-        );
-
-        let automatic = client
-            .post(format!("http://{proxy_address}/v1/chat/completions"))
-            .json(&json!({
-                "model": "locality-model",
-                "messages": [
-                    { "role": "system", "content": "stable policy" },
-                    { "role": "user", "content": "first prompt" }
-                ]
-            }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            automatic
-                .headers()
-                .get("x-lsm-locality")
-                .and_then(|value| value.to_str().ok()),
-            Some("miss")
-        );
-        assert_eq!(
-            automatic.json::<serde_json::Value>().await.unwrap()["upstream"],
-            "one"
-        );
-        let continued = client
-            .post(format!("http://{proxy_address}/v1/chat/completions"))
-            .json(&json!({
-                "model": "locality-model",
-                "messages": [
-                    { "role": "system", "content": "stable policy" },
-                    { "role": "user", "content": "first prompt" },
-                    { "role": "assistant", "content": "first response" },
-                    { "role": "user", "content": "follow up" }
-                ]
-            }))
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(
-            continued
-                .headers()
-                .get("x-lsm-locality")
-                .and_then(|value| value.to_str().ok()),
-            Some("hit")
-        );
-        assert_eq!(
-            continued.json::<serde_json::Value>().await.unwrap()["upstream"],
-            "one"
-        );
-
-        let metrics = client
-            .get(format!("http://{proxy_address}/metrics"))
-            .send()
-            .await
-            .unwrap()
-            .text()
-            .await
-            .unwrap();
-        assert!(metrics.contains("lsm_router_locality_hits_total 3"));
-        assert!(metrics.contains("lsm_router_locality_misses_total 2"));
-        assert!(metrics.contains("lsm_router_locality_fallbacks_total 1"));
-        assert!(metrics.contains("lsm_router_locality_bindings 2"));
-        assert!(!metrics.contains("private-session"));
-        assert!(received_one.lock().unwrap().iter().all(Option::is_none));
-        assert!(received_two.lock().unwrap().iter().all(Option::is_none));
-
-        proxy_task.abort();
-        task_one.abort();
-        task_two.abort();
-    }
-
-    #[tokio::test]
-    async fn legacy_disabled_locality_keeps_the_configured_scheduler() {
-        let received = Arc::new(Mutex::new(Vec::new()));
-        let state = |id: &str| LocalityUpstreamState {
-            id: id.into(),
-            received_session_headers: received.clone(),
-        };
-        let (address_one, task_one) = spawn_test_router(
-            Router::new()
-                .fallback(axum::routing::any(mock_locality_upstream))
-                .with_state(state("one")),
-        )
-        .await;
-        let (address_two, task_two) = spawn_test_router(
-            Router::new()
-                .fallback(axum::routing::any(mock_locality_upstream))
-                .with_state(state("two")),
-        )
-        .await;
-        let mut snapshot = locality_proxy_snapshot(&[("one", address_one), ("two", address_two)]);
-        snapshot.config.locality_routing_enabled = false;
-        let router = super::proxy_router_from_source(Arc::new(TestProxySource { snapshot }));
-        let (proxy_address, proxy_task) = spawn_test_router(router).await;
-        let client = reqwest::Client::new();
-        let mut upstreams = Vec::new();
-        for _ in 0..2 {
-            let response = client
-                .post(format!("http://{proxy_address}/v1/chat/completions"))
-                .header(super::LSM_SESSION_HEADER, "legacy-session")
-                .json(&json!({
-                    "model": "locality-model",
-                    "messages": [{ "role": "user", "content": "hello" }]
-                }))
-                .send()
-                .await
-                .unwrap();
-            assert!(!response.headers().contains_key("x-lsm-locality"));
-            upstreams.push(
-                response.json::<serde_json::Value>().await.unwrap()["upstream"]
-                    .as_str()
-                    .unwrap()
-                    .to_string(),
-            );
-        }
-        assert_eq!(upstreams, vec!["one", "two"]);
-
-        proxy_task.abort();
-        task_one.abort();
-        task_two.abort();
     }
 
     #[tokio::test]
@@ -7096,9 +5234,7 @@ mod tests {
                         id: "discovery-client".into(),
                         name: "Discovery".into(),
                         key: "discovery-key-123456".into(),
-                        key_configured: false,
                         enabled: true,
-                        strength_verified: true,
                         scopes: vec!["discovery".into()],
                         requests_per_minute: 1,
                     },
@@ -7106,9 +5242,7 @@ mod tests {
                         id: "inference-client".into(),
                         name: "Inference".into(),
                         key: "inference-key-123456".into(),
-                        key_configured: false,
                         enabled: true,
-                        strength_verified: true,
                         scopes: vec!["inference".into()],
                         requests_per_minute: 0,
                     },
@@ -7476,15 +5610,6 @@ mod tests {
             &tokens
         ));
         assert!(!super::should_forward_request_header("x-api-key", &tokens));
-        assert!(!super::should_forward_request_header("cookie", &tokens));
-        assert!(!super::should_forward_request_header(
-            "x-forwarded-user",
-            &tokens
-        ));
-        assert!(!super::should_forward_request_header(
-            "x-auth-request-email",
-            &tokens
-        ));
         assert!(!super::should_forward_request_header(
             "accept-encoding",
             &tokens
@@ -7497,12 +5622,6 @@ mod tests {
         assert!(super::should_forward_request_header(
             "content-type",
             &tokens
-        ));
-        assert!(!super::should_forward_response_header(
-            "set-cookie",
-            &tokens,
-            true,
-            super::ProxyApiFormat::OpenAi,
         ));
     }
 
