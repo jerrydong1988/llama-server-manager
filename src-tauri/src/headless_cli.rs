@@ -363,6 +363,7 @@ fn seed_test_fixture(data_dir: Option<PathBuf>) -> AppResult<CommandResult> {
             .map_err(AppError::from)?;
     let executable = engine_path.to_string_lossy().to_string();
     let mut qualification = EngineQualificationReport {
+        profile_version: crate::commands::engine_capabilities::QUALIFICATION_PROFILE_VERSION,
         status: "passed".into(),
         executable_fingerprint: crate::commands::engine_capabilities::executable_fingerprint(
             &executable,
