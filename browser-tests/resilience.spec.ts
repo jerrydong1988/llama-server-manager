@@ -196,17 +196,17 @@ test('paused downloads restore from the backend snapshot and can resume', async 
   ))).toBe(true)
 })
 
-test('cluster workers load from persistence and a connection test refreshes their status', async ({ page }) => {
+test('Secure Agent workers load from persistence and an authenticated test refreshes their status', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
     localStorage.setItem('lastTab', 'cluster')
   })
   await page.goto('/?scenario=cluster-worker')
 
-  await expect(page.getByText('Browser Cluster Worker', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('Browser Secure Agent', { exact: true }).first()).toBeVisible()
   await page.getByRole('button', { name: '测试连接' }).click()
   await expect.poll(() => page.evaluate(() => (
-    window.__TAURI_BROWSER_TEST__.calls.some(call => call.command === 'test_worker')
+    window.__TAURI_BROWSER_TEST__.calls.some(call => call.command === 'test_worker_agent')
   ))).toBe(true)
   await expect(page.getByText('在线', { exact: true }).first()).toBeVisible()
 })

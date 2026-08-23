@@ -568,8 +568,8 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
         {/* 服务基础 (10) */}
         <CollapsibleGroup id="config-advanced-server" title={t.configPage.subAdvServer} onReset={() => resetGroup('advancedServerBasic')} summary={summary(ADVANCED_GROUP_CONFIG_KEYS.advancedServerBasic)}>
           <div className={formGridClassName}>
-            <Input label={`${t.configPage.apiKey} (--api-key)`} value={local.api_key} onChange={v => set('api_key', v)} type="password" title={t.configPage.apiKeyTip}  fieldKey={a('api_key')} />
-            <Input label={`${t.configPage.apiKeyFile} (--api-key-file)`} value={formatPathForDisplay(local.api_key_file)} onChange={v => set('api_key_file', v)} title={t.configPage.apiKeyFileTip}  fieldKey={a('api_key_file')} />
+            <Input label={`${t.configPage.apiKey} (--api-key)`} value={local.api_key} onChange={v => set('api_key', v)} type="password" placeholder={local.api_key_configured ? 'Configured · enter a replacement or clear explicitly' : undefined} title={t.configPage.apiKeyTip}  fieldKey={a('api_key')} />
+            <Input label={`${t.configPage.apiKeyFile} (--api-key-file)`} value={formatPathForDisplay(local.api_key_file)} onChange={v => set('api_key_file', v)} placeholder={local.api_key_file_configured ? 'Configured · enter a replacement or clear explicitly' : undefined} title={t.configPage.apiKeyFileTip}  fieldKey={a('api_key_file')} />
             <Switch label={`${t.configPage.noUi} (--ui / --no-ui)`} value={!local.no_ui} onChange={v => set('no_ui', !v)} title={t.configPage.noUiTip}  fieldKey={a('no_ui')} />
       <Switch label={`${t.configPage.offline} (--offline)`} value={local.offline} onChange={v => set('offline', v)} title={t.configPage.offlineTip}  fieldKey={a('offline')} />
             <Input label={`${t.configPage.pathPrefix} (--path)`} value={local.path_prefix} onChange={v => set('path_prefix', v)} title={t.configPage.pathPrefixTip}  fieldKey={a('path_prefix')} />
@@ -583,8 +583,8 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Switch label={`${t.configPage.verbose} (--verbose, -v)`} value={local.verbose} onChange={v => set('verbose', v)} title={t.configPage.verboseTip}  fieldKey={a('verbose')} />
           </div>
           <div className={`${wideGridClassName} mt-3`}>
-            <Input label={`${t.configPage.sslKey} (--ssl-key-file)`} value={formatPathForDisplay(local.ssl_key_file)} onChange={v => set('ssl_key_file', v)} title={t.configPage.sslKeyTip}  fieldKey={a('ssl_key_file')} />
-            <Input label={`${t.configPage.sslCert} (--ssl-cert-file)`} value={formatPathForDisplay(local.ssl_cert_file)} onChange={v => set('ssl_cert_file', v)} title={t.configPage.sslCertTip}  fieldKey={a('ssl_cert_file')} />
+            <Input label={`${t.configPage.sslKey} (--ssl-key-file)`} value={formatPathForDisplay(local.ssl_key_file)} onChange={v => set('ssl_key_file', v)} placeholder={local.ssl_key_file_configured ? 'Configured · enter a replacement or clear explicitly' : undefined} title={t.configPage.sslKeyTip}  fieldKey={a('ssl_key_file')} />
+            <Input label={`${t.configPage.sslCert} (--ssl-cert-file)`} value={formatPathForDisplay(local.ssl_cert_file)} onChange={v => set('ssl_cert_file', v)} placeholder={local.ssl_cert_file_configured ? 'Configured · enter a replacement' : undefined} title={t.configPage.sslCertTip}  fieldKey={a('ssl_cert_file')} />
           </div>
         </CollapsibleGroup>
 
@@ -599,13 +599,13 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
             <Input label={`${t.configPage.logPromptsDir} (--log-prompts-dir)`} value={formatPathForDisplay(local.log_prompts_dir)} onChange={v => set('log_prompts_dir', v)} title={t.configPage.logPromptsDirTip} fieldKey={a('log_prompts_dir')} />
             <Num label={`${t.configPage.slotPromptSimilarity} (--slot-prompt-similarity, -sps)`} value={local.slot_prompt_similarity} onChange={v => set('slot_prompt_similarity', v)} min={0} max={1} step={0.05} title={t.configPage.slotPromptSimilarityTip}  fieldKey={a('slot_prompt_similarity')} />
             <Switch label={`${t.configPage.prefillAssistant} (--prefill-assistant)`} value={local.prefill_assistant} onChange={v => set('prefill_assistant', v)} title={t.configPage.prefillAssistantTip}  fieldKey={a('prefill_assistant')} />
-            <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={formatPathForDisplay(local.ui_config_file)} onChange={v => set('ui_config_file', v)} title={t.configPage.uiConfigFileTip}  fieldKey={a('ui_config_file')} />
-            <Input label={`${t.configPage.uiConfig} (--ui-config)`} value={local.ui_config} onChange={v => set('ui_config', v)} title={t.configPage.uiConfigTip}  fieldKey={a('ui_config')} />
+            <Input label={`${t.configPage.uiConfigFile} (--ui-config-file)`} value={formatPathForDisplay(local.ui_config_file)} onChange={v => set('ui_config_file', v)} placeholder={local.ui_config_file_configured ? 'Configured · enter a replacement' : undefined} title={t.configPage.uiConfigFileTip}  fieldKey={a('ui_config_file')} />
+            <Input label={`${t.configPage.uiConfig} (--ui-config)`} value={local.ui_config} onChange={v => set('ui_config', v)} placeholder={local.ui_config_configured ? 'Configured · enter a replacement' : undefined} title={t.configPage.uiConfigTip}  fieldKey={a('ui_config')} />
             <Switch label={`${t.configPage.uiMcpProxy} (--ui-mcp-proxy)`} value={local.ui_mcp_proxy} onChange={v => set('ui_mcp_proxy', v)} title={t.configPage.uiMcpProxyTip}  fieldKey={a('ui_mcp_proxy')} />
             <Switch label={`${t.configPage.agent} (--agent)`} value={local.agent} onChange={v => set('agent', v)} title={t.configPage.agentTip}  fieldKey={a('agent')} />
             <Input label={`${t.configPage.toolsRuntime} (--tools-runtime)`} value={local.tools_runtime} onChange={v => set('tools_runtime', v)} title={t.configPage.toolsRuntimeTip} fieldKey={a('tools_runtime')} />
-            <Input label={`${t.configPage.mcpServersConfig} (--mcp-servers-config)`} value={formatPathForDisplay(local.mcp_servers_config)} onChange={v => set('mcp_servers_config', v)} title={t.configPage.mcpServersConfigTip} fieldKey={a('mcp_servers_config')} />
-            <Input label={`${t.configPage.mcpServersJson} (--mcp-servers-json)`} value={local.mcp_servers_json} onChange={v => set('mcp_servers_json', v)} title={t.configPage.mcpServersJsonTip} fieldKey={a('mcp_servers_json')} />
+            <Input label={`${t.configPage.mcpServersConfig} (--mcp-servers-config)`} value={formatPathForDisplay(local.mcp_servers_config)} onChange={v => set('mcp_servers_config', v)} placeholder={local.mcp_servers_config_configured ? 'Configured · enter a replacement or clear explicitly' : undefined} title={t.configPage.mcpServersConfigTip} fieldKey={a('mcp_servers_config')} />
+            <Input label={`${t.configPage.mcpServersJson} (--mcp-servers-json)`} value={local.mcp_servers_json} onChange={v => set('mcp_servers_json', v)} placeholder={local.mcp_servers_json_configured ? 'Configured · enter a replacement or clear explicitly' : undefined} title={t.configPage.mcpServersJsonTip} fieldKey={a('mcp_servers_json')} />
             </>)}
           </div>
           <div className={`${formGridClassName} mt-3`}>

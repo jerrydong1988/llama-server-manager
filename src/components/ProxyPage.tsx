@@ -22,7 +22,9 @@ type ProxyApiKey = {
   id: string
   name: string
   key: string
+  keyConfigured: boolean
   enabled: boolean
+  strengthVerified: boolean
   scopes: string[]
   requestsPerMinute: number
 }
@@ -41,6 +43,7 @@ type ProxyConfig = {
   connectTimeoutMs: number
   timeoutMs: number
   streamingIdleTimeoutMs: number
+  streamingMaxLifetimeMs: number
   healthCheckIntervalMs: number
   healthCheckTimeoutMs: number
   unhealthyThreshold: number
@@ -50,6 +53,7 @@ type ProxyConfig = {
   requestsPerMinute: number
   corsAllowedOrigins: string[]
   apiKeys: ProxyApiKey[]
+  allowAnonymous: boolean
   backgroundServiceMode: boolean
   runtimeServiceEnabled: boolean
   routes: ProxyRoute[]
@@ -95,7 +99,7 @@ type ProxyOperationalSnapshot = {
   alerts: ProxyOperationalAlert[]
 }
 
-type NumericProxyConfigKey = 'connectTimeoutMs' | 'timeoutMs' | 'streamingIdleTimeoutMs'
+type NumericProxyConfigKey = 'connectTimeoutMs' | 'timeoutMs' | 'streamingIdleTimeoutMs' | 'streamingMaxLifetimeMs'
   | 'healthCheckIntervalMs' | 'healthCheckTimeoutMs' | 'unhealthyThreshold'
   | 'recoveryCooldownMs' | 'maxConcurrentRequests' | 'queueTimeoutMs' | 'requestsPerMinute'
   | 'localityTtlMs' | 'localityMaxEntries'
@@ -155,6 +159,7 @@ const defaultConfig: ProxyConfig = {
   connectTimeoutMs: 5000,
   timeoutMs: 600000,
   streamingIdleTimeoutMs: 300000,
+  streamingMaxLifetimeMs: 3600000,
   healthCheckIntervalMs: 5000,
   healthCheckTimeoutMs: 2000,
   unhealthyThreshold: 3,
@@ -164,6 +169,7 @@ const defaultConfig: ProxyConfig = {
   requestsPerMinute: 0,
   corsAllowedOrigins: [],
   apiKeys: [],
+  allowAnonymous: false,
   backgroundServiceMode: false,
   runtimeServiceEnabled: false,
   routes: [],
@@ -238,7 +244,9 @@ function normalizeApiKey(value: unknown, index: number): ProxyApiKey {
     id: getString(record, ['id'], `key-${index + 1}`),
     name: getString(record, ['name'], `API Key ${index + 1}`),
     key: getString(record, ['key']),
+    keyConfigured: getBoolean(record, ['key_configured', 'keyConfigured'], false),
     enabled: getBoolean(record, ['enabled'], true),
+    strengthVerified: getBoolean(record, ['strength_verified', 'strengthVerified'], false),
     scopes: Array.isArray(record.scopes) ? record.scopes.filter((scope): scope is string => typeof scope === 'string') : ['inference', 'discovery'],
     requestsPerMinute: getNumber(record, ['requests_per_minute', 'requestsPerMinute'], 0),
   }
@@ -277,6 +285,7 @@ function normalizeConfig(value: unknown): ProxyConfig {
     connectTimeoutMs: getNumber(record, ['connect_timeout_ms', 'connectTimeoutMs'], defaultConfig.connectTimeoutMs),
     timeoutMs: getNumber(record, ['timeout_ms', 'timeoutMs'], defaultConfig.timeoutMs),
     streamingIdleTimeoutMs: getNumber(record, ['streaming_idle_timeout_ms', 'streamingIdleTimeoutMs'], defaultConfig.streamingIdleTimeoutMs),
+    streamingMaxLifetimeMs: getNumber(record, ['streaming_max_lifetime_ms', 'streamingMaxLifetimeMs'], defaultConfig.streamingMaxLifetimeMs),
     healthCheckIntervalMs: getNumber(record, ['health_check_interval_ms', 'healthCheckIntervalMs'], defaultConfig.healthCheckIntervalMs),
     healthCheckTimeoutMs: getNumber(record, ['health_check_timeout_ms', 'healthCheckTimeoutMs'], defaultConfig.healthCheckTimeoutMs),
     unhealthyThreshold: getNumber(record, ['unhealthy_threshold', 'unhealthyThreshold'], defaultConfig.unhealthyThreshold),
@@ -286,6 +295,7 @@ function normalizeConfig(value: unknown): ProxyConfig {
     requestsPerMinute: getNumber(record, ['requests_per_minute', 'requestsPerMinute'], defaultConfig.requestsPerMinute),
     corsAllowedOrigins: (Array.isArray(record.cors_allowed_origins) ? record.cors_allowed_origins : Array.isArray(record.corsAllowedOrigins) ? record.corsAllowedOrigins : []).filter((origin): origin is string => typeof origin === 'string'),
     apiKeys: apiKeysValue.map(normalizeApiKey),
+    allowAnonymous: getBoolean(record, ['allow_anonymous', 'allowAnonymous'], defaultConfig.allowAnonymous),
     backgroundServiceMode: getBoolean(record, ['background_service_mode', 'backgroundServiceMode'], defaultConfig.backgroundServiceMode),
     runtimeServiceEnabled: getBoolean(record, ['runtime_service_enabled', 'runtimeServiceEnabled'], defaultConfig.runtimeServiceEnabled),
     routes,
@@ -395,6 +405,7 @@ function toCommandConfig(config: ProxyConfig) {
     connect_timeout_ms: config.connectTimeoutMs,
     timeout_ms: config.timeoutMs,
     streaming_idle_timeout_ms: config.streamingIdleTimeoutMs,
+    streaming_max_lifetime_ms: config.streamingMaxLifetimeMs,
     health_check_interval_ms: config.healthCheckIntervalMs,
     health_check_timeout_ms: config.healthCheckTimeoutMs,
     unhealthy_threshold: config.unhealthyThreshold,
@@ -407,10 +418,13 @@ function toCommandConfig(config: ProxyConfig) {
       id: apiKey.id,
       name: apiKey.name.trim(),
       key: apiKey.key.trim(),
+      key_configured: apiKey.keyConfigured,
       enabled: apiKey.enabled,
+      strength_verified: apiKey.strengthVerified,
       scopes: apiKey.scopes,
       requests_per_minute: apiKey.requestsPerMinute,
     })),
+    allow_anonymous: config.allowAnonymous,
     background_service_mode: config.backgroundServiceMode,
     runtime_service_enabled: config.runtimeServiceEnabled,
     routes: config.routes.map(route => ({
@@ -536,7 +550,7 @@ export default function ProxyPage() {
     return normalized === '' || normalized === 'localhost' || normalized === '::1' || loopbackIpv4
   }
   const requiresLoopbackHost = !isLocalHost(draft.host)
-  const hasApiKeyIssues = draft.apiKeys.some(apiKey => apiKey.enabled && apiKey.key.trim().length < 16)
+  const hasApiKeyIssues = draft.apiKeys.some(apiKey => apiKey.enabled && !apiKey.keyConfigured && apiKey.key.trim().length < 32)
 
   const fallbackTargets = useMemo<ProxyTarget[]>(() => instances.map(instance => ({
     instanceId: instance.id,
@@ -769,14 +783,17 @@ export default function ProxyPage() {
     }))
   }
 
-  const addApiKey = () => {
+  const addApiKey = async () => {
+    const generatedKey = await invoke<string>('generate_proxy_api_key')
     setDraft(current => ({
       ...current,
       apiKeys: [...current.apiKeys, {
         id: crypto.randomUUID(),
         name: `API Key ${current.apiKeys.length + 1}`,
-        key: `lsm_${crypto.randomUUID().replace(/-/g, '')}`,
+        key: generatedKey,
+        keyConfigured: false,
         enabled: true,
+        strengthVerified: false,
         scopes: ['inference', 'discovery'],
         requestsPerMinute: 0,
       }],
@@ -1253,6 +1270,7 @@ export default function ProxyPage() {
                 ['timeoutMs', labels.timeout, 1000],
                 ['connectTimeoutMs', labels.connectTimeout, 100],
                 ['streamingIdleTimeoutMs', labels.streamingIdleTimeout, 1000],
+                ['streamingMaxLifetimeMs', labels.streamingMaxLifetime, 1000],
                 ['healthCheckIntervalMs', labels.healthCheckInterval, 1000],
                 ['healthCheckTimeoutMs', labels.healthCheckTimeout, 250],
                 ['unhealthyThreshold', labels.unhealthyThreshold, 1],
@@ -1306,6 +1324,23 @@ export default function ProxyPage() {
               />
               <span className="mt-1.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.corsOriginsHint}</span>
             </label>
+            <div className="mt-4 min-w-0">
+              <span className="mb-1 block text-xs font-medium uppercase text-slate-500 dark:text-slate-400">{labels.allowAnonymous}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-label={labels.allowAnonymous}
+                aria-checked={draft.allowAnonymous}
+                onClick={() => updateDraft({ allowAnonymous: !draft.allowAnonymous })}
+                className={`flex h-10 w-full max-w-sm items-center justify-between rounded-lg border px-3 text-sm transition ${draft.allowAnonymous ? 'border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'}`}
+              >
+                <span>{draft.allowAnonymous ? labels.enabled : labels.disabled}</span>
+                <span className={`relative inline-flex h-6 w-11 rounded-full ${draft.allowAnonymous ? 'bg-amber-600' : 'bg-emerald-600'}`}>
+                  <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${draft.allowAnonymous ? 'left-6' : 'left-1'}`} />
+                </span>
+              </button>
+              <span className="mt-1.5 block text-xs leading-5 text-slate-500 dark:text-slate-400">{labels.allowAnonymousHint}</span>
+            </div>
             <p className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800 dark:border-blue-500/30 dark:bg-blue-500/10 dark:text-blue-200">{labels.apiKeyRelationshipHint}</p>
             <div className="mt-4 space-y-3">
               {draft.apiKeys.length === 0 ? <EmptyPanel title={labels.noApiKeys} /> : draft.apiKeys.map(apiKey => (
@@ -1323,8 +1358,8 @@ export default function ProxyPage() {
                           type={revealedSecretId === `api:${apiKey.id}` && !isStoredApiKey(apiKey.key) ? 'text' : 'password'}
                           autoComplete="off"
                           value={apiKey.key}
-                          placeholder={labels.apiKeyValue}
-                          onChange={event => updateApiKey(apiKey.id, { key: event.target.value })}
+                          placeholder={apiKey.keyConfigured ? labels.apiKeyHashedHint : labels.apiKeyValue}
+                          onChange={event => updateApiKey(apiKey.id, { key: event.target.value, keyConfigured: false, strengthVerified: false })}
                           className="min-w-0 flex-1"
                         />
                         {apiKey.key && !isStoredApiKey(apiKey.key) ? (
@@ -1336,7 +1371,7 @@ export default function ProxyPage() {
                         ) : null}
                         {apiKey.key && !isStoredApiKey(apiKey.key) ? <IconButton label={labels.copyApiKey} onClick={() => void copyApiKey(apiKey)} icon={<Copy className="h-4 w-4" />} /> : null}
                       </div>
-                      {isStoredApiKey(apiKey.key) ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyHashedHint}</p> : null}
+                      {apiKey.keyConfigured || isStoredApiKey(apiKey.key) ? <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyHashedHint}</p> : null}
                     </div>
                     <label className="min-w-0">
                       <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.apiKeyRequestsPerMinute}</span>
@@ -1371,7 +1406,7 @@ export default function ProxyPage() {
                     ))}
                     <span className="ml-auto text-xs text-slate-500 dark:text-slate-400">{labels.apiKeyRpmHint}</span>
                   </div>
-                  {apiKey.enabled && apiKey.key.trim().length < 16 ? <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{labels.apiKeyValidation}</p> : null}
+                  {apiKey.enabled && !apiKey.keyConfigured && apiKey.key.trim().length < 32 ? <p className="mt-2 text-xs text-rose-600 dark:text-rose-400">{labels.apiKeyValidation}</p> : null}
                 </div>
               ))}
             </div>

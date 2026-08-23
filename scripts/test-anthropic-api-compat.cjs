@@ -16,7 +16,11 @@ assert.ok(Number.isInteger(buildNumber) && buildNumber >= 10199, 'Anthropic pass
 for (const route of ['/v1/messages', '/v1/messages/count_tokens', '/v1/models/:model_id']) {
   assert.match(proxy, new RegExp(route.replace(/[/:]/g, '\\$&')), `missing proxy route ${route}`)
 }
-assert.match(proxy, /MAX_ANTHROPIC_REQUEST_BODY_BYTES:\s*usize\s*=\s*32\s*\*\s*1024\s*\*\s*1024/)
+assert.match(
+  proxy,
+  /MAX_ANTHROPIC_REQUEST_BODY_BYTES:\s*usize\s*=\s*8\s*\*\s*1024\s*\*\s*1024/,
+  'Anthropic requests must share the bounded 8 MiB proxy admission limit',
+)
 assert.match(protocol, /"authentication_error"/)
 assert.match(protocol, /"invalid_request_error"/)
 assert.match(protocol, /object\.get_mut\("message"\)/, 'Anthropic message_start model privacy rewrite is required')

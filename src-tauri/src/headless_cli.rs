@@ -270,8 +270,10 @@ fn initialize_state(data_dir: Option<PathBuf>) -> AppResult<AppState> {
     }
     let config_dir = crate::utils::get_data_dir().join("configs");
     let config = crate::commands::config::read_config_from_disk(&config_dir);
-    crate::security::initialize_path_authority(&config.engine_dirs, &config.model_dirs)
+    crate::security::initialize_path_authority()
         .map_err(|message| AppError::new("PATH_AUTHORITY_INITIALIZATION_FAILED", message, false))?;
+    crate::security::validate_configured_roots(&config.engine_dirs, &config.model_dirs)
+        .map_err(|message| AppError::new("PATH_AUTHORITY_REQUIRED", message, false))?;
     crate::commands::model_inventory::initialize_inventory_storage()
         .map_err(|message| AppError::new("INVENTORY_INITIALIZATION_FAILED", message, true))?;
     let models = crate::commands::model_inventory::list_cached_models()
@@ -302,7 +304,7 @@ fn seed_test_fixture(data_dir: Option<PathBuf>) -> AppResult<CommandResult> {
     use crate::commands::model_inventory::{InventoryEngineRecord, InventoryModelRecord};
     use crate::models::{
         EngineCapabilities, EngineInfo, EngineQualificationCheck, EngineQualificationReport,
-        ModelCapabilities, ModelInfo,
+        ModelCapabilities, ModelInfo, ProxyApiKey,
     };
     use std::collections::HashSet;
 
@@ -310,10 +312,17 @@ fn seed_test_fixture(data_dir: Option<PathBuf>) -> AppResult<CommandResult> {
         .ok_or_else(|| usage_error("__test-seed-fixture requires an isolated --data-dir"))?;
     crate::utils::set_data_dir_override(data_dir.clone())
         .map_err(|message| AppError::new("CLI_DATA_DIR_INVALID", message, false))?;
-    let engine_root = data_dir.join("fixture-engine");
-    let model_root = data_dir.join("fixture-model");
+    let engine_root = data_dir.join("engines").join("fixture-engine");
+    let model_root = data_dir.join("models").join("fixture-model");
     std::fs::create_dir_all(&engine_root)?;
     std::fs::create_dir_all(&model_root)?;
+    #[cfg(windows)]
+    for managed_root in [data_dir.join("engines"), data_dir.join("models")] {
+        let marker = managed_root.join(".fixture-permissions");
+        std::fs::write(&marker, b"private fixture root")?;
+        crate::persistence::enforce_private_file(&marker).map_err(AppError::from)?;
+        std::fs::remove_file(marker)?;
+    }
 
     let source_engine = std::env::current_exe().map_err(|error| {
         AppError::new(
@@ -336,6 +345,11 @@ fn seed_test_fixture(data_dir: Option<PathBuf>) -> AppResult<CommandResult> {
     }
     let model_path = model_root.join("fixture.gguf");
     std::fs::write(&model_path, vec![b'f'; 128 * 1024])?;
+    #[cfg(windows)]
+    {
+        crate::persistence::enforce_private_file(&engine_path).map_err(AppError::from)?;
+        crate::persistence::enforce_private_file(&model_path).map_err(AppError::from)?;
+    }
     // Match the real scanner's stable path identity. CI temporary directories can
     // be aliases (/var -> /private/var on macOS or 8.3 -> long paths on Windows).
     let engine_path = std::fs::canonicalize(&engine_path)?;
@@ -449,8 +463,9 @@ fn seed_test_fixture(data_dir: Option<PathBuf>) -> AppResult<CommandResult> {
         .port();
     drop(fixture_listener);
     let manual_command = format!(
-        "\"{}\" __test-fixture-server --host 127.0.0.1 --port {fixture_port}",
-        engine_path.display()
+        "\"{}\" __test-fixture-server --host 127.0.0.1 --port {fixture_port} --model \"{}\"",
+        engine_path.display(),
+        model_path.display()
     );
     let instance_id = "cli-fixture";
     let instance = InstanceConfig {
@@ -479,6 +494,20 @@ fn seed_test_fixture(data_dir: Option<PathBuf>) -> AppResult<CommandResult> {
         .insert(secret_fixture.id.clone(), secret_fixture);
     global.instance_order.push(instance_id.into());
     global.instance_order.push("secret-fixture".into());
+    let proxy_key = crate::commands::proxy::generate_proxy_api_key();
+    global.proxy_config.api_keys = vec![ProxyApiKey {
+        id: "cli-fixture-key".into(),
+        name: "CLI fixture key".into(),
+        key: proxy_key,
+        enabled: true,
+        scopes: vec!["inference".into(), "discovery".into()],
+        ..ProxyApiKey::default()
+    }];
+    global.proxy_config = crate::commands::proxy::normalize_and_validate_proxy_config(
+        global.proxy_config,
+        &global.instances,
+    )
+    .map_err(AppError::from)?;
     crate::config_revision::ensure_current_config_revisions(&mut global).map_err(AppError::from)?;
     crate::commands::config::persist_global_config(&data_dir.join("configs"), &global)
         .map_err(AppError::from)?;

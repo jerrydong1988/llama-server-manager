@@ -7,11 +7,11 @@ use super::protocol::{
     RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
-use crate::commands::engine_capabilities::{executable_fingerprint, QUALIFICATION_PROFILE_VERSION};
+use crate::commands::engine_capabilities::QUALIFICATION_PROFILE_VERSION;
 use crate::commands::proxy::{
     normalize_and_validate_proxy_config, proxy_request_resolution_from,
-    proxy_router_from_source_with_runtime, status_with_runtime, ProxyDataSource,
-    ProxyRequestResolution, ProxyRuntimeSnapshot,
+    proxy_router_from_source_with_runtime, serve_hardened_proxy, status_with_runtime,
+    ProxyDataSource, ProxyRequestResolution, ProxyRuntimeSnapshot,
 };
 use crate::commands::proxy_runtime::RouterRuntime;
 use crate::commands::server::{
@@ -49,7 +49,10 @@ fn unix_timestamp() -> u64 {
         .as_secs()
 }
 
-fn validate_runtime_engine_qualification(spec: &RuntimeLaunchSpec) -> Result<(), String> {
+fn validate_runtime_engine_qualification(
+    spec: &RuntimeLaunchSpec,
+    artifacts: &crate::deployment_identity::LaunchArtifactLeases,
+) -> Result<(), String> {
     if spec.engine_qualification_fingerprint.is_empty()
         || spec.engine_qualification_profile_version == 0
     {
@@ -64,8 +67,7 @@ fn validate_runtime_engine_qualification(spec: &RuntimeLaunchSpec) -> Result<(),
             spec.engine_qualification_profile_version, QUALIFICATION_PROFILE_VERSION
         ));
     }
-    let executable = spec.command.first().map(String::as_str).unwrap_or_default();
-    if executable_fingerprint(executable) != spec.engine_qualification_fingerprint {
+    if artifacts.engine_fingerprint() != spec.engine_qualification_fingerprint {
         return Err(
             "ENGINE_QUALIFICATION_STALE: runtime engine artifact no longer matches qualification evidence"
                 .to_string(),
@@ -74,36 +76,29 @@ fn validate_runtime_engine_qualification(spec: &RuntimeLaunchSpec) -> Result<(),
     Ok(())
 }
 
-fn validate_runtime_deployment_identity(spec: &RuntimeLaunchSpec) -> Result<(), String> {
+fn validate_runtime_deployment_identity(
+    spec: &RuntimeLaunchSpec,
+    artifacts: &crate::deployment_identity::LaunchArtifactLeases,
+    persisted_config: &crate::models::InstanceConfig,
+) -> Result<(), String> {
     if !spec.deployment_identity.is_valid() {
         return Err(
             "DEPLOYMENT_IDENTITY_INVALID: runtime launch snapshot has no valid deployment identity"
                 .to_string(),
         );
     }
-    let executable = spec.command.first().map(String::as_str).unwrap_or_default();
-    let engine = crate::deployment_identity::artifact_identity_for_path(
-        "engine",
-        std::path::Path::new(executable),
-    )
-    .map_err(|error| format!("DEPLOYMENT_ENGINE_IDENTITY_FAILED: {error}"))?;
-    if engine.artifact_id != spec.deployment_identity.engine_artifact_id {
+    if artifacts.engine_identity().artifact_id != spec.deployment_identity.engine_artifact_id {
         return Err(
             "DEPLOYMENT_ENGINE_IDENTITY_STALE: runtime engine artifact identity changed"
                 .to_string(),
         );
     }
-    let model = crate::deployment_identity::artifact_identity_for_path(
-        "model",
-        std::path::Path::new(&spec.config.model_path),
-    )
-    .map_err(|error| format!("DEPLOYMENT_MODEL_IDENTITY_FAILED: {error}"))?;
-    if model.artifact_id != spec.deployment_identity.model_artifact_id {
+    if artifacts.model_identity().artifact_id != spec.deployment_identity.model_artifact_id {
         return Err(
             "DEPLOYMENT_MODEL_IDENTITY_STALE: runtime model artifact identity changed".to_string(),
         );
     }
-    let fingerprint = crate::config_revision::deployment_config_fingerprint(&spec.config)
+    let fingerprint = crate::config_revision::deployment_config_fingerprint(persisted_config)
         .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
     let configuration_id = crate::config_revision::configuration_id_from_fingerprint(&fingerprint)
         .map_err(|error| format!("DEPLOYMENT_CONFIG_IDENTITY_FAILED: {error}"))?;
@@ -112,6 +107,52 @@ fn validate_runtime_deployment_identity(spec: &RuntimeLaunchSpec) -> Result<(), 
             "DEPLOYMENT_CONFIG_IDENTITY_STALE: runtime configuration identity changed (expected {}, found {})",
             spec.deployment_identity.configuration_id, configuration_id
         ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_runtime_engine_qualification_from_paths(
+    spec: &RuntimeLaunchSpec,
+) -> Result<(), String> {
+    if spec.engine_qualification_fingerprint.is_empty()
+        || spec.engine_qualification_profile_version == 0
+    {
+        return Err(
+            "ENGINE_QUALIFICATION_REQUIRED: runtime launch snapshot has no qualification binding"
+                .to_string(),
+        );
+    }
+    if spec.engine_qualification_profile_version != QUALIFICATION_PROFILE_VERSION {
+        return Err("ENGINE_QUALIFICATION_INCOMPLETE: runtime profile mismatch".to_string());
+    }
+    let executable = spec.command.first().map(String::as_str).unwrap_or_default();
+    if crate::commands::engine_capabilities::executable_fingerprint(executable)
+        != spec.engine_qualification_fingerprint
+    {
+        return Err(
+            "ENGINE_QUALIFICATION_STALE: runtime engine artifact no longer matches qualification evidence"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn validate_runtime_deployment_identity_from_paths(spec: &RuntimeLaunchSpec) -> Result<(), String> {
+    let engine = crate::deployment_identity::artifact_identity_for_path(
+        "engine",
+        std::path::Path::new(spec.command.first().map(String::as_str).unwrap_or_default()),
+    )?;
+    if engine.artifact_id != spec.deployment_identity.engine_artifact_id {
+        return Err("DEPLOYMENT_ENGINE_IDENTITY_STALE".to_string());
+    }
+    let model = crate::deployment_identity::artifact_identity_for_path(
+        "model",
+        std::path::Path::new(&spec.config.model_path),
+    )?;
+    if model.artifact_id != spec.deployment_identity.model_artifact_id {
+        return Err("DEPLOYMENT_MODEL_IDENTITY_STALE".to_string());
     }
     Ok(())
 }
@@ -138,14 +179,15 @@ fn instance_recovery_enabled(spec: &RuntimeLaunchSpec) -> bool {
             .eq_ignore_ascii_case("on-failure")
 }
 
-fn runtime_launch_config_matches(
-    launch_config: &crate::models::InstanceConfig,
+fn runtime_deployment_config_matches(
+    deployment_identity: &crate::deployment_identity::DeploymentIdentity,
     current_config: &crate::models::InstanceConfig,
 ) -> bool {
-    let mut comparable = launch_config.clone();
-    comparable.id = current_config.id.clone();
-    comparable.name = current_config.name.clone();
-    comparable == *current_config
+    crate::config_revision::deployment_config_fingerprint(current_config)
+        .and_then(|fingerprint| {
+            crate::config_revision::configuration_id_from_fingerprint(&fingerprint)
+        })
+        .is_ok_and(|configuration_id| configuration_id == deployment_identity.configuration_id)
 }
 
 fn sync_desired_launch_config(
@@ -153,8 +195,9 @@ fn sync_desired_launch_config(
     current_config: &crate::models::InstanceConfig,
     proxy_config: &crate::models::ProxyConfig,
 ) {
-    spec.launch_config_stale = !runtime_launch_config_matches(&spec.config, current_config)
-        || validate_runtime_deployment_revision(spec, proxy_config).is_err();
+    spec.launch_config_stale =
+        !runtime_deployment_config_matches(&spec.deployment_identity, current_config)
+            || validate_runtime_deployment_revision(spec, proxy_config).is_err();
 }
 
 fn next_recovery_delay(restart_attempts: u32) -> Option<u64> {
@@ -897,9 +940,23 @@ impl RuntimeSupervisor {
         if spec.command.is_empty() || spec.command[0].trim().is_empty() {
             return Err("runtime launch command is empty".into());
         }
-        validate_runtime_engine_qualification(&spec)?;
-        validate_runtime_deployment_identity(&spec)?;
-        let proxy_config = self.state.lock().unwrap().proxy_config.clone();
+        let (bound_command, mut artifact_leases) =
+            crate::deployment_identity::bind_launch_artifacts(
+                &spec.command,
+                &spec.deployment_identity,
+            )?;
+        validate_runtime_engine_qualification(&spec, &artifact_leases)?;
+        let (proxy_config, persisted_config) = {
+            let state = self.state.lock().unwrap();
+            let persisted_config = state.instances.get(&spec.instance_id).cloned().ok_or_else(|| {
+                format!(
+                    "DEPLOYMENT_CONFIG_NOT_SYNCED: no persisted configuration is synchronized for instance {}",
+                    spec.instance_id
+                )
+            })?;
+            (state.proxy_config.clone(), persisted_config)
+        };
+        validate_runtime_deployment_identity(&spec, &artifact_leases, &persisted_config)?;
         validate_runtime_deployment_revision(&spec, &proxy_config)?;
         crate::commands::server::validate_effective_launch_security(&spec.config, &spec.command)
             .map_err(|error| error.to_string())?;
@@ -925,9 +982,13 @@ impl RuntimeSupervisor {
                 .map_err(|error| format!("无法创建日志文件: {error}"))?,
         );
 
-        let mut command = Command::new(&spec.command[0]);
+        let mut command = Command::new(&bound_command[0]);
         command
-            .args(&spec.command[1..])
+            .args(&bound_command[1..])
+            .env_clear()
+            .envs(crate::utils::sanitized_engine_environment(
+                std::iter::empty::<(&str, &str)>(),
+            ))
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(working_directory) = spec
@@ -964,6 +1025,18 @@ impl RuntimeSupervisor {
                 return Err("Unable to verify the started server process identity".into());
             }
         };
+        let launch_process_authorization =
+            crate::deployment_identity::register_authorized_launch_process(
+                &spec.instance_id,
+                pid,
+                start_time,
+                &executable_path,
+            );
+        if let Err(error) = artifact_leases.verify_unchanged() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("DEPLOYMENT_ARTIFACT_CHANGED_DURING_START: {error}"));
+        }
         let workload = ModelWorkload::from_storage(&spec.workload);
         let telemetry_session_id = crate::commands::telemetry::begin_run_session(
             &spec.instance_id,
@@ -1033,6 +1106,9 @@ impl RuntimeSupervisor {
             ));
         }
 
+        crate::deployment_identity::retain_launch_artifacts(&spec.instance_id, artifact_leases);
+        launch_process_authorization.disarm();
+
         let supervisor = Arc::downgrade(self);
         let instance_id = spec.instance_id.clone();
         let process_monitor = std::thread::Builder::new()
@@ -1048,6 +1124,7 @@ impl RuntimeSupervisor {
             });
         if let Err(error) = process_monitor {
             let _ = terminate_running_instance(&running);
+            crate::deployment_identity::release_launch_artifacts(&spec.instance_id);
             let mut state = self.state.lock().unwrap();
             state.running.remove(&spec.instance_id);
             state.desired_instances.remove(&spec.instance_id);
@@ -1064,6 +1141,7 @@ impl RuntimeSupervisor {
 
         if let Err(error) = self.spawn_instance_monitor(running.clone(), spec.config.clone()) {
             let _ = terminate_running_instance(&running);
+            crate::deployment_identity::release_launch_artifacts(&spec.instance_id);
             let mut state = self.state.lock().unwrap();
             state.running.remove(&spec.instance_id);
             state.desired_instances.remove(&spec.instance_id);
@@ -1316,6 +1394,7 @@ impl RuntimeSupervisor {
         }
         self.health.lock().unwrap().remove(instance_id);
         self.perf_trackers.lock().unwrap().remove(instance_id);
+        crate::deployment_identity::release_launch_artifacts(instance_id);
         crate::commands::monitoring::remove_instance(instance_id);
     }
 
@@ -1401,6 +1480,7 @@ impl RuntimeSupervisor {
                     }
                     return Err(error);
                 }
+                crate::commands::server::remove_instance_api_credential(instance_id);
             }
             return Ok(());
         };
@@ -1434,7 +1514,11 @@ impl RuntimeSupervisor {
         if removed.is_some() {
             self.health.lock().unwrap().remove(instance_id);
             self.perf_trackers.lock().unwrap().remove(instance_id);
+            crate::deployment_identity::release_launch_artifacts(instance_id);
             crate::commands::monitoring::remove_instance(instance_id);
+            if !preserve_desired {
+                crate::commands::server::remove_running_api_credential(instance_id, &running);
+            }
             let _ = crate::commands::telemetry::finish_run_session(
                 running.telemetry_session_id.as_deref(),
                 None,
@@ -1677,11 +1761,10 @@ impl RuntimeSupervisor {
         *self.proxy_router_runtime.lock().unwrap() = Some(router_runtime);
         let supervisor = self.clone();
         let task = tokio::spawn(async move {
-            let result = axum::serve(listener, router)
-                .with_graceful_shutdown(async move {
-                    let _ = receiver.await;
-                })
-                .await;
+            let result = serve_hardened_proxy(listener, router, async move {
+                let _ = receiver.await;
+            })
+            .await;
             let restart = result.is_err();
             let runtime_error = result
                 .as_ref()
@@ -2041,10 +2124,10 @@ fn should_stop_for_missing_gui(background_enabled: bool, heartbeat_expired: bool
 mod tests {
     use super::{
         gui_owner_is_alive, is_instance_recovery_error, recovery_budget_is_stable,
-        recovery_status_after_failure, runtime_config_matches, runtime_launch_config_matches,
+        recovery_status_after_failure, runtime_config_matches, runtime_deployment_config_matches,
         scheduled_recovery_matches, should_stop_for_missing_gui, sync_desired_launch_config,
-        validate_background_detach_inventory, validate_runtime_deployment_identity,
-        validate_runtime_engine_qualification, validate_runtime_state, GuiOwner,
+        validate_background_detach_inventory, validate_runtime_deployment_identity_from_paths,
+        validate_runtime_engine_qualification_from_paths, validate_runtime_state, GuiOwner,
         QUALIFICATION_PROFILE_VERSION,
     };
     use crate::commands::engine_capabilities::executable_fingerprint;
@@ -2057,12 +2140,17 @@ mod tests {
     };
     use std::collections::HashMap;
 
-    fn test_deployment_identity() -> crate::deployment_identity::DeploymentIdentity {
+    fn test_deployment_identity(
+        config: &InstanceConfig,
+    ) -> crate::deployment_identity::DeploymentIdentity {
+        let fingerprint = crate::config_revision::deployment_config_fingerprint(config).unwrap();
+        let configuration_id =
+            crate::config_revision::configuration_id_from_fingerprint(&fingerprint).unwrap();
         crate::deployment_identity::DeploymentIdentity::new(
             "urn:lsm:engine:v1:sha256:test".into(),
             "urn:lsm:model:v1:sha256:test".into(),
             "revision-test".into(),
-            "urn:lsm:configuration:v1:sha256:test".into(),
+            configuration_id,
             "urn:lsm:qualification:v2:sha256:test".into(),
         )
         .unwrap()
@@ -2090,7 +2178,7 @@ mod tests {
             id: "instance-1".into(),
             ..InstanceConfig::default()
         };
-        let deployment_identity = test_deployment_identity();
+        let deployment_identity = test_deployment_identity(&config);
         let deployment_revision = crate::deployment::test_revision(
             "instance-1",
             &config,
@@ -2167,9 +2255,9 @@ mod tests {
             workload: "inference".into(),
             working_directory: None,
         };
-        validate_runtime_deployment_identity(&spec).unwrap();
+        validate_runtime_deployment_identity_from_paths(&spec).unwrap();
         std::fs::write(&model_path, vec![b'x'; 128 * 1024]).unwrap();
-        assert!(validate_runtime_deployment_identity(&spec)
+        assert!(validate_runtime_deployment_identity_from_paths(&spec)
             .unwrap_err()
             .starts_with("DEPLOYMENT_MODEL_IDENTITY_STALE"));
         std::fs::remove_dir_all(dir).unwrap();
@@ -2199,33 +2287,36 @@ mod tests {
         let mut spec = detach_spec();
         spec.engine_qualification_fingerprint.clear();
         spec.engine_qualification_profile_version = 0;
-        assert!(validate_runtime_engine_qualification(&spec)
+        assert!(validate_runtime_engine_qualification_from_paths(&spec)
             .unwrap_err()
             .starts_with("ENGINE_QUALIFICATION_REQUIRED:"));
 
-        let executable = std::env::temp_dir().join(format!(
+        let directory = std::env::temp_dir().join(format!(
             "lsm-runtime-qualified-engine-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
+        crate::persistence::enforce_private_directory(&directory).unwrap();
+        let executable = directory.join("llama-server.exe");
         std::fs::write(&executable, vec![b'a'; 128 * 1024]).unwrap();
         spec.command = vec![executable.to_string_lossy().to_string()];
         spec.engine_qualification_fingerprint =
             executable_fingerprint(&executable.to_string_lossy());
         spec.engine_qualification_profile_version = QUALIFICATION_PROFILE_VERSION;
-        validate_runtime_engine_qualification(&spec).unwrap();
+        validate_runtime_engine_qualification_from_paths(&spec).unwrap();
 
         std::fs::write(&executable, vec![b'b'; 128 * 1024]).unwrap();
-        assert!(validate_runtime_engine_qualification(&spec)
+        assert!(validate_runtime_engine_qualification_from_paths(&spec)
             .unwrap_err()
             .starts_with("ENGINE_QUALIFICATION_STALE:"));
-        let _ = std::fs::remove_file(executable);
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
-    fn launch_snapshot_staleness_allows_display_renames_but_blocks_policy_and_command_drift() {
+    fn launch_snapshot_staleness_uses_persisted_identity_instead_of_materialized_credentials() {
         let mut spec = detach_spec();
         spec.config.restart_policy = "on-failure".into();
+        spec.deployment_identity = test_deployment_identity(&spec.config);
         spec.deployment_revision = crate::deployment::test_revision(
             "instance-1",
             &spec.config,
@@ -2235,7 +2326,12 @@ mod tests {
         let mut current = spec.config.clone();
         current.name = "renamed".into();
 
-        assert!(runtime_launch_config_matches(&spec.config, &current));
+        assert!(runtime_deployment_config_matches(
+            &spec.deployment_identity,
+            &current
+        ));
+        spec.config.api_key.clear();
+        spec.config.api_key_file = "/private/runtime/api-key".into();
         sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
         assert!(!spec.launch_config_stale);
         assert!(super::instance_recovery_enabled(&spec));
@@ -2245,6 +2341,12 @@ mod tests {
         assert!(spec.launch_config_stale);
         assert!(!super::instance_recovery_enabled(&spec));
         current.auto_start = spec.config.auto_start;
+
+        current.api_key = "a-different-persisted-api-key".into();
+        sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());
+        assert!(spec.launch_config_stale);
+        assert!(!super::instance_recovery_enabled(&spec));
+        current.api_key.clear();
 
         current.port = current.port.saturating_add(1);
         sync_desired_launch_config(&mut spec, &current, &crate::models::ProxyConfig::default());

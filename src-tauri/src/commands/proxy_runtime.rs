@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::Notify;
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 const LATENCY_BUCKETS_MS: [u64; 11] = [
     10,
@@ -25,6 +25,8 @@ const MAX_SCHEDULING_COUNTERS: usize = 4_096;
 const OPERATIONAL_WINDOW: Duration = Duration::from_secs(300);
 const MAX_OPERATIONAL_EVENTS: usize = 4_096;
 const MIN_ALERT_SAMPLES: usize = 5;
+const MAX_GLOBAL_QUEUE_DEPTH: usize = 4_096;
+const MAX_DISCOVERY_REQUESTS: usize = 16;
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -216,7 +218,13 @@ pub struct RouterRuntime {
     scheduling_counters: Mutex<HashMap<String, u64>>,
     limiter: DynamicConcurrencyLimiter,
     queue_depth: AtomicUsize,
+    discovery_round: Arc<Semaphore>,
+    discovery_requests: Arc<Semaphore>,
+    ingress_requests: Arc<Semaphore>,
+    auxiliary_requests: Arc<Semaphore>,
+    client_in_flight: Mutex<HashMap<String, usize>>,
     in_flight_body_bytes: AtomicUsize,
+    in_flight_response_bytes: AtomicUsize,
     rate_buckets: Mutex<HashMap<String, RateBucket>>,
     locality_salt: [u8; 16],
     locality_store: Mutex<LocalityStore>,
@@ -232,7 +240,13 @@ impl Default for RouterRuntime {
             scheduling_counters: Mutex::new(HashMap::new()),
             limiter: DynamicConcurrencyLimiter::default(),
             queue_depth: AtomicUsize::new(0),
+            discovery_round: Arc::new(Semaphore::new(1)),
+            discovery_requests: Arc::new(Semaphore::new(MAX_DISCOVERY_REQUESTS)),
+            ingress_requests: Arc::new(Semaphore::new(8)),
+            auxiliary_requests: Arc::new(Semaphore::new(8)),
+            client_in_flight: Mutex::new(HashMap::new()),
             in_flight_body_bytes: AtomicUsize::new(0),
+            in_flight_response_bytes: AtomicUsize::new(0),
             rate_buckets: Mutex::new(HashMap::new()),
             locality_salt: *uuid::Uuid::new_v4().as_bytes(),
             locality_store: Mutex::new(LocalityStore::default()),
@@ -244,6 +258,27 @@ impl Default for RouterRuntime {
 pub(crate) struct GlobalRequestPermit {
     runtime: Arc<RouterRuntime>,
     queue_wait_ms: u64,
+}
+
+pub(crate) struct ClientRequestPermit {
+    runtime: Arc<RouterRuntime>,
+    key: String,
+}
+
+impl Drop for ClientRequestPermit {
+    fn drop(&mut self) {
+        if let Ok(mut clients) = self.runtime.client_in_flight.lock() {
+            let remove = if let Some(active) = clients.get_mut(&self.key) {
+                *active = active.saturating_sub(1);
+                *active == 0
+            } else {
+                false
+            };
+            if remove {
+                clients.remove(&self.key);
+            }
+        }
+    }
 }
 
 struct QueueDepthGuard {
@@ -259,6 +294,24 @@ impl Drop for QueueDepthGuard {
 pub(crate) struct InFlightBodyPermit {
     runtime: Arc<RouterRuntime>,
     bytes: usize,
+}
+
+struct ResponseMemoryLease {
+    runtime: Arc<RouterRuntime>,
+    bytes: usize,
+}
+
+impl Drop for ResponseMemoryLease {
+    fn drop(&mut self) {
+        self.runtime
+            .in_flight_response_bytes
+            .fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct InFlightResponsePermit {
+    _lease: Arc<ResponseMemoryLease>,
 }
 
 impl Drop for InFlightBodyPermit {
@@ -298,6 +351,62 @@ impl Drop for TargetRequestPermit {
 }
 
 impl RouterRuntime {
+    pub(crate) fn try_acquire_client(
+        self: &Arc<Self>,
+        client_id: &str,
+        scope: &str,
+        limit: usize,
+    ) -> Option<Arc<ClientRequestPermit>> {
+        let key = format!("{scope}\u{1f}{client_id}");
+        let mut clients = self.client_in_flight.lock().ok()?;
+        let active = clients.entry(key.clone()).or_default();
+        if *active >= limit.max(1) {
+            return None;
+        }
+        *active += 1;
+        drop(clients);
+        Some(Arc::new(ClientRequestPermit {
+            runtime: self.clone(),
+            key,
+        }))
+    }
+
+    fn try_reserve_queue_slot(&self, limit: usize) -> bool {
+        loop {
+            let queued = self.queue_depth.load(Ordering::Acquire);
+            if queued >= limit {
+                return false;
+            }
+            if self
+                .queue_depth
+                .compare_exchange_weak(queued, queued + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    pub(crate) fn try_acquire_discovery_round(&self) -> Option<OwnedSemaphorePermit> {
+        self.discovery_round.clone().try_acquire_owned().ok()
+    }
+
+    pub(crate) fn try_acquire_discovery_request(&self) -> Option<OwnedSemaphorePermit> {
+        self.discovery_requests.clone().try_acquire_owned().ok()
+    }
+
+    pub(crate) fn try_acquire_ingress_request(&self) -> Option<OwnedSemaphorePermit> {
+        self.ingress_requests.clone().try_acquire_owned().ok()
+    }
+
+    pub(crate) async fn acquire_auxiliary_request(&self) -> OwnedSemaphorePermit {
+        self.auxiliary_requests
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("auxiliary request semaphore must remain open")
+    }
+
     fn try_acquire_global_slot(&self, limit: usize) -> bool {
         loop {
             let active = self.limiter.active.load(Ordering::Acquire);
@@ -368,10 +477,16 @@ impl RouterRuntime {
                 queue_wait_ms: 0,
             });
         }
+        let queue_limit = limit.saturating_mul(4).clamp(1, MAX_GLOBAL_QUEUE_DEPTH);
+        if !self.try_reserve_queue_slot(queue_limit) {
+            self.metrics
+                .rejected_requests
+                .fetch_add(1, Ordering::Relaxed);
+            return None;
+        }
         self.metrics
             .queued_requests_total
             .fetch_add(1, Ordering::Relaxed);
-        self.queue_depth.fetch_add(1, Ordering::AcqRel);
         let queue_guard = QueueDepthGuard {
             runtime: self.clone(),
         };
@@ -457,6 +572,36 @@ impl RouterRuntime {
         self.in_flight_body_bytes.load(Ordering::Acquire)
     }
 
+    pub(crate) fn try_acquire_response_bytes(
+        self: &Arc<Self>,
+        bytes: usize,
+        limit: usize,
+    ) -> Option<InFlightResponsePermit> {
+        loop {
+            let active = self.in_flight_response_bytes.load(Ordering::Acquire);
+            let next = active.checked_add(bytes)?;
+            if next > limit {
+                return None;
+            }
+            if self
+                .in_flight_response_bytes
+                .compare_exchange_weak(active, next, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(InFlightResponsePermit {
+                    _lease: Arc::new(ResponseMemoryLease {
+                        runtime: self.clone(),
+                        bytes,
+                    }),
+                });
+            }
+        }
+    }
+
+    pub(crate) fn in_flight_response_bytes(&self) -> usize {
+        self.in_flight_response_bytes.load(Ordering::Acquire)
+    }
+
     pub(crate) fn total_requests(&self) -> u64 {
         self.metrics.total_requests.load(Ordering::Relaxed)
     }
@@ -514,9 +659,16 @@ impl RouterRuntime {
             .map(|selection| selection.candidate)
     }
 
-    pub(crate) fn locality_key(&self, routing_key: &str, material: &[u8]) -> String {
+    pub(crate) fn locality_key(
+        &self,
+        routing_key: &str,
+        authenticated_client_id: &str,
+        material: &[u8],
+    ) -> String {
         let mut hasher = Sha256::new();
         hasher.update(self.locality_salt);
+        hasher.update(authenticated_client_id.as_bytes());
+        hasher.update([0]);
         hasher.update(routing_key.as_bytes());
         hasher.update([0]);
         hasher.update(material);
@@ -1114,6 +1266,11 @@ impl RouterRuntime {
             "lsm_router_in_flight_request_body_bytes {}\n",
             self.in_flight_body_bytes()
         ));
+        output.push_str("# TYPE lsm_router_in_flight_response_bytes gauge\n");
+        output.push_str(&format!(
+            "lsm_router_in_flight_response_bytes {}\n",
+            self.in_flight_response_bytes()
+        ));
         output.push_str("# TYPE lsm_router_request_duration_milliseconds histogram\n");
         let mut cumulative = 0u64;
         for (index, upper) in LATENCY_BUCKETS_MS.iter().enumerate() {
@@ -1215,23 +1372,24 @@ impl RouterRuntime {
                 alert.id, alert.severity
             ));
         }
-        output.push_str("# TYPE lsm_router_target_ready gauge\n");
-        output.push_str("# TYPE lsm_router_target_active_requests gauge\n");
-        for (instance_id, target) in targets.iter() {
-            let label = instance_id.replace('\\', "\\\\").replace('"', "\\\"");
-            let ready = u8::from(
-                !draining_targets.contains(instance_id)
+        let ready_targets = targets
+            .iter()
+            .filter(|(instance_id, target)| {
+                !draining_targets.contains(*instance_id)
                     && target.ready
-                    && target.circuit_open_until_ms <= now_ms(),
-            );
-            output.push_str(&format!(
-                "lsm_router_target_ready{{instance_id=\"{label}\"}} {ready}\n"
-            ));
-            output.push_str(&format!(
-                "lsm_router_target_active_requests{{instance_id=\"{label}\"}} {}\n",
-                target.active_requests
-            ));
-        }
+                    && target.circuit_open_until_ms <= now_ms()
+            })
+            .count();
+        let target_active_requests = targets
+            .values()
+            .map(|target| target.active_requests)
+            .sum::<usize>();
+        output.push_str("# TYPE lsm_router_targets_ready gauge\n");
+        output.push_str(&format!("lsm_router_targets_ready {ready_targets}\n"));
+        output.push_str("# TYPE lsm_router_target_active_requests gauge\n");
+        output.push_str(&format!(
+            "lsm_router_target_active_requests {target_active_requests}\n"
+        ));
         output.push_str("# TYPE lsm_router_uptime_seconds gauge\n");
         output.push_str(&format!(
             "lsm_router_uptime_seconds {}\n",
@@ -1252,6 +1410,27 @@ mod tests {
             weight,
             max_concurrent_requests: 0,
         }
+    }
+
+    #[test]
+    fn per_client_concurrency_isolated_by_credential_and_scope() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let first = runtime
+            .try_acquire_client("client-a", "inference", 1)
+            .unwrap();
+        assert!(runtime
+            .try_acquire_client("client-a", "inference", 1)
+            .is_none());
+        assert!(runtime
+            .try_acquire_client("client-b", "inference", 1)
+            .is_some());
+        assert!(runtime
+            .try_acquire_client("client-a", "discovery", 1)
+            .is_some());
+        drop(first);
+        assert!(runtime
+            .try_acquire_client("client-a", "inference", 1)
+            .is_some());
     }
 
     #[test]
@@ -1398,7 +1577,7 @@ mod tests {
         };
         let peer = candidate("peer", 0, 1);
         let standby = candidate("standby", 10, 1);
-        let key = runtime.locality_key("model-a", b"session-a");
+        let key = runtime.locality_key("model-a", "client-a", b"session-a");
 
         runtime.record_locality_success(&key, "peer", 60_000, 10);
         let hit = runtime
@@ -1443,8 +1622,8 @@ mod tests {
     fn locality_bindings_expire_rebind_and_stay_bounded_without_raw_keys_in_metrics() {
         let runtime = RouterRuntime::default();
         let candidates = vec![candidate("one", 0, 1), candidate("two", 0, 1)];
-        let first_key = runtime.locality_key("model-a", b"secret-session-one");
-        let second_key = runtime.locality_key("model-a", b"secret-session-two");
+        let first_key = runtime.locality_key("model-a", "client-a", b"secret-session-one");
+        let second_key = runtime.locality_key("model-a", "client-a", b"secret-session-two");
         assert_ne!(first_key, "secret-session-one");
 
         let miss = runtime

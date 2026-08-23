@@ -325,7 +325,7 @@ export interface ResourcePlan {
 export interface InstanceConfig {
   // Launch policy. null explicit_overrides identifies a legacy config that has
   // not yet been migrated to intent-based command generation.
-  launch_mode: 'managed' | 'manual'; manual_command: string;
+  launch_mode: 'managed' | 'manual'; manual_command: string; manual_command_configured?: boolean;
   explicit_overrides: string[] | null;
   // Basic
   id: string; name: string; engine_id: string; model_path: string; alias: string;
@@ -361,10 +361,12 @@ export interface InstanceConfig {
   override_kv: string;
   // Server & Network
   host: string; port: number; api_key: string; api_key_file: string;
-  ssl_key_file: string; ssl_cert_file: string; path_prefix: string; api_prefix: string;
+  api_key_configured?: boolean; api_key_file_configured?: boolean;
+  ssl_key_file: string; ssl_key_file_configured?: boolean; ssl_cert_file: string; ssl_cert_file_configured?: boolean; path_prefix: string; api_prefix: string;
   cors_origins: string; cors_methods: string; cors_headers: string; cors_credentials: string;
-  no_ui: boolean; offline: boolean; ui_config_file: string; ui_config: string; ui_mcp_proxy: boolean; agent: boolean;
+  no_ui: boolean; offline: boolean; ui_config_file: string; ui_config_file_configured?: boolean; ui_config: string; ui_config_configured?: boolean; ui_mcp_proxy: boolean; agent: boolean;
   tools_runtime: string; mcp_servers_config: string; mcp_servers_json: string;
+  mcp_servers_config_configured?: boolean; mcp_servers_json_configured?: boolean;
   embedding: boolean; pooling: string; embd_normalize: number; reranking: boolean;
   metrics: boolean; props: boolean; slots_enabled: boolean;
   slot_save_path: string; log_prompts_dir: string; slot_prompt_similarity: number; prefill_assistant: boolean;
@@ -388,7 +390,7 @@ export interface InstanceConfig {
   adaptive_target: number; adaptive_decay: number; top_n_sigma: number;
   logit_bias: string; samplers: string; sampler_seq: string;
   // Misc
-  timeout: number; sleep_idle: number; verbose: boolean; custom_args: string[];
+  timeout: number; sleep_idle: number; verbose: boolean; custom_args: string[]; custom_args_configured?: boolean;
   // Server features (aligned with llama.cpp master)
   rpc_servers: string; sse_ping_interval: number; reuse_port: boolean;
   auto_start?: boolean;
@@ -499,6 +501,7 @@ export interface MsFileEntry {
   version?: number
   status?: string
   error?: string
+  artifact_grant?: string
 }
 
 export interface WorkerDevice {
@@ -518,8 +521,6 @@ export interface WorkerAgentConnection {
   tunnel_host: string
   tunnel_port: number
   tls_server_name: string
-  tls_cert_path: string
-  token_path: string
   certificate_sha256: string
 }
 
@@ -564,6 +565,7 @@ export interface DownloadProgress {
   createdAt?: number
   updatedAt?: number
   completedAt?: number
+  managerOwned?: boolean
 }
 
 export interface DownloadQueueEntry {

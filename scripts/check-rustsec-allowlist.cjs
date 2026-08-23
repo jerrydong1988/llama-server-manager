@@ -4,10 +4,14 @@ const path = require('node:path')
 const root = path.resolve(__dirname, '..')
 const policy = JSON.parse(fs.readFileSync(path.join(root, '.github', 'rustsec-allowlist.json'), 'utf8'))
 const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'build.yml'), 'utf8')
-const ignoreLine = workflow.match(/^\s*ignore:\s*(.+)$/m)
-if (!ignoreLine) throw new Error('RustSec workflow ignore list is missing')
+if (!/cargo audit --file src-tauri\/Cargo\.lock/.test(workflow)) {
+  throw new Error('RustSec workflow audit command is missing')
+}
 
-const workflowIds = new Set(ignoreLine[1].split(',').map(id => id.trim()).filter(Boolean))
+const workflowIds = new Set(
+  [...workflow.matchAll(/--ignore\s+(RUSTSEC-\d{4}-\d{4})\b/g)].map(match => match[1]),
+)
+if (workflowIds.size === 0) throw new Error('RustSec workflow ignore list is missing')
 const policyIds = new Set(policy.entries.map(entry => entry.id))
 const missingFromPolicy = [...workflowIds].filter(id => !policyIds.has(id))
 const missingFromWorkflow = [...policyIds].filter(id => !workflowIds.has(id))

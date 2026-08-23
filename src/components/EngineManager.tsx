@@ -487,7 +487,7 @@ const EngineManager = () => {
                         <button
                           onClick={event => {
                             event.stopPropagation()
-                            openEngineFolder(engine.dir)
+                            openEngineFolder(engine.id)
                           }}
                           className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-800 hover:text-slate-100"
                           title={t.engineMgr.openFolder}
@@ -609,7 +609,7 @@ const EngineManager = () => {
                   {defaultEngineId && pathsEqual(defaultEngineId, selectedEngine.id) ? t.engineMgr.defaultEngine : t.engineMgr.setDefault}
                 </Button>
                 <Button
-                  onClick={() => openEngineFolder(selectedEngine.dir)}
+                  onClick={() => openEngineFolder(selectedEngine.id)}
                   icon={<FolderOpen className="h-4 w-4" />}
                 >
                   {t.engineMgr.openFolder}

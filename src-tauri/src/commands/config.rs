@@ -15,6 +15,114 @@ use tauri::Emitter;
 // Unified config write helpers.
 
 static CONFIG_WRITE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+const MAX_PERSISTED_GLOBAL_CONFIG_BYTES: usize = 12 * 1024 * 1024;
+const MAX_FRONTEND_CONFIG_BYTES: usize = 4 * 1024 * 1024;
+const MAX_INSTANCE_CONFIG_BYTES: usize = 256 * 1024;
+const MAX_CONFIG_INSTANCES: usize = 256;
+const MAX_CONFIG_COLLECTION_ITEMS: usize = 4_096;
+const MAX_CONFIG_STRING_BYTES: usize = 64 * 1024;
+
+fn validate_config_json_shape(value: &serde_json::Value, depth: usize) -> Result<(), String> {
+    if depth > 32 {
+        return Err("configuration nesting exceeds 32 levels".to_string());
+    }
+    match value {
+        serde_json::Value::String(value) if value.len() > MAX_CONFIG_STRING_BYTES => Err(format!(
+            "configuration string exceeds {MAX_CONFIG_STRING_BYTES} bytes"
+        )),
+        serde_json::Value::Array(values) => {
+            if values.len() > MAX_CONFIG_COLLECTION_ITEMS {
+                return Err(format!(
+                    "configuration collection exceeds {MAX_CONFIG_COLLECTION_ITEMS} items"
+                ));
+            }
+            for value in values {
+                validate_config_json_shape(value, depth + 1)?;
+            }
+            Ok(())
+        }
+        serde_json::Value::Object(values) => {
+            if values.len() > MAX_CONFIG_COLLECTION_ITEMS {
+                return Err(format!(
+                    "configuration map exceeds {MAX_CONFIG_COLLECTION_ITEMS} entries"
+                ));
+            }
+            for (key, value) in values {
+                if key.len() > 256 {
+                    return Err("configuration key exceeds 256 bytes".to_string());
+                }
+                validate_config_json_shape(value, depth + 1)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_frontend_config_limits(
+    instances: &HashMap<String, InstanceConfig>,
+    model_dirs: &[String],
+    engine_dirs: &[String],
+    default_engine_id: &str,
+    instance_order: &[String],
+    last_tab: &str,
+) -> Result<usize, String> {
+    if instances.len() > MAX_CONFIG_INSTANCES || instance_order.len() > MAX_CONFIG_INSTANCES {
+        return Err(format!(
+            "configuration supports at most {MAX_CONFIG_INSTANCES} instances"
+        ));
+    }
+    if model_dirs.len() > 64 || engine_dirs.len() > 64 {
+        return Err(
+            "configuration supports at most 64 model roots and 64 engine roots".to_string(),
+        );
+    }
+    for (id, instance) in instances {
+        if id.is_empty() || id.len() > 128 {
+            return Err("instance identifier must contain 1 to 128 bytes".to_string());
+        }
+        let encoded = serde_json::to_vec(instance)
+            .map_err(|error| format!("cannot size instance configuration: {error}"))?;
+        if encoded.len() > MAX_INSTANCE_CONFIG_BYTES {
+            return Err(format!(
+                "instance {id} exceeds {MAX_INSTANCE_CONFIG_BYTES} serialized bytes"
+            ));
+        }
+        validate_config_json_shape(
+            &serde_json::to_value(instance)
+                .map_err(|error| format!("cannot validate instance configuration: {error}"))?,
+            0,
+        )?;
+    }
+    for value in model_dirs
+        .iter()
+        .chain(engine_dirs)
+        .chain(instance_order)
+        .map(String::as_str)
+        .chain([default_engine_id, last_tab])
+    {
+        if value.len() > MAX_CONFIG_STRING_BYTES {
+            return Err(format!(
+                "configuration string exceeds {MAX_CONFIG_STRING_BYTES} bytes"
+            ));
+        }
+    }
+    let encoded = serde_json::to_vec(&(
+        instances,
+        model_dirs,
+        engine_dirs,
+        default_engine_id,
+        instance_order,
+        last_tab,
+    ))
+    .map_err(|error| format!("cannot size frontend configuration: {error}"))?;
+    if encoded.len() > MAX_FRONTEND_CONFIG_BYTES {
+        return Err(format!(
+            "frontend configuration exceeds {MAX_FRONTEND_CONFIG_BYTES} bytes"
+        ));
+    }
+    Ok(encoded.len())
+}
 
 pub(crate) struct GlobalConfigWriteGuard {
     _process_guard: MutexGuard<'static, ()>,
@@ -145,6 +253,11 @@ pub(crate) fn persist_global_config_unlocked(
     }
     let json =
         serde_json::to_string_pretty(&persisted_value).map_err(|e| format!("序列化失败: {}", e))?;
+    if json.len() > MAX_PERSISTED_GLOBAL_CONFIG_BYTES {
+        return Err(format!(
+            "refusing to persist configuration larger than {MAX_PERSISTED_GLOBAL_CONFIG_BYTES} bytes"
+        ));
+    }
     if std::fs::read_to_string(&path).is_ok_and(|current| current == json) {
         let backup = config_dir.join("instances.json.bak");
         if !backup.exists() {
@@ -333,20 +446,39 @@ pub fn replace_engine_names_and_persist(
 // Config persistence.
 
 fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
+    const MAX_GLOBAL_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
     let path = config_dir.join("instances.json");
     let backup_path = config_dir.join("instances.json.bak");
-    for private_path in [&path, &backup_path] {
-        if let Err(error) = crate::persistence::enforce_private_file(private_path) {
-            eprintln!("Failed to enforce private config permissions: {error}");
+    let read_private = |private_path: &std::path::Path| {
+        crate::persistence::read_private_file_bounded(private_path, MAX_GLOBAL_CONFIG_BYTES)
+    };
+    let primary = match read_private(&path) {
+        Ok(value) => value,
+        Err(error) => {
+            let mut config = default_global_config();
+            config.proxy_config.enabled = false;
+            config.config_load_warning = Some(format!(
+                "配置文件隐私校验失败，已进入无凭据恢复状态：{error}"
+            ));
+            return config;
         }
-    }
-    let mut config = match std::fs::read_to_string(&path) {
-        Ok(json) => match serde_json::from_str::<GlobalConfig>(&json) {
+    };
+    let backup = match read_private(&backup_path) {
+        Ok(value) => value,
+        Err(error) => {
+            let mut config = default_global_config();
+            config.proxy_config.enabled = false;
+            config.config_load_warning = Some(format!(
+                "配置备份隐私校验失败，已进入无凭据恢复状态：{error}"
+            ));
+            return config;
+        }
+    };
+    let parse = |bytes: &[u8]| serde_json::from_slice::<GlobalConfig>(bytes);
+    let mut config = match primary {
+        Some(json) => match parse(&json) {
             Ok(config) => config,
-            Err(primary_error) => match std::fs::read_to_string(&backup_path)
-                .ok()
-                .and_then(|backup| serde_json::from_str::<GlobalConfig>(&backup).ok())
-            {
+            Err(primary_error) => match backup.as_deref().and_then(|bytes| parse(bytes).ok()) {
                 Some(mut config) => {
                     config.config_load_warning =
                         Some(format!("主配置损坏，已从备份恢复：{primary_error}"));
@@ -361,23 +493,13 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
                 }
             },
         },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            match std::fs::read_to_string(&backup_path)
-                .ok()
-                .and_then(|backup| serde_json::from_str::<GlobalConfig>(&backup).ok())
-            {
-                Some(mut config) => {
-                    config.config_load_warning = Some("主配置缺失，已从备份恢复".to_string());
-                    config
-                }
-                None => default_global_config(),
+        None => match backup.as_deref().and_then(|bytes| parse(bytes).ok()) {
+            Some(mut config) => {
+                config.config_load_warning = Some("主配置缺失，已从备份恢复".to_string());
+                config
             }
-        }
-        Err(error) => {
-            let mut config = default_global_config();
-            config.config_load_warning = Some(format!("读取主配置失败：{error}"));
-            config
-        }
+            None => default_global_config(),
+        },
     };
     config.model_dirs = normalize_model_dirs(config.model_dirs);
     config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
@@ -424,11 +546,13 @@ fn load_global_config_file(config_dir: &std::path::Path) -> GlobalConfig {
 pub(crate) fn load_global_config_for_update_unlocked(
     config_dir: &std::path::Path,
 ) -> Result<GlobalConfig, String> {
+    const MAX_GLOBAL_CONFIG_BYTES: u64 = 16 * 1024 * 1024;
     let primary_path = config_dir.join("instances.json");
     let backup_path = config_dir.join("instances.json.bak");
-    let primary = std::fs::read_to_string(&primary_path);
-    if let Ok(contents) = &primary {
-        if let Ok(mut config) = serde_json::from_str::<GlobalConfig>(contents) {
+    let primary =
+        crate::persistence::read_private_file_bounded(&primary_path, MAX_GLOBAL_CONFIG_BYTES)?;
+    if let Some(contents) = &primary {
+        if let Ok(mut config) = serde_json::from_slice::<GlobalConfig>(contents) {
             config.model_dirs = normalize_model_dirs(config.model_dirs);
             config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
             migrate_global_load_modes(&mut config);
@@ -436,21 +560,22 @@ pub(crate) fn load_global_config_for_update_unlocked(
         }
     }
 
-    if let Ok(contents) = std::fs::read_to_string(&backup_path) {
-        let mut config = serde_json::from_str::<GlobalConfig>(&contents)
+    if let Some(contents) =
+        crate::persistence::read_private_file_bounded(&backup_path, MAX_GLOBAL_CONFIG_BYTES)?
+    {
+        let mut config = serde_json::from_slice::<GlobalConfig>(&contents)
             .map_err(|error| format!("解析配置备份失败: {error}"))?;
         config.model_dirs = normalize_model_dirs(config.model_dirs);
         config.engine_dirs = dedupe_path_dirs(config.engine_dirs);
         migrate_global_load_modes(&mut config);
-        crate::persistence::atomic_write(&primary_path, contents.as_bytes(), None)
+        crate::persistence::atomic_write(&primary_path, &contents, None)
             .map_err(|error| format!("修复主配置失败: {error}"))?;
         return Ok(config);
     }
 
     match primary {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(default_global_config()),
-        Err(error) => Err(format!("读取配置失败: {error}")),
-        Ok(_) => Err("主配置损坏且没有有效备份".into()),
+        None => Ok(default_global_config()),
+        Some(_) => Err("主配置损坏且没有有效备份".into()),
     }
 }
 
@@ -546,12 +671,10 @@ fn apply_frontend_config(
 
 struct NormalizedInstances {
     all: HashMap<String, InstanceConfig>,
-    changed: HashMap<String, InstanceConfig>,
 }
 
 fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> NormalizedInstances {
     let mut all = HashMap::with_capacity(instances.len());
-    let mut changed = HashMap::new();
     for (id, mut config) in instances {
         migrate_legacy_load_mode(&mut config);
         config.restart_policy = if config
@@ -570,18 +693,15 @@ fn normalize_instances_for_save(instances: HashMap<String, InstanceConfig>) -> N
         } else {
             normalize_for_launch(public_config).into_config()
         };
-        if normalized != config {
-            changed.insert(id.clone(), normalized.clone());
-        }
         all.insert(id, normalized);
     }
-    NormalizedInstances { all, changed }
+    NormalizedInstances { all }
 }
 
 #[tauri::command]
 #[allow(clippy::too_many_arguments)] // Tauri expands IPC fields into command parameters.
 pub async fn save_config(
-    instances: HashMap<String, InstanceConfig>,
+    mut instances: HashMap<String, InstanceConfig>,
     model_dirs: Vec<String>,
     engine_dirs: Vec<String>,
     default_engine_id: String,
@@ -591,6 +711,30 @@ pub async fn save_config(
     state: tauri::State<'_, AppState>,
 ) -> AppResult<HashMap<String, InstanceConfig>> {
     let mut timing = crate::operation_timing::OperationTiming::new("save_config");
+    validate_frontend_config_limits(
+        &instances,
+        &model_dirs,
+        &engine_dirs,
+        &default_engine_id,
+        &instance_order,
+        &last_tab,
+    )
+    .map_err(|message| AppError::new("CONFIG_LIMIT_EXCEEDED", message, false))?;
+    crate::security::validate_configured_roots(&engine_dirs, &model_dirs)
+        .map_err(|message| AppError::new("PATH_AUTHORITY_REQUIRED", message, false))?;
+    let current_instances = state.instances.lock().unwrap().clone();
+    for (id, incoming) in &mut instances {
+        crate::models::merge_frontend_secrets(incoming, current_instances.get(id));
+    }
+    let prospective_frontend_bytes = validate_frontend_config_limits(
+        &instances,
+        &model_dirs,
+        &engine_dirs,
+        &default_engine_id,
+        &instance_order,
+        &last_tab,
+    )
+    .map_err(|message| AppError::new("CONFIG_LIMIT_EXCEEDED", message, false))?;
     let normalized = normalize_instances_for_save(instances);
     let instances = normalized.all;
     let config_dir = state.config_dir.lock().unwrap().clone();
@@ -632,6 +776,21 @@ pub async fn save_config(
         crate::residency::ensure_residency_catalog(&mut global)
             .map_err(|error| AppError::new("RESIDENCY_MIGRATION_FAILED", error, false))?;
         let previous_instances = global.instances.clone();
+        let current_global_bytes = serde_json::to_vec(&global)
+            .map_err(|error| AppError::new("CONFIG_LIMIT_CHECK_FAILED", error.to_string(), false))?
+            .len();
+        if current_global_bytes
+            .checked_add(prospective_frontend_bytes.saturating_mul(2))
+            .map_or(true, |projected| {
+                projected > MAX_PERSISTED_GLOBAL_CONFIG_BYTES
+            })
+        {
+            return Err(AppError::new(
+                "CONFIG_LIMIT_EXCEEDED",
+                "configuration and revision snapshots would exceed the durable size contract",
+                false,
+            ));
+        }
         let changed_instance_ids = crate::config_revision::changed_deployment_instance_ids(
             &previous_instances,
             &instances,
@@ -689,7 +848,15 @@ pub async fn save_config(
     }
     timing.mark("queue-runtime-sync");
     timing.finish("success");
-    Ok(normalized.changed)
+    Ok(instances
+        .iter()
+        .map(|(id, config)| {
+            (
+                id.clone(),
+                crate::models::redact_instance_for_frontend(config),
+            )
+        })
+        .collect())
 }
 
 pub async fn load_config(
@@ -913,11 +1080,10 @@ mod tests {
         assert!(config.embedding);
         assert!(config.spec_type.is_empty());
         assert_eq!(config.custom_args, vec!["--temp 1.5"]);
-        assert_eq!(normalized.changed["embedding"], *config);
     }
 
     #[test]
-    fn save_config_returns_only_backend_normalization_changes() {
+    fn save_config_preserves_already_normalized_instances() {
         let config = normalize_for_launch(InstanceConfig::default()).into_config();
         let mut instances = HashMap::new();
         instances.insert("clean".into(), config.clone());
@@ -925,7 +1091,6 @@ mod tests {
         let normalized = normalize_instances_for_save(instances);
 
         assert_eq!(normalized.all["clean"], config);
-        assert!(normalized.changed.is_empty());
     }
 
     #[test]
@@ -1100,9 +1265,26 @@ mod tests {
             id: "private-history".into(),
             name: "Private history".into(),
             api_key: "historical-api-key-must-not-cross-ipc".into(),
+            api_key_file: "private-api-key-file".into(),
+            ssl_key_file: "private-tls-key".into(),
+            ssl_cert_file: "private-tls-certificate".into(),
+            manual_command: "llama-server --hf-token private-hf-token".into(),
+            custom_args: vec!["--future-secret private-custom-value".into()],
+            ui_config_file: "private-ui-config-file".into(),
+            ui_config: "private-ui-config-json".into(),
+            mcp_servers_config: "private-mcp-config-file".into(),
+            mcp_servers_json: "private-mcp-json".into(),
             ..InstanceConfig::default()
         };
         config.instances.insert(instance.id.clone(), instance);
+        config.proxy_config.public_api_key = "private-legacy-proxy-key".into();
+        config.proxy_config.api_keys = vec![crate::models::ProxyApiKey {
+            id: "private-proxy-key".into(),
+            name: "Private proxy key".into(),
+            key: "sha256:private-proxy-verifier".into(),
+            strength_verified: true,
+            ..crate::models::ProxyApiKey::default()
+        }];
         crate::config_revision::ensure_current_config_revisions(&mut config).unwrap();
         let identity = crate::deployment_identity::DeploymentIdentity::new(
             "urn:lsm:engine:v1:sha256:test".into(),
@@ -1113,12 +1295,8 @@ mod tests {
         )
         .unwrap();
         crate::deployment::materialize_revision(&mut config, "private-history", &identity).unwrap();
-        config
-            .instances
-            .get_mut("private-history")
-            .unwrap()
-            .api_key
-            .clear();
+        config.instances.get_mut("private-history").unwrap().api_key =
+            "current-api-key-must-not-cross-ipc".into();
 
         let public = FrontendGlobalConfig::from(&config);
         let json = serde_json::to_string(&public).unwrap();
@@ -1129,6 +1307,68 @@ mod tests {
         assert!(!json.contains("deployment_schema_version"));
         assert!(!json.contains("managed-deployment"));
         assert!(!json.contains("historical-api-key-must-not-cross-ipc"));
+        assert!(!json.contains("current-api-key-must-not-cross-ipc"));
+        for secret in [
+            "private-api-key-file",
+            "private-tls-key",
+            "private-tls-certificate",
+            "private-hf-token",
+            "private-custom-value",
+            "private-ui-config-file",
+            "private-ui-config-json",
+            "private-mcp-config-file",
+            "private-mcp-json",
+            "private-legacy-proxy-key",
+            "private-proxy-verifier",
+        ] {
+            assert!(!json.contains(secret), "frontend JSON leaked {secret}");
+        }
+        assert!(json.contains("\"api_key_configured\":true"));
+        assert!(json.contains("\"manual_command_configured\":true"));
+        assert!(json.contains("\"custom_args_configured\":true"));
+        assert!(json.contains("\"ssl_cert_file_configured\":true"));
+        assert!(json.contains("\"ui_config_configured\":true"));
+        assert!(json.contains("\"key_configured\":true"));
+    }
+
+    #[test]
+    fn frontend_secret_markers_preserve_native_values_without_accepting_forged_proxy_ids() {
+        let current = InstanceConfig {
+            manual_command: "-m model.gguf --hf-token native-secret".into(),
+            custom_args: vec!["--future-secret native-custom".into()],
+            ssl_cert_file: "native-cert.pem".into(),
+            ui_config: "native-ui-secret".into(),
+            ..InstanceConfig::default()
+        };
+        let mut incoming = crate::models::redact_instance_for_frontend(&current);
+        crate::models::merge_frontend_secrets(&mut incoming, Some(&current));
+        assert_eq!(incoming.manual_command, current.manual_command);
+        assert_eq!(incoming.custom_args, current.custom_args);
+        assert_eq!(incoming.ssl_cert_file, current.ssl_cert_file);
+        assert_eq!(incoming.ui_config, current.ui_config);
+        assert!(!incoming.manual_command_configured);
+
+        let current_proxy = ProxyConfig {
+            api_keys: vec![crate::models::ProxyApiKey {
+                id: "existing".into(),
+                key: "sha256:native-verifier".into(),
+                strength_verified: true,
+                ..crate::models::ProxyApiKey::default()
+            }],
+            ..ProxyConfig::default()
+        };
+        let mut redacted_proxy = crate::models::redact_proxy_config_for_frontend(&current_proxy);
+        crate::models::merge_frontend_proxy_secrets(&mut redacted_proxy, &current_proxy).unwrap();
+        assert_eq!(redacted_proxy.api_keys[0].key, "sha256:native-verifier");
+        assert!(!redacted_proxy.api_keys[0].key_configured);
+
+        redacted_proxy.api_keys[0].id = "forged".into();
+        redacted_proxy.api_keys[0].key.clear();
+        redacted_proxy.api_keys[0].key_configured = true;
+        assert!(
+            crate::models::merge_frontend_proxy_secrets(&mut redacted_proxy, &current_proxy)
+                .is_err()
+        );
     }
 
     #[test]

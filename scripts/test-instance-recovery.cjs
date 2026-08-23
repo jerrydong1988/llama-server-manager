@@ -42,12 +42,16 @@ assert.match(supervisorSource, /origin_failure/)
 assert.match(supervisorSource, /recovery_budget_is_stable/)
 assert.match(supervisorSource, /clear_stable_instance_recovery/)
 assert.match(supervisorSource, /automatic start skipped/)
-assert.match(supervisorSource, /validate_runtime_deployment_identity\(&spec\)\?/)
+assert.match(
+  supervisorSource,
+  /bind_launch_artifacts\([\s\S]*?validate_runtime_engine_qualification\(&spec, &artifact_leases\)\?[\s\S]*?state\.instances\.get\(&spec\.instance_id\)[\s\S]*?validate_runtime_deployment_identity\(&spec, &artifact_leases, &persisted_config\)\?/,
+  'runtime recovery must bind verified artifacts and the synchronized persisted configuration before deployment checks',
+)
 assert.match(supervisorSource, /validate_runtime_deployment_revision\(&spec, &proxy_config\)\?/)
 assert.match(
   supervisorSource,
-  /spec\.launch_config_stale = !runtime_launch_config_matches/,
-  'saving a launch-affecting edit must invalidate the old recovery command snapshot',
+  /spec\.launch_config_stale =\s*!runtime_deployment_config_matches/,
+  'saving a deployment-identity-affecting edit must invalidate the old recovery command snapshot',
 )
 assert.match(
   supervisorSource,

@@ -10,7 +10,6 @@
     "dialog:default",
     "dialog:allow-open",
     "process:allow-restart",
-    "shell:allow-open",
     "updater:default"
   ]
 }

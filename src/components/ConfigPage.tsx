@@ -14,7 +14,7 @@ import { formatHostPort } from '../utils/network'
 import { detectModelWorkload, isModelWorkloadLocked, normalizeConfigForSelectedModel, normalizeInstanceConfig, type VectorCleanupChange } from '../modelPolicy'
 import { normalizeModelPath } from '../store/bootstrap'
 import { getEngineCompatibilityMode, normalizeEngineVersionStatus } from '../engineCapabilities'
-import { canonicalConfigFields, fieldLabel, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, restoreReviewField, reviewFieldKeys, type TemplateSnapshot } from './ConfigPage/configWorkspace'
+import { canonicalConfigFields, clearSecretConfiguredMarker, fieldLabel, getConfigChanges, getTemplateChanges, groupTemplateChanges, isEqualValue, restoreReviewField, reviewFieldKeys, type TemplateSnapshot } from './ConfigPage/configWorkspace'
 import { useEngineCompatibility } from './ConfigPage/useEngineCompatibility'
 import { EngineCompatibilityNotice } from './ConfigPage/EngineCompatibilityNotice'
 import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
@@ -117,7 +117,10 @@ const ConfigPage = () => {
     setLastTemplateSnapshot(null)
     setSaved(false)
     setSaveWarnings([])
-    setLocal(current => (current ? markExplicitOverride(current, key, value) : current))
+    setLocal(current => {
+      if (!current) return current
+      return clearSecretConfiguredMarker(markExplicitOverride(current, key, value), key)
+    })
   }
 
   const inherit = (keys: Array<keyof InstanceConfig>) => {

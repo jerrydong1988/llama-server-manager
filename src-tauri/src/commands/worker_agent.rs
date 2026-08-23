@@ -1,10 +1,10 @@
 use crate::commands::cluster::update_workers;
 use crate::models::{AppState, WorkerInfo, WorkerOrigin, WorkerStatus};
 use crate::worker_agent::{
-    certificate_sha256, ensure_manager_bridge, get_remote_audit, get_remote_status,
-    protect_private_token, replace_manager_bridge_connection, start_remote_rpc,
-    stop_manager_bridge, stop_remote_rpc, validate_private_token, WorkerAgentAuditEntry,
-    WorkerAgentConnection, WorkerAgentEnrollment, WorkerAgentStatus, AGENT_PROTOCOL_VERSION,
+    certificate_sha256, certificate_sha256_from_pem, get_remote_audit, get_remote_status,
+    stop_manager_bridge, stop_remote_rpc, validate_private_token, verify_remote_audit_extension,
+    WorkerAgentAuditEntry, WorkerAgentConnection, WorkerAgentEnrollment, WorkerAgentStatus,
+    AGENT_PROTOCOL_VERSION,
 };
 use tauri::{Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
@@ -24,7 +24,11 @@ fn validate_endpoint(value: &str, field: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
-fn canonical_enrollment_file(value: &str, field: &str) -> Result<std::path::PathBuf, String> {
+fn read_enrollment_file(
+    value: &str,
+    field: &str,
+    max_bytes: u64,
+) -> Result<(std::path::PathBuf, Vec<u8>), String> {
     let value = value.trim();
     if value.is_empty() || value.len() > 32_768 || value.chars().any(char::is_control) {
         return Err(format!("{field} path is invalid"));
@@ -33,12 +37,61 @@ fn canonical_enrollment_file(value: &str, field: &str) -> Result<std::path::Path
     if !path.is_absolute() {
         return Err(format!("{field} path must be absolute"));
     }
+    let metadata = std::fs::symlink_metadata(&path)
+        .map_err(|error| format!("{field} path is unavailable: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{field} path is not a regular non-link file"));
+    }
+    let bytes = crate::persistence::read_regular_file_nofollow_bounded(&path, max_bytes)?
+        .ok_or_else(|| format!("{field} path is unavailable"))?;
     let canonical = std::fs::canonicalize(&path)
         .map_err(|error| format!("{field} path is unavailable: {error}"))?;
-    if !canonical.is_file() {
-        return Err(format!("{field} path is not a regular file"));
+    Ok((canonical, bytes))
+}
+
+struct ImportedEnrollmentCredentials {
+    directory: std::path::PathBuf,
+    certificate_path: std::path::PathBuf,
+    token_path: std::path::PathBuf,
+    retain: bool,
+}
+
+impl ImportedEnrollmentCredentials {
+    fn import(state: &AppState, certificate: &[u8], token: &[u8]) -> Result<Self, String> {
+        let directory = state
+            .config_dir
+            .lock()
+            .map_err(|_| "config directory lock is poisoned".to_string())?
+            .join("worker-agent-credentials")
+            .join(uuid::Uuid::new_v4().simple().to_string());
+        crate::persistence::enforce_private_directory(&directory)?;
+        let certificate_path = directory.join("agent-cert.pem");
+        let token_path = directory.join("agent.token");
+        crate::persistence::atomic_write(&certificate_path, certificate, None)?;
+        crate::persistence::atomic_write(&token_path, token, None)?;
+        crate::persistence::enforce_private_file(&certificate_path)?;
+        crate::persistence::enforce_private_file(&token_path)?;
+        Ok(Self {
+            directory,
+            certificate_path,
+            token_path,
+            retain: false,
+        })
     }
-    Ok(canonical)
+
+    fn retain(&mut self) {
+        self.retain = true;
+    }
+}
+
+impl Drop for ImportedEnrollmentCredentials {
+    fn drop(&mut self) {
+        if !self.retain {
+            let _ = std::fs::remove_file(&self.certificate_path);
+            let _ = std::fs::remove_file(&self.token_path);
+            let _ = std::fs::remove_dir(&self.directory);
+        }
+    }
 }
 
 async fn confirm_agent_enrollment(
@@ -46,6 +99,7 @@ async fn confirm_agent_enrollment(
     enrollment: &WorkerAgentEnrollment,
     tls_cert_path: &std::path::Path,
     token_path: &std::path::Path,
+    certificate_fingerprint: &str,
 ) -> Result<(), String> {
     let local_bridge = if enrollment.local_port == 0 {
         "127.0.0.1:<automatic>".to_string()
@@ -53,13 +107,14 @@ async fn confirm_agent_enrollment(
         format!("127.0.0.1:{}", enrollment.local_port)
     };
     let message = format!(
-        "确认登记 Secure Worker Agent？ / Enroll this Secure Worker Agent?\n\nControl: {}:{}\nTunnel: {}:{}\nTLS server name: {}\nCertificate: {}\nPrivate token: {}\nLocal raw RPC bridge: {}\n\n继续后，后端会读取私有令牌、把其权限收紧到当前用户，并仅通过上述 TLS 端点发送。原始 RPC 桥接可被本机所有进程访问，因此仅可在没有不受信任本地用户的专用管理账户/主机上使用。\n\nContinuing lets the backend read the private token, restrict it to the current user, and send it only to the TLS endpoint above. Every local process can access the raw RPC bridge, so use this only from a dedicated manager account/host without untrusted local users.",
+        "确认登记 Secure Worker Agent？ / Enroll this Secure Worker Agent?\n\nControl: {}:{}\nTunnel: {}:{}\nTLS server name: {}\nCertificate: {}\nCertificate SHA-256: {}\nPrivate token: {}\nLocal RPC bridge: {}\n\n继续后，后端会把已核验的证书与令牌内容导入应用私有目录，并仅通过上述 TLS 端点发送令牌。本机桥接只接受由管理器启动且 PID、启动时间和可执行文件身份仍匹配的 llama-server 进程。\n\nContinuing imports the verified certificate and token bytes into application-owned private storage and sends the token only to the TLS endpoint above. The local bridge accepts only manager-launched llama-server processes whose PID, start time, and executable identity still match.",
         enrollment.control_host,
         enrollment.control_port,
         enrollment.tunnel_host,
         enrollment.tunnel_port,
         enrollment.tls_server_name,
         tls_cert_path.display(),
+        certificate_fingerprint,
         token_path.display(),
         local_bridge,
     );
@@ -78,7 +133,7 @@ async fn confirm_agent_enrollment(
     .await
     .map_err(|error| format!("Agent approval dialog failed: {error}"))?;
     if approved {
-        Ok(())
+        Ok::<(), String>(())
     } else {
         Err("Secure Worker Agent enrollment was not approved".to_string())
     }
@@ -143,8 +198,17 @@ pub async fn enroll_worker_agent(
         return Err("Agent name is invalid".to_string());
     }
     enrollment.name = name.to_string();
-    let tls_cert_path = canonical_enrollment_file(&enrollment.tls_cert_path, "Agent certificate")?;
-    let token_path = canonical_enrollment_file(&enrollment.token_path, "Agent token")?;
+    let (selected_tls_cert_path, certificate_bytes) =
+        read_enrollment_file(&enrollment.tls_cert_path, "Agent certificate", 256 * 1024)?;
+    let (selected_token_path, token_bytes) =
+        read_enrollment_file(&enrollment.token_path, "Agent token", 256)?;
+    let token_text = std::str::from_utf8(&token_bytes)
+        .map_err(|_| "Agent token is not UTF-8".to_string())?
+        .trim();
+    if token_text.len() != 64 || !token_text.as_bytes().iter().all(u8::is_ascii_hexdigit) {
+        return Err("Agent token must contain exactly 64 hexadecimal characters".to_string());
+    }
+    let fingerprint = certificate_sha256_from_pem(&certificate_bytes)?;
     if enrollment.control_port == 0 || enrollment.tunnel_port == 0 {
         return Err("Agent control and tunnel ports must be non-zero".to_string());
     }
@@ -154,10 +218,22 @@ pub async fn enroll_worker_agent(
         return Err("Agent control and tunnel endpoints must be distinct".to_string());
     }
     let _enrollment_guard = AGENT_ENROLLMENT_LOCK.lock().await;
-    confirm_agent_enrollment(&app, &enrollment, &tls_cert_path, &token_path).await?;
+    confirm_agent_enrollment(
+        &app,
+        &enrollment,
+        &selected_tls_cert_path,
+        &selected_token_path,
+        &fingerprint,
+    )
+    .await?;
+    let mut imported =
+        ImportedEnrollmentCredentials::import(&state, &certificate_bytes, token_text.as_bytes())?;
+    let tls_cert_path = imported.certificate_path.clone();
+    let token_path = imported.token_path.clone();
     validate_private_token(&token_path)?;
-    protect_private_token(&token_path)?;
-    let fingerprint = certificate_sha256(&tls_cert_path)?;
+    if certificate_sha256(&tls_cert_path)? != fingerprint {
+        return Err("Imported Agent certificate identity changed".to_string());
+    }
     let mut connection = WorkerAgentConnection {
         agent_id: String::new(),
         control_host: enrollment.control_host.trim().to_string(),
@@ -168,8 +244,15 @@ pub async fn enroll_worker_agent(
         tls_cert_path,
         token_path,
         certificate_sha256: fingerprint,
+        audit_sequence: 0,
+        audit_hash: String::new(),
     };
     let status = verified_status(&connection).await?;
+    let parsed_agent_id = uuid::Uuid::parse_str(&status.agent_id)
+        .map_err(|_| "Secure Worker Agent returned a non-UUID identity".to_string())?;
+    if parsed_agent_id.is_nil() {
+        return Err("Secure Worker Agent returned an empty identity".to_string());
+    }
     connection.agent_id = status.agent_id.clone();
     let worker_id = format!("agent-{}", status.agent_id);
     let existing = state
@@ -179,33 +262,51 @@ pub async fn enroll_worker_agent(
         .iter()
         .find(|worker| worker.id == worker_id)
         .cloned();
-    let requested_port = if enrollment.local_port == 0 {
+    let (checkpoint_sequence, checkpoint_hash) = existing
+        .as_ref()
+        .and_then(|worker| worker.agent.as_ref())
+        .map(|agent| (agent.audit_sequence, agent.audit_hash.clone()))
+        .unwrap_or((0, String::new()));
+    connection.audit_sequence = checkpoint_sequence;
+    connection.audit_hash = checkpoint_hash.clone();
+    let enrollment_audit = get_remote_audit(&connection, 500).await?;
+    let (audit_sequence, audit_hash) = verify_remote_audit_extension(
+        &connection.agent_id,
+        checkpoint_sequence,
+        &checkpoint_hash,
+        &enrollment_audit,
+    )?;
+    connection.audit_sequence = audit_sequence;
+    connection.audit_hash = audit_hash;
+    if let Some(existing) = existing.as_ref() {
+        let same_connection = existing.agent.as_ref().is_some_and(|previous| {
+            let same_token =
+                crate::persistence::read_private_file_bounded(&previous.token_path, 256)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|bytes| bytes.as_slice() == token_text.as_bytes());
+            previous.agent_id == connection.agent_id
+                && previous.control_host == connection.control_host
+                && previous.control_port == connection.control_port
+                && previous.tunnel_host == connection.tunnel_host
+                && previous.tunnel_port == connection.tunnel_port
+                && previous.tls_server_name == connection.tls_server_name
+                && previous.certificate_sha256 == connection.certificate_sha256
+                && same_token
+        });
+        let same_requested_port =
+            enrollment.local_port == 0 || enrollment.local_port == existing.port;
+        if !same_connection || !same_requested_port {
+            return Err(
+                "Secure Worker Agent identity is already enrolled with different endpoint, certificate, token, or bridge metadata; use an explicit replacement workflow"
+                    .to_string(),
+            );
+        }
+    }
+    let local_port = if enrollment.local_port == 0 {
         existing.as_ref().map(|worker| worker.port).unwrap_or(0)
     } else {
         enrollment.local_port
-    };
-    let mut previous_bridge_connection = None;
-    let mut bridge_to_restore = None;
-    let local_port = if existing
-        .as_ref()
-        .is_some_and(|worker| worker.port == requested_port)
-    {
-        match replace_manager_bridge_connection(&worker_id, connection.clone(), requested_port)? {
-            Some(previous) => {
-                previous_bridge_connection = Some(previous);
-                requested_port
-            }
-            None => ensure_manager_bridge(&worker_id, connection.clone(), requested_port).await?,
-        }
-    } else {
-        if let Some(existing) = &existing {
-            bridge_to_restore = existing
-                .agent
-                .clone()
-                .map(|connection| (connection, existing.port));
-            let _ = stop_manager_bridge(&existing.id).await;
-        }
-        ensure_manager_bridge(&worker_id, connection.clone(), requested_port).await?
     };
     let mut worker = WorkerInfo {
         id: worker_id.clone(),
@@ -251,24 +352,15 @@ pub async fn enroll_worker_agent(
         Ok(worker.clone())
     });
     match persisted {
-        Ok(result) => result,
-        Err(error) => {
-            if let Some(previous) = previous_bridge_connection {
-                let _ = replace_manager_bridge_connection(&worker_id, previous, local_port);
-            } else {
+        Ok(result) => match result {
+            Ok(worker) => {
                 let _ = stop_manager_bridge(&worker_id).await;
-                if let Some((previous, previous_port)) = bridge_to_restore {
-                    if let Err(restore_error) =
-                        ensure_manager_bridge(&worker_id, previous, previous_port).await
-                    {
-                        eprintln!(
-                            "Failed to restore Secure Worker Agent bridge after persistence error: {restore_error}"
-                        );
-                    }
-                }
+                imported.retain();
+                Ok(worker)
             }
-            Err(error)
-        }
+            Err(error) => Err(error),
+        },
+        Err(error) => Err(error),
     }
 }
 
@@ -289,7 +381,7 @@ pub async fn test_worker_agent(
             return Err(error);
         }
     };
-    ensure_manager_bridge(&worker.id, connection, worker.port).await?;
+    let _ = stop_manager_bridge(&worker.id).await;
     update_workers(&state, |workers| {
         if let Some(worker) = workers.iter_mut().find(|worker| worker.id == id) {
             apply_agent_status(worker, &status);
@@ -303,20 +395,12 @@ pub async fn start_worker_agent(
     state: State<'_, AppState>,
 ) -> Result<WorkerAgentStatus, String> {
     let worker = worker_by_id(&state, &id)?;
-    let connection = agent_connection(&worker)?;
-    let status = start_remote_rpc(&connection).await?;
-    if status.agent_id != connection.agent_id
-        || status.certificate_sha256 != connection.certificate_sha256
-    {
-        return Err("Secure Worker Agent identity changed during start".to_string());
-    }
-    ensure_manager_bridge(&worker.id, connection, worker.port).await?;
-    update_workers(&state, |workers| {
-        if let Some(worker) = workers.iter_mut().find(|worker| worker.id == id) {
-            apply_agent_status(worker, &status);
-        }
-    })?;
-    Ok(status)
+    let _connection = agent_connection(&worker)?;
+    let _ = stop_manager_bridge(&worker.id).await;
+    Err(
+        "Secure Worker Agent compute startup is disabled because current upstream rpc-server cannot expose an authenticated or OS-private child transport"
+            .to_string(),
+    )
 }
 
 pub async fn stop_worker_agent(
@@ -340,7 +424,29 @@ pub async fn list_worker_agent_audit(
     state: State<'_, AppState>,
 ) -> Result<Vec<WorkerAgentAuditEntry>, String> {
     let worker = worker_by_id(&state, &id)?;
-    get_remote_audit(&agent_connection(&worker)?, limit).await
+    let connection = agent_connection(&worker)?;
+    let entries = get_remote_audit(&connection, 500).await?;
+    let (audit_sequence, audit_hash) = verify_remote_audit_extension(
+        &connection.agent_id,
+        connection.audit_sequence,
+        &connection.audit_hash,
+        &entries,
+    )?;
+    update_workers(&state, |workers| {
+        let worker = workers
+            .iter_mut()
+            .find(|worker| worker.id == id)
+            .ok_or_else(|| "Worker not found".to_string())?;
+        let agent = worker
+            .agent
+            .as_mut()
+            .ok_or_else(|| "Secure Worker Agent metadata is missing".to_string())?;
+        agent.audit_sequence = audit_sequence;
+        agent.audit_hash = audit_hash.clone();
+        Ok::<(), String>(())
+    })??;
+    let start = entries.len().saturating_sub(limit.clamp(1, 500));
+    Ok(entries[start..].to_vec())
 }
 
 pub async fn restore_worker_agent_bridges(app: tauri::AppHandle) {
@@ -357,9 +463,9 @@ pub async fn restore_worker_agent_bridges(app: tauri::AppHandle) {
         })
         .unwrap_or_default();
     for worker in workers {
+        let _ = stop_manager_bridge(&worker.id).await;
         let result = async {
             let connection = agent_connection(&worker)?;
-            ensure_manager_bridge(&worker.id, connection.clone(), worker.port).await?;
             verified_status(&connection).await
         }
         .await;
@@ -394,9 +500,10 @@ pub mod ipc {
         enrollment: WorkerAgentEnrollment,
         state: State<'_, AppState>,
         app: tauri::AppHandle,
-    ) -> crate::error::AppResult<WorkerInfo> {
+    ) -> crate::error::AppResult<crate::models::FrontendWorkerInfo> {
         super::enroll_worker_agent(enrollment, state, app)
             .await
+            .map(|worker| crate::models::FrontendWorkerInfo::from(&worker))
             .map_err(crate::error::AppError::from)
     }
 

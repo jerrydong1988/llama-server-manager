@@ -5,17 +5,18 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader as StdBufReader, Read as _, Write as _};
+use std::io::{BufReader as StdBufReader, Write as _};
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 #[cfg(test)]
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Once};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{oneshot, watch, Semaphore};
+use tokio::sync::{oneshot, watch, OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 
 pub const AGENT_PROTOCOL_VERSION: u32 = 1;
@@ -23,9 +24,18 @@ pub const AGENT_CONFIG_SCHEMA_VERSION: u32 = 1;
 const MAX_CONTROL_FRAME_BYTES: usize = 64 * 1024;
 const MAX_AUDIT_RESULTS: usize = 500;
 const MAX_AUDIT_FILE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_IN_FLIGHT_CONNECTIONS: usize = 64;
+const AUDIT_ROTATE_AT_BYTES: u64 = 6 * 1024 * 1024;
+const LIFECYCLE_AUDIT_RESERVATION_BYTES: u64 = ((MAX_CONTROL_FRAME_BYTES + 4 * 1024) as u64) * 2;
+const MAX_PREAUTH_CONTROL_CONNECTIONS: usize = 16;
+const MAX_PREAUTH_TUNNEL_CONNECTIONS: usize = 16;
+const MAX_AUTHENTICATED_CONTROL_CONNECTIONS: usize = 32;
+const MAX_AUTHENTICATED_TUNNELS: usize = 64;
+const MAX_PREAUTH_CONNECTIONS_PER_SOURCE: usize = 4;
 const AUTH_FAILURE_AUDIT_INTERVAL: Duration = Duration::from_secs(60);
-const CONTROL_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_AUTH_DENIAL_FILE_BYTES: u64 = 64 * 1024;
+const CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_TUNNEL_LIFETIME: Duration = Duration::from_secs(60 * 60);
+const MAX_LOCAL_BRIDGE_CONNECTIONS: usize = 16;
 
 const HELP: &str = "Llama Server Manager secure Worker Agent
 
@@ -39,7 +49,8 @@ Usage:
   lsm worker-agent help
 
 Security model:
-  The Agent accepts only status, rpc_start, rpc_stop, and audit actions over TLS.
+  The Agent accepts status, rpc_stop, and audit actions over TLS.
+  rpc_start fails closed until rpc-server supports an authenticated or OS-private endpoint.
   The configured rpc-server path, arguments, environment, and filesystem are never
   supplied by a remote request. The bearer credential is read from a private file
   and is never accepted as a CLI argument or emitted in output.";
@@ -57,6 +68,8 @@ pub struct WorkerAgentConfig {
     pub tls_key_path: PathBuf,
     pub token_path: PathBuf,
     pub rpc_binary_path: PathBuf,
+    #[serde(default)]
+    pub rpc_artifact_identity: crate::deployment_identity::ArtifactIdentity,
     pub rpc_port: u16,
     pub audit_path: PathBuf,
     pub rpc_log_path: PathBuf,
@@ -64,7 +77,7 @@ pub struct WorkerAgentConfig {
     pub devices: Vec<WorkerDevice>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkerAgentConnection {
     pub agent_id: String,
@@ -76,7 +89,27 @@ pub struct WorkerAgentConnection {
     pub tls_cert_path: PathBuf,
     pub token_path: PathBuf,
     pub certificate_sha256: String,
+    #[serde(default)]
+    pub audit_sequence: u64,
+    #[serde(default)]
+    pub audit_hash: String,
 }
+
+impl PartialEq for WorkerAgentConnection {
+    fn eq(&self, other: &Self) -> bool {
+        self.agent_id == other.agent_id
+            && self.control_host == other.control_host
+            && self.control_port == other.control_port
+            && self.tunnel_host == other.tunnel_host
+            && self.tunnel_port == other.tunnel_port
+            && self.tls_server_name == other.tls_server_name
+            && self.tls_cert_path == other.tls_cert_path
+            && self.token_path == other.token_path
+            && self.certificate_sha256 == other.certificate_sha256
+    }
+}
+
+impl Eq for WorkerAgentConnection {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -129,6 +162,10 @@ struct ControlRequest {
     action: ControlAction,
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    from_sequence: Option<u64>,
+    #[serde(default)]
+    checkpoint_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -169,6 +206,10 @@ struct ControlResponse {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     audit: Vec<WorkerAgentAuditEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    next_sequence: Option<u64>,
+    #[serde(default)]
+    has_more: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<ControlError>,
 }
 
@@ -194,7 +235,10 @@ struct AgentRuntime {
     config: WorkerAgentConfig,
     certificate_sha256: String,
     rpc_child: Mutex<Option<Child>>,
+    lifecycle_lock: Mutex<()>,
+    closing: AtomicBool,
     audit_lock: Mutex<()>,
+    audit_reserved_bytes: Mutex<u64>,
     auth_failure_audit: Mutex<AuthFailureAuditState>,
     #[cfg(test)]
     rpc_test_override: AtomicBool,
@@ -204,6 +248,120 @@ struct AgentRuntime {
 struct AuthFailureAuditState {
     last_recorded: Option<Instant>,
     suppressed: u64,
+}
+
+struct AuditReservation {
+    runtime: Arc<AgentRuntime>,
+    remaining: u64,
+}
+
+impl AuditReservation {
+    fn consume(&mut self, bytes: u64) -> Result<(), String> {
+        if bytes > self.remaining {
+            return Err(worker_agent_error(
+                "lifecycle audit record exceeded its reserved capacity",
+            ));
+        }
+        let mut reserved = self
+            .runtime
+            .audit_reserved_bytes
+            .lock()
+            .map_err(|_| worker_agent_error("audit reservation lock is poisoned"))?;
+        if *reserved < bytes {
+            return Err(worker_agent_error(
+                "audit reservation accounting is invalid",
+            ));
+        }
+        *reserved -= bytes;
+        self.remaining -= bytes;
+        Ok(())
+    }
+
+    fn restore(&mut self, bytes: u64) {
+        if let Ok(mut reserved) = self.runtime.audit_reserved_bytes.lock() {
+            *reserved = reserved.saturating_add(bytes);
+            self.remaining = self.remaining.saturating_add(bytes);
+        }
+    }
+}
+
+impl Drop for AuditReservation {
+    fn drop(&mut self) {
+        if let Ok(mut reserved) = self.runtime.audit_reserved_bytes.lock() {
+            *reserved = reserved.saturating_sub(self.remaining);
+        }
+    }
+}
+
+fn reserve_lifecycle_audit(runtime: &Arc<AgentRuntime>) -> Result<AuditReservation, String> {
+    let _audit_guard = runtime
+        .audit_lock
+        .lock()
+        .map_err(|_| worker_agent_error("audit lock is poisoned"))?;
+    let mut current = runtime
+        .config
+        .audit_path
+        .metadata()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if current >= AUDIT_ROTATE_AT_BYTES {
+        let _ = read_verified_audit(&runtime.config.audit_path)?;
+        rotate_audit_log(&runtime.config.audit_path)?;
+        current = 0;
+    }
+    let mut reserved = runtime
+        .audit_reserved_bytes
+        .lock()
+        .map_err(|_| worker_agent_error("audit reservation lock is poisoned"))?;
+    let required = current
+        .checked_add(*reserved)
+        .and_then(|value| value.checked_add(LIFECYCLE_AUDIT_RESERVATION_BYTES))
+        .ok_or_else(|| worker_agent_error("audit capacity calculation overflow"))?;
+    if required > MAX_AUDIT_FILE_BYTES {
+        return Err(worker_agent_error(
+            "audit log cannot reserve a durable lifecycle outcome; archive it first",
+        ));
+    }
+    *reserved += LIFECYCLE_AUDIT_RESERVATION_BYTES;
+    Ok(AuditReservation {
+        runtime: runtime.clone(),
+        remaining: LIFECYCLE_AUDIT_RESERVATION_BYTES,
+    })
+}
+
+struct SourceAdmission {
+    source: IpAddr,
+    counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+}
+
+impl Drop for SourceAdmission {
+    fn drop(&mut self) {
+        if let Ok(mut counts) = self.counts.lock() {
+            if let Some(count) = counts.get_mut(&self.source) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    counts.remove(&self.source);
+                }
+            }
+        }
+    }
+}
+
+fn try_admit_source(
+    counts: &Arc<Mutex<HashMap<IpAddr, usize>>>,
+    source: IpAddr,
+) -> Option<SourceAdmission> {
+    let mut guard = counts.lock().ok()?;
+    let count = guard.entry(source).or_default();
+    if *count >= MAX_PREAUTH_CONNECTIONS_PER_SOURCE {
+        return None;
+    }
+    *count += 1;
+    drop(guard);
+    Some(SourceAdmission {
+        source,
+        counts: counts.clone(),
+    })
 }
 
 struct BridgeHandle {
@@ -320,7 +478,22 @@ fn validate_agent_config(config: &mut WorkerAgentConfig) -> Result<(), String> {
     ] {
         require_absolute_path(path, field)?;
     }
+    config.tls_key_path = protect_private_file(&config.tls_key_path, "TLS private key")?;
+    config.token_path = protect_private_file(&config.token_path, "token file")?;
     config.rpc_binary_path = validate_rpc_binary(&config.rpc_binary_path)?;
+    let rpc_executable =
+        crate::deployment_identity::ArtifactLease::open_owner_protected_executable(
+            &config.rpc_binary_path,
+        )
+        .map_err(worker_agent_error)?;
+    if !config.rpc_artifact_identity.is_verified()
+        || rpc_executable.identity() != &config.rpc_artifact_identity
+    {
+        return Err(worker_agent_error(
+            "rpc-server identity is missing or changed; explicitly reinitialize the Agent to approve the new executable",
+        ));
+    }
+    config.rpc_binary_path = rpc_executable.canonical_path().to_path_buf();
     let _ = server_tls_config(config)?;
     let _ = load_token(&config.token_path)?;
     Ok(())
@@ -328,19 +501,62 @@ fn validate_agent_config(config: &mut WorkerAgentConfig) -> Result<(), String> {
 
 pub fn load_agent_config(path: &Path) -> Result<WorkerAgentConfig, String> {
     require_absolute_path(path, "config")?;
-    let bytes = std::fs::read(path)
-        .map_err(|error| worker_agent_error(format!("failed to read config: {error}")))?;
+    let config_root = path
+        .parent()
+        .ok_or_else(|| worker_agent_error("config path has no parent directory"))?;
+    crate::persistence::enforce_private_directory(config_root).map_err(worker_agent_error)?;
+    let bytes = crate::persistence::read_private_file_bounded(path, MAX_CONTROL_FRAME_BYTES as u64)
+        .map_err(worker_agent_error)?
+        .ok_or_else(|| worker_agent_error("Agent config is unavailable"))?;
     let mut config: WorkerAgentConfig = serde_json::from_slice(&bytes)
         .map_err(|error| worker_agent_error(format!("invalid config: {error}")))?;
     validate_agent_config(&mut config)?;
+    let config_root = std::fs::canonicalize(config_root)
+        .map_err(|error| worker_agent_error(format!("config directory is unavailable: {error}")))?;
+    for (path, label) in [
+        (&config.token_path, "token file"),
+        (&config.audit_path, "audit log"),
+        (&config.rpc_log_path, "RPC log"),
+    ] {
+        let parent = path
+            .parent()
+            .ok_or_else(|| worker_agent_error(format!("{label} has no parent directory")))?;
+        let canonical_parent = std::fs::canonicalize(parent).map_err(|error| {
+            worker_agent_error(format!("{label} directory is unavailable: {error}"))
+        })?;
+        if !crate::path_utils::paths_equal(&canonical_parent, &config_root) {
+            return Err(worker_agent_error(format!(
+                "{label} must reside directly in the private Agent config directory"
+            )));
+        }
+        if path.exists() {
+            let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+                worker_agent_error(format!("failed to inspect {label}: {error}"))
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err(worker_agent_error(format!(
+                    "{label} must be a regular non-link file"
+                )));
+            }
+        }
+    }
     Ok(config)
 }
 
 fn load_certificates(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
     require_absolute_path(path, "TLS certificate path")?;
-    let file = File::open(path)
-        .map_err(|error| worker_agent_error(format!("failed to read TLS certificate: {error}")))?;
-    let mut reader = StdBufReader::new(file);
+    const MAX_CERTIFICATE_PEM_BYTES: u64 = 256 * 1024;
+    let bytes =
+        crate::persistence::read_regular_file_nofollow_bounded(path, MAX_CERTIFICATE_PEM_BYTES)
+            .map_err(worker_agent_error)?
+            .ok_or_else(|| worker_agent_error("TLS certificate file is unavailable"))?;
+    parse_certificates(&bytes)
+}
+
+fn parse_certificates(bytes: &[u8]) -> Result<Vec<CertificateDer<'static>>, String> {
+    const MAX_CERTIFICATES: usize = 8;
+    const MAX_CERTIFICATE_DER_BYTES: usize = 512 * 1024;
+    let mut reader = std::io::Cursor::new(bytes);
     let certificates = rustls_pemfile::certs(&mut reader)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| worker_agent_error(format!("invalid TLS certificate: {error}")))?;
@@ -348,6 +564,19 @@ fn load_certificates(path: &Path) -> Result<Vec<CertificateDer<'static>>, String
         return Err(worker_agent_error(
             "TLS certificate file contains no certificates",
         ));
+    }
+    if certificates.len() > MAX_CERTIFICATES {
+        return Err(worker_agent_error(format!(
+            "TLS certificate bundle exceeds {MAX_CERTIFICATES} certificates"
+        )));
+    }
+    let der_bytes = certificates.iter().try_fold(0_usize, |total, certificate| {
+        total.checked_add(certificate.as_ref().len())
+    });
+    if !matches!(der_bytes, Some(bytes) if bytes <= MAX_CERTIFICATE_DER_BYTES) {
+        return Err(worker_agent_error(format!(
+            "TLS certificate bundle exceeds {MAX_CERTIFICATE_DER_BYTES} decoded bytes"
+        )));
     }
     Ok(certificates)
 }
@@ -362,19 +591,67 @@ fn load_private_key(path: &Path) -> Result<PrivateKeyDer<'static>, String> {
         .ok_or_else(|| worker_agent_error("TLS private key file contains no supported key"))
 }
 
+fn protect_private_file(path: &Path, label: &str) -> Result<PathBuf, String> {
+    require_absolute_path(path, label)?;
+    let original = std::fs::symlink_metadata(path)
+        .map_err(|error| worker_agent_error(format!("failed to inspect {label}: {error}")))?;
+    if !original.is_file() || original.file_type().is_symlink() {
+        return Err(worker_agent_error(format!(
+            "{label} must be a regular non-link file"
+        )));
+    }
+    let canonical = std::fs::canonicalize(path)
+        .map_err(|error| worker_agent_error(format!("{label} is unavailable: {error}")))?;
+    let metadata = std::fs::symlink_metadata(&canonical)
+        .map_err(|error| worker_agent_error(format!("failed to inspect {label}: {error}")))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(worker_agent_error(format!(
+            "{label} must be a regular non-link file"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&canonical, std::fs::Permissions::from_mode(0o600))
+            .map_err(|error| worker_agent_error(format!("failed to protect {label}: {error}")))?;
+    }
+    #[cfg(windows)]
+    {
+        crate::persistence::enforce_private_file(&canonical)
+            .map_err(|error| worker_agent_error(format!("failed to protect {label}: {error}")))?;
+    }
+    Ok(canonical)
+}
+
 pub fn certificate_sha256(path: &Path) -> Result<String, String> {
-    let certificate = load_certificates(path)?
-        .into_iter()
-        .next()
-        .ok_or_else(|| worker_agent_error("TLS certificate file is empty"))?;
+    let certificates = load_certificates(path)?;
+    if certificates.len() != 1 {
+        return Err(worker_agent_error(
+            "pinned TLS certificate enrollment requires exactly one certificate",
+        ));
+    }
+    let certificate = &certificates[0];
     Ok(format!("{:x}", Sha256::digest(certificate.as_ref())))
+}
+
+pub fn certificate_sha256_from_pem(bytes: &[u8]) -> Result<String, String> {
+    let certificates = parse_certificates(bytes)?;
+    if certificates.len() != 1 {
+        return Err(worker_agent_error(
+            "pinned TLS certificate enrollment requires exactly one certificate",
+        ));
+    }
+    Ok(format!("{:x}", Sha256::digest(certificates[0].as_ref())))
 }
 
 fn load_token(path: &Path) -> Result<String, String> {
     require_absolute_path(path, "token path")?;
-    let token = std::fs::read_to_string(path)
-        .map_err(|error| worker_agent_error(format!("failed to read token file: {error}")))?;
-    let token = token.trim();
+    let bytes = crate::persistence::read_private_file_bounded(path, 256)
+        .map_err(worker_agent_error)?
+        .ok_or_else(|| worker_agent_error("token file is unavailable"))?;
+    let token = std::str::from_utf8(&bytes)
+        .map_err(|_| worker_agent_error("token file is invalid"))?
+        .trim();
     if token.len() != 64 || !token.as_bytes().iter().all(u8::is_ascii_hexdigit) {
         return Err(worker_agent_error("token file is invalid"));
     }
@@ -386,67 +663,51 @@ pub fn validate_private_token(path: &Path) -> Result<(), String> {
 }
 
 pub fn protect_private_token(path: &Path) -> Result<(), String> {
-    require_absolute_path(path, "token path")?;
-    let canonical = std::fs::canonicalize(path)
-        .map_err(|error| worker_agent_error(format!("token file is unavailable: {error}")))?;
-    if !canonical.is_file() {
-        return Err(worker_agent_error("token path is not a regular file"));
+    protect_private_file(path, "token file").map(|_| ())
+}
+
+fn open_private_append_file(path: &Path, label: &str) -> Result<File, String> {
+    if !path.exists() {
+        crate::persistence::atomic_write(path, b"", None).map_err(worker_agent_error)?;
     }
+    let canonical = protect_private_file(path, label)?;
+    let mut options = OpenOptions::new();
+    options.read(true).append(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&canonical, std::fs::Permissions::from_mode(0o600)).map_err(
-            |error| worker_agent_error(format!("failed to protect token file: {error}")),
-        )?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
     }
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        let identity_output = Command::new("whoami.exe")
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|error| {
-                worker_agent_error(format!("failed to identify token owner: {error}"))
-            })?;
-        if !identity_output.status.success() {
-            return Err(worker_agent_error("failed to identify token owner"));
-        }
-        let identity = String::from_utf8(identity_output.stdout)
-            .map_err(|_| worker_agent_error("token owner identity is not valid UTF-8"))?;
-        let identity = identity.trim();
-        if identity.is_empty() || identity.chars().any(char::is_control) {
-            return Err(worker_agent_error("token owner identity is invalid"));
-        }
-        let grant = format!("{identity}:(F)");
-        let reset_status = Command::new("icacls.exe")
-            .arg(&canonical)
-            .arg("/reset")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .status()
-            .map_err(|error| worker_agent_error(format!("failed to reset token ACL: {error}")))?;
-        if !reset_status.success() {
-            return Err(worker_agent_error("failed to reset inherited token ACL"));
-        }
-        let status = Command::new("icacls.exe")
-            .arg(&canonical)
-            .args(["/inheritance:r", "/grant:r", grant.as_str()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .status()
-            .map_err(|error| worker_agent_error(format!("failed to protect token ACL: {error}")))?;
-        if !status.success() {
-            return Err(worker_agent_error(
-                "failed to restrict token ACL to the current user",
-            ));
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 0x0000_0001;
+        options
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(&canonical)
+        .map_err(|error| worker_agent_error(format!("failed to open {label}: {error}")))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| worker_agent_error(format!("failed to inspect {label}: {error}")))?;
+    if !metadata.is_file() {
+        return Err(worker_agent_error(format!(
+            "{label} must be a regular file"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.nlink() != 1 {
+            return Err(worker_agent_error(format!(
+                "{label} must have exactly one hard link"
+            )));
         }
     }
-    Ok(())
+    Ok(file)
 }
 
 fn tokens_equal(left: &str, right: &str) -> bool {
@@ -513,13 +774,26 @@ async fn tls_connect(
         .map_err(|error| worker_agent_error(format!("Agent connection failed: {error}")))?;
     let server_name = ServerName::try_from(connection.tls_server_name.clone())
         .map_err(|_| worker_agent_error("TLS server name is invalid"))?;
-    tokio::time::timeout(
+    let tls = tokio::time::timeout(
         CONTROL_TIMEOUT,
         TlsConnector::from(Arc::new(client_tls_config(connection)?)).connect(server_name, stream),
     )
     .await
     .map_err(|_| worker_agent_error("TLS handshake timed out"))?
-    .map_err(|error| worker_agent_error(format!("TLS identity verification failed: {error}")))
+    .map_err(|error| worker_agent_error(format!("TLS identity verification failed: {error}")))?;
+    let negotiated = tls
+        .get_ref()
+        .1
+        .peer_certificates()
+        .and_then(|certificates| certificates.first())
+        .ok_or_else(|| worker_agent_error("TLS peer did not present a leaf certificate"))?;
+    let negotiated_sha256 = format!("{:x}", Sha256::digest(negotiated.as_ref()));
+    if !tokens_equal(&negotiated_sha256, &connection.certificate_sha256) {
+        return Err(worker_agent_error(
+            "negotiated TLS leaf certificate does not match the enrolled fingerprint",
+        ));
+    }
+    Ok(tls)
 }
 
 async fn read_frame<R: tokio::io::AsyncRead + Unpin>(
@@ -575,59 +849,191 @@ fn audit_hash(entry: &WorkerAgentAuditEntry) -> Result<String, String> {
     Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
-fn read_verified_audit(path: &Path) -> Result<Vec<WorkerAgentAuditEntry>, String> {
-    match File::open(path) {
-        Ok(file) => {
-            let length = file
-                .metadata()
-                .map_err(|error| {
-                    worker_agent_error(format!("failed to inspect audit log: {error}"))
-                })?
-                .len();
-            if length > MAX_AUDIT_FILE_BYTES {
-                return Err(worker_agent_error(
-                    "audit log reached its size limit; archive it before restarting the Agent",
-                ));
-            }
-            let mut contents = String::new();
-            file.take(MAX_AUDIT_FILE_BYTES + 1)
-                .read_to_string(&mut contents)
-                .map_err(|error| {
-                    worker_agent_error(format!("failed to read audit log: {error}"))
-                })?;
-            if contents.len() as u64 > MAX_AUDIT_FILE_BYTES {
-                return Err(worker_agent_error(
-                    "audit log reached its size limit; archive it before restarting the Agent",
-                ));
-            }
-            let mut entries = Vec::new();
-            let mut previous_hash = String::new();
-            for (index, line) in contents.lines().enumerate() {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let entry: WorkerAgentAuditEntry = serde_json::from_str(line).map_err(|error| {
-                    worker_agent_error(format!("audit line {} is invalid: {error}", index + 1))
-                })?;
-                if entry.sequence != entries.len() as u64 + 1
-                    || entry.previous_hash != previous_hash
-                    || audit_hash(&entry)? != entry.hash
-                {
-                    return Err(worker_agent_error(format!(
-                        "audit integrity verification failed at line {}",
-                        index + 1
-                    )));
-                }
-                previous_hash = entry.hash.clone();
-                entries.push(entry);
-            }
-            Ok(entries)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(worker_agent_error(format!(
-            "failed to read audit log: {error}"
-        ))),
+pub fn verify_remote_audit_extension(
+    agent_id: &str,
+    checkpoint_sequence: u64,
+    checkpoint_hash: &str,
+    entries: &[WorkerAgentAuditEntry],
+) -> Result<(u64, String), String> {
+    if entries.is_empty() {
+        return Ok((checkpoint_sequence, checkpoint_hash.to_string()));
     }
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.agent_id != agent_id || audit_hash(entry)? != entry.hash {
+            return Err(worker_agent_error(format!(
+                "remote audit integrity verification failed at result {}",
+                index + 1
+            )));
+        }
+        if let Some(previous) = index.checked_sub(1).and_then(|value| entries.get(value)) {
+            if entry.sequence != previous.sequence.saturating_add(1)
+                || entry.previous_hash != previous.hash
+            {
+                return Err(worker_agent_error(format!(
+                    "remote audit chain forked at result {}",
+                    index + 1
+                )));
+            }
+        }
+    }
+
+    let extension_start = if checkpoint_sequence == 0 {
+        let first = &entries[0];
+        if first.sequence != 1 || !first.previous_hash.is_empty() {
+            return Err(worker_agent_error(
+                "remote audit does not provide a valid genesis checkpoint",
+            ));
+        }
+        0
+    } else if let Some(index) = entries
+        .iter()
+        .position(|entry| entry.sequence == checkpoint_sequence && entry.hash == checkpoint_hash)
+    {
+        index.saturating_add(1)
+    } else {
+        let first = &entries[0];
+        if first.sequence != checkpoint_sequence.saturating_add(1)
+            || first.previous_hash != checkpoint_hash
+        {
+            return Err(worker_agent_error(
+                "remote audit history was truncated, rolled back, or forked from the manager checkpoint",
+            ));
+        }
+        0
+    };
+    let terminal = entries
+        .get(extension_start)
+        .and_then(|_| entries.last())
+        .or_else(|| {
+            entries.iter().find(|entry| {
+                entry.sequence == checkpoint_sequence && entry.hash == checkpoint_hash
+            })
+        })
+        .ok_or_else(|| worker_agent_error("remote audit checkpoint is unavailable"))?;
+    if terminal.sequence < checkpoint_sequence {
+        return Err(worker_agent_error("remote audit history rolled back"));
+    }
+    Ok((terminal.sequence, terminal.hash.clone()))
+}
+
+fn read_audit_segment(path: &Path) -> Result<Vec<WorkerAgentAuditEntry>, String> {
+    let Some(bytes) = crate::persistence::read_private_file_bounded(path, MAX_AUDIT_FILE_BYTES + 1)
+        .map_err(worker_agent_error)?
+    else {
+        return Ok(Vec::new());
+    };
+    if bytes.len() as u64 > MAX_AUDIT_FILE_BYTES {
+        return Err(worker_agent_error("audit segment exceeds its size limit"));
+    }
+    let contents =
+        String::from_utf8(bytes).map_err(|_| worker_agent_error("audit log is not valid UTF-8"))?;
+    let mut entries = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if entries.len() >= 200_000 {
+            return Err(worker_agent_error(
+                "audit history exceeds its record budget",
+            ));
+        }
+        entries.push(serde_json::from_str(line).map_err(|error| {
+            worker_agent_error(format!("audit line {} is invalid: {error}", index + 1))
+        })?);
+    }
+    Ok(entries)
+}
+
+fn audit_segment_paths(path: &Path) -> Result<Vec<PathBuf>, String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| worker_agent_error("audit log has no parent directory"))?;
+    let prefix = format!(
+        "{}.segment-",
+        path.file_name()
+            .ok_or_else(|| worker_agent_error("audit log has no file name"))?
+            .to_string_lossy()
+    );
+    let mut segments = std::fs::read_dir(parent)
+        .map_err(|error| {
+            worker_agent_error(format!("failed to enumerate audit segments: {error}"))
+        })?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|candidate| {
+            candidate
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with(&prefix))
+        })
+        .collect::<Vec<_>>();
+    segments.sort();
+    if segments.len() > 16 {
+        return Err(worker_agent_error(
+            "audit history exceeds 16 retained segments; export and explicitly reset it",
+        ));
+    }
+    Ok(segments)
+}
+
+fn read_verified_audit(path: &Path) -> Result<Vec<WorkerAgentAuditEntry>, String> {
+    let mut entries = Vec::new();
+    for segment in audit_segment_paths(path)?
+        .into_iter()
+        .chain(std::iter::once(path.to_path_buf()))
+    {
+        entries.extend(read_audit_segment(&segment)?);
+        if entries.len() > 200_000 {
+            return Err(worker_agent_error(
+                "audit history exceeds its record budget",
+            ));
+        }
+    }
+    let mut expected_sequence = 1_u64;
+    let mut previous_hash = String::new();
+    for (index, entry) in entries.iter().enumerate() {
+        if entry.sequence != expected_sequence
+            || entry.previous_hash != previous_hash
+            || audit_hash(entry)? != entry.hash
+        {
+            return Err(worker_agent_error(format!(
+                "audit integrity verification failed at logical record {}",
+                index + 1
+            )));
+        }
+        expected_sequence = entry
+            .sequence
+            .checked_add(1)
+            .ok_or_else(|| worker_agent_error("audit sequence overflow"))?;
+        previous_hash = entry.hash.clone();
+    }
+    Ok(entries)
+}
+
+fn rotate_audit_log(path: &Path) -> Result<(), String> {
+    let active = read_audit_segment(path)?;
+    if active.is_empty() {
+        return Ok(());
+    }
+    let first = active.first().map(|entry| entry.sequence).unwrap_or(0);
+    let last = active.last().map(|entry| entry.sequence).unwrap_or(0);
+    if audit_segment_paths(path)?.len() >= 16 {
+        return Err(worker_agent_error(
+            "audit segment retention is full; export and explicitly reset it",
+        ));
+    }
+    let archive = path.with_file_name(format!(
+        "{}.segment-{first:020}-{last:020}",
+        path.file_name()
+            .ok_or_else(|| worker_agent_error("audit log has no file name"))?
+            .to_string_lossy()
+    ));
+    if archive.exists() {
+        return Err(worker_agent_error("audit segment archive already exists"));
+    }
+    std::fs::rename(path, &archive)
+        .map_err(|error| worker_agent_error(format!("failed to rotate audit log: {error}")))?;
+    protect_private_file(&archive, "audit archive")?;
+    crate::persistence::atomic_write(path, b"", None).map_err(worker_agent_error)
 }
 
 fn append_audit(
@@ -635,6 +1041,26 @@ fn append_audit(
     event: &str,
     outcome: &str,
     detail: impl Into<String>,
+) -> Result<WorkerAgentAuditEntry, String> {
+    append_audit_internal(runtime, event, outcome, detail.into(), None)
+}
+
+fn append_reserved_audit(
+    runtime: &AgentRuntime,
+    event: &str,
+    outcome: &str,
+    detail: impl Into<String>,
+    reservation: &mut AuditReservation,
+) -> Result<WorkerAgentAuditEntry, String> {
+    append_audit_internal(runtime, event, outcome, detail.into(), Some(reservation))
+}
+
+fn append_audit_internal(
+    runtime: &AgentRuntime,
+    event: &str,
+    outcome: &str,
+    detail: String,
+    mut reservation: Option<&mut AuditReservation>,
 ) -> Result<WorkerAgentAuditEntry, String> {
     let _guard = runtime
         .audit_lock
@@ -644,13 +1070,22 @@ fn append_audit(
     if !runtime.config.audit_path.exists() {
         crate::persistence::atomic_write(&runtime.config.audit_path, b"", None)?;
     }
+    let current_length = runtime
+        .config
+        .audit_path
+        .metadata()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    if current_length >= AUDIT_ROTATE_AT_BYTES {
+        rotate_audit_log(&runtime.config.audit_path)?;
+    }
     let mut entry = WorkerAgentAuditEntry {
         sequence: entries.len() as u64 + 1,
         timestamp: chrono::Utc::now().to_rfc3339(),
         agent_id: runtime.config.agent_id.clone(),
         event: event.to_string(),
         outcome: outcome.to_string(),
-        detail: detail.into(),
+        detail,
         previous_hash: entries
             .last()
             .map(|entry| entry.hash.clone())
@@ -661,26 +1096,45 @@ fn append_audit(
     let mut line = serde_json::to_vec(&entry)
         .map_err(|error| worker_agent_error(format!("audit serialization failed: {error}")))?;
     line.push(b'\n');
-    let current_length = runtime
-        .config
-        .audit_path
-        .metadata()
-        .map_err(|error| worker_agent_error(format!("failed to inspect audit log: {error}")))?
-        .len();
-    if current_length.saturating_add(line.len() as u64) > MAX_AUDIT_FILE_BYTES {
-        return Err(worker_agent_error(
-            "audit log reached its size limit; archive it before restarting the Agent",
-        ));
+    let consumed = line.len() as u64;
+    if let Some(reservation) = reservation.as_deref_mut() {
+        reservation.consume(consumed)?;
     }
-    let mut file = OpenOptions::new()
-        .append(true)
-        .open(&runtime.config.audit_path)
-        .map_err(|error| worker_agent_error(format!("failed to open audit log: {error}")))?;
-    file.write_all(&line)
-        .and_then(|_| file.flush())
-        .and_then(|_| file.sync_data())
-        .map_err(|error| worker_agent_error(format!("failed to persist audit event: {error}")))?;
-    Ok(entry)
+    let result = (|| {
+        let current_length = runtime
+            .config
+            .audit_path
+            .metadata()
+            .map_err(|error| worker_agent_error(format!("failed to inspect audit log: {error}")))?
+            .len();
+        let reserved = *runtime
+            .audit_reserved_bytes
+            .lock()
+            .map_err(|_| worker_agent_error("audit reservation lock is poisoned"))?;
+        let required = current_length
+            .checked_add(line.len() as u64)
+            .and_then(|value| value.checked_add(reserved))
+            .ok_or_else(|| worker_agent_error("audit capacity calculation overflow"))?;
+        if required > MAX_AUDIT_FILE_BYTES {
+            return Err(worker_agent_error(
+                "audit log reached its size limit; archive it before restarting the Agent",
+            ));
+        }
+        let mut file = open_private_append_file(&runtime.config.audit_path, "audit log")?;
+        file.write_all(&line)
+            .and_then(|_| file.flush())
+            .and_then(|_| file.sync_data())
+            .map_err(|error| {
+                worker_agent_error(format!("failed to persist audit event: {error}"))
+            })?;
+        Ok(entry)
+    })();
+    if result.is_err() {
+        if let Some(reservation) = reservation {
+            reservation.restore(consumed);
+        }
+    }
+    result
 }
 
 fn audit_auth_failure(runtime: &AgentRuntime, event: &str) {
@@ -703,7 +1157,31 @@ fn audit_auth_failure(runtime: &AgentRuntime, event: &str) {
     } else {
         format!("authentication failed; {suppressed} repeated failures were suppressed")
     };
-    let _ = append_audit(runtime, event, "denied", detail);
+    let path = runtime.config.audit_path.with_extension("auth-denials.log");
+    let mut line = serde_json::to_vec(&serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "agentId": runtime.config.agent_id,
+        "event": event,
+        "outcome": "denied",
+        "detail": detail,
+    }))
+    .unwrap_or_default();
+    line.push(b'\n');
+    let current = path.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+    let result = if current.saturating_add(line.len() as u64) > MAX_AUTH_DENIAL_FILE_BYTES {
+        crate::persistence::atomic_write(&path, &line, None)
+    } else {
+        open_private_append_file(&path, "authentication denial log").and_then(|mut file| {
+            file.write_all(&line)
+                .and_then(|_| file.sync_data())
+                .map_err(|error| {
+                    worker_agent_error(format!("failed to persist auth denial: {error}"))
+                })
+        })
+    };
+    if result.is_ok() {
+        let _ = protect_private_file(&path, "authentication denial log");
+    }
 }
 
 fn process_is_running(runtime: &AgentRuntime) -> Result<bool, String> {
@@ -743,86 +1221,15 @@ fn status(runtime: &AgentRuntime) -> Result<WorkerAgentStatus, String> {
     })
 }
 
-fn spawn_rpc_process(runtime: &AgentRuntime) -> Result<(), String> {
-    let mut child_slot = runtime
-        .rpc_child
-        .lock()
-        .map_err(|_| worker_agent_error("rpc process lock is poisoned"))?;
-    if let Some(child) = child_slot.as_mut() {
-        if child
-            .try_wait()
-            .map_err(|error| worker_agent_error(format!("failed to inspect rpc-server: {error}")))?
-            .is_none()
-        {
-            return Ok(());
-        }
-        *child_slot = None;
-    }
-    let availability =
-        std::net::TcpListener::bind((IpAddr::from([127, 0, 0, 1]), runtime.config.rpc_port))
-            .map_err(|error| worker_agent_error(format!("rpc port is unavailable: {error}")))?;
-    drop(availability);
-    if let Some(parent) = runtime.config.rpc_log_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            worker_agent_error(format!("failed to create rpc log directory: {error}"))
-        })?;
-    }
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&runtime.config.rpc_log_path)
-        .map_err(|error| worker_agent_error(format!("failed to open rpc log: {error}")))?;
-    let stderr = log
-        .try_clone()
-        .map_err(|error| worker_agent_error(format!("failed to prepare rpc log: {error}")))?;
-    let mut command = Command::new(&runtime.config.rpc_binary_path);
-    command
-        .args([
-            "--host",
-            "127.0.0.1",
-            "--port",
-            &runtime.config.rpc_port.to_string(),
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log))
-        .stderr(Stdio::from(stderr));
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    let child = command.spawn().map_err(|error| {
-        worker_agent_error(format!("failed to start fixed rpc-server: {error}"))
-    })?;
-    *child_slot = Some(child);
-    Ok(())
-}
-
-async fn start_rpc(runtime: Arc<AgentRuntime>) -> Result<WorkerAgentStatus, String> {
-    spawn_rpc_process(&runtime)?;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        if TcpStream::connect(("127.0.0.1", runtime.config.rpc_port))
-            .await
-            .is_ok()
-        {
-            return status(&runtime);
-        }
-        if !process_is_running(&runtime)? {
-            return Err(worker_agent_error(
-                "rpc-server exited before becoming ready",
-            ));
-        }
-        if tokio::time::Instant::now() >= deadline {
-            let _ = stop_rpc(&runtime);
-            return Err(worker_agent_error("rpc-server readiness timed out"));
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
 fn stop_rpc(runtime: &AgentRuntime) -> Result<bool, String> {
+    let _lifecycle_guard = runtime
+        .lifecycle_lock
+        .lock()
+        .map_err(|_| worker_agent_error("rpc lifecycle lock is poisoned"))?;
+    stop_rpc_locked(runtime)
+}
+
+fn stop_rpc_locked(runtime: &AgentRuntime) -> Result<bool, String> {
     let mut child_slot = runtime
         .rpc_child
         .lock()
@@ -840,6 +1247,18 @@ fn stop_rpc(runtime: &AgentRuntime) -> Result<bool, String> {
     Ok(true)
 }
 
+impl Drop for AgentRuntime {
+    fn drop(&mut self) {
+        if let Ok(child_slot) = self.rpc_child.get_mut() {
+            if let Some(child) = child_slot.as_mut() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            *child_slot = None;
+        }
+    }
+}
+
 fn ok_response(runtime: &AgentRuntime) -> ControlResponse {
     ControlResponse {
         protocol_version: AGENT_PROTOCOL_VERSION,
@@ -847,6 +1266,8 @@ fn ok_response(runtime: &AgentRuntime) -> ControlResponse {
         ok: true,
         status: None,
         audit: Vec::new(),
+        next_sequence: None,
+        has_more: false,
         error: None,
     }
 }
@@ -860,6 +1281,8 @@ fn error_response(runtime: Option<&AgentRuntime>, code: &str, message: &str) -> 
         ok: false,
         status: None,
         audit: Vec::new(),
+        next_sequence: None,
+        has_more: false,
         error: Some(ControlError {
             code: code.to_string(),
             message: message.to_string(),
@@ -875,18 +1298,102 @@ fn request_authenticated(runtime: &AgentRuntime, request: &ControlRequest) -> bo
             .is_ok_and(|token| tokens_equal(&token, &request.token))
 }
 
+fn audit_page(runtime: &AgentRuntime, request: &ControlRequest) -> Result<ControlResponse, String> {
+    let entries = read_verified_audit(&runtime.config.audit_path)?;
+    let from_sequence = request.from_sequence.unwrap_or(0);
+    let checkpoint_hash = request.checkpoint_hash.as_deref().unwrap_or_default();
+    if from_sequence > 0
+        && (checkpoint_hash.len() != 64 || !checkpoint_hash.bytes().all(|b| b.is_ascii_hexdigit()))
+    {
+        return Err(worker_agent_error("audit checkpoint hash is invalid"));
+    }
+    let start = if from_sequence == 0 {
+        0
+    } else {
+        entries
+            .iter()
+            .position(|entry| entry.sequence == from_sequence && entry.hash == checkpoint_hash)
+            .map(|index| index + 1)
+            .ok_or_else(|| {
+                worker_agent_error("audit checkpoint is unavailable or does not match")
+            })?
+    };
+    let limit = request.limit.unwrap_or(100).clamp(1, MAX_AUDIT_RESULTS);
+    let mut response = ok_response(runtime);
+    response.next_sequence = Some(from_sequence);
+    for entry in entries.iter().skip(start).take(limit) {
+        response.audit.push(entry.clone());
+        response.next_sequence = Some(entry.sequence);
+        response.has_more = start + response.audit.len() < entries.len();
+        let encoded = serde_json::to_vec(&response).map_err(|error| {
+            worker_agent_error(format!("audit page serialization failed: {error}"))
+        })?;
+        if encoded.len() >= MAX_CONTROL_FRAME_BYTES {
+            response.audit.pop();
+            response.next_sequence = response
+                .audit
+                .last()
+                .map(|entry| entry.sequence)
+                .or(Some(from_sequence));
+            response.has_more = true;
+            if response.audit.is_empty() {
+                return Err(worker_agent_error(
+                    "one audit record exceeds the control frame byte budget",
+                ));
+            }
+            break;
+        }
+    }
+    response.has_more = start + response.audit.len() < entries.len();
+    Ok(response)
+}
+
 async fn dispatch_control(runtime: Arc<AgentRuntime>, request: ControlRequest) -> ControlResponse {
     if !request_authenticated(&runtime, &request) {
         audit_auth_failure(&runtime, "control_auth");
         return error_response(None, "UNAUTHORIZED", "authentication failed");
     }
+    if runtime.closing.load(Ordering::Acquire) {
+        return error_response(
+            Some(&runtime),
+            "AGENT_SHUTTING_DOWN",
+            "Worker Agent is shutting down",
+        );
+    }
     let action = request.action;
-    if let Err(error) = append_audit(
-        &runtime,
-        action.name(),
-        "requested",
-        "authenticated request accepted",
-    ) {
+    let mut lifecycle_reservation =
+        if matches!(action, ControlAction::RpcStart | ControlAction::RpcStop) {
+            match reserve_lifecycle_audit(&runtime) {
+                Ok(reservation) => Some(reservation),
+                Err(error) => {
+                    return error_response(Some(&runtime), "AUDIT_UNAVAILABLE", &error);
+                }
+            }
+        } else {
+            None
+        };
+    let rpc_was_running = if lifecycle_reservation.is_some() {
+        process_is_running(&runtime).unwrap_or(false)
+    } else {
+        false
+    };
+    let requested_audit = if let Some(reservation) = lifecycle_reservation.as_mut() {
+        append_reserved_audit(
+            &runtime,
+            action.name(),
+            "requested",
+            "authenticated request accepted",
+            reservation,
+        )
+    } else {
+        append_audit(
+            &runtime,
+            action.name(),
+            "requested",
+            "authenticated request accepted",
+        )
+    };
+    if let Err(error) = requested_audit {
         return error_response(Some(&runtime), "AUDIT_UNAVAILABLE", &error);
     }
     let result: Result<ControlResponse, String> = match action {
@@ -895,13 +1402,9 @@ async fn dispatch_control(runtime: Arc<AgentRuntime>, request: ControlRequest) -
             response.status = Some(status);
             response
         }),
-        ControlAction::RpcStart if request.limit.is_none() => {
-            start_rpc(runtime.clone()).await.map(|status| {
-                let mut response = ok_response(&runtime);
-                response.status = Some(status);
-                response
-            })
-        }
+        ControlAction::RpcStart if request.limit.is_none() => Err(worker_agent_error(
+            "rpc-server startup is disabled because the upstream child exposes an unauthenticated loopback TCP endpoint; a private inherited socket, named pipe, or authenticated upstream transport is required",
+        )),
         ControlAction::RpcStop if request.limit.is_none() => stop_rpc(&runtime)
             .and_then(|_| status(&runtime))
             .map(|status| {
@@ -910,38 +1413,66 @@ async fn dispatch_control(runtime: Arc<AgentRuntime>, request: ControlRequest) -
                 response
             }),
         ControlAction::Audit => {
-            let limit = request.limit.unwrap_or(100).clamp(1, MAX_AUDIT_RESULTS);
-            read_verified_audit(&runtime.config.audit_path).map(|entries| {
-                let start = entries.len().saturating_sub(limit);
-                let mut response = ok_response(&runtime);
-                response.audit = entries[start..].to_vec();
-                response
-            })
+            audit_page(&runtime, &request)
         }
         _ => Err(worker_agent_error(
             "action is not allowed or contains invalid fields",
         )),
     };
-    match result {
-        Ok(response) => match append_audit(&runtime, action.name(), "allowed", "request completed")
-        {
+    let response = match result {
+        Ok(response) => match if let Some(reservation) = lifecycle_reservation.as_mut() {
+            append_reserved_audit(
+                &runtime,
+                action.name(),
+                "allowed",
+                "request completed",
+                reservation,
+            )
+        } else {
+            append_audit(&runtime, action.name(), "allowed", "request completed")
+        } {
             Ok(_) => response,
-            Err(error) => error_response(Some(&runtime), "AUDIT_UNAVAILABLE", &error),
+            Err(error) => {
+                let rollback = match action {
+                    ControlAction::RpcStart if !rpc_was_running => stop_rpc(&runtime).map(|_| ()),
+                    ControlAction::RpcStop if rpc_was_running => Err(worker_agent_error(
+                        "rpc-server stop could not be rolled back without recreating an unauthenticated loopback endpoint",
+                    )),
+                    _ => Ok(()),
+                };
+                let message = match rollback {
+                    Ok(()) => error,
+                    Err(rollback_error) => format!(
+                        "{error}; lifecycle rollback also failed: {rollback_error}; the durable requested record marks this action as indeterminate"
+                    ),
+                };
+                error_response(Some(&runtime), "AUDIT_UNAVAILABLE", &message)
+            }
         },
         Err(error) => {
-            if let Err(audit_error) = append_audit(&runtime, action.name(), "failed", &error) {
+            let failure_audit = if let Some(reservation) = lifecycle_reservation.as_mut() {
+                append_reserved_audit(&runtime, action.name(), "failed", &error, reservation)
+            } else {
+                append_audit(&runtime, action.name(), "failed", &error)
+            };
+            if let Err(audit_error) = failure_audit {
                 error_response(Some(&runtime), "AUDIT_UNAVAILABLE", &audit_error)
             } else {
                 error_response(Some(&runtime), "ACTION_FAILED", &error)
             }
         }
-    }
+    };
+    drop(lifecycle_reservation);
+    response
 }
 
 async fn handle_control_connection(
     runtime: Arc<AgentRuntime>,
     acceptor: TlsAcceptor,
     stream: TcpStream,
+    preauth_permit: OwnedSemaphorePermit,
+    source_admission: SourceAdmission,
+    authenticated_limit: Arc<Semaphore>,
 ) -> Result<(), String> {
     let mut tls = tokio::time::timeout(CONTROL_TIMEOUT, acceptor.accept(stream))
         .await
@@ -954,6 +1485,17 @@ async fn handle_control_connection(
     drop(reader);
     let request: ControlRequest = serde_json::from_slice(&frame)
         .map_err(|_| worker_agent_error("invalid control request"))?;
+    if request_authenticated(&runtime, &request) {
+        drop(preauth_permit);
+        drop(source_admission);
+        let _authenticated_permit = authenticated_limit
+            .try_acquire_owned()
+            .map_err(|_| worker_agent_error("authenticated control capacity is saturated"))?;
+        let response = dispatch_control(runtime, request).await;
+        write_frame(&mut tls, &response).await?;
+        let _ = tls.shutdown().await;
+        return Ok(());
+    }
     let response = dispatch_control(runtime, request).await;
     write_frame(&mut tls, &response).await?;
     let _ = tls.shutdown().await;
@@ -964,6 +1506,9 @@ async fn handle_tunnel_connection(
     runtime: Arc<AgentRuntime>,
     acceptor: TlsAcceptor,
     stream: TcpStream,
+    preauth_permit: OwnedSemaphorePermit,
+    source_admission: SourceAdmission,
+    authenticated_limit: Arc<Semaphore>,
 ) -> Result<(), String> {
     let tls = tokio::time::timeout(CONTROL_TIMEOUT, acceptor.accept(stream))
         .await
@@ -975,10 +1520,12 @@ async fn handle_tunnel_connection(
         .map_err(|_| worker_agent_error("tunnel authentication timed out"))??;
     let hello: TunnelHello = serde_json::from_slice(&frame)
         .map_err(|_| worker_agent_error("invalid tunnel handshake"))?;
+    let session_token = load_token(&runtime.config.token_path).ok();
     let authenticated = hello.protocol_version == AGENT_PROTOCOL_VERSION
         && hello.expected_agent_id == runtime.config.agent_id
-        && load_token(&runtime.config.token_path)
-            .is_ok_and(|token| tokens_equal(&token, &hello.token));
+        && session_token
+            .as_ref()
+            .is_some_and(|token| tokens_equal(token, &hello.token));
     if !authenticated {
         let mut tls = reader.into_inner();
         let _ = write_frame(
@@ -997,6 +1544,46 @@ async fn handle_tunnel_connection(
         audit_auth_failure(&runtime, "tunnel_auth");
         return Ok(());
     }
+    if runtime.closing.load(Ordering::Acquire) {
+        let mut tls = reader.into_inner();
+        write_frame(
+            &mut tls,
+            &TunnelResponse {
+                protocol_version: AGENT_PROTOCOL_VERSION,
+                agent_id: runtime.config.agent_id.clone(),
+                ok: false,
+                error: Some(ControlError {
+                    code: "AGENT_SHUTTING_DOWN".into(),
+                    message: "Worker Agent is shutting down".into(),
+                }),
+            },
+        )
+        .await?;
+        return Ok(());
+    }
+    let session_token = session_token.expect("authenticated tunnel must have a loaded token");
+    drop(preauth_permit);
+    drop(source_admission);
+    let _authenticated_permit = match authenticated_limit.try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            let mut tls = reader.into_inner();
+            write_frame(
+                &mut tls,
+                &TunnelResponse {
+                    protocol_version: AGENT_PROTOCOL_VERSION,
+                    agent_id: runtime.config.agent_id.clone(),
+                    ok: false,
+                    error: Some(ControlError {
+                        code: "CAPACITY_EXHAUSTED".into(),
+                        message: "authenticated tunnel capacity is saturated".into(),
+                    }),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
+    };
     if let Err(error) = append_audit(
         &runtime,
         "tunnel",
@@ -1040,6 +1627,7 @@ async fn handle_tunnel_connection(
     let mut rpc = TcpStream::connect(("127.0.0.1", runtime.config.rpc_port))
         .await
         .map_err(|error| worker_agent_error(format!("rpc-server connection failed: {error}")))?;
+    verify_rpc_socket_owner(&runtime, &rpc)?;
     append_audit(&runtime, "tunnel", "allowed", "encrypted rpc tunnel opened")?;
     let mut tls = reader.into_inner();
     write_frame(
@@ -1052,15 +1640,41 @@ async fn handle_tunnel_connection(
         },
     )
     .await?;
-    let result = tokio::io::copy_bidirectional(&mut tls, &mut rpc).await;
+    let mut forwarding = Box::pin(tokio::io::copy_bidirectional(&mut tls, &mut rpc));
+    let lifetime = tokio::time::sleep(MAX_TUNNEL_LIFETIME);
+    tokio::pin!(lifetime);
+    let mut token_check = tokio::time::interval(Duration::from_millis(100));
+    token_check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let result = loop {
+        tokio::select! {
+            result = &mut forwarding => break result.map_err(|error| worker_agent_error(format!("tunnel forwarding failed: {error}"))),
+            _ = &mut lifetime => break Err(worker_agent_error("encrypted rpc tunnel exceeded its maximum lifetime")),
+            _ = token_check.tick() => {
+                let current = load_token(&runtime.config.token_path);
+                let revoked = match current {
+                    Ok(token) => !tokens_equal(&token, &session_token),
+                    Err(_) => true,
+                };
+                if revoked {
+                    break Err(worker_agent_error("encrypted rpc tunnel revoked after token rotation"));
+                }
+            }
+        }
+    };
+    drop(forwarding);
     let _ = tls.shutdown().await;
     let _ = rpc.shutdown().await;
     let outcome = if result.is_ok() { "closed" } else { "failed" };
     let audit_result = append_audit(&runtime, "tunnel", outcome, "encrypted rpc tunnel closed");
-    result
-        .map(|_| ())
-        .map_err(|error| worker_agent_error(format!("tunnel forwarding failed: {error}")))?;
+    result.map(|_| ())?;
     audit_result.map(|_| ())
+}
+
+struct ListenerAdmission {
+    preauth_limit: Arc<Semaphore>,
+    authenticated_limit: Arc<Semaphore>,
+    source_counts: Arc<Mutex<HashMap<IpAddr, usize>>>,
+    tunnel: bool,
 }
 
 async fn serve_listener(
@@ -1068,39 +1682,53 @@ async fn serve_listener(
     runtime: Arc<AgentRuntime>,
     acceptor: TlsAcceptor,
     mut shutdown: watch::Receiver<bool>,
-    connection_limit: Arc<Semaphore>,
-    tunnel: bool,
+    admission: ListenerAdmission,
 ) -> Result<(), String> {
+    let mut handlers = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
-                    return Ok(());
+                    break;
                 }
             }
+            completed = handlers.join_next(), if !handlers.is_empty() => {
+                let _ = completed;
+            }
             accepted = listener.accept() => {
-                let (stream, _) = accepted
+                let (stream, peer) = accepted
                     .map_err(|error| worker_agent_error(format!("listener failed: {error}")))?;
-                let Ok(permit) = connection_limit.clone().try_acquire_owned() else {
+                let Some(source_admission) = try_admit_source(&admission.source_counts, peer.ip()) else {
+                    drop(stream);
+                    continue;
+                };
+                let Ok(permit) = admission.preauth_limit.clone().try_acquire_owned() else {
                     drop(stream);
                     continue;
                 };
                 let runtime = runtime.clone();
                 let acceptor = acceptor.clone();
-                tokio::spawn(async move {
-                    let _permit = permit;
+                let authenticated_limit = admission.authenticated_limit.clone();
+                let tunnel = admission.tunnel;
+                handlers.spawn(async move {
                     let result = if tunnel {
-                        handle_tunnel_connection(runtime, acceptor, stream).await
+                        handle_tunnel_connection(runtime, acceptor, stream, permit, source_admission, authenticated_limit).await
                     } else {
-                        handle_control_connection(runtime, acceptor, stream).await
+                        handle_control_connection(runtime, acceptor, stream, permit, source_admission, authenticated_limit).await
                     };
-                    if let Err(error) = result {
-                        eprintln!("{error}");
-                    }
+                    let _ = result;
                 });
             }
         }
     }
+    let drained = tokio::time::timeout(Duration::from_secs(5), async {
+        while handlers.join_next().await.is_some() {}
+    })
+    .await;
+    if drained.is_err() {
+        handlers.shutdown().await;
+    }
+    Ok(())
 }
 
 pub async fn serve(config_path: &Path) -> Result<(), String> {
@@ -1119,37 +1747,57 @@ pub async fn serve(config_path: &Path) -> Result<(), String> {
         config,
         certificate_sha256,
         rpc_child: Mutex::new(None),
+        lifecycle_lock: Mutex::new(()),
+        closing: AtomicBool::new(false),
         audit_lock: Mutex::new(()),
+        audit_reserved_bytes: Mutex::new(0),
         auth_failure_audit: Mutex::new(AuthFailureAuditState::default()),
         #[cfg(test)]
         rpc_test_override: AtomicBool::new(false),
     });
     append_audit(&runtime, "agent", "started", "secure Worker Agent started")?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let connection_limit = Arc::new(Semaphore::new(MAX_IN_FLIGHT_CONNECTIONS));
+    let control_preauth = Arc::new(Semaphore::new(MAX_PREAUTH_CONTROL_CONNECTIONS));
+    let tunnel_preauth = Arc::new(Semaphore::new(MAX_PREAUTH_TUNNEL_CONNECTIONS));
+    let authenticated_control = Arc::new(Semaphore::new(MAX_AUTHENTICATED_CONTROL_CONNECTIONS));
+    let authenticated_tunnels = Arc::new(Semaphore::new(MAX_AUTHENTICATED_TUNNELS));
+    let source_counts = Arc::new(Mutex::new(HashMap::new()));
     let control_task = tokio::spawn(serve_listener(
         control,
         runtime.clone(),
         acceptor.clone(),
         shutdown_rx.clone(),
-        connection_limit.clone(),
-        false,
+        ListenerAdmission {
+            preauth_limit: control_preauth,
+            authenticated_limit: authenticated_control,
+            source_counts: source_counts.clone(),
+            tunnel: false,
+        },
     ));
     let tunnel_task = tokio::spawn(serve_listener(
         tunnel,
         runtime.clone(),
         acceptor,
         shutdown_rx,
-        connection_limit,
-        true,
+        ListenerAdmission {
+            preauth_limit: tunnel_preauth,
+            authenticated_limit: authenticated_tunnels,
+            source_counts,
+            tunnel: true,
+        },
     ));
     tokio::signal::ctrl_c()
         .await
         .map_err(|error| worker_agent_error(format!("shutdown signal failed: {error}")))?;
+    runtime.closing.store(true, Ordering::Release);
     let _ = shutdown_tx.send(true);
-    let _ = control_task.await;
-    let _ = tunnel_task.await;
-    let _ = stop_rpc(&runtime);
+    control_task
+        .await
+        .map_err(|error| worker_agent_error(format!("control listener task failed: {error}")))??;
+    tunnel_task
+        .await
+        .map_err(|error| worker_agent_error(format!("tunnel listener task failed: {error}")))??;
+    stop_rpc(&runtime)?;
     append_audit(&runtime, "agent", "stopped", "secure Worker Agent stopped")?;
     Ok(())
 }
@@ -1158,6 +1806,16 @@ async fn send_control(
     connection: &WorkerAgentConnection,
     action: ControlAction,
     limit: Option<usize>,
+) -> Result<ControlResponse, String> {
+    send_control_with_audit_cursor(connection, action, limit, None, None).await
+}
+
+async fn send_control_with_audit_cursor(
+    connection: &WorkerAgentConnection,
+    action: ControlAction,
+    limit: Option<usize>,
+    from_sequence: Option<u64>,
+    checkpoint_hash: Option<String>,
 ) -> Result<ControlResponse, String> {
     let mut tls = tls_connect(
         &connection.control_host,
@@ -1171,6 +1829,8 @@ async fn send_control(
         expected_agent_id: connection.agent_id.clone(),
         action,
         limit,
+        from_sequence,
+        checkpoint_hash,
     };
     write_frame(&mut tls, &request).await?;
     let mut reader = BufReader::new(tls);
@@ -1226,13 +1886,49 @@ pub async fn get_remote_audit(
     connection: &WorkerAgentConnection,
     limit: usize,
 ) -> Result<Vec<WorkerAgentAuditEntry>, String> {
-    Ok(send_control(
-        connection,
-        ControlAction::Audit,
-        Some(limit.clamp(1, MAX_AUDIT_RESULTS)),
-    )
-    .await?
-    .audit)
+    const MAX_REMOTE_AUDIT_RECORDS: usize = 200_000;
+    const MAX_REMOTE_AUDIT_BYTES: usize = 128 * 1024 * 1024;
+    let mut sequence = connection.audit_sequence;
+    let mut checkpoint_hash = connection.audit_hash.clone();
+    let mut entries = Vec::new();
+    let mut retained_bytes = 0_usize;
+    loop {
+        let response = send_control_with_audit_cursor(
+            connection,
+            ControlAction::Audit,
+            Some(limit.clamp(1, MAX_AUDIT_RESULTS)),
+            Some(sequence),
+            Some(checkpoint_hash.clone()),
+        )
+        .await?;
+        if response.audit.is_empty() && response.has_more {
+            return Err(worker_agent_error(
+                "Agent returned an empty non-terminal audit page",
+            ));
+        }
+        for entry in response.audit {
+            retained_bytes = retained_bytes
+                .checked_add(
+                    serde_json::to_vec(&entry)
+                        .map_err(|error| worker_agent_error(error.to_string()))?
+                        .len(),
+                )
+                .ok_or_else(|| worker_agent_error("remote audit retained-size overflow"))?;
+            if entries.len() >= MAX_REMOTE_AUDIT_RECORDS || retained_bytes > MAX_REMOTE_AUDIT_BYTES
+            {
+                return Err(worker_agent_error(
+                    "remote audit exceeds the manager work budget",
+                ));
+            }
+            sequence = entry.sequence;
+            checkpoint_hash = entry.hash.clone();
+            entries.push(entry);
+        }
+        if !response.has_more {
+            break;
+        }
+    }
+    Ok(entries)
 }
 
 async fn forward_to_agent(
@@ -1267,12 +1963,267 @@ async fn forward_to_agent(
         ));
     }
     let mut tls = reader.into_inner();
-    let result = tokio::io::copy_bidirectional(&mut local, &mut tls).await;
+    let result = tokio::time::timeout(
+        MAX_TUNNEL_LIFETIME,
+        tokio::io::copy_bidirectional(&mut local, &mut tls),
+    )
+    .await
+    .map_err(|_| worker_agent_error("local tunnel bridge exceeded its maximum lifetime"))?;
     let _ = local.shutdown().await;
     let _ = tls.shutdown().await;
     result
         .map(|_| ())
         .map_err(|error| worker_agent_error(format!("local tunnel bridge failed: {error}")))
+}
+
+#[cfg(windows)]
+fn windows_process_sid(process_id: Option<u32>) -> Result<String, String> {
+    crate::persistence::windows_process_sid(process_id).map_err(worker_agent_error)
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn tracked_rpc_child_pid(runtime: &AgentRuntime) -> Result<u32, String> {
+    let mut child = runtime
+        .rpc_child
+        .lock()
+        .map_err(|_| worker_agent_error("rpc process lock is poisoned"))?;
+    let child = child
+        .as_mut()
+        .ok_or_else(|| worker_agent_error("rpc-server is not tracked by the Agent"))?;
+    if child
+        .try_wait()
+        .map_err(|error| worker_agent_error(format!("failed to inspect rpc-server: {error}")))?
+        .is_some()
+    {
+        return Err(worker_agent_error("tracked rpc-server has exited"));
+    }
+    Ok(child.id())
+}
+
+#[cfg(windows)]
+fn verify_rpc_socket_owner(runtime: &AgentRuntime, stream: &TcpStream) -> Result<(), String> {
+    #[cfg(test)]
+    if runtime.rpc_test_override.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let expected = tracked_rpc_child_pid(runtime)?;
+    let actual = windows_tcp_peer_pid(stream)?;
+    if actual != expected {
+        return Err(worker_agent_error(
+            "rpc loopback socket is not owned by the tracked rpc-server child",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn verify_rpc_socket_owner(runtime: &AgentRuntime, stream: &TcpStream) -> Result<(), String> {
+    #[cfg(test)]
+    if runtime.rpc_test_override.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let expected = tracked_rpc_child_pid(runtime)?;
+    let actual = linux_tcp_peer_pid(stream)?;
+    if actual != expected {
+        return Err(worker_agent_error(
+            "rpc loopback socket is not owned by the tracked rpc-server child",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(not(windows), not(target_os = "linux")))]
+fn verify_rpc_socket_owner(_runtime: &AgentRuntime, _stream: &TcpStream) -> Result<(), String> {
+    Err(worker_agent_error(
+        "verified rpc-server socket ownership is unavailable on this platform",
+    ))
+}
+
+#[cfg(windows)]
+fn windows_tcp_peer_pid(stream: &TcpStream) -> Result<u32, String> {
+    use std::ptr;
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetTcpTable2, MIB_TCPTABLE2, MIB_TCP_STATE_ESTAB,
+    };
+
+    let peer = stream
+        .peer_addr()
+        .map_err(|error| worker_agent_error(error.to_string()))?;
+    let local = stream
+        .local_addr()
+        .map_err(|error| worker_agent_error(error.to_string()))?;
+    let (SocketAddr::V4(peer), SocketAddr::V4(local)) = (peer, local) else {
+        return Err(worker_agent_error(
+            "local bridge owner lookup requires an IPv4 loopback socket",
+        ));
+    };
+    let mut length = 0_u32;
+    let initial = unsafe { GetTcpTable2(ptr::null_mut(), &mut length, 0) };
+    if initial != ERROR_INSUFFICIENT_BUFFER || length == 0 {
+        return Err(worker_agent_error("failed to size the TCP owner table"));
+    }
+    let mut table = vec![0_u8; length as usize];
+    let status =
+        unsafe { GetTcpTable2(table.as_mut_ptr().cast::<MIB_TCPTABLE2>(), &mut length, 0) };
+    if status != NO_ERROR {
+        return Err(worker_agent_error("failed to inspect the TCP owner table"));
+    }
+    let table = table.as_ptr().cast::<MIB_TCPTABLE2>();
+    let rows = unsafe {
+        std::slice::from_raw_parts((*table).table.as_ptr(), (*table).dwNumEntries as usize)
+    };
+    let mut matched_pid = None;
+    for row in rows {
+        let row_local_port = u16::from_be((row.dwLocalPort & 0xffff) as u16);
+        let row_remote_port = u16::from_be((row.dwRemotePort & 0xffff) as u16);
+        let row_local_addr = std::net::Ipv4Addr::from(u32::from_be(row.dwLocalAddr));
+        let row_remote_addr = std::net::Ipv4Addr::from(u32::from_be(row.dwRemoteAddr));
+        if row.dwState == MIB_TCP_STATE_ESTAB as u32
+            && row_local_addr == *peer.ip()
+            && row_remote_addr == *local.ip()
+            && row_local_port == peer.port()
+            && row_remote_port == local.port()
+            && matched_pid.replace(row.dwOwningPid).is_some()
+        {
+            return Err(worker_agent_error(
+                "local bridge peer owner lookup is ambiguous",
+            ));
+        }
+    }
+    matched_pid.ok_or_else(|| worker_agent_error("local bridge peer PID was not found"))
+}
+
+#[cfg(windows)]
+async fn authorize_local_bridge_peer(stream: &TcpStream) -> Result<(), String> {
+    let mut last_error = None;
+    for _ in 0..5 {
+        match windows_tcp_peer_pid(stream) {
+            Ok(pid) => {
+                if windows_process_sid(Some(pid))? != windows_process_sid(None)? {
+                    return Err(worker_agent_error(
+                        "local bridge peer belongs to another OS user",
+                    ));
+                }
+                if crate::deployment_identity::is_authorized_launch_process(pid) {
+                    return Ok(());
+                }
+                return Err(worker_agent_error(
+                    "local bridge peer is not a manager-authorized server process",
+                ));
+            }
+            Err(error) => last_error = Some(error),
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Err(last_error.unwrap_or_else(|| worker_agent_error("local bridge peer is unauthorized")))
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn linux_proc_ipv4_endpoint(value: &str) -> Option<std::net::SocketAddrV4> {
+    let (address, port) = value.split_once(':')?;
+    if address.len() != 8 {
+        return None;
+    }
+    let encoded = u32::from_str_radix(address, 16).ok()?;
+    let address = std::net::Ipv4Addr::from(encoded.to_le_bytes());
+    let port = u16::from_str_radix(port, 16).ok()?;
+    Some(std::net::SocketAddrV4::new(address, port))
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn linux_tcp_peer_pid(stream: &TcpStream) -> Result<u32, String> {
+    let peer = stream
+        .peer_addr()
+        .map_err(|error| worker_agent_error(error.to_string()))?;
+    let local = stream
+        .local_addr()
+        .map_err(|error| worker_agent_error(error.to_string()))?;
+    let (SocketAddr::V4(peer), SocketAddr::V4(local)) = (peer, local) else {
+        return Err(worker_agent_error(
+            "local bridge owner lookup requires an IPv4 loopback socket",
+        ));
+    };
+    let table = std::fs::read_to_string("/proc/net/tcp").map_err(|error| {
+        worker_agent_error(format!("failed to inspect local TCP owners: {error}"))
+    })?;
+    let mut socket_match = None;
+    for line in table.lines().skip(1) {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 10 || fields[3] != "01" {
+            continue;
+        }
+        let row_local = linux_proc_ipv4_endpoint(fields[1]);
+        let row_remote = linux_proc_ipv4_endpoint(fields[2]);
+        if row_local.as_ref() == Some(&peer) && row_remote.as_ref() == Some(&local) {
+            let candidate = (fields[7].parse::<u32>().ok(), fields[9].parse::<u64>().ok());
+            if socket_match.replace(candidate).is_some() {
+                return Err(worker_agent_error(
+                    "local bridge peer owner lookup is ambiguous",
+                ));
+            }
+        }
+    }
+    let (socket_uid, socket_inode) =
+        socket_match.ok_or_else(|| worker_agent_error("local bridge peer socket was not found"))?;
+    let uid =
+        socket_uid.ok_or_else(|| worker_agent_error("local bridge peer UID was not found"))?;
+    if uid != unsafe { libc::geteuid() } {
+        return Err(worker_agent_error(
+            "local bridge peer belongs to another OS user",
+        ));
+    }
+    let inode =
+        socket_inode.ok_or_else(|| worker_agent_error("local bridge peer socket was not found"))?;
+    let expected = format!("socket:[{inode}]");
+    let processes = std::fs::read_dir("/proc")
+        .map_err(|error| worker_agent_error(format!("failed to inspect /proc: {error}")))?;
+    let mut inspected = 0_usize;
+    for process in processes.flatten() {
+        let Some(pid) = process
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        inspected += 1;
+        if inspected > 16_384 {
+            return Err(worker_agent_error(
+                "local bridge process lookup exceeded its work budget",
+            ));
+        }
+        let Ok(descriptors) = std::fs::read_dir(process.path().join("fd")) else {
+            continue;
+        };
+        for descriptor in descriptors.flatten().take(4_096) {
+            if std::fs::read_link(descriptor.path())
+                .ok()
+                .is_some_and(|target| target == std::path::Path::new(&expected))
+            {
+                return Ok(pid);
+            }
+        }
+    }
+    Err(worker_agent_error("local bridge peer PID was not found"))
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+async fn authorize_local_bridge_peer(stream: &TcpStream) -> Result<(), String> {
+    let pid = linux_tcp_peer_pid(stream)?;
+    if crate::deployment_identity::is_authorized_launch_process(pid) {
+        return Ok(());
+    }
+    Err(worker_agent_error(
+        "local bridge peer is not a manager-authorized server process",
+    ))
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+async fn authorize_local_bridge_peer(_stream: &TcpStream) -> Result<(), String> {
+    Err(worker_agent_error(
+        "owner-verified local bridges are unavailable on this platform",
+    ))
 }
 
 pub async fn ensure_manager_bridge(
@@ -1331,6 +2282,7 @@ pub async fn ensure_manager_bridge(
     let worker_id = worker_id.to_string();
     tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
+        let connection_limit = Arc::new(Semaphore::new(MAX_LOCAL_BRIDGE_CONNECTIONS));
         loop {
             tokio::select! {
                 changed = shutdown_rx.changed() => {
@@ -1341,6 +2293,10 @@ pub async fn ensure_manager_bridge(
                 accepted = listener.accept() => {
                     match accepted {
                         Ok((stream, _)) => {
+                            let Ok(permit) = connection_limit.clone().try_acquire_owned() else {
+                                drop(stream);
+                                continue;
+                            };
                             let connection = match connection.lock() {
                                 Ok(connection) => connection.clone(),
                                 Err(_) => {
@@ -1349,6 +2305,16 @@ pub async fn ensure_manager_bridge(
                                 }
                             };
                             connections.spawn(async move {
+                                let _permit = permit;
+                                if authorize_local_bridge_peer(&stream).await.is_err() {
+                                    return;
+                                }
+                                // Re-resolve the exact four-tuple immediately
+                                // before credentialed forwarding to close the
+                                // owner-lookup race window.
+                                if authorize_local_bridge_peer(&stream).await.is_err() {
+                                    return;
+                                }
                                 if let Err(error) = forward_to_agent(stream, connection).await {
                                     eprintln!("{error}");
                                 }
@@ -1510,6 +2476,29 @@ fn init_agent(arguments: &[String]) -> Result<(), String> {
             options.keys().next().unwrap()
         )));
     }
+    std::fs::create_dir_all(parent).map_err(|error| {
+        worker_agent_error(format!("failed to create config directory: {error}"))
+    })?;
+    crate::persistence::enforce_private_directory(parent).map_err(worker_agent_error)?;
+    let canonical_parent = std::fs::canonicalize(parent)
+        .map_err(|error| worker_agent_error(format!("config directory is unavailable: {error}")))?;
+    for (path, label) in [
+        (&token_path, "token file"),
+        (&audit_path, "audit log"),
+        (&rpc_log_path, "RPC log"),
+    ] {
+        let candidate_parent = path
+            .parent()
+            .ok_or_else(|| worker_agent_error(format!("{label} has no parent directory")))?;
+        let candidate_parent = std::fs::canonicalize(candidate_parent).map_err(|error| {
+            worker_agent_error(format!("{label} directory is unavailable: {error}"))
+        })?;
+        if !crate::path_utils::paths_equal(&candidate_parent, &canonical_parent) {
+            return Err(worker_agent_error(format!(
+                "{label} must reside directly in the private Agent config directory"
+            )));
+        }
+    }
     if config_path.exists() || token_path.exists() {
         return Err(worker_agent_error(
             "refusing to overwrite existing config or token file",
@@ -1522,6 +2511,15 @@ fn init_agent(arguments: &[String]) -> Result<(), String> {
     );
     crate::persistence::atomic_write(&token_path, token.as_bytes(), None)?;
     protect_private_token(&token_path)?;
+    let rpc_binary_path = validate_rpc_binary(&rpc_binary_path)?;
+    let rpc_executable =
+        crate::deployment_identity::ArtifactLease::open_owner_protected_executable(
+            &rpc_binary_path,
+        )
+        .map_err(worker_agent_error)?;
+    let rpc_artifact_identity = rpc_executable.identity().clone();
+    let rpc_binary_path = rpc_executable.canonical_path().to_path_buf();
+    drop(rpc_executable);
     let mut config = WorkerAgentConfig {
         schema_version: AGENT_CONFIG_SCHEMA_VERSION,
         agent_id: uuid::Uuid::new_v4().to_string(),
@@ -1533,6 +2531,7 @@ fn init_agent(arguments: &[String]) -> Result<(), String> {
         tls_key_path,
         token_path,
         rpc_binary_path,
+        rpc_artifact_identity,
         rpc_port,
         audit_path,
         rpc_log_path,
@@ -1589,6 +2588,9 @@ fn rotate_token(config_path: &Path) -> Result<(), String> {
     );
     crate::persistence::atomic_write(&config.token_path, token.as_bytes(), None)?;
     protect_private_token(&config.token_path)?;
+    // Running Agent processes revalidate tunnel generations every 100 ms.
+    // Wait for that revocation window before reporting rotation success.
+    std::thread::sleep(Duration::from_millis(500));
     println!(
         "{}",
         serde_json::json!({
@@ -1693,6 +2695,7 @@ mod tests {
                 tls_key_path: directory.join("agent.key"),
                 token_path,
                 rpc_binary_path: directory.join(expected_rpc_binary_name()),
+                rpc_artifact_identity: crate::deployment_identity::ArtifactIdentity::default(),
                 rpc_port: 50052,
                 audit_path: directory.join("audit.jsonl"),
                 rpc_log_path: directory.join("rpc.log"),
@@ -1700,7 +2703,10 @@ mod tests {
             },
             certificate_sha256: "a".repeat(64),
             rpc_child: Mutex::new(None),
+            lifecycle_lock: Mutex::new(()),
+            closing: AtomicBool::new(false),
             audit_lock: Mutex::new(()),
+            audit_reserved_bytes: Mutex::new(0),
             auth_failure_audit: Mutex::new(AuthFailureAuditState::default()),
             rpc_test_override: AtomicBool::new(false),
         })
@@ -1777,6 +2783,8 @@ mod tests {
                 expected_agent_id: runtime.config.agent_id.clone(),
                 action: ControlAction::RpcStart,
                 limit: None,
+                from_sequence: None,
+                checkpoint_hash: None,
             },
         )
         .await;
@@ -1789,6 +2797,39 @@ mod tests {
         let _ = std::fs::remove_dir_all(directory);
     }
 
+    #[tokio::test]
+    async fn rpc_start_fails_closed_without_a_private_child_transport() {
+        let directory = test_directory("rpc-isolation");
+        std::fs::create_dir_all(&directory).unwrap();
+        let runtime = test_runtime(&directory);
+        let response = dispatch_control(
+            runtime.clone(),
+            ControlRequest {
+                protocol_version: AGENT_PROTOCOL_VERSION,
+                token: "a".repeat(64),
+                expected_agent_id: runtime.config.agent_id.clone(),
+                action: ControlAction::RpcStart,
+                limit: None,
+                from_sequence: None,
+                checkpoint_hash: None,
+            },
+        )
+        .await;
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_ref().map(|error| error.code.as_str()),
+            Some("ACTION_FAILED")
+        );
+        assert!(response.error.as_ref().is_some_and(|error| error
+            .message
+            .contains("unauthenticated loopback TCP endpoint")));
+        assert!(runtime.rpc_child.lock().unwrap().is_none());
+        let audit = read_verified_audit(&runtime.config.audit_path).unwrap();
+        assert_eq!(audit.len(), 2);
+        assert_eq!(audit[1].outcome, "failed");
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
     #[test]
     fn repeated_authentication_failures_are_aggregated() {
         let directory = test_directory("auth-throttle");
@@ -1797,7 +2838,10 @@ mod tests {
         audit_auth_failure(&runtime, "control_auth");
         audit_auth_failure(&runtime, "control_auth");
         let entries = read_verified_audit(&runtime.config.audit_path).unwrap();
-        assert_eq!(entries.len(), 1);
+        assert!(entries.is_empty());
+        let denial_path = runtime.config.audit_path.with_extension("auth-denials.log");
+        let denials = std::fs::read_to_string(denial_path).unwrap();
+        assert_eq!(denials.lines().count(), 1);
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -1849,6 +2893,8 @@ mod tests {
             tls_cert_path: cert_path,
             token_path,
             certificate_sha256: "a".repeat(64),
+            audit_sequence: 0,
+            audit_hash: String::new(),
         };
         let worker_id = format!("bridge-{}", uuid::Uuid::new_v4());
         let port = ensure_manager_bridge(&worker_id, connection.clone(), 0)
@@ -1907,6 +2953,179 @@ mod tests {
         assert_ne!(audit_hash(&entry).unwrap(), original);
     }
 
+    #[test]
+    fn manager_audit_checkpoint_rejects_rollbacks_and_forks() {
+        let agent_id = uuid::Uuid::new_v4().to_string();
+        let make_entry = |sequence: u64, previous_hash: String| {
+            let mut entry = WorkerAgentAuditEntry {
+                sequence,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                agent_id: agent_id.clone(),
+                event: "status".into(),
+                outcome: "allowed".into(),
+                detail: "request completed".into(),
+                previous_hash,
+                hash: String::new(),
+            };
+            entry.hash = audit_hash(&entry).unwrap();
+            entry
+        };
+        let first = make_entry(1, String::new());
+        let second = make_entry(2, first.hash.clone());
+        let checkpoint =
+            verify_remote_audit_extension(&agent_id, 0, "", &[first.clone(), second.clone()])
+                .unwrap();
+        assert_eq!(checkpoint, (2, second.hash.clone()));
+        assert!(verify_remote_audit_extension(
+            &agent_id,
+            checkpoint.0,
+            &checkpoint.1,
+            std::slice::from_ref(&first),
+        )
+        .is_err());
+
+        let fork = make_entry(3, "forged-previous-hash".into());
+        assert!(verify_remote_audit_extension(
+            &agent_id,
+            checkpoint.0,
+            &checkpoint.1,
+            &[second.clone(), fork],
+        )
+        .is_err());
+        let extension = make_entry(3, second.hash.clone());
+        assert_eq!(
+            verify_remote_audit_extension(
+                &agent_id,
+                checkpoint.0,
+                &checkpoint.1,
+                &[second, extension.clone()],
+            )
+            .unwrap(),
+            (3, extension.hash)
+        );
+    }
+
+    #[test]
+    fn audit_pages_advance_only_from_an_exact_hash_checkpoint() {
+        let directory = test_directory("audit-pages");
+        std::fs::create_dir_all(&directory).unwrap();
+        let runtime = test_runtime(&directory);
+        for detail in ["first", "second", "third"] {
+            append_audit(&runtime, "status", "allowed", detail).unwrap();
+        }
+
+        let first_page = audit_page(
+            &runtime,
+            &ControlRequest {
+                protocol_version: AGENT_PROTOCOL_VERSION,
+                token: String::new(),
+                expected_agent_id: runtime.config.agent_id.clone(),
+                action: ControlAction::Audit,
+                limit: Some(2),
+                from_sequence: Some(0),
+                checkpoint_hash: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            first_page
+                .audit
+                .iter()
+                .map(|entry| entry.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(first_page.has_more);
+        assert_eq!(first_page.next_sequence, Some(2));
+
+        let checkpoint_hash = first_page.audit.last().unwrap().hash.clone();
+        let second_page = audit_page(
+            &runtime,
+            &ControlRequest {
+                protocol_version: AGENT_PROTOCOL_VERSION,
+                token: String::new(),
+                expected_agent_id: runtime.config.agent_id.clone(),
+                action: ControlAction::Audit,
+                limit: Some(2),
+                from_sequence: Some(2),
+                checkpoint_hash: Some(checkpoint_hash),
+            },
+        )
+        .unwrap();
+        assert_eq!(second_page.audit.len(), 1);
+        assert_eq!(second_page.audit[0].sequence, 3);
+        assert!(!second_page.has_more);
+        assert!(audit_page(
+            &runtime,
+            &ControlRequest {
+                protocol_version: AGENT_PROTOCOL_VERSION,
+                token: String::new(),
+                expected_agent_id: runtime.config.agent_id.clone(),
+                action: ControlAction::Audit,
+                limit: Some(2),
+                from_sequence: Some(2),
+                checkpoint_hash: Some("0".repeat(64)),
+            },
+        )
+        .is_err());
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn audit_rotation_preserves_one_verified_logical_chain() {
+        let directory = test_directory("audit-rotation");
+        std::fs::create_dir_all(&directory).unwrap();
+        let runtime = test_runtime(&directory);
+        append_audit(
+            &runtime,
+            "status",
+            "allowed",
+            "x".repeat(AUDIT_ROTATE_AT_BYTES as usize),
+        )
+        .unwrap();
+        append_audit(&runtime, "status", "allowed", "after rotation").unwrap();
+
+        let segments = audit_segment_paths(&runtime.config.audit_path).unwrap();
+        assert_eq!(segments.len(), 1);
+        let entries = read_verified_audit(&runtime.config.audit_path).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].sequence, 2);
+        assert_eq!(entries[1].previous_hash, entries[0].hash);
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn audit_rotation_refuses_to_overwrite_a_full_retention_set() {
+        let directory = test_directory("audit-retention");
+        std::fs::create_dir_all(&directory).unwrap();
+        let runtime = test_runtime(&directory);
+        append_audit(
+            &runtime,
+            "status",
+            "allowed",
+            "x".repeat(AUDIT_ROTATE_AT_BYTES as usize),
+        )
+        .unwrap();
+        for index in 0..16 {
+            let segment = runtime
+                .config
+                .audit_path
+                .with_file_name(format!("audit.jsonl.segment-{index:020}-{index:020}"));
+            crate::persistence::atomic_write(&segment, b"", None).unwrap();
+        }
+
+        let error = append_audit(&runtime, "status", "allowed", "must fail").unwrap_err();
+        assert!(error.contains("retention is full"));
+        assert_eq!(
+            read_verified_audit(&runtime.config.audit_path)
+                .unwrap()
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn authenticated_tls_control_and_rpc_tunnel_round_trip() {
         let directory = test_directory("e2e");
@@ -1936,6 +3155,7 @@ mod tests {
             tls_key_path: key_path,
             token_path: token_path.clone(),
             rpc_binary_path: directory.join(expected_rpc_binary_name()),
+            rpc_artifact_identity: crate::deployment_identity::ArtifactIdentity::default(),
             rpc_port,
             audit_path: directory.join("audit.jsonl"),
             rpc_log_path: directory.join("rpc.log"),
@@ -1947,27 +3167,40 @@ mod tests {
             config: config.clone(),
             certificate_sha256: fingerprint.clone(),
             rpc_child: Mutex::new(None),
+            lifecycle_lock: Mutex::new(()),
+            closing: AtomicBool::new(false),
             audit_lock: Mutex::new(()),
+            audit_reserved_bytes: Mutex::new(0),
             auth_failure_audit: Mutex::new(AuthFailureAuditState::default()),
             rpc_test_override: AtomicBool::new(true),
         });
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
-        let connection_limit = Arc::new(Semaphore::new(MAX_IN_FLIGHT_CONNECTIONS));
+        let source_counts = Arc::new(Mutex::new(HashMap::new()));
         let control_task = tokio::spawn(serve_listener(
             control_listener,
             runtime.clone(),
             acceptor.clone(),
             shutdown_rx.clone(),
-            connection_limit.clone(),
-            false,
+            ListenerAdmission {
+                preauth_limit: Arc::new(Semaphore::new(MAX_PREAUTH_CONTROL_CONNECTIONS)),
+                authenticated_limit: Arc::new(Semaphore::new(
+                    MAX_AUTHENTICATED_CONTROL_CONNECTIONS,
+                )),
+                source_counts: source_counts.clone(),
+                tunnel: false,
+            },
         ));
         let tunnel_task = tokio::spawn(serve_listener(
             tunnel_listener,
             runtime,
             acceptor,
             shutdown_rx,
-            connection_limit,
-            true,
+            ListenerAdmission {
+                preauth_limit: Arc::new(Semaphore::new(MAX_PREAUTH_TUNNEL_CONNECTIONS)),
+                authenticated_limit: Arc::new(Semaphore::new(MAX_AUTHENTICATED_TUNNELS)),
+                source_counts,
+                tunnel: true,
+            },
         ));
         let rpc_task = tokio::spawn(async move {
             let (mut stream, _) = rpc_listener.accept().await.unwrap();
@@ -1986,6 +3219,8 @@ mod tests {
             tls_cert_path: cert_path.clone(),
             token_path: token_path.clone(),
             certificate_sha256: fingerprint,
+            audit_sequence: 0,
+            audit_hash: String::new(),
         };
         let remote = get_remote_status(&connection).await.unwrap();
         assert_eq!(remote.agent_id, config.agent_id);
@@ -1994,6 +3229,15 @@ mod tests {
         let local_port = ensure_manager_bridge("e2e-worker", connection.clone(), 0)
             .await
             .unwrap();
+        let (test_start_time, test_executable) =
+            crate::commands::server::read_process_identity(std::process::id()).unwrap();
+        let _test_process_authorization =
+            crate::deployment_identity::register_authorized_launch_process(
+                "worker-agent-e2e-client",
+                std::process::id(),
+                test_start_time,
+                &test_executable,
+            );
         let mut local = TcpStream::connect(("127.0.0.1", local_port)).await.unwrap();
         local.write_all(b"ping").await.unwrap();
         let mut response = [0_u8; 4];
@@ -2051,6 +3295,7 @@ mod tests {
     fn init_and_rotation_keep_token_contents_out_of_configuration() {
         let directory = test_directory("rotation");
         std::fs::create_dir_all(&directory).unwrap();
+        crate::persistence::enforce_private_directory(&directory).unwrap();
         let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         let cert_path = directory.join("agent.crt");
         let key_path = directory.join("agent.key");
@@ -2059,6 +3304,7 @@ mod tests {
         std::fs::write(&cert_path, certified.cert.pem()).unwrap();
         std::fs::write(&key_path, certified.key_pair.serialize_pem()).unwrap();
         std::fs::write(&rpc_path, b"test fixture").unwrap();
+        crate::persistence::enforce_private_file(&rpc_path).unwrap();
         let arguments = vec![
             "--config".to_string(),
             config_path.to_string_lossy().to_string(),

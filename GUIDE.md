@@ -345,33 +345,27 @@ History retains at most 50 revisions while protecting the current and known-good
 
 ## 集群管理 / Cluster Management
 
-集群管理用于发现和维护 llama.cpp RPC Worker，并把 Worker 地址写入实例的 RPC 配置。支持局域网发现、TCP 扫描、本机启动和 SSH 远程启动。
+集群管理用于登记经过 TLS 身份固定的 Secure Worker Agent，检查状态和设备清单，并查看带 SHA-256 链的审计记录。未经认证的手动、本机、SSH 和局域网发现路径已移除。
 
-Cluster Management discovers and maintains llama.cpp RPC workers and feeds worker addresses into instance RPC configuration. It supports LAN discovery, TCP scanning, local launch, and SSH launch.
+Cluster Management enrolls TLS identity-pinned Secure Worker Agents, checks status and device inventory, and reads SHA-256-chained audit records. Unauthenticated manual, local, SSH, and LAN-discovery paths have been removed.
 
 ![Worker 发现、网络信息和启动方式 / Worker discovery, network details, and launch methods](public/docs/guide/07-cluster-manager.png)
 
 ### 使用步骤 / Workflow
 
-1. 扫描局域网 Worker，或手动添加主机和端口。
-2. 测试连接并检查设备、内存和在线状态。
-3. 本机 Worker 可选择引擎后启动；远程 Worker 需填写 SSH 连接与远端可执行路径。
-4. 在实例参数配置中选择 Worker，生成 `rpc_servers`。
-5. 启动实例后从日志确认 RPC 设备已连接。
+1. 在 Worker 主机上初始化 Agent，并通过受信通道把证书和文件令牌复制到管理器。
+2. 经系统原生确认后登记 Agent，然后测试 TLS 身份、令牌、设备和在线状态。
+3. 查看审计记录，并在轮换凭据或移除 Agent 时使用安全清理。
+4. 当前上游 `rpc-server` 没有已认证或操作系统私有的子进程通道，因此 Agent 计算启动会安全拒绝，且不会创建未认证的 loopback RPC 端点。
 
-1. Scan the LAN or manually add a worker host and port.
-2. Test connectivity and review device, memory, and online state.
-3. Launch a local worker from an engine, or provide SSH and remote executable details.
-4. Select workers in instance configuration to generate `rpc_servers`.
-5. Confirm RPC devices in logs after starting the instance.
+1. Initialize the Agent on the Worker host, then copy its certificate and file-backed token to the manager through a trusted channel.
+2. Approve enrollment in the native system dialog, then test the pinned TLS identity, token, device inventory, and online status.
+3. Review audit records and use safe cleanup when rotating credentials or removing an Agent.
+4. The current upstream `rpc-server` has no authenticated or OS-private child transport, so Agent compute startup fails closed and does not create an unauthenticated loopback RPC endpoint.
 
-USB4 适配器信息用于识别高速直连网络，但不会替代操作系统网络配置。扫描不到 Worker 时检查同网段、防火墙、RPC 端口和远端进程。
+控制和隧道端点支持 IPv4、主机名和 IPv6。IPv6 需使用独立主机字段和端口字段；TLS 服务器名必须与证书 SAN 匹配。
 
-USB4 adapter details help identify high-speed direct links but do not replace OS network configuration. Check subnet, firewall, RPC port, and remote process when discovery fails.
-
-Worker 地址支持 IPv4、主机名和 IPv6。手动填写带端口的 IPv6 地址时使用 `[::1]:50052` 形式，避免与 IPv6 地址自身的冒号混淆。
-
-Worker addresses support IPv4, hostnames, and IPv6. When entering an IPv6 address with a port manually, use `[::1]:50052` so the port is unambiguous.
+Control and tunnel endpoints support IPv4, hostnames, and IPv6. IPv6 uses separate host and port fields, and the TLS server name must match the certificate SAN.
 
 ---
 

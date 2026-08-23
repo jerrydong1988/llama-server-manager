@@ -412,12 +412,17 @@ export function validateConfig(
   if (projectorActive && config.cache_reuse > 0) {
     warnings.push({ field: 'cache_reuse', severity: 'medium', key: 'warnMultimodalCacheReuse' })
   }
-  const mcpServersEnabled = Boolean(config.mcp_servers_config.trim() || config.mcp_servers_json.trim())
+  const mcpServersEnabled = Boolean(
+    config.mcp_servers_config.trim()
+    || config.mcp_servers_json.trim()
+    || config.mcp_servers_config_configured
+    || config.mcp_servers_json_configured,
+  )
   const privilegedToolsEnabled = Boolean(config.tools.trim() || config.agent || mcpServersEnabled || config.ui_mcp_proxy)
   if ((config.tools.trim() || config.agent || mcpServersEnabled) && !config.jinja) {
     warnings.push({ field: 'jinja', severity: 'high', key: 'warnToolsRequireJinja' })
   }
-  if (!isValidJson(config.mcp_servers_json)) {
+  if (!config.mcp_servers_json_configured && !isValidJson(config.mcp_servers_json)) {
     warnings.push({ field: 'mcp_servers_json', severity: 'high', key: 'warnMcpServersJsonInvalid' })
   }
   if (!isValidToolsRuntime(config.tools_runtime)) {

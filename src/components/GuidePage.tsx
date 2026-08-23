@@ -2,12 +2,12 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEven
 import { marked } from 'marked'
 import { driver } from 'driver.js'
 import 'driver.js/dist/driver.css'
-import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { ArrowUp, BookOpen, CheckCircle2, ChevronDown, Circle, Compass, PlayCircle } from 'lucide-react'
 import { version } from '../../package.json'
 import { useAppStore } from '../store'
 import { formatMessage, useI18n } from '../i18n'
 import { getGuideLabels } from '../i18n/pageLabels'
+import { invokeApp } from '../lib/ipc'
 import { Button, InsetSurface, Surface } from './ui'
 import { getGuideTourSteps } from './guide/guideTour'
 
@@ -290,7 +290,9 @@ export default function GuidePage() {
 
     if (href.startsWith('https://')) {
       event.preventDefault()
-      void openExternal(href).catch((error) => console.warn(`Unable to open guide link: ${href}`, error))
+      void invokeApp('open_external_guide_link', { url: href }).catch((error) =>
+        console.warn('Unable to open approved guide link', error),
+      )
     }
   }
 

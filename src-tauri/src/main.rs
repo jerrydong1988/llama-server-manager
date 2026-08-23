@@ -7,14 +7,9 @@ use crate::commands::canary::ipc::{
     abort_canary_rollout, create_canary_rollout, list_canary_rollouts, observe_canary_rollout,
     promote_canary_rollout, rollback_canary_rollout, set_canary_weight,
 };
-use crate::commands::cluster::{
-    add_worker, approve_worker, find_rpc_server_binary, generate_rpc_launch_cmd,
-    get_cluster_metrics, get_local_host, get_worker_info, get_workers, is_local_host, load_workers,
-    remove_worker, scan_workers_tcp, start_local_rpc, stop_local_worker, stop_worker, test_worker,
-};
-use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
+use crate::commands::cluster::ipc::get_workers;
+use crate::commands::cluster::{get_cluster_metrics, load_workers, remove_worker};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
-use crate::commands::cluster_ssh::ipc::{ssh_launch_rpc, stop_ssh_tunnel};
 use crate::commands::config::{
     load_config, load_window_state, resolve_path, save_config, save_window_state,
     update_and_persist,
@@ -36,8 +31,8 @@ use crate::commands::engine_capabilities::ipc::{
 };
 use crate::commands::monitoring::get_monitoring_series;
 use crate::commands::proxy::{
-    get_proxy_config, get_proxy_status, list_proxy_targets, restart_proxy, save_proxy_config,
-    start_proxy, stop_proxy, test_proxy_route,
+    generate_proxy_api_key, get_proxy_config, get_proxy_status, list_proxy_targets, restart_proxy,
+    save_proxy_config, start_proxy, stop_proxy, test_proxy_route,
 };
 use crate::commands::residency::{
     begin_model_residency_drain, complete_model_residency_operation,
@@ -51,13 +46,14 @@ use crate::commands::scanner::{
 use crate::commands::server::{
     check_port, generate_server_command, get_metrics, get_slots, get_system_health,
     get_system_metrics, inspect_deployment, inspect_deployment_identity, open_browser,
-    plan_instance_resources, start_server, stop_server, test_connection,
+    open_external_guide_link, plan_instance_resources, start_server, stop_server, test_connection,
 };
 use crate::commands::telemetry::{
     get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_detail,
     get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
     list_telemetry_sessions, prune_telemetry,
 };
+use crate::commands::updater::verify_updater_release;
 use crate::commands::worker_agent::ipc::{
     enroll_worker_agent, list_worker_agent_audit, start_worker_agent, stop_worker_agent,
     test_worker_agent,
@@ -65,7 +61,7 @@ use crate::commands::worker_agent::ipc::{
 use crate::config_revision::{
     list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
 };
-use crate::models::{AppState, WindowState, WorkerOrigin};
+use crate::models::{AppState, WindowState};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -120,20 +116,6 @@ fn finalize_app_exit(app: &tauri::AppHandle, keep_runtime: bool) {
     let failures = if keep_runtime {
         Vec::new()
     } else {
-        crate::commands::cluster_ssh::stop_all_ssh_tunnels();
-        let local_worker_ports = app
-            .try_state::<AppState>()
-            .and_then(|state| {
-                state.workers.lock().ok().map(|workers| {
-                    workers
-                        .iter()
-                        .filter(|worker| worker.origin == WorkerOrigin::Local)
-                        .map(|worker| worker.port)
-                        .collect::<Vec<_>>()
-                })
-            })
-            .unwrap_or_default();
-        crate::commands::cluster::stop_all_local_rpc_workers(&local_worker_ports);
         crate::commands::server::terminate_all_servers_for_exit(app)
     };
     if !failures.is_empty() {
@@ -199,12 +181,6 @@ async fn prepare_background_exit(
     enable_runtime: bool,
 ) -> Result<(), String> {
     let _handoff = ExitHandoffGuard::acquire()?;
-    if crate::commands::cluster_ssh::has_active_ssh_tunnels() {
-        return Err(
-            "仍有由主程序托管的 SSH Worker；请先停止这些 Worker，再退出并保留后台运行时"
-                .to_string(),
-        );
-    }
     let state = app.state::<AppState>();
     let _transition = state.proxy_lifecycle_lock.lock().await;
     let previous_config = state.proxy_config.lock().unwrap().clone();
@@ -409,10 +385,7 @@ fn main() {
     let data_dir = crate::utils::get_data_dir();
     let config_dir = data_dir.join("configs");
     let initial_config = crate::commands::config::read_config_from_disk(&config_dir);
-    if let Err(error) = crate::security::initialize_path_authority(
-        &initial_config.engine_dirs,
-        &initial_config.model_dirs,
-    ) {
+    if let Err(error) = crate::security::initialize_path_authority() {
         eprintln!("Path authority initialization failed: {error}");
     }
     let initial_workers = load_workers();
@@ -643,7 +616,7 @@ fn main() {
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
             probe_engine_capabilities, qualify_engine, cancel_engine_qualification,
             load_app_data, get_cached_scan,
-            generate_server_command, inspect_deployment_identity, inspect_deployment, plan_instance_resources, start_server, stop_server, open_browser,
+            generate_server_command, inspect_deployment_identity, inspect_deployment, plan_instance_resources, start_server, stop_server, open_browser, open_external_guide_link,
             save_config, load_config,
             list_config_revisions, mark_config_revision_known_good, rollback_config_revision,
             browse_modelscope, download_modelscope_files,
@@ -660,19 +633,13 @@ fn main() {
             test_connection, check_port,
             get_system_metrics, get_system_health, get_slots, get_metrics, get_monitoring_series,
             get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
-            get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
+            generate_proxy_api_key, get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
             list_canary_rollouts, create_canary_rollout, observe_canary_rollout, set_canary_weight, promote_canary_rollout, abort_canary_rollout, rollback_canary_rollout,
             inspect_model_residency, save_model_residency_policy, begin_model_residency_drain, get_model_residency_drain_status, complete_model_residency_operation,
             save_window_state, load_window_state,
             resolve_path,
-            scan_workers_tcp, test_worker, get_worker_info,
-            add_worker, approve_worker, remove_worker, get_workers,
-            find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics,
-            stop_local_worker, stop_worker, is_local_host, start_local_rpc, get_local_host,
+            remove_worker, get_workers, get_cluster_metrics,
             detect_usb4_adapters, get_usb4_adapters,
-            start_mdns_discovery, stop_mdns_discovery,
-            ssh_launch_rpc,
-            stop_ssh_tunnel,
             enroll_worker_agent, test_worker_agent, start_worker_agent, stop_worker_agent, list_worker_agent_audit,
             enable_autostart, disable_autostart, is_autostart_enabled,
             get_startup_elapsed,
@@ -685,6 +652,7 @@ fn main() {
             crate::runtime_service::get_runtime_service_status,
             crate::runtime_service::clear_runtime_service_error,
             crate::security::pick_authorized_directory,
+            verify_updater_release,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

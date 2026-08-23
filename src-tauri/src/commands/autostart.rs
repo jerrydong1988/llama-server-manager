@@ -55,7 +55,7 @@ pub fn enable_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let quoted = format!("\"{}\"", exe);
-        let output = std::process::Command::new("reg")
+        let output = std::process::Command::new(crate::utils::windows_system_utility("reg.exe")?)
             .args([
                 "add",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -124,7 +124,7 @@ pub fn enable_autostart() -> Result<(), String> {
 pub fn disable_autostart() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        let output = std::process::Command::new("reg")
+        let output = std::process::Command::new(crate::utils::windows_system_utility("reg.exe")?)
             .args([
                 "delete",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
@@ -171,7 +171,7 @@ pub fn disable_autostart() -> Result<(), String> {
 pub fn is_autostart_enabled() -> Result<bool, String> {
     #[cfg(target_os = "windows")]
     {
-        let out = std::process::Command::new("reg")
+        let out = std::process::Command::new(crate::utils::windows_system_utility("reg.exe")?)
             .args([
                 "query",
                 r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
