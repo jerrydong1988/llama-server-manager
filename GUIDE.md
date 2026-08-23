@@ -223,6 +223,10 @@ Windows 上不要求把外部引擎移动到应用指定目录，也不需要手
 
 On Windows, external engines do not need to be moved into an application-specific folder, and their original ACLs do not need to be edited manually. LSM runs directly when the source ACL is strict enough; otherwise it automatically creates and verifies an owner-and-SYSTEM-only, content-addressed private snapshot for probing, qualification, launch, and recovery. Engine Details shows the selected execution source. Rescan and requalify after replacing the original engine.
 
+Windows 上的外部 GGUF 模型同样不需要移动或手工修改 ACL。模型通常很大，因此应用不会复制模型；扫描、资格认证、启动和后台恢复会先校验完整内容身份，再用稳定只读句柄绑定模型及其已授权目录。绑定存续期间会拒绝新的写入、替换和删除；如果模型正被其他程序以冲突方式修改，操作会安全失败。删除模型仍采用严格 ACL 规则。
+
+External GGUF models on Windows likewise do not need to be moved or have their ACLs edited manually. Because models are commonly very large, LSM does not copy them. Scan, qualification, launch, and recovery verify the complete content identity and retain stable read-only handles for the model and its authorized path. New writes, replacement, and deletion are denied while the binding is active; an already conflicting modification causes the operation to fail safely. Model deletion keeps the strict ACL policy.
+
 ---
 
 ## 实例管理 / Instance Management

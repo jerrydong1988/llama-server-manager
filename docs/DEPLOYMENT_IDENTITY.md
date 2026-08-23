@@ -28,6 +28,16 @@ The source path and source fingerprint remain the evidence boundary. Replacing t
 
 扫描证据仍绑定原始路径和原始指纹。原始内容被替换后，即使旧快照仍存在，探测与认证也会失效。私有快照解决的是可写目录中的竞态替换风险，并不证明用户所选源内容本身可信。
 
+## External Windows model directories
+
+External GGUF models remain in their operator-authorized directories. When the model tree already satisfies the strict ACL policy, LSM uses the normal protected binding. When another Windows principal has write-like ACL rights, LSM does not copy the potentially very large model. It instead verifies the complete content identity, retains a no-write/no-delete-sharing handle to the selected file, and binds ancestor directories from the authorized root to the model before qualification or launch. These handles remain live for the qualification run or managed server lifetime, and the model is re-hashed after process creation. A conflicting writer, replacement, deletion, identity mismatch, or post-launch change fails closed.
+
+This fallback authorizes read-only execution, not destructive management. Model deletion continues to require the strict owner-protected ACL policy. LSM does not rewrite the source ACL or claim that user-selected model content is trustworthy.
+
+Windows 外部 GGUF 模型会继续保留在操作者已授权的目录中。目录满足严格 ACL 时使用常规保护绑定；如果其他 Windows 主体拥有写入类权限，LSM 不会复制可能非常庞大的模型，而是在认证或启动前校验完整内容身份，保留拒绝写入和删除共享的文件句柄，并从授权根目录到模型逐级绑定祖先目录。这些句柄会覆盖整个资格认证或托管服务生命周期，并在进程创建后重新哈希模型。若存在冲突写入、替换、删除、身份不一致或启动期间变更，操作会安全失败。
+
+该降级路径只授权只读运行，不授权破坏性管理。删除模型仍要求严格的所有者保护 ACL。LSM 不会修改源目录 ACL，也不声称用户所选模型内容本身可信。
+
 ## Migration and fail-closed rules
 
 - Inventory schema 7 persists complete artifact identities. Compatible schema 5 and 6 rows remain visible during refresh but are excluded from incremental reuse until each file is completely hashed again.

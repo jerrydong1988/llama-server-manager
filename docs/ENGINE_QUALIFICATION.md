@@ -18,6 +18,7 @@ The application re-probes the explicitly selected engine before launch. Version 
 
 - executes only the selected, scanned engine and selected, scanned primary generative model;
 - runs directly from an ACL-verified directory or, for an externally writable Windows directory, from the automatically verified managed private snapshot shown in Engine Manager;
+- keeps an external Windows GGUF in place and binds it through complete identity verification plus stable read-only file and ancestor-directory handles instead of copying the model;
 - binds to `127.0.0.1` on a temporary free port;
 - uses a 512-token context, two CPU threads, and zero GPU layers when those flags are available;
 - enables `--no-ui`, `--offline`, and `--log-disable` when the engine reports support;
@@ -60,4 +61,4 @@ No remote listener, arbitrary custom argument, user prompt, API credential, or p
 
 引擎资格认证是 Phase 1 的安全启动门：升级后的旧引擎记录会显示“未认证”，需要在“引擎管理”中选择一个已扫描的主生成模型并完成认证。认证只在 `127.0.0.1` 临时端口上以受控 CPU 基线启动所选引擎，依次验证版本、参数能力、进程启动、健康接口和一次固定提示词的代表性推理；成功、失败、超时或取消后都会终止整个临时进程树。
 
-schema 2 报告会持久保存引擎与代表模型的完整制品身份，并用确定性的资格证据 ID 封存。Windows 外部目录的 ACL 如果允许其他主体写入，应用会自动使用已验证的私有引擎快照完成探测、认证、首次启动和后台恢复；原始路径与指纹仍是证据边界。引擎文件、版本、`--help` 能力证据或报告内容发生变化时，旧报告会保留但不能通过启动门。该认证证明的是基线兼容性，不代表 GPU 性能，也不保证所有模型和运行参数组合。
+schema 2 报告会持久保存引擎与代表模型的完整制品身份，并用确定性的资格证据 ID 封存。Windows 外部目录的 ACL 如果允许其他主体写入，应用会自动使用已验证的私有引擎快照完成探测、认证、首次启动和后台恢复；外部 GGUF 模型则保留原位，通过完整身份校验和稳定只读句柄完成绑定，不复制庞大的模型。原始路径与指纹仍是证据边界。引擎或模型文件、版本、`--help` 能力证据或报告内容发生变化时，旧报告会保留但不能通过启动门。该认证证明的是基线兼容性，不代表 GPU 性能，也不保证所有模型和运行参数组合。

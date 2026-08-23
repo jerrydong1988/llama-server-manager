@@ -918,7 +918,7 @@ fn open_windows_ancestor_guards(path: &Path, root: &Path) -> Result<Vec<File>, S
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     const FILE_SHARE_READ: u32 = 0x0000_0001;
 
-    let mut guards = Vec::new();
+    let mut ancestors = Vec::new();
     let mut current = path
         .parent()
         .ok_or_else(|| "artifact has no parent directory".to_string())?
@@ -930,6 +930,27 @@ fn open_windows_ancestor_guards(path: &Path, root: &Path) -> Result<Vec<File>, S
                 current.display()
             ));
         }
+        ancestors.push(current.clone());
+        if crate::path_utils::paths_equal(&current, root) {
+            break;
+        }
+        current = current
+            .parent()
+            .ok_or_else(|| {
+                format!(
+                    "artifact ancestor escaped its authorized root {}",
+                    root.display()
+                )
+            })?
+            .to_path_buf();
+    }
+
+    // Bind the path from the authorized root toward the leaf. Once a parent
+    // handle is retained without write/delete sharing, a later component
+    // cannot be swapped out behind the remaining path walk.
+    ancestors.reverse();
+    let mut guards = Vec::with_capacity(ancestors.len());
+    for current in ancestors {
         let mut options = OpenOptions::new();
         options
             .read(true)
@@ -952,18 +973,6 @@ fn open_windows_ancestor_guards(path: &Path, root: &Path) -> Result<Vec<File>, S
             ));
         }
         guards.push(guard);
-        if crate::path_utils::paths_equal(&current, root) {
-            break;
-        }
-        current = current
-            .parent()
-            .ok_or_else(|| {
-                format!(
-                    "artifact ancestor escaped its authorized root {}",
-                    root.display()
-                )
-            })?
-            .to_path_buf();
     }
     Ok(guards)
 }
@@ -1127,6 +1136,39 @@ impl ArtifactLease {
         root: &Path,
         deadline: Instant,
     ) -> Result<Self, String> {
+        match Self::open_beneath_authorized_root_with_policy(kind, path, root, Some(deadline), true)
+        {
+            Ok(lease) => Ok(lease),
+            Err(strict_error) => {
+                #[cfg(windows)]
+                {
+                    if kind == "model" && is_owner_protection_error(&strict_error) {
+                        return Self::open_beneath_authorized_root_with_policy(
+                            kind,
+                            path,
+                            root,
+                            Some(deadline),
+                            false,
+                        )
+                        .map_err(|binding_error| {
+                            format!(
+                                "model source did not satisfy the strict ACL policy ({strict_error}); stable read-only binding failed: {binding_error}"
+                            )
+                        });
+                    }
+                }
+                Err(strict_error)
+            }
+        }
+    }
+
+    fn open_beneath_authorized_root_with_policy(
+        kind: &str,
+        path: &Path,
+        root: &Path,
+        deadline: Option<Instant>,
+        validate_owner: bool,
+    ) -> Result<Self, String> {
         let canonical_path = std::fs::canonicalize(path)
             .map_err(|error| format!("failed to resolve {kind} artifact: {error}"))?;
         let authorized_root = std::fs::canonicalize(root)
@@ -1136,14 +1178,21 @@ impl ArtifactLease {
         {
             return Err(format!("{kind} artifact escaped its authorized root"));
         }
-        validate_owner_protected_tree(&canonical_path, &authorized_root)?;
+        if validate_owner {
+            validate_owner_protected_tree(&canonical_path, &authorized_root)?;
+        }
         let ancestor_guards = open_windows_ancestor_guards(&canonical_path, &authorized_root)?;
         let mut file = open_artifact_file(&canonical_path, false)?;
         FileExt::try_lock_shared(&file)
             .map_err(|error| format!("artifact is being modified: {error}"))?;
         let modified = modified_nanos(&file);
-        let (identity, bundle_members) =
-            identity_and_bundle_leases(kind, &canonical_path, &mut file, Some(deadline))?;
+        let (identity, bundle_members) = identity_and_bundle_leases_with_owner_validation(
+            kind,
+            &canonical_path,
+            &mut file,
+            deadline,
+            validate_owner,
+        )?;
         let fingerprint = (kind == "engine")
             .then(|| engine_fingerprint_material(&canonical_path, modified, &identity));
         let integrity_fingerprint = fingerprint.clone();
@@ -1232,6 +1281,40 @@ impl ArtifactLease {
                 {
                     Err(strict_error)
                 }
+            }
+        }
+    }
+
+    pub fn open_authorized_model_for_launch(path: &Path) -> Result<Self, String> {
+        // A GGUF may be tens or hundreds of gigabytes, so copying it into an
+        // application-private snapshot would impose unacceptable storage and
+        // startup costs. On Windows, an authorized external model instead
+        // falls back to a complete identity check plus retained file and
+        // root-to-leaf ancestor handles that deny write/delete sharing for the
+        // lifetime of qualification or the managed server process.
+        match Self::open_authorized("model", path) {
+            Ok(lease) => Ok(lease),
+            Err(strict_error) => {
+                #[cfg(windows)]
+                {
+                    if is_owner_protection_error(&strict_error) {
+                        let (canonical_path, authorized_root) =
+                            crate::security::require_authorized_artifact_path("model", path)?;
+                        return Self::open_beneath_authorized_root_with_policy(
+                            "model",
+                            &canonical_path,
+                            &authorized_root,
+                            None,
+                            false,
+                        )
+                        .map_err(|binding_error| {
+                            format!(
+                                "model source did not satisfy the strict ACL policy ({strict_error}); stable read-only binding failed: {binding_error}"
+                            )
+                        });
+                    }
+                }
+                Err(strict_error)
             }
         }
     }
@@ -1733,7 +1816,7 @@ pub fn bind_launch_artifacts(
                     .unwrap_or_default(),
             ),
         };
-        let artifact = ArtifactLease::open_authorized("model", &path)?;
+        let artifact = ArtifactLease::open_authorized_model_for_launch(&path)?;
         if artifact.identity().artifact_id != expected.artifact_id {
             return Err(format!(
                 "DEPLOYMENT_AUXILIARY_IDENTITY_STALE: verified {} object changed",
@@ -1776,7 +1859,7 @@ pub fn bind_expected_artifacts(
     if engine.identity().artifact_id != expected_engine_artifact_id {
         return Err("DEPLOYMENT_ENGINE_IDENTITY_STALE: verified engine object changed".to_string());
     }
-    let model = ArtifactLease::open_authorized("model", &model_path)?;
+    let model = ArtifactLease::open_authorized_model_for_launch(&model_path)?;
     if model.identity().artifact_id != expected_model_artifact_id {
         return Err("DEPLOYMENT_MODEL_IDENTITY_STALE: verified model object changed".to_string());
     }
@@ -2012,13 +2095,87 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn windows_acl_policy_errors_are_snapshot_eligible() {
+    fn windows_acl_policy_errors_are_fallback_eligible() {
         assert!(is_owner_protection_error(
             "artifact path is writable by another Windows principal: C:\\engine"
         ));
         assert!(!is_owner_protection_error(
             "engine bundle exceeds 512 DLL members"
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_external_model_uses_stable_read_only_binding() {
+        use std::process::{Command, Stdio};
+
+        fn replace_acl(path: &Path, directory: bool) {
+            let current_sid = crate::persistence::windows_process_sid(None).unwrap();
+            let current_grant = if directory {
+                format!("*{current_sid}:(OI)(CI)(F)")
+            } else {
+                format!("*{current_sid}:(F)")
+            };
+            let system_grant = if directory {
+                "*S-1-5-18:(OI)(CI)(F)"
+            } else {
+                "*S-1-5-18:(F)"
+            };
+            let users_grant = if directory {
+                "*S-1-5-32-545:(OI)(CI)(M)"
+            } else {
+                "*S-1-5-32-545:(M)"
+            };
+            let status = Command::new("icacls")
+                .arg(path)
+                .args(["/inheritance:r", "/grant:r"])
+                .arg(current_grant)
+                .arg(system_grant)
+                .arg(users_grant)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+
+        let root = std::env::temp_dir().join(format!(
+            "lsm-stable-external-model-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let model = root.join("model.gguf");
+        let replacement = root.join("replacement.gguf");
+        fs::write(&model, b"verified-model").unwrap();
+        replace_acl(&root, true);
+        replace_acl(&model, false);
+
+        let strict = ArtifactLease::open_beneath_authorized_root_with_policy(
+            "model",
+            &model,
+            &root,
+            Some(Instant::now() + std::time::Duration::from_secs(30)),
+            true,
+        )
+        .unwrap_err();
+        assert!(is_owner_protection_error(&strict));
+
+        let mut lease = ArtifactLease::open_beneath_authorized_root_with_deadline(
+            "model",
+            &model,
+            &root,
+            Instant::now() + std::time::Duration::from_secs(30),
+        )
+        .unwrap();
+        assert!(lease.identity().is_verified());
+        assert_eq!(lease.launch_path(), fs::canonicalize(&model).unwrap());
+        assert!(fs::write(&model, b"changed-model").is_err());
+        assert!(fs::rename(&model, &replacement).is_err());
+        lease.verify_unchanged().unwrap();
+
+        drop(lease);
+        fs::write(&model, b"changed-after-release").unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(windows)]
