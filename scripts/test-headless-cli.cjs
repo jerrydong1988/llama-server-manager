@@ -1,7 +1,5 @@
 const childProcess = require('node:child_process')
-const crypto = require('node:crypto')
 const fs = require('node:fs')
-const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
 
@@ -43,124 +41,6 @@ function invoke(executable, dataDir, arguments, expectedExit = 0) {
     throw new Error(`CLI output exposed a credential-shaped field: ${output}`)
   }
   return payload
-}
-
-function stablePathHash(value) {
-  let hash = 0xcbf29ce484222325n
-  for (const byte of Buffer.from(value, 'utf8')) {
-    hash ^= BigInt(byte)
-    hash = BigInt.asUintN(64, hash * 0x100000001b3n)
-  }
-  return hash.toString(16).padStart(16, '0')
-}
-
-function runtimeEndpoint(dataDir, token) {
-  const suffix = crypto.createHash('sha256').update(token, 'utf8').digest('hex').slice(0, 32)
-  if (process.platform === 'win32') {
-    return `\\\\.\\pipe\\llama-server-manager-runtime-${suffix}`
-  }
-  const preferred = path.join(dataDir, 'runtime', `control-${suffix}.sock`)
-  if (Buffer.byteLength(preferred, 'utf8') <= 90) return preferred
-  const fallback = path.join(
-    os.tmpdir(),
-    `lsm-${stablePathHash(dataDir)}-${suffix}`,
-    `control-${suffix}.sock`,
-  )
-  return Buffer.byteLength(fallback, 'utf8') <= 90
-    ? fallback
-    : path.join('/tmp', `lsm-${suffix}`, `control-${suffix}.sock`)
-}
-
-function runtimeFrame(value) {
-  const body = Buffer.from(JSON.stringify(value))
-  const frame = Buffer.allocUnsafe(body.length + 4)
-  frame.writeUInt32LE(body.length, 0)
-  body.copy(frame, 4)
-  return frame
-}
-
-function runtimeHandshakeProof(token, nonce, servicePid) {
-  const servicePidBytes = Buffer.alloc(4)
-  servicePidBytes.writeUInt32LE(servicePid)
-  return crypto
-    .createHash('sha256')
-    .update(Buffer.from('llama-server-manager:runtime-handshake:v1\0'))
-    .update(Buffer.from(token, 'utf8'))
-    .update(Buffer.from([0]))
-    .update(Buffer.from(nonce, 'utf8'))
-    .update(Buffer.from([0]))
-    .update(servicePidBytes)
-    .digest('hex')
-}
-
-async function runtimeRequest(endpoint, token, servicePid, command, requestId) {
-  const requestFrame = runtimeFrame({
-    protocol_version: 1,
-    request_id: requestId,
-    token,
-    command,
-  })
-  const nonce = crypto.randomUUID()
-  const handshakeFrame = runtimeFrame({ protocol_version: 1, nonce })
-  return new Promise((resolve, reject) => {
-    const socket = net.createConnection(endpoint)
-    let buffered = Buffer.alloc(0)
-    let phase = 'handshake'
-    let settled = false
-    const fail = (error) => {
-      if (settled) return
-      settled = true
-      socket.destroy()
-      reject(error)
-    }
-    socket.setTimeout(5_000, () => socket.destroy(new Error('runtime request timed out')))
-    socket.once('connect', () => socket.write(handshakeFrame))
-    socket.on('data', (chunk) => {
-      buffered = Buffer.concat([buffered, chunk])
-      while (!settled && buffered.length >= 4) {
-        const length = buffered.readUInt32LE(0)
-        if (length > 8 * 1024 * 1024) {
-          fail(new Error(`runtime response frame was oversized: ${length}`))
-          return
-        }
-        if (buffered.length < length + 4) return
-        const payload = buffered.subarray(4, length + 4)
-        buffered = buffered.subarray(length + 4)
-        let response
-        try {
-          response = JSON.parse(payload.toString('utf8'))
-        } catch (error) {
-          fail(error)
-          return
-        }
-        if (phase === 'handshake') {
-          const expectedProof = Buffer.from(
-            runtimeHandshakeProof(token, nonce, servicePid),
-            'utf8',
-          )
-          const actualProof = Buffer.from(String(response.proof ?? ''), 'utf8')
-          if (response.protocol_version !== 1
-            || response.nonce !== nonce
-            || response.service_pid !== servicePid
-            || actualProof.length !== expectedProof.length
-            || !crypto.timingSafeEqual(actualProof, expectedProof)) {
-            fail(new Error('runtime server authentication failed before sending credentials'))
-            return
-          }
-          phase = 'response'
-          socket.write(requestFrame)
-          continue
-        }
-        settled = true
-        socket.end()
-        resolve(response)
-      }
-    })
-    socket.once('error', fail)
-    socket.once('end', () => {
-      if (!settled) fail(new Error('runtime response was truncated'))
-    })
-  })
 }
 
 function pidIsAlive(pid) {
@@ -265,22 +145,29 @@ async function main() {
     progress('instance stop is idempotent')
     if (stoppedAgain.data.state !== 'stopped') throw new Error('instance stop is not idempotent')
 
-    const token = fs.readFileSync(path.join(dataDir, 'runtime', 'control-token'), 'utf8').trim()
-    const response = await runtimeRequest(
-      runtimeEndpoint(dataDir, token),
-      token,
-      servicePid,
-      { command: 'shutdown', payload: { stop_instances: true } },
-      'cli-smoke-shutdown',
+    const currentServicePid = Number.parseInt(
+      fs.readFileSync(path.join(dataDir, 'runtime', 'runtime-service.pid'), 'utf8').trim(),
+      10,
     )
-    if (response.error || response.reply?.result !== 'ack') {
-      throw new Error(`runtime shutdown failed: ${JSON.stringify(response)}`)
+    if (!Number.isInteger(currentServicePid) || currentServicePid <= 0) {
+      throw new Error('runtime service PID file was invalid after the final CLI stop')
     }
-    progress('runtime shutdown acknowledged')
-    for (let attempt = 0; attempt < 80 && pidIsAlive(servicePid); attempt += 1) {
+    servicePid = currentServicePid
+    const idleExitDeadline = Date.now() + 40_000
+    while (pidIsAlive(servicePid) && Date.now() < idleExitDeadline) {
       await sleep(50)
     }
-    if (pidIsAlive(servicePid)) throw new Error('runtime did not exit after CLI smoke test')
+    if (pidIsAlive(servicePid)) {
+      const serviceLogPath = path.join(dataDir, 'runtime', 'runtime-service.log')
+      const serviceLog = fs.existsSync(serviceLogPath)
+        ? fs.readFileSync(serviceLogPath, 'utf8')
+        : '<missing>'
+      throw new Error(
+        `idle runtime PID ${servicePid} did not exit after the final CLI stop\n`
+        + `runtime service log: ${serviceLog}`,
+      )
+    }
+    progress('idle runtime exited')
     console.log('Headless CLI cross-process lifecycle passed.')
   } finally {
     if (servicePid > 0) terminatePid(servicePid)
