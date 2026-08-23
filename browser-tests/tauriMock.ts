@@ -194,7 +194,7 @@ const engine: EngineInfo = {
     qualification: BROWSER_SCENARIO === 'engine-qualification'
       ? {
           schemaVersion: 2,
-          profileVersion: 1,
+          profileVersion: 2,
           status: 'unqualified',
           executableFingerprint: '',
           engineArtifactId: '',
@@ -209,7 +209,7 @@ const engine: EngineInfo = {
         }
       : {
           schemaVersion: 2,
-          profileVersion: 1,
+          profileVersion: 2,
           status: 'passed',
           executableFingerprint: 'browser-test-engine-fingerprint',
           engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
@@ -1490,7 +1490,7 @@ mockIPC((command, payload) => {
         ...target.capabilities!,
         qualification: {
           schemaVersion: 2,
-          profileVersion: 1,
+          profileVersion: 2,
           status: 'passed',
           executableFingerprint: target.capabilities!.executableFingerprint,
           engineArtifactId: 'urn:lsm:engine:v1:sha256:browser-engine',
