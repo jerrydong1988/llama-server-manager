@@ -351,7 +351,7 @@ fn index_cached_models_by_parent(
             continue;
         };
         by_parent
-            .entry(canonical_key(parent))
+            .entry(path_identity_key(parent))
             .or_default()
             .push(record.clone());
     }
@@ -1523,6 +1523,80 @@ mod incremental_scan_tests {
     }
 
     #[test]
+    fn unchanged_engine_root_reuses_cached_inventory() {
+        let root = temp_test_dir("engine-cache");
+        let engine_dir = root.join("vendor").join("bin");
+        std::fs::create_dir_all(&engine_dir).unwrap();
+        std::fs::write(engine_dir.join(ENGINE_EXE_NAME), b"exe").unwrap();
+
+        let scan_root_key = canonical_key(&root);
+        let inspection = inspect_engine_tree(&root, MAX_ENGINE_SCAN_DEPTH).unwrap();
+        let signature = inspection.signature.clone();
+        let mut engines = Vec::new();
+        let mut engine_records = Vec::new();
+        let mut directory_records = Vec::new();
+        let mut seen_inventory_ids = HashSet::new();
+        let mut seen_directory_keys = HashSet::new();
+
+        assert!(!try_reuse_engine_root(
+            &scan_root_key,
+            &signature,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut seen_directory_keys,
+            &mut directory_records,
+            &mut seen_inventory_ids,
+            &mut engines,
+            &mut engine_records,
+        )
+        .unwrap());
+        for (dir, exe) in inspection.executables {
+            push_indexed_engine(
+                &dir,
+                &exe,
+                &scan_root_key,
+                &HashMap::new(),
+                &mut seen_inventory_ids,
+                &mut engines,
+                &mut engine_records,
+            );
+        }
+        assert_eq!(engines.len(), 1);
+
+        let inventory = engine_records
+            .iter()
+            .cloned()
+            .map(|record| (record.id.clone(), record))
+            .collect::<HashMap<_, _>>();
+        let directory_inventory = directory_records
+            .iter()
+            .cloned()
+            .map(|record| (record.path.clone(), record))
+            .collect::<HashMap<_, _>>();
+        engines.clear();
+        engine_records.clear();
+        directory_records.clear();
+        seen_inventory_ids.clear();
+        seen_directory_keys.clear();
+
+        assert!(try_reuse_engine_root(
+            &scan_root_key,
+            &signature,
+            &inventory,
+            &directory_inventory,
+            &mut seen_directory_keys,
+            &mut directory_records,
+            &mut seen_inventory_ids,
+            &mut engines,
+            &mut engine_records,
+        )
+        .unwrap());
+        assert_eq!(engines.len(), 1);
+        assert_eq!(engine_records.len(), 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn engine_scan_stops_at_the_configured_depth_limit() {
         let dir = temp_test_dir("engine-depth-limit");
         let mut too_deep = dir.clone();
@@ -1592,6 +1666,11 @@ mod incremental_scan_tests {
         let cached =
             InventoryModelRecord::from_model(&models[0], cache_key.clone(), stored_root, mtime);
         let inventory = HashMap::from([(cache_key, cached)]);
+        let directory_inventory = directory_records
+            .iter()
+            .cloned()
+            .map(|record| (record.path.clone(), record))
+            .collect::<HashMap<_, _>>();
 
         models.clear();
         seen_display_paths.clear();
@@ -1601,12 +1680,12 @@ mod incremental_scan_tests {
         fresh_files.clear();
         directory_records.clear();
         let cached_by_parent = index_cached_models_by_parent(&inventory);
-        scan_model_directory_incremental(
+        let reused_count = scan_model_directory_incremental(
             &tree,
             &scan_root_key,
             &inventory,
             &cached_by_parent,
-            &HashMap::new(),
+            &directory_inventory,
             &mut models,
             &mut seen_display_paths,
             &mut seen_inventory_paths,
@@ -1616,6 +1695,7 @@ mod incremental_scan_tests {
             &mut directory_records,
         );
 
+        assert_eq!(reused_count, 1);
         assert_eq!(models.len(), 1);
         assert!(fresh_files.is_empty());
         let _ = std::fs::remove_dir_all(dir);
