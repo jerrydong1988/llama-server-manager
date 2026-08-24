@@ -26,7 +26,7 @@ use crate::commands::config::{
 };
 use crate::commands::download::{
     browse_huggingface, browse_modelscope, cancel_all_downloads, cancel_and_cleanup_download,
-    cancel_file_download, check_local_file, clear_download_tasks_by_status,
+    cancel_file_download, check_local_file, check_local_files, clear_download_tasks_by_status,
     delete_managed_local_file, download_huggingface_files, download_modelscope_files,
     enqueue_download_queue, flush_download_manager_state, get_download_bandwidth_limit,
     get_download_concurrency, get_download_low_priority_throttle, get_download_manager_snapshot,
@@ -630,7 +630,6 @@ fn main() {
             download_active_entries: Mutex::new(HashMap::new()),
             download_last_inflight_persist: Mutex::new(Instant::now()),
             download_scheduler_lock: Mutex::new(()),
-            download_inflight_lock: Mutex::new(()),
             download_shutting_down: std::sync::atomic::AtomicBool::new(false),
             download_active_file_slots: std::sync::atomic::AtomicUsize::new(0),
             download_slot_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
@@ -658,7 +657,7 @@ fn main() {
             generate_server_command, start_server, stop_server, open_browser,
             save_config, load_config,
             browse_modelscope, download_modelscope_files,
-            browse_huggingface, download_huggingface_files, check_local_file, delete_managed_local_file,
+            browse_huggingface, download_huggingface_files, check_local_file, check_local_files, delete_managed_local_file,
             enqueue_download_queue, remove_download_queue_entry, clear_download_tasks_by_status, process_download_queue,
             cancel_file_download, pause_file_download, cancel_and_cleanup_download, reset_download_for_redownload,
             persist_download_queue, restore_download_queue,

@@ -4,8 +4,6 @@ import { pathComparisonKey, pathJoin } from '../../utils/path'
 export const DEFAULT_SAVE_DIR = 'models'
 export const DEFAULT_BANDWIDTH_LIMIT = 0
 export const DEFAULT_BANDWIDTH_UNIT: DownloadBandwidthUnit = 'MiB/s'
-export const LOCAL_FILE_CHECK_CONCURRENCY = 8
-
 export const clampConcurrency = (value: number) => Math.max(1, Math.min(8, Number.isFinite(value) ? value : 1))
 export const normalizeResumePolicy = (policy: string): DownloadResumePolicy => policy === 'auto_on_launch' ? 'auto_on_launch' : 'manual'
 

@@ -26,6 +26,17 @@ const LOG_REPLAY_LINES: usize = 2_000;
 const LOG_REPLAY_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const LOG_EVENT_BATCH_SIZE: usize = 200;
 static SERVER_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
+const ENGINE_PREVIEW_MATCH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
+const MAX_ENGINE_PREVIEW_MATCH_CACHE_ENTRIES: usize = 32;
+
+struct CachedEngineMatch {
+    checked_at: std::time::Instant,
+    matches: bool,
+}
+
+static ENGINE_PREVIEW_MATCH_CACHE: LazyLock<
+    Mutex<std::collections::HashMap<String, CachedEngineMatch>>,
+> = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
 struct CappedLogState {
     file: std::fs::File,
@@ -1886,38 +1897,106 @@ pub(crate) fn validate_public_bind_auth(config: &InstanceConfig) -> AppResult<()
     Ok(())
 }
 
-fn trusted_engine_capabilities(
+async fn trusted_engine_capabilities(
     state: &AppState,
     config: &InstanceConfig,
     engine_exe: &str,
+    allow_preview_cache: bool,
 ) -> EngineCapabilityResolution {
     let requested_path = normalized_engine_path(engine_exe);
-    let mut engines = state.engines.lock().unwrap();
-    let selected_index = engines.iter().position(|engine| {
-        paths_equal(
-            std::path::Path::new(&engine.id),
-            std::path::Path::new(&config.engine_id),
+    let (engine_id, stored_executable, capabilities) = {
+        let engines = state.engines.lock().unwrap();
+        let Some(engine) = engines.iter().find(|engine| {
+            paths_equal(
+                std::path::Path::new(&engine.id),
+                std::path::Path::new(&config.engine_id),
+            )
+        }) else {
+            return EngineCapabilityResolution::Missing;
+        };
+        if !paths_equal(&normalized_engine_path(&engine.exe), &requested_path) {
+            return EngineCapabilityResolution::Stale;
+        }
+        if engine.capabilities.executable_fingerprint.is_empty() {
+            return EngineCapabilityResolution::Missing;
+        }
+        (
+            engine.id.clone(),
+            engine.exe.clone(),
+            engine.capabilities.clone(),
         )
+    };
+    let cache_key = format!(
+        "{}|{}",
+        path_identity_key(std::path::Path::new(engine_exe)),
+        capabilities.executable_fingerprint
+    );
+    let cached_match = allow_preview_cache.then(|| {
+        ENGINE_PREVIEW_MATCH_CACHE
+            .lock()
+            .unwrap()
+            .get(&cache_key)
+            .and_then(|cached| {
+                (cached.checked_at.elapsed() <= ENGINE_PREVIEW_MATCH_CACHE_TTL)
+                    .then_some(cached.matches)
+            })
     });
-    let Some(selected_index) = selected_index else {
-        return EngineCapabilityResolution::Missing;
+    let matches = match cached_match.flatten() {
+        Some(matches) => matches,
+        None => {
+            let executable = engine_exe.to_string();
+            let capabilities_for_check = capabilities.clone();
+            let matches = tokio::task::spawn_blocking(move || {
+                capabilities_match_executable(&executable, &capabilities_for_check)
+            })
+            .await
+            .unwrap_or(false);
+            if allow_preview_cache {
+                let mut cache = ENGINE_PREVIEW_MATCH_CACHE.lock().unwrap();
+                if cache.len() >= MAX_ENGINE_PREVIEW_MATCH_CACHE_ENTRIES {
+                    if let Some(oldest) = cache
+                        .iter()
+                        .min_by_key(|(_, cached)| cached.checked_at)
+                        .map(|(key, _)| key.clone())
+                    {
+                        cache.remove(&oldest);
+                    }
+                }
+                cache.insert(
+                    cache_key,
+                    CachedEngineMatch {
+                        checked_at: std::time::Instant::now(),
+                        matches,
+                    },
+                );
+            }
+            matches
+        }
     };
-    let engine = &mut engines[selected_index];
-    if !paths_equal(&normalized_engine_path(&engine.exe), &requested_path) {
-        return EngineCapabilityResolution::Stale;
+    if matches {
+        return EngineCapabilityResolution::Available(Box::new(capabilities));
     }
-    if engine.capabilities.executable_fingerprint.is_empty() {
-        return EngineCapabilityResolution::Missing;
-    }
-    if capabilities_match_executable(engine_exe, &engine.capabilities) {
-        return EngineCapabilityResolution::Available(Box::new(engine.capabilities.clone()));
-    }
-    engine.version.clear();
-    engine.capabilities = EngineCapabilities {
-        error: Some("engine executable changed; compatibility probe required".to_string()),
-        ..EngineCapabilities::default()
+
+    let invalidated = {
+        let mut engines = state.engines.lock().unwrap();
+        let Some(engine) = engines.iter_mut().find(|engine| {
+            engine.id == engine_id
+                && engine.exe == stored_executable
+                && engine.capabilities.executable_fingerprint == capabilities.executable_fingerprint
+        }) else {
+            return EngineCapabilityResolution::Stale;
+        };
+        engine.version.clear();
+        engine.capabilities = EngineCapabilities {
+            error: Some("engine executable changed; compatibility probe required".to_string()),
+            ..EngineCapabilities::default()
+        };
+        engine.clone()
     };
-    let _ = crate::commands::model_inventory::update_engine_probe(engine);
+    let _ = tokio::task::spawn_blocking(move || {
+        crate::commands::model_inventory::update_engine_probe(&invalidated)
+    })
+    .await;
     EngineCapabilityResolution::Stale
 }
 
@@ -2048,11 +2127,12 @@ pub async fn generate_server_command(
             emitted_override_keys: Vec::new(),
         });
     }
-    let capabilities = match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
-        EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
-        EngineCapabilityResolution::Missing => None,
-        EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
-    };
+    let capabilities =
+        match trusted_engine_capabilities(state.inner(), &config, &engine_exe, true).await {
+            EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
+            EngineCapabilityResolution::Missing => None,
+            EngineCapabilityResolution::Stale => return Err(stale_engine_error()),
+        };
     timing.mark("capabilities");
     validate_custom_argument_capabilities(&config, capabilities.as_deref())?;
     let command = adapt_managed_arguments_for_capabilities(&command, capabilities.as_deref());
@@ -2104,7 +2184,7 @@ pub async fn start_server(
         generated_cmd
     } else {
         let engine_capabilities =
-            match trusted_engine_capabilities(state.inner(), &config, &engine_exe) {
+            match trusted_engine_capabilities(state.inner(), &config, &engine_exe, false).await {
                 EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
                 EngineCapabilityResolution::Missing => None,
                 EngineCapabilityResolution::Stale => return Err(stale_engine_error()),

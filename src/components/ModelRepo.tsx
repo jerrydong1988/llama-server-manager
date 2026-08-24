@@ -135,7 +135,7 @@ const ModelRepo = () => {
   const modelDirs = useAppStore(state => state.modelDirs)
   const setModelDirs = useAppStore(state => state.setModelDirs)
   const scanModels = useAppStore(state => state.scanModels)
-  const isLoading = useAppStore(state => state.isLoading)
+  const modelScanLoading = useAppStore(state => state.modelScanLoading)
   const loadInitialData = useAppStore(state => state.loadInitialData)
   const deleteModelFile = useAppStore(state => state.deleteModelFile)
   const openModelFolder = useAppStore(state => state.openModelFolder)
@@ -383,8 +383,8 @@ const ModelRepo = () => {
         <div className="flex flex-wrap items-center gap-3">
           <Button
             onClick={handleScan}
-            disabled={isLoading}
-            icon={<RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />}
+            disabled={modelScanLoading}
+            icon={<RefreshCw className={`h-4 w-4 ${modelScanLoading ? 'animate-spin' : ''}`} />}
           >
             {t.modelRepo.scan}
           </Button>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Cpu, FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Search, ShieldCheck, Star, Trash2 } from 'lucide-react'
+import { AlertTriangle, Cpu, FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Search, ShieldCheck, Star, Trash2 } from 'lucide-react'
 import { confirm, message } from '@tauri-apps/plugin-dialog'
 import { invokeApp as invoke } from '../lib/ipc'
 import { useAppStore, type EngineInfo } from '../store'
@@ -38,7 +38,7 @@ const EngineManager = () => {
   const probeEngineCapabilities = useAppStore(state => state.probeEngineCapabilities)
   const addRuntimeWarning = useAppStore(state => state.addRuntimeWarning)
   const loadInitialData = useAppStore(state => state.loadInitialData)
-  const isLoading = useAppStore(state => state.isLoading)
+  const engineScanLoading = useAppStore(state => state.engineScanLoading)
   const deleteEngine = useAppStore(state => state.deleteEngine)
   const renameEngine = useAppStore(state => state.renameEngine)
   const openEngineFolder = useAppStore(state => state.openEngineFolder)
@@ -54,6 +54,7 @@ const EngineManager = () => {
   const [searchQuery, setSearchQuery] = useState('')
   const [backendFilter, setBackendFilter] = useState('all')
   const [probingEngineId, setProbingEngineId] = useState<string | null>(null)
+  const [scanError, setScanError] = useState('')
   const editingCanceledRef = useRef(false)
 
   const labels = useMemo(() => getEngineLabels(lang), [lang])
@@ -101,7 +102,7 @@ const EngineManager = () => {
   )
 
   const handleScan = async () => {
-    await scanEngines(engineDirs)
+    setScanError((await scanEngines(engineDirs)) ?? '')
   }
 
   const handleAddDirectory = async () => {
@@ -111,9 +112,9 @@ const EngineManager = () => {
 
       const nextDirs = dedupePaths([...engineDirs, dir])
       setEngineDirs(nextDirs)
-      await scanEngines(nextDirs)
+      setScanError((await scanEngines(nextDirs)) ?? '')
     } catch {
-      await scanEngines(engineDirs)
+      setScanError((await scanEngines(engineDirs)) ?? '')
     }
   }
 
@@ -131,7 +132,7 @@ const EngineManager = () => {
 
     const nextDirs = engineDirs.filter(item => !pathsEqual(item, dir))
     setEngineDirs(nextDirs)
-    await scanEngines(nextDirs)
+    setScanError((await scanEngines(nextDirs)) ?? '')
   }
 
   const handleDelete = async (id: string) => {
@@ -221,8 +222,8 @@ const EngineManager = () => {
         <div className="flex flex-wrap items-center gap-3" data-guide="engine-scan">
           <Button
             onClick={handleScan}
-            disabled={isLoading}
-            icon={<RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />}
+            disabled={engineScanLoading}
+            icon={<RefreshCw className={`h-4 w-4 ${engineScanLoading ? 'animate-spin' : ''}`} />}
           >
             {t.engineMgr.scan}
           </Button>
@@ -235,6 +236,13 @@ const EngineManager = () => {
           </Button>
         </div>
       </div>
+
+      {scanError && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{scanError}</span>
+        </div>
+      )}
 
       <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[

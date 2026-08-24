@@ -75,7 +75,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     setModels: (models) => {
       const requestGeneration = beginModelInventoryRequest()
-      applyModelInventory(models, get, set, { isLoading: false }, requestGeneration)
+      applyModelInventory(models, get, set, { modelScanLoading: false }, requestGeneration)
     },
     setEngines: (engines) => set({ engines }),
     setModelDirs: (dirs) => {
@@ -126,7 +126,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       }
     },
     scanModels: async (paths) => {
-      set({ isLoading: true })
+      set({ modelScanLoading: true })
       const requestGeneration = beginModelInventoryRequest()
       try {
         const configuredPaths = dedupePaths(paths)
@@ -141,7 +141,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
           models,
           get,
           set,
-          { modelDirs: effectivePaths, isLoading: false },
+          { modelDirs: effectivePaths, modelScanLoading: false },
           requestGeneration,
         )
         if (pathsChanged) {
@@ -150,7 +150,7 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
         return null
       } catch (error: any) {
         console.error('scan_models error:', error)
-        if (isCurrentModelInventoryRequest(requestGeneration)) set({ isLoading: false })
+        if (isCurrentModelInventoryRequest(requestGeneration)) set({ modelScanLoading: false })
         return error?.message || error?.toString() || 'Scan failed'
       }
     },
@@ -163,14 +163,20 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     readGgufMetadata: async (path) => invoke<GgufMetadataSummary>('read_gguf_metadata', { path }),
     scanEngines: async (paths) => {
-      set({ isLoading: true })
+      set({ engineScanLoading: true })
       const requestGeneration = beginEngineInventoryRequest()
       try {
         const engines = await invoke<EngineInfo[]>('scan_engines', { paths })
-        applyEngineInventory(engines, set, { engineDirs: paths, isLoading: false }, requestGeneration)
-      } catch (error) {
+        applyEngineInventory(engines, set, { engineDirs: paths, engineScanLoading: false }, requestGeneration)
+        return null
+      } catch (error: any) {
         console.error('scan_engines error:', error)
-        if (isCurrentEngineInventoryRequest(requestGeneration)) set({ isLoading: false })
+        const message = error?.message || error?.toString() || 'Engine scan failed'
+        if (isCurrentEngineInventoryRequest(requestGeneration)) {
+          set({ engineScanLoading: false })
+          get().addRuntimeWarning(`engine scan failed: ${message}`)
+        }
+        return message
       }
     },
     probeEngineCapabilities: async (id) => {

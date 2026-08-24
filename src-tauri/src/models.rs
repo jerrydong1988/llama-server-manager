@@ -1157,7 +1157,6 @@ pub struct AppState {
     pub download_active_entries: Mutex<HashMap<String, PersistedQueueEntry>>,
     pub download_last_inflight_persist: Mutex<Instant>,
     pub download_scheduler_lock: Mutex<()>,
-    pub download_inflight_lock: Mutex<()>,
     pub download_shutting_down: AtomicBool,
     pub download_active_file_slots: AtomicUsize,
     pub download_slot_notify: Arc<tokio::sync::Notify>,

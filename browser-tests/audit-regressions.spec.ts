@@ -178,6 +178,12 @@ test('download browsing ignores stale responses and composing Enter', async ({ p
     name: 'new-model.gguf', path: 'new-model.gguf', size: 1_024, file_type: 'model',
   }]))
   await expect(page.getByText('new-model.gguf', { exact: true })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'check_local_files').length
+  ))).toBe(1)
+  expect(await page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'check_local_file').length
+  ))).toBe(0)
   await page.evaluate(() => window.__TAURI_BROWSER_TEST__.releaseBrowse('old/repo', [{
     name: 'old-model.gguf', path: 'old-model.gguf', size: 1_024, file_type: 'model',
   }]))
@@ -194,4 +200,13 @@ test('download browsing ignores stale responses and composing Enter', async ({ p
     name: 'stale-directory-model.gguf', path: 'stale-directory-model.gguf', size: 1_024, file_type: 'model',
   }]))
   await expect(page.getByText('stale-directory-model.gguf', { exact: true })).toHaveCount(0)
+})
+
+test('engine scan failures are visible and do not borrow model scan loading state', async ({ page }) => {
+  await openTab(page, 'engine', 'engine-scan-error')
+
+  const scanButton = page.locator('[data-guide="engine-scan"] button').first()
+  await scanButton.click()
+  await expect(page.getByText('engine directory unavailable', { exact: true })).toBeVisible()
+  await expect(scanButton).toBeEnabled()
 })
