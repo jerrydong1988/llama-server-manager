@@ -1001,6 +1001,13 @@ mod tests {
             extract_engine_version("llama-server version 1.2.3").as_deref(),
             Some("llama-server version 1.2.3")
         );
+        assert_eq!(
+            extract_engine_version(
+                "version: 0.2.0 (build 10566, commit bb4caa754)\nbuilt with Clang 23.0.0 for Windows AMD64"
+            )
+            .as_deref(),
+            Some("version: 0.2.0 (build 10566, commit bb4caa754)")
+        );
     }
 
     #[test]

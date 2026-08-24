@@ -3934,7 +3934,7 @@ struct TaskPerfState {
     n_decoded: u64,
     tg: f64,
     tg_3s: Option<f64>,
-    /// Historical (n_decoded, tg) samples used for speed curves.
+    /// Historical (generated tokens, tg) samples used for speed curves.
     history: Vec<(u64, f64)>,
     // Final summary.
     prompt_tokens: Option<u64>,
@@ -3971,8 +3971,9 @@ struct PerfParser {
     re_ids: regex_lite::Regex,
     re_launch: regex_lite::Regex,
     re_release: regex_lite::Regex,
-    re_decoded: regex_lite::Regex,
+    re_generation: regex_lite::Regex,
     re_tg_3s: regex_lite::Regex,
+    re_prompt_progress: regex_lite::Regex,
     re_prompt: regex_lite::Regex,
     re_eval: regex_lite::Regex,
     re_total: regex_lite::Regex,
@@ -3988,8 +3989,17 @@ impl PerfParser {
             re_ids: regex_lite::Regex::new(r"id\s+(\d+)\s*\|\s*task\s+(\d+)").unwrap(),
             re_launch: regex_lite::Regex::new(r"launch_slot_.*processing\s+task").unwrap(),
             re_release: regex_lite::Regex::new(r"slot\s+release.*id\s+\d+\s*\|\s*task\s+\d+\s*\|\s*stop").unwrap(),
-            re_decoded: regex_lite::Regex::new(r"n_decoded\s*=\s*(\d+).*?tg\s*=\s*([\d.]+)\s*t/s").unwrap(),
+            // llama.cpp v0.1.1+ reports `n_gen`; retain the older `n_decoded`
+            // spelling so previously supported engines keep their live telemetry.
+            re_generation: regex_lite::Regex::new(
+                r"n_(?:gen|decoded)\s*=\s*(\d+).*?tg\s*=\s*([\d.]+)\s*t/s",
+            )
+            .unwrap(),
             re_tg_3s: regex_lite::Regex::new(r"tg_3s\s*=\s*([\d.]+)\s*t/s").unwrap(),
+            re_prompt_progress: regex_lite::Regex::new(
+                r"prompt processing,\s*n_tokens\s*=\s*(\d+).*?\bt\s*=\s*([\d.]+)\s*s\s*/\s*([\d.]+)\s*tokens per second",
+            )
+            .unwrap(),
             re_prompt: regex_lite::Regex::new(r"prompt eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?,\s*([\d.]+)\s*tokens per second\)").unwrap(),
             re_eval: regex_lite::Regex::new(r"eval time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens.*?,\s*([\d.]+)\s*tokens per second\)").unwrap(),
             re_total: regex_lite::Regex::new(r"total time\s*=\s*([\d.]+)\s*ms\s*/\s*(\d+)\s*tokens").unwrap(),
@@ -4138,7 +4148,7 @@ fn parse_perf_line(
     task.updated_at_ms = crate::commands::telemetry::current_time_ms();
 
     // Progress update.
-    if let Some(c) = parser.re_decoded.captures(line) {
+    if let Some(c) = parser.re_generation.captures(line) {
         if let (Ok(n), Ok(tg)) = (
             c.get(1).unwrap().as_str().parse::<u64>(),
             c.get(2).unwrap().as_str().parse::<f64>(),
@@ -4155,6 +4165,18 @@ fn parse_perf_line(
             }
             return true;
         }
+    }
+
+    // Ongoing prompt processing. This is the only live throughput signal for
+    // long prompts and vector workloads before the final timing summary.
+    if let Some(c) = parser.re_prompt_progress.captures(line) {
+        task.prompt_tokens = c.get(1).and_then(|m| m.as_str().parse::<u64>().ok());
+        task.prompt_time_ms = c
+            .get(2)
+            .and_then(|m| m.as_str().parse::<f64>().ok())
+            .map(|seconds| seconds * 1_000.0);
+        task.prompt_tps = c.get(3).and_then(|m| m.as_str().parse::<f64>().ok());
+        return true;
     }
 
     // Prompt phase summary.
@@ -5671,7 +5693,7 @@ mod perf_parser_tests {
 
         let lines = [
             "0.34.994.322 I slot launch_slot_: id  3 | task 6 | processing task, is_child = 0",
-            "0.38.002.100 I slot print_timing: id  3 | task 6 | n_decoded = 120, tg = 40.00 t/s, tg_3s = 52.50 t/s",
+            "31.32.633.180 I slot print_timing: id  3 | task 6 | n_gen =    100, tg =  18.16 t/s, tg_3s =  18.34 t/s",
             "1.29.406.958 I slot print_timing: id  3 | task 6 | prompt eval time =    1193.36 ms /   707 tokens (    1.69 ms per token,   592.45 tokens per second)",
             "1.29.406.983 I slot print_timing: id  3 | task 6 |        eval time =   53204.70 ms /  3519 tokens (   15.12 ms per token,    66.14 tokens per second)",
             "1.29.406.993 I slot print_timing: id  3 | task 6 |       total time =   54398.06 ms /  4226 tokens",
@@ -5694,7 +5716,10 @@ mod perf_parser_tests {
         assert_eq!(task.total_tokens, Some(4226));
         assert_eq!(task.prompt_tps, Some(592.45));
         assert_eq!(task.gen_tps, Some(66.14));
-        assert_eq!(task.tg_3s, Some(52.5));
+        assert_eq!(task.n_decoded, 100);
+        assert_eq!(task.tg, 18.16);
+        assert_eq!(task.tg_3s, Some(18.34));
+        assert_eq!(task.history, vec![(100, 18.16)]);
         assert_eq!(task.spec_accept_rate, Some(0.92624));
     }
 
@@ -5719,6 +5744,65 @@ mod perf_parser_tests {
         let task = &tasks[&7];
         assert_eq!(task.tg, 30.0);
         assert_eq!(task.tg_3s, None);
+    }
+
+    #[test]
+    fn current_generation_progress_reaches_live_monitoring() {
+        let instance_id = "perf-parser-current-generation".to_string();
+        let mut tracker =
+            RuntimePerfTracker::new(instance_id.clone(), None, ModelWorkload::Inference);
+
+        tracker.process_line(
+            "31.26.617.728 I slot launch_slot_: id  1 | task 4418 | processing task, is_child = 0",
+        );
+        tracker.process_line(
+            "31.32.633.180 I slot print_timing: id  1 | task 4418 | n_gen =    100, tg =  18.16 t/s, tg_3s =  18.34 t/s",
+        );
+
+        let active = crate::commands::monitoring::capture_frame(&instance_id)
+            .expect("the live monitoring bridge should contain the task");
+        assert_eq!(active.active_requests, 1);
+        assert_eq!(active.output_tokens_per_second, Some(18.34));
+        assert_eq!(active.source, "task");
+
+        tracker.process_line(
+            "31.56.107.589 I slot      release: id  1 | task 4418 | stop processing: n_tokens = 781, truncated = 0",
+        );
+        let idle = crate::commands::monitoring::capture_frame(&instance_id)
+            .expect("the monitoring bridge should remain available after completion");
+        assert_eq!(idle.active_requests, 0);
+        assert_eq!(idle.output_tokens_per_second, Some(0.0));
+        assert_eq!(idle.source, "idle");
+
+        crate::commands::monitoring::remove_instance(&instance_id);
+    }
+
+    #[test]
+    fn current_prompt_progress_reaches_vector_monitoring() {
+        let instance_id = "perf-parser-current-prompt".to_string();
+        let mut tracker =
+            RuntimePerfTracker::new(instance_id.clone(), None, ModelWorkload::Embedding);
+
+        tracker
+            .process_line("0 I slot launch_slot_: id  0 | task 22 | processing task, is_child = 1");
+        tracker.process_line(
+            "4 I slot print_timing: id  0 | task 22 | prompt processing, n_tokens =   2048, progress = 0.50, t =   4.00 s / 512.00 tokens per second",
+        );
+
+        let active = crate::commands::monitoring::capture_frame(&instance_id)
+            .expect("the vector monitoring bridge should contain prompt progress");
+        assert_eq!(active.active_requests, 1);
+        assert_eq!(active.input_tokens_per_second, Some(512.0));
+        assert_eq!(active.source, "task");
+
+        let snapshot = tracker.snapshot();
+        let task = &snapshot["tasks"][0];
+        assert_eq!(task["prompt_tokens"], 2048);
+        assert_eq!(task["prompt_time_ms"], 4_000.0);
+        assert_eq!(task["prompt_tps"], 512.0);
+
+        tracker.finish();
+        crate::commands::monitoring::remove_instance(&instance_id);
     }
 
     #[test]
