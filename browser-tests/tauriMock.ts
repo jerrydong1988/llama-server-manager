@@ -29,6 +29,7 @@ const STOPPED_INSTANCE_ID = 'browser-stopped-instance'
 const EMBEDDING_INSTANCE_ID = 'browser-embedding-instance'
 const ENGINE_ID = 'browser-test-engine'
 const VULKAN_ENGINE_ID = 'browser-vulkan-engine'
+const ROCM_ENGINE_ID = 'browser-rocm-engine'
 const MODEL_PATH = 'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0.gguf'
 const AMBIGUOUS_MODEL_PATH = 'C:\\browser-test\\models\\Vision-Ambiguous-Q8_0.gguf'
 const QWEN_PROJECTOR_PATH = 'C:\\browser-test\\models\\mmproj-Qwen-BF16.gguf'
@@ -201,7 +202,36 @@ const vulkanEngine: EngineInfo = {
   },
 }
 
-const engines = IS_DOCS_SCENARIO ? [engine, vulkanEngine] : [engine]
+const rocmEngine: EngineInfo = {
+  ...clone(engine),
+  id: ROCM_ENGINE_ID,
+  name: 'Browser ROCm Engine',
+  dir: 'C:\\browser-test\\rocm-engine',
+  exe: 'C:\\browser-test\\rocm-engine\\llama-server.exe',
+  backend: 'ROCm',
+  capabilities: {
+    ...clone(engine.capabilities!),
+    helpHash: 'browser-rocm-help',
+    executableFingerprint: 'browser-rocm-engine-fingerprint',
+  },
+}
+
+const batchProbeEngines: EngineInfo[] = [
+  engine,
+  {
+    ...clone(vulkanEngine),
+    name: 'Browser Vulkan Engine',
+    dir: 'C:\\browser-test\\vulkan-engine',
+    exe: 'C:\\browser-test\\vulkan-engine\\llama-server.exe',
+  },
+  rocmEngine,
+]
+
+const engines = IS_DOCS_SCENARIO
+  ? [engine, vulkanEngine]
+  : BROWSER_SCENARIO?.startsWith('engine-probe-batch')
+    ? batchProbeEngines
+    : [engine]
 
 const instanceConfig: InstanceConfig = {
   ...defaultInstanceConfig(),
@@ -564,6 +594,8 @@ type BrowserTestControl = {
   failProxyTargets: boolean
   failRuntimeStatus: boolean
   updaterCheckCount: number
+  activeProbeCount: number
+  peakProbeCount: number
   state: GlobalConfigShape
   emitEvent: (event: string, payload?: unknown) => Promise<void>
   releaseBrowse: (repoId: string, files: MsFileEntry[]) => void
@@ -607,6 +639,8 @@ const control: BrowserTestControl = {
   failProxyTargets: false,
   failRuntimeStatus: false,
   updaterCheckCount: 0,
+  activeProbeCount: 0,
+  peakProbeCount: 0,
   state,
   emitEvent: (event, payload) => emit(event, payload),
   releaseBrowse: (repoId, files) => {
@@ -942,7 +976,25 @@ mockIPC((command, payload) => {
       target.custom_name = name
       return null
     }
-    case 'probe_engine_capabilities': return clone(engine)
+    case 'probe_engine_capabilities': {
+      const engineId = String(args.engineId ?? '')
+      const target = engines.find(candidate => candidate.id === engineId)
+      if (!target) throw new Error(`browser test engine not found: ${engineId}`)
+      if (!BROWSER_SCENARIO?.startsWith('engine-probe-batch')) return clone(target)
+
+      control.activeProbeCount += 1
+      control.peakProbeCount = Math.max(control.peakProbeCount, control.activeProbeCount)
+      return new Promise<EngineInfo>((resolve, reject) => {
+        window.setTimeout(() => {
+          control.activeProbeCount -= 1
+          if (BROWSER_SCENARIO === 'engine-probe-batch-failure' && engineId === VULKAN_ENGINE_ID) {
+            reject(new Error('browser test capability probe failed'))
+            return
+          }
+          resolve(clone(target))
+        }, 100)
+      })
+    }
     case 'get_download_manager_snapshot':
       if (IS_DOCS_SCENARIO) {
         return {

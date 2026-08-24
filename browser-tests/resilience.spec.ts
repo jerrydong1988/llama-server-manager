@@ -1,11 +1,11 @@
 import { expect, test, type Page } from '@playwright/test'
 
-async function openEngineManager(page: Page) {
+async function openEngineManager(page: Page, scenario?: string) {
   await page.addInitScript(() => {
     localStorage.setItem('lang', 'zh-CN')
     localStorage.setItem('lastTab', 'engine')
   })
-  await page.goto('/')
+  await page.goto(scenario ? `/?scenario=${scenario}` : '/')
   await expect(page.locator('html')).toHaveAttribute(
     'data-tauri-browser-test',
     '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__',
@@ -57,6 +57,39 @@ test('engine rename waits for Linux IME composition before Enter commits', async
       .map(call => call.payload)
   ))).toEqual([{ id: 'browser-test-engine', name: '中文引擎' }])
   await expect(page.getByText('中文引擎', { exact: true }).first()).toBeVisible()
+})
+
+test('batch engine probing covers the full inventory with bounded concurrency', async ({ page }) => {
+  await openEngineManager(page, 'engine-probe-batch')
+
+  const probeAll = page.getByTitle('探测全部已登记引擎，不受当前搜索与后端筛选影响。')
+  await expect(probeAll).toHaveAttribute('title', /全部已登记引擎/)
+  await probeAll.click()
+  await expect(probeAll).toContainText(/探测中 \d\/3/)
+
+  await expect(page.getByText('全部 3 个引擎探测完成。', { exact: true })).toBeVisible()
+  const evidence = await page.evaluate(() => ({
+    ids: window.__TAURI_BROWSER_TEST__.calls
+      .filter(call => call.command === 'probe_engine_capabilities')
+      .map(call => (call.payload as { engineId: string }).engineId)
+      .sort(),
+    active: window.__TAURI_BROWSER_TEST__.activeProbeCount,
+    peak: window.__TAURI_BROWSER_TEST__.peakProbeCount,
+  }))
+  expect(evidence.ids).toEqual(['browser-rocm-engine', 'browser-test-engine', 'browser-vulkan-engine'])
+  expect(evidence.active).toBe(0)
+  expect(evidence.peak).toBe(2)
+})
+
+test('a failed engine does not stop the remaining batch probes', async ({ page }) => {
+  await openEngineManager(page, 'engine-probe-batch-failure')
+
+  await page.getByRole('button', { name: '一键探测全部' }).click()
+  await expect(page.getByText('批量探测完成：2 成功，1 失败。', { exact: true })).toBeVisible()
+  await expect(page.getByText('失败引擎：Browser Vulkan Engine', { exact: true })).toBeVisible()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'probe_engine_capabilities').length
+  ))).toBe(3)
 })
 
 test('automatic instance startup preserves the configured stagger without duplicates', async ({ page }) => {

@@ -27,8 +27,10 @@ const entry = `
     normalizeEngineCapabilityStatus,
     normalizeEngineVersionStatus,
   } from './src/engineCapabilities'
+  import { probeEngineBatch } from './src/engineProbeBatch'
   import { getEngineLabels } from './src/i18n/pageLabels'
 
+  async function run() {
   const detected = {
     status: 'detected',
     supportedFlags: ['-m', '--temp'],
@@ -63,7 +65,55 @@ const entry = `
     zhLabels.executableChangedDuringProbe,
   )
   assert.equal(localizeEngineCapabilityError('access denied', zhLabels), 'access denied')
-  console.log('engine capability frontend regression tests passed')
+
+  let active = 0
+  let peak = 0
+  const processed = []
+  const activeIds = new Set()
+  const progress = []
+  const batchResult = await probeEngineBatch(
+    [
+      { id: 'engine-a', name: 'Engine A' },
+      { id: 'engine-b', name: 'Engine B' },
+      { id: 'engine-c', name: 'Engine C' },
+      { id: 'engine-d', name: 'Engine D' },
+    ],
+    async id => {
+      active += 1
+      peak = Math.max(peak, active)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      processed.push(id)
+      active -= 1
+      if (id === 'engine-b') throw new Error('probe rejected')
+    },
+    {
+      concurrency: 2,
+      onProgress: value => progress.push(value),
+      onActiveChange: (id, isActive) => {
+        if (isActive) activeIds.add(id)
+        else activeIds.delete(id)
+      },
+    },
+  )
+  assert.equal(peak, 2)
+  assert.deepEqual(processed.sort(), ['engine-a', 'engine-b', 'engine-c', 'engine-d'])
+  assert.deepEqual(batchResult, {
+    total: 4,
+    succeeded: 3,
+    failed: 1,
+    failures: [{ id: 'engine-b', name: 'Engine B', error: 'probe rejected' }],
+  })
+  assert.deepEqual(progress[0], { completed: 0, total: 4 })
+  assert.deepEqual(progress.at(-1), { completed: 4, total: 4 })
+  assert.equal(activeIds.size, 0)
+  }
+
+  run()
+    .then(() => console.log('engine capability frontend regression tests passed'))
+    .catch(error => {
+      console.error(error)
+      process.exitCode = 1
+    })
 `
 
 const bundled = esbuild.buildSync({
