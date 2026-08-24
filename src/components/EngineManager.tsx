@@ -10,6 +10,11 @@ import {
   normalizeEngineCapabilityStatus,
   normalizeEngineVersionStatus,
 } from '../engineCapabilities'
+import {
+  probeEngineBatch,
+  type EngineProbeBatchProgress,
+  type EngineProbeBatchResult,
+} from '../engineProbeBatch'
 import { dedupePaths, isPathWithinRoot, pathsEqual } from '../utils/path'
 import { Button, InsetSurface, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 
@@ -53,11 +58,15 @@ const EngineManager = () => {
   const [selectedEngineId, setSelectedEngineId] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [backendFilter, setBackendFilter] = useState('all')
-  const [probingEngineId, setProbingEngineId] = useState<string | null>(null)
+  const [probingEngineIds, setProbingEngineIds] = useState<Set<string>>(() => new Set())
+  const [probeBatchProgress, setProbeBatchProgress] = useState<EngineProbeBatchProgress | null>(null)
+  const [lastProbeBatchResult, setLastProbeBatchResult] = useState<EngineProbeBatchResult | null>(null)
   const [scanError, setScanError] = useState('')
   const editingCanceledRef = useRef(false)
+  const probeOperationRef = useRef(false)
 
   const labels = useMemo(() => getEngineLabels(lang), [lang])
+  const probeBusy = probingEngineIds.size > 0 || probeBatchProgress !== null
 
   useEffect(() => {
     loadInitialData()
@@ -102,10 +111,12 @@ const EngineManager = () => {
   )
 
   const handleScan = async () => {
+    if (probeOperationRef.current) return
     setScanError((await scanEngines(engineDirs)) ?? '')
   }
 
   const handleAddDirectory = async () => {
+    if (probeOperationRef.current) return
     try {
       const dir = await invoke<string | null>('pick_authorized_directory', { purpose: 'engine' })
       if (!dir) return
@@ -119,6 +130,7 @@ const EngineManager = () => {
   }
 
   const handleRemoveDir = async (dir: string) => {
+    if (probeOperationRef.current) return
     const removedEngines = engines.filter(engine => isPathWithinRoot(engine.dir, dir))
     const referenced = useAppStore.getState().instances.filter(instance => (
       removedEngines.some(engine => pathsEqual(engine.id, instance.config.engine_id))
@@ -136,6 +148,7 @@ const EngineManager = () => {
   }
 
   const handleDelete = async (id: string) => {
+    if (probeOperationRef.current) return
     const engine = engines.find(item => item.id === id)
     if (!engine) return
 
@@ -165,14 +178,53 @@ const EngineManager = () => {
   }
 
   const handleProbe = async (id: string) => {
-    if (probingEngineId) return
-    setProbingEngineId(id)
+    if (probeOperationRef.current || engineScanLoading) return
+    probeOperationRef.current = true
+    setLastProbeBatchResult(null)
+    setProbingEngineIds(new Set([id]))
     try {
       await probeEngineCapabilities(id)
     } catch (error) {
       addRuntimeWarning(formatMessage(labels.probeFailed, { error: String(error) }))
     } finally {
-      setProbingEngineId(null)
+      probeOperationRef.current = false
+      setProbingEngineIds(new Set())
+    }
+  }
+
+  const handleProbeAll = async () => {
+    if (probeOperationRef.current || engineScanLoading || engines.length === 0) return
+    probeOperationRef.current = true
+    setLastProbeBatchResult(null)
+    try {
+      const result = await probeEngineBatch(engines, probeEngineCapabilities, {
+        onProgress: setProbeBatchProgress,
+        onActiveChange: (id, active) => {
+          setProbingEngineIds(current => {
+            const next = new Set(current)
+            if (active) next.add(id)
+            else next.delete(id)
+            return next
+          })
+        },
+      })
+      setLastProbeBatchResult(result)
+      if (result.failed > 0) {
+        const summary = formatMessage(labels.probeAllSummary, {
+          succeeded: result.succeeded,
+          failed: result.failed,
+        })
+        const failureDetails = result.failures
+          .map(failure => `${failure.name}: ${failure.error}`)
+          .join('; ')
+        addRuntimeWarning(`${summary} ${formatMessage(labels.probeAllFailedEngines, { names: failureDetails })}`)
+      }
+    } catch (error) {
+      addRuntimeWarning(formatMessage(labels.probeFailed, { error: String(error) }))
+    } finally {
+      probeOperationRef.current = false
+      setProbingEngineIds(new Set())
+      setProbeBatchProgress(null)
     }
   }
 
@@ -220,15 +272,33 @@ const EngineManager = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-3" data-guide="engine-scan">
+          {engines.length > 1 && (
+            <Button
+              onClick={() => void handleProbeAll()}
+              disabled={engineScanLoading || probeBusy}
+              title={labels.probeAllDescription}
+              icon={probeBatchProgress
+                ? <LoaderCircle className="h-4 w-4 animate-spin" />
+                : <ShieldCheck className="h-4 w-4" />}
+            >
+              {probeBatchProgress
+                ? formatMessage(labels.probeAllProgress, {
+                    completed: probeBatchProgress.completed,
+                    total: probeBatchProgress.total,
+                  })
+                : labels.probeAll}
+            </Button>
+          )}
           <Button
             onClick={handleScan}
-            disabled={engineScanLoading}
+            disabled={engineScanLoading || probeBusy}
             icon={<RefreshCw className={`h-4 w-4 ${engineScanLoading ? 'animate-spin' : ''}`} />}
           >
             {t.engineMgr.scan}
           </Button>
           <Button
             onClick={handleAddDirectory}
+            disabled={engineScanLoading || probeBusy}
             variant="primary"
             icon={<Plus className="h-4 w-4" />}
           >
@@ -241,6 +311,38 @@ const EngineManager = () => {
         <div className="flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{scanError}</span>
+        </div>
+      )}
+
+      {lastProbeBatchResult && (
+        <div
+          role="status"
+          className={`flex items-start gap-3 rounded-2xl border px-4 py-3 text-sm ${
+            lastProbeBatchResult.failed > 0
+              ? 'border-amber-500/30 bg-amber-500/10 text-amber-200'
+              : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+          }`}
+        >
+          {lastProbeBatchResult.failed > 0
+            ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            : <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />}
+          <div className="min-w-0">
+            <p>
+              {lastProbeBatchResult.failed > 0
+                ? formatMessage(labels.probeAllSummary, {
+                    succeeded: lastProbeBatchResult.succeeded,
+                    failed: lastProbeBatchResult.failed,
+                  })
+                : formatMessage(labels.probeAllSuccess, { total: lastProbeBatchResult.total })}
+            </p>
+            {lastProbeBatchResult.failed > 0 && (
+              <p className="mt-1 break-words text-xs opacity-80">
+                {formatMessage(labels.probeAllFailedEngines, {
+                  names: lastProbeBatchResult.failures.map(failure => failure.name).join(', '),
+                })}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
@@ -281,7 +383,8 @@ const EngineManager = () => {
                     </div>
                     <button
                       onClick={() => handleRemoveDir(dir)}
-                      className="rounded-lg p-2 text-slate-500 transition hover:bg-red-500/10 hover:text-red-300"
+                      disabled={probeBusy}
+                      className="rounded-lg p-2 text-slate-500 transition hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
                       title={t.engineMgr.remove}
                     >
                       <Trash2 className="h-4 w-4" />
@@ -460,7 +563,8 @@ const EngineManager = () => {
                             event.stopPropagation()
                             void handleDelete(engine.id)
                           }}
-                          className="rounded-lg p-2 text-slate-400 transition hover:bg-red-500/10 hover:text-red-300"
+                          disabled={probeBusy}
+                          className="rounded-lg p-2 text-slate-400 transition hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
                           title={t.engineMgr.remove}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -542,12 +646,12 @@ const EngineManager = () => {
               <div className="grid gap-3">
                 <Button
                   onClick={() => void handleProbe(selectedEngine.id)}
-                  disabled={probingEngineId !== null}
-                  icon={probingEngineId === selectedEngine.id
+                  disabled={engineScanLoading || probeBusy}
+                  icon={probingEngineIds.has(selectedEngine.id)
                     ? <LoaderCircle className="h-4 w-4 animate-spin" />
                     : <ShieldCheck className="h-4 w-4" />}
                 >
-                  {probingEngineId === selectedEngine.id ? labels.probing : labels.probeNow}
+                  {probingEngineIds.has(selectedEngine.id) ? labels.probing : labels.probeNow}
                 </Button>
                 <Button
                   onClick={() => setDefaultEngineId(selectedEngine.id)}
@@ -564,6 +668,7 @@ const EngineManager = () => {
                 </Button>
                 <Button
                   onClick={() => void handleDelete(selectedEngine.id)}
+                  disabled={probeBusy}
                   variant="danger"
                   icon={<Trash2 className="h-4 w-4" />}
                 >
