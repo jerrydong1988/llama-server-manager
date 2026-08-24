@@ -11,7 +11,7 @@ use base64::Engine;
 use futures_util::{StreamExt, TryStreamExt};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -40,8 +40,9 @@ use crate::models::{
 use crate::vector_policy::ModelWorkload;
 
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
-static PROXY_HTTP_CLIENTS: LazyLock<Mutex<HashMap<u64, reqwest::Client>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static PROXY_HTTP_CLIENTS: LazyLock<Mutex<VecDeque<(u64, reqwest::Client)>>> =
+    LazyLock::new(|| Mutex::new(VecDeque::new()));
+const MAX_PROXY_HTTP_CLIENTS: usize = 8;
 const PROXY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 const PROXY_ABORT_TIMEOUT: Duration = Duration::from_secs(1);
 const MAX_PROXY_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
@@ -52,23 +53,35 @@ const MAX_PROXY_MODEL_SELECTOR_BYTES: usize = 512;
 const MAX_ANTHROPIC_REQUEST_BODY_BYTES: usize = 32 * 1024 * 1024;
 const MAX_PROXY_IN_FLIGHT_BODY_BYTES: usize = 256 * 1024 * 1024;
 const TARGET_CAPABILITY_MAX_AGE: Duration = Duration::from_secs(60);
+const CONTEXT_PREFLIGHT_TEMPLATE_MARGIN_TOKENS: u64 = 4_096;
 const PROXY_API_KEY_HASH_PREFIX: &str = "sha256:";
 const SUPPORTED_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 fn proxy_http_client(connect_timeout_ms: u64) -> reqwest::Client {
     let connect_timeout_ms = connect_timeout_ms.clamp(100, 60_000);
     let mut clients = PROXY_HTTP_CLIENTS.lock().unwrap();
-    clients
-        .entry(connect_timeout_ms)
-        .or_insert_with(|| {
-            reqwest::Client::builder()
-                .connect_timeout(Duration::from_millis(connect_timeout_ms))
-                .pool_idle_timeout(Duration::from_secs(90))
-                .tcp_keepalive(Duration::from_secs(30))
-                .build()
-                .expect("proxy HTTP client configuration must be valid")
-        })
-        .clone()
+    if let Some(position) = clients
+        .iter()
+        .position(|(timeout, _)| *timeout == connect_timeout_ms)
+    {
+        let (_, client) = clients
+            .remove(position)
+            .expect("proxy client cache position must remain valid");
+        clients.push_back((connect_timeout_ms, client.clone()));
+        return client;
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_millis(connect_timeout_ms))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(30))
+        .build()
+        .expect("proxy HTTP client configuration must be valid");
+    if clients.len() >= MAX_PROXY_HTTP_CLIENTS {
+        clients.pop_front();
+    }
+    clients.push_back((connect_timeout_ms, client.clone()));
+    client
 }
 
 fn hash_proxy_api_key(key: &str) -> String {
@@ -1814,6 +1827,16 @@ async fn context_limit_violation(
             context_window,
         });
     }
+    // A UTF-8 JSON request cannot tokenize to more input tokens than its byte length before the
+    // server applies the chat template. Reserve a generous fixed template margin and only call the
+    // exact token-count endpoint when the request is near the configured context boundary.
+    if !exact_context_preflight_required(
+        upstream_body.len(),
+        spec.requested_output_tokens,
+        context_window,
+    ) {
+        return None;
+    }
     let input_tokens = fetch_input_token_count(
         client,
         target,
@@ -1831,6 +1854,17 @@ async fn context_limit_violation(
             context_window,
         },
     )
+}
+
+fn exact_context_preflight_required(
+    request_body_bytes: usize,
+    requested_output_tokens: u64,
+    context_window: u64,
+) -> bool {
+    (request_body_bytes as u64)
+        .saturating_add(requested_output_tokens)
+        .saturating_add(CONTEXT_PREFLIGHT_TEMPLATE_MARGIN_TOKENS)
+        > context_window
 }
 
 fn target_url_for_path(target: &ResolvedProxyTarget, path: &str) -> String {
@@ -3482,6 +3516,20 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn adaptive_context_preflight_only_counts_tokens_near_the_limit() {
+        assert!(!super::exact_context_preflight_required(512, 1_024, 32_768));
+        assert!(super::exact_context_preflight_required(7_000, 1_024, 8_192));
+    }
+
+    #[test]
+    fn proxy_http_client_cache_remains_bounded() {
+        for timeout in 1_001..=1_020 {
+            let _ = super::proxy_http_client(timeout);
+        }
+        assert!(super::PROXY_HTTP_CLIENTS.lock().unwrap().len() <= super::MAX_PROXY_HTTP_CLIENTS);
+    }
 
     #[derive(Clone)]
     struct TestProxySource {

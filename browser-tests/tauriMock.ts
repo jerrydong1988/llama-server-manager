@@ -915,11 +915,15 @@ mockIPC((command, payload) => {
       return []
     }
     case 'check_local_file': return null
+    case 'check_local_files': return Array.isArray(args?.paths) ? args.paths.map(() => null) : []
     case 'get_models':
       return BROWSER_SCENARIO === 'delayed-inventory-cache' && !delayedInventoryCacheLoaded
         ? []
         : clone(models)
     case 'scan_engines':
+      if (BROWSER_SCENARIO === 'engine-scan-error') {
+        throw new Error('engine directory unavailable')
+      }
       if (BROWSER_SCENARIO === 'delayed-inventory-cache') {
         return new Promise((resolve) => window.setTimeout(() => resolve(clone(engines)), 3_000))
       }

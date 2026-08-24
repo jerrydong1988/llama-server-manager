@@ -39,6 +39,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   logs: {},
   recentLogs: [],
   isLoading: false,
+  modelScanLoading: false,
+  engineScanLoading: false,
   runtimeWarnings: [],
   darkMode: true,
   defaultEngineId: null,

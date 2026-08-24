@@ -503,6 +503,8 @@ export interface AppState {
   logs: Record<string, LogEntry[]>
   recentLogs: LogEntry[]
   isLoading: boolean
+  modelScanLoading: boolean
+  engineScanLoading: boolean
   runtimeWarnings: string[]
   defaultEngineId: string | null
   modelDirs: string[]
@@ -550,7 +552,7 @@ export interface AppState {
   openModelFolder: (path: string) => Promise<void>
   readGgufMetadata: (path: string) => Promise<GgufMetadataSummary>
 
-  scanEngines: (paths: string[]) => Promise<void>
+  scanEngines: (paths: string[]) => Promise<string | null>
   probeEngineCapabilities: (id: string) => Promise<EngineInfo>
   deleteEngine: (id: string) => Promise<void>
   renameEngine: (id: string, name: string) => void

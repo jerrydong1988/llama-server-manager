@@ -2,13 +2,18 @@ use crate::commands::engine_capabilities::capabilities_match_executable;
 use crate::commands::model_inventory::{
     self, InventoryDirectoryRecord, InventoryEngineRecord, InventoryModelRecord,
 };
-use crate::models::{AppState, EngineInfo, InstanceConfig, ModelCapabilities, ModelInfo};
+use crate::models::{
+    AppState, EngineInfo, InstanceConfig, ModelCapabilities, ModelInfo, RunningInstance,
+};
 use crate::path_utils::{path_identity_key, path_is_within, paths_equal};
 use crate::utils;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+
+static MODEL_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static ENGINE_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn file_mtime(path: &Path) -> u64 {
     path.metadata()
@@ -33,23 +38,40 @@ fn engine_path_identity(path: &Path) -> String {
 
 fn instances_referencing_model(
     instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, RunningInstance>,
     target: &Path,
 ) -> Vec<String> {
     let target_identity = engine_path_identity(target);
-    instances
+    let references_target = |instance: &InstanceConfig| {
+        [
+            instance.model_path.as_str(),
+            instance.draft_model_path.as_str(),
+            instance.mmproj_path.as_str(),
+        ]
+        .into_iter()
+        .filter(|candidate| !candidate.trim().is_empty())
+        .any(|candidate| engine_path_identity(Path::new(candidate)) == target_identity)
+    };
+    let mut names = std::collections::BTreeSet::new();
+    for instance in instances
         .values()
-        .filter(|instance| {
-            [
-                instance.model_path.as_str(),
-                instance.draft_model_path.as_str(),
-                instance.mmproj_path.as_str(),
-            ]
-            .into_iter()
-            .filter(|candidate| !candidate.trim().is_empty())
-            .any(|candidate| engine_path_identity(Path::new(candidate)) == target_identity)
-        })
-        .map(|instance| instance.name.clone())
-        .collect()
+        .filter(|instance| references_target(instance))
+    {
+        names.insert(instance.name.clone());
+    }
+    for (instance_id, running_instance) in running {
+        let Some(launch_config) = running_instance.launch_config.as_ref() else {
+            continue;
+        };
+        if references_target(launch_config) {
+            names.insert(if launch_config.name.trim().is_empty() {
+                instance_id.clone()
+            } else {
+                launch_config.name.clone()
+            });
+        }
+    }
+    names.into_iter().collect()
 }
 
 fn instances_referencing_engine(
@@ -72,7 +94,6 @@ struct DirectoryEntryFingerprint {
     is_symlink: bool,
     size: u64,
     mtime: u64,
-    mtime_ns: u128,
 }
 
 #[derive(Debug, Clone)]
@@ -115,8 +136,9 @@ fn read_directory_fingerprint(path: &Path) -> Result<DirectoryFingerprint, Strin
             is_file: file_type.is_file(),
             is_symlink: file_type.is_symlink(),
             size: metadata.as_ref().map(|m| m.len()).unwrap_or(0),
-            mtime: modified.map(|duration| duration.as_secs()).unwrap_or(0),
-            mtime_ns: modified.map(|duration| duration.as_nanos()).unwrap_or(0),
+            mtime: modified
+                .map(|duration| duration.as_nanos().min(u64::MAX as u128) as u64)
+                .unwrap_or(0),
         });
     }
     entries.sort_by(|left, right| left.name.cmp(&right.name));
@@ -135,7 +157,7 @@ fn read_directory_fingerprint(path: &Path) -> Result<DirectoryFingerprint, Strin
                 },
                 if entry.is_symlink { "l" } else { "-" },
                 entry.size,
-                entry.mtime_ns,
+                entry.mtime,
                 entry.path.extension().and_then(OsStr::to_str).unwrap_or("")
             )
         })
@@ -146,33 +168,7 @@ fn read_directory_fingerprint(path: &Path) -> Result<DirectoryFingerprint, Strin
     })
 }
 
-fn read_directory_tree_signature(path: &Path, max_depth: usize) -> Result<String, String> {
-    fn collect(
-        path: &Path,
-        depth: usize,
-        max_depth: usize,
-        parts: &mut Vec<String>,
-    ) -> Result<(), String> {
-        let fingerprint = read_directory_fingerprint(path)?;
-        let dir_key = canonical_key(path);
-        parts.push(format!("dir|{}|{}", dir_key, fingerprint.signature));
-        if depth >= max_depth {
-            return Ok(());
-        }
-        for entry in fingerprint.entries {
-            if entry.is_dir && !entry.is_symlink {
-                collect(&entry.path, depth + 1, max_depth, parts)?;
-            }
-        }
-        Ok(())
-    }
-
-    let mut parts = Vec::new();
-    collect(path, 0, max_depth, &mut parts)?;
-    parts.sort();
-    Ok(stable_hash(&parts))
-}
-
+#[cfg(test)]
 fn path_is_under_directory(path: &Path, directory: &Path) -> bool {
     !paths_equal(path, directory) && path_is_within(path, directory)
 }
@@ -186,19 +182,146 @@ fn saved_engine_name<'a>(names: &'a HashMap<String, String>, id: &str) -> Option
     })
 }
 
-fn cached_models_under_directory(
-    dir_key: &str,
-    inventory: &HashMap<String, InventoryModelRecord>,
-) -> Vec<InventoryModelRecord> {
-    let dir = Path::new(dir_key);
-    inventory
-        .values()
-        .filter(|record| path_is_under_directory(Path::new(&record.path), dir))
-        .cloned()
-        .collect()
+const MAX_MODEL_SCAN_DEPTH: usize = 32;
+
+#[derive(Debug)]
+struct ModelDirectoryInspection {
+    key: String,
+    signature: String,
+    entries: Vec<DirectoryEntryFingerprint>,
+    children: Vec<ModelDirectoryInspection>,
 }
 
-const MAX_MODEL_SCAN_DEPTH: usize = 32;
+fn inspect_model_tree(
+    path: &Path,
+    depth: usize,
+    max_depth: usize,
+    warnings: &mut Vec<String>,
+) -> Result<ModelDirectoryInspection, String> {
+    let fingerprint = read_directory_fingerprint(path)?;
+    let key = canonical_key(path);
+    let mut children = Vec::new();
+
+    for entry in &fingerprint.entries {
+        if entry.is_symlink {
+            warnings.push(format!(
+                "{} is a symlink and was skipped",
+                entry.path.display()
+            ));
+            continue;
+        }
+        if !entry.is_dir {
+            continue;
+        }
+        if depth >= max_depth {
+            warnings.push(format!(
+                "{} exceeded the model scan depth limit of {} and was skipped",
+                entry.path.display(),
+                max_depth
+            ));
+            continue;
+        }
+        children.push(inspect_model_tree(
+            &entry.path,
+            depth + 1,
+            max_depth,
+            warnings,
+        )?);
+    }
+
+    let mut signature_parts = vec![
+        "model-tree-signature-v2".to_string(),
+        format!("dir|{key}|{}", fingerprint.signature),
+    ];
+    signature_parts.extend(
+        children
+            .iter()
+            .map(|child| format!("child|{}|{}", child.key, child.signature)),
+    );
+    signature_parts.sort();
+
+    Ok(ModelDirectoryInspection {
+        key,
+        signature: stable_hash(&signature_parts),
+        entries: fingerprint.entries,
+        children,
+    })
+}
+
+#[cfg(test)]
+fn read_directory_tree_signature(path: &Path, max_depth: usize) -> Result<String, String> {
+    inspect_model_tree(path, 0, max_depth, &mut Vec::new()).map(|tree| tree.signature)
+}
+
+fn index_cached_models_by_parent(
+    inventory: &HashMap<String, InventoryModelRecord>,
+) -> HashMap<String, Vec<InventoryModelRecord>> {
+    let mut by_parent: HashMap<String, Vec<InventoryModelRecord>> = HashMap::new();
+    for record in inventory.values() {
+        let Some(parent) = Path::new(&record.path).parent() else {
+            continue;
+        };
+        by_parent
+            .entry(canonical_key(parent))
+            .or_default()
+            .push(record.clone());
+    }
+    by_parent
+}
+
+#[allow(clippy::too_many_arguments)]
+fn reuse_cached_models_for_tree(
+    tree: &ModelDirectoryInspection,
+    scan_root_key: &str,
+    cached_by_parent: &HashMap<String, Vec<InventoryModelRecord>>,
+    models: &mut Vec<ModelInfo>,
+    seen_display_paths: &mut HashSet<String>,
+    seen_inventory_paths: &mut HashSet<String>,
+    seen_directory_keys: &mut HashSet<String>,
+    inventory_meta: &mut HashMap<usize, (String, String, u64)>,
+    directory_records: &mut Vec<InventoryDirectoryRecord>,
+) -> usize {
+    seen_directory_keys.insert(tree.key.clone());
+    directory_records.push(InventoryDirectoryRecord::new(
+        "model",
+        tree.key.clone(),
+        scan_root_key.to_string(),
+        tree.signature.clone(),
+    ));
+
+    let mut reused = 0;
+    if let Some(records) = cached_by_parent.get(&tree.key) {
+        for record in records {
+            let mut model = record.to_model_info();
+            if !seen_display_paths.insert(path_identity_key(Path::new(&model.path))) {
+                continue;
+            }
+            model.is_shard = false;
+            let idx = models.len();
+            seen_inventory_paths.insert(record.path.clone());
+            models.push(model);
+            inventory_meta.insert(
+                idx,
+                (record.path.clone(), scan_root_key.to_string(), record.mtime),
+            );
+            reused += 1;
+        }
+    }
+    for child in &tree.children {
+        reused += reuse_cached_models_for_tree(
+            child,
+            scan_root_key,
+            cached_by_parent,
+            models,
+            seen_display_paths,
+            seen_inventory_paths,
+            seen_directory_keys,
+            inventory_meta,
+            directory_records,
+        );
+    }
+    reused
+}
 
 fn reuse_cached_engines_for_root(
     scan_root_key: &str,
@@ -329,10 +452,10 @@ fn merge_scanned_engine_capabilities(scanned: &mut [EngineInfo], current: &[Engi
 
 #[allow(clippy::too_many_arguments)]
 fn scan_model_directory_incremental(
-    dir: &Path,
+    tree: &ModelDirectoryInspection,
     scan_root_key: &str,
-    depth: usize,
     inventory: &HashMap<String, InventoryModelRecord>,
+    cached_by_parent: &HashMap<String, Vec<InventoryModelRecord>>,
     directory_inventory: &HashMap<String, InventoryDirectoryRecord>,
     models: &mut Vec<ModelInfo>,
     seen_display_paths: &mut HashSet<String>,
@@ -341,95 +464,29 @@ fn scan_model_directory_incremental(
     inventory_meta: &mut HashMap<usize, (String, String, u64)>,
     fresh_files: &mut Vec<(usize, PathBuf)>,
     directory_records: &mut Vec<InventoryDirectoryRecord>,
-    errors: &mut Vec<String>,
 ) -> usize {
-    let dir_key = canonical_key(dir);
-    seen_directory_keys.insert(dir_key.clone());
-
-    let fingerprint = match read_directory_fingerprint(dir) {
-        Ok(fingerprint) => fingerprint,
-        Err(err) => {
-            errors.push(err);
-            return 0;
-        }
-    };
-    let tree_signature =
-        match read_directory_tree_signature(dir, MAX_MODEL_SCAN_DEPTH.saturating_sub(depth)) {
-            Ok(signature) => signature,
-            Err(error) => {
-                errors.push(error);
-                return 0;
-            }
-        };
-
     if directory_inventory
-        .get(&dir_key)
-        .map(|record| record.signature == tree_signature)
+        .get(&tree.key)
+        .map(|record| record.signature == tree.signature)
         .unwrap_or(false)
     {
-        let mut reused = 0;
-        for record in cached_models_under_directory(&dir_key, inventory) {
-            let mut model = record.to_model_info();
-            if !seen_display_paths.insert(path_identity_key(Path::new(&model.path))) {
-                continue;
-            }
-            model.is_shard = false;
-            let idx = models.len();
-            seen_inventory_paths.insert(record.path.clone());
-            models.push(model);
-            inventory_meta.insert(
-                idx,
-                (record.path.clone(), record.scan_root.clone(), record.mtime),
-            );
-            reused += 1;
-        }
-        directory_records.push(InventoryDirectoryRecord::new(
-            "model",
-            dir_key,
-            scan_root_key.to_string(),
-            tree_signature,
-        ));
-        return reused;
+        return reuse_cached_models_for_tree(
+            tree,
+            scan_root_key,
+            cached_by_parent,
+            models,
+            seen_display_paths,
+            seen_inventory_paths,
+            seen_directory_keys,
+            inventory_meta,
+            directory_records,
+        );
     }
 
+    seen_directory_keys.insert(tree.key.clone());
     let mut file_count = 0;
-    for entry in fingerprint.entries {
-        if entry.is_symlink {
-            errors.push(format!(
-                "{} is a symlink and was skipped",
-                entry.path.display()
-            ));
-            continue;
-        }
-
-        if entry.is_dir {
-            if depth < MAX_MODEL_SCAN_DEPTH {
-                file_count += scan_model_directory_incremental(
-                    &entry.path,
-                    scan_root_key,
-                    depth + 1,
-                    inventory,
-                    directory_inventory,
-                    models,
-                    seen_display_paths,
-                    seen_inventory_paths,
-                    seen_directory_keys,
-                    inventory_meta,
-                    fresh_files,
-                    directory_records,
-                    errors,
-                );
-            } else {
-                errors.push(format!(
-                    "{} exceeded the model scan depth limit of {} and was skipped",
-                    entry.path.display(),
-                    MAX_MODEL_SCAN_DEPTH
-                ));
-            }
-            continue;
-        }
-
-        if !entry.is_file {
+    for entry in &tree.entries {
+        if entry.is_symlink || entry.is_dir || !entry.is_file {
             continue;
         }
 
@@ -469,7 +526,7 @@ fn scan_model_directory_incremental(
         let idx = models.len();
         models.push(ModelInfo {
             id: uuid::Uuid::new_v4().to_string(),
-            name: entry.name,
+            name: entry.name.clone(),
             path: file_path,
             size: entry.size,
             architecture: None,
@@ -481,14 +538,31 @@ fn scan_model_directory_incremental(
             is_shard: false,
         });
         inventory_meta.insert(idx, (cache_key, scan_root_key.to_string(), entry.mtime));
-        fresh_files.push((idx, entry.path));
+        fresh_files.push((idx, entry.path.clone()));
+    }
+
+    for child in &tree.children {
+        file_count += scan_model_directory_incremental(
+            child,
+            scan_root_key,
+            inventory,
+            cached_by_parent,
+            directory_inventory,
+            models,
+            seen_display_paths,
+            seen_inventory_paths,
+            seen_directory_keys,
+            inventory_meta,
+            fresh_files,
+            directory_records,
+        );
     }
 
     directory_records.push(InventoryDirectoryRecord::new(
         "model",
-        dir_key,
+        tree.key.clone(),
         scan_root_key.to_string(),
-        tree_signature,
+        tree.signature.clone(),
     ));
     file_count
 }
@@ -647,11 +721,22 @@ pub fn build_engine_info(dir: &Path, exe: &Path, _source: &str) -> Option<Engine
 }
 
 // Model scanning.
+struct ModelScanWork {
+    models: Vec<ModelInfo>,
+    records: Vec<InventoryModelRecord>,
+    directory_records: Vec<InventoryDirectoryRecord>,
+    scan_root_keys: HashSet<String>,
+    seen_inventory_paths: HashSet<String>,
+    seen_directory_keys: HashSet<String>,
+    warnings: Vec<String>,
+}
+
 pub async fn scan_models(
     paths: Vec<String>,
     state: tauri::State<'_, AppState>,
     _app: tauri::AppHandle,
 ) -> Result<Vec<ModelInfo>, String> {
+    let _scan_guard = MODEL_SCAN_LOCK.lock().await;
     let generation = state.model_scan_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let app_dir = utils::get_data_dir();
     let default_path = utils::get_default_models_dir();
@@ -688,16 +773,18 @@ pub async fn scan_models(
         .filter(|path| seen_scan_roots.insert(path_identity_key(path)))
         .collect::<Vec<_>>();
 
-    let result = tokio::task::spawn_blocking(move || -> Result<Vec<ModelInfo>, Vec<String>> {
+    let result = tokio::task::spawn_blocking(move || -> Result<ModelScanWork, Vec<String>> {
         let (inventory, directory_inventory) =
             model_inventory::load_model_scan_indexes().map_err(|err| vec![err])?;
+        let cached_by_parent = index_cached_models_by_parent(&inventory);
         let mut models: Vec<ModelInfo> = Vec::new();
         let mut seen_display_paths = HashSet::new();
         let mut seen_inventory_paths = HashSet::new();
         let mut seen_directory_keys = HashSet::new();
         let mut scan_root_keys = HashSet::new();
         let mut inventory_meta: HashMap<usize, (String, String, u64)> = HashMap::new();
-        let mut errors = Vec::new();
+        let mut fatal_errors = Vec::new();
+        let mut warnings = Vec::new();
         let mut fresh_files: Vec<(usize, PathBuf)> = Vec::new();
         let mut directory_records: Vec<InventoryDirectoryRecord> = Vec::new();
 
@@ -707,21 +794,28 @@ pub async fn scan_models(
                 if paths_equal(scan_root, &default_path_for_check) {
                     continue;
                 }
-                errors.push(format!("{} does not exist", root_str));
+                fatal_errors.push(format!("{} does not exist", root_str));
                 continue;
             }
             if !scan_root.is_dir() {
-                errors.push(format!("{} is not a directory", root_str));
+                fatal_errors.push(format!("{} is not a directory", root_str));
                 continue;
             }
 
             let scan_root_key = canonical_key(scan_root);
             scan_root_keys.insert(scan_root_key.clone());
+            let tree = match inspect_model_tree(scan_root, 0, MAX_MODEL_SCAN_DEPTH, &mut warnings) {
+                Ok(tree) => tree,
+                Err(error) => {
+                    fatal_errors.push(error);
+                    continue;
+                }
+            };
             let file_count = scan_model_directory_incremental(
-                scan_root,
+                &tree,
                 &scan_root_key,
-                0,
                 &inventory,
+                &cached_by_parent,
                 &directory_inventory,
                 &mut models,
                 &mut seen_display_paths,
@@ -730,12 +824,15 @@ pub async fn scan_models(
                 &mut inventory_meta,
                 &mut fresh_files,
                 &mut directory_records,
-                &mut errors,
             );
 
             if file_count == 0 {
-                errors.push(format!("{} contains no .gguf model files", root_str));
+                warnings.push(format!("{} contains no .gguf model files", root_str));
             }
+        }
+
+        if !fatal_errors.is_empty() {
+            return Err(fatal_errors);
         }
 
         if !fresh_files.is_empty() {
@@ -777,7 +874,7 @@ pub async fn scan_models(
                     let summary = match summary_result {
                         Ok(summary) => summary,
                         Err(err) => {
-                            errors.push(format!(
+                            warnings.push(format!(
                                 "{} metadata parse failed: {}",
                                 path.display(),
                                 err
@@ -813,31 +910,54 @@ pub async fn scan_models(
                     })
             })
             .collect::<Vec<_>>();
+        if models.is_empty() && !warnings.is_empty() {
+            Err(warnings)
+        } else {
+            Ok(ModelScanWork {
+                models,
+                records,
+                directory_records,
+                scan_root_keys,
+                seen_inventory_paths,
+                seen_directory_keys,
+                warnings,
+            })
+        }
+    })
+    .await
+    .map_err(|e| format!("scan thread failed: {:?}", e))?;
+
+    let work = match result {
+        Ok(work) => work,
+        Err(errors) => return Err(errors.join("; ")),
+    };
+
+    if state.model_scan_generation.load(Ordering::Acquire) != generation {
+        return Ok(state.models.lock().unwrap().clone());
+    }
+    let ModelScanWork {
+        models,
+        records,
+        directory_records,
+        scan_root_keys,
+        seen_inventory_paths,
+        seen_directory_keys,
+        warnings,
+    } = work;
+    let models = tokio::task::spawn_blocking(move || {
         model_inventory::apply_model_scan(
             &records,
             &directory_records,
             &scan_root_keys,
             &seen_inventory_paths,
             &seen_directory_keys,
-        )
-        .map_err(|err| vec![err])?;
-
-        if models.is_empty() && !errors.is_empty() {
-            Err(errors)
-        } else {
-            Ok(models)
-        }
+        )?;
+        Ok::<_, String>(models)
     })
     .await
-    .map_err(|e| format!("scan thread failed: {:?}", e))?;
-
-    let models = match result {
-        Ok(models) => models,
-        Err(errors) => return Err(errors.join("; ")),
-    };
-
-    if state.model_scan_generation.load(Ordering::Acquire) != generation {
-        return Ok(state.models.lock().unwrap().clone());
+    .map_err(|error| format!("model inventory commit worker failed: {error}"))??;
+    for warning in warnings {
+        eprintln!("model scan warning: {warning}");
     }
     let mut state_models = state.models.lock().unwrap();
     *state_models = models.clone();
@@ -934,7 +1054,9 @@ pub async fn delete_model_file(
     if !is_known {
         return Err("文件不在已扫描的模型列表中".to_string());
     }
-    let referenced_by = instances_referencing_model(&state.instances.lock().unwrap(), &canonical);
+    let instances = state.instances.lock().unwrap().clone();
+    let running = state.running.lock().unwrap().clone();
+    let referenced_by = instances_referencing_model(&instances, &running, &canonical);
     if !referenced_by.is_empty() {
         return Err(format!(
             "模型文件正被实例引用，无法删除: {}",
@@ -989,10 +1111,20 @@ pub async fn read_gguf_metadata(
 }
 
 // Engine scanning.
+struct EngineScanWork {
+    engines: Vec<EngineInfo>,
+    records: Vec<InventoryEngineRecord>,
+    directory_records: Vec<InventoryDirectoryRecord>,
+    scan_root_keys: HashSet<String>,
+    seen_inventory_ids: HashSet<String>,
+    seen_directory_keys: HashSet<String>,
+}
+
 pub async fn scan_engines(
     paths: Vec<String>,
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<EngineInfo>, String> {
+    let _scan_guard = ENGINE_SCAN_LOCK.lock().await;
     let generation = state.engine_scan_generation.fetch_add(1, Ordering::AcqRel) + 1;
     let paths = paths
         .into_iter()
@@ -1006,7 +1138,7 @@ pub async fn scan_engines(
         .into_iter()
         .filter(|path| seen_scan_roots.insert(path_identity_key(Path::new(path))))
         .collect::<Vec<_>>();
-    let mut engines = tokio::task::spawn_blocking(move || -> Result<Vec<EngineInfo>, String> {
+    let work = tokio::task::spawn_blocking(move || -> Result<EngineScanWork, String> {
         let (inventory, directory_inventory) = model_inventory::load_engine_scan_indexes()?;
         let mut engines: Vec<EngineInfo> = Vec::new();
         let mut engine_records: Vec<InventoryEngineRecord> = Vec::new();
@@ -1089,14 +1221,14 @@ pub async fn scan_engines(
             }
         }
 
-        model_inventory::apply_engine_scan(
-            &engine_records,
-            &directory_records,
-            &scan_root_keys,
-            &seen_inventory_ids,
-            &seen_directory_keys,
-        )?;
-        Ok(engines)
+        Ok(EngineScanWork {
+            engines,
+            records: engine_records,
+            directory_records,
+            scan_root_keys,
+            seen_inventory_ids,
+            seen_directory_keys,
+        })
     })
     .await
     .map_err(|e| format!("scan thread failed: {}", e))??;
@@ -1104,6 +1236,25 @@ pub async fn scan_engines(
     if state.engine_scan_generation.load(Ordering::Acquire) != generation {
         return Ok(state.engines.lock().unwrap().clone());
     }
+    let EngineScanWork {
+        mut engines,
+        records,
+        directory_records,
+        scan_root_keys,
+        seen_inventory_ids,
+        seen_directory_keys,
+    } = work;
+    tokio::task::spawn_blocking(move || {
+        model_inventory::apply_engine_scan(
+            &records,
+            &directory_records,
+            &scan_root_keys,
+            &seen_inventory_ids,
+            &seen_directory_keys,
+        )
+    })
+    .await
+    .map_err(|error| format!("engine inventory commit worker failed: {error}"))??;
 
     // Preserve custom engine names; state access stays outside spawn_blocking.
     {
@@ -1303,12 +1454,12 @@ mod incremental_scan_tests {
         let mut inventory_meta = HashMap::new();
         let mut fresh_files = Vec::new();
         let mut directory_records = Vec::new();
-        let mut errors = Vec::new();
+        let tree = inspect_model_tree(&dir, 0, MAX_MODEL_SCAN_DEPTH, &mut Vec::new()).unwrap();
 
         scan_model_directory_incremental(
-            &dir,
+            &tree,
             &scan_root_key,
-            0,
+            &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
             &mut models,
@@ -1318,7 +1469,6 @@ mod incremental_scan_tests {
             &mut inventory_meta,
             &mut fresh_files,
             &mut directory_records,
-            &mut errors,
         );
         assert_eq!(fresh_files.len(), 1);
         let (cache_key, stored_root, mtime) = inventory_meta.get(&0).unwrap().clone();
@@ -1333,12 +1483,12 @@ mod incremental_scan_tests {
         inventory_meta.clear();
         fresh_files.clear();
         directory_records.clear();
-        errors.clear();
+        let cached_by_parent = index_cached_models_by_parent(&inventory);
         scan_model_directory_incremental(
-            &dir,
+            &tree,
             &scan_root_key,
-            0,
             &inventory,
+            &cached_by_parent,
             &HashMap::new(),
             &mut models,
             &mut seen_display_paths,
@@ -1347,7 +1497,6 @@ mod incremental_scan_tests {
             &mut inventory_meta,
             &mut fresh_files,
             &mut directory_records,
-            &mut errors,
         );
 
         assert_eq!(models.len(), 1);
@@ -1379,7 +1528,11 @@ mod incremental_scan_tests {
         );
 
         assert_eq!(
-            instances_referencing_model(&instances, Path::new("/models/chat.gguf")),
+            instances_referencing_model(
+                &instances,
+                &HashMap::new(),
+                Path::new("/models/chat.gguf")
+            ),
             vec!["Primary"]
         );
         assert_eq!(
@@ -1387,6 +1540,41 @@ mod incremental_scan_tests {
             vec!["Primary"]
         );
         assert!(instances_referencing_engine(&instances, "engine-2").is_empty());
+    }
+
+    #[test]
+    fn running_launch_snapshot_blocks_deleting_its_original_model() {
+        let saved = HashMap::from([(
+            "primary".to_string(),
+            InstanceConfig {
+                name: "Primary".into(),
+                model_path: "/models/reconfigured.gguf".into(),
+                ..InstanceConfig::default()
+            },
+        )]);
+        let running = HashMap::from([(
+            "primary".to_string(),
+            RunningInstance {
+                instance_id: "primary".into(),
+                pid: 42,
+                port: 8080,
+                host: "127.0.0.1".into(),
+                start_time: 0,
+                executable_path: String::new(),
+                telemetry_session_id: None,
+                workload: String::new(),
+                launch_config: Some(InstanceConfig {
+                    name: "Primary".into(),
+                    model_path: "/models/original.gguf".into(),
+                    ..InstanceConfig::default()
+                }),
+            },
+        )]);
+
+        assert_eq!(
+            instances_referencing_model(&saved, &running, Path::new("/models/original.gguf")),
+            vec!["Primary"]
+        );
     }
 
     #[cfg(windows)]

@@ -4,12 +4,14 @@ use crate::path_utils::paths_equal;
 use crate::path_utils::{path_identity_key, path_is_within};
 use crate::utils;
 use futures_util::StreamExt;
-use reqwest::header::{HeaderMap, CONTENT_LENGTH, CONTENT_RANGE, IF_RANGE};
-use std::collections::HashMap;
+use reqwest::header::{HeaderMap, CONTENT_LENGTH, CONTENT_RANGE, IF_RANGE, LINK};
+use serde::de::DeserializeOwned;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, LazyLock, Mutex};
 use tauri::{Emitter, Manager};
+use tokio::io::AsyncWriteExt;
 
 // Shared HTTP client for all download operations
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
@@ -22,8 +24,86 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 
 const DOWNLOAD_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const DOWNLOAD_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const REPOSITORY_BROWSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const MAX_REPOSITORY_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_HUGGINGFACE_TREE_PAGES: usize = 100;
+const MAX_HUGGINGFACE_TREE_ENTRIES: usize = 100_000;
 
 static DOWNLOAD_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static DOWNLOAD_INFLIGHT_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static INFLIGHT_SNAPSHOT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+async fn read_bounded_json<T: DeserializeOwned>(
+    response: reqwest::Response,
+    context: &str,
+) -> Result<T, String> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_REPOSITORY_RESPONSE_BYTES as u64)
+    {
+        return Err(format!(
+            "{context} response exceeded the {} MiB limit",
+            MAX_REPOSITORY_RESPONSE_BYTES / (1024 * 1024)
+        ));
+    }
+
+    let mut body = Vec::new();
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| format!("{context} response read failed: {error}"))?;
+        if body.len().saturating_add(chunk.len()) > MAX_REPOSITORY_RESPONSE_BYTES {
+            return Err(format!(
+                "{context} response exceeded the {} MiB limit",
+                MAX_REPOSITORY_RESPONSE_BYTES / (1024 * 1024)
+            ));
+        }
+        body.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&body).map_err(|error| format!("{context} parse failed: {error}"))
+}
+
+fn huggingface_next_page(
+    headers: &HeaderMap,
+    current_url: &reqwest::Url,
+) -> Result<Option<reqwest::Url>, String> {
+    let Some(value) = headers.get(LINK) else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| "Hugging Face returned an invalid Link header".to_string())?;
+    for part in value.split(',') {
+        let mut sections = part.trim().split(';');
+        let Some(target) = sections.next() else {
+            continue;
+        };
+        let is_next = sections.any(|section| {
+            let section = section.trim();
+            section.eq_ignore_ascii_case("rel=next") || section.eq_ignore_ascii_case("rel=\"next\"")
+        });
+        if !is_next {
+            continue;
+        }
+        let Some(target) = target
+            .trim()
+            .strip_prefix('<')
+            .and_then(|value| value.strip_suffix('>'))
+        else {
+            return Err("Hugging Face returned a malformed next-page link".to_string());
+        };
+        let url = current_url
+            .join(target)
+            .map_err(|error| format!("invalid Hugging Face next-page link: {error}"))?;
+        if url.scheme() != "https"
+            || url.host_str() != Some("huggingface.co")
+            || url.port().is_some_and(|port| port != 443)
+        {
+            return Err("Hugging Face next-page link left the trusted API origin".to_string());
+        }
+        return Ok(Some(url));
+    }
+    Ok(None)
+}
 
 // #9: Shared download core.
 
@@ -1402,14 +1482,23 @@ async fn download_single_file(
     let mut last_emit = std::time::Instant::now() - std::time::Duration::from_secs(1); // Emit immediately the first time.
     let mut last_artifact_save = std::time::Instant::now() - std::time::Duration::from_secs(2);
 
-    use std::io::Write;
-    let mut file = match open_download_temp_file(
-        &save_path,
-        &final_path,
-        &temp_path,
-        &metadata_path,
-        is_partial,
-    ) {
+    let open_save_path = save_path.clone();
+    let open_final_path = final_path.clone();
+    let open_temp_path = temp_path.clone();
+    let open_metadata_path = metadata_path.clone();
+    let file = match tokio::task::spawn_blocking(move || {
+        open_download_temp_file(
+            &open_save_path,
+            &open_final_path,
+            &open_temp_path,
+            &open_metadata_path,
+            is_partial,
+        )
+    })
+    .await
+    .map_err(|error| format!("download file open worker failed: {error}"))
+    .and_then(|result| result)
+    {
         Ok(f) => f,
         Err(e) => {
             save_artifact_state(
@@ -1451,6 +1540,7 @@ async fn download_single_file(
             return;
         }
     };
+    let mut file = tokio::fs::File::from_std(file);
 
     let mut stream = resp.bytes_stream();
     let mut last_received = std::time::Instant::now();
@@ -1562,7 +1652,7 @@ async fn download_single_file(
             Ok(bytes) => {
                 let len = bytes.len() as u64;
                 throttle_download_bytes(&shared, len).await;
-                if let Err(e) = file.write_all(&bytes) {
+                if let Err(e) = file.write_all(&bytes).await {
                     save_artifact_state(
                         &DownloadArtifactState {
                             task_id: task_id.clone(),
@@ -1697,7 +1787,12 @@ async fn download_single_file(
             }
         }
     }
-    if let Err(error) = file.flush().and_then(|_| file.sync_all()) {
+    if let Err(error) = async {
+        file.flush().await?;
+        file.sync_all().await
+    }
+    .await
+    {
         let message = format!("Failed to flush completed download: {error}");
         has_error.store(true, Ordering::SeqCst);
         update_manager_file_state(
@@ -1830,16 +1925,24 @@ async fn download_single_file(
 // ModelScope browse.
 
 pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
+    let repo_id = sanitize_repo_id(&repo_id)?;
     let url = format!(
         "https://www.modelscope.cn/api/v1/models/{}/repo/files?Recursive=true",
         repo_id
     );
     let resp = HTTP_CLIENT
         .get(&url)
+        .timeout(REPOSITORY_BROWSE_TIMEOUT)
         .send()
         .await
         .map_err(|e| format!("网络错误: {}", e))?;
-    let body: serde_json::Value = resp.json().await.map_err(|e| format!("{}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "ModelScope repository request failed (HTTP {})",
+            resp.status()
+        ));
+    }
+    let body: serde_json::Value = read_bounded_json(resp, "ModelScope repository").await?;
 
     if !body
         .get("Success")
@@ -2063,19 +2166,55 @@ struct HfLfsInfo {
 }
 
 pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
-    let url = format!(
+    let repo_id = sanitize_repo_id(&repo_id)?;
+    let initial_url = format!(
         "https://huggingface.co/api/models/{}/tree/main?recursive=true",
         repo_id
     );
-    let resp = HTTP_CLIENT
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("网络错误: {}", e))?;
-    if !resp.status().is_success() {
-        return Err(format!("仓库未找到 (HTTP {})", resp.status()));
+    let mut next_url = Some(
+        reqwest::Url::parse(&initial_url)
+            .map_err(|error| format!("invalid Hugging Face repository URL: {error}"))?,
+    );
+    let mut entries = Vec::new();
+    let mut seen_paths = HashSet::new();
+
+    for page in 0..MAX_HUGGINGFACE_TREE_PAGES {
+        let Some(url) = next_url.take() else {
+            break;
+        };
+        let resp = HTTP_CLIENT
+            .get(url.clone())
+            .timeout(REPOSITORY_BROWSE_TIMEOUT)
+            .send()
+            .await
+            .map_err(|e| format!("网络错误: {}", e))?;
+        if !resp.status().is_success() {
+            return Err(format!("仓库未找到 (HTTP {})", resp.status()));
+        }
+        next_url = huggingface_next_page(resp.headers(), &url)?;
+        let page_entries: Vec<HfFileEntry> =
+            read_bounded_json(resp, "Hugging Face repository page").await?;
+        for entry in page_entries {
+            if seen_paths.insert(entry.path.clone()) {
+                entries.push(entry);
+            }
+        }
+        if entries.len() > MAX_HUGGINGFACE_TREE_ENTRIES {
+            return Err(format!(
+                "Hugging Face repository exceeded the {} entry limit",
+                MAX_HUGGINGFACE_TREE_ENTRIES
+            ));
+        }
+        if next_url.is_none() {
+            break;
+        }
+        if page + 1 == MAX_HUGGINGFACE_TREE_PAGES {
+            return Err(format!(
+                "Hugging Face repository exceeded the {} page limit",
+                MAX_HUGGINGFACE_TREE_PAGES
+            ));
+        }
     }
-    let entries: Vec<HfFileEntry> = resp.json().await.map_err(|e| format!("解析失败: {}", e))?;
 
     let mut result: Vec<MsFileEntry> = entries
         .iter()
@@ -2173,12 +2312,29 @@ pub async fn download_huggingface_files(
 
 /// Check if local file exists and return its size.
 pub async fn check_local_file(path: String) -> Result<Option<u64>, String> {
-    let p = std::path::Path::new(&path);
-    match std::fs::metadata(p) {
-        Ok(m) if m.is_file() => Ok(Some(m.len())),
-        Ok(_) => Ok(None),
-        Err(_) => Ok(None),
+    Ok(check_local_files(vec![path]).await?.pop().flatten())
+}
+
+/// Check local files in one blocking worker so repository browsing does not issue one IPC call
+/// and one synchronous metadata lookup per file.
+pub async fn check_local_files(paths: Vec<String>) -> Result<Vec<Option<u64>>, String> {
+    if paths.len() > MAX_HUGGINGFACE_TREE_ENTRIES {
+        return Err(format!(
+            "local file check exceeded the {} path limit",
+            MAX_HUGGINGFACE_TREE_ENTRIES
+        ));
     }
+    tokio::task::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|path| match std::fs::metadata(path) {
+                Ok(metadata) if metadata.is_file() => Some(metadata.len()),
+                _ => None,
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| format!("local file check worker failed: {error}"))
 }
 
 pub async fn delete_managed_local_file(
@@ -2345,6 +2501,62 @@ fn conflicting_download_identity(
         .find(|identity| existing_identities.contains(identity))
 }
 
+struct InflightSnapshot {
+    generation: u64,
+    path: PathBuf,
+    entries: Vec<PersistedQueueEntry>,
+}
+
+struct InflightSnapshotWorker {
+    pending: Arc<(Mutex<Option<InflightSnapshot>>, Condvar)>,
+}
+
+impl InflightSnapshotWorker {
+    fn new() -> Self {
+        let pending = Arc::new((Mutex::new(None::<InflightSnapshot>), Condvar::new()));
+        let worker_pending = Arc::clone(&pending);
+        std::thread::Builder::new()
+            .name("download-inflight-writer".into())
+            .spawn(move || loop {
+                let snapshot = {
+                    let (lock, ready) = &*worker_pending;
+                    let mut pending = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    while pending.is_none() {
+                        pending = ready
+                            .wait(pending)
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    }
+                    pending.take().expect("inflight snapshot was signalled")
+                };
+                if let Err(error) = persist_inflight_snapshot(snapshot) {
+                    eprintln!("Failed to persist active download snapshot: {error}");
+                }
+            })
+            .expect("failed to start download inflight writer");
+        Self { pending }
+    }
+
+    fn schedule(&self, snapshot: InflightSnapshot) {
+        let (lock, ready) = &*self.pending;
+        let mut pending = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        *pending = Some(snapshot);
+        ready.notify_one();
+    }
+}
+
+static INFLIGHT_SNAPSHOT_WORKER: LazyLock<InflightSnapshotWorker> =
+    LazyLock::new(InflightSnapshotWorker::new);
+
+fn persist_inflight_snapshot(snapshot: InflightSnapshot) -> Result<(), String> {
+    let _guard = DOWNLOAD_INFLIGHT_STATE_LOCK
+        .lock()
+        .map_err(|_| "download inflight state lock is poisoned".to_string())?;
+    if snapshot.generation != INFLIGHT_SNAPSHOT_GENERATION.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    save_inflight_state_at_path(&snapshot.entries, &snapshot.path)
+}
+
 fn persist_active_entries_snapshot(state: &AppState, force: bool) {
     if !force {
         let mut last_persist = state.download_last_inflight_persist.lock().unwrap();
@@ -2353,13 +2565,21 @@ fn persist_active_entries_snapshot(state: &AppState, force: bool) {
         }
         *last_persist = std::time::Instant::now();
     }
-    let _guard = state.download_inflight_lock.lock().unwrap();
     let inflight: Vec<PersistedQueueEntry> = {
         let entries = state.download_active_entries.lock().unwrap();
         entries.values().cloned().collect()
     };
-    if let Err(error) = save_inflight_state_unlocked(&inflight, state) {
-        eprintln!("Failed to persist active download snapshot: {error}");
+    let snapshot = InflightSnapshot {
+        generation: INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel) + 1,
+        path: inflight_path(state),
+        entries: inflight,
+    };
+    if force {
+        if let Err(error) = persist_inflight_snapshot(snapshot) {
+            eprintln!("Failed to persist active download snapshot: {error}");
+        }
+    } else {
+        INFLIGHT_SNAPSHOT_WORKER.schedule(snapshot);
     }
 }
 
@@ -2941,9 +3161,15 @@ fn save_inflight_state_unlocked(
     inflight: &[PersistedQueueEntry],
     state: &AppState,
 ) -> Result<(), String> {
-    let path = inflight_path(state);
+    save_inflight_state_at_path(inflight, &inflight_path(state))
+}
+
+fn save_inflight_state_at_path(
+    inflight: &[PersistedQueueEntry],
+    path: &Path,
+) -> Result<(), String> {
     if inflight.is_empty() {
-        return match std::fs::remove_file(&path) {
+        return match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!("failed to remove inflight download state: {error}")),
@@ -2954,7 +3180,7 @@ fn save_inflight_state_unlocked(
     };
     serde_json::to_string_pretty(&ds)
         .map_err(|error| format!("failed to serialize inflight download state: {error}"))
-        .and_then(|json| write_string_atomic(&path, &json))
+        .and_then(|json| write_string_atomic(path, &json))
 }
 
 fn load_inflight_state_unlocked(state: &AppState) -> Result<Vec<PersistedQueueEntry>, String> {
@@ -2973,7 +3199,8 @@ fn update_inflight_state<R, F>(state: &AppState, update: F) -> Result<R, String>
 where
     F: FnOnce(&mut Vec<PersistedQueueEntry>) -> R,
 {
-    let _guard = state.download_inflight_lock.lock().unwrap();
+    INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel);
+    let _guard = DOWNLOAD_INFLIGHT_STATE_LOCK.lock().unwrap();
     let mut inflight = load_inflight_state_unlocked(state)?;
     let result = update(&mut inflight);
     save_inflight_state_unlocked(&inflight, state)?;
@@ -2981,7 +3208,8 @@ where
 }
 
 fn clear_inflight_state(state: &AppState) -> Result<(), String> {
-    let _guard = state.download_inflight_lock.lock().unwrap();
+    INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel);
+    let _guard = DOWNLOAD_INFLIGHT_STATE_LOCK.lock().unwrap();
     save_inflight_state_unlocked(&[], state)
 }
 
@@ -3039,7 +3267,7 @@ pub(crate) fn restore_runtime_queue_from_disk(
 
     state.download_shutting_down.store(false, Ordering::SeqCst);
     let inflight = {
-        let _guard = state.download_inflight_lock.lock().unwrap();
+        let _guard = DOWNLOAD_INFLIGHT_STATE_LOCK.lock().unwrap();
         match load_inflight_state_unlocked(state) {
             Ok(inflight) => inflight,
             Err(error) => {
@@ -3635,6 +3863,55 @@ pub fn flush_download_manager_state(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod audit_remediation_tests {
     use super::*;
+
+    #[test]
+    fn huggingface_pagination_accepts_only_trusted_next_links() {
+        let current = reqwest::Url::parse(
+            "https://huggingface.co/api/models/org/model/tree/main?recursive=true",
+        )
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            LINK,
+            reqwest::header::HeaderValue::from_static(
+                "<https://huggingface.co/api/models/org/model/tree/main?cursor=next>; rel=\"next\"",
+            ),
+        );
+        assert_eq!(
+            huggingface_next_page(&headers, &current)
+                .unwrap()
+                .unwrap()
+                .query(),
+            Some("cursor=next")
+        );
+
+        headers.insert(
+            LINK,
+            reqwest::header::HeaderValue::from_static(
+                "<https://attacker.invalid/steal>; rel=\"next\"",
+            ),
+        );
+        assert!(huggingface_next_page(&headers, &current).is_err());
+    }
+
+    #[tokio::test]
+    async fn local_file_checks_are_batched_without_losing_input_order() {
+        let dir = std::env::temp_dir().join(format!("lsm-local-check-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let present = dir.join("present.gguf");
+        std::fs::write(&present, b"model").unwrap();
+        let missing = dir.join("missing.gguf");
+
+        let sizes = check_local_files(vec![
+            present.to_string_lossy().to_string(),
+            missing.to_string_lossy().to_string(),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(sizes, vec![Some(5), None]);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn crash_recovered_inflight_entry_normalizes_active_file_statuses() {
@@ -5015,6 +5292,15 @@ pub mod ipc {
     #[tauri::command]
     pub async fn check_local_file(path: String) -> crate::error::AppResult<Option<u64>> {
         super::check_local_file(path)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn check_local_files(
+        paths: Vec<String>,
+    ) -> crate::error::AppResult<Vec<Option<u64>>> {
+        super::check_local_files(paths)
             .await
             .map_err(crate::error::AppError::from)
     }
