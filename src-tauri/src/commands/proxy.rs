@@ -2110,7 +2110,8 @@ async fn proxy_live(State(router_state): State<ProxyRouterState>) -> Json<serde_
 }
 
 async fn proxy_ready(State(router_state): State<ProxyRouterState>) -> Response {
-    probe_snapshot_targets(router_state.source.clone(), router_state.runtime.clone()).await;
+    // Health probing already runs in the background. Read the latest bounded snapshot here so a
+    // readiness request cannot fan out into health/props/slots calls for every configured target.
     let snapshot = router_state.source.proxy_snapshot();
     let status = status_with_runtime(&snapshot, &router_state.runtime);
     let target_ids = snapshot.running.keys().cloned().collect::<Vec<_>>();
@@ -2743,11 +2744,13 @@ async fn proxy_upstream(
     let response_is_sse = response_content_type.contains("text/event-stream");
     let response_is_json = response_content_type.contains("json");
     let status_success = status.is_success();
+    let normalize_error_as_json =
+        !status_success && (response_is_json || api_format.is_anthropic());
     let response_connection_tokens = connection_header_tokens(response.headers());
     for (name, value) in response.headers().iter() {
         let lower = name.as_str().to_ascii_lowercase();
         if lower == "content-length"
-            || (!status_success && lower == "content-type")
+            || (normalize_error_as_json && lower == "content-type")
             || (api_format.is_anthropic() && !status_success && lower == "request-id")
             || is_hop_by_hop_header(&lower, &response_connection_tokens)
         {
@@ -2760,7 +2763,7 @@ async fn proxy_upstream(
             builder = builder.header(header_name, header_value);
         }
     }
-    if !status_success {
+    if normalize_error_as_json {
         builder = builder.header("content-type", "application/json");
     }
 
@@ -3939,6 +3942,46 @@ mod tests {
             bound_addr: String::new(),
             last_error: None,
         }
+    }
+
+    async fn mock_plain_text_error() -> impl IntoResponse {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("content-type", "text/plain; charset=utf-8")],
+            "backend is warming up",
+        )
+    }
+
+    #[tokio::test]
+    async fn non_json_upstream_errors_preserve_their_content_type() {
+        let upstream_router =
+            Router::new().route("/v1/chat/completions", post(mock_plain_text_error));
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+        let proxy_router = super::proxy_router_from_source(Arc::new(TestProxySource {
+            snapshot: openai_proxy_snapshot(upstream_address, "public-sdk-key"),
+        }));
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .bearer_auth("public-sdk-key")
+            .json(&json!({
+                "model": "local-openai",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/plain")));
+        assert_eq!(response.text().await.unwrap(), "backend is warming up");
+
+        proxy_task.abort();
+        upstream_task.abort();
     }
 
     fn target_health(

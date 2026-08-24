@@ -8,7 +8,7 @@ use crate::path_utils::{path_identity_key, path_is_within as shared_path_is_with
 
 const PATH_AUTHORITY_FILE: &str = "authorized-paths.json";
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct PathAuthority {
     #[serde(default)]
     engine_roots: BTreeSet<String>,
@@ -99,22 +99,25 @@ fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
     let root = canonical_directory(root)?;
     let key = normalized_authority_key(&root);
     let mut authority = PATH_AUTHORITY.lock().unwrap();
+    let mut updated = authority.clone();
     match purpose {
         "engine" => {
-            authority.engine_roots.insert(key);
+            updated.engine_roots.insert(key);
         }
         "model" => {
-            authority.model_roots.insert(key);
+            updated.model_roots.insert(key);
         }
         "download" => {
             let app_data_root = canonical_directory(&crate::utils::get_data_dir())
                 .unwrap_or_else(|_| crate::utils::get_data_dir());
             validate_download_root_boundary(&root, &app_data_root)?;
-            authority.download_roots.insert(key);
+            updated.download_roots.insert(key);
         }
         _ => return Err("未知的目录授权用途".to_string()),
     }
-    persist_authority(&authority)
+    persist_authority(&updated)?;
+    *authority = updated;
+    Ok(())
 }
 
 pub fn initialize_path_authority(

@@ -150,6 +150,16 @@ pub(crate) fn stable_discovered_worker_id(host: &str, port: u16, service: &str) 
     format!("auto-{hash:016x}")
 }
 
+fn is_tcp_auto_discovered_worker(worker: &WorkerInfo) -> bool {
+    worker.auto_discovered
+        && worker.port == 50052
+        && worker.name
+            == format!(
+                "Worker-{}",
+                worker.host.split('.').next_back().unwrap_or("?")
+            )
+}
+
 // -------------------------------------------------------------------
 // Get local LAN prefixes.
 // -------------------------------------------------------------------
@@ -354,6 +364,16 @@ pub async fn scan_workers_tcp(state: State<'_, AppState>) -> Result<Vec<WorkerIn
     match tokio_timeout(overall_timeout, scan_future).await {
         Ok(results) => {
             let merged = update_workers(&state, |existing| {
+                let discovered_endpoints = results
+                    .iter()
+                    .map(|worker| (worker.host.as_str(), worker.port))
+                    .collect::<HashSet<_>>();
+                for worker in existing.iter_mut().filter(|worker| {
+                    is_tcp_auto_discovered_worker(worker)
+                        && !discovered_endpoints.contains(&(worker.host.as_str(), worker.port))
+                }) {
+                    worker.status = WorkerStatus::Offline;
+                }
                 for discovered in &results {
                     if let Some(worker) = existing.iter_mut().find(|worker| {
                         worker.host == discovered.host && worker.port == discovered.port
@@ -1179,6 +1199,27 @@ mod tests {
         assert_eq!(first, same);
         assert_ne!(first, other_port);
         assert_ne!(first, other_service);
+    }
+
+    #[test]
+    fn tcp_discovery_cleanup_only_targets_tcp_generated_workers() {
+        let mut worker = WorkerInfo {
+            id: "tcp".into(),
+            host: "192.168.1.42".into(),
+            port: 50052,
+            name: "Worker-42".into(),
+            origin: WorkerOrigin::Manual,
+            devices: Vec::new(),
+            status: WorkerStatus::Unknown,
+            last_seen: None,
+            auto_discovered: true,
+        };
+        assert!(is_tcp_auto_discovered_worker(&worker));
+        worker.name = "rpc-service".into();
+        assert!(!is_tcp_auto_discovered_worker(&worker));
+        worker.name = "Worker-42".into();
+        worker.auto_discovered = false;
+        assert!(!is_tcp_auto_discovered_worker(&worker));
     }
 
     #[test]

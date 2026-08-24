@@ -839,7 +839,12 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
                         Err(mpsc::TryRecvError::Disconnected) => break,
                     }
                 }
-                for error in write_telemetry_batch_with_retry(&mut conn, &batch, 3) {
+                let write_errors = write_telemetry_batch_with_retry(&mut conn, &batch, 3);
+                if write_errors.is_empty() {
+                    last_write_error = None;
+                    *TELEMETRY_LAST_WRITE_ERROR.lock().unwrap() = None;
+                }
+                for error in write_errors {
                     eprintln!("{error}");
                     TELEMETRY_DROPPED_WRITES.fetch_add(1, Ordering::Relaxed);
                     *TELEMETRY_LAST_WRITE_ERROR.lock().unwrap() = Some((now_ms(), error.clone()));

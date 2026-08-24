@@ -32,6 +32,7 @@ const MAX_HUGGINGFACE_TREE_ENTRIES: usize = 100_000;
 static DOWNLOAD_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static DOWNLOAD_INFLIGHT_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static INFLIGHT_SNAPSHOT_GENERATION: AtomicU64 = AtomicU64::new(0);
+static INFLIGHT_SNAPSHOT_PERSISTED_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 async fn read_bounded_json<T: DeserializeOwned>(
     response: reqwest::Response,
@@ -422,6 +423,14 @@ fn response_total_size(headers: &HeaderMap, resume_from: u64, fallback_size: u64
         .and_then(|value| value.parse::<u64>().ok())
         .map(|content_length| content_length.saturating_add(resume_from))
         .unwrap_or(fallback_size)
+}
+
+fn authoritative_download_size(response_total: u64, catalog_size: u64) -> u64 {
+    if response_total > 0 {
+        response_total
+    } else {
+        catalog_size
+    }
 }
 
 fn validate_partial_response(
@@ -1029,10 +1038,13 @@ async fn download_single_file(
     let artifact = load_artifact_state_async(&temp_path).await;
     let mut save_etag = artifact.as_ref().and_then(|a| a.etag.clone());
     let mut save_lm = artifact.as_ref().and_then(|a| a.last_modified.clone());
-    let resume_from = artifact
-        .as_ref()
-        .map(|a| a.downloaded_size)
-        .unwrap_or_else(|| temp_path.metadata().map(|m| m.len()).unwrap_or(0));
+    // The partial file is the source of truth. A process crash or a failed `write_all` can leave
+    // more (or fewer) bytes on disk than the last artifact checkpoint recorded. Resuming from the
+    // checkpoint while appending to the real file would otherwise create a gap or duplicate data.
+    let resume_from = temp_path
+        .metadata()
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
 
     if shared
         .cancel_flags
@@ -1653,6 +1665,10 @@ async fn download_single_file(
                 let len = bytes.len() as u64;
                 throttle_download_bytes(&shared, len).await;
                 if let Err(e) = file.write_all(&bytes).await {
+                    let persisted_downloaded = tokio::fs::metadata(&temp_path)
+                        .await
+                        .map(|metadata| metadata.len())
+                        .unwrap_or(downloaded);
                     save_artifact_state(
                         &DownloadArtifactState {
                             task_id: task_id.clone(),
@@ -1663,7 +1679,7 @@ async fn download_single_file(
                             final_path: final_path.to_string_lossy().to_string(),
                             temp_path: temp_path.to_string_lossy().to_string(),
                             expected_size: total,
-                            downloaded_size: downloaded,
+                            downloaded_size: persisted_downloaded,
                             etag: save_etag.clone(),
                             last_modified: save_lm.clone(),
                             updated_at: now_secs(),
@@ -1675,7 +1691,7 @@ async fn download_single_file(
                         &shared,
                         &task_id,
                         FileStatePatch {
-                            downloaded: Some(downloaded),
+                            downloaded: Some(persisted_downloaded),
                             size: Some(total),
                             version: Some(ctx.version),
                             status: Some("error".into()),
@@ -1684,6 +1700,7 @@ async fn download_single_file(
                         },
                     );
                     has_error.store(true, Ordering::SeqCst);
+                    has_non_retryable_error.store(true, Ordering::SeqCst);
                     let _ = app.emit("download-error", serde_json::json!({
                             "taskId": &task_id, "runId": &run_id, "version": ctx.version, "fileName": &file_name, "error": format!("File create/write failed: {}", e),
                 "repoId": &repo_id, "source": &source, "remotePath": &remote_path,
@@ -1820,7 +1837,9 @@ async fn download_single_file(
         .metadata()
         .map(|metadata| metadata.len())
         .unwrap_or(0);
-    let authoritative_size = if file_size > 0 { file_size } else { total };
+    // Response metadata describes the object that was actually transferred. The catalog size is
+    // only a fallback because a repository may replace a file after it was browsed.
+    let authoritative_size = authoritative_download_size(total, file_size);
     if authoritative_size > 0 && actual_size != authoritative_size {
         let message =
             format!("Download ended at {actual_size} bytes, expected {authoritative_size} bytes");
@@ -1924,6 +1943,15 @@ async fn download_single_file(
 
 // ModelScope browse.
 
+fn has_supported_download_extension(name: &str) -> bool {
+    Path::new(name)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("gguf") || extension.eq_ignore_ascii_case("txt")
+        })
+}
+
 pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, String> {
     let repo_id = sanitize_repo_id(&repo_id)?;
     let url = format!(
@@ -1965,7 +1993,7 @@ pub async fn browse_modelscope(repo_id: String) -> Result<Vec<MsFileEntry>, Stri
                 return None;
             }
             let name = f.get("Name")?.as_str()?.to_string();
-            if !name.ends_with(".gguf") && !name.ends_with(".txt") {
+            if !has_supported_download_extension(&name) {
                 return None;
             }
             Some(MsFileEntry {
@@ -2223,7 +2251,7 @@ pub async fn browse_huggingface(repo_id: String) -> Result<Vec<MsFileEntry>, Str
                 return None;
             }
             let name = e.path.split('/').next_back()?.to_string();
-            if !name.ends_with(".gguf") && !name.ends_with(".txt") {
+            if !has_supported_download_extension(&name) {
                 return None;
             }
             let size = e.lfs.as_ref().map(|l| l.size).or(e.size).unwrap_or(0);
@@ -2551,10 +2579,12 @@ fn persist_inflight_snapshot(snapshot: InflightSnapshot) -> Result<(), String> {
     let _guard = DOWNLOAD_INFLIGHT_STATE_LOCK
         .lock()
         .map_err(|_| "download inflight state lock is poisoned".to_string())?;
-    if snapshot.generation != INFLIGHT_SNAPSHOT_GENERATION.load(Ordering::Acquire) {
+    if snapshot.generation <= INFLIGHT_SNAPSHOT_PERSISTED_GENERATION.load(Ordering::Acquire) {
         return Ok(());
     }
-    save_inflight_state_at_path(&snapshot.entries, &snapshot.path)
+    save_inflight_state_at_path(&snapshot.entries, &snapshot.path)?;
+    INFLIGHT_SNAPSHOT_PERSISTED_GENERATION.store(snapshot.generation, Ordering::Release);
+    Ok(())
 }
 
 fn persist_active_entries_snapshot(state: &AppState, force: bool) {
@@ -2565,12 +2595,16 @@ fn persist_active_entries_snapshot(state: &AppState, force: bool) {
         }
         *last_persist = std::time::Instant::now();
     }
-    let inflight: Vec<PersistedQueueEntry> = {
+    // Capture the state and allocate its generation under the same lock. Otherwise an older
+    // snapshot can be preempted after capture, receive a newer generation, and overwrite a newer
+    // concurrent state transition during crash-recovery persistence.
+    let (generation, inflight): (u64, Vec<PersistedQueueEntry>) = {
         let entries = state.download_active_entries.lock().unwrap();
-        entries.values().cloned().collect()
+        let generation = INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+        (generation, entries.values().cloned().collect())
     };
     let snapshot = InflightSnapshot {
-        generation: INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel) + 1,
+        generation,
         path: inflight_path(state),
         entries: inflight,
     };
@@ -3199,18 +3233,21 @@ fn update_inflight_state<R, F>(state: &AppState, update: F) -> Result<R, String>
 where
     F: FnOnce(&mut Vec<PersistedQueueEntry>) -> R,
 {
-    INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel);
     let _guard = DOWNLOAD_INFLIGHT_STATE_LOCK.lock().unwrap();
+    let generation = INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     let mut inflight = load_inflight_state_unlocked(state)?;
     let result = update(&mut inflight);
     save_inflight_state_unlocked(&inflight, state)?;
+    INFLIGHT_SNAPSHOT_PERSISTED_GENERATION.store(generation, Ordering::Release);
     Ok(result)
 }
 
 fn clear_inflight_state(state: &AppState) -> Result<(), String> {
-    INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel);
     let _guard = DOWNLOAD_INFLIGHT_STATE_LOCK.lock().unwrap();
-    save_inflight_state_unlocked(&[], state)
+    let generation = INFLIGHT_SNAPSHOT_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+    save_inflight_state_unlocked(&[], state)?;
+    INFLIGHT_SNAPSHOT_PERSISTED_GENERATION.store(generation, Ordering::Release);
+    Ok(())
 }
 
 fn merge_crash_recovered_inflight(
@@ -4642,6 +4679,19 @@ mod audit_remediation_tests {
         headers.insert(CONTENT_LENGTH, "10".parse().unwrap());
 
         assert_eq!(response_total_size(&headers, 10, 100), 100);
+    }
+
+    #[test]
+    fn response_size_overrides_stale_catalog_size() {
+        assert_eq!(authoritative_download_size(150, 100), 150);
+        assert_eq!(authoritative_download_size(0, 100), 100);
+    }
+
+    #[test]
+    fn repository_browser_accepts_extensions_case_insensitively() {
+        assert!(has_supported_download_extension("MODEL.GGUF"));
+        assert!(has_supported_download_extension("tokenizer.TXT"));
+        assert!(!has_supported_download_extension("model.json"));
     }
 
     #[test]

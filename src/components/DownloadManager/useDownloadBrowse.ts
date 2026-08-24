@@ -162,5 +162,17 @@ export function useDownloadBrowse(saveDir: string) {
     }
   }
 
-  return { source, repoId, files, status, browsing, browsedRepoId, selectSource, changeRepoId, resetBrowse, browse }
+  return {
+    source,
+    repoId,
+    files,
+    status,
+    browsing,
+    browsedRepoId,
+    selectSource,
+    changeRepoId,
+    invalidateBrowse: invalidate,
+    resetBrowse,
+    browse,
+  }
 }

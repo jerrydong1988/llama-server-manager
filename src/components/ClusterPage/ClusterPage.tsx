@@ -30,6 +30,8 @@ export default function ClusterPage() {
   const [formData, setFormData] = useState({ host: '', port: 50052, name: '' })
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [mdnsActive, setMdnsActive] = useState(false)
+  const [mdnsBusy, setMdnsBusy] = useState(false)
+  const [mdnsError, setMdnsError] = useState('')
   const [showLaunchWizard, setShowLaunchWizard] = useState(false)
   const [launchStep, setLaunchStep] = useState(0)
   const [launchForm, setLaunchForm] = useState({
@@ -41,6 +43,20 @@ export default function ClusterPage() {
     sshPort: 22,
     remoteOs: 'auto',
   })
+
+  useEffect(() => {
+    let disposed = false
+    invoke<boolean>('is_mdns_discovery_active')
+      .then(active => {
+        if (!disposed) setMdnsActive(active)
+      })
+      .catch(error => {
+        if (!disposed) setMdnsError(errorMessage(error))
+      })
+    return () => {
+      disposed = true
+    }
+  }, [])
   const [localHosts, setLocalHosts] = useState<Set<string>>(new Set(['127.0.0.1', 'localhost', '::1']))
   const [launching, setLaunching] = useState(false)
   const [launchError, setLaunchError] = useState('')
@@ -213,12 +229,23 @@ export default function ClusterPage() {
   }
 
   const handleMdnsToggle = async () => {
-    if (mdnsActive) {
-      await invoke('stop_mdns_discovery')
-      setMdnsActive(false)
-    } else {
-      await invoke('start_mdns_discovery')
-      setMdnsActive(true)
+    if (mdnsBusy) return
+    setMdnsBusy(true)
+    setMdnsError('')
+    try {
+      if (mdnsActive) {
+        await invoke('stop_mdns_discovery')
+        setMdnsActive(false)
+      } else {
+        await invoke('start_mdns_discovery')
+        setMdnsActive(true)
+      }
+    } catch (error) {
+      const message = errorMessage(error)
+      setMdnsError(message)
+      addRuntimeWarning(`mDNS discovery failed: ${message}`)
+    } finally {
+      setMdnsBusy(false)
     }
   }
 
@@ -455,6 +482,7 @@ export default function ClusterPage() {
 
             <Button
               onClick={handleMdnsToggle}
+              disabled={mdnsBusy}
               variant={mdnsActive ? 'primary' : 'secondary'}
               size="icon"
               title={t.clusterPage.discoverMode}
@@ -619,6 +647,7 @@ export default function ClusterPage() {
                   {mdnsActive ? t.clusterPage.online : t.clusterPage.offline}
                 </Badge>
               </div>
+              {mdnsError ? <p className="mt-2 text-xs text-red-400">{mdnsError}</p> : null}
             </InsetSurface>
 
             <InsetSurface className="p-4">

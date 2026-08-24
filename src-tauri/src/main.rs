@@ -17,7 +17,9 @@ use crate::commands::cluster::{
     get_cluster_metrics, get_local_host, get_worker_info, get_workers, is_local_host, load_workers,
     remove_worker, scan_workers_tcp, start_local_rpc, stop_local_worker, stop_worker, test_worker,
 };
-use crate::commands::cluster_mdns::{start_mdns_discovery, stop_mdns_discovery};
+use crate::commands::cluster_mdns::{
+    is_mdns_discovery_active, start_mdns_discovery, stop_mdns_discovery,
+};
 use crate::commands::cluster_network::{detect_usb4_adapters, get_usb4_adapters};
 use crate::commands::cluster_ssh::ipc::{ssh_launch_rpc, stop_ssh_tunnel};
 use crate::commands::config::{
@@ -678,7 +680,7 @@ fn main() {
             find_rpc_server_binary, generate_rpc_launch_cmd, get_cluster_metrics,
             stop_local_worker, stop_worker, is_local_host, start_local_rpc, get_local_host,
             detect_usb4_adapters, get_usb4_adapters,
-            start_mdns_discovery, stop_mdns_discovery,
+            start_mdns_discovery, stop_mdns_discovery, is_mdns_discovery_active,
             ssh_launch_rpc,
             stop_ssh_tunnel,
             enable_autostart, disable_autostart, is_autostart_enabled,

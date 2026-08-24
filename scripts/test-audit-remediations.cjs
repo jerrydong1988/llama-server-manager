@@ -8,6 +8,7 @@ const entry = `
   import assert from 'node:assert/strict'
   import { maskStartupCommandSecrets } from './src/store/commandFormatting'
   import { forEachConcurrent } from './src/utils/async'
+  import { runAutoStartSequence } from './src/autoStartCoordinator'
 
   async function run() {
     assert.equal(
@@ -31,6 +32,34 @@ const entry = `
     })
     assert.equal(peak, 3)
     assert.deepEqual(processed.sort((left, right) => left - right), [1, 2, 3, 4, 5, 6, 7])
+
+    const clusterInstance = {
+      id: 'cluster-instance',
+      status: 'stopped',
+      config: { auto_start: true, rpc_servers: '10.0.0.2:50052' },
+    }
+    let workers = []
+    const started = []
+    const firstAutoStart = await runAutoStartSequence({
+      instanceIds: [clusterInstance.id],
+      getInstance: () => clusterInstance,
+      getWorkers: async () => workers,
+      startInstance: async id => { started.push(id) },
+      delayMs: 0,
+    })
+    assert.deepEqual(firstAutoStart.missingWorkerIds, [clusterInstance.id])
+    assert.deepEqual(started, [])
+
+    workers = [{ host: '10.0.0.2', port: 50052, status: 'Online' }]
+    const retriedAutoStart = await runAutoStartSequence({
+      instanceIds: [clusterInstance.id],
+      getInstance: () => clusterInstance,
+      getWorkers: async () => workers,
+      startInstance: async id => { started.push(id) },
+      delayMs: 0,
+    })
+    assert.deepEqual(retriedAutoStart.missingWorkerIds, [])
+    assert.deepEqual(started, [clusterInstance.id])
   }
 
   run()
@@ -75,6 +104,10 @@ const runtimeEventsSource = fs.readFileSync(path.join(root, 'src', 'store', 'run
 const clusterPageSource = fs.readFileSync(path.join(root, 'src', 'components', 'ClusterPage', 'ClusterPage.tsx'), 'utf8')
 const instanceManagerSource = fs.readFileSync(path.join(root, 'src', 'components', 'InstanceManager.tsx'), 'utf8')
 const coreSliceSource = fs.readFileSync(path.join(root, 'src', 'store', 'coreSlice.ts'), 'utf8')
+const appSource = fs.readFileSync(path.join(root, 'src', 'App.tsx'), 'utf8')
+const osAutoStartSource = fs.readFileSync(path.join(root, 'src', 'hooks', 'useOsAutoStart.ts'), 'utf8')
+const autostartSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'commands', 'autostart.rs'), 'utf8')
+const clusterMdnsSource = fs.readFileSync(path.join(root, 'src-tauri', 'src', 'commands', 'cluster_mdns.rs'), 'utf8')
 
 assert.match(downloadSource, /fn verified_managed_cleanup_path/, 'cleanup must canonicalize managed download paths')
 assert.match(downloadSource, /download_shutting_down\.load\(Ordering::SeqCst\)/, 'the scheduler must stop admitting work during shutdown')
@@ -85,6 +118,9 @@ assert.match(downloadSource, /MAX_HUGGINGFACE_TREE_PAGES/, 'Hugging Face browse 
 assert.match(downloadSource, /read_bounded_json/, 'repository browse responses must be bounded')
 assert.match(downloadSource, /tokio::fs::File::from_std/, 'download writes must use Tokio file IO')
 assert.match(downloadSource, /INFLIGHT_SNAPSHOT_WORKER\.schedule/, 'hot-path inflight snapshots must be delegated to the background writer')
+assert.match(downloadSource, /let resume_from = temp_path\s*\.metadata\(\)/, 'resume offsets must use the real partial file length')
+assert.match(downloadSource, /has_non_retryable_error\.store\(true, Ordering::SeqCst\);[\s\S]*"retryable": false/, 'disk write failures must not be retried')
+assert.match(downloadSource, /let \(generation, inflight\)[\s\S]*download_active_entries\.lock[\s\S]*INFLIGHT_SNAPSHOT_GENERATION\.fetch_add/, 'inflight snapshot state and generation must be captured under one lock')
 assert.match(downloadBrowseSource, /'check_local_files'/, 'local file discovery must use one batched IPC request')
 assert.doesNotMatch(downloadBrowseSource, /'check_local_file'/, 'repository browse must not issue one IPC request per file')
 assert.match(proxySource, /proxy_lifecycle_lock\.lock\(\)\.await/, 'proxy lifecycle transitions must be serialized')
@@ -94,6 +130,7 @@ assert.match(scannerSource, /MODEL_SCAN_LOCK\.lock\(\)\.await/, 'model scans mus
 assert.match(scannerSource, /ENGINE_SCAN_LOCK\.lock\(\)\.await/, 'engine scans must serialize inventory commits')
 assert.match(scannerSource, /running_instance\.launch_config/, 'model deletion must protect running launch snapshots')
 assert.match(scannerSource, /inspect_model_tree/, 'model scans must inspect each directory tree once')
+assert.match(scannerSource, /resolves outside the authorized model root/, 'model scans must reject directory links outside the scan root')
 assert.match(coreSliceSource, /engine scan failed:/, 'engine scan failures must be visible to the user')
 assert.match(serverSource, /stdout_pump\.join\(\)/, 'server exit must drain stdout before final telemetry parsing')
 assert.match(serverSource, /stderr_pump\.join\(\)/, 'server exit must drain stderr before final telemetry parsing')
@@ -102,6 +139,12 @@ assert.match(serverSource, /trusted_engine_capabilities\(state\.inner\(\), &conf
 assert.doesNotMatch(serverSource, /"metrics-update"/, 'the backend must not emit an event without a frontend consumer')
 assert.match(mainSource, /terminate_all_servers_for_exit/, 'application exit must terminate managed server processes')
 assert.match(telemetrySource, /TELEMETRY_DROPPED_WRITES\.fetch_add/, 'telemetry queue pressure must be observable')
+assert.match(telemetrySource, /TELEMETRY_LAST_WRITE_ERROR\.lock\(\)\.unwrap\(\) = None/, 'a successful telemetry batch must clear stale write errors')
+assert.match(appSource, /missingWorkerIds[\s\S]*autoStartAttemptedIdsRef\.current\.delete/, 'cluster auto-start must become retryable when its worker is unavailable')
+assert.match(osAutoStartSource, /mutationRef\.current = mutationRef\.current/, 'OS autostart mutations must be serialized')
+assert.match(osAutoStartSource, /catch\(async \(\) =>[\s\S]*is_autostart_enabled/, 'failed OS autostart mutations must reconcile with the backend state')
+assert.match(autostartSource, /'\\\\' => quoted\.push_str\("\\\\\\\\\\\\\\\\"\)/, 'Linux desktop Exec values must apply both string and argument escaping')
+assert.match(clusterMdnsSource, /is_mdns_discovery_active/, 'the cluster UI must be able to restore the backend discovery state')
 assert.match(downloadSliceSource, /resumeAllDownloads:[\s\S]*error: undefined[\s\S]*completedAt: undefined/, 'bulk resume must clear stale terminal state')
 for (const operation of [
   'download cancellation failed',

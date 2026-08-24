@@ -498,10 +498,21 @@ fn spawn_runtime_process() -> Result<(), String> {
             Ok(())
         });
     }
-    command
+    let child = command
         .spawn()
-        .map(|_| ())
-        .map_err(|error| format!("failed to start runtime service: {error}"))
+        .map_err(|error| format!("failed to start runtime service: {error}"))?;
+    #[cfg(unix)]
+    {
+        // `Child` does not wait on drop. Keep one lightweight reaper so an unexpectedly short-lived
+        // detached runtime service cannot remain as a zombie until the desktop process exits.
+        std::thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+    }
+    #[cfg(not(unix))]
+    drop(child);
+    Ok(())
 }
 
 fn append_runtime_startup_failure(error: &str) {

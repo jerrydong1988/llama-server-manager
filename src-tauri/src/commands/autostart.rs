@@ -25,12 +25,16 @@ fn linux_autostart_executable(
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn desktop_exec_value(executable: &std::path::Path) -> String {
+fn desktop_exec_value(executable: &std::path::Path) -> Result<String, String> {
     let mut quoted = String::from("\"");
     for ch in executable.to_string_lossy().chars() {
+        if ch.is_control() {
+            return Err("登录自启动路径包含 XDG Exec 不支持的控制字符".into());
+        }
         match ch {
-            '\\' | '"' | '`' | '$' => {
-                quoted.push('\\');
+            '\\' => quoted.push_str("\\\\\\\\"),
+            '"' | '`' | '$' => {
+                quoted.push_str("\\\\");
                 quoted.push(ch);
             }
             '%' => quoted.push_str("%%"),
@@ -38,7 +42,7 @@ fn desktop_exec_value(executable: &std::path::Path) -> String {
         }
     }
     quoted.push('"');
-    quoted
+    Ok(quoted)
 }
 
 #[allow(dead_code)]
@@ -110,7 +114,7 @@ pub fn enable_autostart() -> Result<(), String> {
         let desktop = format!(
             "[Desktop Entry]\nType=Application\nName=Llama Server Manager\nExec={}\n\
              Hidden=false\nNoDisplay=false\nX-GNOME-Autostart-enabled=true\n",
-            desktop_exec_value(&executable)
+            desktop_exec_value(&executable)?
         );
         let dir = home_dir()?.join(".config/autostart");
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -206,7 +210,7 @@ pub fn is_autostart_enabled() -> Result<bool, String> {
             let current_exe = PathBuf::from(exe_path()?);
             let executable =
                 linux_autostart_executable(std::env::var_os("APPIMAGE").as_deref(), &current_exe);
-            let expected = format!("Exec={}", desktop_exec_value(&executable));
+            let expected = format!("Exec={}", desktop_exec_value(&executable)?);
             Ok(std::fs::read_to_string(path)
                 .map(|contents| contents.lines().any(|line| line == expected))
                 .unwrap_or(false))
@@ -232,9 +236,15 @@ mod tests {
     #[test]
     fn desktop_exec_quotes_reserved_characters_and_field_codes() {
         assert_eq!(
-            desktop_exec_value(std::path::Path::new("/home/A B/app$`\\\"100%")),
-            "\"/home/A B/app\\$\\`\\\\\\\"100%%\""
+            desktop_exec_value(std::path::Path::new("/home/A B/app$`\\\"100%")).unwrap(),
+            "\"/home/A B/app\\\\$\\\\`\\\\\\\\\\\\\"100%%\""
         );
+    }
+
+    #[test]
+    fn desktop_exec_rejects_control_characters() {
+        assert!(desktop_exec_value(std::path::Path::new("/home/app\nname")).is_err());
+        assert!(desktop_exec_value(std::path::Path::new("/home/app\tname")).is_err());
     }
 }
 

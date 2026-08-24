@@ -25,6 +25,7 @@ import { CommandCenter } from './components/shell/CommandCenter'
 import { RuntimeExitDialogs } from './components/shell/RuntimeExitDialogs'
 import { useCommandCenterModel } from './components/shell/useCommandCenterModel'
 import { useAppUpdater } from './hooks/useAppUpdater'
+import { useOsAutoStart } from './hooks/useOsAutoStart'
 import { runAutoStartSequence } from './autoStartCoordinator'
 
 type ErrorBoundaryCopy = { title: string; description: string; unknown: string; reload: string }
@@ -113,25 +114,27 @@ function AppInner() {
   const loadConfig = useAppStore(s => s.loadConfig)
   const instances = useAppStore(s => s.instances)
   const engines = useAppStore(s => s.engines)
+  const workers = useAppStore(s => s.workers)
   const startInstance = useAppStore(s => s.startInstance)
   const darkMode = useAppStore(s => s.darkMode)
   const setDarkMode = useAppStore(s => s.setDarkMode)
   const runtimeWarnings = useAppStore(s => s.runtimeWarnings)
+  const addRuntimeWarning = useAppStore(s => s.addRuntimeWarning)
   const clearRuntimeWarnings = useAppStore(s => s.clearRuntimeWarnings)
   const { t, lang, setLang } = useI18n()
   const shellCopy = t.appShell
-  const [autoStartEnabled, setAutoStartEnabled] = useState(false)
-  const autoStartSequenceStartedRef = useRef(false)
+  const { enabled: autoStartEnabled, updateEnabled: handleAutoStartChange } = useOsAutoStart()
+  const autoStartAttemptedIdsRef = useRef(new Set<string>())
+  const autoStartMissingWarningIdsRef = useRef(new Set<string>())
+  const autoStartRetryTimerRef = useRef<number | null>(null)
+  const autoStartRetryDelayRef = useRef(3_000)
+  const [autoStartRetryGeneration, setAutoStartRetryGeneration] = useState(0)
   const appDisposedRef = useRef(false)
   const [commandCenterOpen, setCommandCenterOpen] = useState(false)
   const [proxyExitConfirmOpen, setProxyExitConfirmOpen] = useState(false)
   const [proxyExitBusy, setProxyExitBusy] = useState(false)
   const [proxyExitError, setProxyExitError] = useState('')
   const [backgroundDetachError, setBackgroundDetachError] = useState('')
-
-  useEffect(() => {
-    invoke<boolean>('is_autostart_enabled').then(setAutoStartEnabled).catch(() => {})
-  }, [])
 
   const upCount = useMemo(() => instances.filter(i => i.status === 'running').length, [instances])
   const downCount = useMemo(() => instances.filter(i => i.status !== 'running').length, [instances])
@@ -204,20 +207,25 @@ function AppInner() {
     appDisposedRef.current = false
     return () => {
       appDisposedRef.current = true
+      if (autoStartRetryTimerRef.current !== null) {
+        window.clearTimeout(autoStartRetryTimerRef.current)
+        autoStartRetryTimerRef.current = null
+      }
     }
   }, [])
 
   useEffect(() => {
-    if (!configLoaded || autoStartSequenceStartedRef.current) return
+    if (!configLoaded) return
     if (instances.length === 0) return
-    const toBoot = instances.filter(i => i.config.auto_start && i.status !== 'running')
-    if (toBoot.length === 0) {
-      autoStartSequenceStartedRef.current = true
-      return
-    }
+    const toBoot = instances.filter(instance => (
+      instance.config.auto_start
+      && instance.status !== 'running'
+      && !autoStartAttemptedIdsRef.current.has(instance.id)
+    ))
+    if (toBoot.length === 0) return
     if (engines.length === 0) return
 
-    autoStartSequenceStartedRef.current = true
+    for (const instance of toBoot) autoStartAttemptedIdsRef.current.add(instance.id)
     void runAutoStartSequence({
       instanceIds: toBoot.map(instance => instance.id),
       getInstance: id => useAppStore.getState().instances.find(instance => instance.id === id),
@@ -230,10 +238,40 @@ function AppInner() {
       startInstance,
       shouldCancel: () => appDisposedRef.current,
       onMissingWorker: instance => {
-        console.warn(`Instance "${instance.name}" requires a cluster worker but no matching worker is available; skipping auto-start`)
+        if (!autoStartMissingWarningIdsRef.current.has(instance.id)) {
+          autoStartMissingWarningIdsRef.current.add(instance.id)
+          addRuntimeWarning(
+            `实例“${instance.name}”正在等待匹配的在线集群 Worker；Worker 上线后将自动重试启动。`,
+          )
+        }
       },
+    }).then(({ missingWorkerIds }) => {
+      for (const instanceId of missingWorkerIds) {
+        autoStartAttemptedIdsRef.current.delete(instanceId)
+      }
+      for (const instance of toBoot) {
+        if (!missingWorkerIds.includes(instance.id)) {
+          autoStartMissingWarningIdsRef.current.delete(instance.id)
+        }
+      }
+      if (missingWorkerIds.length > 0 && autoStartRetryTimerRef.current === null) {
+        const delay = autoStartRetryDelayRef.current
+        autoStartRetryDelayRef.current = Math.min(delay * 2, 30_000)
+        autoStartRetryTimerRef.current = window.setTimeout(() => {
+          autoStartRetryTimerRef.current = null
+          setAutoStartRetryGeneration(generation => generation + 1)
+        }, delay)
+      } else if (missingWorkerIds.length === 0) {
+        autoStartRetryDelayRef.current = 3_000
+        if (autoStartRetryTimerRef.current !== null) {
+          window.clearTimeout(autoStartRetryTimerRef.current)
+          autoStartRetryTimerRef.current = null
+        }
+      }
+    }).catch(() => {
+      for (const instance of toBoot) autoStartAttemptedIdsRef.current.delete(instance.id)
     })
-  }, [configLoaded, engines, instances, startInstance])
+  }, [addRuntimeWarning, autoStartRetryGeneration, configLoaded, engines, instances, startInstance, workers])
 
   const { updateInfo, installUpdate, checkForUpdate, checking: updateChecking, checkError: updateCheckError } = useAppUpdater(
     instances.some(instance => instance.status === 'running'),
@@ -296,17 +334,6 @@ function AppInner() {
     perf: shellCopy.pageDescriptions.perf,
     logs: shellCopy.pageDescriptions.logs,
     guide: shellCopy.pageDescriptions.guide,
-  }
-  const handleAutoStartChange = (next: boolean) => {
-    setAutoStartEnabled(next)
-    ;(async () => {
-      try {
-        if (next) await invoke('enable_autostart')
-        else await invoke('disable_autostart')
-      } catch {
-        setAutoStartEnabled(!next)
-      }
-    })()
   }
   const handleStopProxyAndQuit = async () => {
     setProxyExitBusy(true)

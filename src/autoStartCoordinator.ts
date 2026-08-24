@@ -13,6 +13,10 @@ type AutoStartSequenceOptions = {
   onMissingWorker?: (instance: Instance) => void
 }
 
+export type AutoStartSequenceResult = {
+  missingWorkerIds: string[]
+}
+
 const matchingWorkerIsOnline = (instance: Instance, workers: WorkerInfo[]) => {
   if (!instance.config.rpc_servers) return true
   const configuredServers = instance.config.rpc_servers.split(/[, ]+/).filter(Boolean)
@@ -24,7 +28,7 @@ const matchingWorkerIsOnline = (instance: Instance, workers: WorkerInfo[]) => {
   ))
 }
 
-const wait = (delayMs: number) => new Promise(resolve => window.setTimeout(resolve, delayMs))
+const wait = (delayMs: number) => new Promise(resolve => globalThis.setTimeout(resolve, delayMs))
 
 export async function runAutoStartSequence({
   instanceIds,
@@ -34,26 +38,30 @@ export async function runAutoStartSequence({
   shouldCancel = () => false,
   delayMs = AUTO_START_STAGGER_MS,
   onMissingWorker,
-}: AutoStartSequenceOptions) {
-  const workers = await getWorkers()
+}: AutoStartSequenceOptions): Promise<AutoStartSequenceResult> {
   let attemptedStart = false
+  const missingWorkerIds: string[] = []
 
   for (const instanceId of instanceIds) {
-    if (shouldCancel()) return
+    if (shouldCancel()) return { missingWorkerIds }
     let instance = getInstance(instanceId)
     if (!instance || !instance.config.auto_start || instance.status === 'running') continue
+    let workers = await getWorkers()
     if (!matchingWorkerIsOnline(instance, workers)) {
       onMissingWorker?.(instance)
+      missingWorkerIds.push(instanceId)
       continue
     }
 
     if (attemptedStart) {
       await wait(delayMs)
-      if (shouldCancel()) return
+      if (shouldCancel()) return { missingWorkerIds }
       instance = getInstance(instanceId)
       if (!instance || !instance.config.auto_start || instance.status === 'running') continue
+      workers = await getWorkers()
       if (!matchingWorkerIsOnline(instance, workers)) {
         onMissingWorker?.(instance)
+        missingWorkerIds.push(instanceId)
         continue
       }
     }
@@ -65,4 +73,5 @@ export async function runAutoStartSequence({
       // A failed automatic start must not prevent later configured instances from starting.
     }
   }
+  return { missingWorkerIds }
 }
