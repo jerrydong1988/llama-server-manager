@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-08-16",
+  "verifiedAt": "2026-08-24",
   "source": "https://github.com/ggerganov/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "b10451",
-  "upstreamCommit": "10bf611e533d81f739128304991c5e133c6aebd8",
-  "upstreamMasterChecked": "10bf611e533d81f739128304991c5e133c6aebd8",
+  "upstreamRelease": "v0.2.0",
+  "upstreamCommit": "bb4caa7540188872173c44d161602d9271386413",
+  "upstreamMasterChecked": "c060ca974c773c7c3d17fd1b66dc9d312bc292c0",
   "releaseSnapshot": {
-    "ref": "b10451",
-    "commit": "10bf611e533d81f739128304991c5e133c6aebd8",
-    "parameterCount": 248,
-    "snapshotHash": "276a7f49af2b5cdfc1ea243cd03fdf6370ffb75edcf06cca0eebf5bd52b5a493",
+    "ref": "v0.2.0",
+    "commit": "bb4caa7540188872173c44d161602d9271386413",
+    "parameterCount": 249,
+    "snapshotHash": "81acaae6068758606c2d5ef863b8abc10845ac825075c575ae12cd9ca73c9ad9",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -999,6 +999,15 @@
         "descriptionHash": "a02cd990d630826355fe0f40055c315e79eb160f813cf50070fa192f49dd013e"
       },
       {
+        "canonical": "--mmproj-device",
+        "aliases": [
+          "--mmproj-device",
+          "-mmdev"
+        ],
+        "synopsisHash": "2378231043178f13f044ce1c4b37cf584dbcb0cb885b0545ed22a4687258b432",
+        "descriptionHash": "564fbdb2408aed8cf8ccbdf3515cb12e2c301c3c61de159e637a91ea3c872d30"
+      },
+      {
         "canonical": "--mmproj-offload",
         "aliases": [
           "--mmproj-offload",
@@ -1955,7 +1964,7 @@
           "--tools"
         ],
         "synopsisHash": "de9d3b68eb5cb89492a1812a8940cd94b9b737d767fc90889fbb74ae8fdc6ed5",
-        "descriptionHash": "8f450cbd74c44e3b04b27949ec476fb890cab9cbf9cf90be9c28583570aeceb5"
+        "descriptionHash": "453043ce96263f3a1a1d93baeeb899f023bbf316641b568a163caa8e2db4b465"
       },
       {
         "canonical": "--tools-runtime",
@@ -2161,9 +2170,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "10bf611e533d81f739128304991c5e133c6aebd8",
-    "parameterCount": 248,
-    "snapshotHash": "276a7f49af2b5cdfc1ea243cd03fdf6370ffb75edcf06cca0eebf5bd52b5a493",
+    "commit": "c060ca974c773c7c3d17fd1b66dc9d312bc292c0",
+    "parameterCount": 249,
+    "snapshotHash": "81acaae6068758606c2d5ef863b8abc10845ac825075c575ae12cd9ca73c9ad9",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -3148,6 +3157,15 @@
         "descriptionHash": "a02cd990d630826355fe0f40055c315e79eb160f813cf50070fa192f49dd013e"
       },
       {
+        "canonical": "--mmproj-device",
+        "aliases": [
+          "--mmproj-device",
+          "-mmdev"
+        ],
+        "synopsisHash": "2378231043178f13f044ce1c4b37cf584dbcb0cb885b0545ed22a4687258b432",
+        "descriptionHash": "564fbdb2408aed8cf8ccbdf3515cb12e2c301c3c61de159e637a91ea3c872d30"
+      },
+      {
         "canonical": "--mmproj-offload",
         "aliases": [
           "--mmproj-offload",
@@ -4104,7 +4122,7 @@
           "--tools"
         ],
         "synopsisHash": "de9d3b68eb5cb89492a1812a8940cd94b9b737d767fc90889fbb74ae8fdc6ed5",
-        "descriptionHash": "8f450cbd74c44e3b04b27949ec476fb890cab9cbf9cf90be9c28583570aeceb5"
+        "descriptionHash": "453043ce96263f3a1a1d93baeeb899f023bbf316641b568a163caa8e2db4b465"
       },
       {
         "canonical": "--tools-runtime",

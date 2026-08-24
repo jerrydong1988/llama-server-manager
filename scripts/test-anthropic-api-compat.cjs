@@ -11,8 +11,18 @@ const telemetry = read('src-tauri', 'src', 'commands', 'telemetry.rs')
 const docs = read('docs', 'ANTHROPIC_API_COMPATIBILITY.md')
 const packageJson = JSON.parse(read('package.json'))
 
-const buildNumber = Number(String(baseline.upstreamRelease).replace(/^b/, ''))
-assert.ok(Number.isInteger(buildNumber) && buildNumber >= 10199, 'Anthropic passthrough requires llama.cpp b10199 or newer')
+const release = String(baseline.upstreamRelease)
+const legacyBuild = release.match(/^b(\d+)$/)
+const semanticRelease = release.match(/^v(\d+)\.(\d+)\.(\d+)$/)
+const supportsAnthropicProtocol = legacyBuild
+  ? Number(legacyBuild[1]) >= 10199
+  : semanticRelease
+    ? Number(semanticRelease[1]) > 0 || Number(semanticRelease[2]) >= 2
+    : false
+assert.ok(
+  supportsAnthropicProtocol,
+  'Anthropic passthrough requires llama.cpp b10199+ or v0.2.0+',
+)
 for (const route of ['/v1/messages', '/v1/messages/count_tokens', '/v1/models/:model_id']) {
   assert.match(proxy, new RegExp(route.replace(/[/:]/g, '\\$&')), `missing proxy route ${route}`)
 }
