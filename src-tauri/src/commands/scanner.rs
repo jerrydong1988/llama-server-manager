@@ -115,15 +115,36 @@ fn stable_hash(parts: &[String]) -> String {
     format!("{hash:016x}")
 }
 
-fn read_directory_fingerprint(path: &Path) -> Result<DirectoryFingerprint, String> {
+fn read_directory_fingerprint(
+    path: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<DirectoryFingerprint, String> {
     let mut entries = Vec::new();
     for entry in
         std::fs::read_dir(path).map_err(|e| format!("failed to read {}: {}", path.display(), e))?
     {
-        let entry = entry.map_err(|e| format!("failed to read {} entry: {}", path.display(), e))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|e| format!("failed to read {} file type: {}", entry.path().display(), e))?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                warnings.push(format!(
+                    "failed to read an entry in {} and skipped it: {}",
+                    path.display(),
+                    error
+                ));
+                continue;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                warnings.push(format!(
+                    "failed to read {} file type and skipped it: {}",
+                    entry.path().display(),
+                    error
+                ));
+                continue;
+            }
+        };
         let metadata = entry.metadata().ok();
         let modified = metadata
             .as_ref()
@@ -192,14 +213,28 @@ struct ModelDirectoryInspection {
     children: Vec<ModelDirectoryInspection>,
 }
 
-fn inspect_model_tree(
+fn inspect_model_tree_inner(
     path: &Path,
+    canonical_root: &Path,
     depth: usize,
     max_depth: usize,
     warnings: &mut Vec<String>,
+    visited: &mut HashSet<String>,
 ) -> Result<ModelDirectoryInspection, String> {
-    let fingerprint = read_directory_fingerprint(path)?;
-    let key = canonical_key(path);
+    let canonical_path = std::fs::canonicalize(path)
+        .map_err(|error| format!("failed to resolve {}: {}", path.display(), error))?;
+    if !paths_equal(&canonical_path, canonical_root)
+        && !path_is_within(&canonical_path, canonical_root)
+    {
+        return Err(format!(
+            "{} resolves outside the authorized model root {}",
+            path.display(),
+            canonical_root.display()
+        ));
+    }
+
+    let fingerprint = read_directory_fingerprint(path, warnings)?;
+    let key = path_identity_key(&canonical_path);
     let mut children = Vec::new();
 
     for entry in &fingerprint.entries {
@@ -221,12 +256,47 @@ fn inspect_model_tree(
             ));
             continue;
         }
-        children.push(inspect_model_tree(
+        let canonical_child = match std::fs::canonicalize(&entry.path) {
+            Ok(path) => path,
+            Err(error) => {
+                warnings.push(format!(
+                    "{} could not be resolved and was skipped: {}",
+                    entry.path.display(),
+                    error
+                ));
+                continue;
+            }
+        };
+        if !path_is_within(&canonical_child, canonical_root) {
+            warnings.push(format!(
+                "{} resolves outside the authorized model root and was skipped",
+                entry.path.display()
+            ));
+            continue;
+        }
+        let child_key = path_identity_key(&canonical_child);
+        if !visited.insert(child_key) {
+            warnings.push(format!(
+                "{} resolves to an already visited directory and was skipped",
+                entry.path.display()
+            ));
+            continue;
+        }
+        match inspect_model_tree_inner(
             &entry.path,
+            canonical_root,
             depth + 1,
             max_depth,
             warnings,
-        )?);
+            visited,
+        ) {
+            Ok(child) => children.push(child),
+            Err(error) => warnings.push(format!(
+                "{} could not be scanned and was skipped: {}",
+                entry.path.display(),
+                error
+            )),
+        }
     }
 
     let mut signature_parts = vec![
@@ -246,6 +316,25 @@ fn inspect_model_tree(
         entries: fingerprint.entries,
         children,
     })
+}
+
+fn inspect_model_tree(
+    path: &Path,
+    depth: usize,
+    max_depth: usize,
+    warnings: &mut Vec<String>,
+) -> Result<ModelDirectoryInspection, String> {
+    let canonical_root = std::fs::canonicalize(path)
+        .map_err(|error| format!("failed to resolve {}: {}", path.display(), error))?;
+    let mut visited = HashSet::from([path_identity_key(&canonical_root)]);
+    inspect_model_tree_inner(
+        path,
+        &canonical_root,
+        depth,
+        max_depth,
+        warnings,
+        &mut visited,
+    )
 }
 
 #[cfg(test)]
@@ -1299,14 +1388,42 @@ mod incremental_scan_tests {
     #[test]
     fn directory_fingerprint_changes_when_model_file_is_added() {
         let dir = temp_test_dir("fingerprint");
-        let initial = read_directory_fingerprint(&dir).unwrap();
+        let initial = read_directory_fingerprint(&dir, &mut Vec::new()).unwrap();
 
         std::fs::write(dir.join("model.gguf"), b"test").unwrap();
 
-        let updated = read_directory_fingerprint(&dir).unwrap();
+        let updated = read_directory_fingerprint(&dir, &mut Vec::new()).unwrap();
         assert_ne!(initial.signature, updated.signature);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn model_tree_does_not_follow_junctions_outside_the_scan_root() {
+        let root = temp_test_dir("model-root");
+        let outside = temp_test_dir("model-outside");
+        std::fs::write(outside.join("external.gguf"), b"outside").unwrap();
+        let junction = root.join("linked");
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&outside)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let mut warnings = Vec::new();
+        let tree = inspect_model_tree(&root, 0, MAX_MODEL_SCAN_DEPTH, &mut warnings).unwrap();
+        assert!(tree.children.is_empty());
+        assert!(warnings.iter().any(|warning| {
+            warning.contains("outside the authorized model root")
+                || warning.contains("symlink and was skipped")
+        }));
+
+        std::fs::remove_dir(&junction).unwrap();
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(outside);
     }
 
     #[test]

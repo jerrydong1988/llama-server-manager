@@ -423,11 +423,18 @@ fn load_model_index_from_connection(
             "#,
         )
         .map_err(|e| format!("failed to prepare model inventory query: {}", e))?;
-    let rows = stmt
+    let mapped_rows = stmt
         .query_map([], record_from_row)
-        .map_err(|e| format!("failed to query model inventory: {}", e))?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("failed to read model inventory row: {}", e))?;
+        .map_err(|e| format!("failed to query model inventory: {}", e))?;
+    let mut rows = Vec::new();
+    for row in mapped_rows {
+        match row {
+            Ok(record) => rows.push(record),
+            Err(error) => {
+                eprintln!("Skipping an unreadable model inventory row: {error}");
+            }
+        }
+    }
     Ok(rows
         .into_iter()
         .filter(|record| read_mode.accepts(record.cache_version))
@@ -745,14 +752,8 @@ pub fn delete_engine(id: &str) -> Result<(), String> {
 
 fn record_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<InventoryModelRecord> {
     let capabilities_json: String = row.get(11)?;
-    let capabilities =
-        serde_json::from_str::<ModelCapabilities>(&capabilities_json).map_err(|err| {
-            rusqlite::Error::FromSqlConversionFailure(
-                11,
-                rusqlite::types::Type::Text,
-                Box::new(err),
-            )
-        })?;
+    let capabilities = serde_json::from_str::<ModelCapabilities>(&capabilities_json)
+        .unwrap_or_else(|_| ModelCapabilities::default());
     let context_length_i64: Option<i64> = row.get(8)?;
     Ok(InventoryModelRecord {
         path: row.get(0)?,
@@ -856,6 +857,43 @@ mod tests {
         let capabilities = serde_json::from_str::<EngineCapabilities>("{}").unwrap();
         assert_eq!(capabilities.status, "unprobed");
         assert!(capabilities.supported_flags.is_empty());
+    }
+
+    #[test]
+    fn corrupt_model_capabilities_do_not_hide_the_cached_inventory() {
+        let conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-corrupt-model-capabilities-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let model_path = dir.join("model.gguf");
+        std::fs::write(&model_path, b"gguf").unwrap();
+        let model_path = model_path.to_string_lossy().to_string();
+        let scan_root = dir.to_string_lossy().to_string();
+
+        conn.execute(
+            r#"
+            INSERT INTO model_inventory (
+                path, id, display_path, name, scan_root, size, mtime,
+                architecture, context_length, quant_type, has_mtp_head,
+                capabilities_json, file_type, is_shard, last_seen, cache_version
+            ) VALUES (?1, 'model', ?1, 'model.gguf', ?2, 4, 0,
+                      NULL, NULL, NULL, 0, 'not-json', 'gguf', 0, 0, ?3)
+            "#,
+            params![model_path, scan_root, MODEL_INVENTORY_SCHEMA_VERSION],
+        )
+        .unwrap();
+
+        let models =
+            load_model_index_from_connection(&conn, InventoryCacheReadMode::Current).unwrap();
+        assert_eq!(models.len(), 1);
+        let capabilities = &models.values().next().unwrap().capabilities;
+        assert!(!capabilities.metadata_complete);
+        assert!(capabilities.tags.is_empty());
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

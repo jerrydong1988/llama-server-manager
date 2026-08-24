@@ -13,6 +13,14 @@ struct DiscoveryTask {
 
 static DISCOVERY_TASK: Mutex<Option<DiscoveryTask>> = Mutex::const_new(None);
 
+pub async fn is_mdns_discovery_active() -> bool {
+    DISCOVERY_TASK
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|discovery| !discovery.handle.is_finished())
+}
+
 fn service_name_from_fullname(fullname: &str) -> String {
     fullname.trim_end_matches("._rpc._tcp.local.").to_string()
 }
@@ -198,5 +206,10 @@ pub mod ipc {
         super::stop_mdns_discovery()
             .await
             .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn is_mdns_discovery_active() -> crate::error::AppResult<bool> {
+        Ok(super::is_mdns_discovery_active().await)
     }
 }

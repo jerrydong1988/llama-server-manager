@@ -580,6 +580,7 @@ declare global {
 
 let releasePendingStart: (() => void) | null = null
 let delayedInventoryCacheLoaded = false
+let mdnsDiscoveryActive = false
 const pendingBrowses: Array<{ repoId: string; resolve: (files: MsFileEntry[]) => void }> = []
 const pendingPortChecks: Array<{ port: number; resolve: (available: boolean) => void }> = []
 const pendingWorkerScans: Array<(workers: WorkerInfo[]) => void> = []
@@ -1157,6 +1158,13 @@ mockIPC((command, payload) => {
       runtimeStatus.lastError = null
       return null
     case 'is_autostart_enabled': return false
+    case 'is_mdns_discovery_active': return mdnsDiscoveryActive
+    case 'start_mdns_discovery':
+      mdnsDiscoveryActive = true
+      return 'started'
+    case 'stop_mdns_discovery':
+      mdnsDiscoveryActive = false
+      return 'stopped'
     case 'resolve_path': return args.path === 'models' ? 'C:\\browser-test\\models' : String(args.path ?? '')
     case 'generate_server_command': {
       if (BROWSER_SCENARIO === 'command-error') throw new Error('Browser test command generation failed')

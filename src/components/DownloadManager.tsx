@@ -51,10 +51,12 @@ export default function DownloadManager() {
       return DEFAULT_SAVE_DIR
     }
   })
+  const committedSaveDirRef = useRef(saveDir)
   const {
     source, repoId, files, status, browsing, browsedRepoId,
     selectSource: handleSourceChange,
     changeRepoId: handleRepoIdChange,
+    invalidateBrowse,
     resetBrowse,
     browse: handleBrowse,
   } = useDownloadBrowse(saveDir)
@@ -220,8 +222,9 @@ export default function DownloadManager() {
     }
   }
 
-  const saveDirPersist = (dir: string) => {
-    resetBrowse()
+  const commitSaveDir = (dir: string) => {
+    if (dir !== committedSaveDirRef.current) resetBrowse()
+    committedSaveDirRef.current = dir
     setSaveDir(dir)
     try {
       localStorage.setItem('downloadSaveDir', dir)
@@ -233,7 +236,7 @@ export default function DownloadManager() {
   const handleBrowseSaveDir = async () => {
     try {
       const dir = await invoke<string | null>('pick_authorized_directory', { purpose: 'download' })
-      if (dir) saveDirPersist(dir)
+      if (dir) commitSaveDir(dir)
     } catch {
       // ignore
     }
@@ -933,7 +936,14 @@ export default function DownloadManager() {
                   <input
                     type="text"
                     value={formatPathForDisplay(saveDir)}
-                    onChange={e => saveDirPersist(e.target.value)}
+                    onChange={e => {
+                      invalidateBrowse()
+                      setSaveDir(e.target.value)
+                    }}
+                    onBlur={() => commitSaveDir(saveDir)}
+                    onKeyDown={event => {
+                      if (event.key === 'Enter') commitSaveDir(saveDir)
+                    }}
                     placeholder={ui.storageSection}
                     aria-label={ui.storageSection}
                     className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-100"
