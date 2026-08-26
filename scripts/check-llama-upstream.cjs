@@ -9,7 +9,7 @@ const writeMode = arguments.has('--write')
 const softMode = arguments.has('--soft')
 const reportArgument = process.argv.indexOf('--report')
 const reportPath = reportArgument >= 0 ? path.resolve(process.argv[reportArgument + 1]) : null
-const repository = 'ggerganov/llama.cpp'
+const repository = 'ggml-org/llama.cpp'
 
 const headers = {
   Accept: 'application/vnd.github+json',

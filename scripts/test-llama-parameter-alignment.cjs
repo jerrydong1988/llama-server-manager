@@ -14,9 +14,11 @@ const english = read('src', 'i18n', 'en-US.ts')
 const configPage = read('src', 'components', 'ConfigPage.tsx')
 const compatibilityHook = read('src', 'components', 'ConfigPage', 'useEngineCompatibility.ts')
 const upstreamWatcher = read('scripts', 'check-llama-upstream.cjs')
+const upstreamWorkflow = read('.github', 'workflows', 'llama-upstream-watch.yml')
 
 assert.match(baseline.upstreamCommit, /^[0-9a-f]{40}$/)
 assert.match(baseline.upstreamMasterChecked, /^[0-9a-f]{40}$/)
+assert.equal(baseline.source, 'https://github.com/ggml-org/llama.cpp')
 assert.equal(baseline.schemaVersion, 2)
 assert.ok(baseline.releaseSnapshot.parameterCount >= 100)
 assert.equal(baseline.releaseSnapshot.parameters.length, baseline.releaseSnapshot.parameterCount)
@@ -59,6 +61,11 @@ assert.match(server, /"-ngld"\.into\(\), config\.draft_gpu_layers\.to_string\(\)
 assert.match(server, /cmd\.push\(if config\.jinja[\s\S]*"--jinja"/)
 assert.match(
   upstreamWatcher,
+  /const repository = 'ggml-org\/llama\.cpp'/,
+  'the upstream watcher must use the canonical llama.cpp repository',
+)
+assert.match(
+  upstreamWatcher,
   /raw\.githubusercontent\.com\/\$\{repository\}\/\$\{encodeURIComponent\(commit\)\}/,
   'upstream README snapshots must be fetched by the resolved immutable commit',
 )
@@ -71,6 +78,21 @@ assert.match(
   upstreamWatcher,
   /writeOutput\('release_advanced', releaseAdvanced\)/,
   'tag-only stable advances must remain visible as informational workflow output',
+)
+assert.match(
+  upstreamWorkflow,
+  /RELEASE_ADVANCED: \$\{\{ steps\.drift\.outputs\.release_advanced \}\}/,
+  'the upstream workflow must consume stable tag advances',
+)
+assert.match(
+  upstreamWorkflow,
+  /"\$RELEASE_ADVANCED" == 'true'/,
+  'stable tag advances must create a non-blocking maintenance reminder',
+)
+assert.match(
+  upstreamWorkflow,
+  /if: steps\.drift\.outputs\.release_drift == 'true' \|\| steps\.drift\.outputs\.error == 'true'/,
+  'tag-only stable advances must not fail the compatibility gate',
 )
 assert.doesNotMatch(shared, /['"]mistral['"]/, 'removed built-in template must not remain selectable')
 assert.doesNotMatch(english, /apply_diff/, 'removed upstream built-in tool must not be advertised')
