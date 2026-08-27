@@ -78,14 +78,13 @@ for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-a
   if (!body.includes('contents: read') || body.includes('contents: write')) {
     failures.push(`${job} must build with read-only repository contents permission`)
   }
-  const supplyChainIndex = body.indexOf('node scripts/check-npm-supply-chain.cjs')
-  const dependencyInstallIndex = body.indexOf('npm ci --ignore-scripts')
-  if (supplyChainIndex < 0 || dependencyInstallIndex < 0 || supplyChainIndex > dependencyInstallIndex) {
-    failures.push(`${job} does not run the npm malware gate before installation`)
+  if (!body.includes('needs: quality')) {
+    failures.push(`${job} does not depend on the centralized quality gate`)
   }
+  if (!body.includes('npm ci --ignore-scripts')) failures.push(`${job} does not disable npm lifecycle scripts during installation`)
   if (!body.includes('npm rebuild esbuild')) failures.push(`${job} does not rebuild only the reviewed esbuild lifecycle script`)
-  if (!body.includes('check-npm-supply-chain.cjs --installed-only')) {
-    failures.push(`${job} does not scan installed npm content for ChainDrop indicators`)
+  if (body.includes('check-npm-supply-chain.cjs')) {
+    failures.push(`${job} duplicates the npm malware gate already enforced by quality`)
   }
   if (body.includes('softprops/action-gh-release') || body.includes('gh release upload')) {
     failures.push(`${job} must not publish while build dependencies are present`)
@@ -102,13 +101,20 @@ for (const job of ['build-windows', 'build-macos', 'build-linux', 'build-linux-a
 }
 
 const qualityJob = jobBody('quality')
-if (!qualityJob.includes('node scripts/check-npm-supply-chain.cjs')) {
-  failures.push('quality job does not run the npm malware gate')
+const qualitySupplyChainIndex = qualityJob.indexOf('node scripts/check-npm-supply-chain.cjs')
+const qualityDependencyInstallIndex = qualityJob.indexOf('npm ci --ignore-scripts')
+const qualityInstalledScanIndex = qualityJob.indexOf('check-npm-supply-chain.cjs --installed-only')
+if (
+  qualitySupplyChainIndex < 0
+  || qualityDependencyInstallIndex < 0
+  || qualitySupplyChainIndex > qualityDependencyInstallIndex
+) {
+  failures.push('quality job does not run the npm malware gate before installation')
 }
 if (!qualityJob.includes('npm ci --ignore-scripts') || !qualityJob.includes('npm rebuild esbuild')) {
   failures.push('quality job does not enforce reviewed npm lifecycle scripts')
 }
-if (!qualityJob.includes('check-npm-supply-chain.cjs --installed-only')) {
+if (qualityInstalledScanIndex < qualityDependencyInstallIndex) {
   failures.push('quality job does not scan installed npm content for ChainDrop indicators')
 }
 if (!qualityJob.includes('node node_modules/playwright/cli.js install chromium') || qualityJob.includes('npx playwright')) {
