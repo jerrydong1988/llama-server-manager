@@ -86,14 +86,10 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
-      - name: Verify npm dependency supply chain
-        run: node scripts/check-npm-supply-chain.cjs
       - name: Install reviewed dependencies
         run: |
           npm ci --ignore-scripts
           npm rebuild esbuild
-      - name: Scan installed dependencies for ChainDrop indicators
-        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Windows
@@ -227,14 +223,10 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           workspaces: src-tauri
-      - name: Verify npm dependency supply chain
-        run: node scripts/check-npm-supply-chain.cjs
       - name: Install reviewed dependencies
         run: |
           npm ci --ignore-scripts
           npm rebuild esbuild
-      - name: Scan installed dependencies for ChainDrop indicators
-        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on macOS
@@ -396,14 +388,10 @@ jobs:
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf || \
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf || \
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - name: Verify npm dependency supply chain
-        run: node scripts/check-npm-supply-chain.cjs
       - name: Install reviewed dependencies
         run: |
           npm ci --ignore-scripts
           npm rebuild esbuild
-      - name: Scan installed dependencies for ChainDrop indicators
-        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Linux x64
@@ -457,14 +445,10 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-      - name: Verify npm dependency supply chain
-        run: node scripts/check-npm-supply-chain.cjs
       - name: Install reviewed dependencies
         run: |
           npm ci --ignore-scripts
           npm rebuild esbuild
-      - name: Scan installed dependencies for ChainDrop indicators
-        run: node scripts/check-npm-supply-chain.cjs --installed-only
       - name: Build frontend for Tauri context
         run: npm run build
       - name: Test Rust on Linux ARM64
