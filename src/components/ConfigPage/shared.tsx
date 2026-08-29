@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, createContext, useContext, useId } from 'react'
+import { useState, useRef, useEffect, useCallback, createContext, useContext, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, CircleHelp, RotateCcw } from 'lucide-react'
 import type { EngineCapabilities, InstanceConfig } from '../../store'
@@ -544,6 +544,17 @@ export const SpecTypeMultiSelect = ({
   fieldKey?: FieldKey
 }) => {
   const runtime = useContext(FieldRuntimeCtx)
+  const popupId = useId()
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const popupRef = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  const [popupPosition, setPopupPosition] = useState<{
+    top?: number
+    bottom?: number
+    left: number
+    width: number
+    maxHeight: number
+  }>({ top: 0, left: 0, width: 0, maxHeight: 360 })
   const normalized = normalizeSpeculativeTypes(value)
   const selected = parseSpeculativeTypes(normalized)
   const reported = runtime.capabilities?.speculativeTypes?.filter(Boolean) ?? []
@@ -558,64 +569,152 @@ export const SpecTypeMultiSelect = ({
     onChange(normalizeSpeculativeTypes([...next].join(',')))
   }
 
+  const updatePopupPosition = useCallback(() => {
+    const rect = triggerRef.current?.getBoundingClientRect()
+    if (!rect) return
+
+    const viewportPadding = 12
+    const gap = 6
+    const availableWidth = Math.max(160, window.innerWidth - viewportPadding * 2)
+    const width = Math.min(Math.max(rect.width, 280), availableWidth)
+    const left = Math.max(
+      viewportPadding,
+      Math.min(rect.left, window.innerWidth - width - viewportPadding),
+    )
+    const spaceBelow = Math.max(0, window.innerHeight - rect.bottom - gap - viewportPadding)
+    const spaceAbove = Math.max(0, rect.top - gap - viewportPadding)
+    const placeAbove = spaceBelow < 240 && spaceAbove > spaceBelow
+    const maxHeight = Math.max(96, Math.min(360, placeAbove ? spaceAbove : spaceBelow))
+
+    setPopupPosition(placeAbove
+      ? {
+          bottom: window.innerHeight - rect.top + gap,
+          left,
+          width,
+          maxHeight,
+        }
+      : {
+          top: rect.bottom + gap,
+          left,
+          width,
+          maxHeight,
+        })
+  }, [])
+
+  useEffect(() => {
+    if (!open) return
+
+    updatePopupPosition()
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      if (triggerRef.current?.contains(target) || popupRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    document.addEventListener('keydown', closeOnEscape)
+    window.addEventListener('resize', updatePopupPosition)
+    window.addEventListener('scroll', updatePopupPosition, true)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+      window.removeEventListener('resize', updatePopupPosition)
+      window.removeEventListener('scroll', updatePopupPosition, true)
+    }
+  }, [open, updatePopupPosition])
+
   return (
     <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
-      <details
-        className="group rounded-lg border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950/60"
+      <div
+        className="min-w-0"
         data-spec-type-source={reported.length > 0 ? 'engine' : 'fallback'}
       >
-        <summary
+        <button
+          ref={triggerRef}
+          type="button"
           aria-label={label}
-          onClick={event => { if (disabled) event.preventDefault() }}
-          className={`flex h-10 list-none items-center gap-2 px-3 text-sm ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} [&::-webkit-details-marker]:hidden`}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={open ? popupId : undefined}
+          onClick={() => {
+            if (disabled) return
+            if (!open) updatePopupPosition()
+            setOpen(current => !current)
+          }}
+          disabled={disabled}
+          className="flex h-10 w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-left text-sm transition hover:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700"
         >
           <span className="min-w-0 flex-1 truncate font-mono text-xs">
             {normalized || defaultLabel}
           </span>
-          <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition group-open:rotate-180" />
-        </summary>
-        <div role="listbox" aria-multiselectable="true" className="border-t border-slate-200 p-2 dark:border-slate-800">
-          <div className="mb-2 grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => onChange('')}
-              disabled={disabled}
-              className={`rounded-md border px-2 py-1 text-xs ${normalized === '' ? 'border-blue-500 bg-blue-500/10 text-blue-300' : 'border-slate-700 text-slate-400'}`}
-            >
-              {defaultLabel}
-            </button>
-            <button
-              type="button"
-              onClick={() => onChange('none')}
-              disabled={disabled}
-              className={`rounded-md border px-2 py-1 font-mono text-xs ${normalized === 'none' ? 'border-blue-500 bg-blue-500/10 text-blue-300' : 'border-slate-700 text-slate-400'}`}
-            >
-              none
-            </button>
-          </div>
-          <div className="max-h-52 space-y-1 overflow-y-auto" role="group">
-            {options.map(option => {
-              const checked = selected.includes(option)
-              const engineUnreported = reported.length > 0 && !reportedSet.has(option)
-              return (
-                <label key={option} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-900 ${engineUnreported ? 'text-amber-400' : 'text-slate-700 dark:text-slate-300'}`}>
-                  <input
-                    type="checkbox"
-                    aria-label={option}
-                    checked={checked}
-                    onChange={() => toggle(option)}
-                    disabled={disabled}
-                    className="h-3.5 w-3.5 rounded"
-                  />
-                  <span className="font-mono">{option}</span>
-                  {engineUnreported && <span className="ml-auto text-[10px]">!</span>}
-                </label>
-              )
-            })}
-          </div>
-          <p className="mt-2 border-t border-slate-200 pt-2 text-[11px] leading-4 text-slate-500 dark:border-slate-800">{priorityLabel}</p>
-        </div>
-      </details>
+          <ChevronDown className={`h-4 w-4 shrink-0 text-slate-500 transition ${open ? 'rotate-180' : ''}`} />
+        </button>
+        {open && createPortal(
+          <div
+            ref={popupRef}
+            id={popupId}
+            role="listbox"
+            aria-label={label}
+            aria-multiselectable="true"
+            data-spec-type-popup="true"
+            className="fixed z-[110] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+            style={popupPosition}
+          >
+            <div className="mb-2 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => onChange('')}
+                disabled={disabled}
+                className={`rounded-md border px-2 py-1 text-xs ${normalized === '' ? 'border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300' : 'border-slate-300 text-slate-500 dark:border-slate-700 dark:text-slate-400'}`}
+              >
+                {defaultLabel}
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange('none')}
+                disabled={disabled}
+                className={`rounded-md border px-2 py-1 font-mono text-xs ${normalized === 'none' ? 'border-blue-500 bg-blue-500/10 text-blue-700 dark:text-blue-300' : 'border-slate-300 text-slate-500 dark:border-slate-700 dark:text-slate-400'}`}
+              >
+                none
+              </button>
+            </div>
+            <div className="max-h-52 space-y-1 overflow-y-auto" role="group">
+              {options.map(option => {
+                const checked = selected.includes(option)
+                const engineUnreported = reported.length > 0 && !reportedSet.has(option)
+                return (
+                  <label
+                    key={option}
+                    role="option"
+                    aria-selected={checked}
+                    className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-800 ${engineUnreported ? 'text-amber-500 dark:text-amber-400' : 'text-slate-700 dark:text-slate-300'}`}
+                  >
+                    <input
+                      type="checkbox"
+                      aria-label={option}
+                      checked={checked}
+                      onChange={() => toggle(option)}
+                      disabled={disabled}
+                      className="h-3.5 w-3.5 rounded"
+                    />
+                    <span className="font-mono">{option}</span>
+                    {engineUnreported && <span className="ml-auto text-[10px]">!</span>}
+                  </label>
+                )
+              })}
+            </div>
+            <p className="mt-2 border-t border-slate-200 pt-2 text-[11px] leading-4 text-slate-500 dark:border-slate-700">{priorityLabel}</p>
+          </div>,
+          document.body,
+        )}
+      </div>
     </FieldFrame>
   )
 }
