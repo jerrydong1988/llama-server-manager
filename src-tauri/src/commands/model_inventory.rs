@@ -6,10 +6,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 5;
-// Cache version 4 has the same persisted row shape as version 5. Version 5 only
+const MODEL_INVENTORY_SCHEMA_VERSION: i64 = 6;
+// Cache versions 4 and 5 have the same persisted row shape as version 6. Version 6 only
 // adds metadata that can safely remain unknown until the background refresh
-// reparses the file. Keep compatible rows visible during that refresh so an
+// reparses the file and rebuilds logical shard metadata. Keep compatible rows visible during that refresh so an
 // application update never turns an existing inventory into a blank screen.
 const MIN_DISPLAYABLE_INVENTORY_CACHE_VERSION: i64 = 4;
 static INVENTORY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);

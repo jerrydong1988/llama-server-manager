@@ -296,14 +296,14 @@ Configuration is stored per instance and covers structured options for models, g
 - API Key 可以直接填写，也可以通过 API Key 文件提供；健康检查、测试连接、指标读取和实例路由会使用有效密钥。
 - 非本机监听会扩大访问范围，应配置鉴权并检查防火墙。
 - 向量模型会锁定不适用的生成参数。
-- 推测解码需要主模型和草稿模型兼容；出现异常时先禁用推测解码验证基础运行。
+- `--spec-type` 支持从当前引擎能力生成逗号分隔的多选组合；llama.cpp 使用固定运行优先级，勾选顺序不代表执行顺序。含 `draft-*` 的组合仍需匹配的内置或外部草稿能力。
 - 自定义参数会原样追加，使用前核对当前 `llama-server --help`。
 
 - Larger context increases KV cache usage; reduce context, batch size, or GPU layers when memory is tight.
 - API keys may be inline or file-based; health, connection tests, metrics, and routing use the effective key.
 - Non-local binding increases exposure and should use authentication and firewall controls.
 - Embedding models lock irrelevant generation options.
-- Speculative decoding requires compatible main and draft models.
+- `--spec-type` supports comma-separated multi-selection from the current engine's reported capabilities. llama.cpp uses a fixed runtime priority; selection order is not execution order. Any `draft-*` choice still requires compatible built-in or external draft support.
 - Custom arguments are appended as entered and should be checked against the current `llama-server --help`.
 
 ### KV / Prefill 缓存检查点 / Cache Checkpoint
@@ -316,11 +316,13 @@ The experimental KV / Prefill Cache Checkpoint is off by default. It saves one m
 
 - `parallel = 1`，启用 prompt cache、slots、idle-slot cache，并让 Cache RAM 为正数或 `-1`。
 - 滑动窗口模型启用 SWA 完整缓存；请先评估额外 KV 内存。
-- 使用单文件文本 GGUF、本机受管 loopback HTTP 引擎；不要使用 custom args、router、多模型、Embedding、Reranker、LoRA、mmproj 或推测解码。
+- 使用单文件或同目录完整分片集的文本 GGUF、本机受管 loopback HTTP 引擎；不要使用 custom args、router、多模型、Embedding、Reranker、LoRA 或 mmproj。
+- 推测解码可以关闭，也可以只选当前引擎明确报告的 `ngram-*` 类型；任一 `draft-*`、未知类型、`spec-default` 或外部 lookup cache 会让本次检查点安全回退冷启动。
+- 已知 hybrid/recurrent 架构仍不支持。Qwen3.8-Flash-Next 的 `qwen4exp` 可正常使用同进程 prompt cache 和 `ngram-mod`，但 B10679 跨进程实测 restore 后 `cache_n = 0`，因此不能启用持久检查点。
 - DeepSeek Harness 必须连接管理器代理而不是实例直连端口。Harness 的标题请求可能先占用 slot，idle-slot cache 和足够的 Cache RAM 用于保留刚恢复的长前缀。
 - 从实例页查看 `Ready (restored)` / `Ready (cold)`、token、文件大小和原因；只有实例完全停止时才能清除数据。
 
-Checkpoint files contain sensitive prompt-derived state and are not portable session backups. Confirm actual benefit with llama.cpp `cache_n`, `n_past`, or prompt-evaluation metrics, not only a successful restore response. See [KV / Prefill Cache Checkpoint](docs/KV_CACHE_CHECKPOINT.md) for the compatibility matrix, lifecycle, privacy model, and troubleshooting steps.
+Complete shard sets are fingerprinted as one logical model, including every shard. Checkpoint speculation is limited to engine-reported `ngram-*` types; draft and hybrid/recurrent state remain unsupported. Checkpoint files contain sensitive prompt-derived state and are not portable session backups. Confirm actual benefit with llama.cpp `cache_n`, `n_past`, or prompt-evaluation metrics, not only a successful restore response. See [KV / Prefill Cache Checkpoint](docs/KV_CACHE_CHECKPOINT.md) for the compatibility matrix, lifecycle, privacy model, and troubleshooting steps.
 
 ---
 

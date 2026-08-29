@@ -524,7 +524,7 @@ const configDiffSource = section(configPageSource, 'const savedBaseline', 'const
 assert.match(configDiffSource, /vectorCleanupChanges/, 'cleanup-only keys must be filtered from the ordinary config diff')
 assert.match(configDiffSource, /isEqualValue\(local\[change\.key\],\s*change\.after\)/, 'manual edits after cleanup must remain visible in the ordinary diff')
 assert.match(configWorkspaceSource, /key === 'custom_args'/, 'custom argument diffs must render counts instead of values')
-assert.match(inventorySource, /MODEL_INVENTORY_SCHEMA_VERSION: i64 = 5/, 'GGUF capability changes must invalidate cached model metadata')
+assert.match(inventorySource, /MODEL_INVENTORY_SCHEMA_VERSION: i64 = 6/, 'GGUF capability and shard-topology changes must invalidate cached model metadata')
 assert.match(ggufParserSource, /"general\.tags" =>/, 'GGUF parsing must retain modality tags')
 assert.match(ggufParserSource, /"tokenizer\.chat_template" =>/, 'GGUF parsing must inspect multimodal chat templates')
 assert.match(ggufParserSource, /"clip\.projector_type" \| "clip\.vision\.projector_type"/, 'GGUF parsing must support current projector metadata keys')

@@ -848,9 +848,10 @@ fn append_device_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
 
 fn append_speculative_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec<String>) {
     // Speculative decoding.
+    let spec_type = crate::speculative::normalize_speculative_types(&config.spec_type);
     let spec_active = !is_emb
-        && !config.spec_type.is_empty()
-        && config.spec_type != "none"
+        && !spec_type.is_empty()
+        && spec_type != "none"
         && should_emit(config, "spec_type", true);
     if spec_active {
         if should_emit(
@@ -873,7 +874,7 @@ fn append_speculative_flags(config: &InstanceConfig, is_emb: bool, cmd: &mut Vec
                 config.spec_draft_n_min.to_string(),
             ]);
         }
-        cmd.extend_from_slice(&["--spec-type".into(), config.spec_type.clone()]);
+        cmd.extend_from_slice(&["--spec-type".into(), spec_type]);
         if should_emit(config, "spec_draft_p_min", true) {
             cmd.extend_from_slice(&[
                 "--spec-draft-p-min".into(),
@@ -2139,7 +2140,7 @@ fn assess_checkpoint_eligibility(
     workload: ModelWorkload,
     engine_capabilities: Option<&EngineCapabilities>,
 ) -> CheckpointEligibility {
-    let (model_architecture, model_is_sharded, model_has_swa) = {
+    let (model_architecture, model_artifacts_complete, model_has_swa) = {
         let models = state.models.lock().unwrap();
         models
             .iter()
@@ -2152,7 +2153,10 @@ fn assess_checkpoint_eligibility(
             .map(|model| {
                 (
                     model.architecture.clone(),
-                    model.is_shard,
+                    crate::model_artifacts::resolve_model_artifacts(std::path::Path::new(
+                        &model.path,
+                    ))
+                    .is_ok(),
                     model.capabilities.has_swa,
                 )
             })
@@ -2168,8 +2172,11 @@ fn assess_checkpoint_eligibility(
         workload,
         managed_local_engine: true,
         engine_capabilities: engine_checkpoint_capabilities,
+        engine_speculative_types: engine_capabilities
+            .map(|capabilities| capabilities.speculative_types.as_slice())
+            .unwrap_or(&[]),
         model_architecture: model_architecture.as_deref(),
-        model_is_sharded,
+        model_artifacts_complete,
         model_has_swa,
     })
 }
@@ -2217,7 +2224,7 @@ async fn prepare_checkpoint_launch_plan(
     let template_path = (!config.chat_template_file.trim().is_empty())
         .then(|| std::path::PathBuf::from(&config.chat_template_file));
     let fingerprint = tokio::task::spawn_blocking(move || {
-        let model_sha256 = store.content_sha256(&model_path)?;
+        let model_sha256 = store.model_artifact_sha256(&model_path)?;
         let engine_sha256 = store.content_sha256(&engine_path)?;
         let chat_template_file_sha256 = template_path
             .as_deref()
@@ -5503,6 +5510,30 @@ mod perf_parser_tests {
         ] {
             assert!(!command.iter().any(|argument| argument == inherited));
         }
+    }
+
+    #[test]
+    fn speculative_command_normalizes_a_multi_type_fallback_chain() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            spec_type: " draft-mtp,ngram-mod,ngram-mod ".into(),
+            explicit_overrides: Some(vec!["spec_type".into()]),
+            ..InstanceConfig::default()
+        };
+
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(
+            &command,
+            "--spec-type",
+            "ngram-mod,draft-mtp"
+        ));
+        assert_eq!(
+            command
+                .iter()
+                .filter(|argument| argument.as_str() == "--spec-type")
+                .count(),
+            1
+        );
     }
 
     #[test]

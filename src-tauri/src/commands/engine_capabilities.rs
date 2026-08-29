@@ -11,7 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
-const REPORTED_DEFAULTS_VERSION: u8 = 1;
+const REPORTED_DEFAULTS_VERSION: u8 = 2;
 
 #[derive(Debug)]
 struct CommandOutput {
@@ -232,6 +232,37 @@ pub(crate) fn extract_supported_flags(output: &str) -> Vec<String> {
     flags.into_iter().collect()
 }
 
+fn is_speculative_type_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+        })
+        && (value == "none" || value.contains('-'))
+}
+
+pub(crate) fn extract_speculative_types(output: &str) -> Vec<String> {
+    let Some(marker) = output.find("--spec-type") else {
+        return Vec::new();
+    };
+    let tail = &output[marker + "--spec-type".len()..];
+    let lowercase = tail.to_ascii_lowercase();
+    let end = lowercase
+        .find("comma-separated list")
+        .unwrap_or_else(|| tail.len().min(2048));
+    let declaration = tail[..end.min(2048)].split_whitespace().collect::<String>();
+    let mut types = Vec::new();
+    for value in declaration.split(',') {
+        let value = value
+            .trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '-')
+            .to_ascii_lowercase();
+        if is_speculative_type_name(&value) && !types.contains(&value) {
+            types.push(value);
+        }
+    }
+    types
+}
+
 fn defaults_from_help_block(flags: &[String], block: &str, defaults: &mut HashMap<String, String>) {
     let Some(marker) = block.find("(default:") else {
         return;
@@ -441,6 +472,7 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let help_output = run_bounded(&engine.exe, "--help");
     let supported_flags = extract_supported_flags(&help_output.text);
     let reported_defaults = extract_reported_defaults(&help_output.text);
+    let speculative_types = extract_speculative_types(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
     let fingerprint = executable_fingerprint(&engine.exe);
     if fingerprint_before.is_empty() || fingerprint_before != fingerprint {
@@ -492,6 +524,7 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         supported_flags,
         reported_defaults,
         reported_defaults_version: REPORTED_DEFAULTS_VERSION,
+        speculative_types,
         help_hash: if help_output.text.is_empty() {
             String::new()
         } else {
@@ -776,14 +809,35 @@ pub(crate) fn unsupported_command_flags(
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    command_argument_groups(command)
-        .into_iter()
-        .map(|group| group.flag)
-        .filter(|flag| !supported.contains(flag))
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+    let reported_speculative_types = capabilities
+        .speculative_types
+        .iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .collect::<BTreeSet<_>>();
+    let mut unsupported = BTreeSet::new();
+    for group in command_argument_groups(command) {
+        if !supported.contains(group.flag) {
+            unsupported.insert(group.flag.to_string());
+            continue;
+        }
+        // Older/forked engines can advertise the flag without printing its enum.
+        // Preserve the historical flag-level behavior unless the engine supplied
+        // an authoritative value list; checkpoint eligibility remains stricter.
+        if group.flag != "--spec-type" || reported_speculative_types.is_empty() {
+            continue;
+        }
+        let value = group.tokens[0]
+            .split_once('=')
+            .map(|(_, value)| value)
+            .or_else(|| group.tokens.get(1).map(String::as_str))
+            .unwrap_or_default();
+        for speculative_type in crate::speculative::parse_speculative_types(value) {
+            if !reported_speculative_types.contains(&speculative_type) {
+                unsupported.insert(format!("--spec-type={speculative_type}"));
+            }
+        }
+    }
+    unsupported.into_iter().collect()
 }
 
 fn preserve_in_conservative_mode(flag: &str) -> bool {
@@ -986,6 +1040,30 @@ mod tests {
     }
 
     #[test]
+    fn extracts_wrapped_speculative_type_choices_in_engine_order() {
+        let types = extract_speculative_types(
+            "--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,draft-dspark,ngram-simple,ngram-map-k,ngram-map-k4v\n,ngram-mod,ngram-cache\n    comma-separated list of types of speculative decoding to use (default: none)\n",
+        );
+        assert_eq!(
+            types,
+            vec![
+                "none",
+                "draft-simple",
+                "draft-eagle3",
+                "draft-mtp",
+                "draft-dflash",
+                "draft-dspark",
+                "ngram-simple",
+                "ngram-map-k",
+                "ngram-map-k4v",
+                "ngram-mod",
+                "ngram-cache",
+            ]
+        );
+        assert!(extract_speculative_types("--model FILE\n").is_empty());
+    }
+
+    #[test]
     fn version_extraction_skips_backend_logs_and_requires_a_version_marker() {
         let output = "load_backend: loaded RPC backend\nversion: 9055 (8e52631d5)\nbuilt with MSVC";
         assert_eq!(
@@ -1029,6 +1107,24 @@ mod tests {
         let mut unknown = detected(&["-m"]);
         unknown.status = "partial".to_string();
         assert!(unsupported_command_flags(&command, &unknown).is_empty());
+    }
+
+    #[test]
+    fn validates_speculative_type_values_reported_by_the_engine() {
+        let command = vec![
+            "llama-server".to_string(),
+            "--spec-type".to_string(),
+            "ngram-mod,ngram-future,draft-mtp".to_string(),
+        ];
+        let mut capabilities = detected(&["--spec-type"]);
+        capabilities.speculative_types = vec!["ngram-mod".into(), "draft-mtp".into()];
+        assert_eq!(
+            unsupported_command_flags(&command, &capabilities),
+            vec!["--spec-type=ngram-future".to_string()]
+        );
+
+        capabilities.speculative_types.clear();
+        assert!(unsupported_command_flags(&command, &capabilities).is_empty());
     }
 
     #[test]

@@ -8,6 +8,7 @@ const MAX_GGUF_STRING_BYTES: u64 = 10_000_000;
 const MAX_GGUF_ARRAY_ITEMS: u64 = 10_000_000;
 const MAX_GGUF_METADATA_ITEMS: u64 = 65_536;
 const MAX_GGUF_STRING_ITEMS: u64 = 65_536;
+const MAX_GGUF_SKIPPED_STRING_ITEMS: u64 = 1_000_000;
 const MAX_GGUF_TOTAL_STRING_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_GGUF_TAG_ARRAY_ITEMS: u64 = 4_096;
 const MAX_GGUF_STORED_TAGS: u64 = 256;
@@ -19,6 +20,7 @@ pub const DEFAULT_MODELS_DIR_NAME: &str = "models";
 struct GgufParseBudget {
     remaining_string_items: u64,
     remaining_string_bytes: u64,
+    remaining_skipped_string_items: u64,
 }
 
 impl Default for GgufParseBudget {
@@ -26,6 +28,7 @@ impl Default for GgufParseBudget {
         Self {
             remaining_string_items: MAX_GGUF_STRING_ITEMS,
             remaining_string_bytes: MAX_GGUF_TOTAL_STRING_BYTES,
+            remaining_skipped_string_items: MAX_GGUF_SKIPPED_STRING_ITEMS,
         }
     }
 }
@@ -43,6 +46,17 @@ impl GgufParseBudget {
             .remaining_string_bytes
             .checked_sub(len)
             .ok_or_else(|| "GGUF cumulative string data is too large".to_string())?;
+        Ok(())
+    }
+
+    fn consume_skipped_string(&mut self, len: u64) -> Result<(), String> {
+        if len > MAX_GGUF_STRING_BYTES {
+            return Err("GGUF string is too large".into());
+        }
+        self.remaining_skipped_string_items = self
+            .remaining_skipped_string_items
+            .checked_sub(1)
+            .ok_or_else(|| "GGUF contains too many skipped strings".to_string())?;
         Ok(())
     }
 }
@@ -403,7 +417,7 @@ fn ensure_bytes_available(file: &mut std::fs::File, bytes: u64) -> Result<(), St
 
 fn skip_gguf_string(file: &mut std::fs::File, budget: &mut GgufParseBudget) -> Result<(), String> {
     let len = read_u64(file)?;
-    budget.consume_string(len)?;
+    budget.consume_skipped_string(len)?;
     skip_bytes(file, len)
 }
 
@@ -424,7 +438,7 @@ fn skip_gguf_array(
         4..=6 => skip_bytes(file, scaled_bytes(4)?),
         10..=12 => skip_bytes(file, scaled_bytes(8)?),
         8 => {
-            if array_len > MAX_GGUF_STRING_ITEMS {
+            if array_len > budget.remaining_skipped_string_items {
                 return Err("GGUF string array is too large".into());
             }
             for _ in 0..array_len {
@@ -1083,6 +1097,57 @@ mod tests {
         let error = parse_gguf_metadata(&path).unwrap_err();
 
         assert!(error.contains("tag array is too large"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn large_tokenizer_string_arrays_are_streamed_without_losing_alignment() {
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-gguf-tokenizer-array-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("large-tokenizer.gguf");
+        let tokens = vec![""; (MAX_GGUF_STRING_ITEMS + 1) as usize];
+        write_test_gguf(
+            &path,
+            &[
+                ("tokenizer.ggml.tokens", TestMetadataValue::Strings(&tokens)),
+                (
+                    "general.architecture",
+                    TestMetadataValue::String("qwen4exp"),
+                ),
+            ],
+        );
+
+        let metadata = parse_gguf_metadata(&path).unwrap();
+
+        assert_eq!(metadata.architecture.as_deref(), Some("qwen4exp"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn excessive_skipped_string_arrays_are_rejected_before_iteration() {
+        let dir = std::env::temp_dir().join(format!(
+            "lsm-gguf-skipped-string-budget-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("excessive-tokenizer.gguf");
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&3_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        bytes.extend_from_slice(&1_u64.to_le_bytes());
+        push_test_string(&mut bytes, "tokenizer.ggml.tokens");
+        bytes.extend_from_slice(&9_u32.to_le_bytes());
+        bytes.extend_from_slice(&8_u32.to_le_bytes());
+        bytes.extend_from_slice(&(MAX_GGUF_SKIPPED_STRING_ITEMS + 1).to_le_bytes());
+        std::fs::write(&path, bytes).unwrap();
+
+        let error = parse_gguf_metadata(&path).unwrap_err();
+
+        assert!(error.contains("string array is too large"));
         let _ = std::fs::remove_dir_all(dir);
     }
 

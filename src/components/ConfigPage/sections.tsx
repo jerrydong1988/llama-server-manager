@@ -2,14 +2,14 @@ import type { InstanceConfig } from '../../store'
 import type { Translations } from '../../i18n'
 import { useState, useEffect } from 'react'
 import { FolderOpen, Plus, X } from 'lucide-react'
-import { Section, Input, Num, IntentNum, Switch, Select, SearchTarget, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, specTypes, cacheTypes } from './shared'
+import { Section, Input, Num, IntentNum, Switch, Select, SpecTypeMultiSelect, SearchTarget, CollapsibleGroup, ResetButton, RESET_MAP, chatTemplates, cacheTypes } from './shared'
 import { KNOWN_FLAGS } from '../../validators'
 import { hasExplicitOverride } from '../../parameterIntent'
 import WorkerSelector from './WorkerSelector'
 import { Button, TextInput } from '../ui'
 import { getResettableFields, type ModelWorkload } from '../../modelPolicy'
 import { formatPathForDisplay } from '../../utils/path'
-import { projectorEnabled } from '../../configSemantics'
+import { projectorEnabled, speculativeEnabled } from '../../configSemantics'
 
 const formGridClassName = 'config-form-grid'
 const wideGridClassName = 'config-form-grid'
@@ -180,10 +180,10 @@ export function ReasoningSection({ local, set, t, isEmbedding, emittedParams, ch
   const a = (k: keyof InstanceConfig) => k
   return (
     <Section id="config-reasoning" title={t.configPage.reasoning} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={countSummary(countActive(emittedParams, REASONING_CONFIG_KEYS), countActive(changedParams, REASONING_CONFIG_KEYS), statusLabels)}>
-      {(() => { const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding; return (<>
+      {(() => { const specActive = speculativeEnabled(local, isEmbedding); return (<>
       <div className={formGridClassName}>
         <Select label={`${t.configPage.reasoningSwitch} (--reasoning)`} value={local.reasoning} onChange={v => set('reasoning', v)} options={['', 'on', 'off', 'auto']} title={t.configPage.reasoningTip} disabled={isEmbedding} defaultLabel={t.common.default}  fieldKey={a('reasoning')} />
-        <Select label={`${t.configPage.specType} (--spec-type)`} value={local.spec_type} onChange={v => set('spec_type', v)} options={specTypes} title={t.configPage.specTypeTip} disabled={isEmbedding} defaultLabel={t.common.default}  fieldKey={a('spec_type')} />
+        <SpecTypeMultiSelect label={`${t.configPage.specType} (--spec-type)`} value={local.spec_type} onChange={v => set('spec_type', v)} title={t.configPage.specTypeTip} disabled={isEmbedding} defaultLabel={t.common.default} priorityLabel={t.configPage.specTypePriority} fieldKey={a('spec_type')} />
         <Num label={`${t.configPage.draftTokens} (--spec-draft-n-max)`} value={local.draft_tokens} onChange={v => set('draft_tokens', v)} min={0} title={t.configPage.draftTokensTip} disabled={!specActive}  fieldKey={a('draft_tokens')} />
         <Num label={`${t.configPage.specDraftNMin} (--spec-draft-n-min)`} value={local.spec_draft_n_min} onChange={v => set('spec_draft_n_min', v)} min={0} title={t.configPage.specDraftNMinTip} disabled={!specActive}  fieldKey={a('spec_draft_n_min')} />
         <Num label={`${t.configPage.temp} (--temp)`} value={local.temp} onChange={v => set('temp', v)} min={0} max={2} step={0.1} title={t.configPage.tempTip} disabled={isEmbedding}  fieldKey={a('temp')} />
@@ -318,7 +318,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
     setEntries(next)
     set('custom_args', serializeArgs(next))
   }
-  const specActive = local.spec_type && local.spec_type !== 'none' && !isEmbedding
+  const specActive = speculativeEnabled(local, isEmbedding)
 
   return (
     <Section id="config-advanced" title={t.configPage.advSectionTitle} defaultOpen={true} searchQuery={searchQuery} changedParams={changedParams} emittedParams={emittedParams} changedLabel={statusLabels.changedMarker} emittedLabel={statusLabels.emittedMarker} summary={summary(ADVANCED_CONFIG_KEYS)}>

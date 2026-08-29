@@ -36,9 +36,13 @@ Scanning never executes every discovered binary. Probes run only for explicitly 
 
 ## 有状态检查点采用更严格策略 / Stricter Stateful Checkpoint Policy
 
-引擎公开某个参数只代表命令语法可用，不代表跨进程 slot 状态一定能被真实复用。实验性 KV / Prefill Cache Checkpoint 因此使用独立的保守资格检查：引擎必须明确公开 slots、slot-save-path、Cache RAM 和 idle-slot cache 能力；模型、引擎二进制、版本/backend 和全部状态相关配置必须命中完整 SHA-256 fingerprint。滑动窗口模型还必须启用且支持 SWA 完整缓存。
+引擎公开某个参数只代表命令语法可用，不代表跨进程 slot 状态一定能被真实复用。实验性 KV / Prefill Cache Checkpoint 因此使用独立的证据门：引擎必须明确公开 slots、slot-save-path、Cache RAM 和 idle-slot cache 能力；模型、引擎二进制、版本/backend 和全部状态相关配置必须命中完整 SHA-256 fingerprint。完整分片 GGUF 会按索引对每个分片做内容摘要后再聚合；任一分片变化都产生安全 miss。滑动窗口模型还必须启用且支持 SWA 完整缓存。
 
-Advertising a flag proves only command-line availability, not reusable cross-process state. The experimental checkpoint feature therefore requires the complete slot and prompt-cache capability set plus an exact model, engine, version/backend, and state-bearing configuration fingerprint. Sliding-window models additionally require supported full SWA cache.
+Advertising a flag proves only command-line availability, not reusable cross-process state. The experimental checkpoint feature therefore requires the complete slot and prompt-cache capability set plus an exact model-artifact set, engine, version/backend, and state-bearing configuration fingerprint. Complete GGUF shard sets are hashed per shard and then aggregated, so any changed shard causes a safe miss. Sliding-window models additionally require supported full SWA cache.
+
+推测解码能力探测还会读取引擎实际报告的 `--spec-type` 候选。普通命令可以包含多个逗号分隔类型，并按 llama.cpp 固定优先级规范化；checkpoint 只允许当前引擎明确报告的可重建 `ngram-*` 集合。任何 draft/MTP、未知类型或外部 lookup 状态都退回冷启动。`qwen4exp` 已由 B10679 跨进程实测及上游实现确认使用 hybrid recurrent memory：普通 prompt cache 和 `ngram-mod` 可用，但 slot restore 后没有 target cache hit，因此列入 checkpoint 反例，而不是根据模型名称乐观放行。
+
+Runtime probing also records the engine-reported `--spec-type` choices. Ordinary commands may combine comma-separated types in normalized llama.cpp priority order; checkpointing allows only reported, rebuildable `ngram-*` sets. Draft/MTP, unknown types, and external lookup state fall back cold. B10679 cross-process testing and the corresponding llama.cpp implementation confirm that `qwen4exp` uses hybrid recurrent memory: ordinary prompt caching and `ngram-mod` work, but restored slot state does not yield a target cache hit, so the architecture is an explicit checkpoint counterexample.
 
 资格不满足、fingerprint miss、损坏或 restore 验证失败都会安全回到冷启动；不会因为引擎处于通用参数支持窗口就放宽有状态兼容条件。完整范围和操作说明见 [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md)。
 

@@ -1,6 +1,7 @@
 import { mockConvertFileSrc, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 import { emit } from '@tauri-apps/api/event'
 import { defaultInstanceConfig } from '../src/store/defaults'
+import { normalizeSpeculativeTypes } from '../src/speculativeTypes'
 import type { GlobalConfigShape } from '../src/store/bootstrap'
 import type {
   EngineInfo,
@@ -174,13 +175,18 @@ const engine: EngineInfo = {
       '--temp', '--top-k', '--top-p', '--threads', '--kv-unified',
       '--mmap', '--no-mmap', '--perf', '--no-perf',
       '--models-autoload', '--no-models-autoload', '--image-min-tokens', '--mmproj',
+      '--spec-type',
     ],
     reportedDefaults: {
       '--temp': '0.8',
       '--threads': 'automatic',
       '--mmap': 'enabled',
     },
-    reportedDefaultsVersion: 1,
+    reportedDefaultsVersion: 2,
+    speculativeTypes: [
+      'none', 'draft-simple', 'draft-eagle3', 'draft-mtp', 'draft-dflash', 'draft-dspark',
+      'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod', 'ngram-cache',
+    ],
     helpHash: 'browser-test-help',
     executableFingerprint: 'browser-test-engine-fingerprint',
     probedAt: IS_DOCS_SCENARIO ? Date.UTC(2026, 6, 31, 12, 0, 0) / 1000 : 1,
@@ -702,7 +708,10 @@ const emittedOverrideKeys = (config: InstanceConfig): Array<keyof InstanceConfig
     'model_path', 'host', 'port', 'api_key', 'api_key_file',
     'metrics', 'props', 'slots_enabled', 'embedding', 'pooling', 'reranking',
   ])
-  const speculativeActive = Boolean(config.spec_type && config.spec_type !== 'none')
+  const speculativeActive = Boolean(
+    normalizeSpeculativeTypes(config.spec_type)
+      && normalizeSpeculativeTypes(config.spec_type) !== 'none',
+  )
   const speculativeChildren = new Set([
     'draft_tokens', 'spec_draft_n_min', 'spec_draft_p_min', 'spec_draft_p_split',
     'draft_gpu_layers', 'spec_draft_device', 'spec_default',
@@ -739,6 +748,10 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
     else if (field === 'models_autoload') command.push(config.models_autoload ? '--models-autoload' : '--no-models-autoload')
     else if (field === 'image_min_tokens') command.push('--image-min-tokens', String(config.image_min_tokens))
     else if (field === 'mmproj_path' && config.mmproj_path) command.push('--mmproj', config.mmproj_path)
+    else if (field === 'spec_type') {
+      const value = normalizeSpeculativeTypes(config.spec_type)
+      if (value && value !== 'none') command.push('--spec-type', value)
+    }
   }
   return { command, unsupportedFlags: [], emittedOverrideKeys: emitted }
 }

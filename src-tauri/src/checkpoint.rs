@@ -1,8 +1,10 @@
+use crate::model_artifacts::resolve_model_artifacts;
 use crate::models::{
     InstanceConfig, KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MAX,
     KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MIN, KV_CHECKPOINT_STORAGE_LIMIT_GIB_MAX,
     KV_CHECKPOINT_STORAGE_LIMIT_GIB_MIN,
 };
+use crate::speculative::{checkpoint_speculative_types_supported, normalize_speculative_types};
 use crate::vector_policy::ModelWorkload;
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -105,6 +107,7 @@ pub enum CheckpointReasonCode {
     SlidingWindowRequiresFullCache,
     ModelArchitectureUnknown,
     ShardedModelUnsupported,
+    ModelArtifactsIncomplete,
     ConflictingSlotSavePath,
     FingerprintUnavailable,
     FingerprintMismatch,
@@ -235,8 +238,9 @@ pub struct CheckpointEligibilityContext<'a> {
     pub workload: ModelWorkload,
     pub managed_local_engine: bool,
     pub engine_capabilities: EngineCheckpointCapabilities,
+    pub engine_speculative_types: &'a [String],
     pub model_architecture: Option<&'a str>,
-    pub model_is_sharded: bool,
+    pub model_artifacts_complete: bool,
     pub model_has_swa: Option<bool>,
 }
 
@@ -261,6 +265,7 @@ fn is_known_hybrid_or_recurrent(architecture: &str) -> bool {
         .flat_map(char::to_lowercase)
         .collect();
     const UNSUPPORTED_HINTS: &[&str] = &[
+        "qwen4exp",
         "qwen3next",
         "recurrentgemma",
         "mamba",
@@ -353,7 +358,10 @@ pub fn evaluate_checkpoint_eligibility(
         push_reason(&mut reasons, CheckpointReasonCode::EngineCapabilityMissing);
     }
     if !config.draft_model_path.trim().is_empty()
-        || !config.spec_type.trim().is_empty()
+        || !checkpoint_speculative_types_supported(
+            &config.spec_type,
+            context.engine_speculative_types,
+        )
         || !config.lookup_cache_static.trim().is_empty()
         || !config.lookup_cache_dynamic.trim().is_empty()
         || config.spec_default
@@ -377,8 +385,8 @@ pub fn evaluate_checkpoint_eligibility(
     {
         push_reason(&mut reasons, CheckpointReasonCode::MultimodalUnsupported);
     }
-    if context.model_is_sharded {
-        push_reason(&mut reasons, CheckpointReasonCode::ShardedModelUnsupported);
+    if !context.model_artifacts_complete {
+        push_reason(&mut reasons, CheckpointReasonCode::ModelArtifactsIncomplete);
     }
     if context.model_has_swa == Some(true) && !config.swa_full {
         push_reason(
@@ -407,7 +415,7 @@ pub fn evaluate_checkpoint_eligibility(
 }
 
 pub const CHECKPOINT_MANIFEST_SCHEMA_VERSION: u32 = 1;
-pub const CHECKPOINT_FINGERPRINT_SCHEMA_VERSION: u32 = 1;
+pub const CHECKPOINT_FINGERPRINT_SCHEMA_VERSION: u32 = 2;
 const HASH_CACHE_SCHEMA_VERSION: u32 = 1;
 const LATEST_POINTER_SCHEMA_VERSION: u32 = 1;
 const USAGE_SCHEMA_VERSION: u32 = 1;
@@ -778,7 +786,7 @@ pub struct FingerprintMaterials {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CanonicalFingerprintV1<'a> {
+struct CanonicalFingerprintV2<'a> {
     fingerprint_schema_version: u32,
     manifest_schema_version: u32,
     state_format: &'static str,
@@ -786,6 +794,7 @@ struct CanonicalFingerprintV1<'a> {
     engine_sha256: &'a str,
     engine_version: &'a str,
     backend: &'a str,
+    spec_type: String,
     ctx_size: u32,
     ctx_size_auto: bool,
     parallel: i32,
@@ -859,7 +868,7 @@ fn canonical_fingerprint_bytes(
             "checkpoint fingerprint material is unavailable",
         ));
     }
-    let canonical = CanonicalFingerprintV1 {
+    let canonical = CanonicalFingerprintV2 {
         fingerprint_schema_version: CHECKPOINT_FINGERPRINT_SCHEMA_VERSION,
         manifest_schema_version: CHECKPOINT_MANIFEST_SCHEMA_VERSION,
         state_format: STATE_FORMAT,
@@ -867,6 +876,7 @@ fn canonical_fingerprint_bytes(
         engine_sha256: &materials.engine_sha256,
         engine_version: materials.engine_version.trim(),
         backend: materials.backend.trim(),
+        spec_type: normalize_speculative_types(&config.spec_type),
         ctx_size: config.ctx_size,
         ctx_size_auto: config.ctx_size_auto,
         parallel: config.parallel,
@@ -1341,6 +1351,27 @@ impl CheckpointStore {
         Ok(digest)
     }
 
+    pub fn model_artifact_sha256(&self, model_path: &Path) -> StoreResult<String> {
+        let artifacts = resolve_model_artifacts(model_path).map_err(|_| {
+            CheckpointStoreError::new(
+                CheckpointReasonCode::ModelArtifactsIncomplete,
+                "model artifact set is unavailable or incomplete",
+            )
+        })?;
+        if artifacts.len() == 1 {
+            return self.content_sha256(&artifacts[0]);
+        }
+
+        let mut canonical = Vec::with_capacity(32 + artifacts.len() * 72);
+        canonical.extend_from_slice(b"llama-model-artifact-set-v1\0");
+        canonical.extend_from_slice(&(artifacts.len() as u32).to_le_bytes());
+        for (index, artifact) in artifacts.iter().enumerate() {
+            canonical.extend_from_slice(&((index + 1) as u32).to_le_bytes());
+            canonical.extend_from_slice(self.content_sha256(artifact)?.as_bytes());
+        }
+        Ok(sha256_bytes(&canonical))
+    }
+
     pub fn build_fingerprint(
         &self,
         config: &InstanceConfig,
@@ -1355,7 +1386,7 @@ impl CheckpointStore {
             Some(self.content_sha256(Path::new(&config.chat_template_file))?)
         };
         let materials = FingerprintMaterials {
-            model_sha256: self.content_sha256(model_path)?,
+            model_sha256: self.model_artifact_sha256(model_path)?,
             engine_sha256: self.content_sha256(engine_path)?,
             engine_version: engine_version.into(),
             backend: backend.into(),
@@ -3593,8 +3624,13 @@ mod tests {
                 cache_idle_slots: true,
                 swa_full: true,
             },
+            engine_speculative_types: &[
+                "ngram-mod".into(),
+                "ngram-cache".into(),
+                "draft-mtp".into(),
+            ],
             model_architecture: Some("llama"),
-            model_is_sharded: false,
+            model_artifacts_complete: true,
             model_has_swa: Some(false),
         })
     }
@@ -3865,6 +3901,38 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_allows_ngram_fallbacks_but_rejects_draft_state() {
+        let mut config = eligible_config();
+        config.spec_type = "ngram-cache,ngram-mod".into();
+        assert!(evaluate(&config).eligible);
+
+        config.spec_type = "ngram-mod,draft-mtp".into();
+        assert!(evaluate(&config)
+            .reasons
+            .contains(&CheckpointReasonCode::SpeculativeDecodingUnsupported));
+
+        config.spec_type = "ngram-cache".into();
+        config.lookup_cache_static = "external-cache.bin".into();
+        assert!(evaluate(&config)
+            .reasons
+            .contains(&CheckpointReasonCode::SpeculativeDecodingUnsupported));
+
+        config.lookup_cache_static.clear();
+        config.spec_type = "ngram-future".into();
+        assert!(evaluate(&config)
+            .reasons
+            .contains(&CheckpointReasonCode::SpeculativeDecodingUnsupported));
+
+        config.spec_type = "ngram-simple".into();
+        assert!(evaluate(&config)
+            .reasons
+            .contains(&CheckpointReasonCode::SpeculativeDecodingUnsupported));
+
+        config.spec_type = "none".into();
+        assert!(evaluate(&config).eligible);
+    }
+
+    #[test]
     fn eligibility_rejects_every_unsupported_config_row() {
         assert_config_reason(CheckpointReasonCode::UnsupportedConfiguration, |config| {
             config.kv_checkpoint.storage_limit_gib = 0
@@ -3940,8 +4008,9 @@ mod tests {
                 cache_idle_slots: true,
                 swa_full: true,
             },
+            engine_speculative_types: &[],
             model_architecture: Some("llama"),
-            model_is_sharded: false,
+            model_artifacts_complete: true,
             model_has_swa: Some(false),
         };
 
@@ -3983,6 +4052,14 @@ mod tests {
             .reasons
             .contains(&CheckpointReasonCode::HybridRecurrentUnsupported));
 
+        let qwen4exp = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+            model_architecture: Some("qwen4exp"),
+            ..base
+        });
+        assert!(qwen4exp
+            .reasons
+            .contains(&CheckpointReasonCode::HybridRecurrentUnsupported));
+
         let unknown = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
             model_architecture: None,
             ..base
@@ -3991,13 +4068,13 @@ mod tests {
             .reasons
             .contains(&CheckpointReasonCode::ModelArchitectureUnknown));
 
-        let sharded = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
-            model_is_sharded: true,
+        let incomplete = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+            model_artifacts_complete: false,
             ..base
         });
-        assert!(sharded
+        assert!(incomplete
             .reasons
-            .contains(&CheckpointReasonCode::ShardedModelUnsupported));
+            .contains(&CheckpointReasonCode::ModelArtifactsIncomplete));
 
         let sliding_window = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
             model_has_swa: Some(true),
@@ -4467,6 +4544,7 @@ mod tests {
         assert_fingerprint_changes(&base, |config| config.reasoning_format = "deepseek".into());
         assert_fingerprint_changes(&base, |config| config.reasoning_effort = "high".into());
         assert_fingerprint_changes(&base, |config| config.reasoning = "on".into());
+        assert_fingerprint_changes(&base, |config| config.spec_type = "ngram-mod".into());
         assert_fingerprint_changes(&base, |config| config.reasoning_preserve = "true".into());
         assert_fingerprint_changes(&base, |config| config.reasoning_budget = "8192".into());
         assert_fingerprint_changes(&base, |config| {
@@ -4585,6 +4663,48 @@ mod tests {
         assert_eq!(parsed.entries.len(), 2);
         assert!(parsed.entries.keys().all(|key| is_lower_hex_digest(key)));
         assert!(!String::from_utf8(cache).unwrap().contains("model.gguf"));
+    }
+
+    #[test]
+    fn model_artifact_hash_covers_every_shard_and_preserves_single_file_behavior() {
+        let sandbox = TestSandbox::new("artifact-hash");
+        let store = sandbox.store();
+        let single = sandbox.path.join("single.gguf");
+        fs::write(&single, b"single model").unwrap();
+        assert_eq!(
+            store.model_artifact_sha256(&single).unwrap(),
+            store.content_sha256(&single).unwrap()
+        );
+
+        let first = sandbox.path.join("Qwen-00001-of-00003.gguf");
+        let second = sandbox.path.join("Qwen-00002-of-00003.gguf");
+        let third = sandbox.path.join("Qwen-00003-of-00003.gguf");
+        fs::write(&first, b"shard one").unwrap();
+        fs::write(&second, b"shard two").unwrap();
+        fs::write(&third, b"shard three").unwrap();
+        let initial = store.model_artifact_sha256(&first).unwrap();
+        assert_eq!(store.model_artifact_sha256(&second).unwrap(), initial);
+
+        fs::write(&third, b"shard three changed").unwrap();
+        assert_ne!(store.model_artifact_sha256(&first).unwrap(), initial);
+        fs::remove_file(&second).unwrap();
+        let error = store.model_artifact_sha256(&first).unwrap_err();
+        assert_eq!(
+            error.reason_code,
+            CheckpointReasonCode::ModelArtifactsIncomplete
+        );
+    }
+
+    #[test]
+    fn fingerprint_normalizes_equivalent_speculative_type_order() {
+        let mut first = eligible_config();
+        first.spec_type = "ngram-cache,ngram-mod".into();
+        let mut second = first.clone();
+        second.spec_type = "ngram-mod,ngram-cache".into();
+        assert_eq!(
+            test_fingerprint(&first).digest,
+            test_fingerprint(&second).digest
+        );
     }
 
     #[test]

@@ -10,6 +10,13 @@ const entry = `
     buildSpeculativeDecodingSummary,
     isSpeculativeDecodingConfigured,
   } from './src/components/monitoring/speculativeDecoding'
+  import {
+    hasDraftSpeculativeType,
+    hasSpeculativeType,
+    isNgramOnlySpeculativeType,
+    normalizeSpeculativeTypes,
+    parseSpeculativeTypes,
+  } from './src/speculativeTypes'
 
   const request = (overrides = {}) => ({
     session_id: 'session',
@@ -64,6 +71,14 @@ const entry = `
   assert.equal(isSpeculativeDecodingConfigured({ spec_type: 'ngram-cache' }), true)
   assert.equal(isSpeculativeDecodingConfigured({ spec_type: 'none' }), false)
   assert.equal(isSpeculativeDecodingConfigured({ spec_type: '' }), false)
+  assert.equal(isSpeculativeDecodingConfigured({ spec_type: 'none,ngram-mod' }), false)
+  assert.deepEqual(parseSpeculativeTypes(' ngram-mod, draft-mtp,ngram-mod '), ['ngram-mod', 'draft-mtp'])
+  assert.equal(normalizeSpeculativeTypes('draft-mtp,ngram-mod'), 'ngram-mod,draft-mtp')
+  assert.equal(normalizeSpeculativeTypes('none,ngram-mod'), 'none')
+  assert.equal(hasSpeculativeType('ngram-mod,draft-mtp', 'draft-mtp'), true)
+  assert.equal(hasDraftSpeculativeType('ngram-mod,draft-mtp'), true)
+  assert.equal(isNgramOnlySpeculativeType('ngram-mod,ngram-cache'), true)
+  assert.equal(isNgramOnlySpeculativeType('ngram-mod,draft-mtp'), false)
 
   const historical = buildSpeculativeDecodingSummary({
     requests: [
