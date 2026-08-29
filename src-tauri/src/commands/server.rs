@@ -2305,6 +2305,21 @@ fn resolve_checkpoint_startup(
     if !coordinator.gate_active(instance_id) {
         return true;
     }
+    if coordinator.restore_cleanup_pending(instance_id, expected_pid) {
+        let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_HTTP_TIMEOUT) {
+            Ok(client) => {
+                coordinator.retry_failed_restore_cleanup(instance_id, expected_pid, &client)
+            }
+            Err(error) => Err(error),
+        };
+        match cleanup {
+            Ok(status) => emit_checkpoint_status(app, &status),
+            Err(error) => {
+                eprintln!("Checkpoint restore cleanup failed for {instance_id}: {error}")
+            }
+        }
+        return coordinator.gate_allows_routing(instance_id);
+    }
     let healthy = match coordinator.on_engine_healthy(instance_id, expected_pid) {
         Ok(status) => status,
         Err(error) => {

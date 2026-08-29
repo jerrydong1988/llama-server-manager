@@ -641,6 +641,18 @@ impl RuntimeSupervisor {
         if !coordinator.gate_active(instance_id) {
             return true;
         }
+        if coordinator.restore_cleanup_pending(instance_id, expected_pid) {
+            let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_HTTP_TIMEOUT) {
+                Ok(client) => {
+                    coordinator.retry_failed_restore_cleanup(instance_id, expected_pid, &client)
+                }
+                Err(error) => Err(error),
+            };
+            if let Err(error) = cleanup {
+                eprintln!("Checkpoint restore cleanup failed for {instance_id}: {error}");
+            }
+            return coordinator.gate_allows_routing(instance_id);
+        }
         if let Err(error) = coordinator.on_engine_healthy(instance_id, expected_pid) {
             eprintln!("Checkpoint health transition failed for {instance_id}: {error}");
             return coordinator.gate_allows_routing(instance_id);

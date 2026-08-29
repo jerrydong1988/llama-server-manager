@@ -2633,19 +2633,51 @@ impl CheckpointCoordinator {
         error: CheckpointStoreError,
         started: Instant,
     ) -> StoreResult<CheckpointStatus> {
-        let _ = backend.erase();
-        self.finish_ready_cold(
-            instance_id,
-            expected_pid,
-            CheckpointOperationUpdate::new(
-                CheckpointOperation::Restore,
-                CheckpointOutcome::Failed,
-                error.reason_code,
-                error.message,
-                None,
-                started.elapsed().as_millis() as u64,
-            ),
-        )
+        let cleanup_required = self
+            .status(instance_id)
+            .is_some_and(|status| status.phase == CheckpointPhase::Restoring);
+        let cleanup = backend.erase();
+        let update = CheckpointOperationUpdate::new(
+            CheckpointOperation::Restore,
+            CheckpointOutcome::Failed,
+            error.reason_code,
+            error.message,
+            None,
+            started.elapsed().as_millis() as u64,
+        );
+        if cleanup_required && cleanup.is_err() {
+            // A restore request may have modified slot state even when its
+            // response failed. Keep the routing gate closed until a later
+            // health pass can prove the erase request succeeded.
+            self.update_operation(instance_id, expected_pid, update)
+        } else {
+            self.finish_ready_cold(instance_id, expected_pid, update)
+        }
+    }
+
+    pub fn restore_cleanup_pending(&self, instance_id: &str, expected_pid: u32) -> bool {
+        self.status(instance_id).is_some_and(|status| {
+            status.expected_pid == Some(expected_pid)
+                && status.phase == CheckpointPhase::Restoring
+                && status.last_operation == CheckpointOperation::Restore
+                && status.last_outcome == CheckpointOutcome::Failed
+        })
+    }
+
+    pub fn retry_failed_restore_cleanup<B: SlotBackend + ?Sized>(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        backend: &B,
+    ) -> StoreResult<CheckpointStatus> {
+        if !self.restore_cleanup_pending(instance_id, expected_pid) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::InvalidStateTransition,
+                "checkpoint restore cleanup is not pending",
+            ));
+        }
+        backend.erase()?;
+        self.transition(instance_id, expected_pid, CheckpointPhase::ReadyCold)
     }
 
     pub fn fail_restore_setup(
@@ -3269,6 +3301,13 @@ impl CheckpointCoordinator {
 mod tests {
     use super::*;
     use crate::models::{InstanceConfig, KvCheckpointConfig};
+    use axum::body::Bytes;
+    use axum::extract::{Query, State};
+    use axum::http::StatusCode;
+    use axum::response::{IntoResponse, Response};
+    use axum::routing::{get, post};
+    use axum::{Json, Router};
+    use tokio::sync::oneshot;
 
     fn eligible_config() -> InstanceConfig {
         InstanceConfig {
@@ -3279,6 +3318,237 @@ mod tests {
                 ..KvCheckpointConfig::default()
             },
             ..InstanceConfig::default()
+        }
+    }
+
+    #[derive(Debug)]
+    struct FakeLlamaHttpState {
+        health_ok: bool,
+        processing: bool,
+        prompt_tokens: u64,
+        last_saved_tokens: u64,
+        payload: Vec<u8>,
+        health_delay: Duration,
+        save_delay: Duration,
+        restore_delay: Duration,
+        restore_applies: bool,
+        malformed_action: Option<String>,
+        erase_count: u32,
+        events: Vec<String>,
+    }
+
+    impl Default for FakeLlamaHttpState {
+        fn default() -> Self {
+            Self {
+                health_ok: true,
+                processing: false,
+                prompt_tokens: 0,
+                last_saved_tokens: 0,
+                payload: Vec::new(),
+                health_delay: Duration::ZERO,
+                save_delay: Duration::ZERO,
+                restore_delay: Duration::ZERO,
+                restore_applies: true,
+                malformed_action: None,
+                erase_count: 0,
+                events: Vec::new(),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeLlamaHttpContext {
+        scratch: PathBuf,
+        state: Arc<Mutex<FakeLlamaHttpState>>,
+        action_lock: Arc<tokio::sync::Mutex<()>>,
+    }
+
+    struct FakeLlamaHttpServer {
+        port: u16,
+        state: Arc<Mutex<FakeLlamaHttpState>>,
+        shutdown: Option<oneshot::Sender<()>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl FakeLlamaHttpServer {
+        async fn start(scratch: PathBuf) -> Self {
+            let state = Arc::new(Mutex::new(FakeLlamaHttpState::default()));
+            let context = FakeLlamaHttpContext {
+                scratch,
+                state: state.clone(),
+                action_lock: Arc::new(tokio::sync::Mutex::new(())),
+            };
+            let router = Router::new()
+                .route("/health", get(fake_llama_health))
+                .route("/slots", get(fake_llama_slots))
+                .route("/slots/0", post(fake_llama_slot_action))
+                .with_state(context);
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (shutdown, receiver) = oneshot::channel();
+            let task = tokio::spawn(async move {
+                axum::serve(listener, router)
+                    .with_graceful_shutdown(async move {
+                        let _ = receiver.await;
+                    })
+                    .await
+                    .unwrap();
+            });
+            Self {
+                port,
+                state,
+                shutdown: Some(shutdown),
+                task,
+            }
+        }
+
+        fn configure(&self, configure: impl FnOnce(&mut FakeLlamaHttpState)) {
+            configure(&mut self.state.lock().unwrap());
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.state.lock().unwrap().events.clone()
+        }
+
+        async fn stop(mut self) {
+            if let Some(shutdown) = self.shutdown.take() {
+                let _ = shutdown.send(());
+            }
+            self.task.await.unwrap();
+        }
+    }
+
+    fn malformed_json_response() -> Response {
+        (
+            StatusCode::OK,
+            [("content-type", "application/json")],
+            "not-json",
+        )
+            .into_response()
+    }
+
+    async fn fake_llama_health(State(context): State<FakeLlamaHttpContext>) -> Response {
+        let (health_ok, delay, malformed) = {
+            let mut state = context.state.lock().unwrap();
+            state.events.push("health".into());
+            (
+                state.health_ok,
+                state.health_delay,
+                state.malformed_action.as_deref() == Some("health"),
+            )
+        };
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if malformed {
+            return malformed_json_response();
+        }
+        Json(serde_json::json!({
+            "status": if health_ok { "ok" } else { "loading model" }
+        }))
+        .into_response()
+    }
+
+    async fn fake_llama_slots(State(context): State<FakeLlamaHttpContext>) -> Response {
+        let (processing, prompt_tokens, malformed) = {
+            let mut state = context.state.lock().unwrap();
+            state.events.push("slots".into());
+            (
+                state.processing,
+                state.prompt_tokens,
+                state.malformed_action.as_deref() == Some("slots"),
+            )
+        };
+        if malformed {
+            return malformed_json_response();
+        }
+        Json(serde_json::json!([{
+            "id": 0,
+            "is_processing": processing,
+            "n_ctx": prompt_tokens
+        }]))
+        .into_response()
+    }
+
+    async fn fake_llama_slot_action(
+        State(context): State<FakeLlamaHttpContext>,
+        Query(query): Query<HashMap<String, String>>,
+        body: Bytes,
+    ) -> Response {
+        let _action_guard = context.action_lock.lock().await;
+        let action = query.get("action").map(String::as_str).unwrap_or_default();
+        let (delay, malformed) = {
+            let mut state = context.state.lock().unwrap();
+            state.events.push(action.to_string());
+            let delay = match action {
+                "save" => state.save_delay,
+                "restore" => state.restore_delay,
+                _ => Duration::ZERO,
+            };
+            (delay, state.malformed_action.as_deref() == Some(action))
+        };
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if malformed {
+            return malformed_json_response();
+        }
+
+        if action == "erase" {
+            let mut state = context.state.lock().unwrap();
+            let n_erased = state.prompt_tokens;
+            state.prompt_tokens = 0;
+            state.payload.clear();
+            state.erase_count += 1;
+            return Json(serde_json::json!({ "id_slot": 0, "n_erased": n_erased })).into_response();
+        }
+
+        let filename = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value["filename"].as_str().map(str::to_string));
+        let Some(filename) = filename.filter(|value| is_manager_slot_filename(value)) else {
+            return (StatusCode::BAD_REQUEST, "invalid filename").into_response();
+        };
+        let path = context.scratch.join(&filename);
+        match action {
+            "save" => {
+                let (tokens, payload) = {
+                    let state = context.state.lock().unwrap();
+                    (state.prompt_tokens, state.payload.clone())
+                };
+                if fs::write(&path, &payload).is_err() {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "save failed").into_response();
+                }
+                context.state.lock().unwrap().last_saved_tokens = tokens;
+                Json(serde_json::json!({
+                    "id_slot": 0,
+                    "filename": filename,
+                    "n_saved": tokens,
+                    "n_written": payload.len()
+                }))
+                .into_response()
+            }
+            "restore" => {
+                let Ok(payload) = fs::read(&path) else {
+                    return (StatusCode::INTERNAL_SERVER_ERROR, "restore failed").into_response();
+                };
+                let mut state = context.state.lock().unwrap();
+                let restored_tokens = state.last_saved_tokens.max(1);
+                if state.restore_applies {
+                    state.prompt_tokens = restored_tokens;
+                    state.payload.clone_from(&payload);
+                }
+                Json(serde_json::json!({
+                    "id_slot": 0,
+                    "filename": filename,
+                    "n_restored": restored_tokens,
+                    "n_read": payload.len()
+                }))
+                .into_response()
+            }
+            _ => (StatusCode::BAD_REQUEST, "unsupported action").into_response(),
         }
     }
 
@@ -3309,6 +3579,239 @@ mod tests {
             "expected {reason:?}, got {:?}",
             result.reasons
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn http_slot_checkpoint_round_trip_gates_restore_and_erases_partial_state() {
+        const INSTANCE_ID: &str = "http-round-trip";
+        const PRIVATE_PAYLOAD: &[u8] = b"private prompt-derived slot bytes";
+        const PRIVATE_API_KEY: &str = "private-test-api-key";
+
+        let sandbox = TestSandbox::new("http-round-trip");
+        let store = sandbox.store();
+        let scratch = store.prepare_instance(INSTANCE_ID).unwrap();
+        let server = FakeLlamaHttpServer::start(scratch).await;
+        let mut config = eligible_config();
+        config.port = server.port;
+        config.api_key = PRIVATE_API_KEY.into();
+        config.kv_checkpoint.minimum_prompt_tokens = 1;
+        let fingerprint = test_fingerprint(&config);
+        let eligibility = evaluate(&config);
+
+        server.configure(|state| {
+            state.prompt_tokens = 1_536;
+            state.payload = PRIVATE_PAYLOAD.to_vec();
+        });
+        let first = CheckpointCoordinator::new(store.clone());
+        let starting = first
+            .register_start_with_context(
+                INSTANCE_ID,
+                901,
+                &eligibility,
+                Some(fingerprint.clone()),
+                config.kv_checkpoint.clone(),
+            )
+            .unwrap();
+        assert_eq!(starting.phase, CheckpointPhase::Starting);
+        assert!(!first.gate_allows_routing(INSTANCE_ID));
+        assert_eq!(
+            first.on_engine_healthy(INSTANCE_ID, 901).unwrap().phase,
+            CheckpointPhase::EngineHealthy
+        );
+        let cold_coordinator = first.clone();
+        let cold_config = config.clone();
+        let cold_fingerprint = fingerprint.clone();
+        let cold = tokio::task::spawn_blocking(move || {
+            let client = LlamaSlotClient::new(&cold_config, Duration::from_secs(2)).unwrap();
+            cold_coordinator.restore_or_cold(INSTANCE_ID, 901, &cold_fingerprint, true, &client)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(cold.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(cold.reason_code, CheckpointReasonCode::NoCheckpoint);
+        assert!(first.gate_allows_routing(INSTANCE_ID));
+
+        assert_eq!(
+            first.begin_draining(INSTANCE_ID, 901).unwrap().phase,
+            CheckpointPhase::Draining
+        );
+        assert!(!first.gate_allows_routing(INSTANCE_ID));
+        let save_coordinator = first.clone();
+        let save_config = config.clone();
+        let save_fingerprint = fingerprint.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            let client = LlamaSlotClient::new(&save_config, Duration::from_secs(2)).unwrap();
+            save_coordinator.save_before_stop(
+                INSTANCE_ID,
+                901,
+                &save_fingerprint,
+                &save_config.kv_checkpoint,
+                &client,
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(saved.phase, CheckpointPhase::Stopping);
+        assert_eq!(saved.last_outcome, CheckpointOutcome::Success);
+        first.mark_stopped(INSTANCE_ID, 901).unwrap();
+        let committed = store
+            .load_latest(INSTANCE_ID, &fingerprint.digest)
+            .unwrap()
+            .unwrap();
+        assert_eq!(committed.manifest.slot().prompt_tokens, 1_536);
+        assert_eq!(
+            committed.manifest.slot().bytes,
+            PRIVATE_PAYLOAD.len() as u64
+        );
+
+        server.configure(|state| {
+            state.prompt_tokens = 0;
+            state.payload.clear();
+            state.restore_delay = Duration::from_millis(300);
+            state.events.clear();
+        });
+        let second = CheckpointCoordinator::new(store.clone());
+        second
+            .register_start_with_context(
+                INSTANCE_ID,
+                902,
+                &eligibility,
+                Some(fingerprint.clone()),
+                config.kv_checkpoint.clone(),
+            )
+            .unwrap();
+        second.on_engine_healthy(INSTANCE_ID, 902).unwrap();
+        let restore_coordinator = second.clone();
+        let restore_config = config.clone();
+        let restore_fingerprint = fingerprint.clone();
+        let restore = tokio::task::spawn_blocking(move || {
+            let client = LlamaSlotClient::new(&restore_config, Duration::from_secs(2)).unwrap();
+            restore_coordinator.restore_or_cold(
+                INSTANCE_ID,
+                902,
+                &restore_fingerprint,
+                true,
+                &client,
+            )
+        });
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if second
+                    .status(INSTANCE_ID)
+                    .is_some_and(|status| status.phase == CheckpointPhase::Restoring)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!second.gate_allows_routing(INSTANCE_ID));
+        let restored = restore.await.unwrap().unwrap();
+        assert_eq!(restored.phase, CheckpointPhase::Ready);
+        assert_eq!(restored.last_outcome, CheckpointOutcome::Success);
+        assert!(second.gate_allows_routing(INSTANCE_ID));
+        assert_eq!(server.events(), ["health", "restore", "save", "slots"]);
+        {
+            let state = server.state.lock().unwrap();
+            assert_eq!(state.prompt_tokens, 1_536);
+            assert_eq!(state.payload, PRIVATE_PAYLOAD);
+        }
+        let public_status = serde_json::to_string(&restored).unwrap();
+        assert!(!public_status.contains(std::str::from_utf8(PRIVATE_PAYLOAD).unwrap()));
+        assert!(!public_status.contains(PRIVATE_API_KEY));
+
+        server.configure(|state| {
+            state.prompt_tokens = 7;
+            state.payload = b"unverified state".to_vec();
+            state.restore_delay = Duration::ZERO;
+            state.restore_applies = false;
+            state.erase_count = 0;
+            state.events.clear();
+        });
+        let third = CheckpointCoordinator::new(store.clone());
+        third
+            .register_start_with_context(
+                INSTANCE_ID,
+                903,
+                &eligibility,
+                Some(fingerprint.clone()),
+                config.kv_checkpoint.clone(),
+            )
+            .unwrap();
+        third.on_engine_healthy(INSTANCE_ID, 903).unwrap();
+        let partial_coordinator = third.clone();
+        let partial_config = config.clone();
+        let partial_fingerprint = fingerprint.clone();
+        let partial = tokio::task::spawn_blocking(move || {
+            let client = LlamaSlotClient::new(&partial_config, Duration::from_secs(2)).unwrap();
+            partial_coordinator.restore_or_cold(
+                INSTANCE_ID,
+                903,
+                &partial_fingerprint,
+                true,
+                &client,
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(partial.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(partial.last_outcome, CheckpointOutcome::Failed);
+        assert_eq!(partial.reason_code, CheckpointReasonCode::SlotStateMismatch);
+        assert!(third.gate_allows_routing(INSTANCE_ID));
+        {
+            let state = server.state.lock().unwrap();
+            assert_eq!(state.erase_count, 1);
+            assert_eq!(state.prompt_tokens, 0);
+            assert!(state.payload.is_empty());
+        }
+        assert_eq!(server.events(), ["health", "restore", "save", "erase"]);
+
+        server.configure(|state| {
+            state.restore_applies = true;
+            state.malformed_action = Some("restore".into());
+            state.erase_count = 0;
+            state.events.clear();
+        });
+        let fourth = CheckpointCoordinator::new(store);
+        fourth
+            .register_start_with_context(
+                INSTANCE_ID,
+                904,
+                &eligibility,
+                Some(fingerprint.clone()),
+                config.kv_checkpoint.clone(),
+            )
+            .unwrap();
+        fourth.on_engine_healthy(INSTANCE_ID, 904).unwrap();
+        let malformed_coordinator = fourth.clone();
+        let malformed_config = config.clone();
+        let malformed_fingerprint = fingerprint.clone();
+        let malformed = tokio::task::spawn_blocking(move || {
+            let client = LlamaSlotClient::new(&malformed_config, Duration::from_secs(2)).unwrap();
+            malformed_coordinator.restore_or_cold(
+                INSTANCE_ID,
+                904,
+                &malformed_fingerprint,
+                true,
+                &client,
+            )
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(malformed.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(
+            malformed.reason_code,
+            CheckpointReasonCode::RestoreResponseInvalid
+        );
+        assert_eq!(server.state.lock().unwrap().erase_count, 1);
+
+        server.stop().await;
     }
 
     #[test]
@@ -4172,6 +4675,16 @@ mod tests {
             .load_latest("instance-1", &fingerprint.digest)
             .unwrap_err();
         assert_eq!(error.reason_code, CheckpointReasonCode::ChecksumMismatch);
+
+        fs::remove_file(loaded.payload_path()).unwrap();
+        fs::create_dir(loaded.payload_path()).unwrap();
+        let non_regular = store
+            .load_latest("instance-1", &fingerprint.digest)
+            .unwrap_err();
+        assert_eq!(
+            non_regular.reason_code,
+            CheckpointReasonCode::ManifestInvalid
+        );
     }
 
     #[test]
@@ -4509,6 +5022,44 @@ mod tests {
             CheckpointReasonCode::RestoreResponseInvalid
         );
         assert_eq!(backend.erase_count(), 1);
+
+        let backend = FakeSlotBackend::new(&store, "instance-3");
+        commit_test_generation(
+            &store,
+            "instance-3",
+            &fingerprint,
+            512,
+            b"cleanup retry durable slot",
+        );
+        backend.configure(|state| {
+            state.restore_error = Some(CheckpointStoreError::new(
+                CheckpointReasonCode::HttpTimeout,
+                "injected restore timeout",
+            ));
+            state.erase_error = Some(CheckpointStoreError::new(
+                CheckpointReasonCode::SlotApiError,
+                "injected erase failure",
+            ));
+        });
+        let coordinator = coordinator_with_healthy_engine(&store, "instance-3", 403);
+        let blocked = coordinator
+            .restore_or_cold("instance-3", 403, &fingerprint, true, &backend)
+            .unwrap();
+        assert_eq!(blocked.phase, CheckpointPhase::Restoring);
+        assert!(!blocked.routable);
+        assert!(!coordinator.gate_allows_routing("instance-3"));
+        assert!(coordinator.restore_cleanup_pending("instance-3", 403));
+        assert_eq!(blocked.reason_code, CheckpointReasonCode::HttpTimeout);
+        assert_eq!(backend.erase_count(), 1);
+
+        backend.configure(|state| state.erase_error = None);
+        let cold = coordinator
+            .retry_failed_restore_cleanup("instance-3", 403, &backend)
+            .unwrap();
+        assert_eq!(cold.phase, CheckpointPhase::ReadyCold);
+        assert!(cold.routable);
+        assert_eq!(cold.reason_code, CheckpointReasonCode::HttpTimeout);
+        assert_eq!(backend.erase_count(), 2);
     }
 
     #[test]

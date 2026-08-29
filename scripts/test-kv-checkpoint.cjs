@@ -14,6 +14,15 @@ assert.match(checkpointSource, /EngineCapabilityMissing/, 'engine capability mus
 assert.match(checkpointSource, /fingerprints-v1\.json/, 'full content fingerprints must use a versioned cache')
 assert.match(checkpointSource, /\.pending-/, 'generation commits must stage through a pending directory')
 assert.match(checkpointSource, /AfterManifestWrite/, 'storage tests must inject a manifest-last failure')
+for (const faultPoint of [
+  'AfterPayloadCopy',
+  'AfterPayloadSync',
+  'AfterManifestWrite',
+  'BeforeGenerationRename',
+  'BeforeLatestUpdate',
+]) {
+  assert.match(checkpointSource, new RegExp(`StoreFaultPoint::${faultPoint}`), `missing fault injection: ${faultPoint}`)
+}
 assert.match(checkpointSource, /FILE_ATTRIBUTE_REPARSE_POINT/, 'Windows reparse points must be rejected')
 assert.match(checkpointSource, /trait SlotBackend/, 'slot lifecycle tests must use an injectable backend')
 assert.match(checkpointSource, /gate_allows_routing/, 'checkpoint restore must own a routing gate')
@@ -47,6 +56,49 @@ assert.match(runtimeSupervisorSource, /prepare_runtime_checkpoint_launch/, 'runt
 assert.match(runtimeSupervisorSource, /resolve_checkpoint_startup/, 'runtime must resolve restore before routing')
 assert.match(runtimeSupervisorSource, /checkpoint_before_termination/, 'runtime must save at the controlled stop boundary')
 assert.match(runtimeSupervisorSource, /gate_allows_routing/, 'runtime proxy paths must enforce the checkpoint gate')
+assert.match(runtimeSupervisorSource, /retry_failed_restore_cleanup/, 'runtime must retry erase before cold routing')
+
+const serverSource = fs.readFileSync(
+  path.join(process.cwd(), 'src-tauri', 'src', 'commands', 'server.rs'),
+  'utf8',
+)
+assert.match(serverSource, /retry_failed_restore_cleanup/, 'direct lifecycle must retry erase before cold routing')
+
+const functionSlice = (source, start, end) => {
+  const startIndex = source.indexOf(start)
+  assert.notEqual(startIndex, -1, `missing lifecycle boundary: ${start}`)
+  const endIndex = source.indexOf(end, startIndex + start.length)
+  assert.notEqual(endIndex, -1, `missing lifecycle boundary: ${end}`)
+  return source.slice(startIndex, endIndex)
+}
+const assertOrdered = (source, markers, label) => {
+  let cursor = -1
+  for (const marker of markers) {
+    const next = source.indexOf(marker, cursor + 1)
+    assert.ok(next > cursor, `${label} must order ${markers.join(' -> ')}`)
+    cursor = next
+  }
+}
+assertOrdered(
+  functionSlice(serverSource, 'fn checkpoint_before_termination_blocking(', 'async fn checkpoint_before_termination('),
+  ['begin_draining', 'target_snapshot', 'save_before_stop'],
+  'direct checkpoint stop',
+)
+assertOrdered(
+  functionSlice(serverSource, 'pub async fn stop_server(', 'pub async fn test_connection('),
+  ['checkpoint_before_termination', 'terminate_running_instance'],
+  'direct process stop',
+)
+assertOrdered(
+  functionSlice(runtimeSupervisorSource, 'fn checkpoint_before_termination(', 'fn stop_instance_with_mode('),
+  ['begin_draining', 'target_snapshot', 'save_before_stop'],
+  'runtime checkpoint stop',
+)
+assertOrdered(
+  functionSlice(runtimeSupervisorSource, 'fn stop_instance_locked(', 'pub fn stop_all_instances('),
+  ['checkpoint_before_termination', 'terminate_running_instance'],
+  'runtime process stop',
+)
 
 const proxySource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'commands', 'proxy.rs'),
