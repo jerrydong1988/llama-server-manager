@@ -2,7 +2,7 @@
 
 日期：2026-08-29
 
-状态：设计阶段，待实现
+状态：已实现；默认关闭并标记实验性
 
 ## 1. 背景
 
@@ -125,6 +125,8 @@ Ollama 稳定版本主要通过 runner 驻留保持内存 cache。其尚未合�
 | 标准文本生成 GGUF | 支持候选，仍需真实 cache hit 验证 |
 | `parallel = 1`、slot 0 | 支持 |
 | `cache_prompt = true`、`slots_enabled = true` | 必需；配置页提示并提供显式修复动作，不静默改写 |
+| `cache_idle_slots = true`、`cache_ram > 0` 或 `-1` | Harness 会先发标题/元数据请求，必须用二级 prompt cache 保留已恢复长前缀 |
+| 已知 sliding-window attention 模型 | 只有启用 `swa_full` 且引擎支持该参数时才支持；否则 restore 200 仍可能没有真实 cache hit |
 | loopback HTTP upstream | 支持 |
 | 手工命令、自定义未知参数 | 不支持，冷启动并说明原因 |
 | router / models preset / remote target | 不支持 |
@@ -134,7 +136,7 @@ Ollama 稳定版本主要通过 runner 驻留保持内存 cache。其尚未合�
 | mmproj / multimodal | 不支持 |
 | 已知 hybrid / recurrent 架构 | 不支持 |
 | TLS upstream 或非 loopback bind | 第一版不支持；不降低 TLS 校验来换取 restore |
-| 引擎缺少 `--slots` 或 `--slot-save-path` | 不支持 |
+| 引擎缺少 `--slots`、`--slot-save-path`、`--cache-ram` 或 `--cache-idle-slots` | 不支持 |
 | fingerprint 无法计算 | 不 restore、不保存，实例冷启动 |
 
 “不支持”只关闭本次运行的 checkpoint，不阻止实例正常启动。
@@ -302,7 +304,7 @@ fingerprint 使用稳定序列化后的 canonical object 计算 SHA-256。v1 采
 - RoPE scaling/base/scale/frequency 和全部 YaRN 参数。
 - batch/ubatch、device、GPU layers、split mode、tensor split 和 main GPU。
 - Jinja、chat template、template file 内容摘要、reasoning 格式相关启动设置。
-- cache prompt 和影响 slot/prefix 行为的 server 参数。
+- cache prompt、cache RAM、idle-slot cache 和影响 slot/prefix 行为的 server 参数。
 
 第一版通过 eligibility 排除 LoRA、mmproj、draft model、lookup cache、router、manual command 和 custom args，避免无法完整规范化的状态。
 
@@ -335,7 +337,7 @@ pub struct KvCheckpointConfig {
 - 实验性和支持范围说明。
 - 开关、自动保存、自动恢复、容量和最低 token 阈值。
 - 当前配置 eligibility；不支持时列出具体原因。
-- 对 `parallel`、prompt cache 和 slots 等必需字段提供需要用户确认的修复动作；保存过程本身不静默改写其他推理参数。
+- 对 `parallel`、prompt cache、idle-slot cache、Cache RAM、slots 和按模型需要的 SWA full 等字段提供需要用户确认的修复动作；确认文案必须说明额外内存影响，保存过程本身不静默改写其他推理参数。
 - 提醒 Harness 必须使用管理器代理才能获得 restore-before-first-request 保证。
 
 实例页显示：
@@ -423,6 +425,18 @@ reason code 至少覆盖：unsupported configuration、engine capability missing
 - 最后用实际 DeepSeek Harness 路由重复同一上下文，确认 Harness 首请求发生在代理 ready 之后并命中缓存。
 
 真实性能验收是合并前人工/本机证据；CI 使用确定性 fake server 验证生命周期和故障安全。
+
+### 14.5 实施期真实验收结论
+
+2026-08-29 使用真实 HIP `llama-server`、标准单文件 Gemma 4 GGUF 和 DeepSeek Harness 完成跨进程验证：
+
+- 相同长前缀冷启动的 prompt evaluation 约为 5.63 秒；同进程复用约为 34 毫秒。
+- 默认 sliding-window cache 虽然 slot save/restore 返回成功且 payload round trip 一致，但重启后 `cache_n = 0`，证明 HTTP 200 不能作为真实复用证据。
+- 启用 `swa_full` 后，重启恢复的相同 OpenAI 请求得到 `cache_n = 7164`、prompt evaluation 约 34 毫秒。
+- DeepSeek Harness 新会话先发标题请求，再发主上下文。启用 idle-slot cache 和 Cache RAM 后，第二个新会话的主请求得到 `n_past = 7418`，prompt evaluation 从约 5.66 秒降至约 32 毫秒。
+- 恢复期间代理返回可重试 503；fingerprint mismatch 和损坏副本均在 restore 前退化为可路由冷启动。确定性故障注入另外覆盖精确 checksum mismatch、restore timeout、partial erase 和 manifest-last 原子性。
+
+因此实施将 `swa_full`（仅 SWA 模型）、idle-slot cache 和非零 Cache RAM 从调优建议提升为资格条件，并把相关状态纳入严格 fingerprint。完整引擎/模型摘要、generation 校验和 Harness 会话证据保留在实现 PR 的验收记录中，不把用户本机路径或 prompt-derived payload 提交到仓库。
 
 ## 15. 发布与回滚
 

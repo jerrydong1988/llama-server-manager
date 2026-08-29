@@ -34,6 +34,16 @@ The application uses three complementary controls so parameter support does not 
 
 Scanning never executes every discovered binary. Probes run only for explicitly selected engines, without a shell, with time and output limits. Version recognition is independent from parameter capability detection. Complete results enforce compatibility at save and launch; partial results retain recognized and essential flags; unknown results use a minimal command without deleting saved configuration.
 
+## 有状态检查点采用更严格策略 / Stricter Stateful Checkpoint Policy
+
+引擎公开某个参数只代表命令语法可用，不代表跨进程 slot 状态一定能被真实复用。实验性 KV / Prefill Cache Checkpoint 因此使用独立的保守资格检查：引擎必须明确公开 slots、slot-save-path、Cache RAM 和 idle-slot cache 能力；模型、引擎二进制、版本/backend 和全部状态相关配置必须命中完整 SHA-256 fingerprint。滑动窗口模型还必须启用且支持 SWA 完整缓存。
+
+Advertising a flag proves only command-line availability, not reusable cross-process state. The experimental checkpoint feature therefore requires the complete slot and prompt-cache capability set plus an exact model, engine, version/backend, and state-bearing configuration fingerprint. Sliding-window models additionally require supported full SWA cache.
+
+资格不满足、fingerprint miss、损坏或 restore 验证失败都会安全回到冷启动；不会因为引擎处于通用参数支持窗口就放宽有状态兼容条件。完整范围和操作说明见 [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md)。
+
+Ineligibility, fingerprint misses, corruption, and restore-validation failures always fall back to a cold start. The general parameter support window never relaxes state compatibility. See [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md) for the full matrix and operating guide.
+
 ## 上游监控 / Upstream Watcher
 
 `scripts/check-llama-upstream.cjs` 读取官方最新稳定版和 `master` 的 `tools/server/README.md` 参数表，并在 `scripts/llama-parameter-baseline.json` 中保存参数名、别名、语法摘要及说明/默认值摘要。

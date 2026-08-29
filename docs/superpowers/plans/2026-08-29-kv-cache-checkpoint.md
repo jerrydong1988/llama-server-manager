@@ -6,6 +6,8 @@
 
 **Tech Stack:** Tauri 2、Rust 1.80、reqwest blocking、serde/serde_json、sha2、uuid、Tokio、Axum、React 18、TypeScript 5、Zustand 5、Node.js regression scripts。
 
+**Implementation record (2026-08-29):** Tasks 1-9 completed on the implementation branch, including real llama-server and DeepSeek Harness acceptance. Task 10 records the remaining release-gate and pull-request delivery work; detailed measured results are captured in the design implementation record and implementation PR evidence. The unchecked boxes below preserve the original execution specification rather than serving as a live tracker.
+
 ## Global Constraints
 
 - 只实现设计文档的第一版支持矩阵；不得为了提高命中率放宽 fingerprint 或偷偷支持未验收模型类型。
