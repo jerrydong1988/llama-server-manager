@@ -12,6 +12,7 @@ const INTENT_METADATA_FIELDS = new Set<keyof InstanceConfig>([
   'host',
   'port',
   'auto_start',
+  'kv_checkpoint',
 ])
 
 const sameValue = (left: unknown, right: unknown) => {

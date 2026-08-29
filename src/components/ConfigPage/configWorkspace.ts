@@ -123,9 +123,15 @@ const reviewFieldValue = (config: InstanceConfig, key: keyof InstanceConfig): un
   }
 }
 
-export const isEqualValue = (left: unknown, right: unknown) => {
+export const isEqualValue = (left: unknown, right: unknown): boolean => {
   if (Array.isArray(left) || Array.isArray(right)) {
     return JSON.stringify(left ?? []) === JSON.stringify(right ?? [])
+  }
+  if (left && right && typeof left === 'object' && typeof right === 'object') {
+    const leftRecord = left as Record<string, unknown>
+    const rightRecord = right as Record<string, unknown>
+    const keys = new Set([...Object.keys(leftRecord), ...Object.keys(rightRecord)])
+    return [...keys].every(key => isEqualValue(leftRecord[key], rightRecord[key]))
   }
   return left === right
 }
@@ -136,6 +142,9 @@ export const formatValue = (value: unknown, labels: Record<string, string>) => {
   }
   if (typeof value === 'boolean') {
     return value ? labels.on : labels.off
+  }
+  if (typeof value === 'object' && value !== null) {
+    return JSON.stringify(value)
   }
   if (value === '' || value === null || value === undefined) {
     return labels.emptyValue

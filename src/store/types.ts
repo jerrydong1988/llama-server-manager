@@ -74,6 +74,44 @@ export interface GeneratedServerCommand {
   emittedOverrideKeys: Array<keyof InstanceConfig>
 }
 
+export interface KvCheckpointConfig {
+  enabled: boolean
+  auto_save: boolean
+  auto_restore: boolean
+  storage_limit_gib: number
+  minimum_prompt_tokens: number
+}
+
+export type CheckpointPhase =
+  | 'disabled' | 'ineligible' | 'starting' | 'engine_healthy'
+  | 'restoring' | 'ready' | 'ready_cold' | 'draining'
+  | 'saving' | 'stopping' | 'stopped'
+
+export type CheckpointOperation = 'none' | 'save' | 'restore' | 'clear'
+export type CheckpointOutcome = 'none' | 'success' | 'skipped' | 'failed'
+
+export interface CheckpointStatus {
+  instance_id: string
+  expected_pid?: number
+  phase: CheckpointPhase
+  routable: boolean
+  last_operation: CheckpointOperation
+  last_outcome: CheckpointOutcome
+  reason_code: string
+  message: string
+  generation_id?: string
+  prompt_tokens?: number
+  bytes?: number
+  duration_ms?: number
+  updated_at: number
+}
+
+export interface CheckpointEligibility {
+  eligible: boolean
+  reason_code: string
+  reasons: string[]
+}
+
 export interface InstanceConfig {
   // Launch policy. null explicit_overrides identifies a legacy config that has
   // not yet been migrated to intent-based command generation.
@@ -119,7 +157,8 @@ export interface InstanceConfig {
   tools_runtime: string; mcp_servers_config: string; mcp_servers_json: string;
   embedding: boolean; pooling: string; embd_normalize: number; reranking: boolean;
   metrics: boolean; props: boolean; slots_enabled: boolean;
-  slot_save_path: string; log_prompts_dir: string; slot_prompt_similarity: number; prefill_assistant: boolean;
+  slot_save_path: string; kv_checkpoint: KvCheckpointConfig;
+  log_prompts_dir: string; slot_prompt_similarity: number; prefill_assistant: boolean;
   // Multi-Model & Media
   models_dir: string; models_preset: string; models_max: number; models_autoload: boolean;
   mmproj_url: string; mmproj_auto: boolean; mmproj_mode: string; no_mmproj: boolean; no_mmproj_offload: boolean; image_min_tokens: number; image_max_tokens: number; mtmd_batch_max_tokens: number;
