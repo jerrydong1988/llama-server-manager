@@ -13,6 +13,9 @@ mod utils;
 mod vector_policy;
 
 use crate::commands::autostart::{disable_autostart, enable_autostart, is_autostart_enabled};
+use crate::commands::checkpoint::{
+    clear_checkpoint, get_checkpoint_status, list_checkpoint_statuses,
+};
 use crate::commands::cluster::{
     add_worker, approve_worker, find_rpc_server_binary, generate_rpc_launch_cmd,
     get_cluster_metrics, get_local_host, get_worker_info, get_workers, is_local_host, load_workers,
@@ -51,8 +54,9 @@ use crate::commands::scanner::{
     scan_models,
 };
 use crate::commands::server::{
-    check_port, generate_server_command, get_metrics, get_slots, get_system_health,
-    get_system_metrics, open_browser, start_server, stop_server, test_connection,
+    check_port, generate_server_command, get_checkpoint_eligibility, get_metrics, get_slots,
+    get_system_health, get_system_metrics, open_browser, start_server, stop_server,
+    test_connection,
 };
 use crate::commands::telemetry::{
     get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_detail,
@@ -661,8 +665,9 @@ fn main() {
             scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata,
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
             probe_engine_capabilities,
+            get_checkpoint_status, list_checkpoint_statuses, clear_checkpoint,
             load_app_data, get_cached_scan,
-            generate_server_command, start_server, stop_server, open_browser,
+            generate_server_command, get_checkpoint_eligibility, start_server, stop_server, open_browser,
             save_config, load_config,
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file, check_local_files, delete_managed_local_file,

@@ -14,6 +14,7 @@ import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engi
 import { markExplicitOverride } from '../parameterIntent'
 import { pathsEqual } from '../utils/path'
 import { usePortAvailability } from './InstanceManager/usePortAvailability'
+import { CheckpointStatusCard } from './InstanceManager/CheckpointStatusCard'
 
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
@@ -661,6 +662,8 @@ const InstanceManager = () => {
                   <PathText value={selectedInstance.config.model_path || selectedInstance.model} maxLength={36} className="text-slate-700 dark:text-slate-200" />
                 </div>
               </div>
+
+              <CheckpointStatusCard instance={selectedInstance} />
 
               <div className="space-y-2">
                 <div className="text-xs font-semibold text-slate-500 dark:text-slate-400">{labels.primaryActions}</div>

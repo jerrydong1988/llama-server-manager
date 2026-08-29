@@ -20,12 +20,24 @@ assert.match(checkpointSource, /gate_allows_routing/, 'checkpoint restore must o
 assert.match(checkpointSource, /verified_sha256 != slot\.sha256/, 'restore must verify a save round trip')
 assert.match(checkpointSource, /StaleProcessEvent/, 'checkpoint events must be bound to the active process')
 
+const rustEnumValues = (name) => {
+  const body = checkpointSource.match(new RegExp(`pub enum ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1] || ''
+  return [...body.matchAll(/^\s+([A-Z][A-Za-z0-9]+),\s*$/gm)].map(match => (
+    match[1].replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase()
+  ))
+}
+const backendReasonCodes = rustEnumValues('CheckpointReasonCode')
+const backendPhases = rustEnumValues('CheckpointPhase')
+assert.ok(backendReasonCodes.length > 20, 'backend reason-code contract must be discoverable')
+assert.ok(backendPhases.length > 5, 'backend phase contract must be discoverable')
+
 const runtimeProtocolSource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'runtime_service', 'protocol.rs'),
   'utf8',
 )
 assert.match(runtimeProtocolSource, /KV_CHECKPOINT_CAPABILITY/, 'runtime protocol must advertise checkpoint ownership')
 assert.match(runtimeProtocolSource, /RuntimeCheckpointLaunchSpec/, 'runtime launches must carry checkpoint eligibility and fingerprint state')
+assert.match(runtimeProtocolSource, /ClearCheckpoint/, 'runtime protocol must expose exact-instance checkpoint clear')
 
 const runtimeSupervisorSource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'runtime_service', 'supervisor.rs'),
@@ -50,12 +62,32 @@ const persistenceSource = fs.readFileSync(
 )
 assert.match(persistenceSource, /windows_wide_path/, 'Windows atomic writes must support deep checkpoint paths')
 
+const checkpointCommandSource = fs.readFileSync(
+  path.join(process.cwd(), 'src-tauri', 'src', 'commands', 'checkpoint.rs'),
+  'utf8',
+)
+assert.match(checkpointCommandSource, /list_checkpoint_statuses/, 'GUI must hydrate checkpoint status')
+assert.match(checkpointCommandSource, /get_checkpoint_status/, 'GUI must support exact checkpoint status lookup')
+assert.match(checkpointCommandSource, /reserve_checkpoint_clear/, 'direct clear must serialize against instance start')
+
 const entry = `
   import assert from 'node:assert/strict'
   import { defaultInstanceConfig } from './src/store/defaults'
   import { migrateParameterIntent } from './src/parameterIntent'
   import { normalizeInstanceConfig } from './src/modelPolicy'
   import { getConfigChanges } from './src/components/ConfigPage/configWorkspace'
+  import {
+    CHECKPOINT_PHASES,
+    canClearCheckpoint,
+    checkpointPhaseLabel,
+    checkpointReasonLabel,
+    formatCheckpointBytes,
+  } from './src/checkpointView'
+  import { enUS } from './src/i18n/en-US'
+  import { zhCN } from './src/i18n/zh-CN'
+
+  const backendReasonCodes = ${JSON.stringify(backendReasonCodes)}
+  const backendPhases = ${JSON.stringify(backendPhases)}
 
   const defaults = defaultInstanceConfig()
   assert.deepEqual(defaults.kv_checkpoint, {
@@ -86,6 +118,27 @@ const entry = `
     kv_checkpoint: { ...defaults.kv_checkpoint },
   }
   assert.deepEqual(getConfigChanges(equivalent, defaults, translations, labels), [])
+
+  for (const phase of CHECKPOINT_PHASES) {
+    assert.ok(checkpointPhaseLabel(phase, enUS.checkpoint))
+    assert.ok(checkpointPhaseLabel(phase, zhCN.checkpoint))
+  }
+  assert.deepEqual([...CHECKPOINT_PHASES], backendPhases)
+  for (const reason of backendReasonCodes) {
+    assert.ok(enUS.checkpoint.reasons[reason], \`missing en-US checkpoint reason: \${reason}\`)
+    assert.ok(zhCN.checkpoint.reasons[reason], \`missing zh-CN checkpoint reason: \${reason}\`)
+  }
+  const checkpoint = {
+    instance_id: 'instance-1', phase: 'stopped', routable: false,
+    last_operation: 'restore', last_outcome: 'failed', reason_code: 'checksum_mismatch',
+    message: '', updated_at: 1,
+  }
+  assert.equal(checkpointReasonLabel(checkpoint, enUS.checkpoint), enUS.checkpoint.reasons.checksum_mismatch)
+  assert.equal(formatCheckpointBytes(1024 * 1024), '1.00 MiB')
+  assert.equal(canClearCheckpoint('stopped', undefined, checkpoint), true)
+  assert.equal(canClearCheckpoint('running', undefined, checkpoint), false)
+  assert.equal(canClearCheckpoint('stopped', 'stopping', checkpoint), false)
+  assert.equal(canClearCheckpoint('stopped', undefined, { ...checkpoint, phase: 'saving' }), false)
 
   console.log('kv checkpoint contract regression tests passed')
 `

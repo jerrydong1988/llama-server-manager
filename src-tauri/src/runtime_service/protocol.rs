@@ -85,6 +85,9 @@ pub enum RuntimeCommand {
     StopInstance {
         instance_id: String,
     },
+    ClearCheckpoint {
+        instance_id: String,
+    },
     ClearLastError,
     StartProxy,
     StopProxy,
@@ -111,6 +114,7 @@ pub enum RuntimeReply {
     Ack,
     Status(Box<RuntimeServiceStatus>),
     Instance(Box<RunningInstance>),
+    CheckpointStatus(crate::checkpoint::CheckpointStatus),
     ProxyStatus(ProxyStatus),
 }
 
@@ -202,6 +206,26 @@ mod tests {
 
         let decoded: RuntimeRequest = serde_json::from_value(json).unwrap();
         assert!(matches!(decoded.command, RuntimeCommand::ClearLastError));
+    }
+
+    #[test]
+    fn checkpoint_clear_command_round_trip_preserves_the_exact_instance() {
+        let request = RuntimeRequest {
+            protocol_version: RUNTIME_PROTOCOL_VERSION,
+            request_id: "checkpoint-clear".into(),
+            token: "secret".into(),
+            command: RuntimeCommand::ClearCheckpoint {
+                instance_id: "instance-1".into(),
+            },
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["command"]["command"], "clear_checkpoint");
+        assert_eq!(json["command"]["payload"]["instance_id"], "instance-1");
+        let decoded: RuntimeRequest = serde_json::from_value(json).unwrap();
+        assert!(matches!(
+            decoded.command,
+            RuntimeCommand::ClearCheckpoint { instance_id } if instance_id == "instance-1"
+        ));
     }
 
     #[test]

@@ -2133,15 +2133,12 @@ impl CheckpointLaunchPlan {
     }
 }
 
-async fn prepare_checkpoint_launch_plan(
+fn assess_checkpoint_eligibility(
     state: &AppState,
-    instance_id: &str,
     config: &InstanceConfig,
     workload: ModelWorkload,
-    engine_exe: &str,
-    engine_backend: &str,
     engine_capabilities: Option<&EngineCapabilities>,
-) -> CheckpointLaunchPlan {
+) -> CheckpointEligibility {
     let (model_architecture, model_is_sharded) = {
         let models = state.models.lock().unwrap();
         models
@@ -2160,14 +2157,26 @@ async fn prepare_checkpoint_launch_plan(
             EngineCheckpointCapabilities::from_supported_flags(&capabilities.supported_flags)
         })
         .unwrap_or_default();
-    let eligibility = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+    evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
         config,
         workload,
         managed_local_engine: true,
         engine_capabilities: engine_checkpoint_capabilities,
         model_architecture: model_architecture.as_deref(),
         model_is_sharded,
-    });
+    })
+}
+
+async fn prepare_checkpoint_launch_plan(
+    state: &AppState,
+    instance_id: &str,
+    config: &InstanceConfig,
+    workload: ModelWorkload,
+    engine_exe: &str,
+    engine_backend: &str,
+    engine_capabilities: Option<&EngineCapabilities>,
+) -> CheckpointLaunchPlan {
+    let eligibility = assess_checkpoint_eligibility(state, config, workload, engine_capabilities);
     if !eligibility.eligible {
         return CheckpointLaunchPlan {
             eligibility,
@@ -2393,6 +2402,30 @@ pub async fn generate_server_command(
         unsupported_flags,
         emitted_override_keys,
     })
+}
+
+#[tauri::command]
+pub async fn get_checkpoint_eligibility(
+    config: InstanceConfig,
+    engine_exe: String,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<CheckpointEligibility> {
+    let manual = uses_manual_command(&config);
+    let (config, workload, _) = prepare_launch_checked(config, &engine_exe)?;
+    let capabilities = if manual {
+        None
+    } else {
+        match trusted_engine_capabilities(state.inner(), &config, &engine_exe, true).await {
+            EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
+            EngineCapabilityResolution::Missing | EngineCapabilityResolution::Stale => None,
+        }
+    };
+    Ok(assess_checkpoint_eligibility(
+        state.inner(),
+        &config,
+        workload,
+        capabilities.as_deref(),
+    ))
 }
 
 #[tauri::command]

@@ -539,6 +539,7 @@ export interface AppState {
   engines: EngineInfo[]
   instances: Instance[]
   instanceLifecycle: Record<string, InstanceLifecyclePhase>
+  checkpointStatuses: Record<string, CheckpointStatus>
   logs: Record<string, LogEntry[]>
   recentLogs: LogEntry[]
   isLoading: boolean
@@ -584,6 +585,9 @@ export interface AppState {
   addLog: (entry: LogEntry) => void
   addLogs: (entries: LogEntry[]) => void
   clearLogs: (instanceId: string) => void
+  setCheckpointStatus: (status: CheckpointStatus) => void
+  hydrateCheckpointStatuses: (statuses: Record<string, CheckpointStatus>) => void
+  clearCheckpoint: (instanceId: string) => Promise<CheckpointStatus>
 
   loadInitialData: () => Promise<void>
   scanModels: (paths: string[]) => Promise<string | null>

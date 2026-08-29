@@ -1,4 +1,8 @@
-use crate::models::InstanceConfig;
+use crate::models::{
+    InstanceConfig, KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MAX,
+    KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MIN, KV_CHECKPOINT_STORAGE_LIMIT_GIB_MAX,
+    KV_CHECKPOINT_STORAGE_LIMIT_GIB_MIN,
+};
 use crate::vector_policy::ModelWorkload;
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -118,6 +122,7 @@ pub enum CheckpointReasonCode {
     SlotApiError,
     StaleProcessEvent,
     InvalidStateTransition,
+    ClearWhileRunning,
     UnexpectedExit,
 }
 
@@ -277,6 +282,13 @@ pub fn evaluate_checkpoint_eligibility(
     }
 
     let mut reasons = Vec::new();
+    if !(KV_CHECKPOINT_STORAGE_LIMIT_GIB_MIN..=KV_CHECKPOINT_STORAGE_LIMIT_GIB_MAX)
+        .contains(&config.kv_checkpoint.storage_limit_gib)
+        || !(KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MIN..=KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MAX)
+            .contains(&config.kv_checkpoint.minimum_prompt_tokens)
+    {
+        push_reason(&mut reasons, CheckpointReasonCode::UnsupportedConfiguration);
+    }
     if !config.launch_mode.eq_ignore_ascii_case("managed") {
         push_reason(&mut reasons, CheckpointReasonCode::ManualLaunchUnsupported);
     }
@@ -1175,6 +1187,23 @@ impl CheckpointStore {
             removed += 1;
         }
         Ok(removed)
+    }
+
+    pub fn clear_instance(&self, instance_id: &str) -> StoreResult<bool> {
+        self.ensure_root()?;
+        let instance_root = self.instance_root(instance_id)?;
+        match fs::symlink_metadata(&instance_root) {
+            Ok(_) => {
+                validate_directory(&instance_root)?;
+                safe_remove_directory(&instance_root, &self.root)?;
+                sync_directory(&self.root)?;
+                Ok(true)
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(_) => Err(CheckpointStoreError::io(
+                "checkpoint instance inspection failed",
+            )),
+        }
     }
 
     fn validate_scratch_payload(&self, instance_id: &str, path: &Path) -> StoreResult<()> {
@@ -2416,6 +2445,70 @@ impl CheckpointCoordinator {
         })
     }
 
+    pub fn clear_instance(&self, instance_id: &str) -> StoreResult<CheckpointStatus> {
+        if !validate_identifier(instance_id) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::ManifestInvalid,
+                "checkpoint instance identity is invalid",
+            ));
+        }
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| CheckpointStoreError::io("checkpoint status lock failed"))?;
+        if entries.get(instance_id).is_some_and(|entry| {
+            entry.status.expected_pid.is_some() && entry.status.phase != CheckpointPhase::Stopped
+        }) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::ClearWhileRunning,
+                "checkpoint cannot be cleared while the instance is running",
+            ));
+        }
+        let removed = self.store.clear_instance(instance_id)?;
+        let mut status = entries
+            .get(instance_id)
+            .map(|entry| entry.status.clone())
+            .unwrap_or_else(|| {
+                CheckpointStatus::disabled(instance_id, checkpoint_now_millis())
+                    .with_phase(CheckpointPhase::Stopped)
+            });
+        status.expected_pid = None;
+        status.phase = CheckpointPhase::Stopped;
+        status.routable = false;
+        status.last_operation = CheckpointOperation::Clear;
+        status.last_outcome = if removed {
+            CheckpointOutcome::Success
+        } else {
+            CheckpointOutcome::Skipped
+        };
+        status.reason_code = if removed {
+            CheckpointReasonCode::None
+        } else {
+            CheckpointReasonCode::NoCheckpoint
+        };
+        status.message = if removed {
+            "checkpoint data cleared"
+        } else {
+            "no checkpoint data was present"
+        }
+        .into();
+        status.generation_id = None;
+        status.prompt_tokens = None;
+        status.bytes = None;
+        status.duration_ms = Some(0);
+        status.updated_at = checkpoint_now_millis();
+        entries.insert(
+            instance_id.into(),
+            CoordinatorEntry {
+                gate_active: false,
+                status: status.clone(),
+                fingerprint: None,
+                policy: crate::models::KvCheckpointConfig::default(),
+            },
+        );
+        Ok(status)
+    }
+
     pub fn gate_allows_routing(&self, instance_id: &str) -> bool {
         self.entries
             .lock()
@@ -3237,6 +3330,12 @@ mod tests {
 
     #[test]
     fn eligibility_rejects_every_unsupported_config_row() {
+        assert_config_reason(CheckpointReasonCode::UnsupportedConfiguration, |config| {
+            config.kv_checkpoint.storage_limit_gib = 0
+        });
+        assert_config_reason(CheckpointReasonCode::UnsupportedConfiguration, |config| {
+            config.kv_checkpoint.minimum_prompt_tokens = 1_048_577
+        });
         assert_config_reason(CheckpointReasonCode::ManualLaunchUnsupported, |config| {
             config.launch_mode = "manual".into();
         });
@@ -3993,6 +4092,22 @@ mod tests {
     }
 
     #[test]
+    fn clear_removes_only_the_exact_instance_root_and_is_idempotent() {
+        let sandbox = TestSandbox::new("clear-instance");
+        let store = sandbox.store();
+        let first = store.prepare_instance("instance-1").unwrap();
+        let second = store.prepare_instance("instance-2").unwrap();
+        fs::write(first.join("local-marker"), b"one").unwrap();
+        fs::write(second.join("local-marker"), b"two").unwrap();
+
+        assert!(store.clear_instance("instance-1").unwrap());
+        assert!(!store.root().join("instance-1").exists());
+        assert!(store.root().join("instance-2").is_dir());
+        assert!(!store.clear_instance("instance-1").unwrap());
+        assert!(store.clear_instance("../escape").is_err());
+    }
+
+    #[test]
     fn scratch_payload_symlink_or_reparse_point_is_rejected_when_supported() {
         let sandbox = TestSandbox::new("symlink");
         let store = sandbox.store();
@@ -4268,6 +4383,41 @@ mod tests {
         let current = coordinator.status("instance-1").unwrap();
         assert_eq!(current.expected_pid, Some(202));
         assert_eq!(current.phase, CheckpointPhase::Starting);
+    }
+
+    #[test]
+    fn coordinator_rejects_running_clear_and_reports_exact_clear_outcome() {
+        let sandbox = TestSandbox::new("coordinator-clear");
+        let store = sandbox.store();
+        store.prepare_instance("instance-1").unwrap();
+        let coordinator = CheckpointCoordinator::new(store.clone());
+        let config = eligible_config();
+        let eligibility = evaluate(&config);
+        coordinator
+            .register_start_with_context(
+                "instance-1",
+                303,
+                &eligibility,
+                Some(test_fingerprint(&config)),
+                config.kv_checkpoint,
+            )
+            .unwrap();
+
+        let running = coordinator.clear_instance("instance-1").unwrap_err();
+        assert_eq!(running.reason_code, CheckpointReasonCode::ClearWhileRunning);
+        assert!(store.root().join("instance-1").is_dir());
+
+        coordinator.mark_unexpected_exit("instance-1", 303).unwrap();
+        let cleared = coordinator.clear_instance("instance-1").unwrap();
+        assert_eq!(cleared.phase, CheckpointPhase::Stopped);
+        assert_eq!(cleared.last_operation, CheckpointOperation::Clear);
+        assert_eq!(cleared.last_outcome, CheckpointOutcome::Success);
+        assert_eq!(cleared.reason_code, CheckpointReasonCode::None);
+        assert!(!store.root().join("instance-1").exists());
+
+        let repeated = coordinator.clear_instance("instance-1").unwrap();
+        assert_eq!(repeated.last_outcome, CheckpointOutcome::Skipped);
+        assert_eq!(repeated.reason_code, CheckpointReasonCode::NoCheckpoint);
     }
 
     #[test]

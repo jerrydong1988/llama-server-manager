@@ -1121,6 +1121,28 @@ impl RuntimeSupervisor {
         self.stop_instance_with_mode(instance_id, false, "manual-stop")
     }
 
+    pub fn clear_checkpoint(
+        &self,
+        instance_id: &str,
+    ) -> Result<crate::checkpoint::CheckpointStatus, String> {
+        crate::commands::server::validate_instance_id(instance_id)
+            .map_err(|error| error.to_string())?;
+        let _lifecycle = self.instance_lifecycle.lock().unwrap();
+        if self
+            .state
+            .lock()
+            .unwrap()
+            .running
+            .get(instance_id)
+            .is_some_and(running_instance_matches_live_process)
+        {
+            return Err("checkpoint cannot be cleared while the instance is running".into());
+        }
+        self.checkpoint_coordinator
+            .clear_instance(instance_id)
+            .map_err(|error| error.to_string())
+    }
+
     fn checkpoint_before_termination(
         &self,
         instance_id: &str,
@@ -1725,6 +1747,9 @@ impl RuntimeSupervisor {
                 self.stop_instance(&instance_id)?;
                 Ok(RuntimeReply::Ack)
             }
+            RuntimeCommand::ClearCheckpoint { instance_id } => self
+                .clear_checkpoint(&instance_id)
+                .map(RuntimeReply::CheckpointStatus),
             RuntimeCommand::ClearLastError => {
                 self.clear_last_error();
                 Ok(RuntimeReply::Ack)
