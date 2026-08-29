@@ -194,6 +194,10 @@ impl CheckpointEligibility {
             reasons,
         }
     }
+
+    pub fn ineligible(reason_code: CheckpointReasonCode) -> Self {
+        Self::from_reasons(vec![reason_code])
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -374,7 +378,7 @@ pub struct CheckpointStoreError {
 }
 
 impl CheckpointStoreError {
-    fn new(reason_code: CheckpointReasonCode, message: &'static str) -> Self {
+    pub(crate) fn new(reason_code: CheckpointReasonCode, message: &'static str) -> Self {
         Self {
             reason_code,
             message,
@@ -1135,6 +1139,26 @@ impl CheckpointStore {
     pub fn new_scratch_slot_path(&self, instance_id: &str, pid: u32) -> StoreResult<PathBuf> {
         let scratch = self.prepare_instance(instance_id)?;
         Ok(scratch.join(format!("slot-0-{pid}-{}.bin", uuid::Uuid::new_v4())))
+    }
+
+    pub fn cleanup_scratch(&self, instance_id: &str) -> StoreResult<usize> {
+        let scratch = self.prepare_instance(instance_id)?;
+        let mut removed = 0;
+        for entry in fs::read_dir(&scratch)
+            .map_err(|_| CheckpointStoreError::io("scratch directory scan failed"))?
+        {
+            let entry = entry.map_err(|_| CheckpointStoreError::io("scratch entry read failed"))?;
+            let filename = entry.file_name();
+            let filename = filename.to_str().unwrap_or_default();
+            if !is_manager_slot_filename(filename) {
+                continue;
+            }
+            let path = entry.path();
+            validate_regular_file(&path)?;
+            self.remove_scratch_payload(instance_id, &path)?;
+            removed += 1;
+        }
+        Ok(removed)
     }
 
     fn validate_scratch_payload(&self, instance_id: &str, path: &Path) -> StoreResult<()> {
@@ -2149,6 +2173,8 @@ impl SlotBackend for LlamaSlotClient {
 struct CoordinatorEntry {
     gate_active: bool,
     status: CheckpointStatus,
+    fingerprint: Option<CheckpointFingerprint>,
+    policy: crate::models::KvCheckpointConfig,
 }
 
 #[derive(Clone)]
@@ -2209,6 +2235,8 @@ fn legal_checkpoint_transition(from: CheckpointPhase, to: CheckpointPhase) -> bo
             | (CheckpointPhase::Draining, CheckpointPhase::Stopping)
             | (CheckpointPhase::Saving, CheckpointPhase::Stopping)
             | (CheckpointPhase::Stopping, CheckpointPhase::Stopped)
+            | (CheckpointPhase::Stopping, CheckpointPhase::Ready)
+            | (CheckpointPhase::Stopping, CheckpointPhase::ReadyCold)
             | (CheckpointPhase::Disabled, CheckpointPhase::Stopped)
             | (CheckpointPhase::Ineligible, CheckpointPhase::Stopped)
     )
@@ -2226,17 +2254,28 @@ impl CheckpointCoordinator {
         &self.store
     }
 
-    pub fn register_start(
+    pub fn register_start_with_context(
         &self,
         instance_id: &str,
         expected_pid: u32,
         eligibility: &CheckpointEligibility,
+        fingerprint: Option<CheckpointFingerprint>,
+        policy: crate::models::KvCheckpointConfig,
     ) -> StoreResult<CheckpointStatus> {
         if !validate_identifier(instance_id) || expected_pid == 0 {
             return Err(CheckpointStoreError::new(
                 CheckpointReasonCode::UnsupportedConfiguration,
                 "checkpoint process identity is invalid",
             ));
+        }
+        if eligibility.eligible {
+            let registered_fingerprint = fingerprint.as_ref().ok_or_else(|| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::FingerprintUnavailable,
+                    "eligible checkpoint registration requires a fingerprint",
+                )
+            })?;
+            registered_fingerprint.validate()?;
         }
         let (gate_active, phase, reason_code, last_outcome) = if eligibility.eligible {
             (
@@ -2286,9 +2325,38 @@ impl CheckpointCoordinator {
             CoordinatorEntry {
                 gate_active,
                 status: status.clone(),
+                fingerprint,
+                policy,
             },
         );
         Ok(status)
+    }
+
+    pub fn registered_checkpoint(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+    ) -> StoreResult<Option<(CheckpointFingerprint, crate::models::KvCheckpointConfig)>> {
+        let entries = self
+            .entries
+            .lock()
+            .map_err(|_| CheckpointStoreError::io("checkpoint status lock failed"))?;
+        let entry = entries.get(instance_id).ok_or_else(|| {
+            CheckpointStoreError::new(
+                CheckpointReasonCode::StaleProcessEvent,
+                "checkpoint event has no active process",
+            )
+        })?;
+        if entry.status.expected_pid != Some(expected_pid) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::StaleProcessEvent,
+                "checkpoint event belongs to a stale process",
+            ));
+        }
+        Ok(entry
+            .fingerprint
+            .clone()
+            .map(|fingerprint| (fingerprint, entry.policy.clone())))
     }
 
     pub fn status(&self, instance_id: &str) -> Option<CheckpointStatus> {
@@ -2445,6 +2513,26 @@ impl CheckpointCoordinator {
                 error.message,
                 None,
                 started.elapsed().as_millis() as u64,
+            ),
+        )
+    }
+
+    pub fn fail_restore_setup(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        error: CheckpointStoreError,
+    ) -> StoreResult<CheckpointStatus> {
+        self.finish_ready_cold(
+            instance_id,
+            expected_pid,
+            CheckpointOperationUpdate::new(
+                CheckpointOperation::Restore,
+                CheckpointOutcome::Failed,
+                error.reason_code,
+                error.message,
+                None,
+                0,
             ),
         )
     }
@@ -2672,6 +2760,66 @@ impl CheckpointCoordinator {
     ) -> StoreResult<CheckpointStatus> {
         self.transition(instance_id, expected_pid, CheckpointPhase::Stopping)?;
         self.update_operation(instance_id, expected_pid, update)
+    }
+
+    pub fn skip_save_busy(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        duration_ms: u64,
+    ) -> StoreResult<CheckpointStatus> {
+        self.finish_stopping(
+            instance_id,
+            expected_pid,
+            CheckpointOperationUpdate::new(
+                CheckpointOperation::Save,
+                CheckpointOutcome::Skipped,
+                CheckpointReasonCode::BusyTimeout,
+                "checkpoint drain timed out",
+                None,
+                duration_ms,
+            ),
+        )
+    }
+
+    pub fn skip_save_not_ready(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+    ) -> StoreResult<CheckpointStatus> {
+        self.finish_stopping(
+            instance_id,
+            expected_pid,
+            CheckpointOperationUpdate::new(
+                CheckpointOperation::Save,
+                CheckpointOutcome::Skipped,
+                CheckpointReasonCode::BusyTimeout,
+                "checkpoint startup was not ready to save",
+                None,
+                0,
+            ),
+        )
+    }
+
+    pub fn fail_save_setup(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        error: CheckpointStoreError,
+        duration_ms: u64,
+    ) -> StoreResult<CheckpointStatus> {
+        self.finish_stopping(
+            instance_id,
+            expected_pid,
+            CheckpointOperationUpdate::new(
+                CheckpointOperation::Save,
+                CheckpointOutcome::Failed,
+                error.reason_code,
+                error.message,
+                None,
+                duration_ms,
+            ),
+        )
     }
 
     pub fn save_before_stop<B: SlotBackend + ?Sized>(
@@ -2933,6 +3081,24 @@ impl CheckpointCoordinator {
         Ok(status)
     }
 
+    pub fn resume_after_stop_failure(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        ready_phase: CheckpointPhase,
+    ) -> StoreResult<CheckpointStatus> {
+        if !matches!(
+            ready_phase,
+            CheckpointPhase::Ready | CheckpointPhase::ReadyCold
+        ) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::InvalidStateTransition,
+                "checkpoint stop recovery phase is invalid",
+            ));
+        }
+        self.transition(instance_id, expected_pid, ready_phase)
+    }
+
     pub fn mark_unexpected_exit(
         &self,
         instance_id: &str,
@@ -2954,12 +3120,15 @@ impl CheckpointCoordinator {
                 "checkpoint event belongs to a stale process",
             ));
         }
+        let expected_stop = entry.status.phase == CheckpointPhase::Stopping;
         entry.gate_active = false;
         entry.status.phase = CheckpointPhase::Stopped;
         entry.status.routable = false;
-        entry.status.last_outcome = CheckpointOutcome::Skipped;
-        entry.status.reason_code = CheckpointReasonCode::UnexpectedExit;
-        entry.status.message = "process exited before checkpoint save".into();
+        if !expected_stop {
+            entry.status.last_outcome = CheckpointOutcome::Skipped;
+            entry.status.reason_code = CheckpointReasonCode::UnexpectedExit;
+            entry.status.message = "process exited before checkpoint save".into();
+        }
         entry.status.updated_at = checkpoint_now_millis();
         Ok(entry.status.clone())
     }
@@ -3480,9 +3649,16 @@ mod tests {
         pid: u32,
     ) -> CheckpointCoordinator {
         let coordinator = CheckpointCoordinator::new(store.clone());
-        let eligibility = evaluate(&eligible_config());
+        let config = eligible_config();
+        let eligibility = evaluate(&config);
         let starting = coordinator
-            .register_start(instance_id, pid, &eligibility)
+            .register_start_with_context(
+                instance_id,
+                pid,
+                &eligibility,
+                Some(test_fingerprint(&config)),
+                config.kv_checkpoint,
+            )
             .unwrap();
         assert_eq!(starting.phase, CheckpointPhase::Starting);
         assert!(!coordinator.gate_allows_routing(instance_id));
@@ -3800,6 +3976,20 @@ mod tests {
     }
 
     #[test]
+    fn launch_cleanup_removes_only_manager_generated_scratch_files() {
+        let sandbox = TestSandbox::new("scratch-cleanup");
+        let store = sandbox.store();
+        let managed = write_scratch_payload(&store, "instance-1", 99, b"stale slot");
+        let scratch = store.prepare_instance("instance-1").unwrap();
+        let unrelated = scratch.join("operator-note.txt");
+        fs::write(&unrelated, b"keep").unwrap();
+
+        assert_eq!(store.cleanup_scratch("instance-1").unwrap(), 1);
+        assert!(!managed.exists());
+        assert!(unrelated.exists());
+    }
+
+    #[test]
     fn generation_commit_is_manifest_last_and_detects_payload_corruption() {
         let sandbox = TestSandbox::new("commit-load");
         let store = sandbox.store();
@@ -3982,10 +4172,31 @@ mod tests {
         let sandbox = TestSandbox::new("coordinator-transitions");
         let store = sandbox.store();
         let coordinator = CheckpointCoordinator::new(store);
-        let eligibility = evaluate(&eligible_config());
+        let config = eligible_config();
+        let eligibility = evaluate(&config);
+        let fingerprint = test_fingerprint(&config);
+        let missing = coordinator
+            .register_start_with_context(
+                "missing-fingerprint",
+                100,
+                &eligibility,
+                None,
+                config.kv_checkpoint.clone(),
+            )
+            .unwrap_err();
+        assert_eq!(
+            missing.reason_code,
+            CheckpointReasonCode::FingerprintUnavailable
+        );
 
         let starting = coordinator
-            .register_start("instance-1", 101, &eligibility)
+            .register_start_with_context(
+                "instance-1",
+                101,
+                &eligibility,
+                Some(fingerprint.clone()),
+                config.kv_checkpoint.clone(),
+            )
             .unwrap();
         assert_eq!(starting.phase, CheckpointPhase::Starting);
         assert!(!coordinator.gate_allows_routing("instance-1"));
@@ -4003,7 +4214,13 @@ mod tests {
 
         coordinator.on_engine_healthy("instance-1", 101).unwrap();
         coordinator
-            .register_start("instance-1", 202, &eligibility)
+            .register_start_with_context(
+                "instance-1",
+                202,
+                &eligibility,
+                Some(fingerprint),
+                config.kv_checkpoint,
+            )
             .unwrap();
         let stale = coordinator
             .on_engine_healthy("instance-1", 101)
@@ -4299,6 +4516,38 @@ mod tests {
         assert_eq!(status.phase, CheckpointPhase::Stopping);
         assert_eq!(status.last_outcome, CheckpointOutcome::Failed);
         assert_eq!(status.reason_code, CheckpointReasonCode::HttpTimeout);
+    }
+
+    #[test]
+    fn failed_termination_can_resume_routing_and_expected_exit_preserves_save_result() {
+        let sandbox = TestSandbox::new("coordinator-stop-recovery");
+        let store = sandbox.store();
+        let config = eligible_config();
+        let fingerprint = test_fingerprint(&config);
+        let backend = FakeSlotBackend::new(&store, "instance-1");
+        let coordinator = coordinator_with_healthy_engine(&store, "instance-1", 750);
+        coordinator
+            .restore_or_cold("instance-1", 750, &fingerprint, true, &backend)
+            .unwrap();
+
+        coordinator.begin_draining("instance-1", 750).unwrap();
+        coordinator
+            .skip_save_busy("instance-1", 750, 15_000)
+            .unwrap();
+        let resumed = coordinator
+            .resume_after_stop_failure("instance-1", 750, CheckpointPhase::ReadyCold)
+            .unwrap();
+        assert_eq!(resumed.phase, CheckpointPhase::ReadyCold);
+        assert!(resumed.routable);
+
+        coordinator.begin_draining("instance-1", 750).unwrap();
+        let stopping = coordinator
+            .skip_save_busy("instance-1", 750, 15_000)
+            .unwrap();
+        let stopped = coordinator.mark_unexpected_exit("instance-1", 750).unwrap();
+        assert_eq!(stopped.phase, CheckpointPhase::Stopped);
+        assert_eq!(stopped.last_outcome, stopping.last_outcome);
+        assert_eq!(stopped.reason_code, CheckpointReasonCode::BusyTimeout);
     }
 
     #[test]

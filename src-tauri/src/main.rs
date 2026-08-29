@@ -649,6 +649,11 @@ fn main() {
             proxy_bound_addr: Mutex::new(None),
             proxy_last_error: Mutex::new(None),
             proxy_lifecycle_lock: tokio::sync::Mutex::new(()),
+            checkpoint_coordinator: std::sync::Arc::new(
+                crate::checkpoint::CheckpointCoordinator::new(
+                    crate::checkpoint::CheckpointStore::new(crate::utils::get_data_dir()),
+                ),
+            ),
             runtime_managed_instances: Mutex::new(std::collections::HashSet::new()),
             restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
         })

@@ -275,7 +275,12 @@ impl ProxyDataSource for TauriProxyDataSource {
             .unwrap_or_else(|| proxy_bound_addr(&config));
         let last_error = state.proxy_last_error.lock().unwrap().clone();
         let instances = state.instances.lock().unwrap().clone();
-        let running = state.running.lock().unwrap().clone();
+        let mut running = state.running.lock().unwrap().clone();
+        running.retain(|instance_id, _| {
+            state
+                .checkpoint_coordinator
+                .gate_allows_routing(instance_id)
+        });
         ProxyRuntimeSnapshot {
             bound_addr,
             last_error,
@@ -305,13 +310,21 @@ impl ProxyDataSource for TauriProxyDataSource {
         // request path only clones the selected target instead of both maps.
         let instances = state.instances.lock().unwrap();
         let running = state.running.lock().unwrap();
-        proxy_request_resolution_from(
+        let mut resolution = proxy_request_resolution_from(
             config,
             &instances,
             &running,
             requested_model,
             endpoint_workload,
-        )
+        );
+        drop(running);
+        drop(instances);
+        resolution.candidates.retain(|target| {
+            state
+                .checkpoint_coordinator
+                .gate_allows_routing(&target.public.instance_id)
+        });
+        resolution
     }
 }
 
@@ -564,10 +577,16 @@ fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
     let bound_addr = actual_bound_addr.unwrap_or_else(|| proxy_bound_addr(&config));
     if running {
         if let Some(runtime) = state.proxy_router_runtime.lock().unwrap().clone() {
+            let mut running = state.running.lock().unwrap().clone();
+            running.retain(|instance_id, _| {
+                state
+                    .checkpoint_coordinator
+                    .gate_allows_routing(instance_id)
+            });
             let snapshot = ProxyRuntimeSnapshot {
                 config,
                 instances: state.instances.lock().unwrap().clone(),
-                running: state.running.lock().unwrap().clone(),
+                running,
                 bound_addr,
                 last_error,
             };

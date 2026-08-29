@@ -50,6 +50,32 @@ assert.ok(
   startServerSource.indexOf('reserve_instance_start') < startServerSource.indexOf('CappedLogWriter::new'),
   'backend start reservation must happen before the log is opened or a process is spawned',
 )
+assert.ok(
+  startServerSource.indexOf('apply_managed_checkpoint_arguments') < startServerSource.indexOf('Command::new(&cmd[0])'),
+  'managed checkpoint arguments must be finalized before the process is spawned',
+)
+assert.ok(
+  startServerSource.indexOf('register_start_with_context') < startServerSource.indexOf('running.insert('),
+  'checkpoint routing must be gated before a running instance becomes visible',
+)
+const directStopSection = serverSource.slice(
+  serverSource.indexOf('pub async fn stop_server('),
+  serverSource.indexOf('fn is_recorded_process_alive'),
+)
+assert.ok(
+  directStopSection.indexOf('checkpoint_before_termination') < directStopSection.indexOf('terminate_running_instance'),
+  'direct stop must drain and save before terminating the process',
+)
+assert.match(serverSource, /resolve_checkpoint_startup[\s\S]*restore_or_cold/)
+const proxySource = fs.readFileSync(
+  path.join(__dirname, '..', 'src-tauri', 'src', 'commands', 'proxy.rs'),
+  'utf8',
+)
+assert.match(
+  proxySource,
+  /checkpoint_coordinator[\s\S]*gate_allows_routing/,
+  'proxy snapshots and request resolution must honor the checkpoint routing gate',
+)
 const runtimeServiceSource = fs.readFileSync(
   path.join(__dirname, '..', 'src-tauri', 'src', 'runtime_service', 'mod.rs'),
   'utf8',

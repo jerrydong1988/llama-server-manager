@@ -1258,6 +1258,7 @@ pub struct AppState {
     pub proxy_bound_addr: Mutex<Option<String>>,
     pub proxy_last_error: Mutex<Option<String>>,
     pub proxy_lifecycle_lock: tokio::sync::Mutex<()>,
+    pub checkpoint_coordinator: Arc<crate::checkpoint::CheckpointCoordinator>,
     pub runtime_managed_instances: Mutex<std::collections::HashSet<String>>,
     pub restored_runtime_instances: Mutex<std::collections::HashSet<String>>,
 }
