@@ -8,6 +8,14 @@ pub const MAX_RUNTIME_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
 pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
+pub const KV_CHECKPOINT_CAPABILITY: &str = "kv_checkpoint_v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeCheckpointLaunchSpec {
+    pub eligibility: crate::checkpoint::CheckpointEligibility,
+    #[serde(default)]
+    pub fingerprint: Option<crate::checkpoint::CheckpointFingerprint>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLaunchSpec {
@@ -19,6 +27,8 @@ pub struct RuntimeLaunchSpec {
     pub workload: String,
     #[serde(default)]
     pub working_directory: Option<String>,
+    #[serde(default)]
+    pub checkpoint: Option<RuntimeCheckpointLaunchSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +54,8 @@ pub struct RuntimeServiceStatus {
     pub monitoring: HashMap<String, crate::commands::monitoring::MonitoringFrame>,
     #[serde(default)]
     pub performance: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub checkpoints: HashMap<String, crate::checkpoint::CheckpointStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +85,9 @@ pub enum RuntimeCommand {
     StopInstance {
         instance_id: String,
     },
+    ClearCheckpoint {
+        instance_id: String,
+    },
     ClearLastError,
     StartProxy,
     StopProxy,
@@ -99,6 +114,7 @@ pub enum RuntimeReply {
     Ack,
     Status(Box<RuntimeServiceStatus>),
     Instance(Box<RunningInstance>),
+    CheckpointStatus(crate::checkpoint::CheckpointStatus),
     ProxyStatus(ProxyStatus),
 }
 
@@ -193,11 +209,46 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_clear_command_round_trip_preserves_the_exact_instance() {
+        let request = RuntimeRequest {
+            protocol_version: RUNTIME_PROTOCOL_VERSION,
+            request_id: "checkpoint-clear".into(),
+            token: "secret".into(),
+            command: RuntimeCommand::ClearCheckpoint {
+                instance_id: "instance-1".into(),
+            },
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["command"]["command"], "clear_checkpoint");
+        assert_eq!(json["command"]["payload"]["instance_id"], "instance-1");
+        let decoded: RuntimeRequest = serde_json::from_value(json).unwrap();
+        assert!(matches!(
+            decoded.command,
+            RuntimeCommand::ClearCheckpoint { instance_id } if instance_id == "instance-1"
+        ));
+    }
+
+    #[test]
     fn persisted_state_accepts_missing_future_fields() {
         let state: PersistedRuntimeState = serde_json::from_str("{}").unwrap();
         assert_eq!(state.schema_version, 1);
         assert!(!state.background_enabled);
         assert!(state.desired_instances.is_empty());
+    }
+
+    #[test]
+    fn launch_spec_accepts_payloads_without_checkpoint_metadata() {
+        let value = serde_json::json!({
+            "instance_id": "legacy-instance",
+            "config": crate::models::InstanceConfig::default(),
+            "engine_backend": "test",
+            "command": ["llama-server"],
+            "command_display": "llama-server",
+            "workload": "inference",
+            "working_directory": null,
+        });
+        let spec: RuntimeLaunchSpec = serde_json::from_value(value).unwrap();
+        assert!(spec.checkpoint.is_none());
     }
 
     #[test]
@@ -227,6 +278,7 @@ mod tests {
         assert!(status.health.is_empty());
         assert!(status.monitoring.is_empty());
         assert!(status.performance.is_empty());
+        assert!(status.checkpoints.is_empty());
     }
 
     #[test]

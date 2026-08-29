@@ -31,6 +31,7 @@ import { FieldRuntimeProvider } from './ConfigPage/shared'
 import { canReuseConfigPreflight, configForPreflight, createConfigPreflightKey } from './ConfigPage/configPreflight'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
 import { useConfigSaveShortcut } from './ConfigPage/useConfigSaveShortcut'
+import { CheckpointPanel } from './ConfigPage/CheckpointPanel'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -69,7 +70,6 @@ const ConfigPage = () => {
   const saveInFlightRef = useRef(false)
   const saveShortcutRef = useConfigSaveShortcut()
   const saveFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -151,7 +151,6 @@ const ConfigPage = () => {
     : null, [currentModel, local])
   const trustedEngineId = local?.engine_id || defaultEngineId || ''
   const { unsupportedEngineFlags, setUnsupportedEngineFlags, commandPreview, commandPreviewKey, previewingCommand, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local: compatibilityConfig, currentEngine, trustedEngineId })
-
   saveShortcutRef.current = async () => {}
   if (!local) return <div className="space-y-5"><EmptyState icon={<Settings className="h-10 w-10" />} title={t.configPage.title} description={t.configPage.noInstance} /></div>
 
@@ -202,7 +201,6 @@ const ConfigPage = () => {
   }
 
   const manualMode = local.launch_mode === 'manual'
-
   const save = async () => {
     if (!inst || saveInFlightRef.current || (!manualMode && (probingEngineCompatibility || capabilityProbeRequired))) {
       return
@@ -461,6 +459,7 @@ const ConfigPage = () => {
     { id: 'config-advanced-custom', title: t.configPage.customArgs },
   ]
   const directoryGroups = [
+    { id: 'config-checkpoint', title: t.checkpoint.configTitle },
     { id: 'config-basic', title: t.configPage.basic },
     ...(!isEmbedding ? [{ id: 'config-reasoning', title: t.configPage.reasoning }] : []),
     { id: 'config-performance', title: t.configPage.performance },
@@ -564,6 +563,9 @@ const ConfigPage = () => {
             />
           )}
 
+          <CheckpointPanel config={local} engineExe={currentEngine?.exe} instanceId={configInstanceId || local.id} labels={t.checkpoint}
+            onCheckpointChange={next => set('kv_checkpoint', next)}
+            onApplyRequirements={reasons => { set('parallel', 1); set('cache_prompt', true); set('cache_idle_slots', true); if (local.cache_ram !== -1 && local.cache_ram <= 0) set('cache_ram', 8192); set('slots_enabled', true); if (reasons.includes('sliding_window_requires_full_cache')) set('swa_full', true) }} />
           {!manualMode && visibleVectorCleanupGroups.length > 0 && (
             <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />

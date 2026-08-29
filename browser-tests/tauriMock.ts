@@ -304,6 +304,20 @@ if (IS_DOCS_SCENARIO) {
   state.instance_order = [INSTANCE_ID, STOPPED_INSTANCE_ID, EMBEDDING_INSTANCE_ID]
   state.last_tab = 'dashboard'
 }
+if (BROWSER_SCENARIO === 'checkpoint-requirements') {
+  Object.assign(state.instances[INSTANCE_ID], {
+    parallel: 2,
+    cache_prompt: false,
+    cache_idle_slots: false,
+    cache_ram: 0,
+    slots_enabled: false,
+    swa_full: false,
+    kv_checkpoint: {
+      ...state.instances[INSTANCE_ID].kv_checkpoint,
+      enabled: true,
+    },
+  })
+}
 
 type BrowserProxyRoute = {
   id: string
@@ -936,6 +950,37 @@ mockIPC((command, payload) => {
       }
       return [clone(models), clone(engines)]
     case 'load_config': return clone(control.state)
+    case 'list_checkpoint_statuses': return {}
+    case 'get_checkpoint_status': return null
+    case 'get_checkpoint_eligibility': {
+      const config = args.config as InstanceConfig
+      const reasons: string[] = []
+      if (config.parallel !== 1) reasons.push('parallel_must_be_one')
+      if (!config.cache_prompt) reasons.push('prompt_cache_required')
+      if (!config.cache_idle_slots || (config.cache_ram !== -1 && config.cache_ram <= 0)) {
+        reasons.push('prompt_cache_retention_required')
+      }
+      if (!config.slots_enabled) reasons.push('slots_required')
+      if (BROWSER_SCENARIO === 'checkpoint-requirements' && !config.swa_full) {
+        reasons.push('sliding_window_requires_full_cache')
+      }
+      return {
+        eligible: reasons.length === 0,
+        reason_code: reasons[0] ?? 'none',
+        reasons,
+      }
+    }
+    case 'clear_checkpoint':
+      return {
+        instance_id: String(args.instanceId ?? ''),
+        phase: 'stopped',
+        routable: false,
+        last_operation: 'clear',
+        last_outcome: 'success',
+        reason_code: 'none',
+        message: '',
+        updated_at: Date.now(),
+      }
     case 'scan_models':
       if (BROWSER_SCENARIO === 'delayed-inventory-cache') {
         return new Promise((resolve) => window.setTimeout(() => resolve(clone(models)), 3_000))

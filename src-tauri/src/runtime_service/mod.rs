@@ -6,8 +6,8 @@ mod transport;
 use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
-    RUNTIME_PROTOCOL_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, KV_CHECKPOINT_CAPABILITY,
+    RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use supervisor::{start_watchdog, RuntimeSupervisor};
 
-pub use protocol::RuntimeLaunchSpec;
+pub use protocol::{RuntimeCheckpointLaunchSpec, RuntimeLaunchSpec};
 
 static CONFIG_REVISION: AtomicU64 = AtomicU64::new(0);
 static CONFIG_CHANGE_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -32,6 +32,7 @@ fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
         BACKGROUND_DETACH_CAPABILITY,
         CONFIG_SYNC_ACK_CAPABILITY,
         RUNTIME_ERROR_ACK_CAPABILITY,
+        KV_CHECKPOINT_CAPABILITY,
     ]
     .iter()
     .all(|required| {
@@ -112,6 +113,15 @@ pub async fn stop_instance(instance_id: String) -> Result<(), String> {
     match call_recovering(RuntimeCommand::StopInstance { instance_id }).await? {
         RuntimeReply::Ack => Ok(()),
         _ => Err("runtime service returned an unexpected stop response".into()),
+    }
+}
+
+pub async fn clear_checkpoint(
+    instance_id: String,
+) -> Result<crate::checkpoint::CheckpointStatus, String> {
+    match call_recovering(RuntimeCommand::ClearCheckpoint { instance_id }).await? {
+        RuntimeReply::CheckpointStatus(status) => Ok(status),
+        _ => Err("runtime service returned an unexpected checkpoint response".into()),
     }
 }
 
@@ -723,6 +733,7 @@ fn runtime_status_payload(
         "proxy": status.proxy,
         "running": running,
         "health": status.health,
+        "checkpoints": status.checkpoints,
         "previouslyManaged": previously_managed
             .map(|ids| ids.iter().cloned().collect::<Vec<_>>())
             .unwrap_or_default(),
@@ -908,6 +919,7 @@ mod tests {
                 BACKGROUND_DETACH_CAPABILITY.into(),
                 CONFIG_SYNC_ACK_CAPABILITY.into(),
                 RUNTIME_ERROR_ACK_CAPABILITY.into(),
+                KV_CHECKPOINT_CAPABILITY.into(),
             ],
             config_revision: 1,
             background_enabled: false,
@@ -927,10 +939,14 @@ mod tests {
             health: Default::default(),
             monitoring: Default::default(),
             performance: Default::default(),
+            checkpoints: Default::default(),
         };
         let previously_managed = ["stale-instance".to_string()].into_iter().collect();
         let payload = runtime_status_payload(&status, Some(&previously_managed));
         assert_eq!(payload["previouslyManaged"][0], "stale-instance");
+        assert!(payload["checkpoints"]
+            .as_object()
+            .is_some_and(|value| value.is_empty()));
         assert!(has_required_runtime_capabilities(&status));
 
         let mut legacy_status = status;

@@ -112,6 +112,57 @@ pub(crate) fn error_response(
     response
 }
 
+pub(crate) fn checkpoint_unavailable_response(format: ProxyApiFormat, phase: &str) -> Response {
+    let request_id = proxy_request_id();
+    let message = "matching route is temporarily unavailable while checkpoint state is resolving";
+    let checkpoint = json!({
+        "phase": phase,
+        "retryable": true,
+    });
+    let value = match format {
+        ProxyApiFormat::OpenAi => json!({
+            "error": {
+                "message": message,
+                "type": openai_error_type(StatusCode::SERVICE_UNAVAILABLE),
+                "param": Value::Null,
+                "code": "checkpoint_not_ready",
+                "checkpoint": checkpoint,
+            }
+        }),
+        ProxyApiFormat::Anthropic => json!({
+            "type": "error",
+            "error": {
+                "type": anthropic_error_type(StatusCode::SERVICE_UNAVAILABLE),
+                "message": message,
+                "code": "checkpoint_not_ready",
+                "checkpoint": checkpoint,
+            },
+            "request_id": request_id,
+        }),
+    };
+    let mut response = (StatusCode::SERVICE_UNAVAILABLE, Json(value)).into_response();
+    response
+        .headers_mut()
+        .insert("retry-after", HeaderValue::from_static("1"));
+    if let Ok(header_value) = HeaderValue::from_str(phase) {
+        response
+            .headers_mut()
+            .insert("x-llama-server-manager-checkpoint-phase", header_value);
+    }
+    if let Ok(header_value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert(
+            if format.is_anthropic() {
+                "request-id"
+            } else {
+                "x-request-id"
+            },
+            header_value,
+        );
+    }
+    add_format_header(&mut response, format);
+    response
+}
+
 pub(crate) fn context_limit_error_response(
     format: ProxyApiFormat,
     param: &str,
@@ -438,6 +489,35 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("anthropic")
         );
+    }
+
+    #[tokio::test]
+    async fn checkpoint_unavailable_is_retryable_in_both_api_formats() {
+        for format in [ProxyApiFormat::OpenAi, ProxyApiFormat::Anthropic] {
+            let response = checkpoint_unavailable_response(format, "restoring");
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|value| value.to_str().ok()),
+                Some("1")
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-llama-server-manager-checkpoint-phase")
+                    .and_then(|value| value.to_str().ok()),
+                Some("restoring")
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let value: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["error"]["code"], "checkpoint_not_ready");
+            assert_eq!(value["error"]["checkpoint"]["phase"], "restoring");
+            assert_eq!(value["error"]["checkpoint"]["retryable"], true);
+        }
     }
 
     #[test]

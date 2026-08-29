@@ -1,3 +1,8 @@
+use crate::checkpoint::{
+    build_checkpoint_fingerprint, evaluate_checkpoint_eligibility, CheckpointEligibility,
+    CheckpointEligibilityContext, CheckpointFingerprint, CheckpointReasonCode,
+    EngineCheckpointCapabilities, FingerprintMaterials, LlamaSlotClient, SlotBackend,
+};
 use crate::commands::adlx;
 use crate::commands::engine_capabilities::{
     blocked_security_flags, capabilities_match_executable, command_for_capabilities,
@@ -28,6 +33,10 @@ const LOG_EVENT_BATCH_SIZE: usize = 200;
 static SERVER_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 const ENGINE_PREVIEW_MATCH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 const MAX_ENGINE_PREVIEW_MATCH_CACHE_ENTRIES: usize = 32;
+const CHECKPOINT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const CHECKPOINT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+const CHECKPOINT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+const CHECKPOINT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 struct CachedEngineMatch {
     checked_at: std::time::Instant,
@@ -264,7 +273,7 @@ fn terminate_spawned_child(child: &mut std::process::Child) -> Result<(), String
 
 // Generate CLI command.
 
-fn format_command_for_display(command: &[String]) -> String {
+pub(crate) fn format_command_for_display(command: &[String]) -> String {
     let mut masked = Vec::with_capacity(command.len());
     let mut hide_next = false;
     for argument in command {
@@ -2107,6 +2116,260 @@ fn reserve_instance_start<'a>(
     })
 }
 
+#[derive(Debug, Clone)]
+struct CheckpointLaunchPlan {
+    eligibility: CheckpointEligibility,
+    fingerprint: Option<CheckpointFingerprint>,
+    scratch_path: Option<std::path::PathBuf>,
+}
+
+impl CheckpointLaunchPlan {
+    fn ineligible(reason_code: CheckpointReasonCode) -> Self {
+        Self {
+            eligibility: CheckpointEligibility::ineligible(reason_code),
+            fingerprint: None,
+            scratch_path: None,
+        }
+    }
+}
+
+fn assess_checkpoint_eligibility(
+    state: &AppState,
+    config: &InstanceConfig,
+    workload: ModelWorkload,
+    engine_capabilities: Option<&EngineCapabilities>,
+) -> CheckpointEligibility {
+    let (model_architecture, model_is_sharded, model_has_swa) = {
+        let models = state.models.lock().unwrap();
+        models
+            .iter()
+            .find(|model| {
+                paths_equal(
+                    std::path::Path::new(&model.path),
+                    std::path::Path::new(&config.model_path),
+                )
+            })
+            .map(|model| {
+                (
+                    model.architecture.clone(),
+                    model.is_shard,
+                    model.capabilities.has_swa,
+                )
+            })
+            .unwrap_or((None, false, None))
+    };
+    let engine_checkpoint_capabilities = engine_capabilities
+        .map(|capabilities| {
+            EngineCheckpointCapabilities::from_supported_flags(&capabilities.supported_flags)
+        })
+        .unwrap_or_default();
+    evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+        config,
+        workload,
+        managed_local_engine: true,
+        engine_capabilities: engine_checkpoint_capabilities,
+        model_architecture: model_architecture.as_deref(),
+        model_is_sharded,
+        model_has_swa,
+    })
+}
+
+async fn prepare_checkpoint_launch_plan(
+    state: &AppState,
+    instance_id: &str,
+    config: &InstanceConfig,
+    workload: ModelWorkload,
+    engine_exe: &str,
+    engine_backend: &str,
+    engine_capabilities: Option<&EngineCapabilities>,
+) -> CheckpointLaunchPlan {
+    let eligibility = assess_checkpoint_eligibility(state, config, workload, engine_capabilities);
+    if !eligibility.eligible {
+        return CheckpointLaunchPlan {
+            eligibility,
+            fingerprint: None,
+            scratch_path: None,
+        };
+    }
+
+    let (engine_version, stored_backend) = {
+        let engines = state.engines.lock().unwrap();
+        engines
+            .iter()
+            .find(|engine| {
+                paths_equal(
+                    std::path::Path::new(&engine.exe),
+                    std::path::Path::new(engine_exe),
+                )
+            })
+            .map(|engine| (engine.version.clone(), engine.backend.clone()))
+            .unwrap_or_default()
+    };
+    let backend = if engine_backend.trim().is_empty() {
+        stored_backend
+    } else {
+        engine_backend.to_string()
+    };
+    let store = state.checkpoint_coordinator.store().clone();
+    let fingerprint_config = config.clone();
+    let model_path = std::path::PathBuf::from(&config.model_path);
+    let engine_path = std::path::PathBuf::from(engine_exe);
+    let template_path = (!config.chat_template_file.trim().is_empty())
+        .then(|| std::path::PathBuf::from(&config.chat_template_file));
+    let fingerprint = tokio::task::spawn_blocking(move || {
+        let model_sha256 = store.content_sha256(&model_path)?;
+        let engine_sha256 = store.content_sha256(&engine_path)?;
+        let chat_template_file_sha256 = template_path
+            .as_deref()
+            .map(|path| store.content_sha256(path))
+            .transpose()?;
+        build_checkpoint_fingerprint(
+            &fingerprint_config,
+            &FingerprintMaterials {
+                model_sha256,
+                engine_sha256,
+                engine_version,
+                backend,
+                chat_template_file_sha256,
+            },
+        )
+    })
+    .await;
+    let fingerprint = match fingerprint {
+        Ok(Ok(fingerprint)) => fingerprint,
+        Ok(Err(error)) => return CheckpointLaunchPlan::ineligible(error.reason_code),
+        Err(_) => {
+            return CheckpointLaunchPlan::ineligible(CheckpointReasonCode::FingerprintUnavailable)
+        }
+    };
+    let store = state.checkpoint_coordinator.store();
+    let scratch_path = match store.cleanup_scratch(instance_id) {
+        Ok(_) => match store.prepare_instance(instance_id) {
+            Ok(path) => path,
+            Err(error) => return CheckpointLaunchPlan::ineligible(error.reason_code),
+        },
+        Err(error) => return CheckpointLaunchPlan::ineligible(error.reason_code),
+    };
+    CheckpointLaunchPlan {
+        eligibility,
+        fingerprint: Some(fingerprint),
+        scratch_path: Some(scratch_path),
+    }
+}
+
+fn apply_managed_checkpoint_arguments(command: &mut Vec<String>, plan: &mut CheckpointLaunchPlan) {
+    if !plan.eligibility.eligible {
+        return;
+    }
+    if command
+        .iter()
+        .any(|argument| argument == "--slot-save-path")
+    {
+        *plan = CheckpointLaunchPlan::ineligible(CheckpointReasonCode::ConflictingSlotSavePath);
+        return;
+    }
+    let Some(scratch_path) = plan.scratch_path.as_ref() else {
+        *plan = CheckpointLaunchPlan::ineligible(CheckpointReasonCode::IoError);
+        return;
+    };
+    command.push("--slot-save-path".into());
+    command.push(scratch_path.to_string_lossy().to_string());
+}
+
+fn emit_checkpoint_status(app: &tauri::AppHandle, status: &crate::checkpoint::CheckpointStatus) {
+    let _ = app.emit("checkpoint-status", status);
+}
+
+fn mark_checkpoint_unexpected_exit(
+    state: &AppState,
+    app: &tauri::AppHandle,
+    instance_id: &str,
+    expected_pid: u32,
+) {
+    if let Ok(status) = state
+        .checkpoint_coordinator
+        .mark_unexpected_exit(instance_id, expected_pid)
+    {
+        if let Err(error) = state
+            .checkpoint_coordinator
+            .store()
+            .cleanup_scratch(instance_id)
+        {
+            eprintln!("Checkpoint scratch cleanup failed for {instance_id}: {error}");
+        }
+        emit_checkpoint_status(app, &status);
+    }
+}
+
+fn resolve_checkpoint_startup(
+    app: &tauri::AppHandle,
+    instance_id: &str,
+    expected_pid: u32,
+    config: &InstanceConfig,
+) -> bool {
+    let state = app.state::<AppState>();
+    let coordinator = &state.checkpoint_coordinator;
+    if !coordinator.gate_active(instance_id) {
+        return true;
+    }
+    if coordinator.restore_cleanup_pending(instance_id, expected_pid) {
+        let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_HTTP_TIMEOUT) {
+            Ok(client) => {
+                coordinator.retry_failed_restore_cleanup(instance_id, expected_pid, &client)
+            }
+            Err(error) => Err(error),
+        };
+        match cleanup {
+            Ok(status) => emit_checkpoint_status(app, &status),
+            Err(error) => {
+                eprintln!("Checkpoint restore cleanup failed for {instance_id}: {error}")
+            }
+        }
+        return coordinator.gate_allows_routing(instance_id);
+    }
+    let healthy = match coordinator.on_engine_healthy(instance_id, expected_pid) {
+        Ok(status) => status,
+        Err(error) => {
+            eprintln!("Checkpoint health transition failed for {instance_id}: {error}");
+            return coordinator.gate_allows_routing(instance_id);
+        }
+    };
+    emit_checkpoint_status(app, &healthy);
+    let registered = match coordinator.registered_checkpoint(instance_id, expected_pid) {
+        Ok(Some(registered)) => registered,
+        Ok(None) => {
+            let error = crate::checkpoint::CheckpointStoreError::new(
+                CheckpointReasonCode::FingerprintUnavailable,
+                "checkpoint fingerprint was not registered",
+            );
+            if let Ok(status) = coordinator.fail_restore_setup(instance_id, expected_pid, error) {
+                emit_checkpoint_status(app, &status);
+            }
+            return coordinator.gate_allows_routing(instance_id);
+        }
+        Err(error) => {
+            eprintln!("Checkpoint registration lookup failed for {instance_id}: {error}");
+            return coordinator.gate_allows_routing(instance_id);
+        }
+    };
+    let (fingerprint, policy) = registered;
+    let status = match LlamaSlotClient::new(config, CHECKPOINT_HTTP_TIMEOUT) {
+        Ok(client) => coordinator.restore_or_cold(
+            instance_id,
+            expected_pid,
+            &fingerprint,
+            policy.auto_restore,
+            &client,
+        ),
+        Err(error) => coordinator.fail_restore_setup(instance_id, expected_pid, error),
+    };
+    match status {
+        Ok(status) => emit_checkpoint_status(app, &status),
+        Err(error) => eprintln!("Checkpoint restore failed for {instance_id}: {error}"),
+    }
+    coordinator.gate_allows_routing(instance_id)
+}
+
 pub async fn generate_server_command(
     config: InstanceConfig,
     engine_exe: String,
@@ -2164,6 +2427,30 @@ pub async fn generate_server_command(
 }
 
 #[tauri::command]
+pub async fn get_checkpoint_eligibility(
+    config: InstanceConfig,
+    engine_exe: String,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<CheckpointEligibility> {
+    let manual = uses_manual_command(&config);
+    let (config, workload, _) = prepare_launch_checked(config, &engine_exe)?;
+    let capabilities = if manual {
+        None
+    } else {
+        match trusted_engine_capabilities(state.inner(), &config, &engine_exe, true).await {
+            EngineCapabilityResolution::Available(capabilities) => Some(capabilities),
+            EngineCapabilityResolution::Missing | EngineCapabilityResolution::Stale => None,
+        }
+    };
+    Ok(assess_checkpoint_eligibility(
+        state.inner(),
+        &config,
+        workload,
+        capabilities.as_deref(),
+    ))
+}
+
+#[tauri::command]
 pub async fn start_server(
     instance_id: String,
     config: InstanceConfig,
@@ -2180,8 +2467,8 @@ pub async fn start_server(
     let (config, workload, generated_cmd) = prepare_launch_checked(config, &engine_exe)?;
     validate_tls_configuration(&config)?;
     validate_public_bind_auth(&config)?;
-    let cmd = if manual {
-        generated_cmd
+    let (mut cmd, engine_capabilities) = if manual {
+        (generated_cmd, None)
     } else {
         let engine_capabilities =
             match trusted_engine_capabilities(state.inner(), &config, &engine_exe, false).await {
@@ -2218,8 +2505,22 @@ pub async fn start_server(
                 false,
             ));
         }
-        command_for_capabilities(&generated_cmd, engine_capabilities.as_deref())
+        (
+            command_for_capabilities(&generated_cmd, engine_capabilities.as_deref()),
+            engine_capabilities,
+        )
     };
+    let mut checkpoint_plan = prepare_checkpoint_launch_plan(
+        state.inner(),
+        &instance_id,
+        &config,
+        workload,
+        &engine_exe,
+        &engine_backend,
+        engine_capabilities.as_deref(),
+    )
+    .await;
+    apply_managed_checkpoint_arguments(&mut cmd, &mut checkpoint_plan);
     validate_effective_launch_security(&config, &cmd)?;
     let cmd_display = format_command_for_display(&cmd);
     timing.mark("preflight");
@@ -2236,6 +2537,10 @@ pub async fn start_server(
                 working_directory: std::env::current_dir()
                     .ok()
                     .map(|path| path.to_string_lossy().to_string()),
+                checkpoint: Some(crate::runtime_service::RuntimeCheckpointLaunchSpec {
+                    eligibility: checkpoint_plan.eligibility.clone(),
+                    fingerprint: checkpoint_plan.fingerprint.clone(),
+                }),
             })
             .await
             .map_err(AppError::from)?;
@@ -2375,6 +2680,26 @@ pub async fn start_server(
                 .with_context("instanceId", instance_id));
         }
     };
+    let checkpoint_status = match state.checkpoint_coordinator.register_start_with_context(
+        &instance_id,
+        pid,
+        &checkpoint_plan.eligibility,
+        checkpoint_plan.fingerprint.clone(),
+        config.kv_checkpoint.clone(),
+    ) {
+        Ok(status) => status,
+        Err(error) => {
+            let message = match terminate_spawned_child(&mut child) {
+                Ok(()) => format!("checkpoint lifecycle registration failed: {error}"),
+                Err(cleanup_error) => {
+                    format!("checkpoint lifecycle registration failed: {error}; {cleanup_error}")
+                }
+            };
+            return Err(AppError::new("CHECKPOINT_REGISTRATION", message, true)
+                .with_context("instanceId", instance_id));
+        }
+    };
+    emit_checkpoint_status(&app, &checkpoint_status);
     let telemetry_session_id = crate::commands::telemetry::begin_run_session(
         &instance_id,
         &config,
@@ -2410,6 +2735,7 @@ pub async fn start_server(
     };
     if duplicate_start {
         let cleanup_result = terminate_spawned_child(&mut child);
+        mark_checkpoint_unexpected_exit(state.inner(), &app, &instance_id, pid);
         let _ = crate::commands::telemetry::finish_run_session(
             telemetry_session_id.as_deref(),
             None,
@@ -2469,6 +2795,7 @@ pub async fn start_server(
                 "Runtime state persistence failed: {persist_error}; {cleanup_error}"
             ),
         };
+        mark_checkpoint_unexpected_exit(state.inner(), &app, &instance_id, pid);
         return Err(AppError::new("RUNTIME_STATE_PERSIST_FAILED", message, true)
             .with_context("instanceId", instance_id));
     }
@@ -2538,6 +2865,7 @@ pub async fn start_server(
                     let mut restored = st.restored_runtime_instances.lock().unwrap();
                     restored.remove(&format!("{}:{}", id, pid));
                 }
+                mark_checkpoint_unexpected_exit(st.inner(), &app_clone, &id, pid);
                 let _ = crate::commands::telemetry::finish_run_session(
                     telemetry_session_monitor.as_deref(),
                     status.code(),
@@ -2593,6 +2921,7 @@ pub async fn start_server(
             }
         };
         if removed {
+            mark_checkpoint_unexpected_exit(st2.inner(), &app_clone, &id, pid);
             {
                 let mut restored = st2.restored_runtime_instances.lock().unwrap();
                 restored.remove(&format!("{}:{}", id, pid));
@@ -2643,6 +2972,7 @@ pub async fn start_server(
     );
     let api_key_metrics = effective_api_key(&config);
     let telemetry_session_metrics = telemetry_session_id.clone();
+    let launch_config_metrics = config.clone();
     std::thread::spawn(move || {
         monitor_loop(
             &id_metrics,
@@ -2652,6 +2982,7 @@ pub async fn start_server(
                 api_key: api_key_metrics,
                 telemetry_session_id: telemetry_session_metrics,
                 workload,
+                launch_config: launch_config_metrics,
             },
             app_metrics,
         );
@@ -2666,6 +2997,7 @@ struct MonitorLoopConfig {
     api_key: String,
     telemetry_session_id: Option<String>,
     workload: ModelWorkload,
+    launch_config: InstanceConfig,
 }
 
 pub(crate) struct InstanceMonitorSample {
@@ -2812,6 +3144,7 @@ fn monitor_loop(
         api_key,
         telemetry_session_id,
         workload,
+        launch_config,
     } = config;
     crate::commands::monitoring::start_frame_loop(
         instance_id.to_string(),
@@ -2841,6 +3174,10 @@ fn monitor_loop(
     let mut proc_sys = System::new_all();
     let mut health_failures = 0_u32;
     let mut last_health_ready: Option<bool> = None;
+    let mut checkpoint_startup_resolved = !app
+        .state::<AppState>()
+        .checkpoint_coordinator
+        .gate_active(instance_id);
 
     loop {
         let iteration_started = std::time::Instant::now();
@@ -2860,17 +3197,24 @@ fn monitor_loop(
             expected_pid,
             start_instant.elapsed().as_secs(),
         );
-        match advance_health_state(
+        let health_transition = advance_health_state(
             sample.ready,
             start_instant.elapsed() >= INITIAL_HEALTH_GRACE,
             &mut health_failures,
             &mut last_health_ready,
-        ) {
+        );
+        if sample.ready && !checkpoint_startup_resolved {
+            checkpoint_startup_resolved =
+                resolve_checkpoint_startup(&app, instance_id, expected_pid, &launch_config);
+        }
+        match health_transition {
             HealthTransition::Ready => {
-                let _ = app.emit(
-                    "health-status",
-                    serde_json::json!({ "instanceId": instance_id, "status": "ok" }),
-                );
+                if checkpoint_startup_resolved {
+                    let _ = app.emit(
+                        "health-status",
+                        serde_json::json!({ "instanceId": instance_id, "status": "ok" }),
+                    );
+                }
             }
             HealthTransition::Failed => {
                 let _ = app.emit(
@@ -2978,9 +3322,26 @@ pub(crate) fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<Stri
     let mut failures = Vec::new();
 
     for (instance_id, recorded) in running {
+        let checkpoint_resume_phase =
+            checkpoint_before_termination_blocking(app, &instance_id, &recorded);
         if !terminate_running_instance(&recorded) {
+            if let Some(ready_phase) = checkpoint_resume_phase {
+                if let Ok(status) = state.checkpoint_coordinator.resume_after_stop_failure(
+                    &instance_id,
+                    recorded.pid,
+                    ready_phase,
+                ) {
+                    emit_checkpoint_status(app, &status);
+                }
+            }
             failures.push(format!("{instance_id} (PID {})", recorded.pid));
             continue;
+        }
+        if let Ok(status) = state
+            .checkpoint_coordinator
+            .mark_stopped(&instance_id, recorded.pid)
+        {
+            emit_checkpoint_status(app, &status);
         }
 
         let removed = {
@@ -3019,6 +3380,162 @@ pub(crate) fn terminate_all_servers_for_exit(app: &tauri::AppHandle) -> Vec<Stri
                 .is_some_and(|(instance_id, _)| remaining_ids.contains(instance_id))
         });
     failures
+}
+
+fn checkpoint_before_termination_blocking(
+    app: &tauri::AppHandle,
+    instance_id: &str,
+    running: &RunningInstance,
+) -> Option<crate::checkpoint::CheckpointPhase> {
+    let state = app.state::<AppState>();
+    let coordinator = state.checkpoint_coordinator.clone();
+    if !coordinator.gate_active(instance_id) {
+        return None;
+    }
+    let current_phase = coordinator.status(instance_id).map(|status| status.phase);
+    let resume_phase = match current_phase {
+        Some(
+            phase @ (crate::checkpoint::CheckpointPhase::Ready
+            | crate::checkpoint::CheckpointPhase::ReadyCold),
+        ) => phase,
+        Some(
+            crate::checkpoint::CheckpointPhase::Starting
+            | crate::checkpoint::CheckpointPhase::EngineHealthy
+            | crate::checkpoint::CheckpointPhase::Restoring,
+        ) => {
+            if let Ok(status) = coordinator.skip_save_not_ready(instance_id, running.pid) {
+                emit_checkpoint_status(app, &status);
+            }
+            return None;
+        }
+        _ => return None,
+    };
+    let draining = match coordinator.begin_draining(instance_id, running.pid) {
+        Ok(status) => status,
+        Err(error) => {
+            eprintln!("Checkpoint drain transition failed for {instance_id}: {error}");
+            return None;
+        }
+    };
+    emit_checkpoint_status(app, &draining);
+
+    let registered = match coordinator.registered_checkpoint(instance_id, running.pid) {
+        Ok(Some(registered)) => registered,
+        Ok(None) => {
+            let error = crate::checkpoint::CheckpointStoreError::new(
+                CheckpointReasonCode::FingerprintUnavailable,
+                "checkpoint fingerprint was not registered",
+            );
+            if let Ok(status) = coordinator.fail_save_setup(instance_id, running.pid, error, 0) {
+                emit_checkpoint_status(app, &status);
+            }
+            return Some(resume_phase);
+        }
+        Err(error) => {
+            eprintln!("Checkpoint registration lookup failed for {instance_id}: {error}");
+            return Some(resume_phase);
+        }
+    };
+    let Some(config) = running.launch_config.clone() else {
+        let error = crate::checkpoint::CheckpointStoreError::new(
+            CheckpointReasonCode::UnsupportedConfiguration,
+            "checkpoint launch configuration was unavailable",
+        );
+        if let Ok(status) = coordinator.fail_save_setup(instance_id, running.pid, error, 0) {
+            emit_checkpoint_status(app, &status);
+        }
+        return Some(resume_phase);
+    };
+    let proxy_runtime = state.proxy_router_runtime.lock().unwrap().clone();
+    let pid = running.pid;
+    let started = std::time::Instant::now();
+    let probe_client = match LlamaSlotClient::new(&config, CHECKPOINT_PROBE_TIMEOUT) {
+        Ok(client) => client,
+        Err(error) => {
+            if let Ok(status) = coordinator.fail_save_setup(
+                instance_id,
+                pid,
+                error,
+                started.elapsed().as_millis() as u64,
+            ) {
+                emit_checkpoint_status(app, &status);
+            }
+            return Some(resume_phase);
+        }
+    };
+    let result = loop {
+        let active_requests = proxy_runtime
+            .as_ref()
+            .map(|runtime| runtime.target_snapshot(instance_id).active_requests)
+            .unwrap_or(0);
+        let slots = match probe_client.slots() {
+            Ok(slots) => slots,
+            Err(error) => {
+                break coordinator.fail_save_setup(
+                    instance_id,
+                    pid,
+                    error,
+                    started.elapsed().as_millis() as u64,
+                )
+            }
+        };
+        if active_requests == 0 && slots.iter().all(|slot| !slot.is_processing) {
+            let (fingerprint, policy) = &registered;
+            let save_client = match LlamaSlotClient::new(&config, CHECKPOINT_HTTP_TIMEOUT) {
+                Ok(client) => client,
+                Err(error) => {
+                    break coordinator.fail_save_setup(
+                        instance_id,
+                        pid,
+                        error,
+                        started.elapsed().as_millis() as u64,
+                    )
+                }
+            };
+            break coordinator.save_before_stop(
+                instance_id,
+                pid,
+                fingerprint,
+                policy,
+                &save_client,
+            );
+        }
+        if started.elapsed() >= CHECKPOINT_DRAIN_TIMEOUT {
+            break coordinator.skip_save_busy(
+                instance_id,
+                pid,
+                started.elapsed().as_millis() as u64,
+            );
+        }
+        std::thread::sleep(CHECKPOINT_DRAIN_POLL);
+    };
+    match result {
+        Ok(status) => emit_checkpoint_status(app, &status),
+        Err(error) => eprintln!("Checkpoint save failed for {instance_id}: {error}"),
+    }
+    Some(resume_phase)
+}
+
+async fn checkpoint_before_termination(
+    app: &tauri::AppHandle,
+    instance_id: &str,
+    running: &RunningInstance,
+) -> Option<crate::checkpoint::CheckpointPhase> {
+    let app = app.clone();
+    let instance_id = instance_id.to_string();
+    let instance_id_for_error = instance_id.clone();
+    let running = running.clone();
+    match tokio::task::spawn_blocking(move || {
+        checkpoint_before_termination_blocking(&app, &instance_id, &running)
+    })
+    .await
+    {
+        Ok(resume_phase) => resume_phase,
+        Err(error) => {
+            eprintln!("Checkpoint stop task failed for {instance_id_for_error}: {error}");
+            None
+        }
+    }
 }
 
 pub async fn stop_server(
@@ -3083,9 +3600,22 @@ pub async fn stop_server(
         }
     }
 
+    let checkpoint_resume_phase = if let Some(ref running) = ri {
+        checkpoint_before_termination(&app, &instance_id, running).await
+    } else {
+        None
+    };
     let killed = ri.as_ref().is_some_and(terminate_running_instance);
 
     if killed {
+        if let Some(ref running) = ri {
+            if let Ok(status) = state
+                .checkpoint_coordinator
+                .mark_stopped(&instance_id, running.pid)
+            {
+                emit_checkpoint_status(&app, &status);
+            }
+        }
         let removed = {
             let mut running = state.running.lock().unwrap();
             if running
@@ -3140,6 +3670,15 @@ pub async fn stop_server(
             format!("Server stopped, but its runtime state could not be persisted: {error}")
         })
     } else {
+        if let (Some(running), Some(ready_phase)) = (ri.as_ref(), checkpoint_resume_phase) {
+            if let Ok(status) = state.checkpoint_coordinator.resume_after_stop_failure(
+                &instance_id,
+                running.pid,
+                ready_phase,
+            ) {
+                emit_checkpoint_status(&app, &status);
+            }
+        }
         // Process is still running; do not emit server-stopped so the frontend stays running.
         // The monitor thread cleans up when the process actually exits.
         Err("无法终止进程".into())
@@ -3264,6 +3803,7 @@ fn cleanup_running_instance(
     let Some(ri) = removed else {
         return false;
     };
+    mark_checkpoint_unexpected_exit(state.inner(), app, instance_id, expected_pid);
     {
         let mut restored = state.restored_runtime_instances.lock().unwrap();
         let prefix = format!("{}:", instance_id);
@@ -3858,6 +4398,7 @@ pub fn reconnect_running_instance(
         let workload =
             crate::commands::telemetry::session_workload(telemetry_session_id.as_deref())
                 .unwrap_or(ModelWorkload::Inference);
+        let launch_config = config.clone();
         std::thread::spawn(move || {
             monitor_loop(
                 &id_metrics,
@@ -3867,6 +4408,7 @@ pub fn reconnect_running_instance(
                     api_key: ak,
                     telemetry_session_id,
                     workload,
+                    launch_config,
                 },
                 app_metrics,
             );
@@ -4818,6 +5360,61 @@ mod perf_parser_tests {
         command
             .windows(2)
             .any(|arguments| arguments[0] == flag && arguments[1] == value)
+    }
+
+    #[test]
+    fn disabled_checkpoint_keeps_generated_command_byte_for_byte_unchanged() {
+        let mut command = vec![
+            "llama-server".to_string(),
+            "-m".to_string(),
+            "model.gguf".to_string(),
+        ];
+        let expected = command.clone();
+        let mut plan = CheckpointLaunchPlan::ineligible(CheckpointReasonCode::Disabled);
+        apply_managed_checkpoint_arguments(&mut command, &mut plan);
+        assert_eq!(command, expected);
+    }
+
+    #[test]
+    fn eligible_checkpoint_injects_exactly_one_private_slot_path() {
+        let scratch = std::path::PathBuf::from("C:/private/checkpoints/instance/scratch");
+        let mut plan = CheckpointLaunchPlan {
+            eligibility: CheckpointEligibility {
+                eligible: true,
+                reason_code: CheckpointReasonCode::None,
+                reasons: Vec::new(),
+            },
+            fingerprint: None,
+            scratch_path: Some(scratch.clone()),
+        };
+        let mut command = vec!["llama-server".into(), "-m".into(), "model.gguf".into()];
+        apply_managed_checkpoint_arguments(&mut command, &mut plan);
+        assert_eq!(
+            command
+                .iter()
+                .filter(|argument| argument.as_str() == "--slot-save-path")
+                .count(),
+            1
+        );
+        assert!(has_flag_value(
+            &command,
+            "--slot-save-path",
+            &scratch.to_string_lossy()
+        ));
+
+        apply_managed_checkpoint_arguments(&mut command, &mut plan);
+        assert!(!plan.eligibility.eligible);
+        assert_eq!(
+            plan.eligibility.reason_code,
+            CheckpointReasonCode::ConflictingSlotSavePath
+        );
+        assert_eq!(
+            command
+                .iter()
+                .filter(|argument| argument.as_str() == "--slot-save-path")
+                .count(),
+            1
+        );
     }
 
     #[test]

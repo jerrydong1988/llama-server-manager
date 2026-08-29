@@ -21,8 +21,9 @@ use tokio_util::io::StreamReader;
 
 use crate::commands::config::update_and_persist;
 use crate::commands::proxy_protocol::{
-    add_format_header, context_limit_error_response, ensure_request_id_header, error_response,
-    request_format, response_request_id, rewrite_json_response, rewrite_sse_line, ProxyApiFormat,
+    add_format_header, checkpoint_unavailable_response, context_limit_error_response,
+    ensure_request_id_header, error_response, request_format, response_request_id,
+    rewrite_json_response, rewrite_sse_line, ProxyApiFormat,
 };
 use crate::commands::proxy_runtime::{
     GlobalRequestPermit, InFlightBodyPermit, RouterRuntime, RoutingCandidate, TargetCapabilities,
@@ -218,6 +219,24 @@ struct ResolvedProxyTarget {
 pub(crate) struct ProxyRequestResolution {
     config: ProxyConfig,
     candidates: Vec<ResolvedProxyTarget>,
+    checkpoint_phase: Option<crate::checkpoint::CheckpointPhase>,
+}
+
+impl ProxyRequestResolution {
+    pub(crate) fn apply_checkpoint_gate(
+        &mut self,
+        mut gate: impl FnMut(&str) -> (bool, Option<crate::checkpoint::CheckpointPhase>),
+    ) {
+        let mut checkpoint_phase = None;
+        self.candidates.retain(|target| {
+            let (allowed, phase) = gate(&target.public.instance_id);
+            if !allowed && checkpoint_phase.is_none() {
+                checkpoint_phase = phase;
+            }
+            allowed
+        });
+        self.checkpoint_phase = checkpoint_phase;
+    }
 }
 
 #[derive(Clone)]
@@ -234,6 +253,10 @@ pub(crate) trait ProxyDataSource: Send + Sync {
 
     fn proxy_config(&self) -> ProxyConfig {
         self.proxy_snapshot().config
+    }
+
+    fn checkpoint_blocked_phase(&self) -> Option<crate::checkpoint::CheckpointPhase> {
+        None
     }
 
     fn resolve_proxy_request(
@@ -275,7 +298,12 @@ impl ProxyDataSource for TauriProxyDataSource {
             .unwrap_or_else(|| proxy_bound_addr(&config));
         let last_error = state.proxy_last_error.lock().unwrap().clone();
         let instances = state.instances.lock().unwrap().clone();
-        let running = state.running.lock().unwrap().clone();
+        let mut running = state.running.lock().unwrap().clone();
+        running.retain(|instance_id, _| {
+            state
+                .checkpoint_coordinator
+                .gate_allows_routing(instance_id)
+        });
         ProxyRuntimeSnapshot {
             bound_addr,
             last_error,
@@ -294,6 +322,13 @@ impl ProxyDataSource for TauriProxyDataSource {
             .clone()
     }
 
+    fn checkpoint_blocked_phase(&self) -> Option<crate::checkpoint::CheckpointPhase> {
+        self.app
+            .state::<AppState>()
+            .checkpoint_coordinator
+            .blocked_phase()
+    }
+
     fn resolve_proxy_request(
         &self,
         requested_model: Option<&str>,
@@ -305,13 +340,27 @@ impl ProxyDataSource for TauriProxyDataSource {
         // request path only clones the selected target instead of both maps.
         let instances = state.instances.lock().unwrap();
         let running = state.running.lock().unwrap();
-        proxy_request_resolution_from(
+        let mut resolution = proxy_request_resolution_from(
             config,
             &instances,
             &running,
             requested_model,
             endpoint_workload,
-        )
+        );
+        drop(running);
+        drop(instances);
+        resolution.apply_checkpoint_gate(|instance_id| {
+            (
+                state
+                    .checkpoint_coordinator
+                    .gate_allows_routing(instance_id),
+                state
+                    .checkpoint_coordinator
+                    .status(instance_id)
+                    .map(|status| status.phase),
+            )
+        });
+        resolution
     }
 }
 
@@ -564,10 +613,16 @@ fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
     let bound_addr = actual_bound_addr.unwrap_or_else(|| proxy_bound_addr(&config));
     if running {
         if let Some(runtime) = state.proxy_router_runtime.lock().unwrap().clone() {
+            let mut running = state.running.lock().unwrap().clone();
+            running.retain(|instance_id, _| {
+                state
+                    .checkpoint_coordinator
+                    .gate_allows_routing(instance_id)
+            });
             let snapshot = ProxyRuntimeSnapshot {
                 config,
                 instances: state.instances.lock().unwrap().clone(),
-                running: state.running.lock().unwrap().clone(),
+                running,
                 bound_addr,
                 last_error,
             };
@@ -1081,7 +1136,11 @@ pub(crate) fn proxy_request_resolution_from(
         requested_model,
         endpoint_workload,
     );
-    ProxyRequestResolution { config, candidates }
+    ProxyRequestResolution {
+        config,
+        candidates,
+        checkpoint_phase: None,
+    }
 }
 
 fn requested_model_from_body(body: &[u8]) -> Result<Option<String>, String> {
@@ -2117,21 +2176,34 @@ async fn proxy_ready(State(router_state): State<ProxyRouterState>) -> Response {
     let target_ids = snapshot.running.keys().cloned().collect::<Vec<_>>();
     let targets = router_state.runtime.snapshots(target_ids);
     let ready = status.healthy_routes > 0;
+    let checkpoint_phase = (!ready)
+        .then(|| router_state.source.checkpoint_blocked_phase())
+        .flatten();
     let code = if ready {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    (
+    let mut response = (
         code,
         Json(json!({
             "status": if ready { "ready" } else { "unavailable" },
             "healthy_routes": status.healthy_routes,
             "unhealthy_routes": status.unhealthy_routes,
             "targets": targets,
+            "checkpoint": checkpoint_phase.map(|phase| json!({
+                "phase": phase.as_str(),
+                "retryable": true,
+            })),
         })),
     )
-        .into_response()
+        .into_response();
+    if checkpoint_phase.is_some() {
+        response
+            .headers_mut()
+            .insert("retry-after", HeaderValue::from_static("1"));
+    }
+    response
 }
 
 async fn proxy_metrics(State(router_state): State<ProxyRouterState>) -> Response {
@@ -2547,12 +2619,16 @@ async fn proxy_upstream(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
     let proxy_config = resolution.config;
+    let checkpoint_phase = resolution.checkpoint_phase;
     let mut candidates = resolution.candidates;
     let routing_key = routing_group_key(
         requested_model.as_deref(),
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
     if candidates.is_empty() {
+        if let Some(phase) = checkpoint_phase {
+            return checkpoint_unavailable_response(api_format, phase.as_str());
+        }
         return error_response(
             api_format,
             if requested_model.is_some() {
@@ -3545,6 +3621,45 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct CheckpointGatedProxySource {
+        snapshot: super::ProxyRuntimeSnapshot,
+        blocked: HashMap<String, crate::checkpoint::CheckpointPhase>,
+    }
+
+    impl super::ProxyDataSource for CheckpointGatedProxySource {
+        fn proxy_snapshot(&self) -> super::ProxyRuntimeSnapshot {
+            let mut snapshot = self.snapshot.clone();
+            snapshot
+                .running
+                .retain(|instance_id, _| !self.blocked.contains_key(instance_id));
+            snapshot
+        }
+
+        fn checkpoint_blocked_phase(&self) -> Option<crate::checkpoint::CheckpointPhase> {
+            self.blocked.values().copied().next()
+        }
+
+        fn resolve_proxy_request(
+            &self,
+            requested_model: Option<&str>,
+            endpoint_workload: Option<ModelWorkload>,
+        ) -> super::ProxyRequestResolution {
+            let mut resolution = super::proxy_request_resolution_from(
+                self.snapshot.config.clone(),
+                &self.snapshot.instances,
+                &self.snapshot.running,
+                requested_model,
+                endpoint_workload,
+            );
+            resolution.apply_checkpoint_gate(|instance_id| {
+                let phase = self.blocked.get(instance_id).copied();
+                (phase.is_none(), phase)
+            });
+            resolution
+        }
+    }
+
     async fn spawn_test_router(
         router: Router,
     ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
@@ -3686,6 +3801,42 @@ mod tests {
             StatusCode::NOT_FOUND,
             "unsupported mock endpoint",
         )
+    }
+
+    #[derive(Default)]
+    struct CheckpointUpstreamState {
+        inference_requests: AtomicUsize,
+    }
+
+    async fn mock_checkpoint_upstream(
+        State(state): State<Arc<CheckpointUpstreamState>>,
+        uri: Uri,
+    ) -> Response {
+        match uri.path() {
+            "/health" => Json(json!({ "status": "ok" })).into_response(),
+            "/props" => Json(json!({
+                "default_generation_settings": { "n_ctx": 4096 },
+                "total_slots": 1,
+            }))
+            .into_response(),
+            "/slots" => Json(json!([{
+                "id": 0,
+                "n_ctx": 4096,
+                "is_processing": false,
+            }]))
+            .into_response(),
+            "/v1/chat/completions" => {
+                state.inference_requests.fetch_add(1, Ordering::Relaxed);
+                Json(json!({
+                    "id": "chatcmpl-checkpoint",
+                    "object": "chat.completion",
+                    "model": "upstream-private",
+                    "choices": [],
+                }))
+                .into_response()
+            }
+            _ => StatusCode::NOT_FOUND.into_response(),
+        }
     }
 
     #[derive(Default)]
@@ -3942,6 +4093,116 @@ mod tests {
             bound_addr: String::new(),
             last_error: None,
         }
+    }
+
+    #[tokio::test]
+    async fn checkpoint_gate_returns_retryable_503_before_any_inference_reaches_upstream() {
+        let upstream_state = Arc::new(CheckpointUpstreamState::default());
+        let upstream_router = Router::new()
+            .fallback(mock_checkpoint_upstream)
+            .with_state(upstream_state.clone());
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+        let snapshot = openai_proxy_snapshot(upstream_address, "");
+        let blocked_id = snapshot.running.keys().next().unwrap().clone();
+        let source = CheckpointGatedProxySource {
+            snapshot,
+            blocked: HashMap::from([(blocked_id, crate::checkpoint::CheckpointPhase::Restoring)]),
+        };
+        let proxy_router = super::proxy_router_from_source(Arc::new(source));
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .json(&json!({
+                "model": "local-openai",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-llama-server-manager-checkpoint-phase")
+                .and_then(|value| value.to_str().ok()),
+            Some("restoring")
+        );
+        let body: serde_json::Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "checkpoint_not_ready");
+        assert_eq!(body["error"]["checkpoint"]["phase"], "restoring");
+        assert_eq!(body["error"]["checkpoint"]["retryable"], true);
+        assert_eq!(upstream_state.inference_requests.load(Ordering::Relaxed), 0);
+
+        let ready = reqwest::get(format!("http://{proxy_address}/ready"))
+            .await
+            .unwrap();
+        assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            ready
+                .headers()
+                .get("retry-after")
+                .and_then(|value| value.to_str().ok()),
+            Some("1")
+        );
+        let ready_body: serde_json::Value = ready.json().await.unwrap();
+        assert_eq!(ready_body["checkpoint"]["phase"], "restoring");
+        assert_eq!(ready_body["checkpoint"]["retryable"], true);
+
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn checkpoint_gate_keeps_another_matching_ready_target_routable() {
+        let upstream_state = Arc::new(CheckpointUpstreamState::default());
+        let upstream_router = Router::new()
+            .fallback(mock_checkpoint_upstream)
+            .with_state(upstream_state.clone());
+        let (upstream_address, upstream_task) = spawn_test_router(upstream_router).await;
+        let mut snapshot = openai_proxy_snapshot(upstream_address, "");
+        let blocked_id = snapshot.running.keys().next().unwrap().clone();
+        let ready_id = "openai-ready".to_string();
+        let mut ready_config = snapshot.instances[&blocked_id].clone();
+        ready_config.id = ready_id.clone();
+        let mut ready_running = snapshot.running[&blocked_id].clone();
+        ready_running.instance_id = ready_id.clone();
+        ready_running.launch_config = Some(ready_config.clone());
+        snapshot.instances.insert(ready_id.clone(), ready_config);
+        snapshot.running.insert(ready_id.clone(), ready_running);
+        snapshot.config.routes.push(ProxyRoute {
+            model_alias: "local-openai".into(),
+            target_instance_id: ready_id,
+            ..ProxyRoute::default()
+        });
+        let source = CheckpointGatedProxySource {
+            snapshot,
+            blocked: HashMap::from([(blocked_id, crate::checkpoint::CheckpointPhase::Restoring)]),
+        };
+        let proxy_router = super::proxy_router_from_source(Arc::new(source));
+        let (proxy_address, proxy_task) = spawn_test_router(proxy_router).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .json(&json!({
+                "model": "local-openai",
+                "messages": [{ "role": "user", "content": "hello" }]
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(upstream_state.inference_requests.load(Ordering::Relaxed), 1);
+
+        proxy_task.abort();
+        upstream_task.abort();
     }
 
     async fn mock_plain_text_error() -> impl IntoResponse {

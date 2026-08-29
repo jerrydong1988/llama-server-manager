@@ -117,6 +117,12 @@ mod model_capability_tests {
         assert_eq!(config.metrics, expected.metrics);
         assert_eq!(config.props, expected.props);
         assert_eq!(config.slots_enabled, expected.slots_enabled);
+        assert_eq!(config.kv_checkpoint, expected.kv_checkpoint);
+        assert!(!config.kv_checkpoint.enabled);
+        assert!(config.kv_checkpoint.auto_save);
+        assert!(config.kv_checkpoint.auto_restore);
+        assert_eq!(config.kv_checkpoint.storage_limit_gib, 8);
+        assert_eq!(config.kv_checkpoint.minimum_prompt_tokens, 256);
         assert_eq!(
             config.slot_prompt_similarity,
             expected.slot_prompt_similarity
@@ -128,6 +134,35 @@ mod model_capability_tests {
         assert_eq!(config.adaptive_decay, expected.adaptive_decay);
         assert_eq!(config.top_n_sigma, expected.top_n_sigma);
         assert_eq!(config.sse_ping_interval, expected.sse_ping_interval);
+    }
+
+    #[test]
+    fn kv_checkpoint_config_round_trips_and_normalizes_numeric_bounds() {
+        let config: InstanceConfig = serde_json::from_str(
+            r#"{
+                "kv_checkpoint": {
+                    "enabled": true,
+                    "auto_save": false,
+                    "auto_restore": false,
+                    "storage_limit_gib": 0,
+                    "minimum_prompt_tokens": 4294967295
+                }
+            }"#,
+        )
+        .unwrap();
+
+        assert!(config.kv_checkpoint.enabled);
+        assert!(!config.kv_checkpoint.auto_save);
+        assert!(!config.kv_checkpoint.auto_restore);
+
+        let normalized = config.kv_checkpoint.normalized();
+        assert_eq!(normalized.storage_limit_gib, 1);
+        assert_eq!(normalized.minimum_prompt_tokens, 1_048_576);
+
+        let encoded = serde_json::to_value(&normalized).unwrap();
+        assert_eq!(encoded["enabled"], true);
+        assert_eq!(encoded["storage_limit_gib"], 1);
+        assert_eq!(encoded["minimum_prompt_tokens"], 1_048_576);
     }
 
     #[test]
@@ -286,6 +321,53 @@ pub struct EngineInfo {
 // Instance config.
 // Container-level #[serde(default)]: missing fields fall back to Default.
 // Prevent older or hand-edited configs from failing all instance deserialization because one field is missing.
+pub const KV_CHECKPOINT_STORAGE_LIMIT_GIB_MIN: u32 = 1;
+pub const KV_CHECKPOINT_STORAGE_LIMIT_GIB_MAX: u32 = 1_024;
+pub const KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MIN: u32 = 1;
+pub const KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MAX: u32 = 1_048_576;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct KvCheckpointConfig {
+    pub enabled: bool,
+    pub auto_save: bool,
+    pub auto_restore: bool,
+    pub storage_limit_gib: u32,
+    pub minimum_prompt_tokens: u32,
+}
+
+impl KvCheckpointConfig {
+    pub fn normalize(&mut self) -> bool {
+        let before = self.clone();
+        self.storage_limit_gib = self.storage_limit_gib.clamp(
+            KV_CHECKPOINT_STORAGE_LIMIT_GIB_MIN,
+            KV_CHECKPOINT_STORAGE_LIMIT_GIB_MAX,
+        );
+        self.minimum_prompt_tokens = self.minimum_prompt_tokens.clamp(
+            KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MIN,
+            KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MAX,
+        );
+        *self != before
+    }
+
+    pub fn normalized(mut self) -> Self {
+        self.normalize();
+        self
+    }
+}
+
+impl Default for KvCheckpointConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_save: true,
+            auto_restore: true,
+            storage_limit_gib: 8,
+            minimum_prompt_tokens: 256,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct InstanceConfig {
@@ -496,6 +578,8 @@ pub struct InstanceConfig {
     pub slots_enabled: bool,
     #[serde(default)]
     pub slot_save_path: String,
+    #[serde(default)]
+    pub kv_checkpoint: KvCheckpointConfig,
     pub log_prompts_dir: String,
     #[serde(default = "default_point_one")]
     pub slot_prompt_similarity: f32,
@@ -832,6 +916,7 @@ impl Default for InstanceConfig {
             props: true,
             slots_enabled: true,
             slot_save_path: String::new(),
+            kv_checkpoint: KvCheckpointConfig::default(),
             log_prompts_dir: String::new(),
             slot_prompt_similarity: 0.1,
             prefill_assistant: true,
@@ -1173,6 +1258,7 @@ pub struct AppState {
     pub proxy_bound_addr: Mutex<Option<String>>,
     pub proxy_last_error: Mutex<Option<String>>,
     pub proxy_lifecycle_lock: tokio::sync::Mutex<()>,
+    pub checkpoint_coordinator: Arc<crate::checkpoint::CheckpointCoordinator>,
     pub runtime_managed_instances: Mutex<std::collections::HashSet<String>>,
     pub restored_runtime_instances: Mutex<std::collections::HashSet<String>>,
 }

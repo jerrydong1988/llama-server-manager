@@ -306,6 +306,22 @@ Configuration is stored per instance and covers structured options for models, g
 - Speculative decoding requires compatible main and draft models.
 - Custom arguments are appended as entered and should be checked against the current `llama-server --help`.
 
+### KV / Prefill 缓存检查点 / Cache Checkpoint
+
+实验性 KV / Prefill Cache Checkpoint 默认关闭。它在受控停止本机受管实例时保存单个文本生成 slot，并在相同模型、引擎和强兼容配置重启后、管理器代理重新开放路由前完成验证与恢复。检查点失败只会进入 `Ready (cold)`，不会阻止实例启动。
+
+The experimental KV / Prefill Cache Checkpoint is off by default. It saves one managed local text-generation slot on a controlled stop and verifies restore before the manager proxy reopens routing. Any failure falls back to `Ready (cold)` without blocking startup.
+
+使用要求：
+
+- `parallel = 1`，启用 prompt cache、slots、idle-slot cache，并让 Cache RAM 为正数或 `-1`。
+- 滑动窗口模型启用 SWA 完整缓存；请先评估额外 KV 内存。
+- 使用单文件文本 GGUF、本机受管 loopback HTTP 引擎；不要使用 custom args、router、多模型、Embedding、Reranker、LoRA、mmproj 或推测解码。
+- DeepSeek Harness 必须连接管理器代理而不是实例直连端口。Harness 的标题请求可能先占用 slot，idle-slot cache 和足够的 Cache RAM 用于保留刚恢复的长前缀。
+- 从实例页查看 `Ready (restored)` / `Ready (cold)`、token、文件大小和原因；只有实例完全停止时才能清除数据。
+
+Checkpoint files contain sensitive prompt-derived state and are not portable session backups. Confirm actual benefit with llama.cpp `cache_n`, `n_past`, or prompt-evaluation metrics, not only a successful restore response. See [KV / Prefill Cache Checkpoint](docs/KV_CACHE_CHECKPOINT.md) for the compatibility matrix, lifecycle, privacy model, and troubleshooting steps.
+
 ---
 
 ## 集群管理 / Cluster Management

@@ -4,6 +4,7 @@ import type { StoreApi } from 'zustand'
 import { formatStartupCommand } from './commandFormatting'
 import type {
   AppState,
+  CheckpointStatus,
   DownloadProgress,
   InstanceConfig,
   MonitoringFrame,
@@ -195,6 +196,7 @@ export function registerGlobalStoreListeners(
     running: Record<string, { pid: number; host: string; port: number; startTime: number }>
     previouslyManaged?: string[]
     lastError?: string | null
+    checkpoints?: Record<string, CheckpointStatus>
   }>(store, 'runtime-service-status', (event) => {
     const running = event.payload.running || {}
     const nextManagedIds = new Set(Object.keys(running))
@@ -222,6 +224,10 @@ export function registerGlobalStoreListeners(
         }
         return instance
       }),
+      checkpointStatuses: {
+        ...state.checkpointStatuses,
+        ...(event.payload.checkpoints || {}),
+      },
     }))
     const nextRuntimeError = event.payload.lastError?.trim() || null
     if (nextRuntimeError && nextRuntimeError !== lastReportedRuntimeStatusError) {
@@ -233,6 +239,18 @@ export function registerGlobalStoreListeners(
   registerListener<{ error: string }>(store, 'runtime-service-error', (event) => {
     store.getState().addRuntimeWarning(`background runtime: ${event.payload.error}`)
   })
+
+  registerListener<CheckpointStatus>(store, 'checkpoint-status', (event) => {
+    store.getState().setCheckpointStatus(event.payload)
+  })
+
+  invoke<Record<string, CheckpointStatus>>('list_checkpoint_statuses')
+    .then(statuses => store.getState().hydrateCheckpointStatuses(statuses))
+    .catch(error => {
+      store.getState().addRuntimeWarning(
+        `checkpoint status hydration failed: ${error?.message || String(error)}`,
+      )
+    })
 
   registerListener<{ instanceId: string; text: string }>(store, 'server-log', (event) => {
     store.getState().addLog({

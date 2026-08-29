@@ -9,7 +9,7 @@ import { createLatestSaveCoordinator } from './configSaveCoordinator'
 import type { AppStoreGet, AppStoreSet } from './helpers'
 import { runInstanceStart, runInstanceStop } from './instanceLifecycleCoordinator'
 import { synchronizeInstanceSummary } from './instanceSummary'
-import type { AppState, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
+import type { AppState, CheckpointStatus, GeneratedServerCommand, InstanceConfig, LogEntry } from './types'
 import { resolveEffectiveEngine } from './engineResolution'
 import { pathsEqual } from '../utils/path'
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
@@ -97,6 +97,9 @@ export function createInstanceSlice(
   | 'addLog'
   | 'addLogs'
   | 'clearLogs'
+  | 'setCheckpointStatus'
+  | 'hydrateCheckpointStatuses'
+  | 'clearCheckpoint'
   | 'generateCommand'
   | 'startInstance'
   | 'stopInstance'
@@ -115,9 +118,14 @@ export function createInstanceSlice(
         return synchronizeInstanceSummary({ ...instance, ...partial })
       }),
     })),
-    deleteInstance: (id) => set((state) => ({
-      instances: state.instances.filter((instance) => instance.id !== id),
-    })),
+    deleteInstance: (id) => set((state) => {
+      const checkpointStatuses = { ...state.checkpointStatuses }
+      delete checkpointStatuses[id]
+      return {
+        instances: state.instances.filter((instance) => instance.id !== id),
+        checkpointStatuses,
+      }
+    }),
     moveInstance: (id, direction, orderedIds) => {
       const state = get()
       const index = state.instances.findIndex((instance) => instance.id === id)
@@ -176,6 +184,20 @@ export function createInstanceSlice(
       logs: { ...state.logs, [instanceId]: [] },
       recentLogs: state.recentLogs.filter(entry => entry.instanceId !== instanceId),
     })),
+    setCheckpointStatus: (status: CheckpointStatus) => set(state => ({
+      checkpointStatuses: {
+        ...state.checkpointStatuses,
+        [status.instance_id]: status,
+      },
+    })),
+    hydrateCheckpointStatuses: (statuses: Record<string, CheckpointStatus>) => set(state => ({
+      checkpointStatuses: { ...state.checkpointStatuses, ...statuses },
+    })),
+    clearCheckpoint: async (instanceId: string) => {
+      const status = await invoke<CheckpointStatus>('clear_checkpoint', { instanceId })
+      get().setCheckpointStatus(status)
+      return status
+    },
     generateCommand: async (config: InstanceConfig, engineExe: string) => {
       const normalized = normalizeStoredConfig(config, get().models)
       const matchingEngine = get().engines.find(engine => pathsEqual(engine.exe, engineExe))
