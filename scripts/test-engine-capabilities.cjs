@@ -18,6 +18,11 @@ assert.match(
   /let mut state_engines = state\.engines\.lock\(\)\.unwrap\(\);[\s\S]*for engine in state_engines\.iter\(\)[\s\S]*model_inventory::update_engine_probe\(engine\)[\s\S]*state_engines\.clone\(\)/,
   'an engine scan must persist merged capabilities before releasing the engine state lock',
 )
+assert.match(
+  capabilityBackend,
+  /reported_speculative_types[\s\S]*--spec-type=\{speculative_type\}/,
+  'detected engines must validate every configured speculative type against their reported enum values',
+)
 
 const entry = `
   import assert from 'node:assert/strict'

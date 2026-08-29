@@ -657,24 +657,74 @@ fn scan_model_directory_incremental(
 }
 
 fn mark_sharded_models(models: &mut [ModelInfo]) {
-    use regex_lite::Regex;
-    let shard_re = Regex::new(r"(?i)^(.+?)-([0-9]{5})-of-([0-9]{5})\.gguf$").unwrap();
-    let mut groups: HashMap<String, (u32, Vec<usize>)> = HashMap::new();
-    for (i, model) in models.iter().enumerate() {
-        if let Some(caps) = shard_re.captures(&model.name) {
-            let base = caps.get(1).unwrap().as_str().to_string();
-            let total: u32 = caps.get(3).unwrap().as_str().parse().unwrap_or(0);
-            groups
-                .entry(base)
-                .or_insert_with(|| (total, Vec::new()))
-                .1
-                .push(i);
-        }
+    type ShardGroupKey = (String, String);
+    type ShardGroupEntry = (u32, u32, usize);
+    let mut groups: HashMap<ShardGroupKey, Vec<ShardGroupEntry>> = HashMap::new();
+    for (model_idx, model) in models.iter_mut().enumerate() {
+        model.is_shard = false;
+        let Some(descriptor) = crate::model_artifacts::parse_model_shard_name(&model.name) else {
+            continue;
+        };
+        model.is_shard = descriptor.index != 1;
+        let parent = Path::new(&model.path)
+            .parent()
+            .map(path_identity_key)
+            .unwrap_or_default();
+        groups.entry((parent, descriptor.base)).or_default().push((
+            descriptor.index,
+            descriptor.total,
+            model_idx,
+        ));
     }
-    for (expected_total, indices) in groups.values() {
-        if indices.len() as u32 == *expected_total && *expected_total > 1 {
-            for &idx in indices {
-                models[idx].is_shard = true;
+
+    for entries in groups.values() {
+        let Some(expected_total) = entries.first().map(|entry| entry.1) else {
+            continue;
+        };
+        let mut indices = HashSet::new();
+        let complete = entries.len() == expected_total as usize
+            && entries.iter().all(|entry| entry.1 == expected_total)
+            && entries
+                .iter()
+                .all(|entry| indices.insert(entry.0) && entry.0 <= expected_total)
+            && (1..=expected_total).all(|index| indices.contains(&index));
+        if !complete {
+            continue;
+        }
+
+        let lead_idx = entries
+            .iter()
+            .find(|entry| entry.0 == 1)
+            .map(|entry| entry.2)
+            .unwrap();
+        let architecture = entries
+            .iter()
+            .find_map(|entry| models[entry.2].architecture.clone());
+        let context_length = entries
+            .iter()
+            .find_map(|entry| models[entry.2].context_length);
+        let quant_type = entries
+            .iter()
+            .find_map(|entry| models[entry.2].quant_type.clone());
+        let capabilities = entries
+            .iter()
+            .map(|entry| &models[entry.2])
+            .find(|model| model.capabilities.metadata_complete)
+            .map(|model| (model.has_mtp_head, model.capabilities.clone()));
+        let lead = &mut models[lead_idx];
+        if lead.architecture.is_none() {
+            lead.architecture = architecture;
+        }
+        if lead.context_length.is_none() {
+            lead.context_length = context_length;
+        }
+        if lead.quant_type.is_none() {
+            lead.quant_type = quant_type;
+        }
+        if !lead.capabilities.metadata_complete {
+            if let Some((has_mtp_head, capabilities)) = capabilities {
+                lead.has_mtp_head = has_mtp_head;
+                lead.capabilities = capabilities;
             }
         }
     }
@@ -1378,6 +1428,22 @@ pub async fn get_engines(state: tauri::State<'_, AppState>) -> Result<Vec<Engine
 mod incremental_scan_tests {
     use super::*;
 
+    fn scanned_model(name: &str, parent: &str) -> ModelInfo {
+        ModelInfo {
+            id: name.to_string(),
+            name: name.to_string(),
+            path: Path::new(parent).join(name).to_string_lossy().to_string(),
+            size: 1,
+            architecture: None,
+            context_length: None,
+            quant_type: None,
+            has_mtp_head: false,
+            capabilities: ModelCapabilities::default(),
+            file_type: "model".into(),
+            is_shard: false,
+        }
+    }
+
     fn temp_test_dir(name: &str) -> PathBuf {
         let dir =
             std::env::temp_dir().join(format!("lsm-incremental-{}-{}", name, uuid::Uuid::new_v4()));
@@ -1396,6 +1462,44 @@ mod incremental_scan_tests {
         assert_ne!(initial.signature, updated.signature);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn complete_shards_have_one_logical_entry_and_propagate_metadata() {
+        let mut models = vec![
+            scanned_model("Qwen-00001-of-00003.gguf", "models-a"),
+            scanned_model("Qwen-00002-of-00003.gguf", "models-a"),
+            scanned_model("Qwen-00003-of-00003.gguf", "models-a"),
+        ];
+        models[0].architecture = Some("qwen4exp".into());
+        models[1].context_length = Some(262_144);
+        models[2].quant_type = Some("IQ4_XS".into());
+        models[1].capabilities.metadata_complete = true;
+
+        mark_sharded_models(&mut models);
+
+        assert!(!models[0].is_shard);
+        assert!(models[1].is_shard);
+        assert!(models[2].is_shard);
+        assert_eq!(models[0].architecture.as_deref(), Some("qwen4exp"));
+        assert_eq!(models[0].context_length, Some(262_144));
+        assert_eq!(models[0].quant_type.as_deref(), Some("IQ4_XS"));
+        assert!(models[0].capabilities.metadata_complete);
+    }
+
+    #[test]
+    fn shard_grouping_never_crosses_parent_directories() {
+        let mut models = vec![
+            scanned_model("Same-00001-of-00002.gguf", "models-a"),
+            scanned_model("Same-00002-of-00002.gguf", "models-b"),
+        ];
+        models[1].architecture = Some("wrong-parent".into());
+
+        mark_sharded_models(&mut models);
+
+        assert!(!models[0].is_shard);
+        assert!(models[1].is_shard);
+        assert!(models[0].architecture.is_none());
     }
 
     #[cfg(windows)]

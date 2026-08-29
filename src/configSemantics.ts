@@ -1,4 +1,9 @@
 import type { InstanceConfig } from './store/types'
+import {
+  hasSpeculativeType,
+  normalizeSpeculativeTypes,
+  parseSpeculativeTypes,
+} from './speculativeTypes'
 
 export function effectiveMmprojMode(config: InstanceConfig): '' | 'on' | 'off' {
   const mode = config.mmproj_mode || (config.no_mmproj ? 'off' : config.mmproj_auto ? 'on' : '')
@@ -13,8 +18,12 @@ export function projectorEnabled(config: InstanceConfig, isEmbedding = config.em
 }
 
 export function speculativeType(config: InstanceConfig): string {
-  const type = config.spec_type.trim()
+  const type = normalizeSpeculativeTypes(config.spec_type)
   return type === 'none' ? '' : type
+}
+
+export function speculativeTypes(config: InstanceConfig): string[] {
+  return parseSpeculativeTypes(config.spec_type)
 }
 
 export function speculativeEnabled(config: InstanceConfig, isEmbedding = config.embedding): boolean {
@@ -22,7 +31,7 @@ export function speculativeEnabled(config: InstanceConfig, isEmbedding = config.
 }
 
 export function ngramCacheEnabled(config: InstanceConfig, isEmbedding = config.embedding): boolean {
-  return !isEmbedding && speculativeType(config) === 'ngram-cache'
+  return !isEmbedding && hasSpeculativeType(config.spec_type, 'ngram-cache')
 }
 
 export function reasoningBudgetEnabled(config: InstanceConfig): boolean {

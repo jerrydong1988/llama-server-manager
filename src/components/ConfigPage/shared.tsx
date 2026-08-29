@@ -11,9 +11,14 @@ import {
 } from '../../parameterCatalog'
 import { reviewFieldKeys } from './configWorkspace'
 import { SelectInput, TextInput, surfaceClassName } from '../ui'
+import {
+  FALLBACK_SPECULATIVE_TYPES,
+  normalizeSpeculativeTypes,
+  orderSpeculativeTypeOptions,
+  parseSpeculativeTypes,
+} from '../../speculativeTypes'
 
 export const cacheTypes = ['', 'f32', 'f16', 'bf16', 'q8_0', 'q4_0', 'q4_1', 'iq4_nl', 'q5_0', 'q5_1']
-export const specTypes = ['', 'none', 'draft-mtp', 'draft-simple', 'draft-eagle3', 'draft-dflash', 'draft-dspark', 'ngram-cache', 'ngram-simple', 'ngram-map-k', 'ngram-map-k4v', 'ngram-mod']
 export const chatTemplates = ['', 'bailing', 'bailing-think', 'bailing2', 'chatglm3', 'chatglm4', 'chatml', 'command-r', 'deepseek', 'deepseek-ocr', 'deepseek2', 'deepseek3', 'exaone-moe', 'exaone3', 'exaone4', 'falcon3', 'gemma', 'gigachat', 'glmedge', 'gpt-oss', 'granite', 'granite-4.0', 'granite-4.1', 'grok-2', 'hunyuan-dense', 'hunyuan-moe', 'hunyuan-vl', 'kimi-k2', 'llama2', 'llama2-sys', 'llama2-sys-bos', 'llama2-sys-strip', 'llama3', 'llama4', 'megrez', 'minicpm', 'mistral-v1', 'mistral-v3', 'mistral-v3-tekken', 'mistral-v7', 'mistral-v7-tekken', 'monarch', 'openchat', 'orion', 'pangu-embedded', 'phi3', 'phi4', 'rwkv-world', 'seed_oss', 'smolvlm', 'solar-open', 'vicuna', 'vicuna-orca', 'yandex', 'zephyr']
 
 // Search and draft-change metadata are shared by every field without prop drilling.
@@ -518,6 +523,102 @@ export const Select = ({ label, value, onChange, options, title, disabled, defau
       </SelectInput>
     </FieldFrame>
 )}
+
+export const SpecTypeMultiSelect = ({
+  label,
+  value,
+  onChange,
+  title,
+  disabled,
+  defaultLabel,
+  priorityLabel,
+  fieldKey,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  title?: string
+  disabled?: boolean
+  defaultLabel: string
+  priorityLabel: string
+  fieldKey?: FieldKey
+}) => {
+  const runtime = useContext(FieldRuntimeCtx)
+  const normalized = normalizeSpeculativeTypes(value)
+  const selected = parseSpeculativeTypes(normalized)
+  const reported = runtime.capabilities?.speculativeTypes?.filter(Boolean) ?? []
+  const sourceOptions = reported.length > 0 ? reported : [...FALLBACK_SPECULATIVE_TYPES]
+  const options = orderSpeculativeTypeOptions([...sourceOptions, ...selected])
+    .filter(option => option !== 'none')
+  const reportedSet = new Set(reported)
+  const toggle = (type: string) => {
+    const next = new Set(selected)
+    if (next.has(type)) next.delete(type)
+    else next.add(type)
+    onChange(normalizeSpeculativeTypes([...next].join(',')))
+  }
+
+  return (
+    <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
+      <details
+        className="group rounded-lg border border-slate-300 bg-white dark:border-slate-800 dark:bg-slate-950/60"
+        data-spec-type-source={reported.length > 0 ? 'engine' : 'fallback'}
+      >
+        <summary
+          aria-label={label}
+          onClick={event => { if (disabled) event.preventDefault() }}
+          className={`flex h-10 list-none items-center gap-2 px-3 text-sm ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'} [&::-webkit-details-marker]:hidden`}
+        >
+          <span className="min-w-0 flex-1 truncate font-mono text-xs">
+            {normalized || defaultLabel}
+          </span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-slate-500 transition group-open:rotate-180" />
+        </summary>
+        <div role="listbox" aria-multiselectable="true" className="border-t border-slate-200 p-2 dark:border-slate-800">
+          <div className="mb-2 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => onChange('')}
+              disabled={disabled}
+              className={`rounded-md border px-2 py-1 text-xs ${normalized === '' ? 'border-blue-500 bg-blue-500/10 text-blue-300' : 'border-slate-700 text-slate-400'}`}
+            >
+              {defaultLabel}
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange('none')}
+              disabled={disabled}
+              className={`rounded-md border px-2 py-1 font-mono text-xs ${normalized === 'none' ? 'border-blue-500 bg-blue-500/10 text-blue-300' : 'border-slate-700 text-slate-400'}`}
+            >
+              none
+            </button>
+          </div>
+          <div className="max-h-52 space-y-1 overflow-y-auto" role="group">
+            {options.map(option => {
+              const checked = selected.includes(option)
+              const engineUnreported = reported.length > 0 && !reportedSet.has(option)
+              return (
+                <label key={option} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-slate-100 dark:hover:bg-slate-900 ${engineUnreported ? 'text-amber-400' : 'text-slate-700 dark:text-slate-300'}`}>
+                  <input
+                    type="checkbox"
+                    aria-label={option}
+                    checked={checked}
+                    onChange={() => toggle(option)}
+                    disabled={disabled}
+                    className="h-3.5 w-3.5 rounded"
+                  />
+                  <span className="font-mono">{option}</span>
+                  {engineUnreported && <span className="ml-auto text-[10px]">!</span>}
+                </label>
+              )
+            })}
+          </div>
+          <p className="mt-2 border-t border-slate-200 pt-2 text-[11px] leading-4 text-slate-500 dark:border-slate-800">{priorityLabel}</p>
+        </div>
+      </details>
+    </FieldFrame>
+  )
+}
 
 export const SearchTarget = ({ label, fieldKey, title, children, className = '', showLabel = true }: { label: string; fieldKey: FieldKey; title?: string; children: React.ReactNode; className?: string; showLabel?: boolean }) => {
   return (

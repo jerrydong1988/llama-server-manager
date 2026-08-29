@@ -35,7 +35,7 @@ export function useEngineCompatibility({ local, currentEngine, trustedEngineId }
   const versionStatus = normalizeEngineVersionStatus(currentEngine?.capabilities)
   const managedMode = local?.launch_mode !== 'manual'
   const isTrustedSelection = Boolean(currentEngine && currentEngine.id === trustedEngineId)
-  const defaultsProbeRequired = (currentEngine?.capabilities?.reportedDefaultsVersion ?? 0) < 1
+  const defaultsProbeRequired = (currentEngine?.capabilities?.reportedDefaultsVersion ?? 0) < 2
   const capabilityProbeRequired = managedMode && isTrustedSelection
     && (status === 'unprobed' || versionStatus === 'unprobed' || defaultsProbeRequired)
     && autoProbeFailedFor !== currentEngine?.id

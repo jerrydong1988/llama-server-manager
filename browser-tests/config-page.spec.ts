@@ -221,6 +221,35 @@ test('automatic numeric modes and the unified loading mode produce unambiguous c
   })).toEqual([])
 })
 
+test('speculative decoding accepts a normalized multi-type fallback chain', async ({ page }) => {
+  await openConfiguration(page)
+
+  const specType = page.locator('[data-config-field="spec_type"]')
+  await expect(specType.locator('details')).toHaveAttribute('data-spec-type-source', 'engine')
+  await specType.locator('summary').click()
+  await specType.getByRole('checkbox', { name: 'draft-mtp', exact: true }).check()
+  await specType.getByRole('checkbox', { name: 'ngram-mod', exact: true }).check()
+
+  await expect(specType.locator('summary')).toContainText('ngram-mod,draft-mtp')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .toEqual(expect.arrayContaining(['--spec-type', 'ngram-mod,draft-mtp']))
+
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect.poll(() => page.evaluate(() => (
+    window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance']?.spec_type
+  ))).toBe('ngram-mod,draft-mtp')
+
+  await page.getByRole('button', { name: '实例管理', exact: true }).click()
+  await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
+  const reopenedSpecType = page.locator('[data-config-field="spec_type"]')
+  await expect(reopenedSpecType.locator('summary')).toContainText('ngram-mod,draft-mtp')
+  await reopenedSpecType.locator('summary').click()
+  await reopenedSpecType.getByRole('button', { name: 'none', exact: true }).click()
+  await expect(reopenedSpecType.locator('summary')).toContainText('none')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .not.toContain('--spec-type')
+})
+
 test('source-confirmed multimodal projector is emitted without a mismatch warning', async ({ page }) => {
   await openConfiguration(page, 'multimodal-match')
 

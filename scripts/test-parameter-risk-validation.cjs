@@ -106,6 +106,11 @@ const entry = `
     { spec_type: 'draft-mtp', draft_model_path: 'draft.gguf' },
     model({ capabilities: { metadata_complete: true, has_builtin_mtp: true } }),
   ), true)
+  assert.equal(has(
+    'warnC4',
+    { spec_type: 'future-draft-mtp-mode', draft_model_path: 'draft.gguf' },
+    model({ capabilities: { metadata_complete: true, has_builtin_mtp: true } }),
+  ), false)
   assert.equal(has('warnC5', {}, model({ file_type: 'mmproj', capabilities: { metadata_complete: true, is_mmproj: true } })), true)
 
   // Custom-argument detection covers packed rows, aliases, and --flag=value without

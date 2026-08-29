@@ -10,6 +10,7 @@ import {
   speculativeEnabled,
   speculativeType,
 } from './configSemantics'
+import { hasSpeculativeType, parseSpeculativeTypes } from './speculativeTypes'
 
 type WarningKey = Extract<keyof Translations['configPage'], `warn${string}`>
 
@@ -282,6 +283,7 @@ export function validateConfig(
   const defaults = defaultInstanceConfig()
   const flags = customFlags(config)
   const specType = speculativeType(config)
+  const specTypes = parseSpeculativeTypes(specType)
   const specActive = speculativeEnabled(config)
   const projectorActive = projectorEnabled(config)
   const hasGrammar = Boolean(config.grammar || config.grammar_file || config.json_schema || config.json_schema_file)
@@ -295,9 +297,9 @@ export function validateConfig(
 
   // External draft requirements, including sources supplied through the managed escape hatch.
   if (specActive) {
-    const isDraftMtp = specType.includes('draft-mtp')
+    const isDraftMtp = hasSpeculativeType(specType, 'draft-mtp')
     const needsExternalDraft = ['draft-simple', 'draft-eagle3', 'draft-dflash', 'draft-dspark']
-      .some(type => specType.includes(type))
+      .some(type => specTypes.includes(type))
     const hasExternalDraft = Boolean(config.draft_model_path.trim())
       || flags.has('--spec-draft-hf')
       || flags.has('--model-draft')
@@ -455,7 +457,7 @@ export function validateConfig(
   if (config.n_predict === -1 && config.ignore_eos) {
     warnings.push({ field: 'n_predict', severity: 'medium', key: 'warnC3' })
   }
-  if (config.draft_model_path && specType.includes('draft-mtp') && hasBuiltinMtp(model)) {
+  if (config.draft_model_path && hasSpeculativeType(specType, 'draft-mtp') && hasBuiltinMtp(model)) {
     warnings.push({ field: 'draft_model_path', severity: 'low', key: 'warnC4' })
   }
 

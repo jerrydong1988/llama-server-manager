@@ -4,6 +4,7 @@ import type {
   RunningInferenceTask,
   SpeculativeTelemetryAnalysis,
 } from '../../store/types'
+import { parseSpeculativeTypes } from '../../speculativeTypes'
 
 type SpeculativeObservation = Pick<
   RunningInferenceTask,
@@ -31,8 +32,7 @@ export type SpeculativeDecodingSummary = Aggregate & {
 export function isSpeculativeDecodingConfigured(
   config: Pick<InstanceConfig, 'spec_type'> | null | undefined,
 ): boolean {
-  const specType = config?.spec_type?.trim().toLowerCase()
-  return Boolean(specType && specType !== 'none' && specType !== 'off')
+  return parseSpeculativeTypes(config?.spec_type).length > 0
 }
 
 export function buildSpeculativeDecodingSummary({

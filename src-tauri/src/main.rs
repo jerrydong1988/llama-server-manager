@@ -3,12 +3,14 @@
 pub mod checkpoint;
 mod commands;
 mod error;
+mod model_artifacts;
 mod models;
 mod operation_timing;
 mod path_utils;
 mod persistence;
 mod runtime_service;
 mod security;
+mod speculative;
 mod utils;
 mod vector_policy;
 

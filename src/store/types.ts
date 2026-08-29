@@ -62,6 +62,7 @@ export interface EngineCapabilities {
   supportedFlags: string[]
   reportedDefaults?: Record<string, string>
   reportedDefaultsVersion?: number
+  speculativeTypes?: string[]
   helpHash: string
   executableFingerprint: string
   probedAt?: number
