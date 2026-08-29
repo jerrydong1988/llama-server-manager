@@ -1,15 +1,16 @@
 use crate::models::InstanceConfig;
 use crate::vector_policy::ModelWorkload;
 use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufReader, Read, Write};
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -92,6 +93,7 @@ pub enum CheckpointReasonCode {
     BusyTimeout,
     ChecksumMismatch,
     ManifestInvalid,
+    SaveResponseInvalid,
     RestoreResponseInvalid,
     SlotStateMismatch,
     StorageLimit,
@@ -99,6 +101,7 @@ pub enum CheckpointReasonCode {
     HttpTimeout,
     SlotApiError,
     StaleProcessEvent,
+    InvalidStateTransition,
     UnexpectedExit,
 }
 
@@ -353,6 +356,16 @@ const STATE_FORMAT: &str = "llama.cpp-slot-state";
 const SLOT_FILENAME: &str = "slot-0.bin";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+
+fn is_manager_slot_filename(filename: &str) -> bool {
+    !filename.is_empty()
+        && filename.len() <= 128
+        && filename.starts_with("slot-0-")
+        && filename.ends_with(".bin")
+        && filename
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.'))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckpointStoreError {
@@ -1142,11 +1155,7 @@ impl CheckpointStore {
             .and_then(|value| value.to_str())
             .unwrap_or_default();
         if !is_path_within(&canonical_payload, &canonical_scratch)
-            || !filename.starts_with("slot-0-")
-            || !filename.ends_with(".bin")
-            || filename
-                .bytes()
-                .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.')))
+            || !is_manager_slot_filename(filename)
         {
             return Err(CheckpointStoreError::manifest(
                 "checkpoint scratch payload path is invalid",
@@ -1716,6 +1725,1244 @@ impl CheckpointStore {
             remaining_bytes,
         })
     }
+
+    pub fn copy_generation_to_scratch(
+        &self,
+        instance_id: &str,
+        pid: u32,
+        generation: &LoadedGeneration,
+    ) -> StoreResult<PathBuf> {
+        if generation.manifest.instance_id != instance_id {
+            return Err(CheckpointStoreError::manifest(
+                "checkpoint generation belongs to another instance",
+            ));
+        }
+        let destination = self.new_scratch_slot_path(instance_id, pid)?;
+        let mut source = File::open(generation.payload_path())
+            .map_err(|_| CheckpointStoreError::io("generation payload open failed"))?;
+        let mut options = OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut target = options
+            .open(&destination)
+            .map_err(|_| CheckpointStoreError::io("scratch restore payload create failed"))?;
+        let copy_result = (|| {
+            std::io::copy(&mut source, &mut target)
+                .map_err(|_| CheckpointStoreError::io("scratch restore payload copy failed"))?;
+            target
+                .flush()
+                .map_err(|_| CheckpointStoreError::io("scratch restore payload flush failed"))?;
+            target
+                .sync_all()
+                .map_err(|_| CheckpointStoreError::io("scratch restore payload sync failed"))?;
+            drop(target);
+            protect_file(&destination)?;
+            let slot = generation.manifest.slot();
+            if validate_regular_file(&destination)?.len() != slot.bytes
+                || sha256_file(&destination)? != slot.sha256
+            {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::ChecksumMismatch,
+                    "scratch restore payload failed verification",
+                ));
+            }
+            Ok(())
+        })();
+        if copy_result.is_err() {
+            let _ = self.remove_scratch_payload(instance_id, &destination);
+        }
+        copy_result.map(|_| destination)
+    }
+
+    pub fn verify_scratch_payload(
+        &self,
+        instance_id: &str,
+        path: &Path,
+        expected_bytes: u64,
+    ) -> StoreResult<String> {
+        self.validate_scratch_payload(instance_id, path)?;
+        if validate_regular_file(path)?.len() != expected_bytes || expected_bytes == 0 {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::ChecksumMismatch,
+                "scratch payload byte count mismatch",
+            ));
+        }
+        sha256_file(path)
+    }
+
+    pub fn remove_scratch_payload(&self, instance_id: &str, path: &Path) -> StoreResult<()> {
+        let scratch = self.prepare_instance(instance_id)?;
+        if !path.exists() {
+            return Ok(());
+        }
+        validate_regular_file(path)?;
+        let canonical_scratch = fs::canonicalize(&scratch)
+            .map_err(|_| CheckpointStoreError::io("scratch path resolution failed"))?;
+        let canonical_payload = fs::canonicalize(path)
+            .map_err(|_| CheckpointStoreError::io("scratch payload resolution failed"))?;
+        let filename = canonical_payload
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !is_path_within(&canonical_payload, &canonical_scratch)
+            || !is_manager_slot_filename(filename)
+        {
+            return Err(CheckpointStoreError::manifest(
+                "scratch payload escaped its private root",
+            ));
+        }
+        fs::remove_file(canonical_payload)
+            .map_err(|_| CheckpointStoreError::io("scratch payload removal failed"))
+    }
+
+    pub fn has_other_fingerprint_generation(
+        &self,
+        instance_id: &str,
+        current_fingerprint: &str,
+    ) -> StoreResult<bool> {
+        self.ensure_root()?;
+        if !is_lower_hex_digest(current_fingerprint) {
+            return Err(CheckpointStoreError::manifest(
+                "current fingerprint is invalid",
+            ));
+        }
+        let instance_root = self.instance_root(instance_id)?;
+        if !instance_root.exists() {
+            return Ok(false);
+        }
+        validate_directory(&instance_root)?;
+        let entries = fs::read_dir(instance_root)
+            .map_err(|_| CheckpointStoreError::io("fingerprint generation scan failed"))?;
+        for entry in entries.flatten() {
+            let fingerprint = entry.file_name().to_string_lossy().to_string();
+            if fingerprint == current_fingerprint || !is_lower_hex_digest(&fingerprint) {
+                continue;
+            }
+            if self
+                .load_latest(instance_id, &fingerprint)
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotSnapshot {
+    pub id: u32,
+    pub is_processing: bool,
+    pub n_ctx: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotSaveResult {
+    pub id_slot: u32,
+    pub filename: String,
+    pub n_saved: u64,
+    pub n_written: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SlotRestoreResult {
+    pub id_slot: u32,
+    pub filename: String,
+    pub n_restored: u64,
+    pub n_read: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotEraseResult {
+    pub id_slot: u32,
+    pub n_erased: u64,
+}
+
+pub trait SlotBackend: Send + Sync {
+    fn health(&self) -> StoreResult<()>;
+    fn slots(&self) -> StoreResult<Vec<SlotSnapshot>>;
+    fn save(&self, filename: &str) -> StoreResult<SlotSaveResult>;
+    fn restore(&self, filename: &str) -> StoreResult<SlotRestoreResult>;
+    fn erase(&self) -> StoreResult<SlotEraseResult>;
+}
+
+#[derive(Deserialize)]
+struct HealthResponse {
+    status: String,
+}
+
+#[derive(Deserialize)]
+struct RawSlotSnapshot {
+    id: u32,
+    #[serde(default)]
+    is_processing: bool,
+    #[serde(default)]
+    n_ctx: u64,
+}
+
+#[derive(Deserialize)]
+struct RawSlotSaveResult {
+    id_slot: u32,
+    filename: String,
+    n_saved: u64,
+    n_written: u64,
+}
+
+#[derive(Deserialize)]
+struct RawSlotRestoreResult {
+    id_slot: u32,
+    filename: String,
+    n_restored: u64,
+    n_read: u64,
+}
+
+#[derive(Deserialize)]
+struct RawSlotEraseResult {
+    id_slot: u32,
+    n_erased: u64,
+}
+
+pub struct LlamaSlotClient {
+    client: reqwest::blocking::Client,
+    base_url: String,
+    api_key: String,
+}
+
+impl LlamaSlotClient {
+    pub fn new(config: &InstanceConfig, timeout: Duration) -> StoreResult<Self> {
+        if !is_loopback_host(&config.host)
+            || !config.ssl_key_file.trim().is_empty()
+            || !config.ssl_cert_file.trim().is_empty()
+            || !config.path_prefix.trim().is_empty()
+            || !config.api_prefix.trim().is_empty()
+        {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::LoopbackHttpRequired,
+                "slot client requires a loopback HTTP endpoint",
+            ));
+        }
+        let timeout = timeout
+            .max(Duration::from_millis(250))
+            .min(Duration::from_secs(30));
+        let connect_timeout = timeout.min(Duration::from_secs(2));
+        let client = reqwest::blocking::Client::builder()
+            .timeout(timeout)
+            .connect_timeout(connect_timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|_| CheckpointStoreError::io("slot HTTP client creation failed"))?;
+        Ok(Self {
+            client,
+            base_url: format!(
+                "http://{}",
+                crate::utils::format_host_port(config.host.trim(), config.port)
+            ),
+            api_key: crate::commands::server::effective_api_key(config),
+        })
+    }
+
+    fn execute_json<T: DeserializeOwned>(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+        invalid_reason: CheckpointReasonCode,
+        invalid_message: &'static str,
+    ) -> StoreResult<T> {
+        const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+        let request = if self.api_key.is_empty() {
+            request
+        } else {
+            request.bearer_auth(&self.api_key)
+        };
+        let mut response = request.send().map_err(|error| {
+            if error.is_timeout() {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::HttpTimeout,
+                    "slot HTTP request timed out",
+                )
+            } else {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::SlotApiError,
+                    "slot HTTP request failed",
+                )
+            }
+        })?;
+        if !response.status().is_success() {
+            let reason = if matches!(
+                response.status(),
+                reqwest::StatusCode::REQUEST_TIMEOUT | reqwest::StatusCode::GATEWAY_TIMEOUT
+            ) {
+                CheckpointReasonCode::HttpTimeout
+            } else {
+                CheckpointReasonCode::SlotApiError
+            };
+            return Err(CheckpointStoreError::new(
+                reason,
+                "slot HTTP endpoint returned an error",
+            ));
+        }
+        let mut bytes = Vec::new();
+        response
+            .by_ref()
+            .take(MAX_RESPONSE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|_| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::SlotApiError,
+                    "slot HTTP response read failed",
+                )
+            })?;
+        if bytes.len() as u64 > MAX_RESPONSE_BYTES {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::SlotApiError,
+                "slot HTTP response exceeded its size limit",
+            ));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|_| CheckpointStoreError::new(invalid_reason, invalid_message))
+    }
+
+    fn manager_filename(filename: &str) -> StoreResult<()> {
+        if !is_manager_slot_filename(filename) {
+            return Err(CheckpointStoreError::manifest(
+                "slot filename is not manager generated",
+            ));
+        }
+        Ok(())
+    }
+
+    fn action_url(&self, action: &str) -> String {
+        format!("{}/slots/0?action={action}", self.base_url)
+    }
+}
+
+impl SlotBackend for LlamaSlotClient {
+    fn health(&self) -> StoreResult<()> {
+        let health: HealthResponse = self.execute_json(
+            self.client.get(format!("{}/health", self.base_url)),
+            CheckpointReasonCode::SlotApiError,
+            "slot health response was malformed",
+        )?;
+        if health.status != "ok" {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::SlotApiError,
+                "llama server is not healthy",
+            ));
+        }
+        Ok(())
+    }
+
+    fn slots(&self) -> StoreResult<Vec<SlotSnapshot>> {
+        let slots: Vec<RawSlotSnapshot> = self.execute_json(
+            self.client.get(format!("{}/slots", self.base_url)),
+            CheckpointReasonCode::SlotApiError,
+            "slot state response was malformed",
+        )?;
+        let mut seen = HashSet::new();
+        if slots.is_empty() || slots.iter().any(|slot| !seen.insert(slot.id)) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::SlotStateMismatch,
+                "slot state response was ambiguous",
+            ));
+        }
+        Ok(slots
+            .into_iter()
+            .map(|slot| SlotSnapshot {
+                id: slot.id,
+                is_processing: slot.is_processing,
+                n_ctx: slot.n_ctx,
+            })
+            .collect())
+    }
+
+    fn save(&self, filename: &str) -> StoreResult<SlotSaveResult> {
+        Self::manager_filename(filename)?;
+        let raw: RawSlotSaveResult = self.execute_json(
+            self.client
+                .post(self.action_url("save"))
+                .json(&serde_json::json!({ "filename": filename })),
+            CheckpointReasonCode::SaveResponseInvalid,
+            "slot save response was malformed",
+        )?;
+        if raw.id_slot != 0 || raw.filename != filename || raw.n_written == 0 {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::SaveResponseInvalid,
+                "slot save response did not match the request",
+            ));
+        }
+        Ok(SlotSaveResult {
+            id_slot: raw.id_slot,
+            filename: raw.filename,
+            n_saved: raw.n_saved,
+            n_written: raw.n_written,
+        })
+    }
+
+    fn restore(&self, filename: &str) -> StoreResult<SlotRestoreResult> {
+        Self::manager_filename(filename)?;
+        let raw: RawSlotRestoreResult = self.execute_json(
+            self.client
+                .post(self.action_url("restore"))
+                .json(&serde_json::json!({ "filename": filename })),
+            CheckpointReasonCode::RestoreResponseInvalid,
+            "slot restore response was malformed",
+        )?;
+        if raw.id_slot != 0 || raw.filename != filename || raw.n_read == 0 {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::RestoreResponseInvalid,
+                "slot restore response did not match the request",
+            ));
+        }
+        Ok(SlotRestoreResult {
+            id_slot: raw.id_slot,
+            filename: raw.filename,
+            n_restored: raw.n_restored,
+            n_read: raw.n_read,
+        })
+    }
+
+    fn erase(&self) -> StoreResult<SlotEraseResult> {
+        let raw: RawSlotEraseResult = self.execute_json(
+            self.client.post(self.action_url("erase")),
+            CheckpointReasonCode::RestoreResponseInvalid,
+            "slot erase response was malformed",
+        )?;
+        if raw.id_slot != 0 {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::RestoreResponseInvalid,
+                "slot erase response did not match slot zero",
+            ));
+        }
+        Ok(SlotEraseResult {
+            id_slot: raw.id_slot,
+            n_erased: raw.n_erased,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CoordinatorEntry {
+    gate_active: bool,
+    status: CheckpointStatus,
+}
+
+#[derive(Clone)]
+pub struct CheckpointCoordinator {
+    store: CheckpointStore,
+    entries: Arc<Mutex<HashMap<String, CoordinatorEntry>>>,
+}
+
+struct CheckpointOperationUpdate<'a> {
+    operation: CheckpointOperation,
+    outcome: CheckpointOutcome,
+    reason_code: CheckpointReasonCode,
+    message: &'static str,
+    generation: Option<&'a CheckpointManifestV1>,
+    duration_ms: u64,
+}
+
+impl<'a> CheckpointOperationUpdate<'a> {
+    fn new(
+        operation: CheckpointOperation,
+        outcome: CheckpointOutcome,
+        reason_code: CheckpointReasonCode,
+        message: &'static str,
+        generation: Option<&'a CheckpointManifestV1>,
+        duration_ms: u64,
+    ) -> Self {
+        Self {
+            operation,
+            outcome,
+            reason_code,
+            message,
+            generation,
+            duration_ms,
+        }
+    }
+}
+
+fn checkpoint_now_millis() -> u64 {
+    Utc::now().timestamp_millis().max(0) as u64
+}
+
+fn legal_checkpoint_transition(from: CheckpointPhase, to: CheckpointPhase) -> bool {
+    matches!(
+        (from, to),
+        (CheckpointPhase::Starting, CheckpointPhase::EngineHealthy)
+            | (CheckpointPhase::Starting, CheckpointPhase::Stopping)
+            | (CheckpointPhase::EngineHealthy, CheckpointPhase::Restoring)
+            | (CheckpointPhase::EngineHealthy, CheckpointPhase::ReadyCold)
+            | (CheckpointPhase::EngineHealthy, CheckpointPhase::Stopping)
+            | (CheckpointPhase::Restoring, CheckpointPhase::Ready)
+            | (CheckpointPhase::Restoring, CheckpointPhase::ReadyCold)
+            | (CheckpointPhase::Restoring, CheckpointPhase::Stopping)
+            | (CheckpointPhase::Ready, CheckpointPhase::Draining)
+            | (CheckpointPhase::ReadyCold, CheckpointPhase::Draining)
+            | (CheckpointPhase::Ready, CheckpointPhase::Stopping)
+            | (CheckpointPhase::ReadyCold, CheckpointPhase::Stopping)
+            | (CheckpointPhase::Draining, CheckpointPhase::Saving)
+            | (CheckpointPhase::Draining, CheckpointPhase::Stopping)
+            | (CheckpointPhase::Saving, CheckpointPhase::Stopping)
+            | (CheckpointPhase::Stopping, CheckpointPhase::Stopped)
+            | (CheckpointPhase::Disabled, CheckpointPhase::Stopped)
+            | (CheckpointPhase::Ineligible, CheckpointPhase::Stopped)
+    )
+}
+
+impl CheckpointCoordinator {
+    pub fn new(store: CheckpointStore) -> Self {
+        Self {
+            store,
+            entries: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    pub fn store(&self) -> &CheckpointStore {
+        &self.store
+    }
+
+    pub fn register_start(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        eligibility: &CheckpointEligibility,
+    ) -> StoreResult<CheckpointStatus> {
+        if !validate_identifier(instance_id) || expected_pid == 0 {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::UnsupportedConfiguration,
+                "checkpoint process identity is invalid",
+            ));
+        }
+        let (gate_active, phase, reason_code, last_outcome) = if eligibility.eligible {
+            (
+                true,
+                CheckpointPhase::Starting,
+                CheckpointReasonCode::None,
+                CheckpointOutcome::None,
+            )
+        } else if eligibility.reason_code == CheckpointReasonCode::Disabled {
+            (
+                false,
+                CheckpointPhase::Disabled,
+                CheckpointReasonCode::Disabled,
+                CheckpointOutcome::None,
+            )
+        } else {
+            (
+                false,
+                CheckpointPhase::Ineligible,
+                eligibility.reason_code,
+                CheckpointOutcome::Skipped,
+            )
+        };
+        let status = CheckpointStatus {
+            instance_id: instance_id.into(),
+            expected_pid: Some(expected_pid),
+            phase,
+            // Disabled/ineligible runs retain legacy routing behavior. Their
+            // engine health remains the proxy's independent readiness signal.
+            routable: !gate_active,
+            last_operation: CheckpointOperation::None,
+            last_outcome,
+            reason_code,
+            message: String::new(),
+            generation_id: None,
+            prompt_tokens: None,
+            bytes: None,
+            duration_ms: None,
+            updated_at: checkpoint_now_millis(),
+        };
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| CheckpointStoreError::io("checkpoint status lock failed"))?;
+        entries.insert(
+            instance_id.into(),
+            CoordinatorEntry {
+                gate_active,
+                status: status.clone(),
+            },
+        );
+        Ok(status)
+    }
+
+    pub fn status(&self, instance_id: &str) -> Option<CheckpointStatus> {
+        self.entries
+            .lock()
+            .ok()
+            .and_then(|entries| entries.get(instance_id).map(|entry| entry.status.clone()))
+    }
+
+    pub fn statuses(&self) -> HashMap<String, CheckpointStatus> {
+        self.entries
+            .lock()
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(|(id, entry)| (id.clone(), entry.status.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn gate_allows_routing(&self, instance_id: &str) -> bool {
+        self.entries
+            .lock()
+            .ok()
+            .and_then(|entries| {
+                entries
+                    .get(instance_id)
+                    .map(|entry| !entry.gate_active || entry.status.routable)
+            })
+            .unwrap_or(true)
+    }
+
+    pub fn gate_active(&self, instance_id: &str) -> bool {
+        self.entries
+            .lock()
+            .ok()
+            .and_then(|entries| entries.get(instance_id).map(|entry| entry.gate_active))
+            .unwrap_or(false)
+    }
+
+    fn transition(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        next: CheckpointPhase,
+    ) -> StoreResult<CheckpointStatus> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| CheckpointStoreError::io("checkpoint status lock failed"))?;
+        let entry = entries.get_mut(instance_id).ok_or_else(|| {
+            CheckpointStoreError::new(
+                CheckpointReasonCode::StaleProcessEvent,
+                "checkpoint event has no active process",
+            )
+        })?;
+        if entry.status.expected_pid != Some(expected_pid) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::StaleProcessEvent,
+                "checkpoint event belongs to a stale process",
+            ));
+        }
+        if !legal_checkpoint_transition(entry.status.phase, next) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::InvalidStateTransition,
+                "checkpoint state transition is invalid",
+            ));
+        }
+        entry.status.phase = next;
+        entry.status.routable = next.is_routable();
+        entry.status.updated_at = checkpoint_now_millis();
+        Ok(entry.status.clone())
+    }
+
+    fn update_operation(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        update: CheckpointOperationUpdate<'_>,
+    ) -> StoreResult<CheckpointStatus> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| CheckpointStoreError::io("checkpoint status lock failed"))?;
+        let entry = entries.get_mut(instance_id).ok_or_else(|| {
+            CheckpointStoreError::new(
+                CheckpointReasonCode::StaleProcessEvent,
+                "checkpoint event has no active process",
+            )
+        })?;
+        if entry.status.expected_pid != Some(expected_pid) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::StaleProcessEvent,
+                "checkpoint event belongs to a stale process",
+            ));
+        }
+        entry.status.last_operation = update.operation;
+        entry.status.last_outcome = update.outcome;
+        entry.status.reason_code = update.reason_code;
+        entry.status.message = update.message.into();
+        entry.status.duration_ms = Some(update.duration_ms);
+        if let Some(manifest) = update.generation {
+            entry.status.generation_id = Some(manifest.generation_id.clone());
+            entry.status.prompt_tokens = Some(manifest.slot().prompt_tokens);
+            entry.status.bytes = Some(manifest.slot().bytes);
+        }
+        entry.status.updated_at = checkpoint_now_millis();
+        Ok(entry.status.clone())
+    }
+
+    pub fn on_engine_healthy(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+    ) -> StoreResult<CheckpointStatus> {
+        if !self.gate_active(instance_id) {
+            return self.status(instance_id).ok_or_else(|| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::StaleProcessEvent,
+                    "checkpoint event has no active process",
+                )
+            });
+        }
+        self.transition(instance_id, expected_pid, CheckpointPhase::EngineHealthy)
+    }
+
+    fn finish_ready_cold(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        update: CheckpointOperationUpdate<'_>,
+    ) -> StoreResult<CheckpointStatus> {
+        self.transition(instance_id, expected_pid, CheckpointPhase::ReadyCold)?;
+        self.update_operation(instance_id, expected_pid, update)
+    }
+
+    fn restore_failure<B: SlotBackend + ?Sized>(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        backend: &B,
+        error: CheckpointStoreError,
+        started: Instant,
+    ) -> StoreResult<CheckpointStatus> {
+        let _ = backend.erase();
+        self.finish_ready_cold(
+            instance_id,
+            expected_pid,
+            CheckpointOperationUpdate::new(
+                CheckpointOperation::Restore,
+                CheckpointOutcome::Failed,
+                error.reason_code,
+                error.message,
+                None,
+                started.elapsed().as_millis() as u64,
+            ),
+        )
+    }
+
+    pub fn restore_or_cold<B: SlotBackend + ?Sized>(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        fingerprint: &CheckpointFingerprint,
+        auto_restore: bool,
+        backend: &B,
+    ) -> StoreResult<CheckpointStatus> {
+        if !self.gate_active(instance_id) {
+            return self.status(instance_id).ok_or_else(|| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::StaleProcessEvent,
+                    "checkpoint event has no active process",
+                )
+            });
+        }
+        let started = Instant::now();
+        if !auto_restore {
+            return self.finish_ready_cold(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Restore,
+                    CheckpointOutcome::Skipped,
+                    CheckpointReasonCode::AutoRestoreDisabled,
+                    "automatic checkpoint restore is disabled",
+                    None,
+                    started.elapsed().as_millis() as u64,
+                ),
+            );
+        }
+        if let Err(error) = fingerprint.validate() {
+            return self.finish_ready_cold(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Restore,
+                    CheckpointOutcome::Failed,
+                    error.reason_code,
+                    error.message,
+                    None,
+                    started.elapsed().as_millis() as u64,
+                ),
+            );
+        }
+        let generation = match self.store.load_latest(instance_id, &fingerprint.digest) {
+            Ok(Some(generation)) => generation,
+            Ok(None) => {
+                let mismatch = match self
+                    .store
+                    .has_other_fingerprint_generation(instance_id, &fingerprint.digest)
+                {
+                    Ok(mismatch) => mismatch,
+                    Err(error) => {
+                        return self.restore_failure(
+                            instance_id,
+                            expected_pid,
+                            backend,
+                            error,
+                            started,
+                        );
+                    }
+                };
+                let (reason, message) = if mismatch {
+                    (
+                        CheckpointReasonCode::FingerprintMismatch,
+                        "available checkpoint fingerprint does not match",
+                    )
+                } else {
+                    (
+                        CheckpointReasonCode::NoCheckpoint,
+                        "no compatible checkpoint is available",
+                    )
+                };
+                return self.finish_ready_cold(
+                    instance_id,
+                    expected_pid,
+                    CheckpointOperationUpdate::new(
+                        CheckpointOperation::Restore,
+                        CheckpointOutcome::Skipped,
+                        reason,
+                        message,
+                        None,
+                        started.elapsed().as_millis() as u64,
+                    ),
+                );
+            }
+            Err(error) => {
+                return self.restore_failure(instance_id, expected_pid, backend, error, started);
+            }
+        };
+
+        self.transition(instance_id, expected_pid, CheckpointPhase::Restoring)?;
+        let restore_path =
+            match self
+                .store
+                .copy_generation_to_scratch(instance_id, expected_pid, &generation)
+            {
+                Ok(path) => path,
+                Err(error) => {
+                    return self.restore_failure(
+                        instance_id,
+                        expected_pid,
+                        backend,
+                        error,
+                        started,
+                    );
+                }
+            };
+        let restore_filename = restore_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let mut verification_path = None;
+        let restore_result = (|| {
+            backend.health()?;
+            let restored = backend.restore(&restore_filename)?;
+            let slot = generation.manifest.slot();
+            if restored.id_slot != 0
+                || restored.filename != restore_filename
+                || restored.n_restored != slot.prompt_tokens
+                || restored.n_read != slot.bytes
+            {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::RestoreResponseInvalid,
+                    "slot restore response did not match the manifest",
+                ));
+            }
+
+            let verify_path = self
+                .store
+                .new_scratch_slot_path(instance_id, expected_pid)?;
+            let verify_filename = verify_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            verification_path = Some(verify_path.clone());
+            let verified = backend.save(&verify_filename)?;
+            if verified.id_slot != 0
+                || verified.filename != verify_filename
+                || verified.n_saved != slot.prompt_tokens
+                || verified.n_written != slot.bytes
+            {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::SlotStateMismatch,
+                    "restored slot did not retain the expected prompt state",
+                ));
+            }
+            let verified_sha256 =
+                self.store
+                    .verify_scratch_payload(instance_id, &verify_path, verified.n_written)?;
+            if verified_sha256 != slot.sha256 {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::SlotStateMismatch,
+                    "restored slot payload did not match the checkpoint",
+                ));
+            }
+            let slots = backend.slots()?;
+            if slots.len() != 1 || slots[0].id != 0 || slots[0].is_processing || slots[0].n_ctx == 0
+            {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::SlotStateMismatch,
+                    "restored slot state was not idle and usable",
+                ));
+            }
+            Ok(())
+        })();
+
+        let restore_cleanup = self
+            .store
+            .remove_scratch_payload(instance_id, &restore_path);
+        let verification_cleanup = verification_path
+            .as_deref()
+            .map(|path| self.store.remove_scratch_payload(instance_id, path))
+            .transpose();
+        if let Err(error) = restore_result
+            .and(restore_cleanup)
+            .and(verification_cleanup.map(|_| ()))
+        {
+            return self.restore_failure(instance_id, expected_pid, backend, error, started);
+        }
+
+        self.transition(instance_id, expected_pid, CheckpointPhase::Ready)?;
+        self.update_operation(
+            instance_id,
+            expected_pid,
+            CheckpointOperationUpdate::new(
+                CheckpointOperation::Restore,
+                CheckpointOutcome::Success,
+                CheckpointReasonCode::None,
+                "checkpoint restored and verified",
+                Some(&generation.manifest),
+                started.elapsed().as_millis() as u64,
+            ),
+        )
+    }
+
+    pub fn begin_draining(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+    ) -> StoreResult<CheckpointStatus> {
+        if !self.gate_active(instance_id) {
+            return self.status(instance_id).ok_or_else(|| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::StaleProcessEvent,
+                    "checkpoint event has no active process",
+                )
+            });
+        }
+        self.transition(instance_id, expected_pid, CheckpointPhase::Draining)
+    }
+
+    fn finish_stopping(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        update: CheckpointOperationUpdate<'_>,
+    ) -> StoreResult<CheckpointStatus> {
+        self.transition(instance_id, expected_pid, CheckpointPhase::Stopping)?;
+        self.update_operation(instance_id, expected_pid, update)
+    }
+
+    pub fn save_before_stop<B: SlotBackend + ?Sized>(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        fingerprint: &CheckpointFingerprint,
+        config: &crate::models::KvCheckpointConfig,
+        backend: &B,
+    ) -> StoreResult<CheckpointStatus> {
+        if !self.gate_active(instance_id) {
+            return self.status(instance_id).ok_or_else(|| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::StaleProcessEvent,
+                    "checkpoint event has no active process",
+                )
+            });
+        }
+        let started = Instant::now();
+        if !config.auto_save {
+            return self.finish_stopping(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Save,
+                    CheckpointOutcome::Skipped,
+                    CheckpointReasonCode::AutoSaveDisabled,
+                    "automatic checkpoint save is disabled",
+                    None,
+                    started.elapsed().as_millis() as u64,
+                ),
+            );
+        }
+        if let Err(error) = fingerprint.validate() {
+            return self.finish_stopping(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Save,
+                    CheckpointOutcome::Failed,
+                    error.reason_code,
+                    error.message,
+                    None,
+                    started.elapsed().as_millis() as u64,
+                ),
+            );
+        }
+        let slots = match backend.slots() {
+            Ok(slots) => slots,
+            Err(error) => {
+                return self.finish_stopping(
+                    instance_id,
+                    expected_pid,
+                    CheckpointOperationUpdate::new(
+                        CheckpointOperation::Save,
+                        CheckpointOutcome::Failed,
+                        error.reason_code,
+                        error.message,
+                        None,
+                        started.elapsed().as_millis() as u64,
+                    ),
+                );
+            }
+        };
+        if slots.len() != 1 || slots[0].id != 0 || slots[0].n_ctx == 0 {
+            return self.finish_stopping(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Save,
+                    CheckpointOutcome::Failed,
+                    CheckpointReasonCode::SlotStateMismatch,
+                    "slot zero state was unavailable",
+                    None,
+                    started.elapsed().as_millis() as u64,
+                ),
+            );
+        }
+        if slots[0].is_processing {
+            return self.finish_stopping(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Save,
+                    CheckpointOutcome::Skipped,
+                    CheckpointReasonCode::BusyTimeout,
+                    "slot remained busy at the save boundary",
+                    None,
+                    started.elapsed().as_millis() as u64,
+                ),
+            );
+        }
+
+        self.transition(instance_id, expected_pid, CheckpointPhase::Saving)?;
+        let scratch_path = match self.store.new_scratch_slot_path(instance_id, expected_pid) {
+            Ok(path) => path,
+            Err(error) => {
+                return self.finish_stopping(
+                    instance_id,
+                    expected_pid,
+                    CheckpointOperationUpdate::new(
+                        CheckpointOperation::Save,
+                        CheckpointOutcome::Failed,
+                        error.reason_code,
+                        error.message,
+                        None,
+                        started.elapsed().as_millis() as u64,
+                    ),
+                );
+            }
+        };
+        let filename = scratch_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let operation = (|| {
+            let saved = backend.save(&filename)?;
+            if saved.id_slot != 0 || saved.filename != filename || saved.n_written == 0 {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::SaveResponseInvalid,
+                    "slot save response did not match the request",
+                ));
+            }
+            if saved.n_saved < u64::from(config.minimum_prompt_tokens) {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::BelowTokenThreshold,
+                    "slot prompt state is below the save threshold",
+                ));
+            }
+            let payload_sha256 =
+                self.store
+                    .verify_scratch_payload(instance_id, &scratch_path, saved.n_written)?;
+            let manifest = CheckpointManifestV1::new(
+                instance_id,
+                fingerprint.clone(),
+                saved.n_saved,
+                saved.n_written,
+                payload_sha256,
+            );
+            let storage_limit_bytes = u64::from(config.storage_limit_gib)
+                .saturating_mul(1024)
+                .saturating_mul(1024)
+                .saturating_mul(1024);
+            self.store
+                .commit_generation(&manifest, &scratch_path, storage_limit_bytes)?;
+            self.store.prune_instance(
+                instance_id,
+                storage_limit_bytes,
+                &[(fingerprint.digest.clone(), manifest.generation_id.clone())],
+            )?;
+            Ok(manifest)
+        })();
+        let cleanup = self
+            .store
+            .remove_scratch_payload(instance_id, &scratch_path);
+        match (operation, cleanup) {
+            (Ok(manifest), Ok(())) => self.finish_stopping(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Save,
+                    CheckpointOutcome::Success,
+                    CheckpointReasonCode::None,
+                    "checkpoint saved and committed",
+                    Some(&manifest),
+                    started.elapsed().as_millis() as u64,
+                ),
+            ),
+            (Ok(manifest), Err(error)) => self.finish_stopping(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Save,
+                    CheckpointOutcome::Failed,
+                    error.reason_code,
+                    error.message,
+                    Some(&manifest),
+                    started.elapsed().as_millis() as u64,
+                ),
+            ),
+            (Err(_), Err(cleanup_error)) => self.finish_stopping(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Save,
+                    CheckpointOutcome::Failed,
+                    cleanup_error.reason_code,
+                    cleanup_error.message,
+                    None,
+                    started.elapsed().as_millis() as u64,
+                ),
+            ),
+            (Err(error), Ok(()))
+                if error.reason_code == CheckpointReasonCode::BelowTokenThreshold =>
+            {
+                self.finish_stopping(
+                    instance_id,
+                    expected_pid,
+                    CheckpointOperationUpdate::new(
+                        CheckpointOperation::Save,
+                        CheckpointOutcome::Skipped,
+                        error.reason_code,
+                        error.message,
+                        None,
+                        started.elapsed().as_millis() as u64,
+                    ),
+                )
+            }
+            (Err(error), Ok(())) => self.finish_stopping(
+                instance_id,
+                expected_pid,
+                CheckpointOperationUpdate::new(
+                    CheckpointOperation::Save,
+                    CheckpointOutcome::Failed,
+                    error.reason_code,
+                    error.message,
+                    None,
+                    started.elapsed().as_millis() as u64,
+                ),
+            ),
+        }
+    }
+
+    pub fn mark_stopped(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+    ) -> StoreResult<CheckpointStatus> {
+        let status = if self.gate_active(instance_id) {
+            self.transition(instance_id, expected_pid, CheckpointPhase::Stopped)?
+        } else {
+            let mut entries = self
+                .entries
+                .lock()
+                .map_err(|_| CheckpointStoreError::io("checkpoint status lock failed"))?;
+            let entry = entries.get_mut(instance_id).ok_or_else(|| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::StaleProcessEvent,
+                    "checkpoint event has no active process",
+                )
+            })?;
+            if entry.status.expected_pid != Some(expected_pid) {
+                return Err(CheckpointStoreError::new(
+                    CheckpointReasonCode::StaleProcessEvent,
+                    "checkpoint event belongs to a stale process",
+                ));
+            }
+            entry.status.phase = CheckpointPhase::Stopped;
+            entry.status.routable = false;
+            entry.status.updated_at = checkpoint_now_millis();
+            entry.status.clone()
+        };
+        if let Ok(mut entries) = self.entries.lock() {
+            if let Some(entry) = entries.get_mut(instance_id) {
+                entry.gate_active = false;
+            }
+        }
+        Ok(status)
+    }
+
+    pub fn mark_unexpected_exit(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+    ) -> StoreResult<CheckpointStatus> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| CheckpointStoreError::io("checkpoint status lock failed"))?;
+        let entry = entries.get_mut(instance_id).ok_or_else(|| {
+            CheckpointStoreError::new(
+                CheckpointReasonCode::StaleProcessEvent,
+                "checkpoint event has no active process",
+            )
+        })?;
+        if entry.status.expected_pid != Some(expected_pid) {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::StaleProcessEvent,
+                "checkpoint event belongs to a stale process",
+            ));
+        }
+        entry.gate_active = false;
+        entry.status.phase = CheckpointPhase::Stopped;
+        entry.status.routable = false;
+        entry.status.last_outcome = CheckpointOutcome::Skipped;
+        entry.status.reason_code = CheckpointReasonCode::UnexpectedExit;
+        entry.status.message = "process exited before checkpoint save".into();
+        entry.status.updated_at = checkpoint_now_millis();
+        Ok(entry.status.clone())
+    }
 }
 
 #[cfg(test)]
@@ -1960,6 +3207,10 @@ mod tests {
             (CheckpointReasonCode::ChecksumMismatch, "checksum_mismatch"),
             (CheckpointReasonCode::ManifestInvalid, "manifest_invalid"),
             (
+                CheckpointReasonCode::SaveResponseInvalid,
+                "save_response_invalid",
+            ),
+            (
                 CheckpointReasonCode::RestoreResponseInvalid,
                 "restore_response_invalid",
             ),
@@ -2064,6 +3315,196 @@ mod tests {
             metadata.len(),
             sha256_file(payload).unwrap(),
         )
+    }
+
+    #[derive(Debug)]
+    struct FakeSlotState {
+        n_ctx: u64,
+        is_processing: bool,
+        prompt_tokens: u64,
+        payload: Vec<u8>,
+        restore_tokens: u64,
+        restore_applies: bool,
+        restore_claim_tokens: Option<u64>,
+        restore_claim_bytes: Option<u64>,
+        save_claim_tokens: Option<u64>,
+        save_claim_bytes: Option<u64>,
+        save_payload_override: Option<Vec<u8>>,
+        health_error: Option<CheckpointStoreError>,
+        slots_error: Option<CheckpointStoreError>,
+        save_error: Option<CheckpointStoreError>,
+        restore_error: Option<CheckpointStoreError>,
+        erase_error: Option<CheckpointStoreError>,
+        erase_count: u32,
+        events: Vec<String>,
+    }
+
+    impl Default for FakeSlotState {
+        fn default() -> Self {
+            Self {
+                n_ctx: 4096,
+                is_processing: false,
+                prompt_tokens: 0,
+                payload: Vec::new(),
+                restore_tokens: 0,
+                restore_applies: true,
+                restore_claim_tokens: None,
+                restore_claim_bytes: None,
+                save_claim_tokens: None,
+                save_claim_bytes: None,
+                save_payload_override: None,
+                health_error: None,
+                slots_error: None,
+                save_error: None,
+                restore_error: None,
+                erase_error: None,
+                erase_count: 0,
+                events: Vec::new(),
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct FakeSlotBackend {
+        scratch: PathBuf,
+        state: Arc<Mutex<FakeSlotState>>,
+    }
+
+    impl FakeSlotBackend {
+        fn new(store: &CheckpointStore, instance_id: &str) -> Self {
+            Self {
+                scratch: store.prepare_instance(instance_id).unwrap(),
+                state: Arc::new(Mutex::new(FakeSlotState::default())),
+            }
+        }
+
+        fn configure(&self, configure: impl FnOnce(&mut FakeSlotState)) {
+            configure(&mut self.state.lock().unwrap());
+        }
+
+        fn events(&self) -> Vec<String> {
+            self.state.lock().unwrap().events.clone()
+        }
+
+        fn erase_count(&self) -> u32 {
+            self.state.lock().unwrap().erase_count
+        }
+    }
+
+    impl SlotBackend for FakeSlotBackend {
+        fn health(&self) -> StoreResult<()> {
+            let mut state = self.state.lock().unwrap();
+            state.events.push("health".into());
+            if let Some(error) = state.health_error.clone() {
+                return Err(error);
+            }
+            Ok(())
+        }
+
+        fn slots(&self) -> StoreResult<Vec<SlotSnapshot>> {
+            let mut state = self.state.lock().unwrap();
+            state.events.push("slots".into());
+            if let Some(error) = state.slots_error.clone() {
+                return Err(error);
+            }
+            Ok(vec![SlotSnapshot {
+                id: 0,
+                is_processing: state.is_processing,
+                n_ctx: state.n_ctx,
+            }])
+        }
+
+        fn save(&self, filename: &str) -> StoreResult<SlotSaveResult> {
+            LlamaSlotClient::manager_filename(filename)?;
+            let mut state = self.state.lock().unwrap();
+            state.events.push(format!("save:{filename}"));
+            if let Some(error) = state.save_error.clone() {
+                return Err(error);
+            }
+            let payload = state
+                .save_payload_override
+                .clone()
+                .unwrap_or_else(|| state.payload.clone());
+            fs::write(self.scratch.join(filename), &payload)
+                .map_err(|_| CheckpointStoreError::io("fake slot save failed"))?;
+            Ok(SlotSaveResult {
+                id_slot: 0,
+                filename: filename.into(),
+                n_saved: state.save_claim_tokens.unwrap_or(state.prompt_tokens),
+                n_written: state.save_claim_bytes.unwrap_or(payload.len() as u64),
+            })
+        }
+
+        fn restore(&self, filename: &str) -> StoreResult<SlotRestoreResult> {
+            LlamaSlotClient::manager_filename(filename)?;
+            let mut state = self.state.lock().unwrap();
+            state.events.push(format!("restore:{filename}"));
+            if let Some(error) = state.restore_error.clone() {
+                return Err(error);
+            }
+            let payload = fs::read(self.scratch.join(filename))
+                .map_err(|_| CheckpointStoreError::io("fake slot restore failed"))?;
+            let restore_tokens = state.restore_tokens;
+            if state.restore_applies {
+                state.prompt_tokens = restore_tokens;
+                state.payload.clone_from(&payload);
+            }
+            Ok(SlotRestoreResult {
+                id_slot: 0,
+                filename: filename.into(),
+                n_restored: state.restore_claim_tokens.unwrap_or(restore_tokens),
+                n_read: state.restore_claim_bytes.unwrap_or(payload.len() as u64),
+            })
+        }
+
+        fn erase(&self) -> StoreResult<SlotEraseResult> {
+            let mut state = self.state.lock().unwrap();
+            state.events.push("erase".into());
+            state.erase_count += 1;
+            if let Some(error) = state.erase_error.clone() {
+                return Err(error);
+            }
+            let n_erased = state.prompt_tokens;
+            state.prompt_tokens = 0;
+            state.payload.clear();
+            Ok(SlotEraseResult {
+                id_slot: 0,
+                n_erased,
+            })
+        }
+    }
+
+    fn coordinator_with_healthy_engine(
+        store: &CheckpointStore,
+        instance_id: &str,
+        pid: u32,
+    ) -> CheckpointCoordinator {
+        let coordinator = CheckpointCoordinator::new(store.clone());
+        let eligibility = evaluate(&eligible_config());
+        let starting = coordinator
+            .register_start(instance_id, pid, &eligibility)
+            .unwrap();
+        assert_eq!(starting.phase, CheckpointPhase::Starting);
+        assert!(!coordinator.gate_allows_routing(instance_id));
+        let healthy = coordinator.on_engine_healthy(instance_id, pid).unwrap();
+        assert_eq!(healthy.phase, CheckpointPhase::EngineHealthy);
+        coordinator
+    }
+
+    fn commit_test_generation(
+        store: &CheckpointStore,
+        instance_id: &str,
+        fingerprint: &CheckpointFingerprint,
+        prompt_tokens: u64,
+        payload: &[u8],
+    ) -> CheckpointManifestV1 {
+        let scratch = write_scratch_payload(store, instance_id, 999, payload);
+        let manifest = manifest_for_payload(instance_id, fingerprint, &scratch, prompt_tokens);
+        store
+            .commit_generation(&manifest, &scratch, 1024 * 1024)
+            .unwrap();
+        store.remove_scratch_payload(instance_id, &scratch).unwrap();
+        manifest
     }
 
     #[test]
@@ -2534,5 +3975,459 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.manifest.generation_id, latest_id);
+    }
+
+    #[test]
+    fn coordinator_rejects_illegal_transitions_and_stale_pid_events() {
+        let sandbox = TestSandbox::new("coordinator-transitions");
+        let store = sandbox.store();
+        let coordinator = CheckpointCoordinator::new(store);
+        let eligibility = evaluate(&eligible_config());
+
+        let starting = coordinator
+            .register_start("instance-1", 101, &eligibility)
+            .unwrap();
+        assert_eq!(starting.phase, CheckpointPhase::Starting);
+        assert!(!coordinator.gate_allows_routing("instance-1"));
+        let illegal = coordinator
+            .transition("instance-1", 101, CheckpointPhase::Ready)
+            .unwrap_err();
+        assert_eq!(
+            illegal.reason_code,
+            CheckpointReasonCode::InvalidStateTransition
+        );
+        assert_eq!(
+            coordinator.status("instance-1").unwrap().phase,
+            CheckpointPhase::Starting
+        );
+
+        coordinator.on_engine_healthy("instance-1", 101).unwrap();
+        coordinator
+            .register_start("instance-1", 202, &eligibility)
+            .unwrap();
+        let stale = coordinator
+            .on_engine_healthy("instance-1", 101)
+            .unwrap_err();
+        assert_eq!(stale.reason_code, CheckpointReasonCode::StaleProcessEvent);
+        let current = coordinator.status("instance-1").unwrap();
+        assert_eq!(current.expected_pid, Some(202));
+        assert_eq!(current.phase, CheckpointPhase::Starting);
+    }
+
+    #[test]
+    fn restore_is_routable_only_after_round_trip_verification() {
+        let sandbox = TestSandbox::new("coordinator-restore-success");
+        let store = sandbox.store();
+        let fingerprint = test_fingerprint(&eligible_config());
+        let payload = b"deterministic serialized slot state";
+        let manifest = commit_test_generation(&store, "instance-1", &fingerprint, 768, payload);
+        let backend = FakeSlotBackend::new(&store, "instance-1");
+        backend.configure(|state| state.restore_tokens = 768);
+        let coordinator = coordinator_with_healthy_engine(&store, "instance-1", 301);
+
+        let status = coordinator
+            .restore_or_cold("instance-1", 301, &fingerprint, true, &backend)
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::Ready);
+        assert!(status.routable);
+        assert!(coordinator.gate_allows_routing("instance-1"));
+        assert_eq!(status.last_operation, CheckpointOperation::Restore);
+        assert_eq!(status.last_outcome, CheckpointOutcome::Success);
+        assert_eq!(status.generation_id, Some(manifest.generation_id));
+        assert_eq!(status.prompt_tokens, Some(768));
+        assert_eq!(status.bytes, Some(payload.len() as u64));
+        assert_eq!(backend.erase_count(), 0);
+
+        let events = backend.events();
+        assert_eq!(events[0], "health");
+        assert!(events[1].starts_with("restore:slot-0-301-"));
+        assert!(events[2].starts_with("save:slot-0-301-"));
+        assert_eq!(events[3], "slots");
+        let scratch = store.prepare_instance("instance-1").unwrap();
+        assert_eq!(fs::read_dir(scratch).unwrap().count(), 0);
+
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains(&sandbox.path.to_string_lossy().to_string()));
+        assert!(!serialized.contains("serialized slot state"));
+    }
+
+    #[test]
+    fn restore_noop_or_invalid_response_erases_slot_and_fails_open() {
+        let sandbox = TestSandbox::new("coordinator-restore-noop");
+        let store = sandbox.store();
+        let fingerprint = test_fingerprint(&eligible_config());
+        commit_test_generation(
+            &store,
+            "instance-1",
+            &fingerprint,
+            512,
+            b"expected durable slot bytes",
+        );
+
+        let backend = FakeSlotBackend::new(&store, "instance-1");
+        backend.configure(|state| {
+            state.restore_tokens = 512;
+            state.restore_applies = false;
+            state.payload = b"cold slot".to_vec();
+        });
+        let coordinator = coordinator_with_healthy_engine(&store, "instance-1", 401);
+        let status = coordinator
+            .restore_or_cold("instance-1", 401, &fingerprint, true, &backend)
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::ReadyCold);
+        assert!(status.routable);
+        assert_eq!(status.last_outcome, CheckpointOutcome::Failed);
+        assert_eq!(status.reason_code, CheckpointReasonCode::SlotStateMismatch);
+        assert_eq!(backend.erase_count(), 1);
+        assert_eq!(backend.events().last().unwrap(), "erase");
+
+        let backend = FakeSlotBackend::new(&store, "instance-2");
+        commit_test_generation(
+            &store,
+            "instance-2",
+            &fingerprint,
+            512,
+            b"another durable slot",
+        );
+        backend.configure(|state| {
+            state.restore_tokens = 512;
+            state.restore_claim_tokens = Some(511);
+        });
+        let coordinator = coordinator_with_healthy_engine(&store, "instance-2", 402);
+        let status = coordinator
+            .restore_or_cold("instance-2", 402, &fingerprint, true, &backend)
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(
+            status.reason_code,
+            CheckpointReasonCode::RestoreResponseInvalid
+        );
+        assert_eq!(backend.erase_count(), 1);
+    }
+
+    #[test]
+    fn restore_timeout_fails_open_while_no_checkpoint_and_mismatch_skip_io() {
+        let sandbox = TestSandbox::new("coordinator-restore-fallbacks");
+        let store = sandbox.store();
+        let fingerprint = test_fingerprint(&eligible_config());
+
+        let no_checkpoint_backend = FakeSlotBackend::new(&store, "empty-instance");
+        let coordinator = coordinator_with_healthy_engine(&store, "empty-instance", 501);
+        let status = coordinator
+            .restore_or_cold(
+                "empty-instance",
+                501,
+                &fingerprint,
+                true,
+                &no_checkpoint_backend,
+            )
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(status.last_outcome, CheckpointOutcome::Skipped);
+        assert_eq!(status.reason_code, CheckpointReasonCode::NoCheckpoint);
+        assert!(no_checkpoint_backend.events().is_empty());
+
+        commit_test_generation(
+            &store,
+            "mismatch-instance",
+            &fingerprint,
+            512,
+            b"old fingerprint payload",
+        );
+        let mut changed = eligible_config();
+        changed.ctx_size = 8192;
+        let changed_fingerprint = test_fingerprint(&changed);
+        let mismatch_backend = FakeSlotBackend::new(&store, "mismatch-instance");
+        let coordinator = coordinator_with_healthy_engine(&store, "mismatch-instance", 502);
+        let status = coordinator
+            .restore_or_cold(
+                "mismatch-instance",
+                502,
+                &changed_fingerprint,
+                true,
+                &mismatch_backend,
+            )
+            .unwrap();
+        assert_eq!(
+            status.reason_code,
+            CheckpointReasonCode::FingerprintMismatch
+        );
+        assert!(mismatch_backend.events().is_empty());
+
+        commit_test_generation(
+            &store,
+            "timeout-instance",
+            &fingerprint,
+            512,
+            b"timeout payload",
+        );
+        let timeout_backend = FakeSlotBackend::new(&store, "timeout-instance");
+        timeout_backend.configure(|state| {
+            state.restore_error = Some(CheckpointStoreError::new(
+                CheckpointReasonCode::HttpTimeout,
+                "injected restore timeout",
+            ));
+        });
+        let coordinator = coordinator_with_healthy_engine(&store, "timeout-instance", 503);
+        let status = coordinator
+            .restore_or_cold(
+                "timeout-instance",
+                503,
+                &fingerprint,
+                true,
+                &timeout_backend,
+            )
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(status.reason_code, CheckpointReasonCode::HttpTimeout);
+        assert_eq!(timeout_backend.erase_count(), 1);
+    }
+
+    #[test]
+    fn save_commits_generation_then_moves_to_stopping() {
+        let sandbox = TestSandbox::new("coordinator-save-success");
+        let store = sandbox.store();
+        let config = eligible_config();
+        let fingerprint = test_fingerprint(&config);
+        let backend = FakeSlotBackend::new(&store, "instance-1");
+        backend.configure(|state| {
+            state.prompt_tokens = 1024;
+            state.payload = b"live slot payload ready for persistence".to_vec();
+        });
+        let coordinator = coordinator_with_healthy_engine(&store, "instance-1", 601);
+        coordinator
+            .restore_or_cold("instance-1", 601, &fingerprint, true, &backend)
+            .unwrap();
+        coordinator.begin_draining("instance-1", 601).unwrap();
+        let status = coordinator
+            .save_before_stop(
+                "instance-1",
+                601,
+                &fingerprint,
+                &config.kv_checkpoint,
+                &backend,
+            )
+            .unwrap();
+
+        assert_eq!(status.phase, CheckpointPhase::Stopping);
+        assert!(!status.routable);
+        assert_eq!(status.last_operation, CheckpointOperation::Save);
+        assert_eq!(status.last_outcome, CheckpointOutcome::Success);
+        assert_eq!(status.reason_code, CheckpointReasonCode::None);
+        assert_eq!(status.prompt_tokens, Some(1024));
+        let loaded = store
+            .load_latest("instance-1", &fingerprint.digest)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.manifest.generation_id, status.generation_id.unwrap());
+        assert_eq!(loaded.manifest.slot().prompt_tokens, 1024);
+        assert_eq!(
+            fs::read(loaded.payload_path()).unwrap(),
+            b"live slot payload ready for persistence"
+        );
+        let stopped = coordinator.mark_stopped("instance-1", 601).unwrap();
+        assert_eq!(stopped.phase, CheckpointPhase::Stopped);
+        assert!(!coordinator.gate_active("instance-1"));
+    }
+
+    #[test]
+    fn save_threshold_busy_timeout_and_backend_error_never_block_stop() {
+        let sandbox = TestSandbox::new("coordinator-save-fallbacks");
+        let store = sandbox.store();
+        let config = eligible_config();
+        let fingerprint = test_fingerprint(&config);
+
+        let below = FakeSlotBackend::new(&store, "below");
+        below.configure(|state| {
+            state.prompt_tokens = u64::from(config.kv_checkpoint.minimum_prompt_tokens - 1);
+            state.payload = b"small but valid slot".to_vec();
+        });
+        let coordinator = coordinator_with_healthy_engine(&store, "below", 701);
+        coordinator
+            .restore_or_cold("below", 701, &fingerprint, true, &below)
+            .unwrap();
+        coordinator.begin_draining("below", 701).unwrap();
+        let status = coordinator
+            .save_before_stop("below", 701, &fingerprint, &config.kv_checkpoint, &below)
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::Stopping);
+        assert_eq!(status.last_outcome, CheckpointOutcome::Skipped);
+        assert_eq!(
+            status.reason_code,
+            CheckpointReasonCode::BelowTokenThreshold
+        );
+        assert!(store
+            .load_latest("below", &fingerprint.digest)
+            .unwrap()
+            .is_none());
+
+        let busy = FakeSlotBackend::new(&store, "busy");
+        busy.configure(|state| state.is_processing = true);
+        let coordinator = coordinator_with_healthy_engine(&store, "busy", 702);
+        coordinator
+            .restore_or_cold("busy", 702, &fingerprint, true, &busy)
+            .unwrap();
+        coordinator.begin_draining("busy", 702).unwrap();
+        let status = coordinator
+            .save_before_stop("busy", 702, &fingerprint, &config.kv_checkpoint, &busy)
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::Stopping);
+        assert_eq!(status.last_outcome, CheckpointOutcome::Skipped);
+        assert_eq!(status.reason_code, CheckpointReasonCode::BusyTimeout);
+
+        let timeout = FakeSlotBackend::new(&store, "save-timeout");
+        timeout.configure(|state| {
+            state.slots_error = Some(CheckpointStoreError::new(
+                CheckpointReasonCode::HttpTimeout,
+                "injected slot timeout",
+            ));
+        });
+        let coordinator = coordinator_with_healthy_engine(&store, "save-timeout", 703);
+        coordinator
+            .restore_or_cold("save-timeout", 703, &fingerprint, true, &timeout)
+            .unwrap();
+        coordinator.begin_draining("save-timeout", 703).unwrap();
+        let status = coordinator
+            .save_before_stop(
+                "save-timeout",
+                703,
+                &fingerprint,
+                &config.kv_checkpoint,
+                &timeout,
+            )
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::Stopping);
+        assert_eq!(status.last_outcome, CheckpointOutcome::Failed);
+        assert_eq!(status.reason_code, CheckpointReasonCode::HttpTimeout);
+    }
+
+    #[test]
+    fn invalid_fingerprint_and_unexpected_exit_resolve_terminally() {
+        let sandbox = TestSandbox::new("coordinator-terminal-fallbacks");
+        let store = sandbox.store();
+        let config = eligible_config();
+        let valid_fingerprint = test_fingerprint(&config);
+        let mut invalid_fingerprint = valid_fingerprint.clone();
+        invalid_fingerprint.algorithm = "md5".into();
+
+        let backend = FakeSlotBackend::new(&store, "invalid-restore");
+        let coordinator = coordinator_with_healthy_engine(&store, "invalid-restore", 801);
+        let status = coordinator
+            .restore_or_cold("invalid-restore", 801, &invalid_fingerprint, true, &backend)
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(status.last_outcome, CheckpointOutcome::Failed);
+        assert_eq!(status.reason_code, CheckpointReasonCode::ManifestInvalid);
+
+        let coordinator = coordinator_with_healthy_engine(&store, "invalid-save", 802);
+        coordinator
+            .restore_or_cold("invalid-save", 802, &valid_fingerprint, true, &backend)
+            .unwrap();
+        coordinator.begin_draining("invalid-save", 802).unwrap();
+        let status = coordinator
+            .save_before_stop(
+                "invalid-save",
+                802,
+                &invalid_fingerprint,
+                &config.kv_checkpoint,
+                &backend,
+            )
+            .unwrap();
+        assert_eq!(status.phase, CheckpointPhase::Stopping);
+        assert_eq!(status.reason_code, CheckpointReasonCode::ManifestInvalid);
+
+        let backend = FakeSlotBackend::new(&store, "unexpected");
+        let coordinator = coordinator_with_healthy_engine(&store, "unexpected", 803);
+        coordinator
+            .restore_or_cold("unexpected", 803, &valid_fingerprint, true, &backend)
+            .unwrap();
+        let status = coordinator.mark_unexpected_exit("unexpected", 803).unwrap();
+        assert_eq!(status.phase, CheckpointPhase::Stopped);
+        assert_eq!(status.reason_code, CheckpointReasonCode::UnexpectedExit);
+        assert!(store
+            .load_latest("unexpected", &valid_fingerprint.digest)
+            .unwrap()
+            .is_none());
+    }
+
+    fn one_shot_http_server(
+        status: &'static str,
+        body: Vec<u8>,
+        delay: Duration,
+    ) -> (u16, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 8192];
+            let _ = stream.read(&mut request);
+            if !delay.is_zero() {
+                std::thread::sleep(delay);
+            }
+            let headers = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(headers.as_bytes());
+            let _ = stream.write_all(&body);
+        });
+        (port, handle)
+    }
+
+    fn slot_client_for_port(port: u16, timeout: Duration) -> LlamaSlotClient {
+        let config = InstanceConfig {
+            host: "127.0.0.1".into(),
+            port,
+            ..eligible_config()
+        };
+        LlamaSlotClient::new(&config, timeout).unwrap()
+    }
+
+    #[test]
+    fn slot_client_rejects_unsafe_names_malformed_results_and_timeouts() {
+        for filename in [
+            "../slot-0-bad.bin",
+            "slot-1-1-deadbeef.bin",
+            "slot-0-name with spaces.bin",
+            "arbitrary.bin",
+        ] {
+            assert!(LlamaSlotClient::manager_filename(filename).is_err());
+        }
+        assert!(LlamaSlotClient::manager_filename(
+            "slot-0-1-123e4567-e89b-12d3-a456-426614174000.bin"
+        )
+        .is_ok());
+
+        let (port, server) = one_shot_http_server("200 OK", b"not-json".to_vec(), Duration::ZERO);
+        let error = slot_client_for_port(port, Duration::from_secs(1))
+            .health()
+            .unwrap_err();
+        assert_eq!(error.reason_code, CheckpointReasonCode::SlotApiError);
+        server.join().unwrap();
+
+        let invalid_save = serde_json::to_vec(&serde_json::json!({
+            "id_slot": 0,
+            "filename": "wrong.bin",
+            "n_saved": 512,
+            "n_written": 4096
+        }))
+        .unwrap();
+        let (port, server) = one_shot_http_server("200 OK", invalid_save, Duration::ZERO);
+        let error = slot_client_for_port(port, Duration::from_secs(1))
+            .save("slot-0-1-123e4567-e89b-12d3-a456-426614174000.bin")
+            .unwrap_err();
+        assert_eq!(error.reason_code, CheckpointReasonCode::SaveResponseInvalid);
+        server.join().unwrap();
+
+        let (port, server) = one_shot_http_server(
+            "200 OK",
+            br#"{"status":"ok"}"#.to_vec(),
+            Duration::from_millis(500),
+        );
+        let error = slot_client_for_port(port, Duration::from_millis(10))
+            .health()
+            .unwrap_err();
+        assert_eq!(error.reason_code, CheckpointReasonCode::HttpTimeout);
+        server.join().unwrap();
     }
 }

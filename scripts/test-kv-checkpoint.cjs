@@ -15,6 +15,10 @@ assert.match(checkpointSource, /fingerprints-v1\.json/, 'full content fingerprin
 assert.match(checkpointSource, /\.pending-/, 'generation commits must stage through a pending directory')
 assert.match(checkpointSource, /AfterManifestWrite/, 'storage tests must inject a manifest-last failure')
 assert.match(checkpointSource, /FILE_ATTRIBUTE_REPARSE_POINT/, 'Windows reparse points must be rejected')
+assert.match(checkpointSource, /trait SlotBackend/, 'slot lifecycle tests must use an injectable backend')
+assert.match(checkpointSource, /gate_allows_routing/, 'checkpoint restore must own a routing gate')
+assert.match(checkpointSource, /verified_sha256 != slot\.sha256/, 'restore must verify a save round trip')
+assert.match(checkpointSource, /StaleProcessEvent/, 'checkpoint events must be bound to the active process')
 
 const persistenceSource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'persistence.rs'),
