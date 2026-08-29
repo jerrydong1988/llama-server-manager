@@ -1756,7 +1756,16 @@ impl RuntimeSupervisor {
                 .map(Box::new)
                 .map(RuntimeReply::Instance),
             RuntimeCommand::StopInstance { instance_id } => {
-                self.stop_instance(&instance_id)?;
+                // Checkpoint save uses reqwest's blocking client and streams the
+                // slot payload to disk. Running that work on this async control
+                // task can both stall the runtime endpoint and panic when the
+                // blocking client drops its internal Tokio runtime. The direct
+                // lifecycle already isolates the same operation with
+                // spawn_blocking; keep the detached runtime on that boundary too.
+                let supervisor = Arc::clone(self);
+                tokio::task::spawn_blocking(move || supervisor.stop_instance(&instance_id))
+                    .await
+                    .map_err(|error| format!("runtime stop task failed: {error}"))??;
                 Ok(RuntimeReply::Ack)
             }
             RuntimeCommand::ClearCheckpoint { instance_id } => self
@@ -1780,13 +1789,23 @@ impl RuntimeSupervisor {
                     if let Err(error) = self.stop_proxy().await {
                         failures.push(format!("failed to stop routing service: {error}"));
                     }
-                    failures.extend(self.stop_all_instances());
+                    let supervisor = Arc::clone(self);
+                    failures.extend(
+                        tokio::task::spawn_blocking(move || supervisor.stop_all_instances())
+                            .await
+                            .map_err(|error| format!("runtime shutdown task failed: {error}"))?,
+                    );
                     if !failures.is_empty() {
                         return Err(failures.join("; "));
                     }
                 } else {
                     let _ = self.stop_proxy_runtime(false).await;
-                    let failures = self.stop_all_instances_internal(true, "runtime-upgrade");
+                    let supervisor = Arc::clone(self);
+                    let failures = tokio::task::spawn_blocking(move || {
+                        supervisor.stop_all_instances_internal(true, "runtime-upgrade")
+                    })
+                    .await
+                    .map_err(|error| format!("runtime upgrade stop task failed: {error}"))?;
                     if !failures.is_empty() {
                         let restore_failures = self.restore_missing_desired_instances();
                         let mut errors = failures;

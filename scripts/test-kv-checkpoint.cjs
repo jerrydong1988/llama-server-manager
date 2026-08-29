@@ -99,6 +99,21 @@ assertOrdered(
   ['checkpoint_before_termination', 'terminate_running_instance'],
   'runtime process stop',
 )
+const runtimeCommandHandler = functionSlice(
+  runtimeSupervisorSource,
+  'pub async fn handle_command(',
+  'impl ProxyDataSource for RuntimeSupervisor',
+)
+assert.match(
+  functionSlice(runtimeCommandHandler, 'RuntimeCommand::StopInstance', 'RuntimeCommand::ClearCheckpoint'),
+  /spawn_blocking/,
+  'runtime checkpoint stop must not construct or drop a blocking HTTP client on the async control task',
+)
+assert.match(
+  functionSlice(runtimeCommandHandler, 'RuntimeCommand::Shutdown', '\n            }\n        }'),
+  /spawn_blocking/,
+  'runtime shutdown must isolate checkpoint stop work from the async control task',
+)
 
 const proxySource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'commands', 'proxy.rs'),
