@@ -11,6 +11,16 @@ const checkpointSource = fs.readFileSync(
 assert.match(checkpointSource, /CheckpointReasonCode/, 'backend must expose stable checkpoint reason codes')
 assert.match(checkpointSource, /ModelArchitectureUnknown/, 'unknown model state must remain conservative')
 assert.match(checkpointSource, /EngineCapabilityMissing/, 'engine capability must be part of eligibility')
+assert.match(checkpointSource, /fingerprints-v1\.json/, 'full content fingerprints must use a versioned cache')
+assert.match(checkpointSource, /\.pending-/, 'generation commits must stage through a pending directory')
+assert.match(checkpointSource, /AfterManifestWrite/, 'storage tests must inject a manifest-last failure')
+assert.match(checkpointSource, /FILE_ATTRIBUTE_REPARSE_POINT/, 'Windows reparse points must be rejected')
+
+const persistenceSource = fs.readFileSync(
+  path.join(process.cwd(), 'src-tauri', 'src', 'persistence.rs'),
+  'utf8',
+)
+assert.match(persistenceSource, /windows_wide_path/, 'Windows atomic writes must support deep checkpoint paths')
 
 const entry = `
   import assert from 'node:assert/strict'

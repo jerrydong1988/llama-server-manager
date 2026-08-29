@@ -92,19 +92,54 @@ fn sync_parent(_path: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn replace_path_raw(source: &Path, destination: &Path) -> Result<(), String> {
+fn windows_wide_path(path: &Path) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
+
+    const SEPARATOR: u16 = b'\\' as u16;
+    const QUESTION: u16 = b'?' as u16;
+    const EXTENDED_PREFIX: [u16; 4] = [SEPARATOR, SEPARATOR, QUESTION, SEPARATOR];
+    const DEVICE_PREFIX: [u16; 4] = [SEPARATOR, SEPARATOR, b'.' as u16, SEPARATOR];
+    const UNC_PREFIX: [u16; 8] = [
+        SEPARATOR,
+        SEPARATOR,
+        QUESTION,
+        SEPARATOR,
+        b'U' as u16,
+        b'N' as u16,
+        b'C' as u16,
+        SEPARATOR,
+    ];
+
+    let encoded: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let mut wide = if encoded.starts_with(&EXTENDED_PREFIX)
+        || encoded.starts_with(&DEVICE_PREFIX)
+        || !path.is_absolute()
+    {
+        encoded
+    } else if encoded.starts_with(&[SEPARATOR, SEPARATOR]) {
+        let mut extended = Vec::with_capacity(UNC_PREFIX.len() + encoded.len());
+        extended.extend_from_slice(&UNC_PREFIX);
+        extended.extend_from_slice(&encoded[2..]);
+        extended
+    } else {
+        let mut extended = Vec::with_capacity(EXTENDED_PREFIX.len() + encoded.len());
+        extended.extend_from_slice(&EXTENDED_PREFIX);
+        extended.extend_from_slice(&encoded);
+        extended
+    };
+    wide.push(0);
+    wide
+}
+
+#[cfg(windows)]
+fn replace_path_raw(source: &Path, destination: &Path) -> Result<(), String> {
     use windows_sys::Win32::Storage::FileSystem::{
         MoveFileExW, ReplaceFileW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
         REPLACEFILE_IGNORE_MERGE_ERRORS,
     };
 
-    fn wide(path: &Path) -> Vec<u16> {
-        path.as_os_str().encode_wide().chain(Some(0)).collect()
-    }
-
-    let source_wide = wide(source);
-    let destination_wide = wide(destination);
+    let source_wide = windows_wide_path(source);
+    let destination_wide = windows_wide_path(destination);
     let succeeded = unsafe {
         if destination.exists() {
             ReplaceFileW(
@@ -339,6 +374,30 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
         assert_eq!(std::fs::read(&backup).unwrap(), b"old");
         let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn atomic_write_supports_extended_length_checkpoint_paths() {
+        let root = test_dir("windows-long-path");
+        let path = root
+            .join("instance-00000000-0000-4000-8000-000000000000")
+            .join("f".repeat(64))
+            .join("generations")
+            .join(".pending-00000000-0000-4000-8000-000000000000")
+            .join("manifest.json");
+        assert!(path.as_os_str().len() > 260);
+
+        atomic_write(&path, b"checkpoint manifest", None).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"checkpoint manifest");
+
+        let temp = std::env::temp_dir();
+        assert_eq!(root.parent(), Some(temp.as_path()));
+        assert!(root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("lsm-persistence-")));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
