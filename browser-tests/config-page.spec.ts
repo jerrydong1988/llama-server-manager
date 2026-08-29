@@ -29,6 +29,33 @@ test('opening an instance config keeps React hook order stable (issue #5)', asyn
   expect(pageErrors).toEqual([])
 })
 
+test('checkpoint requirements are explicit and repaired only after confirmation', async ({ page }) => {
+  await openConfiguration(page, 'checkpoint-requirements')
+
+  await expect(page.getByText('并行 slot 数必须设为 1')).toBeVisible()
+  await expect(page.getByText('必须启用 prompt cache')).toBeVisible()
+  await expect(page.getByText(/Harness 元数据请求之后保留已恢复前缀/)).toBeVisible()
+  await expect(page.getByText(/滑动窗口模型必须启用 SWA 完整缓存/)).toBeVisible()
+
+  await page.getByRole('button', { name: '应用必需设置', exact: true }).click()
+  await expect(page.getByText('可使用受管检查点', { exact: true })).toBeVisible()
+
+  const repaired = await page.evaluate(() => {
+    const calls = window.__TAURI_BROWSER_TEST__.calls
+      .filter(candidate => candidate.command === 'get_checkpoint_eligibility')
+    const call = calls[calls.length - 1]
+    return (call?.payload as { config?: Record<string, unknown> } | undefined)?.config
+  })
+  expect(repaired).toMatchObject({
+    parallel: 1,
+    cache_prompt: true,
+    cache_idle_slots: true,
+    cache_ram: 8192,
+    slots_enabled: true,
+    swa_full: true,
+  })
+})
+
 test('search navigation, change review, emission preview, and save use the mock backend', async ({ page }) => {
   await openConfiguration(page)
 
