@@ -36,6 +36,14 @@ assert.match(runtimeSupervisorSource, /resolve_checkpoint_startup/, 'runtime mus
 assert.match(runtimeSupervisorSource, /checkpoint_before_termination/, 'runtime must save at the controlled stop boundary')
 assert.match(runtimeSupervisorSource, /gate_allows_routing/, 'runtime proxy paths must enforce the checkpoint gate')
 
+const proxySource = fs.readFileSync(
+  path.join(process.cwd(), 'src-tauri', 'src', 'commands', 'proxy.rs'),
+  'utf8',
+)
+assert.match(proxySource, /checkpoint_unavailable_response/, 'gated routes must return a checkpoint-aware retry response')
+assert.match(proxySource, /retry-after/, 'checkpoint readiness must be explicitly retryable')
+assert.match(proxySource, /checkpoint_gate_keeps_another_matching_ready_target_routable/, 'checkpoint gating must retain healthy failover targets')
+
 const persistenceSource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'persistence.rs'),
   'utf8',

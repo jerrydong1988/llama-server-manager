@@ -1805,10 +1805,19 @@ impl ProxyDataSource for RuntimeSupervisor {
             endpoint_workload,
         );
         drop(state);
-        resolution.retain_candidates(|instance_id| {
-            self.checkpoint_coordinator.gate_allows_routing(instance_id)
+        resolution.apply_checkpoint_gate(|instance_id| {
+            (
+                self.checkpoint_coordinator.gate_allows_routing(instance_id),
+                self.checkpoint_coordinator
+                    .status(instance_id)
+                    .map(|status| status.phase),
+            )
         });
         resolution
+    }
+
+    fn checkpoint_blocked_phase(&self) -> Option<CheckpointPhase> {
+        self.checkpoint_coordinator.blocked_phase()
     }
 }
 

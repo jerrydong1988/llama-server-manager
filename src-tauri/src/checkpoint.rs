@@ -37,6 +37,22 @@ impl CheckpointPhase {
     pub const fn is_busy(self) -> bool {
         matches!(self, Self::Restoring | Self::Saving)
     }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Ineligible => "ineligible",
+            Self::Starting => "starting",
+            Self::EngineHealthy => "engine_healthy",
+            Self::Restoring => "restoring",
+            Self::Ready => "ready",
+            Self::ReadyCold => "ready_cold",
+            Self::Draining => "draining",
+            Self::Saving => "saving",
+            Self::Stopping => "stopping",
+            Self::Stopped => "stopped",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -2378,6 +2394,28 @@ impl CheckpointCoordinator {
             .unwrap_or_default()
     }
 
+    pub fn blocked_phase(&self) -> Option<CheckpointPhase> {
+        fn priority(phase: CheckpointPhase) -> u8 {
+            match phase {
+                CheckpointPhase::Restoring => 0,
+                CheckpointPhase::Saving => 1,
+                CheckpointPhase::Draining => 2,
+                CheckpointPhase::EngineHealthy => 3,
+                CheckpointPhase::Starting => 4,
+                CheckpointPhase::Stopping => 5,
+                _ => 6,
+            }
+        }
+
+        self.entries.lock().ok().and_then(|entries| {
+            entries
+                .values()
+                .filter(|entry| entry.gate_active && !entry.status.routable)
+                .map(|entry| entry.status.phase)
+                .min_by_key(|phase| priority(*phase))
+        })
+    }
+
     pub fn gate_allows_routing(&self, instance_id: &str) -> bool {
         self.entries
             .lock()
@@ -3344,6 +3382,7 @@ mod tests {
         assert_eq!(value["last_outcome"], "none");
         assert!(value.get("expected_pid").is_none());
         assert!(CheckpointPhase::Restoring.is_busy());
+        assert_eq!(CheckpointPhase::Restoring.as_str(), "restoring");
         assert!(CheckpointPhase::Saving.is_busy());
         assert!(!CheckpointPhase::Starting.is_busy());
     }
