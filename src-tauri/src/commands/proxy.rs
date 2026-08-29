@@ -220,6 +220,13 @@ pub(crate) struct ProxyRequestResolution {
     candidates: Vec<ResolvedProxyTarget>,
 }
 
+impl ProxyRequestResolution {
+    pub(crate) fn retain_candidates(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        self.candidates
+            .retain(|target| keep(&target.public.instance_id));
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ProxyRuntimeSnapshot {
     pub config: ProxyConfig,

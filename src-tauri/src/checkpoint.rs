@@ -696,7 +696,7 @@ pub struct CheckpointFingerprint {
 }
 
 impl CheckpointFingerprint {
-    fn validate(&self) -> StoreResult<()> {
+    pub(crate) fn validate(&self) -> StoreResult<()> {
         if self.algorithm != "sha256"
             || !is_lower_hex_digest(&self.digest)
             || !is_lower_hex_digest(&self.model_sha256)

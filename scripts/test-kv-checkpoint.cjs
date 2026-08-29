@@ -20,6 +20,22 @@ assert.match(checkpointSource, /gate_allows_routing/, 'checkpoint restore must o
 assert.match(checkpointSource, /verified_sha256 != slot\.sha256/, 'restore must verify a save round trip')
 assert.match(checkpointSource, /StaleProcessEvent/, 'checkpoint events must be bound to the active process')
 
+const runtimeProtocolSource = fs.readFileSync(
+  path.join(process.cwd(), 'src-tauri', 'src', 'runtime_service', 'protocol.rs'),
+  'utf8',
+)
+assert.match(runtimeProtocolSource, /KV_CHECKPOINT_CAPABILITY/, 'runtime protocol must advertise checkpoint ownership')
+assert.match(runtimeProtocolSource, /RuntimeCheckpointLaunchSpec/, 'runtime launches must carry checkpoint eligibility and fingerprint state')
+
+const runtimeSupervisorSource = fs.readFileSync(
+  path.join(process.cwd(), 'src-tauri', 'src', 'runtime_service', 'supervisor.rs'),
+  'utf8',
+)
+assert.match(runtimeSupervisorSource, /prepare_runtime_checkpoint_launch/, 'runtime must validate private checkpoint launch metadata')
+assert.match(runtimeSupervisorSource, /resolve_checkpoint_startup/, 'runtime must resolve restore before routing')
+assert.match(runtimeSupervisorSource, /checkpoint_before_termination/, 'runtime must save at the controlled stop boundary')
+assert.match(runtimeSupervisorSource, /gate_allows_routing/, 'runtime proxy paths must enforce the checkpoint gate')
+
 const persistenceSource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'persistence.rs'),
   'utf8',

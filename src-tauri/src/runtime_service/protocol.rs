@@ -8,6 +8,14 @@ pub const MAX_RUNTIME_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
 pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
+pub const KV_CHECKPOINT_CAPABILITY: &str = "kv_checkpoint_v1";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeCheckpointLaunchSpec {
+    pub eligibility: crate::checkpoint::CheckpointEligibility,
+    #[serde(default)]
+    pub fingerprint: Option<crate::checkpoint::CheckpointFingerprint>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeLaunchSpec {
@@ -19,6 +27,8 @@ pub struct RuntimeLaunchSpec {
     pub workload: String,
     #[serde(default)]
     pub working_directory: Option<String>,
+    #[serde(default)]
+    pub checkpoint: Option<RuntimeCheckpointLaunchSpec>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,6 +54,8 @@ pub struct RuntimeServiceStatus {
     pub monitoring: HashMap<String, crate::commands::monitoring::MonitoringFrame>,
     #[serde(default)]
     pub performance: HashMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub checkpoints: HashMap<String, crate::checkpoint::CheckpointStatus>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -201,6 +213,21 @@ mod tests {
     }
 
     #[test]
+    fn launch_spec_accepts_payloads_without_checkpoint_metadata() {
+        let value = serde_json::json!({
+            "instance_id": "legacy-instance",
+            "config": crate::models::InstanceConfig::default(),
+            "engine_backend": "test",
+            "command": ["llama-server"],
+            "command_display": "llama-server",
+            "workload": "inference",
+            "working_directory": null,
+        });
+        let spec: RuntimeLaunchSpec = serde_json::from_value(value).unwrap();
+        assert!(spec.checkpoint.is_none());
+    }
+
+    #[test]
     fn status_accepts_payloads_from_the_first_runtime_schema() {
         let value = serde_json::json!({
             "protocol_version": RUNTIME_PROTOCOL_VERSION,
@@ -227,6 +254,7 @@ mod tests {
         assert!(status.health.is_empty());
         assert!(status.monitoring.is_empty());
         assert!(status.performance.is_empty());
+        assert!(status.checkpoints.is_empty());
     }
 
     #[test]

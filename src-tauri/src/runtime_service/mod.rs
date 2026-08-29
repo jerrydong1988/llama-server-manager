@@ -6,8 +6,8 @@ mod transport;
 use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
-    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
-    RUNTIME_PROTOCOL_VERSION,
+    BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, KV_CHECKPOINT_CAPABILITY,
+    RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use supervisor::{start_watchdog, RuntimeSupervisor};
 
-pub use protocol::RuntimeLaunchSpec;
+pub use protocol::{RuntimeCheckpointLaunchSpec, RuntimeLaunchSpec};
 
 static CONFIG_REVISION: AtomicU64 = AtomicU64::new(0);
 static CONFIG_CHANGE_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -32,6 +32,7 @@ fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
         BACKGROUND_DETACH_CAPABILITY,
         CONFIG_SYNC_ACK_CAPABILITY,
         RUNTIME_ERROR_ACK_CAPABILITY,
+        KV_CHECKPOINT_CAPABILITY,
     ]
     .iter()
     .all(|required| {
@@ -908,6 +909,7 @@ mod tests {
                 BACKGROUND_DETACH_CAPABILITY.into(),
                 CONFIG_SYNC_ACK_CAPABILITY.into(),
                 RUNTIME_ERROR_ACK_CAPABILITY.into(),
+                KV_CHECKPOINT_CAPABILITY.into(),
             ],
             config_revision: 1,
             background_enabled: false,
@@ -927,6 +929,7 @@ mod tests {
             health: Default::default(),
             monitoring: Default::default(),
             performance: Default::default(),
+            checkpoints: Default::default(),
         };
         let previously_managed = ["stale-instance".to_string()].into_iter().collect();
         let payload = runtime_status_payload(&status, Some(&previously_managed));

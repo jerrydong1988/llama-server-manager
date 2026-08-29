@@ -273,7 +273,7 @@ fn terminate_spawned_child(child: &mut std::process::Child) -> Result<(), String
 
 // Generate CLI command.
 
-fn format_command_for_display(command: &[String]) -> String {
+pub(crate) fn format_command_for_display(command: &[String]) -> String {
     let mut masked = Vec::with_capacity(command.len());
     let mut hide_next = false;
     for argument in command {
@@ -2482,6 +2482,10 @@ pub async fn start_server(
                 working_directory: std::env::current_dir()
                     .ok()
                     .map(|path| path.to_string_lossy().to_string()),
+                checkpoint: Some(crate::runtime_service::RuntimeCheckpointLaunchSpec {
+                    eligibility: checkpoint_plan.eligibility.clone(),
+                    fingerprint: checkpoint_plan.fingerprint.clone(),
+                }),
             })
             .await
             .map_err(AppError::from)?;

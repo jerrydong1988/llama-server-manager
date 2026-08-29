@@ -309,7 +309,9 @@ async function main() {
       || status.reply.payload?.service_pid <= 0
       || !status.reply.payload?.capabilities?.includes('background_detach_v1')
       || !status.reply.payload?.capabilities?.includes('config_sync_ack_v1')
-      || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')) {
+      || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')
+      || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v1')
+      || typeof status.reply.payload?.checkpoints !== 'object') {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }
     service = contenders.find(candidate => candidate.pid === status.reply.payload.service_pid)
@@ -378,6 +380,15 @@ async function main() {
     }
     const firstInstancePid = started.reply.payload.pid
     launchedPids.add(firstInstancePid)
+    const legacyCheckpointStatus = await request(
+      endpoint,
+      token,
+      { command: 'get_status' },
+      'legacy-checkpoint-status',
+    )
+    if (legacyCheckpointStatus.reply?.payload?.checkpoints?.[launchSpec.instance_id]?.phase !== 'disabled') {
+      throw new Error(`legacy launch did not fail open with checkpoints disabled: ${JSON.stringify(legacyCheckpointStatus)}`)
+    }
 
     const proxyStarted = await request(endpoint, token, { command: 'start_proxy' }, 'start-proxy')
     if (proxyStarted.reply?.result !== 'proxy_status' || proxyStarted.reply.payload?.running !== true) {
