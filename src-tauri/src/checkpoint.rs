@@ -93,6 +93,7 @@ pub enum CheckpointReasonCode {
     VectorWorkloadUnsupported,
     ParallelMustBeOne,
     PromptCacheRequired,
+    PromptCacheRetentionRequired,
     SlotsRequired,
     LoopbackHttpRequired,
     CustomEndpointUnsupported,
@@ -101,6 +102,7 @@ pub enum CheckpointReasonCode {
     LoraUnsupported,
     MultimodalUnsupported,
     HybridRecurrentUnsupported,
+    SlidingWindowRequiresFullCache,
     ModelArchitectureUnknown,
     ShardedModelUnsupported,
     ConflictingSlotSavePath,
@@ -179,6 +181,9 @@ impl CheckpointStatus {
 pub struct EngineCheckpointCapabilities {
     pub slots: bool,
     pub slot_save_path: bool,
+    pub cache_ram: bool,
+    pub cache_idle_slots: bool,
+    pub swa_full: bool,
 }
 
 impl EngineCheckpointCapabilities {
@@ -191,11 +196,14 @@ impl EngineCheckpointCapabilities {
         Self {
             slots: has("--slots"),
             slot_save_path: has("--slot-save-path"),
+            cache_ram: has("--cache-ram"),
+            cache_idle_slots: has("--cache-idle-slots"),
+            swa_full: has("--swa-full"),
         }
     }
 
     pub const fn complete(self) -> bool {
-        self.slots && self.slot_save_path
+        self.slots && self.slot_save_path && self.cache_ram && self.cache_idle_slots
     }
 }
 
@@ -229,6 +237,7 @@ pub struct CheckpointEligibilityContext<'a> {
     pub engine_capabilities: EngineCheckpointCapabilities,
     pub model_architecture: Option<&'a str>,
     pub model_is_sharded: bool,
+    pub model_has_swa: Option<bool>,
 }
 
 fn is_loopback_host(host: &str) -> bool {
@@ -316,6 +325,12 @@ pub fn evaluate_checkpoint_eligibility(
     if !config.cache_prompt {
         push_reason(&mut reasons, CheckpointReasonCode::PromptCacheRequired);
     }
+    if !config.cache_idle_slots || !(config.cache_ram == -1 || config.cache_ram > 0) {
+        push_reason(
+            &mut reasons,
+            CheckpointReasonCode::PromptCacheRetentionRequired,
+        );
+    }
     if !config.slots_enabled {
         push_reason(&mut reasons, CheckpointReasonCode::SlotsRequired);
     }
@@ -364,6 +379,18 @@ pub fn evaluate_checkpoint_eligibility(
     }
     if context.model_is_sharded {
         push_reason(&mut reasons, CheckpointReasonCode::ShardedModelUnsupported);
+    }
+    if context.model_has_swa == Some(true) && !config.swa_full {
+        push_reason(
+            &mut reasons,
+            CheckpointReasonCode::SlidingWindowRequiresFullCache,
+        );
+    }
+    if context.model_has_swa == Some(true)
+        && config.swa_full
+        && !context.engine_capabilities.swa_full
+    {
+        push_reason(&mut reasons, CheckpointReasonCode::EngineCapabilityMissing);
     }
     match context.model_architecture.map(str::trim) {
         None | Some("") => {
@@ -766,6 +793,7 @@ struct CanonicalFingerprintV1<'a> {
     cache_prompt: bool,
     cache_reuse: u32,
     cache_ram: i32,
+    cache_idle_slots: bool,
     ctx_checkpoints: u32,
     checkpoint_min_step: u32,
     slots_enabled: bool,
@@ -846,6 +874,7 @@ fn canonical_fingerprint_bytes(
         cache_prompt: config.cache_prompt,
         cache_reuse: config.cache_reuse,
         cache_ram: config.cache_ram,
+        cache_idle_slots: config.cache_idle_slots,
         ctx_checkpoints: config.ctx_checkpoints,
         checkpoint_min_step: config.checkpoint_min_step,
         slots_enabled: config.slots_enabled,
@@ -3560,9 +3589,13 @@ mod tests {
             engine_capabilities: EngineCheckpointCapabilities {
                 slots: true,
                 slot_save_path: true,
+                cache_ram: true,
+                cache_idle_slots: true,
+                swa_full: true,
             },
             model_architecture: Some("llama"),
             model_is_sharded: false,
+            model_has_swa: Some(false),
         })
     }
 
@@ -3854,6 +3887,18 @@ mod tests {
         assert_config_reason(CheckpointReasonCode::PromptCacheRequired, |config| {
             config.cache_prompt = false;
         });
+        assert_config_reason(
+            CheckpointReasonCode::PromptCacheRetentionRequired,
+            |config| config.cache_idle_slots = false,
+        );
+        assert_config_reason(
+            CheckpointReasonCode::PromptCacheRetentionRequired,
+            |config| config.cache_ram = 0,
+        );
+        assert_config_reason(
+            CheckpointReasonCode::PromptCacheRetentionRequired,
+            |config| config.cache_ram = -2,
+        );
         assert_config_reason(CheckpointReasonCode::SlotsRequired, |config| {
             config.slots_enabled = false;
         });
@@ -3891,9 +3936,13 @@ mod tests {
             engine_capabilities: EngineCheckpointCapabilities {
                 slots: true,
                 slot_save_path: true,
+                cache_ram: true,
+                cache_idle_slots: true,
+                swa_full: true,
             },
             model_architecture: Some("llama"),
             model_is_sharded: false,
+            model_has_swa: Some(false),
         };
 
         let remote = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
@@ -3916,6 +3965,9 @@ mod tests {
             engine_capabilities: EngineCheckpointCapabilities {
                 slots: true,
                 slot_save_path: false,
+                cache_ram: true,
+                cache_idle_slots: true,
+                swa_full: true,
             },
             ..base
         });
@@ -3946,13 +3998,54 @@ mod tests {
         assert!(sharded
             .reasons
             .contains(&CheckpointReasonCode::ShardedModelUnsupported));
+
+        let sliding_window = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+            model_has_swa: Some(true),
+            ..base
+        });
+        assert!(sliding_window
+            .reasons
+            .contains(&CheckpointReasonCode::SlidingWindowRequiresFullCache));
+
+        let mut full_swa_config = config.clone();
+        full_swa_config.swa_full = true;
+        let full_sliding_window = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+            config: &full_swa_config,
+            model_has_swa: Some(true),
+            ..base
+        });
+        assert!(full_sliding_window.eligible);
+
+        let missing_swa_capability =
+            evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+                config: &full_swa_config,
+                engine_capabilities: EngineCheckpointCapabilities {
+                    swa_full: false,
+                    ..base.engine_capabilities
+                },
+                model_has_swa: Some(true),
+                ..base
+            });
+        assert!(missing_swa_capability
+            .reasons
+            .contains(&CheckpointReasonCode::EngineCapabilityMissing));
     }
 
     #[test]
-    fn engine_capabilities_require_both_official_flags() {
-        let flags = vec!["--slots".into(), "--slot-save-path".into()];
+    fn engine_capabilities_require_all_core_official_flags() {
+        let flags = vec![
+            "--slots".into(),
+            "--slot-save-path".into(),
+            "--cache-ram".into(),
+            "--cache-idle-slots".into(),
+            "--swa-full".into(),
+        ];
         assert!(EngineCheckpointCapabilities::from_supported_flags(&flags).complete());
-        let incomplete = vec!["--slots".into()];
+        let incomplete = vec![
+            "--slots".into(),
+            "--slot-save-path".into(),
+            "--cache-ram".into(),
+        ];
         assert!(!EngineCheckpointCapabilities::from_supported_flags(&incomplete).complete());
     }
 
@@ -4334,6 +4427,7 @@ mod tests {
         assert_fingerprint_changes(&base, |config| config.cache_prompt = false);
         assert_fingerprint_changes(&base, |config| config.cache_reuse = 128);
         assert_fingerprint_changes(&base, |config| config.cache_ram = 4096);
+        assert_fingerprint_changes(&base, |config| config.cache_idle_slots = false);
         assert_fingerprint_changes(&base, |config| config.ctx_checkpoints = 16);
         assert_fingerprint_changes(&base, |config| config.checkpoint_min_step = 4096);
         assert_fingerprint_changes(&base, |config| config.slots_enabled = false);

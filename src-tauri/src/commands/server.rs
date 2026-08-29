@@ -2139,7 +2139,7 @@ fn assess_checkpoint_eligibility(
     workload: ModelWorkload,
     engine_capabilities: Option<&EngineCapabilities>,
 ) -> CheckpointEligibility {
-    let (model_architecture, model_is_sharded) = {
+    let (model_architecture, model_is_sharded, model_has_swa) = {
         let models = state.models.lock().unwrap();
         models
             .iter()
@@ -2149,8 +2149,14 @@ fn assess_checkpoint_eligibility(
                     std::path::Path::new(&config.model_path),
                 )
             })
-            .map(|model| (model.architecture.clone(), model.is_shard))
-            .unwrap_or((None, false))
+            .map(|model| {
+                (
+                    model.architecture.clone(),
+                    model.is_shard,
+                    model.capabilities.has_swa,
+                )
+            })
+            .unwrap_or((None, false, None))
     };
     let engine_checkpoint_capabilities = engine_capabilities
         .map(|capabilities| {
@@ -2164,6 +2170,7 @@ fn assess_checkpoint_eligibility(
         engine_capabilities: engine_checkpoint_capabilities,
         model_architecture: model_architecture.as_deref(),
         model_is_sharded,
+        model_has_swa,
     })
 }
 

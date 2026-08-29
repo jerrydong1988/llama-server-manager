@@ -564,7 +564,14 @@ const ConfigPage = () => {
           )}
 
           <CheckpointPanel config={local} engineExe={currentEngine?.exe} instanceId={configInstanceId || local.id} labels={t.checkpoint}
-            onCheckpointChange={next => set('kv_checkpoint', next)} onApplyRequirements={() => { set('parallel', 1); set('cache_prompt', true); set('slots_enabled', true) }} />
+            onCheckpointChange={next => set('kv_checkpoint', next)} onApplyRequirements={reasons => {
+              set('parallel', 1)
+              set('cache_prompt', true)
+              set('cache_idle_slots', true)
+              if (local.cache_ram !== -1 && local.cache_ram <= 0) set('cache_ram', 8192)
+              set('slots_enabled', true)
+              if (reasons.includes('sliding_window_requires_full_cache')) set('swa_full', true)
+            }} />
 
           {!manualMode && visibleVectorCleanupGroups.length > 0 && (
             <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">

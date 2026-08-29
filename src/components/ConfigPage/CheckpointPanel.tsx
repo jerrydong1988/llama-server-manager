@@ -10,7 +10,9 @@ import { Toggle } from './shared'
 const REQUIRED_SETTING_REASONS = new Set([
   'parallel_must_be_one',
   'prompt_cache_required',
+  'prompt_cache_retention_required',
   'slots_required',
+  'sliding_window_requires_full_cache',
 ])
 
 const boundedInteger = (value: string, minimum: number, maximum: number) => {
@@ -32,7 +34,7 @@ export function CheckpointPanel({
   instanceId: string
   labels: Translations['checkpoint']
   onCheckpointChange: (next: KvCheckpointConfig) => void
-  onApplyRequirements: () => void
+  onApplyRequirements: (reasons: string[]) => void
 }) {
   const [eligibility, setEligibility] = useState<CheckpointEligibility | null>(null)
   const [loading, setLoading] = useState(false)
@@ -42,6 +44,8 @@ export function CheckpointPanel({
   const canRepair = policy.enabled && (
     config.parallel !== 1
     || !config.cache_prompt
+    || !config.cache_idle_slots
+    || (config.cache_ram !== -1 && config.cache_ram <= 0)
     || !config.slots_enabled
     || reasons.some(reason => REQUIRED_SETTING_REASONS.has(reason))
   )
@@ -93,7 +97,7 @@ export function CheckpointPanel({
 
   const applyRequirements = async () => {
     if (!await confirm(labels.applyRequirementsConfirm, { title: labels.configTitle, kind: 'warning' })) return
-    if (mountedRef.current && useAppStore.getState().activeConfigInstanceId === instanceId) onApplyRequirements()
+    if (mountedRef.current && useAppStore.getState().activeConfigInstanceId === instanceId) onApplyRequirements(reasons)
   }
 
   return (
