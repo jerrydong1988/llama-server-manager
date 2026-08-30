@@ -153,6 +153,10 @@ fn revoke_authorized_root(
 
 #[tauri::command]
 pub async fn list_authorized_directories() -> Vec<AuthorizedDirectory> {
+    authorized_directories_snapshot()
+}
+
+pub(crate) fn authorized_directories_snapshot() -> Vec<AuthorizedDirectory> {
     let authority = PATH_AUTHORITY.lock().unwrap();
     let mut directories = Vec::with_capacity(
         authority.engine_roots.len() + authority.model_roots.len() + authority.download_roots.len(),

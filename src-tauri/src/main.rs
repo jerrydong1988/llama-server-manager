@@ -13,6 +13,7 @@ mod persistence;
 mod runtime_service;
 mod security;
 mod speculative;
+mod storage_maintenance;
 mod utils;
 mod vector_policy;
 
@@ -65,7 +66,7 @@ use crate::commands::server::{
 use crate::commands::telemetry::{
     get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_detail,
     get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
-    list_telemetry_sessions, prune_telemetry,
+    list_telemetry_sessions, optimize_telemetry_storage, prune_telemetry,
 };
 use crate::models::{AppState, WindowState, WorkerOrigin};
 use std::collections::HashMap;
@@ -452,6 +453,11 @@ fn main() {
             let mut timings: Vec<(String, u64)> = Vec::new();
             let now = || NATIVE_START.get().map(|t| t.elapsed().as_millis() as u64).unwrap_or(0);
             timings.push(("setup-enter".into(), now()));
+            // The single-instance plugin has established this process as the primary app,
+            // while the programmatic WebView window has not been created yet.
+            if let Err(error) = crate::storage_maintenance::process_scheduled_webview_cleanup() {
+                eprintln!("Scheduled WebView cache cleanup failed: {error}");
+            }
             if let Err(error) = crate::commands::telemetry::initialize_telemetry_storage() {
                 eprintln!("Telemetry storage initialization failed: {error}");
             }
@@ -527,6 +533,12 @@ fn main() {
             let data_dir = crate::utils::get_data_dir();
             let config_dir = data_dir.join("configs");
             let config = crate::commands::config::read_config_from_disk(&config_dir);
+            let maintenance_running_count = config.running.len();
+            std::thread::spawn(move || {
+                crate::storage_maintenance::run_automatic_storage_maintenance(
+                    maintenance_running_count,
+                );
+            });
             let config_json = serde_json::to_string(&config).unwrap_or_else(|_| "{}".to_string());
             timings.push(("setup-config-read".into(), now()));
 
@@ -688,7 +700,7 @@ fn main() {
             get_download_manager_snapshot,
             test_connection, check_port,
             get_system_metrics, get_system_health, get_slots, get_metrics, get_monitoring_series,
-            get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry,
+            get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry, optimize_telemetry_storage,
             get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
             save_window_state, load_window_state,
             resolve_path,
@@ -714,6 +726,9 @@ fn main() {
             crate::security::list_authorized_directories,
             crate::security::revoke_authorized_directory,
             crate::external_artifacts::get_external_artifact_inventory,
+            crate::storage_maintenance::get_storage_maintenance_inventory,
+            crate::storage_maintenance::cleanup_storage_group,
+            crate::storage_maintenance::schedule_webview_cache_cleanup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

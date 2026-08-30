@@ -39,4 +39,27 @@ const external = read('src-tauri/src/external_artifacts.rs')
 assert.ok(external.includes('ownership: "operator".to_string()'), 'external paths must remain operator-owned')
 assert.ok(!external.includes('std::fs::remove_file') && !external.includes('std::fs::remove_dir'), 'external artifact inventory must stay read-only')
 
+const storage = read('src-tauri/src/storage_maintenance.rs')
+assert.ok(storage.includes('Unknown fixed storage-maintenance group'), 'storage cleanup must reject arbitrary group identifiers')
+assert.ok(storage.includes('validated_path_size(path, root)?'), 'storage cleanup must revalidate containment and links immediately before deletion')
+assert.ok(storage.includes('WebView cache cleanup must be scheduled for the next restart'), 'live WebView cleanup must be rejected')
+const webviewAllowlist = storage.slice(
+  storage.indexOf('const WEBVIEW_CACHE_RELATIVES'),
+  storage.indexOf('pub struct StorageArtifactItem'),
+)
+for (const forbidden of ['Local Storage', 'IndexedDB', 'Cookies']) {
+  assert.ok(!webviewAllowlist.includes(forbidden), `WebView cleanup allowlist must exclude ${forbidden}`)
+}
+
+const telemetry = read('src-tauri/src/commands/telemetry.rs')
+assert.ok(telemetry.includes('TelemetryWrite::Vacuum'), 'telemetry VACUUM must use the serialized writer control queue')
+assert.ok(telemetry.includes('requires all instances to be stopped'), 'telemetry VACUUM must reject active instances')
+
+const main = read('src-tauri/src/main.rs')
+const singleInstancePlugin = main.indexOf('tauri_plugin_single_instance::init')
+const appSetup = main.indexOf('.setup(|app|')
+const webviewCleanup = main.indexOf('process_scheduled_webview_cleanup()')
+const webviewCreation = main.indexOf('tauri::WebviewWindowBuilder::new')
+assert.ok(singleInstancePlugin < appSetup && appSetup < webviewCleanup && webviewCleanup < webviewCreation, 'WebView cache cleanup must run only in the primary app setup before WebView creation')
+
 console.log('Artifact lifecycle regression checks passed.')
