@@ -435,6 +435,8 @@ const STATE_FORMAT: &str = "llama.cpp-slot-state";
 const SLOT_FILENAME: &str = "slot-0.bin";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_METADATA_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_HASH_CACHE_ENTRIES: usize = 256;
+const HASH_CACHE_TTL_SECS: u64 = 90 * 24 * 60 * 60;
 
 fn is_manager_slot_filename(filename: &str) -> bool {
     !filename.is_empty()
@@ -764,6 +766,8 @@ struct HashCacheEntry {
     size: u64,
     modified_unix_nanos: u64,
     sha256: String,
+    #[serde(default)]
+    last_used_unix_secs: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -779,6 +783,28 @@ impl Default for HashCacheFile {
             schema_version: HASH_CACHE_SCHEMA_VERSION,
             entries: BTreeMap::new(),
         }
+    }
+}
+
+fn maintain_hash_cache(cache: &mut HashCacheFile, now_unix_secs: u64) {
+    for entry in cache.entries.values_mut() {
+        if entry.last_used_unix_secs == 0 {
+            entry.last_used_unix_secs = now_unix_secs;
+        }
+    }
+    cache.entries.retain(|_, entry| {
+        now_unix_secs.saturating_sub(entry.last_used_unix_secs) <= HASH_CACHE_TTL_SECS
+    });
+    while cache.entries.len() > MAX_HASH_CACHE_ENTRIES {
+        let Some(oldest) = cache
+            .entries
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_used_unix_secs)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        cache.entries.remove(&oldest);
     }
 }
 
@@ -1344,6 +1370,21 @@ impl CheckpointStore {
         Ok(())
     }
 
+    fn write_hash_cache(&self, path: &Path, cache: &HashCacheFile) -> StoreResult<()> {
+        let encoded = serde_json::to_vec_pretty(cache).map_err(|_| {
+            CheckpointStoreError::new(
+                CheckpointReasonCode::FingerprintUnavailable,
+                "fingerprint cache serialization failed",
+            )
+        })?;
+        crate::persistence::atomic_write(path, &encoded, None).map_err(|_| {
+            CheckpointStoreError::new(
+                CheckpointReasonCode::FingerprintUnavailable,
+                "fingerprint cache persistence failed",
+            )
+        })
+    }
+
     pub fn content_sha256(&self, path: &Path) -> StoreResult<String> {
         self.ensure_root()?;
         let _guard = self
@@ -1372,13 +1413,20 @@ impl CheckpointStore {
                 .unwrap_or_default(),
             Err(_) => HashCacheFile::default(),
         };
-        if let Some(entry) = cache.entries.get(&key) {
-            if entry.size == before.len()
+        let now_unix_secs = Utc::now().timestamp().max(0) as u64;
+        maintain_hash_cache(&mut cache, now_unix_secs);
+        let cached_digest = cache.entries.get(&key).and_then(|entry| {
+            (entry.size == before.len()
                 && entry.modified_unix_nanos == modified_before
-                && is_lower_hex_digest(&entry.sha256)
-            {
-                return Ok(entry.sha256.clone());
+                && is_lower_hex_digest(&entry.sha256))
+            .then(|| entry.sha256.clone())
+        });
+        if let Some(digest) = cached_digest {
+            if let Some(entry) = cache.entries.get_mut(&key) {
+                entry.last_used_unix_secs = now_unix_secs;
             }
+            self.write_hash_cache(&cache_path, &cache)?;
+            return Ok(digest);
         }
 
         let digest = sha256_file(&canonical).map_err(|_| {
@@ -1406,20 +1454,11 @@ impl CheckpointStore {
                 size: after.len(),
                 modified_unix_nanos: modified_after,
                 sha256: digest.clone(),
+                last_used_unix_secs: now_unix_secs,
             },
         );
-        let encoded = serde_json::to_vec_pretty(&cache).map_err(|_| {
-            CheckpointStoreError::new(
-                CheckpointReasonCode::FingerprintUnavailable,
-                "fingerprint cache serialization failed",
-            )
-        })?;
-        crate::persistence::atomic_write(&cache_path, &encoded, None).map_err(|_| {
-            CheckpointStoreError::new(
-                CheckpointReasonCode::FingerprintUnavailable,
-                "fingerprint cache persistence failed",
-            )
-        })?;
+        maintain_hash_cache(&mut cache, now_unix_secs);
+        self.write_hash_cache(&cache_path, &cache)?;
         Ok(digest)
     }
 
@@ -1829,6 +1868,81 @@ impl CheckpointStore {
         self.write_usage(instance_id, &usage)
     }
 
+    fn reconcile_latest_pointer(&self, instance_id: &str, fingerprint: &str) -> StoreResult<()> {
+        let fingerprint_root = self.fingerprint_root(instance_id, fingerprint)?;
+        if !fingerprint_root.exists() {
+            return Ok(());
+        }
+        validate_directory(&fingerprint_root)?;
+        let generations_root = fingerprint_root.join("generations");
+        if !generations_root.exists() {
+            return Ok(());
+        }
+        validate_directory(&generations_root)?;
+
+        let mut newest = None;
+        for entry in fs::read_dir(&generations_root)
+            .map_err(|_| CheckpointStoreError::io("generation scan failed"))?
+            .flatten()
+        {
+            let generation_id = entry.file_name().to_string_lossy().to_string();
+            if !validate_uuid(&generation_id) {
+                continue;
+            }
+            let Ok(loaded) = self.load_generation(
+                instance_id,
+                fingerprint,
+                &generations_root,
+                &generation_id,
+                None,
+            ) else {
+                continue;
+            };
+            let Ok(created_at) = DateTime::parse_from_rfc3339(&loaded.manifest.created_at) else {
+                continue;
+            };
+            let replace = newest.as_ref().map_or(
+                true,
+                |(current, _): &(DateTime<chrono::FixedOffset>, LoadedGeneration)| {
+                    created_at > *current
+                },
+            );
+            if replace {
+                newest = Some((created_at, loaded));
+            }
+        }
+
+        let latest_path = fingerprint_root.join("latest.json");
+        if let Some((_, loaded)) = newest {
+            let manifest_bytes = read_bounded(
+                &loaded.generation_dir.join("manifest.json"),
+                MAX_MANIFEST_BYTES,
+            )?;
+            let latest = LatestPointerV1 {
+                schema_version: LATEST_POINTER_SCHEMA_VERSION,
+                generation_id: loaded.manifest.generation_id,
+                manifest_sha256: sha256_bytes(&manifest_bytes),
+                updated_at: Utc::now().to_rfc3339(),
+            };
+            let latest_bytes = serde_json::to_vec_pretty(&latest).map_err(|_| {
+                CheckpointStoreError::manifest("latest pointer serialization failed")
+            })?;
+            crate::persistence::atomic_write(&latest_path, &latest_bytes, None)
+                .map_err(|_| CheckpointStoreError::io("latest pointer persistence failed"))?;
+        } else {
+            match fs::symlink_metadata(&latest_path) {
+                Ok(_) => {
+                    validate_regular_file(&latest_path)?;
+                    fs::remove_file(&latest_path)
+                        .map_err(|_| CheckpointStoreError::io("latest pointer removal failed"))?;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(CheckpointStoreError::io("latest pointer inspection failed")),
+            }
+        }
+        Ok(())
+    }
+
     pub fn prune_instance(
         &self,
         instance_id: &str,
@@ -1849,8 +1963,13 @@ impl CheckpointStore {
             })
             .map(|(fingerprint, generation)| format!("{fingerprint}/{generation}"))
             .collect();
-        let mut latest_protected = HashSet::new();
+        let mut fallback_protected = HashSet::new();
         let mut generations = Vec::new();
+        let mut fingerprint_ids = Vec::new();
+        let mut valid_keys = HashSet::new();
+        let mut newest_global: Option<(DateTime<chrono::FixedOffset>, String, u64)> = None;
+        let mut removed_generations = 0;
+        let mut usage_next = usage.clone();
         let fingerprint_entries = fs::read_dir(&instance_root)
             .map_err(|_| CheckpointStoreError::io("instance generation scan failed"))?;
         for fingerprint_entry in fingerprint_entries.flatten() {
@@ -1862,25 +1981,12 @@ impl CheckpointStore {
             if validate_directory(&fingerprint_root).is_err() {
                 continue;
             }
+            fingerprint_ids.push(fingerprint.clone());
             let generations_root = fingerprint_root.join("generations");
             if validate_directory(&generations_root).is_err() {
                 continue;
             }
-            let mut newest_valid: Option<(DateTime<chrono::FixedOffset>, String)> = None;
-            if let Ok(latest) = self.read_latest_pointer(&fingerprint_root) {
-                if self
-                    .load_generation(
-                        instance_id,
-                        &fingerprint,
-                        &generations_root,
-                        &latest.generation_id,
-                        Some(&latest.manifest_sha256),
-                    )
-                    .is_ok()
-                {
-                    latest_protected.insert(format!("{fingerprint}/{}", latest.generation_id));
-                }
-            }
+            let _ = self.cleanup_pending(instance_id, &fingerprint);
             let entries = match fs::read_dir(&generations_root) {
                 Ok(entries) => entries,
                 Err(_) => continue,
@@ -1890,14 +1996,22 @@ impl CheckpointStore {
                 if !validate_uuid(&generation_id) {
                     continue;
                 }
-                let Ok(loaded) = self.load_generation(
+                let loaded = match self.load_generation(
                     instance_id,
                     &fingerprint,
                     &generations_root,
                     &generation_id,
                     None,
-                ) else {
-                    continue;
+                ) {
+                    Ok(loaded) => loaded,
+                    Err(_) => {
+                        let key = format!("{fingerprint}/{generation_id}");
+                        usage_next.entries.remove(&key);
+                        if safe_remove_directory(&entry.path(), &generations_root).is_ok() {
+                            removed_generations += 1;
+                        }
+                        continue;
+                    }
                 };
                 let manifest_size = fs::metadata(loaded.generation_dir.join("manifest.json"))
                     .map(|metadata| metadata.len())
@@ -1905,12 +2019,11 @@ impl CheckpointStore {
                 let bytes = loaded.manifest.slot().bytes.saturating_add(manifest_size);
                 let key = format!("{fingerprint}/{generation_id}");
                 if let Ok(created_at) = DateTime::parse_from_rfc3339(&loaded.manifest.created_at) {
-                    let is_newest = match newest_valid.as_ref() {
-                        Some((newest, _)) => created_at > *newest,
-                        None => true,
-                    };
-                    if is_newest {
-                        newest_valid = Some((created_at, key.clone()));
+                    let replace = newest_global
+                        .as_ref()
+                        .map_or(true, |(newest, _, _)| created_at > *newest);
+                    if replace {
+                        newest_global = Some((created_at, key.clone(), bytes));
                     }
                 }
                 let last_used = usage.entries.get(&key).copied().unwrap_or_else(|| {
@@ -1918,14 +2031,15 @@ impl CheckpointStore {
                         .map(|value| value.timestamp_millis().max(0) as u64)
                         .unwrap_or(0)
                 });
+                valid_keys.insert(key.clone());
                 generations.push((last_used, key, bytes, loaded.generation_dir));
             }
-            if !latest_protected
-                .iter()
-                .any(|key| key.starts_with(&format!("{fingerprint}/")))
-            {
-                if let Some((_, newest_key)) = newest_valid {
-                    latest_protected.insert(newest_key);
+        }
+
+        if explicit_protected.is_empty() {
+            if let Some((_, key, bytes)) = newest_global {
+                if bytes <= storage_limit_bytes {
+                    fallback_protected.insert(key);
                 }
             }
         }
@@ -1934,13 +2048,11 @@ impl CheckpointStore {
             total.saturating_add(*bytes)
         });
         generations.sort_by_key(|(last_used, _, _, _)| *last_used);
-        let mut removed_generations = 0;
-        let mut usage_next = usage;
         for (_, key, bytes, path) in generations {
             if remaining_bytes <= storage_limit_bytes {
                 break;
             }
-            if explicit_protected.contains(&key) || latest_protected.contains(&key) {
+            if explicit_protected.contains(&key) || fallback_protected.contains(&key) {
                 continue;
             }
             let Some(generations_root) = path.parent() else {
@@ -1950,9 +2062,14 @@ impl CheckpointStore {
             remaining_bytes = remaining_bytes.saturating_sub(bytes);
             removed_generations += 1;
             usage_next.entries.remove(&key);
+            valid_keys.remove(&key);
         }
+        usage_next.entries.retain(|key, _| valid_keys.contains(key));
         if usage_next.entries != self.read_usage(instance_id).entries {
             self.write_usage(instance_id, &usage_next)?;
+        }
+        for fingerprint in fingerprint_ids {
+            self.reconcile_latest_pointer(instance_id, &fingerprint)?;
         }
         Ok(PruneResult {
             removed_generations,
@@ -5291,6 +5408,110 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.manifest.generation_id, latest_id);
+    }
+
+    #[test]
+    fn per_instance_limit_evicts_historical_fingerprint_generations() {
+        let sandbox = TestSandbox::new("cross-fingerprint-lru");
+        let store = sandbox.store();
+        let first_fingerprint = test_fingerprint(&eligible_config());
+        let mut second_config = eligible_config();
+        second_config.cache_type_k = "q8_0".into();
+        let second_fingerprint = test_fingerprint(&second_config);
+
+        let first_payload = write_scratch_payload(&store, "instance-1", 50, &vec![1; 2048]);
+        let first = manifest_for_payload("instance-1", &first_fingerprint, &first_payload, 512);
+        store
+            .commit_generation(&first, &first_payload, 4096)
+            .unwrap();
+
+        let second_payload = write_scratch_payload(&store, "instance-1", 51, &vec![2; 2048]);
+        let second = manifest_for_payload("instance-1", &second_fingerprint, &second_payload, 768);
+        store
+            .commit_generation(&second, &second_payload, 4096)
+            .unwrap();
+
+        let result = store
+            .prune_instance(
+                "instance-1",
+                4096,
+                &[(
+                    second_fingerprint.digest.clone(),
+                    second.generation_id.clone(),
+                )],
+            )
+            .unwrap();
+
+        assert_eq!(result.removed_generations, 1);
+        assert!(result.remaining_bytes <= 4096);
+        assert!(store
+            .load_latest("instance-1", &first_fingerprint.digest)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store
+                .load_latest("instance-1", &second_fingerprint.digest)
+                .unwrap()
+                .unwrap()
+                .manifest
+                .generation_id,
+            second.generation_id
+        );
+    }
+
+    #[test]
+    fn pruning_removes_unloadable_final_generation_directories() {
+        let sandbox = TestSandbox::new("corrupt-generation-gc");
+        let store = sandbox.store();
+        let fingerprint = test_fingerprint(&eligible_config());
+        let (_, generations_root) = store
+            .ensure_generation_roots("instance-1", &fingerprint.digest)
+            .unwrap();
+        let corrupt = generations_root.join(uuid::Uuid::new_v4().to_string());
+        ensure_private_directory(&corrupt).unwrap();
+        fs::write(corrupt.join("manifest.json"), b"not-json").unwrap();
+
+        let result = store
+            .prune_instance("instance-1", 1024 * 1024, &[])
+            .unwrap();
+
+        assert_eq!(result.removed_generations, 1);
+        assert!(!corrupt.exists());
+    }
+
+    #[test]
+    fn fingerprint_cache_has_ttl_and_lru_bounds() {
+        let now = 10_000_000;
+        let mut cache = HashCacheFile::default();
+        cache.entries.insert(
+            "stale".into(),
+            HashCacheEntry {
+                size: 1,
+                modified_unix_nanos: 1,
+                sha256: digest(1),
+                last_used_unix_secs: now - HASH_CACHE_TTL_SECS - 1,
+            },
+        );
+        for index in 0..=MAX_HASH_CACHE_ENTRIES {
+            cache.entries.insert(
+                format!("entry-{index:03}"),
+                HashCacheEntry {
+                    size: 1,
+                    modified_unix_nanos: 1,
+                    sha256: digest(2),
+                    last_used_unix_secs: now - (MAX_HASH_CACHE_ENTRIES - index) as u64,
+                },
+            );
+        }
+
+        maintain_hash_cache(&mut cache, now);
+
+        assert_eq!(cache.entries.len(), MAX_HASH_CACHE_ENTRIES);
+        assert!(!cache.entries.contains_key("stale"));
+        assert!(!cache.entries.contains_key("entry-000"));
+        assert!(cache
+            .entries
+            .contains_key(&format!("entry-{MAX_HASH_CACHE_ENTRIES:03}")));
     }
 
     #[test]

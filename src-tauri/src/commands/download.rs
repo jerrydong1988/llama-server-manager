@@ -28,11 +28,28 @@ const REPOSITORY_BROWSE_TIMEOUT: std::time::Duration = std::time::Duration::from
 const MAX_REPOSITORY_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HUGGINGFACE_TREE_PAGES: usize = 100;
 const MAX_HUGGINGFACE_TREE_ENTRIES: usize = 100_000;
+const DOWNLOAD_ARTIFACT_LEDGER_SCHEMA_VERSION: u32 = 1;
 
 static DOWNLOAD_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static DOWNLOAD_INFLIGHT_STATE_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static DOWNLOAD_ARTIFACT_LEDGER_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 static INFLIGHT_SNAPSHOT_GENERATION: AtomicU64 = AtomicU64::new(0);
 static INFLIGHT_SNAPSHOT_PERSISTED_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct DownloadArtifactLedger {
+    schema_version: u32,
+    entries: Vec<PersistedQueueEntry>,
+}
+
+impl Default for DownloadArtifactLedger {
+    fn default() -> Self {
+        Self {
+            schema_version: DOWNLOAD_ARTIFACT_LEDGER_SCHEMA_VERSION,
+            entries: Vec::new(),
+        }
+    }
+}
 
 async fn read_bounded_json<T: DeserializeOwned>(
     response: reqwest::Response,
@@ -2370,6 +2387,7 @@ pub async fn delete_managed_local_file(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let mut entries = load_download_state(&state)?;
+    entries.extend(load_download_artifact_entries(&state)?);
     entries.extend(state.download_queue.lock().unwrap().clone());
     entries.extend(
         state
@@ -2401,6 +2419,134 @@ pub async fn delete_managed_local_file(
 // Download queue persistence.
 
 use crate::models::DownloadState;
+
+fn download_artifact_ledger_path(state: &AppState) -> PathBuf {
+    state
+        .config_dir
+        .lock()
+        .unwrap()
+        .join("download-artifacts-v1.json")
+}
+
+fn save_download_artifact_ledger_at_path(
+    path: &Path,
+    ledger: &DownloadArtifactLedger,
+) -> Result<(), String> {
+    if ledger.entries.is_empty() {
+        return match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!(
+                "failed to remove download artifact ledger: {error}"
+            )),
+        };
+    }
+    let bytes = serde_json::to_vec_pretty(ledger)
+        .map_err(|error| format!("failed to serialize download artifact ledger: {error}"))?;
+    crate::persistence::atomic_write(path, &bytes, None)
+}
+
+fn load_download_artifact_ledger_at_path(path: &Path) -> Result<DownloadArtifactLedger, String> {
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(DownloadArtifactLedger::default())
+        }
+        Err(error) => return Err(format!("failed to read download artifact ledger: {error}")),
+    };
+    let ledger: DownloadArtifactLedger = serde_json::from_slice(&bytes)
+        .map_err(|error| format!("failed to parse download artifact ledger: {error}"))?;
+    if ledger.schema_version != DOWNLOAD_ARTIFACT_LEDGER_SCHEMA_VERSION {
+        return Err("download artifact ledger schema is unsupported".into());
+    }
+    Ok(ledger)
+}
+
+fn load_download_artifact_entries(state: &AppState) -> Result<Vec<PersistedQueueEntry>, String> {
+    let _guard = DOWNLOAD_ARTIFACT_LEDGER_LOCK
+        .lock()
+        .map_err(|_| "download artifact ledger lock is poisoned".to_string())?;
+    Ok(load_download_artifact_ledger_at_path(&download_artifact_ledger_path(state))?.entries)
+}
+
+fn update_download_artifact_ledger<R>(
+    state: &AppState,
+    update: impl FnOnce(&mut Vec<PersistedQueueEntry>) -> Result<R, String>,
+) -> Result<R, String> {
+    let _guard = DOWNLOAD_ARTIFACT_LEDGER_LOCK
+        .lock()
+        .map_err(|_| "download artifact ledger lock is poisoned".to_string())?;
+    let path = download_artifact_ledger_path(state);
+    let mut ledger = load_download_artifact_ledger_at_path(&path)?;
+    let result = update(&mut ledger.entries)?;
+    save_download_artifact_ledger_at_path(&path, &ledger)?;
+    Ok(result)
+}
+
+fn completed_artifact_entry(
+    entry: &PersistedQueueEntry,
+) -> Result<Option<PersistedQueueEntry>, String> {
+    let mut completed = entry.clone();
+    completed
+        .files
+        .retain(|file| file.status.as_deref() == Some("completed"));
+    if completed.files.is_empty() {
+        return Ok(None);
+    }
+    if completed.files.iter().any(|file| file.task_id.is_none()) {
+        return Err("completed download is missing its ownership identity".into());
+    }
+    completed.status = "completed".into();
+    Ok(Some(completed))
+}
+
+fn register_completed_download_artifacts(
+    state: &AppState,
+    entry: &PersistedQueueEntry,
+) -> Result<(), String> {
+    let Some(completed) = completed_artifact_entry(entry)? else {
+        return Ok(());
+    };
+    let base_dir = state
+        .config_dir
+        .lock()
+        .unwrap()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    validate_queue_entry(&base_dir, &completed)?;
+    for file in &completed.files {
+        let task_id = file.task_id.as_deref().unwrap_or_default();
+        let (root, final_path, _, _) = registered_download_paths_for_task(
+            std::slice::from_ref(&completed),
+            &base_dir,
+            task_id,
+        )?;
+        let final_path = verified_managed_cleanup_path(&root, &final_path)?;
+        validate_download_file_candidate(&final_path)?;
+        if !final_path.is_file() {
+            return Err("completed download artifact is unavailable".into());
+        }
+    }
+    let task_ids = completed
+        .files
+        .iter()
+        .filter_map(|file| file.task_id.clone())
+        .collect::<HashSet<_>>();
+    update_download_artifact_ledger(state, move |entries| {
+        for task_id in &task_ids {
+            remove_task_from_entries(entries, task_id);
+        }
+        entries.push(completed);
+        Ok(())
+    })
+}
+
+fn remove_download_artifact_ownership(state: &AppState, task_id: &str) -> Result<bool, String> {
+    update_download_artifact_ledger(state, |entries| {
+        Ok(remove_task_from_entries(entries, task_id))
+    })
+}
 
 fn persist_manager_queue(state: &AppState) -> Result<(), String> {
     let queue = state.download_queue.lock().unwrap().clone();
@@ -2748,8 +2894,13 @@ fn remove_manager_file(state: &AppState, task_id: &str) -> Result<bool, String> 
     };
     let runtime_changed =
         remove_task_from_entries(&mut state.download_queue.lock().unwrap(), task_id);
+    let ownership_changed = remove_download_artifact_ownership(state, task_id)?;
 
-    Ok(persisted_changed || inflight_changed || active_changed || runtime_changed)
+    Ok(persisted_changed
+        || inflight_changed
+        || active_changed
+        || runtime_changed
+        || ownership_changed)
 }
 
 fn cleanup_requested(
@@ -2765,6 +2916,7 @@ fn cleanup_requested(
 }
 
 fn persist_terminal_entry(state: &AppState, mut entry: PersistedQueueEntry) -> Result<(), String> {
+    register_completed_download_artifacts(state, &entry)?;
     {
         let cancel_flags = state.cancel_flags.lock().unwrap().clone();
         let pause_flags = state.pause_flags.lock().unwrap().clone();
@@ -3555,8 +3707,104 @@ pub async fn remove_download_queue_entry(
     Ok(())
 }
 
+fn prune_empty_managed_download_dirs(root: &Path, start: &Path) {
+    let Ok(canonical_root) = std::fs::canonicalize(root) else {
+        return;
+    };
+    // Windows can canonicalize one side through an 8.3 path alias (for example
+    // RUNNER~1) while the caller still holds the long path. Normalize both
+    // identities before the containment walk so safe empty descendants are not
+    // silently retained just because the two spellings differ.
+    let Ok(mut current) = std::fs::canonicalize(start) else {
+        return;
+    };
+    while current != canonical_root && path_is_within(&current, &canonical_root) {
+        let Ok(metadata) = std::fs::symlink_metadata(&current) else {
+            break;
+        };
+        if metadata_is_link_like(&metadata) || !metadata.is_dir() {
+            break;
+        }
+        let Ok(mut entries) = std::fs::read_dir(&current) else {
+            break;
+        };
+        if entries.next().is_some() || std::fs::remove_dir(&current).is_err() {
+            break;
+        }
+        let Some(parent) = current.parent() else {
+            break;
+        };
+        current = parent.to_path_buf();
+    }
+}
+
+fn cleanup_partial_download_artifacts(
+    state: &AppState,
+    entries: &[PersistedQueueEntry],
+    statuses: &HashSet<String>,
+) -> Result<usize, String> {
+    let base_dir = state
+        .config_dir
+        .lock()
+        .unwrap()
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_path_buf();
+    let active_paths = state.active_download_paths.lock().unwrap().clone();
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let matching_files = entry.files.iter().filter(|file| {
+            file.status
+                .as_ref()
+                .is_some_and(|status| statuses.contains(status))
+        });
+        let matching_files = matching_files.collect::<Vec<_>>();
+        if matching_files.is_empty() {
+            continue;
+        }
+        validate_queue_entry(&base_dir, entry)?;
+        let root = queue_entry_managed_root(&base_dir, entry)?;
+        let repo_dir = queue_entry_download_dir(&base_dir, entry)?;
+        for file in matching_files {
+            let dir = remote_parent_dir(&repo_dir, &file.path)?;
+            let (final_path, temp_path, metadata_path) = build_download_paths(&dir, &file.name);
+            if active_paths.contains(&normalized_destination_key(&final_path)) {
+                return Err("download artifact is still active and cannot be cleared".into());
+            }
+            for path in [temp_path, metadata_path] {
+                let verified = verified_managed_cleanup_path(&root, &path)?;
+                let key = path_identity_key(&verified);
+                if seen.insert(key) {
+                    candidates.push((root.clone(), verified));
+                }
+            }
+        }
+    }
+
+    let mut removed = 0;
+    let mut parents = Vec::new();
+    for (root, path) in candidates {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                removed += 1;
+                if let Some(parent) = path.parent() {
+                    parents.push((root, parent.to_path_buf()));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Failed to remove {}: {error}", path.display())),
+        }
+    }
+    for (root, parent) in parents {
+        prune_empty_managed_download_dirs(&root, &parent);
+    }
+    Ok(removed)
+}
+
 pub async fn clear_download_tasks_by_status(
     statuses: Vec<String>,
+    cleanup_artifacts: Option<bool>,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let _scheduler = state
@@ -3566,6 +3814,23 @@ pub async fn clear_download_tasks_by_status(
     let status_set: std::collections::HashSet<String> = statuses.into_iter().collect();
     let previous_persisted = load_download_state(&state)?;
     let previous_runtime = state.download_queue.lock().unwrap().clone();
+    if cleanup_artifacts.unwrap_or(false) {
+        let mut cleanup_entries = previous_persisted.clone();
+        cleanup_entries.extend(previous_runtime.clone());
+        cleanup_entries.extend({
+            let _guard = DOWNLOAD_INFLIGHT_STATE_LOCK.lock().unwrap();
+            load_inflight_state_unlocked(&state)?
+        });
+        cleanup_entries.extend(
+            state
+                .download_active_entries
+                .lock()
+                .unwrap()
+                .values()
+                .cloned(),
+        );
+        cleanup_partial_download_artifacts(&state, &cleanup_entries, &status_set)?;
+    }
     {
         let mut queue = state.download_queue.lock().unwrap();
         queue.retain_mut(|entry| {
@@ -4919,6 +5184,84 @@ mod audit_remediation_tests {
     }
 
     #[test]
+    fn completed_download_ownership_is_persisted_separately_from_queue_state() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-download-ledger-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("download-artifacts-v1.json");
+        let entry = PersistedQueueEntry {
+            id: "batch-1".into(),
+            repo_id: "org/model".into(),
+            source: "huggingface".into(),
+            save_dir: "models".into(),
+            added_at: 1,
+            status: "error".into(),
+            retries: 0,
+            max_retries: 3,
+            last_error: Some("one file failed".into()),
+            files: vec![
+                MsFileEntry {
+                    name: "complete.gguf".into(),
+                    path: "complete.gguf".into(),
+                    size: 100,
+                    file_type: "model".into(),
+                    task_id: Some("task-complete".into()),
+                    run_id: Some("run-complete".into()),
+                    downloaded: Some(100),
+                    version: Some(1),
+                    status: Some("completed".into()),
+                    error: None,
+                },
+                MsFileEntry {
+                    name: "failed.gguf".into(),
+                    path: "failed.gguf".into(),
+                    size: 100,
+                    file_type: "model".into(),
+                    task_id: Some("task-failed".into()),
+                    run_id: Some("run-failed".into()),
+                    downloaded: Some(25),
+                    version: Some(1),
+                    status: Some("error".into()),
+                    error: Some("network".into()),
+                },
+            ],
+        };
+        let completed = completed_artifact_entry(&entry).unwrap().unwrap();
+        assert_eq!(completed.files.len(), 1);
+        assert_eq!(completed.files[0].task_id.as_deref(), Some("task-complete"));
+
+        let ledger = DownloadArtifactLedger {
+            schema_version: DOWNLOAD_ARTIFACT_LEDGER_SCHEMA_VERSION,
+            entries: vec![completed],
+        };
+        save_download_artifact_ledger_at_path(&path, &ledger).unwrap();
+        let restored = load_download_artifact_ledger_at_path(&path).unwrap();
+        assert_eq!(restored.entries.len(), 1);
+        assert_eq!(restored.entries[0].files.len(), 1);
+
+        save_download_artifact_ledger_at_path(&path, &DownloadArtifactLedger::default()).unwrap();
+        assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn failed_download_cleanup_prunes_only_empty_managed_descendants() {
+        let dir =
+            std::env::temp_dir().join(format!("lsm-download-empty-dir-{}", uuid::Uuid::new_v4()));
+        let nested = dir.join("org").join("model").join("weights");
+        std::fs::create_dir_all(&nested).unwrap();
+        let sibling = dir.join("keep.txt");
+        std::fs::write(&sibling, b"keep").unwrap();
+
+        prune_empty_managed_download_dirs(&dir, &nested);
+
+        assert!(!nested.exists());
+        assert!(dir.exists());
+        assert_eq!(std::fs::read(&sibling).unwrap(), b"keep");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn deterministic_http_failures_are_not_retried() {
         assert!(!is_retryable_error(Some(400)));
         assert!(!is_retryable_error(Some(403)));
@@ -5399,9 +5742,10 @@ pub mod ipc {
     #[tauri::command]
     pub async fn clear_download_tasks_by_status(
         statuses: Vec<String>,
+        cleanup_artifacts: Option<bool>,
         state: tauri::State<'_, AppState>,
     ) -> crate::error::AppResult<()> {
-        super::clear_download_tasks_by_status(statuses, state)
+        super::clear_download_tasks_by_status(statuses, cleanup_artifacts, state)
             .await
             .map_err(crate::error::AppError::from)
     }
