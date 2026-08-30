@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Activity, BarChart3, Download, Package, Play, RefreshCw, Route, Server, Square, Terminal, Wrench } from 'lucide-react'
+import { Activity, BarChart3, Download, HardDrive, Package, Play, RefreshCw, Route, Server, Square, Terminal, Wrench } from 'lucide-react'
 import { formatMessage, useI18n } from '../../i18n'
 import { useAppStore } from '../../store'
 import type { CommandAction, ProductIssue } from './CommandCenter'
@@ -52,6 +52,7 @@ export function useCommandCenterModel() {
       { id: 'performance', title: actionsCopy.performanceTitle, description: actionsCopy.performanceDescription, group: actionsCopy.groupDiagnostics, icon: <Activity className="h-4 w-4" />, action: go('perf') },
       { id: 'routing', title: actionsCopy.proxyTitle, description: actionsCopy.proxyDescription, group: actionsCopy.groupServices, icon: <Route className="h-4 w-4" />, action: go('proxy') },
       { id: 'logs', title: actionsCopy.logsTitle, description: actionsCopy.logsDescription, group: actionsCopy.groupDiagnostics, icon: <Terminal className="h-4 w-4" />, action: go('logs') },
+      { id: 'storage', title: actionsCopy.storageTitle, description: actionsCopy.storageDescription, group: actionsCopy.groupMaintenance, icon: <HardDrive className="h-4 w-4" />, action: go('storage') },
       { id: 'refresh', title: actionsCopy.refreshTitle, description: actionsCopy.refreshDescription, group: actionsCopy.groupMaintenance, icon: <RefreshCw className="h-4 w-4" />, action: () => void loadInitialData() },
     ]
     const firstStopped = instances.find(instance => instance.status !== 'running' && !instanceLifecycle[instance.id])

@@ -45,6 +45,13 @@ Prevent long-running installations from accumulating files that no active instan
 - Authorized external roots: explicit engine, model, and download grants are listable and exactly revocable. Revocation persists before the in-memory authority changes and never deletes files.
 - External engine outputs: configured fields, custom arguments, and manual commands are inspected for lookup caches, slot state, prompt logs, engine logs, and projector URLs; every match remains an operator-owned reference. Relative paths are not resolved against the manager process, and no automatic deletion is permitted.
 - Quarantine and atomic scratch: age-limited and count-limited inside fixed application roots.
+- Atomic-write scratch and interrupted checkpoint pending generations become eligible after 24 hours, but cleanup is suppressed while any instance is active. Corrupt download-state quarantine expires after 30 days and retains at most the newest ten entries per ledger family.
+- Updater staging: only top-level temporary directories matching the complete `LlamaServerManager-<version>-updater-<suffix>` grammar are inventoried. They become manually eligible after 24 hours and automatically eligible after seven days.
+- Developer/test temp: only top-level `lsm-*` entries with a restricted name grammar are inventoried after 24 hours; cleanup is always explicit and never part of automatic maintenance.
+- Windows crash dumps: exact `llama-server-manager.exe.<pid>.dmp`, `llama-server.exe.<pid>.dmp`, and `msedgewebview2.exe.<pid>.dmp` groups are reported separately. Engine dumps may belong to launches outside the manager and therefore always require explicit confirmation.
+- WebView2: the UI writes a private restart marker. On the next primary process, after the single-instance plugin has established ownership but before any WebView window is created, only a fixed cache-directory allowlist is revalidated and removed. The whole profile, cookies, Local Storage, IndexedDB, and application configuration are never targets.
+- Telemetry compaction: optional `VACUUM` is enqueued on the single telemetry writer after a truncating WAL checkpoint and is rejected while any instance is active.
+- Platform cleanup APIs accept fixed group identifiers only. They rescan immediately before deletion and reject symlinks, Windows reparse points, special files, containment changes, and unknown groups. Partial failures are returned per operation and remain retryable.
 
 ## Delivery batches
 
@@ -52,5 +59,7 @@ Prevent long-running installations from accumulating files that no active instan
 2. Instance/runtime logs and background telemetry maintenance.
 3. Sharded model artifact-set deletion, authorization revocation, and external-output inventory.
 4. Updater, WebView2, crash-dump, quarantine, atomic scratch, and developer-temp maintenance surfaces.
+
+The fourth batch also exposes exact directory-authorization revocation, operator-owned external-output inventory, serialized telemetry compaction, and the restart-only WebView cache workflow on one storage-maintenance page. It does not accept user-supplied cleanup paths.
 
 Each batch must retain cold-start or no-op fallback behavior on maintenance failure, pass Rust and frontend regression suites, and use the protected pull-request workflow.

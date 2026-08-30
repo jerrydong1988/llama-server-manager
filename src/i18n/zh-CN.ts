@@ -1,5 +1,5 @@
 ﻿export const zhCN = {
-  nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', proxy: '\u5B9E\u4F8B\u8DEF\u7531', perf: '\u6027\u80FD\u76D1\u63A7', bigScreen: '\u5927\u5C4F\u6A21\u5F0F', logs: '\u670D\u52A1\u5668\u65E5\u5FD7', dashboard: '\u603B\u89C8', guide: '\u4F7F\u7528\u8BF4\u660E', up: '\u8FD0\u884C', down: '\u505C\u6B62' },
+  nav: { modelRepo: '\u6A21\u578B\u4ED3\u5E93', engine: '\u5F15\u64CE\u7BA1\u7406', instances: '\u5B9E\u4F8B\u7BA1\u7406', config: '\u53C2\u6570\u914D\u7F6E', downloads: '\u4E0B\u8F7D\u7BA1\u7406', cluster: '\u96C6\u7FA4\u7BA1\u7406', proxy: '\u5B9E\u4F8B\u8DEF\u7531', perf: '\u6027\u80FD\u76D1\u63A7', bigScreen: '\u5927\u5C4F\u6A21\u5F0F', logs: '\u670D\u52A1\u5668\u65E5\u5FD7', storage: '存储维护', dashboard: '\u603B\u89C8', guide: '\u4F7F\u7528\u8BF4\u660E', up: '\u8FD0\u884C', down: '\u505C\u6B62' },
   instance: {
     title: '\u670D\u52A1\u5668\u5B9E\u4F8B', create: '\u521B\u5EFA\u5B9E\u4F8B', newInstance: '\u521B\u5EFA\u65B0\u5B9E\u4F8B',
     name: '\u5B9E\u4F8B\u540D\u79F0', namePlaceholder: '\u4F8B\u5982\uFF1ALlama-3-8B',
@@ -620,13 +620,40 @@
     },
   },
 
+  storageMaintenance: {
+    title: '存储维护', description: '按所有权盘点伴生产物，只回收具有固定生命周期策略和固定根目录的路径。', refresh: '刷新盘点',
+    reclaimableItems: '可回收项目', reclaimableBytes: '可回收空间', telemetrySize: '遥测存储', runningInstances: '运行中实例',
+    managerTitle: '管理器所有的产物', managerDescription: '私有暂存和隔离数据只有通过期限、数量、活动状态与路径安全校验后才可回收。',
+    platformTitle: '平台所有的产物', platformDescription: '更新器暂存、WebView 缓存、开发临时数据和崩溃转储分开管理，并要求窄范围确认。',
+    total: '已发现', reclaimable: '当前可回收', showItems: '查看 {count} 个项目', unknownTime: '修改时间未知', unsafe: '路径不安全，已跳过', unknownGroup: '固定维护分组',
+    cleanup: '清理可回收项', cleaning: '正在清理…', cleanupTitle: '确认存储清理', cleanupConfirm: '确定从“{group}”移除 {count} 个可回收项目（{size}）吗？后端会重新扫描固定根目录，并拒绝链接或已发生变化的路径。',
+    cleanupResult: '已移除 {count} 个项目，回收 {size}。', partialFailure: '有 {count} 个项目失败，仍可稍后重试。',
+    webviewTitle: '安排 WebView 缓存清理', webviewConfirm: '是否在下次创建应用窗口前，仅清理固定的 WebView 缓存子目录？Cookie、Local Storage、IndexedDB 和应用配置都会保留。',
+    scheduleRestart: '下次重启时清理', cancelScheduled: '取消计划清理', webviewScheduled: '已安排在下次重启时清理 WebView 缓存。', webviewCancelled: '已取消 WebView 缓存计划清理。',
+    telemetryTitle: '遥测数据库', telemetryDescription: '保留期限会自动执行。VACUUM 是可选的串行维护，仅在全部实例停止时可用。',
+    optimize: '优化数据库', optimizing: '正在优化…', telemetryConfirm: '现在执行截断式 WAL checkpoint 和 VACUUM 吗？该操作可能耗时，期间全部实例必须保持停止。', telemetryResult: '遥测优化回收了 {size}。',
+    authorizedTitle: '已授权目录', authorizedDescription: '这些授权允许访问引擎、模型或下载目录。撤销授权绝不会删除其中的文件。',
+    purposes: { engine: '引擎', model: '模型', download: '下载' }, revoke: '撤销授权', revokeTitle: '撤销目录访问权', revokeConfirm: '撤销对 {path} 的访问权吗？现有文件不会被删除。', revoked: '目录访问权已撤销。', noAuthorized: '当前没有保存显式目录授权。',
+    externalTitle: '操作者所有的外部输出', externalDescription: '实例设置中的 lookup 缓存、slot 路径、提示词日志、引擎日志和投影器 URL 仅做盘点，本页绝不会删除。', operatorOwned: '操作者所有', noExternal: '未发现外部输出引用。',
+    groups: {
+      'private-scratch': { title: '原子写入与检查点暂存', description: '超过 24 小时的中断原子写入文件和检查点 pending generation。', warning: '存在任何运行中实例时，此清理会被阻止。' },
+      'private-quarantine': { title: '损坏状态隔离', description: '超过 30 天或超出每个账本类别最新 10 份的损坏下载账本。' },
+      'updater-staging': { title: '更新器暂存', description: '超过 24 小时且名称精确匹配的 LlamaServerManager 更新器暂存目录；超过 7 天的项目也会由每日维护回收。' },
+      'developer-temp': { title: '开发与测试临时项', description: '超过 24 小时且名称精确匹配 lsm-* 的临时项目，不会自动删除。' },
+      'crash-manager': { title: '管理器崩溃转储', description: '进程名前缀精确为 llama-server-manager.exe 的 Windows 崩溃转储。' },
+      'crash-engine': { title: 'llama-server 崩溃转储', description: '进程名前缀精确为 llama-server.exe 的 Windows 崩溃转储。', warning: '该分组可能包含从本管理器之外启动的 llama-server，请在确认前检查路径。' },
+      'crash-webview': { title: 'WebView2 崩溃转储', description: '进程名前缀精确为 msedgewebview2.exe 的 Windows 崩溃转储。' },
+      'webview-cache': { title: 'WebView 缓存', description: '仅包含应用 WebView 配置中的固定缓存子目录，并在下一次 WebView 启动前清理。', warning: 'Cookie、Local Storage、IndexedDB 和完整配置目录都不在清理集合内。' },
+    },
+  },
+
   appShell: {
     pageDescriptions: {
       dashboard: '\u7CFB\u7EDF\u603B\u89C8\u4E0E llama-server \u5B9E\u4F8B\u6D3B\u52A8', modelRepo: '\u6D4F\u89C8\u672C\u5730\u4E0E\u8FDC\u7A0B\u6A21\u578B\u8D44\u6E90',
       downloads: '\u6A21\u578B\u4F20\u8F93\u961F\u5217\u4E0E\u6D3B\u52A8\u4EFB\u52A1', engine: '\u8FD0\u884C\u65F6\u4E8C\u8FDB\u5236\u4E0E\u6267\u884C\u540E\u7AEF',
       instances: '\u670D\u52A1\u5B9E\u4F8B\u3001\u7AEF\u53E3\u4E0E\u8FDB\u7A0B\u72B6\u6001', config: '\u5E94\u7528\u9ED8\u8BA4\u503C\u4E0E\u8FD0\u884C\u65F6\u504F\u597D',
       cluster: '\u5206\u5E03\u5F0F worker \u4E0E\u7F51\u7EDC\u53EF\u7528\u6027', proxy: '\u7EDF\u4E00 API \u5165\u53E3\u4E0E\u6A21\u578B\u522B\u540D\u8DEF\u7531',
-      perf: '\u6027\u80FD\u9065\u6D4B\u4E0E\u8D44\u6E90\u4FE1\u53F7', logs: '\u8FD0\u884C\u65E5\u5FD7\u4E0E\u8BCA\u65AD\u8F93\u51FA', guide: '\u53C2\u8003\u8D44\u6599\u4E0E\u64CD\u4F5C\u8BF4\u660E',
+      perf: '\u6027\u80FD\u9065\u6D4B\u4E0E\u8D44\u6E90\u4FE1\u53F7', logs: '\u8FD0\u884C\u65E5\u5FD7\u4E0E\u8BCA\u65AD\u8F93\u51FA', storage: '伴生产物、缓存、授权与保留策略', guide: '\u53C2\u8003\u8D44\u6599\u4E0E\u64CD\u4F5C\u8BF4\u660E',
       fallback: '\u7BA1\u7406\u672C\u5730 llama-server \u8FD0\u884C\u72B6\u6001',
     },
     switchToLight: '\u5207\u6362\u5230\u660E\u4EAE\u6A21\u5F0F', switchToDark: '\u5207\u6362\u5230\u6DF1\u8272\u6A21\u5F0F', languageLabel: 'EN',
@@ -675,6 +702,7 @@
       performanceTitle: '\u6253\u5F00\u6027\u80FD\u5206\u6790', performanceDescription: '\u67E5\u770B\u9065\u6D4B\u3001\u8D44\u6E90\u74F6\u9888\u3001\u5B9E\u4F8B\u541E\u5410\u4E0E\u667A\u80FD\u8BCA\u65AD\u3002',
       proxyTitle: '\u7BA1\u7406\u5B9E\u4F8B\u8DEF\u7531', proxyDescription: '\u914D\u7F6E\u7EDF\u4E00 OpenAI \u517C\u5BB9\u5165\u53E3\uFF0C\u5C06\u8BF7\u6C42\u6309\u6A21\u578B\u540D\u5206\u53D1\u5230\u8FD0\u884C\u4E2D\u7684\u5B9E\u4F8B\u3002',
       logsTitle: '\u67E5\u770B\u8FD0\u884C\u65E5\u5FD7', logsDescription: '\u5B9A\u4F4D\u542F\u52A8\u5931\u8D25\u3001\u4E0B\u8F7D\u9519\u8BEF\u548C\u5065\u5EB7\u68C0\u67E5\u7EBF\u7D22\u3002',
+      storageTitle: '维护伴生存储', storageDescription: '检查管理器暂存、平台缓存、崩溃转储、目录授权与外部输出引用。',
       refreshTitle: '\u5237\u65B0\u5168\u90E8\u72B6\u6001', refreshDescription: '\u91CD\u65B0\u52A0\u8F7D\u5B9E\u4F8B\u3001\u6A21\u578B\u3001\u5F15\u64CE\u4E0E\u961F\u5217\u72B6\u6001\u3002',
       startDescription: '\u5FEB\u901F\u542F\u52A8\u7B2C\u4E00\u4E2A\u672A\u8FD0\u884C\u5B9E\u4F8B\u3002', stopDescription: '\u5FEB\u901F\u505C\u6B62\u5F53\u524D\u7B2C\u4E00\u4E2A\u8FD0\u884C\u5B9E\u4F8B\u3002',
       groupNavigation: '\u5BFC\u822A', groupRuntime: '\u8FD0\u884C', groupResources: '\u8D44\u6E90', groupSetup: '\u914D\u7F6E',

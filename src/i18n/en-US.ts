@@ -1,5 +1,5 @@
 export const enUS = {
-  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', downloads: 'Downloads', cluster: 'Cluster', proxy: 'Routing', perf: 'Performance', bigScreen: 'Big Screen', logs: 'Server Logs', dashboard: 'Dashboard', guide: 'Guide', up: 'up', down: 'down' },
+  nav: { modelRepo: 'Model Repo', engine: 'Engines', instances: 'Instances', config: 'Config', downloads: 'Downloads', cluster: 'Cluster', proxy: 'Routing', perf: 'Performance', bigScreen: 'Big Screen', logs: 'Server Logs', storage: 'Storage', dashboard: 'Dashboard', guide: 'Guide', up: 'up', down: 'down' },
   instance: {
     title: 'Server Instances', create: 'Create Instance', newInstance: 'New Instance',
     name: 'Instance Name', namePlaceholder: 'e.g. Llama-3-8B',
@@ -620,6 +620,33 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
     },
   },
 
+  storageMaintenance: {
+    title: 'Storage Maintenance', description: 'Inventory companion artifacts by ownership and reclaim only paths covered by a fixed lifecycle policy.', refresh: 'Refresh inventory',
+    reclaimableItems: 'Reclaimable items', reclaimableBytes: 'Reclaimable bytes', telemetrySize: 'Telemetry storage', runningInstances: 'Running instances',
+    managerTitle: 'Manager-owned artifacts', managerDescription: 'Private scratch and quarantine data can be reclaimed only after age, count, activity, and path-safety checks.',
+    platformTitle: 'Platform-owned artifacts', platformDescription: 'Updater staging, WebView caches, developer temp data, and crash dumps remain separate and require narrowly scoped confirmation.',
+    total: 'Detected', reclaimable: 'Eligible now', showItems: 'Show {count} item(s)', unknownTime: 'Unknown modification time', unsafe: 'Unsafe path — skipped', unknownGroup: 'Fixed maintenance group',
+    cleanup: 'Clean eligible', cleaning: 'Cleaning…', cleanupTitle: 'Confirm storage cleanup', cleanupConfirm: 'Remove {count} eligible item(s) ({size}) from “{group}”? The backend will rescan the fixed root and reject links or paths that changed.',
+    cleanupResult: 'Removed {count} item(s), reclaiming {size}.', partialFailure: '{count} item(s) failed and remain available for retry.',
+    webviewTitle: 'Schedule WebView cache cleanup', webviewConfirm: 'Clear only the fixed WebView cache subdirectories before the next application window is created? Cookies, Local Storage, IndexedDB, and application configuration will be preserved.',
+    scheduleRestart: 'Clean on next restart', cancelScheduled: 'Cancel scheduled cleanup', webviewScheduled: 'WebView cache cleanup is scheduled for the next restart.', webviewCancelled: 'Scheduled WebView cache cleanup was cancelled.',
+    telemetryTitle: 'Telemetry database', telemetryDescription: 'Retention runs automatically. VACUUM is an optional serialized maintenance operation and is available only while all instances are stopped.',
+    optimize: 'Optimize database', optimizing: 'Optimizing…', telemetryConfirm: 'Run a truncating WAL checkpoint and VACUUM now? This can take time and requires all instances to remain stopped.', telemetryResult: 'Telemetry optimization reclaimed {size}.',
+    authorizedTitle: 'Authorized directories', authorizedDescription: 'These grants permit engine, model, or download access. Revoking a grant never deletes its files.',
+    purposes: { engine: 'Engine', model: 'Model', download: 'Download' }, revoke: 'Revoke', revokeTitle: 'Revoke directory access', revokeConfirm: 'Revoke access to {path}? Existing files will not be deleted.', revoked: 'Directory access was revoked.', noAuthorized: 'No explicit directory grants are stored.',
+    externalTitle: 'Operator-owned external outputs', externalDescription: 'Lookup caches, slot paths, prompt logs, engine logs, and projector URLs found in instance settings are inventory-only and are never deleted here.', operatorOwned: 'Operator owned', noExternal: 'No external output references were found.',
+    groups: {
+      'private-scratch': { title: 'Atomic and checkpoint scratch', description: 'Interrupted manager atomic writes and checkpoint pending generations older than 24 hours.', warning: 'Cleanup is blocked while any instance is running.' },
+      'private-quarantine': { title: 'Corrupt-state quarantine', description: 'Corrupt download ledgers older than 30 days or beyond the newest ten files per ledger family.' },
+      'updater-staging': { title: 'Updater staging', description: 'Exact LlamaServerManager updater staging directories older than 24 hours. Items older than seven days are also reclaimed by daily maintenance.' },
+      'developer-temp': { title: 'Developer and test temp', description: 'Exact lsm-* temporary entries older than 24 hours. These are never removed automatically.' },
+      'crash-manager': { title: 'Manager crash dumps', description: 'Windows crash dumps whose exact process prefix is llama-server-manager.exe.' },
+      'crash-engine': { title: 'llama-server crash dumps', description: 'Windows crash dumps whose exact process prefix is llama-server.exe.', warning: 'This group can include llama-server processes launched outside this manager; review paths before confirmation.' },
+      'crash-webview': { title: 'WebView2 crash dumps', description: 'Windows crash dumps whose exact process prefix is msedgewebview2.exe.' },
+      'webview-cache': { title: 'WebView cache', description: 'Only fixed cache subdirectories under the application WebView profile. Cleanup runs before the next WebView starts.', warning: 'Cookies, Local Storage, IndexedDB, and the full profile are outside this cleanup set.' },
+    },
+  },
+
   appShell: {
     pageDescriptions: {
       dashboard: 'System overview and current llama-server activity',
@@ -627,7 +654,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
       engine: 'Runtime binaries and execution backends', instances: 'Server instances, ports, and process state',
       config: 'Application defaults and runtime preferences', cluster: 'Distributed workers and network availability',
       proxy: 'Unified API endpoint and model alias routing', perf: 'Performance telemetry and resource signals',
-      logs: 'Runtime logs and diagnostic output', guide: 'Reference material and operating notes',
+      logs: 'Runtime logs and diagnostic output', storage: 'Owned artifacts, caches, permissions, and retention', guide: 'Reference material and operating notes',
       fallback: 'Manage local llama-server runtime state',
     },
     switchToLight: 'Switch to light mode', switchToDark: 'Switch to dark mode', languageLabel: '\u4E2D\u6587',
@@ -679,6 +706,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
       performanceTitle: 'Open performance analysis', performanceDescription: 'Inspect telemetry, bottlenecks, instance throughput, and diagnostics.',
       proxyTitle: 'Manage instance routing', proxyDescription: 'Configure the unified OpenAI-compatible endpoint and route requests by model name.',
       logsTitle: 'Review runtime logs', logsDescription: 'Trace startup failures, download errors, and health check clues.',
+      storageTitle: 'Maintain companion storage', storageDescription: 'Review owned scratch, caches, crash dumps, directory grants, and external output references.',
       refreshTitle: 'Refresh all state', refreshDescription: 'Reload instances, models, engines, and queue state.',
       startDescription: 'Quickly start the first stopped instance.', stopDescription: 'Quickly stop the first running instance.',
       groupNavigation: 'Navigation', groupRuntime: 'Runtime', groupResources: 'Resources', groupSetup: 'Setup',

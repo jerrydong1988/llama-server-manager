@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense, Component, ReactNode } from 'react'
-import { Activity, BarChart3, BookOpen, Cpu, Database, Download, Monitor, Network, Route, Server, Settings, Terminal } from 'lucide-react'
+import { Activity, BarChart3, BookOpen, Cpu, Database, Download, HardDrive, Monitor, Network, Route, Server, Settings, Terminal } from 'lucide-react'
 import { version } from '../package.json'
 import { invokeApp as invoke } from './lib/ipc'
 import { listen } from '@tauri-apps/api/event'
@@ -15,6 +15,7 @@ const ProxyPage = lazy(() => import('./components/ProxyPage'))
 const BigScreenPage = lazy(() => import('./components/BigScreenPage'))
 const Dashboard = lazy(() => import('./components/Dashboard/Dashboard'))
 const GuidePage = lazy(() => import('./components/GuidePage'))
+const StorageMaintenance = lazy(() => import('./components/StorageMaintenance'))
 import { _startupTimings } from './store'
 import { useAppStore } from './store'
 import type { WorkerInfo } from './store'
@@ -90,6 +91,7 @@ const TAB_CONTENT: Record<string, () => React.ReactElement> = {
   downloads: () => <DownloadManager />,
   bigscreen: () => <BigScreenPage />,
   guide: () => <GuidePage />,
+  storage: () => <StorageMaintenance />,
 }
 
 const renderTabContent = (tabId: string) => {
@@ -153,6 +155,7 @@ function AppInner() {
     { id: 'perf', name: t.nav.perf, icon: Activity },
     { id: 'bigscreen', name: t.nav.bigScreen, icon: Monitor },
     { id: 'logs', name: t.nav.logs, icon: Terminal },
+    { id: 'storage', name: t.nav.storage, icon: HardDrive },
     { id: 'guide', name: t.nav.guide, icon: BookOpen, separator: true },
   ], [t, upCount, activeDownloadCount])
 
@@ -316,7 +319,7 @@ function AppInner() {
   }, [])
 
   const immersiveContent = activeTab === 'bigscreen'
-  const layoutWide = activeTab === 'logs' || activeTab === 'guide' || immersiveContent || activeTab === 'proxy'
+  const layoutWide = activeTab === 'logs' || activeTab === 'guide' || activeTab === 'storage' || immersiveContent || activeTab === 'proxy'
   const statusChips: ShellStatusChip[] = [
     { label: t.nav.up || 'up', value: upCount, tone: 'emerald' },
     { label: t.nav.down || 'down', value: downCount, tone: 'slate' },
@@ -333,6 +336,7 @@ function AppInner() {
     proxy: shellCopy.pageDescriptions.proxy,
     perf: shellCopy.pageDescriptions.perf,
     logs: shellCopy.pageDescriptions.logs,
+    storage: shellCopy.pageDescriptions.storage,
     guide: shellCopy.pageDescriptions.guide,
   }
   const handleStopProxyAndQuit = async () => {

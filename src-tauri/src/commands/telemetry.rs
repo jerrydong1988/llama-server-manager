@@ -15,6 +15,23 @@ const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
 pub(crate) const DEFAULT_TELEMETRY_RETENTION_DAYS: u32 = 14;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryStorageInfo {
+    pub database_bytes: u64,
+    pub wal_bytes: u64,
+    pub shared_memory_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TelemetryOptimizeReport {
+    pub before: TelemetryStorageInfo,
+    pub after: TelemetryStorageInfo,
+    pub reclaimed_bytes: u64,
+}
+
 static TELEMETRY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 static TELEMETRY_DROPPED_WRITES: AtomicU64 = AtomicU64::new(0);
 static TELEMETRY_LAST_WRITE_ERROR: LazyLock<Mutex<Option<(i64, String)>>> =
@@ -283,10 +300,54 @@ enum TelemetryWrite {
         before: i64,
         waiter: mpsc::Sender<Result<u32, String>>,
     },
+    Vacuum {
+        waiter: mpsc::Sender<Result<TelemetryOptimizeReport, String>>,
+    },
 }
 
 fn telemetry_db_path() -> PathBuf {
     crate::utils::get_data_dir().join("telemetry.db")
+}
+
+fn file_bytes(path: &std::path::Path) -> u64 {
+    std::fs::metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file())
+        .map(|metadata| metadata.len())
+        .unwrap_or(0)
+}
+
+pub(crate) fn telemetry_storage_info() -> TelemetryStorageInfo {
+    telemetry_storage_info_for(&telemetry_db_path())
+}
+
+fn telemetry_storage_info_for(path: &std::path::Path) -> TelemetryStorageInfo {
+    let database_bytes = file_bytes(path);
+    let wal_bytes = file_bytes(&path.with_extension("db-wal"));
+    let shared_memory_bytes = file_bytes(&path.with_extension("db-shm"));
+    TelemetryStorageInfo {
+        database_bytes,
+        wal_bytes,
+        shared_memory_bytes,
+        total_bytes: database_bytes
+            .saturating_add(wal_bytes)
+            .saturating_add(shared_memory_bytes),
+    }
+}
+
+fn optimize_telemetry_connection(
+    conn: &Connection,
+    path: &std::path::Path,
+) -> Result<TelemetryOptimizeReport, String> {
+    let before = telemetry_storage_info_for(path);
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA optimize;")
+        .map_err(|error| format!("Telemetry storage optimization failed: {error}"))?;
+    let after = telemetry_storage_info_for(path);
+    Ok(TelemetryOptimizeReport {
+        reclaimed_bytes: before.total_bytes.saturating_sub(after.total_bytes),
+        before,
+        after,
+    })
 }
 
 fn now_ms() -> i64 {
@@ -827,12 +888,25 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
                 let _ = waiter.send(result);
                 continue;
             }
+            TelemetryWrite::Vacuum { waiter } => {
+                let result = if let Some(error) = last_write_error.take() {
+                    Err(error)
+                } else {
+                    optimize_telemetry_connection(&conn, &telemetry_db_path())
+                };
+                let _ = waiter.send(result);
+                continue;
+            }
             write => {
                 let mut batch = Vec::with_capacity(TELEMETRY_WRITE_BATCH_SIZE);
                 batch.push(write);
                 while batch.len() < TELEMETRY_WRITE_BATCH_SIZE {
                     match receiver.try_recv() {
-                        Ok(write @ (TelemetryWrite::Flush(_) | TelemetryWrite::Prune { .. })) => {
+                        Ok(
+                            write @ (TelemetryWrite::Flush(_)
+                            | TelemetryWrite::Prune { .. }
+                            | TelemetryWrite::Vacuum { .. }),
+                        ) => {
                             pending_control = Some(write);
                             break;
                         }
@@ -950,7 +1024,7 @@ fn apply_telemetry_write(conn: &Connection, write: &TelemetryWrite) -> Result<()
             timestamp,
             slots,
         } => insert_slot_snapshots(conn, session_id, instance_id, *timestamp, slots),
-        TelemetryWrite::Flush(_) | TelemetryWrite::Prune { .. } => {
+        TelemetryWrite::Flush(_) | TelemetryWrite::Prune { .. } | TelemetryWrite::Vacuum { .. } => {
             Err("telemetry control message reached the data writer".into())
         }
     }
@@ -1459,6 +1533,28 @@ pub async fn prune_telemetry(retention_days: Option<u32>) -> Result<u32, String>
         .map_err(|e| format!("遥测清理失败: {}", e))?
 }
 
+pub async fn optimize_telemetry_storage(
+    state: tauri::State<'_, crate::models::AppState>,
+) -> crate::error::AppResult<TelemetryOptimizeReport> {
+    if !state.running.lock().unwrap().is_empty() {
+        return Err(crate::error::AppError::new(
+            "CONFLICT",
+            "Telemetry storage optimization requires all instances to be stopped",
+            false,
+        ));
+    }
+    tokio::task::spawn_blocking(vacuum_telemetry_storage)
+        .await
+        .map_err(|error| {
+            crate::error::AppError::new(
+                "INTERNAL",
+                format!("Telemetry optimization task failed: {error}"),
+                true,
+            )
+        })?
+        .map_err(crate::error::AppError::from)
+}
+
 fn reconcile_open_run_sessions_connection(
     conn: &mut Connection,
     active_session_ids: &HashSet<String>,
@@ -1551,6 +1647,16 @@ pub(crate) fn prune_telemetry_storage(retention_days: u32) -> Result<u32, String
     receiver
         .recv_timeout(Duration::from_secs(10))
         .map_err(|_| "timed out while pruning telemetry storage".to_string())?
+}
+
+pub(crate) fn vacuum_telemetry_storage() -> Result<TelemetryOptimizeReport, String> {
+    let (sender, receiver) = mpsc::channel();
+    telemetry_writer()?
+        .send(TelemetryWrite::Vacuum { waiter: sender })
+        .map_err(|_| "telemetry writer is unavailable during optimization".to_string())?;
+    receiver
+        .recv_timeout(Duration::from_secs(120))
+        .map_err(|_| "timed out while optimizing telemetry storage".to_string())?
 }
 
 pub async fn get_telemetry_session_analysis(
@@ -4228,6 +4334,58 @@ mod tests {
         assert_eq!(removed, 1);
         assert_eq!(remaining, 1);
     }
+
+    #[test]
+    fn telemetry_storage_info_counts_database_sidecars() {
+        let root = std::env::temp_dir().join(format!(
+            "lsm-telemetry-storage-info-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("telemetry.db");
+        std::fs::write(&path, vec![0_u8; 10]).unwrap();
+        std::fs::write(path.with_extension("db-wal"), vec![0_u8; 20]).unwrap();
+        std::fs::write(path.with_extension("db-shm"), vec![0_u8; 30]).unwrap();
+
+        let info = telemetry_storage_info_for(&path);
+        assert_eq!(info.database_bytes, 10);
+        assert_eq!(info.wal_bytes, 20);
+        assert_eq!(info.shared_memory_bytes, 30);
+        assert_eq!(info.total_bytes, 60);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn telemetry_optimization_checkpoints_and_vacuums_the_selected_database() {
+        let root =
+            std::env::temp_dir().join(format!("lsm-telemetry-vacuum-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("telemetry.db");
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE disposable (id INTEGER PRIMARY KEY, payload BLOB);
+             BEGIN;
+             INSERT INTO disposable(payload) VALUES (zeroblob(2097152));
+             COMMIT;
+             DELETE FROM disposable;",
+        )
+        .unwrap();
+
+        let report = optimize_telemetry_connection(&conn, &path).unwrap();
+        assert!(report.before.total_bytes > 0);
+        assert!(report.after.total_bytes > 0);
+        assert_eq!(
+            report.reclaimed_bytes,
+            report
+                .before
+                .total_bytes
+                .saturating_sub(report.after.total_bytes)
+        );
+        assert!(report.after.wal_bytes <= report.before.wal_bytes);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }
 
 // IPC compatibility boundary: legacy command internals keep their existing error flow,
@@ -4278,6 +4436,13 @@ pub mod ipc {
         super::prune_telemetry(retention_days)
             .await
             .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
+    pub async fn optimize_telemetry_storage(
+        state: tauri::State<'_, crate::models::AppState>,
+    ) -> crate::error::AppResult<TelemetryOptimizeReport> {
+        super::optimize_telemetry_storage(state).await
     }
 
     #[tauri::command]

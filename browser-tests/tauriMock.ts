@@ -633,6 +633,21 @@ declare global {
 let releasePendingStart: (() => void) | null = null
 let delayedInventoryCacheLoaded = false
 let mdnsDiscoveryActive = false
+let storageWebviewScheduled = false
+const storageAuthorizedDirectories = [
+  { purpose: 'model', root: 'C:\\browser-test\\models' },
+  { purpose: 'engine', root: 'C:\\browser-test\\engines' },
+]
+const storageGroups = [
+  { id: 'private-scratch', ownership: 'manager', action: 'confirm', automatic: true, itemCount: 1, eligibleCount: 1, totalBytes: 4096, eligibleBytes: 4096, items: [{ path: 'C:\\browser-test\\app-data\\.config.deadbeef.tmp', bytes: 4096, modifiedAt: Date.now() - 172_800_000, eligible: true, safe: true, reason: 'older-than-24-hours' }], warnings: [] },
+  { id: 'private-quarantine', ownership: 'manager', action: 'confirm', automatic: true, itemCount: 1, eligibleCount: 0, totalBytes: 512, eligibleBytes: 0, items: [], warnings: [] },
+  { id: 'updater-staging', ownership: 'platform', action: 'confirm', automatic: true, itemCount: 1, eligibleCount: 1, totalBytes: 15_937_536, eligibleBytes: 15_937_536, items: [], warnings: [] },
+  { id: 'developer-temp', ownership: 'platform', action: 'confirm', automatic: false, itemCount: 2, eligibleCount: 2, totalBytes: 39_800_000, eligibleBytes: 39_800_000, items: [], warnings: [] },
+  { id: 'crash-manager', ownership: 'platform', action: 'confirm', automatic: false, itemCount: 1, eligibleCount: 1, totalBytes: 3_216_380, eligibleBytes: 3_216_380, items: [], warnings: [] },
+  { id: 'crash-engine', ownership: 'platform', action: 'confirm', automatic: false, itemCount: 2, eligibleCount: 2, totalBytes: 19_200_000, eligibleBytes: 19_200_000, items: [], warnings: [] },
+  { id: 'crash-webview', ownership: 'platform', action: 'confirm', automatic: false, itemCount: 1, eligibleCount: 1, totalBytes: 10_616_846, eligibleBytes: 10_616_846, items: [], warnings: [] },
+  { id: 'webview-cache', ownership: 'platform', action: 'restart', automatic: false, itemCount: 3, eligibleCount: 3, totalBytes: 116_917_925, eligibleBytes: 116_917_925, items: [], warnings: [] },
+]
 const pendingBrowses: Array<{ repoId: string; resolve: (files: MsFileEntry[]) => void }> = []
 const pendingPortChecks: Array<{ port: number; resolve: (available: boolean) => void }> = []
 const pendingWorkerScans: Array<(workers: WorkerInfo[]) => void> = []
@@ -1168,6 +1183,51 @@ mockIPC((command, payload) => {
         }
       }
       return { queue: [], active_count: 0, max_concurrent: 3, resume_policy: 'manual', bandwidth_limit_bytes_per_sec: 0, low_priority_throttle: false }
+    case 'get_storage_maintenance_inventory':
+      return {
+        generatedAt: Date.now(),
+        appDataRoot: 'C:\\browser-test\\app-data',
+        tempRoot: 'C:\\browser-test\\temp',
+        webviewRoot: 'C:\\browser-test\\webview',
+        scheduledWebviewCleanup: storageWebviewScheduled,
+        runningInstanceCount: 0,
+        groups: clone(storageGroups),
+        authorizedDirectories: clone(storageAuthorizedDirectories),
+        externalArtifacts: {
+          references: [{ instanceId: INSTANCE_ID, instanceName: 'Browser Test Instance', source: 'custom-argument', flag: '--slot-save-path', artifactKind: 'slot-state', ownership: 'operator', value: 'C:\\operator\\slots', locationKind: 'absolute-existing', exists: true, sizeBytes: 2048 }],
+          warnings: [],
+        },
+        telemetry: { databaseBytes: 13_762_560, walBytes: 4_173_592, sharedMemoryBytes: 32_768, totalBytes: 17_968_920 },
+      }
+    case 'cleanup_storage_group': {
+      const groupId = String(args.groupId ?? '')
+      const group = storageGroups.find(candidate => candidate.id === groupId)
+      if (!group) throw new Error(`unknown browser storage group: ${groupId}`)
+      if (groupId === 'updater-staging') {
+        group.eligibleCount = 0
+        group.eligibleBytes = 0
+        return { groupId, removedItems: 0, removedBytes: 0, skippedItems: 1, failures: ['Refusing linked updater staging directory'] }
+      }
+      const report = { groupId, removedItems: group.eligibleCount, removedBytes: group.eligibleBytes, skippedItems: group.itemCount - group.eligibleCount, failures: [] }
+      group.itemCount -= group.eligibleCount
+      group.totalBytes -= group.eligibleBytes
+      group.eligibleCount = 0
+      group.eligibleBytes = 0
+      group.items = []
+      return report
+    }
+    case 'schedule_webview_cache_cleanup':
+      storageWebviewScheduled = Boolean(args.enabled)
+      return storageWebviewScheduled
+    case 'optimize_telemetry_storage':
+      return { before: { totalBytes: 17_968_920 }, after: { totalBytes: 13_762_560 }, reclaimedBytes: 4_206_360 }
+    case 'revoke_authorized_directory': {
+      const purpose = String(args.purpose ?? '')
+      const root = String(args.root ?? '')
+      const index = storageAuthorizedDirectories.findIndex(candidate => candidate.purpose === purpose && candidate.root === root)
+      if (index >= 0) storageAuthorizedDirectories.splice(index, 1)
+      return index >= 0
+    }
     case 'restore_download_queue': return []
     case 'get_monitoring_series':
       return HAS_MONITORING_DATA ? clone(monitoringSeries) : []

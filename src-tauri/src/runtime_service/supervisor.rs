@@ -1928,6 +1928,7 @@ impl RuntimeSupervisor {
             Ok(_) => {}
             Err(error) => eprintln!("Telemetry retention maintenance failed: {error}"),
         }
+        crate::storage_maintenance::run_automatic_storage_maintenance(active_instance_ids.len());
     }
 }
 
