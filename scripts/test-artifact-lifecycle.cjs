@@ -27,6 +27,16 @@ const scanner = read('src-tauri/src/commands/scanner.rs')
 assert.ok(scanner.includes('resolve_model_deletion_artifacts'), 'backend must resolve a complete artifact set')
 assert.ok(scanner.includes('ModelArtifactError::Incomplete'), 'incomplete shard groups must fail closed')
 assert.ok(scanner.includes('Rebuild the complete artifact set at execution time'), 'execution must not trust a stale preview')
+assert.ok(scanner.includes('model_artifact_references'), 'model deletion must use one effective artifact reference resolver')
+for (const source of ['custom_args', 'manual_command', 'lora_path', 'lora_scaled', 'models_dir', 'models_preset']) {
+  assert.ok(scanner.includes(source), `model deletion must account for ${source}`)
+}
+assert.ok(scanner.includes('malformed_launch_escape_hatches_fail_model_deletion_closed'), 'ambiguous launch arguments must fail deletion closed')
+assert.ok(scanner.includes('collect_model_preset_references'), 'router INI presets must be resolved before model deletion')
+assert.ok(scanner.includes('MAX_MODEL_PRESET_BYTES'), 'router INI preset inspection must be bounded')
+assert.ok(scanner.includes('model_deletion_references_include_router_preset_files'), 'router INI model references need regression coverage')
+assert.ok(scanner.includes('missing_or_malformed_router_presets_fail_model_deletion_closed'), 'unreadable router presets must fail deletion closed')
+assert.ok(scanner.includes('running_instance_without_launch_snapshot_fails_model_deletion_closed'), 'legacy running instances without launch evidence must block model deletion')
 
 const security = read('src-tauri/src/security.rs')
 const revoke = security.slice(

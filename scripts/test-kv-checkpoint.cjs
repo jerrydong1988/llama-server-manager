@@ -19,10 +19,15 @@ assert.match(checkpointSource, /spec_draft_backend_sampling/, 'draft context and
 assert.match(checkpointSource, /engine_artifact_sha256/, 'checkpoint compatibility must cover adjacent engine runtime libraries')
 assert.match(checkpointSource, /"qwen4exp"/, 'hybrid recurrent qwen4exp models must fail open to a cold start')
 assert.match(checkpointSource, /fingerprints-v1\.json/, 'full content fingerprints must use a versioned cache')
+assert.match(checkpointSource, /HASH_CACHE_SCHEMA_VERSION: u32 = 2/, 'persistent hashes must bind to stronger file identity metadata')
 assert.match(checkpointSource, /\.pending-/, 'generation commits must stage through a pending directory')
+assert.match(checkpointSource, /CHECKPOINT_SLOT_OPERATION_TIMEOUT[^\n]*30 \* 60/, 'large slot operations must receive a long-running timeout')
+assert.doesNotMatch(checkpointSource, /\.min\(Duration::from_secs\(30\)\)/, 'slot operation timeouts must not be clamped to 30 seconds')
+assert.match(checkpointSource, /fs::rename\(scratch_payload, &destination\)/, 'generation commits must move scratch payloads without duplicating them')
+assert.match(checkpointSource, /ensure_scratch_capacity/, 'known-size checkpoint staging must preflight free disk space')
 assert.match(checkpointSource, /AfterManifestWrite/, 'storage tests must inject a manifest-last failure')
 for (const faultPoint of [
-  'AfterPayloadCopy',
+  'AfterPayloadMove',
   'AfterPayloadSync',
   'AfterManifestWrite',
   'BeforeGenerationRename',
@@ -106,6 +111,11 @@ assertOrdered(
   ['checkpoint_before_termination', 'terminate_running_instance'],
   'runtime process stop',
 )
+assertOrdered(
+  functionSlice(checkpointSource, 'pub fn restore_or_cold', 'pub fn save_before_stop'),
+  ['backend.restore', 'remove_scratch_payload', 'ensure_scratch_capacity', 'backend.save'],
+  'restore scratch lifecycle',
+)
 const runtimeCommandHandler = functionSlice(
   runtimeSupervisorSource,
   'pub async fn handle_command(',
@@ -135,6 +145,14 @@ const persistenceSource = fs.readFileSync(
   'utf8',
 )
 assert.match(persistenceSource, /windows_wide_path/, 'Windows atomic writes must support deep checkpoint paths')
+
+const readDoc = relative => fs.readFileSync(path.join(process.cwd(), relative), 'utf8')
+const readme = readDoc('README.md')
+const guide = readDoc('GUIDE.md')
+for (const [name, document] of [['README', readme], ['GUIDE', guide]]) {
+  assert.doesNotMatch(document, /纯 n-gram|ngram-only speculation|limited to engine-reported `ngram-\*` types/, `${name} must not claim checkpointing is ngram-only`)
+  assert.match(document, /target\/draft|target\/draft context/, `${name} must describe the explicit draft-context capability gate`)
+}
 
 const checkpointCommandSource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'commands', 'checkpoint.rs'),

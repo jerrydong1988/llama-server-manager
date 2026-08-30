@@ -2,6 +2,7 @@ use crate::checkpoint::{
     build_checkpoint_fingerprint, evaluate_checkpoint_eligibility, CheckpointEligibility,
     CheckpointEligibilityContext, CheckpointFingerprint, CheckpointReasonCode,
     EngineCheckpointCapabilities, FingerprintMaterials, LlamaSlotClient, SlotBackend,
+    CHECKPOINT_SLOT_OPERATION_TIMEOUT,
 };
 use crate::commands::adlx;
 use crate::commands::engine_capabilities::{
@@ -33,7 +34,6 @@ const LOG_EVENT_BATCH_SIZE: usize = 200;
 static SERVER_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(reqwest::Client::new);
 const ENGINE_PREVIEW_MATCH_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(2);
 const MAX_ENGINE_PREVIEW_MATCH_CACHE_ENTRIES: usize = 32;
-const CHECKPOINT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CHECKPOINT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const CHECKPOINT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const CHECKPOINT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -2354,7 +2354,7 @@ fn resolve_checkpoint_startup(
         return true;
     }
     if coordinator.restore_cleanup_pending(instance_id, expected_pid) {
-        let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_HTTP_TIMEOUT) {
+        let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_SLOT_OPERATION_TIMEOUT) {
             Ok(client) => {
                 coordinator.retry_failed_restore_cleanup(instance_id, expected_pid, &client)
             }
@@ -2394,7 +2394,7 @@ fn resolve_checkpoint_startup(
         }
     };
     let (fingerprint, policy) = registered;
-    let status = match LlamaSlotClient::new(config, CHECKPOINT_HTTP_TIMEOUT) {
+    let status = match LlamaSlotClient::new(config, CHECKPOINT_SLOT_OPERATION_TIMEOUT) {
         Ok(client) => coordinator.restore_or_cold(
             instance_id,
             expected_pid,
@@ -3522,7 +3522,8 @@ fn checkpoint_before_termination_blocking(
         };
         if active_requests == 0 && slots.iter().all(|slot| !slot.is_processing) {
             let (fingerprint, policy) = &registered;
-            let save_client = match LlamaSlotClient::new(&config, CHECKPOINT_HTTP_TIMEOUT) {
+            let save_client = match LlamaSlotClient::new(&config, CHECKPOINT_SLOT_OPERATION_TIMEOUT)
+            {
                 Ok(client) => client,
                 Err(error) => {
                     break coordinator.fail_save_setup(

@@ -8,6 +8,7 @@ use super::transport::runtime_state_path;
 use crate::checkpoint::{
     CheckpointCoordinator, CheckpointEligibility, CheckpointFingerprint, CheckpointPhase,
     CheckpointReasonCode, CheckpointStore, CheckpointStoreError, LlamaSlotClient, SlotBackend,
+    CHECKPOINT_SLOT_OPERATION_TIMEOUT,
 };
 use crate::commands::proxy::{
     normalize_and_validate_proxy_config, proxy_request_resolution_from,
@@ -30,7 +31,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const GUI_HEARTBEAT_TIMEOUT_MS: u64 = 20_000;
-const CHECKPOINT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const CHECKPOINT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const CHECKPOINT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const CHECKPOINT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
@@ -645,7 +645,7 @@ impl RuntimeSupervisor {
             return true;
         }
         if coordinator.restore_cleanup_pending(instance_id, expected_pid) {
-            let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_HTTP_TIMEOUT) {
+            let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_SLOT_OPERATION_TIMEOUT) {
                 Ok(client) => {
                     coordinator.retry_failed_restore_cleanup(instance_id, expected_pid, &client)
                 }
@@ -676,7 +676,7 @@ impl RuntimeSupervisor {
             }
         };
         let (fingerprint, policy) = registered;
-        let result = match LlamaSlotClient::new(config, CHECKPOINT_HTTP_TIMEOUT) {
+        let result = match LlamaSlotClient::new(config, CHECKPOINT_SLOT_OPERATION_TIMEOUT) {
             Ok(client) => coordinator.restore_or_cold(
                 instance_id,
                 expected_pid,
@@ -1238,17 +1238,18 @@ impl RuntimeSupervisor {
             };
             if active_requests == 0 && slots.iter().all(|slot| !slot.is_processing) {
                 let (fingerprint, policy) = &registered;
-                let save_client = match LlamaSlotClient::new(&config, CHECKPOINT_HTTP_TIMEOUT) {
-                    Ok(client) => client,
-                    Err(error) => {
-                        break coordinator.fail_save_setup(
-                            instance_id,
-                            running.pid,
-                            error,
-                            started.elapsed().as_millis() as u64,
-                        )
-                    }
-                };
+                let save_client =
+                    match LlamaSlotClient::new(&config, CHECKPOINT_SLOT_OPERATION_TIMEOUT) {
+                        Ok(client) => client,
+                        Err(error) => {
+                            break coordinator.fail_save_setup(
+                                instance_id,
+                                running.pid,
+                                error,
+                                started.elapsed().as_millis() as u64,
+                            )
+                        }
+                    };
                 break coordinator.save_before_stop(
                     instance_id,
                     running.pid,
