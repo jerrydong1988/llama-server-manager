@@ -195,6 +195,7 @@ export const fieldLabel = (key: keyof InstanceConfig, t: Translations) => {
     cont_batching: t.configPage.contBatching,
     flash_attn: t.configPage.flashAttn,
     load_mode: t.configPage.loadMode,
+    lazy_mode: t.configPage.lazyMode,
     no_repack: t.configPage.noRepack,
     numa: t.configPage.numa,
     numa_mode: t.configPage.numa,

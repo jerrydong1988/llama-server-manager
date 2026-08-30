@@ -170,7 +170,16 @@ export function CheckpointPanel({
               {!loading && reasons.length > 0 && (
                 <ul className="mt-2 space-y-1 text-xs text-slate-600 dark:text-slate-300">
                   {reasons.map(reason => (
-                    <li key={reason}>• {labels.reasons[reason as keyof typeof labels.reasons] || reason}</li>
+                    <li key={reason}>
+                      • {labels.reasons[reason as keyof typeof labels.reasons] || reason}
+                      {reason === 'custom_arguments_unsupported' && (eligibility?.custom_argument_blockers?.length ?? 0) > 0 && (
+                        <span className="ml-1 inline-flex flex-wrap gap-1 align-middle">
+                          {eligibility?.custom_argument_blockers?.map(blocker => (
+                            <code key={blocker} className="rounded bg-slate-200/70 px-1 py-0.5 text-[11px] dark:bg-slate-800">{blocker}</code>
+                          ))}
+                        </span>
+                      )}
+                    </li>
                   ))}
                 </ul>
               )}

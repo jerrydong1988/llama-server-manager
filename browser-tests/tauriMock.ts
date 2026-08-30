@@ -758,6 +758,7 @@ const generatedCommand = (config: InstanceConfig): GeneratedServerCommand => {
     else if (field === 'top_p') command.push('--top-p', String(config.top_p))
     else if (field === 'threads') command.push('--threads', String(config.threads))
     else if (field === 'load_mode' && config.load_mode) command.push('--load-mode', config.load_mode)
+    else if (field === 'lazy_mode' && config.lazy_mode) command.push('--lazy-mode', config.lazy_mode)
     else if (field === 'perf') command.push(config.perf ? '--perf' : '--no-perf')
     else if (field === 'kv_unified_mode') command.push(config.kv_unified_mode === 'off' ? '--no-kv-unified' : '--kv-unified')
     else if (field === 'models_autoload') command.push(config.models_autoload ? '--models-autoload' : '--no-models-autoload')

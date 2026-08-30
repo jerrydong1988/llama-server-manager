@@ -854,6 +854,66 @@ pub fn get_default_models_dir() -> PathBuf {
     get_data_dir().join(DEFAULT_MODELS_DIR_NAME)
 }
 
+/// Split a managed command-line fragment while preserving ordinary Windows
+/// path separators. This intentionally mirrors CommandLineToArgvW-style quote
+/// handling closely enough for llama-server custom argument rows and manual
+/// commands without interpreting shell metacharacters.
+pub(crate) fn split_command_line_checked(input: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut token_started = false;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                token_started = true;
+            }
+            '\\' => {
+                token_started = true;
+                let mut count = 1;
+                while chars.peek() == Some(&'\\') {
+                    chars.next();
+                    count += 1;
+                }
+                if chars.peek() == Some(&'"') {
+                    for _ in 0..count / 2 {
+                        current.push('\\');
+                    }
+                    chars.next();
+                    if count % 2 == 0 {
+                        in_quotes = !in_quotes;
+                    } else {
+                        current.push('"');
+                    }
+                } else {
+                    for _ in 0..count {
+                        current.push('\\');
+                    }
+                }
+            }
+            ' ' | '\t' | '\r' | '\n' if !in_quotes => {
+                if token_started {
+                    args.push(std::mem::take(&mut current));
+                    token_started = false;
+                }
+            }
+            _ => {
+                token_started = true;
+                current.push(ch);
+            }
+        }
+    }
+    if in_quotes {
+        return Err("命令参数包含未闭合的双引号。".to_string());
+    }
+    if token_started {
+        args.push(current);
+    }
+    Ok(args)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

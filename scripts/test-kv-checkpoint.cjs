@@ -40,6 +40,8 @@ assert.match(checkpointSource, /trait SlotBackend/, 'slot lifecycle tests must u
 assert.match(checkpointSource, /gate_allows_routing/, 'checkpoint restore must own a routing gate')
 assert.match(checkpointSource, /verified_sha256 != slot\.sha256/, 'restore must verify a save round trip')
 assert.match(checkpointSource, /StaleProcessEvent/, 'checkpoint events must be bound to the active process')
+assert.match(checkpointSource, /CHECKPOINT_SAFE_LAZY_FLAGS/, 'checkpoint eligibility must explicitly classify safe lazy-loading flags')
+assert.match(checkpointSource, /custom_argument_blockers/, 'checkpoint eligibility must return concrete custom-argument blockers')
 
 const rustEnumValues = (name) => {
   const body = checkpointSource.match(new RegExp(`pub enum ${name} \\{([\\s\\S]*?)\\n\\}`))?.[1] || ''
@@ -162,6 +164,13 @@ assert.match(checkpointCommandSource, /list_checkpoint_statuses/, 'GUI must hydr
 assert.match(checkpointCommandSource, /get_checkpoint_status/, 'GUI must support exact checkpoint status lookup')
 assert.match(checkpointCommandSource, /reserve_checkpoint_clear/, 'direct clear must serialize against instance start')
 
+const checkpointPanelSource = fs.readFileSync(
+  path.join(process.cwd(), 'src', 'components', 'ConfigPage', 'CheckpointPanel.tsx'),
+  'utf8',
+)
+assert.match(checkpointPanelSource, /custom_argument_blockers/, 'checkpoint UI must render concrete custom-argument blockers')
+assert.match(checkpointPanelSource, /<code key=\{blocker\}/, 'checkpoint blockers must be visually distinct exact argument names')
+
 const entry = `
   import assert from 'node:assert/strict'
   import { defaultInstanceConfig } from './src/store/defaults'
@@ -189,6 +198,7 @@ const entry = `
     storage_limit_gib: 8,
     minimum_prompt_tokens: 256,
   })
+  assert.equal(defaults.lazy_mode, '')
 
   const legacy = { ...defaults, explicit_overrides: null }
   delete legacy.kv_checkpoint

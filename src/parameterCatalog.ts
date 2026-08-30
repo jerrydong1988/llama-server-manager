@@ -108,6 +108,10 @@ export const PARAMETER_CATALOG: Partial<Record<keyof InstanceConfig, ParameterDe
       ...b10423('auto（设备支持时使用 mmap）', 'auto (mmap when the device supports it)'),
     },
   },
+  lazy_mode: {
+    flags: ['--lazy-mode', '-lzm'],
+    defaultKind: 'engine',
+  },
   no_mmap: { flags: ['--mmap', '--no-mmap'], verifiedDefaults: b10068('内存映射开启', 'memory mapping enabled') },
   no_repack: { flags: ['--repack', '--no-repack'], verifiedDefaults: b10068('权重重打包开启', 'weight repacking enabled') },
   no_kv_offload: { flags: ['--kv-offload', '--no-kv-offload'], verifiedDefaults: b10068('GPU 卸载开启', 'GPU offload enabled') },

@@ -32,7 +32,9 @@ The application uses three complementary controls so parameter support does not 
 
 保守模式不会静默删除配置。更换回能力完整的引擎后，原有参数可以重新参与校验和命令生成。Embedding 与 Reranker 的工作模式参数以及认证/TLS 等安全参数不会因保守模式被静默移除。
 
-Scanning never executes every discovered binary. Probes run only for explicitly selected engines, without a shell, with time and output limits. Version recognition is independent from parameter capability detection. Complete results enforce compatibility at save and launch; partial results retain recognized and essential flags; unknown results use a minimal command without deleting saved configuration.
+Lazy 张量加载使用结构化 `lazy_mode` 配置。当前 `master` 的规范参数是 `--lazy-mode`（短别名 `-lzm`）；部分实验分支仍公开旧 `--tensor-read-lazy`。程序只在所选引擎的能力探测明确报告对应别名时协商替换，优先级为 `--lazy-mode`、`-lzm`、`--tensor-read-lazy`。稳定版基线仍是权威来源，master-only 参数只作为已复核前瞻能力。
+
+Scanning never executes every discovered binary. Probes run only for explicitly selected engines, without a shell, with time and output limits. Version recognition is independent from parameter capability detection. Complete results enforce compatibility at save and launch; partial results retain recognized and essential flags; unknown results use a minimal command without deleting saved configuration. Structured lazy loading prefers current `--lazy-mode`, then `-lzm`, and negotiates legacy `--tensor-read-lazy` only when the selected engine advertises it.
 
 ## 有状态检查点采用更严格策略 / Stricter Stateful Checkpoint Policy
 

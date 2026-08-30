@@ -134,6 +134,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
   if (config.moe_cpu_layers > 0) a.add('moe_cpu_layers')
   if (config.cpu_moe) a.add('cpu_moe')
   if (config.load_mode) a.add('load_mode')
+  if (config.lazy_mode) a.add('lazy_mode')
   if (config.no_repack) a.add('no_repack')
   if (config.numa_mode || config.numa) a.add('numa_mode')
   if (config.perf) a.add('perf')

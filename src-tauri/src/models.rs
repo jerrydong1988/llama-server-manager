@@ -469,6 +469,9 @@ pub struct InstanceConfig {
     /// Unified llama.cpp model loading mode. Empty means inherit the engine default.
     #[serde(default)]
     pub load_mode: String,
+    /// Lazy tensor loading mode. Empty means inherit the engine default.
+    #[serde(default)]
+    pub lazy_mode: String,
     /// Legacy loading fields retained only for configuration migration.
     #[serde(default)]
     pub mlock: bool,
@@ -853,6 +856,7 @@ impl Default for InstanceConfig {
             moe_cpu_layers: 0,
             cpu_moe: false,
             load_mode: String::new(),
+            lazy_mode: String::new(),
             mlock: false,
             no_mmap: false,
             no_repack: false,

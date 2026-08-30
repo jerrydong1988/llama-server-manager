@@ -31,7 +31,7 @@ export const VECTOR_ALLOWED_FIELDS = new Set<keyof InstanceConfig>([
   'cont_batching', 'warmup',
   'rope_scaling', 'rope_scale', 'rope_freq_base', 'rope_freq_scale',
   'yarn_ext_factor', 'yarn_attn_factor', 'yarn_beta_slow', 'yarn_beta_fast',
-  'yarn_orig_ctx', 'flash_attn', 'moe_cpu_layers', 'cpu_moe', 'load_mode',
+  'yarn_orig_ctx', 'flash_attn', 'moe_cpu_layers', 'cpu_moe', 'load_mode', 'lazy_mode',
   'no_repack', 'numa', 'numa_mode', 'perf', 'check_tensors',
   'fit', 'fit_mode', 'fit_target', 'fit_ctx', 'cache_type_k', 'cache_type_v',
   'kv_unified', 'kv_unified_mode', 'cache_idle_slots', 'no_kv_offload', 'device', 'split_mode',

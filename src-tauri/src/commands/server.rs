@@ -37,6 +37,8 @@ const MAX_ENGINE_PREVIEW_MATCH_CACHE_ENTRIES: usize = 32;
 const CHECKPOINT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const CHECKPOINT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const CHECKPOINT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+const LAZY_MODE_SHORT_FLAG: &str = "-lzm";
+const LEGACY_TENSOR_READ_LAZY_FLAG: &str = "--tensor-read-lazy";
 
 struct CachedEngineMatch {
     checked_at: std::time::Instant,
@@ -704,6 +706,12 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
         )
     {
         cmd.extend_from_slice(&["--load-mode".into(), load_mode]);
+    }
+    let lazy_mode = config.lazy_mode.trim().to_ascii_lowercase();
+    if should_emit(config, "lazy_mode", !lazy_mode.is_empty())
+        && matches!(lazy_mode.as_str(), "auto" | "on" | "off")
+    {
+        cmd.extend_from_slice(&["--lazy-mode".into(), lazy_mode]);
     }
     if should_emit(config, "no_repack", config.no_repack) {
         cmd.push(
@@ -1577,11 +1585,53 @@ fn adapt_reasoning_effort_for_capabilities(
     adapted
 }
 
+fn adapt_lazy_mode_for_capabilities(
+    command: &[String],
+    capabilities: Option<&EngineCapabilities>,
+) -> Vec<String> {
+    let Some(capabilities) = capabilities else {
+        return command.to_vec();
+    };
+    let supported = capabilities
+        .supported_flags
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::HashSet<_>>();
+    let native_flag = [
+        "--lazy-mode",
+        LAZY_MODE_SHORT_FLAG,
+        LEGACY_TENSOR_READ_LAZY_FLAG,
+    ]
+    .into_iter()
+    .find(|flag| supported.contains(flag));
+    let Some(native_flag) = native_flag else {
+        return command.to_vec();
+    };
+
+    let mut adapted = Vec::with_capacity(command.len());
+    let mut index = 0;
+    while index < command.len() {
+        if command[index] == "--lazy-mode" {
+            adapted.push(native_flag.to_string());
+            if let Some(mode) = command.get(index + 1) {
+                adapted.push(mode.clone());
+                index += 2;
+                continue;
+            }
+        } else {
+            adapted.push(command[index].clone());
+        }
+        index += 1;
+    }
+    adapted
+}
+
 fn adapt_managed_arguments_for_capabilities(
     command: &[String],
     capabilities: Option<&EngineCapabilities>,
 ) -> Vec<String> {
     let adapted = adapt_load_mode_for_capabilities(command, capabilities);
+    let adapted = adapt_lazy_mode_for_capabilities(&adapted, capabilities);
     adapt_reasoning_effort_for_capabilities(&adapted, capabilities)
 }
 
@@ -5297,59 +5347,7 @@ fn split_args(input: &str) -> Vec<String> {
 }
 
 pub(crate) fn split_args_checked(input: &str) -> Result<Vec<String>, String> {
-    let mut args = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut token_started = false;
-    let mut chars = input.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '"' => {
-                in_quotes = !in_quotes;
-                token_started = true;
-            }
-            '\\' => {
-                token_started = true;
-                let mut count = 1;
-                while chars.peek() == Some(&'\\') {
-                    chars.next();
-                    count += 1;
-                }
-                if chars.peek() == Some(&'"') {
-                    for _ in 0..count / 2 {
-                        current.push('\\');
-                    }
-                    chars.next();
-                    if count % 2 == 0 {
-                        in_quotes = !in_quotes;
-                    } else {
-                        current.push('"');
-                    }
-                } else {
-                    for _ in 0..count {
-                        current.push('\\');
-                    }
-                }
-            }
-            ' ' | '\t' | '\r' | '\n' if !in_quotes => {
-                if token_started {
-                    args.push(std::mem::take(&mut current));
-                    token_started = false;
-                }
-            }
-            _ => {
-                token_started = true;
-                current.push(ch);
-            }
-        }
-    }
-    if in_quotes {
-        return Err("手动命令包含未闭合的双引号。".to_string());
-    }
-    if token_started {
-        args.push(current);
-    }
-    Ok(args)
+    crate::utils::split_command_line_checked(input)
 }
 
 #[cfg(test)]
@@ -5425,6 +5423,7 @@ mod perf_parser_tests {
                 eligible: true,
                 reason_code: CheckpointReasonCode::None,
                 reasons: Vec::new(),
+                custom_argument_blockers: Vec::new(),
             },
             fingerprint: None,
             scratch_path: Some(scratch.clone()),
@@ -5755,6 +5754,66 @@ mod perf_parser_tests {
                 "--mmap".to_string(),
                 "--mlock".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn lazy_mode_emits_the_current_canonical_flag() {
+        let config = InstanceConfig {
+            model_path: "model.gguf".into(),
+            lazy_mode: "ON".into(),
+            explicit_overrides: Some(vec!["lazy_mode".into()]),
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(&command, "--lazy-mode", "on"));
+    }
+
+    #[test]
+    fn lazy_mode_negotiates_current_short_and_legacy_aliases() {
+        let command = vec![
+            "llama-server".to_string(),
+            "--lazy-mode".to_string(),
+            "on".to_string(),
+        ];
+        for (supported_flags, expected_flag) in [
+            (
+                vec![
+                    LEGACY_TENSOR_READ_LAZY_FLAG.into(),
+                    LAZY_MODE_SHORT_FLAG.into(),
+                    "--lazy-mode".into(),
+                ],
+                "--lazy-mode",
+            ),
+            (vec![LAZY_MODE_SHORT_FLAG.into()], LAZY_MODE_SHORT_FLAG),
+            (
+                vec![LEGACY_TENSOR_READ_LAZY_FLAG.into()],
+                LEGACY_TENSOR_READ_LAZY_FLAG,
+            ),
+        ] {
+            let capabilities = EngineCapabilities {
+                status: "detected".into(),
+                supported_flags,
+                ..EngineCapabilities::default()
+            };
+            assert_eq!(
+                adapt_lazy_mode_for_capabilities(&command, Some(&capabilities)),
+                vec![
+                    "llama-server".to_string(),
+                    expected_flag.to_string(),
+                    "on".to_string(),
+                ]
+            );
+        }
+
+        let unsupported = EngineCapabilities {
+            status: "detected".into(),
+            supported_flags: vec!["--load-mode".into()],
+            ..EngineCapabilities::default()
+        };
+        assert_eq!(
+            adapt_lazy_mode_for_capabilities(&command, Some(&unsupported)),
+            command
         );
     }
 

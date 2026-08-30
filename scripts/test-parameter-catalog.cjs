@@ -34,7 +34,7 @@ for (const flag of catalogFlags) {
 
 for (const key of [
   'gpu_layers', 'ctx_size', 'threads', 'threads_batch', 'threads_http', 'parallel', 'draft_gpu_layers',
-  'image_min_tokens', 'image_max_tokens', 'load_mode', 'no_mmap', 'no_repack',
+  'image_min_tokens', 'image_max_tokens', 'load_mode', 'lazy_mode', 'no_mmap', 'no_repack',
   'no_kv_offload', 'no_mmproj_offload', 'no_ui', 'perf',
 ]) {
   assert.match(catalog, new RegExp(`\\b${key}:\\s*\\{`), `missing parameter-catalog entry for ${key}`)
@@ -64,6 +64,7 @@ assert.match(sections, /value=\{hasExplicitOverride\(local, 'perf'\) \? local\.p
 assert.match(catalog, /projectorEnabled\(config, isEmbedding\)/, 'projector-dependent controls must use the shared effective-projector semantics')
 assert.match(catalog, /lookup_cache_static:[\s\S]*dependency: ngramCacheEnabled/, 'lookup-cache files must activate only for the exact ngram-cache mode')
 assert.match(catalog, /backend_sampling:[\s\S]*dependency: backendSamplingCompatible/, 'backend sampling must expose known runtime incompatibilities as inactive dependencies')
+assert.match(validators, /--tensor-read-lazy/, 'legacy lazy-loading alias must remain recognized for custom-argument conflict warnings')
 
 for (const staleClaim of [
   /20-30[^'\n]*token/i,
