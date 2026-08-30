@@ -7,13 +7,15 @@ use crate::models::{
 };
 use crate::path_utils::{path_identity_key, path_is_within, paths_equal};
 use crate::utils;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 static MODEL_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static ENGINE_SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const MAX_MODEL_PRESET_FILES: usize = 64;
+const MAX_MODEL_PRESET_BYTES: u64 = 16 * 1024 * 1024;
 
 fn file_mtime(path: &Path) -> u64 {
     path.metadata()
@@ -36,34 +38,452 @@ fn engine_path_identity(path: &Path) -> String {
     path_identity_key(&canonical)
 }
 
-fn instances_referencing_model(
-    instances: &HashMap<String, InstanceConfig>,
-    running: &HashMap<String, RunningInstance>,
-    target: &Path,
-) -> Vec<String> {
-    let target_identity = engine_path_identity(target);
-    let references_target = |instance: &InstanceConfig| {
-        [
-            instance.model_path.as_str(),
-            instance.draft_model_path.as_str(),
-            instance.mmproj_path.as_str(),
-        ]
-        .into_iter()
-        .filter(|candidate| !candidate.trim().is_empty())
-        .any(|candidate| engine_path_identity(Path::new(candidate)) == target_identity)
-    };
-    let mut names = std::collections::BTreeSet::new();
-    for instance in instances
-        .values()
-        .filter(|instance| references_target(instance))
-    {
-        names.insert(instance.name.clone());
+#[derive(Debug, Default)]
+struct ModelArtifactReferences {
+    exact_paths: BTreeSet<String>,
+    model_directories: BTreeSet<String>,
+    preset_files: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModelArgumentKind {
+    ExactPath,
+    ModelDirectory,
+    PresetFile,
+}
+
+fn model_argument_kind(flag: &str) -> Option<ModelArgumentKind> {
+    match flag {
+        "-m"
+        | "--model"
+        | "-md"
+        | "--model-draft"
+        | "--spec-draft-model"
+        | "-mm"
+        | "--mmproj"
+        | "--lora"
+        | "--lora-scaled"
+        | "--control-vector"
+        | "--control-vector-scaled" => Some(ModelArgumentKind::ExactPath),
+        "--models-dir" => Some(ModelArgumentKind::ModelDirectory),
+        "--models-preset" => Some(ModelArgumentKind::PresetFile),
+        _ => None,
     }
-    for (instance_id, running_instance) in running {
-        let Some(launch_config) = running_instance.launch_config.as_ref() else {
+}
+
+fn insert_possible_gguf_path(references: &mut BTreeSet<String>, value: &str) {
+    let value = value.trim();
+    if value.is_empty() {
+        return;
+    }
+    references.insert(value.trim_matches(['\"', '\'']).to_string());
+    let lower = value.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(relative_end) = lower[search_from..].find(".gguf") {
+        let end = search_from + relative_end + ".gguf".len();
+        let mut start = 0;
+        let mut quote = None;
+        for (index, character) in value[..end].char_indices() {
+            match quote {
+                Some(active) if character == active => quote = None,
+                Some(_) => {}
+                None if matches!(character, '\"' | '\'') => {
+                    quote = Some(character);
+                    start = index + character.len_utf8();
+                }
+                None if matches!(character, ',' | ';' | '=') => {
+                    start = index + character.len_utf8();
+                }
+                None => {}
+            }
+        }
+        let candidate = value[start..end].trim().trim_matches(['\"', '\'']).trim();
+        if !candidate.is_empty() {
+            references.insert(candidate.to_string());
+        }
+        search_from = end;
+    }
+}
+
+fn insert_path_with_working_directory(
+    references: &mut BTreeSet<String>,
+    value: &str,
+    working_directory: &Path,
+) {
+    let value = value.trim().trim_matches(['\"', '\'']).trim();
+    if value.is_empty() {
+        return;
+    }
+    references.insert(value.to_string());
+    let path = Path::new(value);
+    if path.is_relative() {
+        references.insert(working_directory.join(path).to_string_lossy().to_string());
+    }
+}
+
+fn insert_gguf_paths_with_working_directory(
+    references: &mut BTreeSet<String>,
+    value: &str,
+    working_directory: &Path,
+) {
+    let mut candidates = BTreeSet::new();
+    insert_possible_gguf_path(&mut candidates, value);
+    for candidate in candidates {
+        insert_path_with_working_directory(references, &candidate, working_directory);
+    }
+}
+
+fn preset_argument_kind(key: &str) -> Option<ModelArgumentKind> {
+    match key {
+        "m"
+        | "model"
+        | "LLAMA_ARG_MODEL"
+        | "md"
+        | "model-draft"
+        | "spec-draft-model"
+        | "LLAMA_ARG_SPEC_DRAFT_MODEL"
+        | "mm"
+        | "mmproj"
+        | "LLAMA_ARG_MMPROJ"
+        | "lora"
+        | "lora-scaled"
+        | "control-vector"
+        | "control-vector-scaled" => Some(ModelArgumentKind::ExactPath),
+        "models-dir" | "LLAMA_ARG_MODELS_DIR" => Some(ModelArgumentKind::ModelDirectory),
+        "models-preset" | "LLAMA_ARG_MODELS_PRESET" => Some(ModelArgumentKind::PresetFile),
+        _ => None,
+    }
+}
+
+fn valid_preset_key(key: &str) -> bool {
+    let mut characters = key.chars();
+    matches!(characters.next(), Some(first) if first.is_ascii_alphabetic() || first == '_')
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '.' | '-')
+        })
+}
+
+fn strip_preset_inline_comment(value: &str) -> &str {
+    for (index, character) in value.char_indices() {
+        if matches!(character, ';' | '#')
+            && (index == 0
+                || value[..index]
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_whitespace))
+        {
+            return value[..index].trim_end();
+        }
+    }
+    value.trim_end()
+}
+
+fn collect_references_from_model_preset(
+    references: &mut ModelArtifactReferences,
+    preset_path: &Path,
+    working_directory: &Path,
+) -> Result<u64, String> {
+    let metadata = std::fs::metadata(preset_path).map_err(|error| {
+        format!(
+            "无法读取模型路由预设 {}，已拒绝在引用状态不明时删除模型: {error}",
+            preset_path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "模型路由预设 {} 不是普通文件，已拒绝在引用状态不明时删除模型",
+            preset_path.display()
+        ));
+    }
+    if metadata.len() > MAX_MODEL_PRESET_BYTES {
+        return Err(format!(
+            "模型路由预设 {} 超过 {} MiB 安全读取上限，已拒绝删除模型",
+            preset_path.display(),
+            MAX_MODEL_PRESET_BYTES / 1024 / 1024
+        ));
+    }
+    let contents = std::fs::read_to_string(preset_path).map_err(|error| {
+        format!(
+            "无法按 UTF-8 读取模型路由预设 {}，已拒绝在引用状态不明时删除模型: {error}",
+            preset_path.display()
+        )
+    })?;
+    let normalized = contents.replace("\r\n", "\n").replace('\r', "\n");
+    for (line_index, raw_line) in normalized.lines().enumerate() {
+        let line_number = line_index + 1;
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') {
+            let Some(close) = line.find(']') else {
+                return Err(format!(
+                    "模型路由预设 {} 第 {line_number} 行的节标题未闭合，已拒绝删除模型",
+                    preset_path.display()
+                ));
+            };
+            if line[1..close].trim().is_empty() {
+                return Err(format!(
+                    "模型路由预设 {} 第 {line_number} 行的节标题为空，已拒绝删除模型",
+                    preset_path.display()
+                ));
+            }
+            let trailing = line[close + 1..].trim_start();
+            if !trailing.is_empty() && !trailing.starts_with(';') && !trailing.starts_with('#') {
+                return Err(format!(
+                    "模型路由预设 {} 第 {line_number} 行的节标题后存在无法解析的内容，已拒绝删除模型",
+                    preset_path.display()
+                ));
+            }
+            continue;
+        }
+        let Some((key, raw_value)) = line.split_once('=') else {
+            return Err(format!(
+                "模型路由预设 {} 第 {line_number} 行不是有效的 key=value，已拒绝删除模型",
+                preset_path.display()
+            ));
+        };
+        let key = key.trim();
+        if !valid_preset_key(key) {
+            return Err(format!(
+                "模型路由预设 {} 第 {line_number} 行包含无效参数名，已拒绝删除模型",
+                preset_path.display()
+            ));
+        }
+        let value = strip_preset_inline_comment(raw_value.trim_start()).trim();
+        if value.to_ascii_lowercase().contains(".gguf") {
+            insert_gguf_paths_with_working_directory(
+                &mut references.exact_paths,
+                value,
+                working_directory,
+            );
+        }
+        let Some(kind) = preset_argument_kind(key) else {
             continue;
         };
-        if references_target(launch_config) {
+        if value.is_empty() {
+            return Err(format!(
+                "模型路由预设 {} 第 {line_number} 行的参数 {key} 缺少路径值，已拒绝删除模型",
+                preset_path.display()
+            ));
+        }
+        match kind {
+            ModelArgumentKind::ExactPath => insert_gguf_paths_with_working_directory(
+                &mut references.exact_paths,
+                value,
+                working_directory,
+            ),
+            ModelArgumentKind::ModelDirectory => insert_path_with_working_directory(
+                &mut references.model_directories,
+                value,
+                working_directory,
+            ),
+            ModelArgumentKind::PresetFile => insert_path_with_working_directory(
+                &mut references.preset_files,
+                value,
+                working_directory,
+            ),
+        }
+    }
+    Ok(metadata.len())
+}
+
+fn collect_model_preset_references(references: &mut ModelArtifactReferences) -> Result<(), String> {
+    if references.preset_files.is_empty() {
+        return Ok(());
+    }
+    let working_directory = std::env::current_dir().map_err(|error| {
+        format!("无法确定 llama-server 工作目录，已拒绝在引用状态不明时删除模型: {error}")
+    })?;
+    let mut pending = references.preset_files.iter().cloned().collect::<Vec<_>>();
+    let mut queued = references.preset_files.clone();
+    let mut visited = BTreeSet::new();
+    let mut total_bytes = 0u64;
+    while let Some(configured_path) = pending.pop() {
+        let configured_path = configured_path.trim().trim_matches(['\"', '\'']).trim();
+        let path = Path::new(configured_path);
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            working_directory.join(path)
+        };
+        let identity = engine_path_identity(&resolved);
+        if !visited.insert(identity) {
+            continue;
+        }
+        if visited.len() > MAX_MODEL_PRESET_FILES {
+            return Err(format!(
+                "模型路由预设链超过 {MAX_MODEL_PRESET_FILES} 个文件，已拒绝删除模型"
+            ));
+        }
+        total_bytes = total_bytes
+            .checked_add(collect_references_from_model_preset(
+                references,
+                &resolved,
+                &working_directory,
+            )?)
+            .ok_or_else(|| "模型路由预设总大小溢出，已拒绝删除模型".to_string())?;
+        if total_bytes > MAX_MODEL_PRESET_BYTES {
+            return Err(format!(
+                "模型路由预设链总大小超过 {} MiB，已拒绝删除模型",
+                MAX_MODEL_PRESET_BYTES / 1024 / 1024
+            ));
+        }
+        for nested in &references.preset_files {
+            if queued.insert(nested.clone()) {
+                pending.push(nested.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_model_argument_references(
+    references: &mut ModelArtifactReferences,
+    tokens: &[String],
+    source: &str,
+) -> Result<(), String> {
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = &tokens[index];
+        if token.to_ascii_lowercase().contains(".gguf") {
+            insert_possible_gguf_path(&mut references.exact_paths, token);
+        }
+        let (flag, inline_value) = token
+            .split_once('=')
+            .map_or((token.as_str(), None), |(flag, value)| (flag, Some(value)));
+        let Some(kind) = model_argument_kind(flag) else {
+            index += 1;
+            continue;
+        };
+        let value = if let Some(value) = inline_value {
+            if value.trim().is_empty() {
+                return Err(format!("{source} 中的模型参数 {flag} 缺少路径值"));
+            }
+            value
+        } else {
+            let Some(value) = tokens.get(index + 1) else {
+                return Err(format!("{source} 中的模型参数 {flag} 缺少路径值"));
+            };
+            if value.starts_with('-') {
+                return Err(format!("{source} 中的模型参数 {flag} 缺少路径值"));
+            }
+            index += 1;
+            value
+        };
+        match kind {
+            ModelArgumentKind::ExactPath => {
+                insert_possible_gguf_path(&mut references.exact_paths, value)
+            }
+            ModelArgumentKind::ModelDirectory => {
+                references
+                    .model_directories
+                    .insert(value.trim().to_string());
+            }
+            ModelArgumentKind::PresetFile => {
+                references.preset_files.insert(value.trim().to_string());
+            }
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
+fn model_artifact_references(instance: &InstanceConfig) -> Result<ModelArtifactReferences, String> {
+    let mut references = ModelArtifactReferences::default();
+    for value in [
+        instance.model_path.as_str(),
+        instance.draft_model_path.as_str(),
+        instance.mmproj_path.as_str(),
+        instance.lora_path.as_str(),
+    ] {
+        insert_possible_gguf_path(&mut references.exact_paths, value);
+    }
+    insert_possible_gguf_path(&mut references.exact_paths, &instance.lora_scaled);
+    if !instance.models_dir.trim().is_empty() {
+        references
+            .model_directories
+            .insert(instance.models_dir.trim().to_string());
+    }
+    if !instance.models_preset.trim().is_empty() {
+        references
+            .preset_files
+            .insert(instance.models_preset.trim().to_string());
+    }
+
+    let mut custom_tokens = Vec::new();
+    for row in &instance.custom_args {
+        let parsed = crate::commands::server::split_args_checked(row.trim()).map_err(|error| {
+            format!(
+                "实例 {} 的自定义参数无法解析，已拒绝在引用状态不明时删除模型: {error}",
+                instance.name
+            )
+        })?;
+        custom_tokens.extend(parsed);
+    }
+    collect_model_argument_references(
+        &mut references,
+        &custom_tokens,
+        &format!("实例 {} 的自定义参数", instance.name),
+    )?;
+
+    if !instance.manual_command.trim().is_empty() {
+        let manual = crate::commands::server::split_args_checked(instance.manual_command.trim())
+            .map_err(|error| {
+                format!(
+                    "实例 {} 的手动命令无法解析，已拒绝在引用状态不明时删除模型: {error}",
+                    instance.name
+                )
+            })?;
+        collect_model_argument_references(
+            &mut references,
+            &manual,
+            &format!("实例 {} 的手动命令", instance.name),
+        )?;
+    }
+    collect_model_preset_references(&mut references)?;
+    Ok(references)
+}
+
+fn model_reference_matches_target(references: &ModelArtifactReferences, target: &Path) -> bool {
+    let target = std::fs::canonicalize(target).unwrap_or_else(|_| target.to_path_buf());
+    let target_identity = engine_path_identity(&target);
+    references
+        .exact_paths
+        .iter()
+        .any(|candidate| engine_path_identity(Path::new(candidate)) == target_identity)
+        || references.model_directories.iter().any(|directory| {
+            let directory = Path::new(directory);
+            let directory =
+                std::fs::canonicalize(directory).unwrap_or_else(|_| directory.to_path_buf());
+            path_is_within(&target, &directory)
+        })
+}
+
+fn instances_referencing_models(
+    instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, RunningInstance>,
+    targets: &[PathBuf],
+) -> Result<Vec<String>, String> {
+    let mut names = std::collections::BTreeSet::new();
+    for instance in instances.values() {
+        let references = model_artifact_references(instance)?;
+        if targets
+            .iter()
+            .any(|target| model_reference_matches_target(&references, target))
+        {
+            names.insert(instance.name.clone());
+        }
+    }
+    for (instance_id, running_instance) in running {
+        let launch_config = running_instance.launch_config.as_ref().ok_or_else(|| {
+            format!("运行中实例 {instance_id} 缺少启动配置快照，已拒绝在模型引用状态不明时删除模型")
+        })?;
+        let references = model_artifact_references(launch_config)?;
+        if targets
+            .iter()
+            .any(|target| model_reference_matches_target(&references, target))
+        {
             names.insert(if launch_config.name.trim().is_empty() {
                 instance_id.clone()
             } else {
@@ -71,7 +491,16 @@ fn instances_referencing_model(
             });
         }
     }
-    names.into_iter().collect()
+    Ok(names.into_iter().collect())
+}
+
+#[cfg(test)]
+fn instances_referencing_model(
+    instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, RunningInstance>,
+    target: &Path,
+) -> Result<Vec<String>, String> {
+    instances_referencing_models(instances, running, &[target.to_path_buf()])
 }
 
 #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -176,10 +605,9 @@ fn prepare_model_deletion(
 
     let instances = state.instances.lock().unwrap().clone();
     let running = state.running.lock().unwrap().clone();
-    let mut referenced_by = std::collections::BTreeSet::new();
+    let referenced_by = instances_referencing_models(&instances, &running, &artifacts)?;
     let mut total_bytes = 0_u64;
     for artifact in &artifacts {
-        referenced_by.extend(instances_referencing_model(&instances, &running, artifact));
         total_bytes = total_bytes.saturating_add(
             std::fs::metadata(artifact)
                 .map_err(|error| format!("无法读取模型分片大小 {}: {error}", artifact.display()))?
@@ -196,7 +624,7 @@ fn prepare_model_deletion(
         total_bytes,
         is_sharded: artifact_paths.len() > 1,
         artifact_paths,
-        referenced_by: referenced_by.into_iter().collect(),
+        referenced_by,
     };
     Ok((artifacts, preview))
 }
@@ -1737,7 +2165,8 @@ mod incremental_scan_tests {
                 &instances,
                 &HashMap::new(),
                 Path::new("/models/Qwen-00002-of-00003.gguf")
-            ),
+            )
+            .unwrap(),
             vec!["Draft"]
         );
     }
@@ -2073,7 +2502,8 @@ mod incremental_scan_tests {
                 &instances,
                 &HashMap::new(),
                 Path::new("/models/chat.gguf")
-            ),
+            )
+            .unwrap(),
             vec!["Primary"]
         );
         assert_eq!(
@@ -2081,6 +2511,207 @@ mod incremental_scan_tests {
             vec!["Primary"]
         );
         assert!(instances_referencing_engine(&instances, "engine-2").is_empty());
+    }
+
+    #[test]
+    fn model_deletion_references_cover_custom_manual_lora_and_models_directory() {
+        let models_dir = temp_test_dir("delete-reference-sources");
+        let target = models_dir.join("target model.gguf");
+        std::fs::write(&target, b"model").unwrap();
+        let target_text = target.to_string_lossy().to_string();
+        let directory_text = models_dir.to_string_lossy().to_string();
+        let instances = HashMap::from([
+            (
+                "custom".to_string(),
+                InstanceConfig {
+                    name: "Custom".into(),
+                    custom_args: vec![format!("--model=\"{target_text}\"")],
+                    ..InstanceConfig::default()
+                },
+            ),
+            (
+                "directory".to_string(),
+                InstanceConfig {
+                    name: "Directory".into(),
+                    models_dir: directory_text,
+                    ..InstanceConfig::default()
+                },
+            ),
+            (
+                "lora".to_string(),
+                InstanceConfig {
+                    name: "LoRA".into(),
+                    lora_path: target_text.clone(),
+                    ..InstanceConfig::default()
+                },
+            ),
+            (
+                "scaled".to_string(),
+                InstanceConfig {
+                    name: "Scaled".into(),
+                    lora_scaled: format!("\"{target_text}\" 0.5"),
+                    ..InstanceConfig::default()
+                },
+            ),
+            (
+                "manual".to_string(),
+                InstanceConfig {
+                    name: "Manual".into(),
+                    launch_mode: "manual".into(),
+                    manual_command: format!(
+                        "llama-server --spec-draft-model=\"{target_text}\" --port 8080"
+                    ),
+                    ..InstanceConfig::default()
+                },
+            ),
+            (
+                "future".to_string(),
+                InstanceConfig {
+                    name: "FutureArg".into(),
+                    custom_args: vec![format!(
+                        "--future-model-list=\"{target_text}\":0.5,other.gguf:0.5"
+                    )],
+                    ..InstanceConfig::default()
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            instances_referencing_model(&instances, &HashMap::new(), &target).unwrap(),
+            vec![
+                "Custom",
+                "Directory",
+                "FutureArg",
+                "LoRA",
+                "Manual",
+                "Scaled"
+            ]
+        );
+        let _ = std::fs::remove_dir_all(models_dir);
+    }
+
+    #[test]
+    fn model_deletion_references_include_router_preset_files() {
+        let models_dir = temp_test_dir("delete-preset-references");
+        let target = models_dir.join("preset target.gguf");
+        let nested_preset = models_dir.join("nested.ini");
+        let root_preset = models_dir.join("root.ini");
+        std::fs::write(&target, b"model").unwrap();
+        std::fs::write(
+            &nested_preset,
+            format!(
+                "version = 1\n\n[preset-model]\nmodel = {} ; retained model\n",
+                target.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &root_preset,
+            format!(
+                "[*]\nmodels-preset = {}\nLLAMA_ARG_MODELS_DIR = {}\n",
+                nested_preset.display(),
+                models_dir.display()
+            ),
+        )
+        .unwrap();
+        let preset_text = root_preset.to_string_lossy().to_string();
+        let instances = HashMap::from([
+            (
+                "configured".to_string(),
+                InstanceConfig {
+                    name: "ConfiguredPreset".into(),
+                    models_preset: preset_text.clone(),
+                    ..InstanceConfig::default()
+                },
+            ),
+            (
+                "custom".to_string(),
+                InstanceConfig {
+                    name: "CustomPreset".into(),
+                    custom_args: vec![format!("--models-preset=\"{preset_text}\"")],
+                    ..InstanceConfig::default()
+                },
+            ),
+            (
+                "manual".to_string(),
+                InstanceConfig {
+                    name: "ManualPreset".into(),
+                    launch_mode: "manual".into(),
+                    manual_command: format!(
+                        "llama-server --models-preset \"{preset_text}\" --port 8080"
+                    ),
+                    ..InstanceConfig::default()
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            instances_referencing_model(&instances, &HashMap::new(), &target).unwrap(),
+            vec!["ConfiguredPreset", "CustomPreset", "ManualPreset"]
+        );
+        let _ = std::fs::remove_dir_all(models_dir);
+    }
+
+    #[test]
+    fn missing_or_malformed_router_presets_fail_model_deletion_closed() {
+        let models_dir = temp_test_dir("delete-invalid-preset");
+        let missing = models_dir.join("missing.ini");
+        let missing_instances = HashMap::from([(
+            "missing".to_string(),
+            InstanceConfig {
+                name: "MissingPreset".into(),
+                models_preset: missing.to_string_lossy().to_string(),
+                ..InstanceConfig::default()
+            },
+        )]);
+        let missing_error = instances_referencing_model(
+            &missing_instances,
+            &HashMap::new(),
+            &models_dir.join("target.gguf"),
+        )
+        .unwrap_err();
+        assert!(missing_error.contains("拒绝"));
+        assert!(missing_error.contains("missing.ini"));
+
+        let malformed = models_dir.join("malformed.ini");
+        std::fs::write(&malformed, "[unterminated\nmodel = target.gguf\n").unwrap();
+        let malformed_instances = HashMap::from([(
+            "malformed".to_string(),
+            InstanceConfig {
+                name: "MalformedPreset".into(),
+                models_preset: malformed.to_string_lossy().to_string(),
+                ..InstanceConfig::default()
+            },
+        )]);
+        let malformed_error = instances_referencing_model(
+            &malformed_instances,
+            &HashMap::new(),
+            &models_dir.join("target.gguf"),
+        )
+        .unwrap_err();
+        assert!(malformed_error.contains("未闭合"));
+        let _ = std::fs::remove_dir_all(models_dir);
+    }
+
+    #[test]
+    fn malformed_launch_escape_hatches_fail_model_deletion_closed() {
+        let instances = HashMap::from([(
+            "broken".to_string(),
+            InstanceConfig {
+                name: "Broken".into(),
+                custom_args: vec!["--model \"unterminated".into()],
+                ..InstanceConfig::default()
+            },
+        )]);
+
+        let error = instances_referencing_model(
+            &instances,
+            &HashMap::new(),
+            Path::new("/models/target.gguf"),
+        )
+        .unwrap_err();
+        assert!(error.contains("拒绝"));
+        assert!(error.contains("Broken"));
     }
 
     #[test]
@@ -2113,9 +2744,37 @@ mod incremental_scan_tests {
         )]);
 
         assert_eq!(
-            instances_referencing_model(&saved, &running, Path::new("/models/original.gguf")),
+            instances_referencing_model(&saved, &running, Path::new("/models/original.gguf"))
+                .unwrap(),
             vec!["Primary"]
         );
+    }
+
+    #[test]
+    fn running_instance_without_launch_snapshot_fails_model_deletion_closed() {
+        let running = HashMap::from([(
+            "legacy-running".to_string(),
+            RunningInstance {
+                instance_id: "legacy-running".into(),
+                pid: 42,
+                port: 8080,
+                host: "127.0.0.1".into(),
+                start_time: 0,
+                executable_path: String::new(),
+                telemetry_session_id: None,
+                workload: String::new(),
+                launch_config: None,
+            },
+        )]);
+
+        let error = instances_referencing_model(
+            &HashMap::new(),
+            &running,
+            Path::new("/models/target.gguf"),
+        )
+        .unwrap_err();
+        assert!(error.contains("legacy-running"));
+        assert!(error.contains("拒绝"));
     }
 
     #[cfg(windows)]

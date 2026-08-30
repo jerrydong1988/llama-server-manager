@@ -62,11 +62,11 @@ Local B10688 plus the replayed and hardened llama.cpp PR #26004 passed a real cr
 
 ## 生命周期与故障行为 / Lifecycle and Failure Behavior
 
-受控停止时，管理器先从代理移除实例、等待在途请求和 slot 排空，再调用官方 slot save API。payload 会校验大小并计算 SHA-256；新的 generation 采用 manifest-last 提交，只有完整 generation 才能成为最新版本。崩溃、强制退出或排空超时不会产生新的 generation。
+受控停止时，管理器先从代理移除实例、等待在途请求和 slot 排空，再调用官方 slot save API。payload 会校验大小并计算 SHA-256；新的 generation 通过同文件系统原子移动进入 manifest-last 提交目录，不再复制一份同等大小的 payload，只有完整 generation 才能成为最新版本。崩溃、强制退出或排空超时不会产生新的 generation。
 
 启动时，管理器先等待引擎健康，再严格验证模型、引擎和状态相关配置的 fingerprint、manifest、文件类型、大小和 SHA-256。恢复响应和恢复后的 slot 状态还会再次核对。只有完成恢复或明确决定冷启动后，代理才允许该实例接收请求。
 
-On a controlled stop, the manager gates routing, drains requests, saves slot 0, verifies the payload, and commits a manifest-last generation. On startup, it verifies the full compatibility fingerprint and payload before restore, validates the restore round trip, and only then opens the routing gate.
+On a controlled stop, the manager gates routing, drains requests, saves slot 0, verifies the payload, and atomically moves it into a manifest-last generation without duplicating the payload. On startup, it verifies the full compatibility fingerprint and payload before restore, validates the restore round trip, and only then opens the routing gate.
 
 以下情况都会安全退化为可路由的冷启动，而不会阻止实例启动：
 
@@ -83,9 +83,9 @@ Checkpoint 文件包含由系统提示、仓库说明、工具定义和用户上
 
 Checkpoint files contain prompt-derived model state and must be treated as sensitive local data. They are stored under the current user's private application data, while logs and status messages omit payloads, prompts, API keys, and private paths. A checkpoint is not a portable conversation backup.
 
-每个实例使用独立容量上限和 generation LRU。只有实例完全停止且没有保存/恢复操作时，才能在实例页点击“清除检查点”。清除只删除该实例经过边界校验的 checkpoint 根目录，不删除模型或实例配置，且不可恢复。
+每个实例使用独立容量上限和 generation LRU。恢复时只保留一个 scratch payload：restore 返回后先删除输入 scratch，再创建验证副本；创建每个已知大小的 scratch 前都会检查 payload 大小外加 64 MiB 余量。因此瞬时空间约为已保留 generations 加一个 payload，而不是同一 payload 的三份副本。slot save/restore 的总请求上限为 30 分钟；erase 清理保留 30 秒上限，健康与 slots 探测仍使用最多 2 秒的短超时。只有实例完全停止且没有保存/恢复操作时，才能在实例页点击“清除检查点”。清除只删除该实例经过边界校验的 checkpoint 根目录，不删除模型或实例配置，且不可恢复。
 
-Each instance has its own capacity limit and generation LRU. Clear is allowed only while the instance is fully stopped and no save or restore is active. It removes only that instance's validated checkpoint root, not its model or configuration, and cannot be undone.
+Each instance has its own capacity limit and generation LRU. Restore keeps only one scratch payload at a time and checks for the payload size plus 64 MiB of free-space headroom before each known-size staging operation. Slot save/restore requests may run for up to 30 minutes; erase retains a 30-second ceiling, while health and slot probes retain a short two-second ceiling. Clear is allowed only while the instance is fully stopped and no save or restore is active. It removes only that instance's validated checkpoint root, not its model or configuration, and cannot be undone.
 
 ## 验证与排障 / Verification and Troubleshooting
 

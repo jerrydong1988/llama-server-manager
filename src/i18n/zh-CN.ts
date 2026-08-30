@@ -614,7 +614,7 @@
       below_token_threshold: '提示状态低于配置的 token 阈值', busy_timeout: 'slot 未在安全超时内变为空闲',
       checksum_mismatch: '检查点完整性校验失败', manifest_invalid: '检查点元数据无效', save_response_invalid: 'llama.cpp 返回了无效的保存结果',
       restore_response_invalid: 'llama.cpp 返回了无效的恢复结果', slot_state_mismatch: '恢复后的 slot 与已保存 generation 不一致',
-      storage_limit: '新 generation 超过存储上限', io_error: '本地检查点存储失败', http_timeout: 'llama.cpp slot API 超时',
+      storage_limit: '新 generation 超过存储上限', insufficient_disk_space: '磁盘剩余空间不足，无法暂存检查点', io_error: '本地检查点存储失败', http_timeout: 'llama.cpp slot API 超时',
       slot_api_error: 'llama.cpp slot API 返回错误', stale_process_event: '已忽略过期进程事件', invalid_state_transition: '生命周期状态转换无效',
       clear_while_running: '请先停止实例再清除检查点', unexpected_exit: '引擎异常退出，未保存检查点',
     },

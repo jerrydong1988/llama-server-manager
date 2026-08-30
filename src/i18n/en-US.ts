@@ -614,7 +614,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
       below_token_threshold: 'The prompt state is below the configured token threshold', busy_timeout: 'The slot did not become idle before the safety timeout',
       checksum_mismatch: 'Checkpoint integrity verification failed', manifest_invalid: 'Checkpoint metadata is invalid', save_response_invalid: 'llama.cpp returned an invalid save result',
       restore_response_invalid: 'llama.cpp returned an invalid restore result', slot_state_mismatch: 'The restored slot did not match the saved generation',
-      storage_limit: 'The new generation exceeds the storage limit', io_error: 'Local checkpoint storage failed', http_timeout: 'The llama.cpp slot API timed out',
+      storage_limit: 'The new generation exceeds the storage limit', insufficient_disk_space: 'Not enough free disk space is available for checkpoint staging', io_error: 'Local checkpoint storage failed', http_timeout: 'The llama.cpp slot API timed out',
       slot_api_error: 'The llama.cpp slot API returned an error', stale_process_event: 'A stale process event was ignored', invalid_state_transition: 'The lifecycle transition was invalid',
       clear_while_running: 'Stop the instance before clearing its checkpoint', unexpected_exit: 'The engine exited unexpectedly; no checkpoint was saved',
     },

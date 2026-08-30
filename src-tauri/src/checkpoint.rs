@@ -21,6 +21,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
+pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const CHECKPOINT_SLOT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+const CHECKPOINT_SLOT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
+const CHECKPOINT_DISK_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CheckpointPhase {
@@ -125,6 +130,7 @@ pub enum CheckpointReasonCode {
     RestoreResponseInvalid,
     SlotStateMismatch,
     StorageLimit,
+    InsufficientDiskSpace,
     IoError,
     HttpTimeout,
     SlotApiError,
@@ -428,7 +434,7 @@ pub fn evaluate_checkpoint_eligibility(
 
 pub const CHECKPOINT_MANIFEST_SCHEMA_VERSION: u32 = 1;
 pub const CHECKPOINT_FINGERPRINT_SCHEMA_VERSION: u32 = 3;
-const HASH_CACHE_SCHEMA_VERSION: u32 = 1;
+const HASH_CACHE_SCHEMA_VERSION: u32 = 2;
 const LATEST_POINTER_SCHEMA_VERSION: u32 = 1;
 const USAGE_SCHEMA_VERSION: u32 = 1;
 const STATE_FORMAT: &str = "llama.cpp-slot-state";
@@ -745,6 +751,82 @@ fn modified_unix_nanos(metadata: &fs::Metadata) -> StoreResult<u64> {
 }
 
 #[cfg(unix)]
+fn file_identity(_path: &Path, metadata: &fs::Metadata) -> StoreResult<String> {
+    use std::os::unix::fs::MetadataExt;
+    Ok(format!(
+        "unix:{}:{}:{}:{}",
+        metadata.dev(),
+        metadata.ino(),
+        metadata.ctime(),
+        metadata.ctime_nsec()
+    ))
+}
+
+#[cfg(windows)]
+fn file_identity(path: &Path, _metadata: &fs::Metadata) -> StoreResult<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_BASIC_INFO,
+    };
+
+    let file = File::open(path)
+        .map_err(|_| CheckpointStoreError::io("fingerprint input identity unavailable"))?;
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    let success =
+        unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut information) };
+    if success == 0 {
+        return Err(CheckpointStoreError::io(
+            "fingerprint input identity unavailable",
+        ));
+    }
+    let mut basic = FILE_BASIC_INFO::default();
+    let success = unsafe {
+        GetFileInformationByHandleEx(
+            file.as_raw_handle() as HANDLE,
+            FileBasicInfo,
+            std::ptr::addr_of_mut!(basic).cast(),
+            std::mem::size_of::<FILE_BASIC_INFO>() as u32,
+        )
+    };
+    if success == 0 {
+        return Err(CheckpointStoreError::io(
+            "fingerprint input change time unavailable",
+        ));
+    }
+    let file_index =
+        (u64::from(information.nFileIndexHigh) << 32) | u64::from(information.nFileIndexLow);
+    Ok(format!(
+        "windows:{}:{file_index}:{}:{}",
+        information.dwVolumeSerialNumber, basic.CreationTime, basic.ChangeTime
+    ))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_identity(_path: &Path, metadata: &fs::Metadata) -> StoreResult<String> {
+    let created = metadata
+        .created()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |value| value.as_nanos().min(u128::from(u64::MAX)) as u64);
+    Ok(format!("portable:{created}"))
+}
+
+fn ensure_available_checkpoint_space(path: &Path, payload_bytes: u64) -> StoreResult<()> {
+    let available = fs2::available_space(path)
+        .map_err(|_| CheckpointStoreError::io("checkpoint disk capacity query failed"))?;
+    let required = payload_bytes.saturating_add(CHECKPOINT_DISK_HEADROOM_BYTES);
+    if available < required {
+        return Err(CheckpointStoreError::new(
+            CheckpointReasonCode::InsufficientDiskSpace,
+            "checkpoint storage does not have enough free space",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 fn canonical_path_cache_key(path: &Path) -> String {
     use std::os::unix::ffi::OsStrExt;
     sha256_bytes(path.as_os_str().as_bytes())
@@ -765,6 +847,7 @@ fn canonical_path_cache_key(path: &Path) -> String {
 struct HashCacheEntry {
     size: u64,
     modified_unix_nanos: u64,
+    file_identity: String,
     sha256: String,
     #[serde(default)]
     last_used_unix_secs: u64,
@@ -1215,7 +1298,7 @@ impl LoadedGeneration {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StoreFaultPoint {
-    AfterPayloadCopy,
+    AfterPayloadMove,
     AfterPayloadSync,
     AfterManifestWrite,
     BeforeGenerationRename,
@@ -1404,6 +1487,7 @@ impl CheckpointStore {
             )
         })?;
         let modified_before = modified_unix_nanos(&before)?;
+        let identity_before = file_identity(&canonical, &before)?;
         let key = canonical_path_cache_key(&canonical);
         let cache_path = self.root.join("fingerprints-v1.json");
         let mut cache = match read_bounded(&cache_path, MAX_METADATA_BYTES) {
@@ -1418,6 +1502,7 @@ impl CheckpointStore {
         let cached_digest = cache.entries.get(&key).and_then(|entry| {
             (entry.size == before.len()
                 && entry.modified_unix_nanos == modified_before
+                && entry.file_identity == identity_before
                 && is_lower_hex_digest(&entry.sha256))
             .then(|| entry.sha256.clone())
         });
@@ -1442,7 +1527,11 @@ impl CheckpointStore {
             )
         })?;
         let modified_after = modified_unix_nanos(&after)?;
-        if before.len() != after.len() || modified_before != modified_after {
+        let identity_after = file_identity(&canonical, &after)?;
+        if before.len() != after.len()
+            || modified_before != modified_after
+            || identity_before != identity_after
+        {
             return Err(CheckpointStoreError::new(
                 CheckpointReasonCode::FingerprintUnavailable,
                 "fingerprint input changed while hashing",
@@ -1453,6 +1542,7 @@ impl CheckpointStore {
             HashCacheEntry {
                 size: after.len(),
                 modified_unix_nanos: modified_after,
+                file_identity: identity_after,
                 sha256: digest.clone(),
                 last_used_unix_secs: now_unix_secs,
             },
@@ -1606,28 +1696,15 @@ impl CheckpointStore {
         let mut renamed = false;
         let result = (|| {
             let destination = pending.join(SLOT_FILENAME);
-            let mut source = File::open(scratch_payload)
-                .map_err(|_| CheckpointStoreError::io("scratch payload open failed"))?;
-            let mut options = OpenOptions::new();
-            options.create_new(true).write(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut target = options
+            fs::rename(scratch_payload, &destination)
+                .map_err(|_| CheckpointStoreError::io("generation payload move failed"))?;
+            inject(StoreFaultPoint::AfterPayloadMove)?;
+            OpenOptions::new()
+                .read(true)
+                .write(true)
                 .open(&destination)
-                .map_err(|_| CheckpointStoreError::io("generation payload create failed"))?;
-            std::io::copy(&mut source, &mut target)
-                .map_err(|_| CheckpointStoreError::io("generation payload copy failed"))?;
-            target
-                .flush()
-                .map_err(|_| CheckpointStoreError::io("generation payload flush failed"))?;
-            inject(StoreFaultPoint::AfterPayloadCopy)?;
-            target
-                .sync_all()
+                .and_then(|payload| payload.sync_all())
                 .map_err(|_| CheckpointStoreError::io("generation payload sync failed"))?;
-            drop(target);
             protect_file(&destination)?;
             inject(StoreFaultPoint::AfterPayloadSync)?;
             if validate_regular_file(&destination)?.len() != slot.bytes
@@ -1635,7 +1712,7 @@ impl CheckpointStore {
             {
                 return Err(CheckpointStoreError::new(
                     CheckpointReasonCode::ChecksumMismatch,
-                    "copied generation payload failed verification",
+                    "moved generation payload failed verification",
                 ));
             }
 
@@ -2088,6 +2165,8 @@ impl CheckpointStore {
                 "checkpoint generation belongs to another instance",
             ));
         }
+        let slot = generation.manifest.slot();
+        self.ensure_scratch_capacity(instance_id, slot.bytes)?;
         let destination = self.new_scratch_slot_path(instance_id, pid)?;
         let mut source = File::open(generation.payload_path())
             .map_err(|_| CheckpointStoreError::io("generation payload open failed"))?;
@@ -2112,7 +2191,6 @@ impl CheckpointStore {
                 .map_err(|_| CheckpointStoreError::io("scratch restore payload sync failed"))?;
             drop(target);
             protect_file(&destination)?;
-            let slot = generation.manifest.slot();
             if validate_regular_file(&destination)?.len() != slot.bytes
                 || sha256_file(&destination)? != slot.sha256
             {
@@ -2127,6 +2205,15 @@ impl CheckpointStore {
             let _ = self.remove_scratch_payload(instance_id, &destination);
         }
         copy_result.map(|_| destination)
+    }
+
+    pub fn ensure_scratch_capacity(
+        &self,
+        instance_id: &str,
+        payload_bytes: u64,
+    ) -> StoreResult<()> {
+        let scratch = self.prepare_instance(instance_id)?;
+        ensure_available_checkpoint_space(&scratch, payload_bytes)
     }
 
     pub fn verify_scratch_payload(
@@ -2279,8 +2366,24 @@ struct RawSlotEraseResult {
     n_erased: u64,
 }
 
+fn normalize_slot_http_timeout(timeout: Duration) -> Duration {
+    timeout.max(Duration::from_millis(250))
+}
+
+fn build_slot_http_client(timeout: Duration) -> StoreResult<reqwest::blocking::Client> {
+    let timeout = normalize_slot_http_timeout(timeout);
+    reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .connect_timeout(timeout.min(Duration::from_secs(2)))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|_| CheckpointStoreError::io("slot HTTP client creation failed"))
+}
+
 pub struct LlamaSlotClient {
-    client: reqwest::blocking::Client,
+    probe_client: reqwest::blocking::Client,
+    operation_client: reqwest::blocking::Client,
+    cleanup_client: reqwest::blocking::Client,
     base_url: String,
     api_key: String,
 }
@@ -2298,18 +2401,15 @@ impl LlamaSlotClient {
                 "slot client requires a loopback HTTP endpoint",
             ));
         }
-        let timeout = timeout
-            .max(Duration::from_millis(250))
-            .min(Duration::from_secs(30));
-        let connect_timeout = timeout.min(Duration::from_secs(2));
-        let client = reqwest::blocking::Client::builder()
-            .timeout(timeout)
-            .connect_timeout(connect_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|_| CheckpointStoreError::io("slot HTTP client creation failed"))?;
+        let operation_timeout = normalize_slot_http_timeout(timeout);
+        let probe_timeout = operation_timeout.min(CHECKPOINT_SLOT_PROBE_TIMEOUT);
+        let probe_client = build_slot_http_client(probe_timeout)?;
+        let operation_client = build_slot_http_client(operation_timeout)?;
+        let cleanup_client = build_slot_http_client(CHECKPOINT_SLOT_CLEANUP_TIMEOUT)?;
         Ok(Self {
-            client,
+            probe_client,
+            operation_client,
+            cleanup_client,
             base_url: format!(
                 "http://{}",
                 crate::utils::format_host_port(config.host.trim(), config.port)
@@ -2395,7 +2495,7 @@ impl LlamaSlotClient {
 impl SlotBackend for LlamaSlotClient {
     fn health(&self) -> StoreResult<()> {
         let health: HealthResponse = self.execute_json(
-            self.client.get(format!("{}/health", self.base_url)),
+            self.probe_client.get(format!("{}/health", self.base_url)),
             CheckpointReasonCode::SlotApiError,
             "slot health response was malformed",
         )?;
@@ -2410,7 +2510,7 @@ impl SlotBackend for LlamaSlotClient {
 
     fn slots(&self) -> StoreResult<Vec<SlotSnapshot>> {
         let slots: Vec<RawSlotSnapshot> = self.execute_json(
-            self.client.get(format!("{}/slots", self.base_url)),
+            self.probe_client.get(format!("{}/slots", self.base_url)),
             CheckpointReasonCode::SlotApiError,
             "slot state response was malformed",
         )?;
@@ -2434,7 +2534,7 @@ impl SlotBackend for LlamaSlotClient {
     fn save(&self, filename: &str) -> StoreResult<SlotSaveResult> {
         Self::manager_filename(filename)?;
         let raw: RawSlotSaveResult = self.execute_json(
-            self.client
+            self.operation_client
                 .post(self.action_url("save"))
                 .json(&serde_json::json!({ "filename": filename })),
             CheckpointReasonCode::SaveResponseInvalid,
@@ -2457,7 +2557,7 @@ impl SlotBackend for LlamaSlotClient {
     fn restore(&self, filename: &str) -> StoreResult<SlotRestoreResult> {
         Self::manager_filename(filename)?;
         let raw: RawSlotRestoreResult = self.execute_json(
-            self.client
+            self.operation_client
                 .post(self.action_url("restore"))
                 .json(&serde_json::json!({ "filename": filename })),
             CheckpointReasonCode::RestoreResponseInvalid,
@@ -2479,7 +2579,7 @@ impl SlotBackend for LlamaSlotClient {
 
     fn erase(&self) -> StoreResult<SlotEraseResult> {
         let raw: RawSlotEraseResult = self.execute_json(
-            self.client.post(self.action_url("erase")),
+            self.cleanup_client.post(self.action_url("erase")),
             CheckpointReasonCode::RestoreResponseInvalid,
             "slot erase response was malformed",
         )?;
@@ -3111,6 +3211,15 @@ impl CheckpointCoordinator {
                     "slot restore response did not match the manifest",
                 ));
             }
+
+            // The restore endpoint has finished reading the source file when it
+            // returns. Remove it before asking llama.cpp to save the verification copy so
+            // a restore never needs generation + restore + verification payloads
+            // on disk at the same time.
+            self.store
+                .remove_scratch_payload(instance_id, &restore_path)?;
+            self.store
+                .ensure_scratch_capacity(instance_id, slot.bytes)?;
 
             let verify_path = self
                 .store
@@ -4443,6 +4552,10 @@ mod tests {
                 "slot_state_mismatch",
             ),
             (CheckpointReasonCode::StorageLimit, "storage_limit"),
+            (
+                CheckpointReasonCode::InsufficientDiskSpace,
+                "insufficient_disk_space",
+            ),
             (CheckpointReasonCode::IoError, "io_error"),
             (CheckpointReasonCode::HttpTimeout, "http_timeout"),
         ];
@@ -4956,6 +5069,36 @@ mod tests {
         assert_ne!(model_first, model_second);
         assert_ne!(engine_first, engine_second);
 
+        let previous_metadata = fs::metadata(&model).unwrap();
+        let previous_modified = previous_metadata.modified().unwrap();
+        let replacement = vec![b'x'; previous_metadata.len() as usize];
+        fs::remove_file(&model).unwrap();
+        fs::write(&model, &replacement).unwrap();
+        File::options()
+            .write(true)
+            .open(&model)
+            .unwrap()
+            .set_modified(previous_modified)
+            .unwrap();
+        let replacement_hash = store.content_sha256(&model).unwrap();
+        assert_eq!(replacement_hash, sha256_bytes(&replacement));
+        assert_ne!(replacement_hash, model_second);
+
+        let previous_modified = fs::metadata(&model).unwrap().modified().unwrap();
+        let in_place = vec![b'y'; replacement.len()];
+        let mut open = File::options()
+            .write(true)
+            .truncate(true)
+            .open(&model)
+            .unwrap();
+        open.write_all(&in_place).unwrap();
+        open.sync_all().unwrap();
+        open.set_modified(previous_modified).unwrap();
+        drop(open);
+        let in_place_hash = store.content_sha256(&model).unwrap();
+        assert_eq!(in_place_hash, sha256_bytes(&in_place));
+        assert_ne!(in_place_hash, replacement_hash);
+
         let cache = fs::read(store.root().join("fingerprints-v1.json")).unwrap();
         let parsed: HashCacheFile = serde_json::from_slice(&cache).unwrap();
         assert_eq!(parsed.schema_version, HASH_CACHE_SCHEMA_VERSION);
@@ -5234,6 +5377,10 @@ mod tests {
             .commit_generation(&manifest, &payload, 1024 * 1024)
             .unwrap();
         assert_eq!(committed.generation_id, manifest.generation_id);
+        assert!(
+            !payload.exists(),
+            "generation commit must move, not copy, scratch payloads"
+        );
 
         let loaded = store
             .load_latest("instance-1", &fingerprint.digest)
@@ -5306,7 +5453,7 @@ mod tests {
             .unwrap();
 
         let points = [
-            StoreFaultPoint::AfterPayloadCopy,
+            StoreFaultPoint::AfterPayloadMove,
             StoreFaultPoint::AfterPayloadSync,
             StoreFaultPoint::AfterManifestWrite,
             StoreFaultPoint::BeforeGenerationRename,
@@ -5371,6 +5518,19 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(loaded.manifest.generation_id, stable.generation_id);
+    }
+
+    #[test]
+    fn scratch_capacity_preflight_reports_insufficient_disk_space() {
+        let sandbox = TestSandbox::new("scratch-capacity");
+        let store = sandbox.store();
+        let error = store
+            .ensure_scratch_capacity("instance-1", u64::MAX)
+            .unwrap_err();
+        assert_eq!(
+            error.reason_code,
+            CheckpointReasonCode::InsufficientDiskSpace
+        );
     }
 
     #[test]
@@ -5488,6 +5648,7 @@ mod tests {
             HashCacheEntry {
                 size: 1,
                 modified_unix_nanos: 1,
+                file_identity: "stale".into(),
                 sha256: digest(1),
                 last_used_unix_secs: now - HASH_CACHE_TTL_SECS - 1,
             },
@@ -5498,6 +5659,7 @@ mod tests {
                 HashCacheEntry {
                     size: 1,
                     modified_unix_nanos: 1,
+                    file_identity: format!("entry-{index:03}"),
                     sha256: digest(2),
                     last_used_unix_secs: now - (MAX_HASH_CACHE_ENTRIES - index) as u64,
                 },
@@ -6054,6 +6216,11 @@ mod tests {
 
     #[test]
     fn slot_client_rejects_unsafe_names_malformed_results_and_timeouts() {
+        assert_eq!(
+            normalize_slot_http_timeout(Duration::from_secs(31 * 60)),
+            Duration::from_secs(31 * 60),
+            "large checkpoint operations must not be clamped back to 30 seconds"
+        );
         for filename in [
             "../slot-0-bad.bin",
             "slot-1-1-deadbeef.bin",

@@ -108,7 +108,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - AMD ADLX、NVIDIA NVML 和系统指标自适应降级。
 - 实例 API Key 与 API Key 文件支持；统一路由支持摘要持久化的多 Key、推理/发现权限、独立限流和精确 Origin CORS。
 - 同一统一路由原生支持 OpenAI Chat Completions / Responses 与 Anthropic Messages，并提供严格模型边界、健康探测、熔断、四种调度策略、安全 `/slots` 发现和 Prometheus 指标。
-- 可选的实验性 KV / Prefill Cache Checkpoint 支持完整 GGUF 分片集与引擎已报告的纯 n-gram 推测组合，在受管引擎重启前保存 slot 状态，并以全内容指纹和真实架构兼容门验证恢复。
+- 可选的实验性 KV / Prefill Cache Checkpoint 支持完整 GGUF 分片集与引擎已报告的推测组合；`ngram-*` 可直接重建，`draft-*` 仅在引擎明确声明会共同持久化 target/draft context 时放行。它在受管引擎重启前保存 slot 状态，并以全内容指纹和真实架构兼容门验证恢复。
 - 独立后台运行时可在管理界面退出后继续托管实例与路由，并在当前用户登录后恢复。
 - 原子配置保存、`instances.json.bak` 回退、下载队列与日志持久化。
 - 端口冲突、路径、配置规则和启动健康检查。
@@ -119,7 +119,7 @@ Inspect resources, history, and diagnostics with workload-aware metrics: output 
 - AMD ADLX, NVIDIA NVML, and system-metric fallback.
 - Inline or file-based instance keys plus hashed, scoped multi-key routing authentication, per-key limits, and exact-origin CORS.
 - Native OpenAI Chat Completions / Responses and Anthropic Messages on one listener, with strict model boundaries, active probes, circuit breaking, four schedulers, safe `/slots` discovery, and Prometheus metrics.
-- Optional experimental KV / Prefill Cache Checkpoint supports complete GGUF shard sets and engine-reported n-gram-only speculation, with full-content fingerprints and architecture evidence gates before a restored route is reopened.
+- Optional experimental KV / Prefill Cache Checkpoint supports complete GGUF shard sets and engine-reported speculation. Rebuildable `ngram-*` works on the original slot format, while `draft-*` additionally requires an engine that explicitly persists target/draft contexts. Full-content fingerprints and architecture evidence gates are verified before a restored route is reopened.
 - An independent background runtime that keeps instances and routing alive after the management UI exits and restores them at user login.
 - Atomic configuration saves, backup fallback, persistent downloads and logs.
 - Port, path, configuration, startup, and health validation.
