@@ -2140,7 +2140,7 @@ fn assess_checkpoint_eligibility(
     workload: ModelWorkload,
     engine_capabilities: Option<&EngineCapabilities>,
 ) -> CheckpointEligibility {
-    let (model_architecture, model_artifacts_complete, model_has_swa) = {
+    let (model_architecture, main_model_artifacts_complete, model_has_swa) = {
         let models = state.models.lock().unwrap();
         models
             .iter()
@@ -2162,9 +2162,16 @@ fn assess_checkpoint_eligibility(
             })
             .unwrap_or((None, false, None))
     };
+    let draft_model_artifacts_complete = config.draft_model_path.trim().is_empty()
+        || crate::model_artifacts::resolve_model_artifacts(std::path::Path::new(
+            &config.draft_model_path,
+        ))
+        .is_ok();
+    let model_artifacts_complete = main_model_artifacts_complete && draft_model_artifacts_complete;
     let engine_checkpoint_capabilities = engine_capabilities
         .map(|capabilities| {
             EngineCheckpointCapabilities::from_supported_flags(&capabilities.supported_flags)
+                .with_context_checkpoint_persistence(capabilities.context_checkpoint_persistence)
         })
         .unwrap_or_default();
     evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
@@ -2220,12 +2227,18 @@ async fn prepare_checkpoint_launch_plan(
     let store = state.checkpoint_coordinator.store().clone();
     let fingerprint_config = config.clone();
     let model_path = std::path::PathBuf::from(&config.model_path);
+    let draft_model_path = (!config.draft_model_path.trim().is_empty())
+        .then(|| std::path::PathBuf::from(&config.draft_model_path));
     let engine_path = std::path::PathBuf::from(engine_exe);
     let template_path = (!config.chat_template_file.trim().is_empty())
         .then(|| std::path::PathBuf::from(&config.chat_template_file));
     let fingerprint = tokio::task::spawn_blocking(move || {
         let model_sha256 = store.model_artifact_sha256(&model_path)?;
-        let engine_sha256 = store.content_sha256(&engine_path)?;
+        let draft_model_sha256 = draft_model_path
+            .as_deref()
+            .map(|path| store.model_artifact_sha256(path))
+            .transpose()?;
+        let engine_sha256 = store.engine_artifact_sha256(&engine_path)?;
         let chat_template_file_sha256 = template_path
             .as_deref()
             .map(|path| store.content_sha256(path))
@@ -2234,6 +2247,7 @@ async fn prepare_checkpoint_launch_plan(
             &fingerprint_config,
             &FingerprintMaterials {
                 model_sha256,
+                draft_model_sha256,
                 engine_sha256,
                 engine_version,
                 backend,

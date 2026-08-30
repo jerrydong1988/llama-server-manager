@@ -1979,6 +1979,7 @@ mod tests {
             algorithm: "sha256".into(),
             digest: "a".repeat(64),
             model_sha256: "b".repeat(64),
+            draft_model_sha256: None,
             engine_sha256: "c".repeat(64),
             engine_version: "test-version".into(),
             backend: "test-backend".into(),

@@ -93,6 +93,55 @@ pub(crate) fn resolve_model_artifacts(path: &Path) -> Result<Vec<PathBuf>, Model
     Ok(artifacts.into_values().collect())
 }
 
+fn is_engine_runtime_library(name: &str) -> bool {
+    let lowercase = name.to_ascii_lowercase();
+    lowercase.ends_with(".dll")
+        || lowercase.ends_with(".dylib")
+        || lowercase.ends_with(".so")
+        || lowercase.contains(".so.")
+}
+
+/// Resolve the launcher plus adjacent dynamic libraries that participate in an
+/// engine process. Packaged llama.cpp builds keep these files together; hashing
+/// only the small launcher would miss changes to llama-server-impl and ggml.
+pub(crate) fn resolve_engine_runtime_artifacts(path: &Path) -> Option<Vec<PathBuf>> {
+    if !path.is_file() {
+        return None;
+    }
+    let parent = path.parent()?;
+    let mut libraries = fs::read_dir(parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|candidate| candidate != path && candidate.is_file())
+        .filter(|candidate| {
+            candidate
+                .file_name()
+                .and_then(|value| value.to_str())
+                .is_some_and(is_engine_runtime_library)
+        })
+        .collect::<Vec<_>>();
+    libraries.sort_by(|left, right| {
+        left.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .cmp(
+                &right
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_ascii_lowercase(),
+            )
+            .then_with(|| left.as_os_str().cmp(right.as_os_str()))
+    });
+
+    let mut artifacts = Vec::with_capacity(libraries.len() + 1);
+    artifacts.push(path.to_path_buf());
+    artifacts.extend(libraries);
+    Some(artifacts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +223,20 @@ mod tests {
         assert_eq!(
             resolve_model_artifacts(&first),
             Err(ModelArtifactError::Incomplete)
+        );
+    }
+
+    #[test]
+    fn engine_artifacts_include_adjacent_runtime_libraries_only() {
+        let dir = TestDirectory::new();
+        let engine = dir.file("llama-server.exe");
+        let implementation = dir.file("llama-server-impl.dll");
+        let versioned = dir.file("libggml.so.1");
+        dir.file("release-notes.txt");
+
+        assert_eq!(
+            resolve_engine_runtime_artifacts(&engine).unwrap(),
+            vec![engine, versioned, implementation]
         );
     }
 }

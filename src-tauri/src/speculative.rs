@@ -12,6 +12,20 @@ const RUNTIME_PRIORITY: &[&str] = &[
     "draft-dflash",
     "draft-dspark",
 ];
+const REBUILDABLE_NGRAM_TYPES: &[&str] = &[
+    "ngram-simple",
+    "ngram-map-k",
+    "ngram-map-k4v",
+    "ngram-mod",
+    "ngram-cache",
+];
+const CHECKPOINTED_DRAFT_TYPES: &[&str] = &[
+    "draft-simple",
+    "draft-eagle3",
+    "draft-mtp",
+    "draft-dflash",
+    "draft-dspark",
+];
 
 fn raw_types(value: &str) -> Vec<String> {
     value
@@ -63,20 +77,25 @@ pub(crate) fn normalize_speculative_types(value: &str) -> String {
     normalized.join(",")
 }
 
-pub(crate) fn checkpoint_speculative_types_supported(value: &str, engine_types: &[String]) -> bool {
+pub(crate) fn checkpoint_uses_draft_state(value: &str) -> bool {
+    parse_speculative_types(value)
+        .iter()
+        .any(|candidate| CHECKPOINTED_DRAFT_TYPES.contains(&candidate.as_str()))
+}
+
+pub(crate) fn checkpoint_speculative_types_supported(
+    value: &str,
+    engine_types: &[String],
+    context_checkpoint_persistence: bool,
+) -> bool {
     let configured = parse_speculative_types(value);
     if configured.is_empty() {
         return true;
     }
-    const REBUILDABLE_NGRAM_TYPES: &[&str] = &[
-        "ngram-simple",
-        "ngram-map-k",
-        "ngram-map-k4v",
-        "ngram-mod",
-        "ngram-cache",
-    ];
     configured.iter().all(|candidate| {
-        REBUILDABLE_NGRAM_TYPES.contains(&candidate.as_str())
+        (REBUILDABLE_NGRAM_TYPES.contains(&candidate.as_str())
+            || (context_checkpoint_persistence
+                && CHECKPOINTED_DRAFT_TYPES.contains(&candidate.as_str())))
             && engine_types
                 .iter()
                 .any(|reported| reported.trim().eq_ignore_ascii_case(candidate))
@@ -98,26 +117,40 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_support_is_limited_to_rebuildable_ngram_types() {
+    fn checkpoint_support_requires_engine_reported_types_and_full_draft_contexts() {
         let engine_types = vec![
             "ngram-mod".to_string(),
             "ngram-cache".to_string(),
             "draft-mtp".to_string(),
         ];
-        assert!(checkpoint_speculative_types_supported("", &[]));
+        assert!(checkpoint_speculative_types_supported("", &[], false));
         assert!(checkpoint_speculative_types_supported(
             "ngram-mod,ngram-cache",
             &engine_types,
+            false,
         ));
         assert!(!checkpoint_speculative_types_supported(
             "ngram-mod,draft-mtp",
             &engine_types,
+            false,
+        ));
+        assert!(checkpoint_speculative_types_supported(
+            "ngram-mod,draft-mtp",
+            &engine_types,
+            true,
         ));
         assert!(!checkpoint_speculative_types_supported(
             "ngram-future",
             &["ngram-future".to_string()],
+            true,
         ));
-        assert!(!checkpoint_speculative_types_supported("ngram-mod", &[],));
-        assert!(checkpoint_speculative_types_supported("none", &[]));
+        assert!(!checkpoint_speculative_types_supported(
+            "ngram-mod",
+            &[],
+            true,
+        ));
+        assert!(checkpoint_speculative_types_supported("none", &[], false));
+        assert!(checkpoint_uses_draft_state("ngram-mod,draft-mtp"));
+        assert!(!checkpoint_uses_draft_state("ngram-mod"));
     }
 }

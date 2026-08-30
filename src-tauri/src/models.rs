@@ -272,6 +272,8 @@ pub struct EngineCapabilities {
     #[serde(default)]
     pub speculative_types: Vec<String>,
     #[serde(default)]
+    pub context_checkpoint_persistence: bool,
+    #[serde(default)]
     pub help_hash: String,
     #[serde(default)]
     pub executable_fingerprint: String,
@@ -299,6 +301,7 @@ impl Default for EngineCapabilities {
             reported_defaults: HashMap::new(),
             reported_defaults_version: 0,
             speculative_types: Vec::new(),
+            context_checkpoint_persistence: false,
             help_hash: String::new(),
             executable_fingerprint: String::new(),
             probed_at: None,

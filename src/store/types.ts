@@ -63,6 +63,7 @@ export interface EngineCapabilities {
   reportedDefaults?: Record<string, string>
   reportedDefaultsVersion?: number
   speculativeTypes?: string[]
+  contextCheckpointPersistence?: boolean
   helpHash: string
   executableFingerprint: string
   probedAt?: number
