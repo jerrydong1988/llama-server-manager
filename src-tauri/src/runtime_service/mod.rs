@@ -14,7 +14,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
-use supervisor::{start_watchdog, RuntimeSupervisor};
+use supervisor::{start_runtime_maintenance, start_watchdog, RuntimeSupervisor};
 
 pub use protocol::{RuntimeCheckpointLaunchSpec, RuntimeLaunchSpec};
 
@@ -26,6 +26,15 @@ static RUNTIME_READY: AtomicBool = AtomicBool::new(false);
 static RUNTIME_START_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static APP_CONFIG_SYNC_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const MAX_RUNTIME_SERVICE_LOG_BYTES: u64 = 4 * 1024 * 1024;
+const RETAINED_RUNTIME_SERVICE_LOG_BYTES: u64 = 1024 * 1024;
+
+pub(crate) fn maintain_runtime_service_log() -> Result<u64, String> {
+    crate::artifact_maintenance::compact_regular_file_tail(
+        &transport::service_log_path(),
+        MAX_RUNTIME_SERVICE_LOG_BYTES,
+        RETAINED_RUNTIME_SERVICE_LOG_BYTES,
+    )
+}
 
 fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
     [
@@ -469,16 +478,9 @@ fn spawn_runtime_process() -> Result<(), String> {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("failed to create runtime log directory: {error}"))?;
     }
-    let truncate_log = std::fs::metadata(&log_path)
-        .map(|metadata| metadata.len() > MAX_RUNTIME_SERVICE_LOG_BYTES)
-        .unwrap_or(false);
+    maintain_runtime_service_log()?;
     let mut log_options = OpenOptions::new();
-    log_options.create(true).write(true);
-    if truncate_log {
-        log_options.truncate(true);
-    } else {
-        log_options.append(true);
-    }
+    log_options.create(true).append(true);
     let stdout = log_options
         .open(&log_path)
         .map_err(|error| format!("failed to open runtime service log: {error}"))?;
@@ -533,16 +535,9 @@ fn append_runtime_startup_failure(error: &str) {
     if std::fs::create_dir_all(parent).is_err() {
         return;
     }
-    let truncate = std::fs::metadata(&log_path)
-        .map(|metadata| metadata.len() > MAX_RUNTIME_SERVICE_LOG_BYTES)
-        .unwrap_or(false);
+    let _ = maintain_runtime_service_log();
     let mut options = OpenOptions::new();
-    options.create(true).write(true);
-    if truncate {
-        options.truncate(true);
-    } else {
-        options.append(true);
-    }
+    options.create(true).append(true);
     let Ok(mut log) = options.open(log_path) else {
         return;
     };
@@ -622,6 +617,9 @@ pub async fn ensure_runtime_service() -> Result<RuntimeServiceStatus, String> {
 }
 
 pub fn run_runtime_service() -> Result<(), String> {
+    if let Err(error) = maintain_runtime_service_log() {
+        eprintln!("Runtime service log maintenance failed: {error}");
+    }
     let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_name("llama-runtime")
@@ -650,7 +648,8 @@ pub fn run_runtime_service() -> Result<(), String> {
                         let supervisor = supervisor_for_initialization.clone();
                         async move {
                             supervisor.restore().await?;
-                            start_watchdog(supervisor);
+                            start_watchdog(supervisor.clone());
+                            start_runtime_maintenance(supervisor);
                             Ok(())
                         }
                     },

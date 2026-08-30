@@ -42,6 +42,11 @@ assert.ok(
     && deleteSection.indexOf('await useAppStore.getState().clearCheckpoint(id)') < deleteSection.indexOf('deleteInstance(id)'),
   'deleting an instance must clear its stopped checkpoint before removing the ownership record',
 )
+assert.ok(
+  deleteSection.indexOf("await invoke('delete_instance_log'") > deleteSection.indexOf('await useAppStore.getState().clearCheckpoint(id)')
+    && deleteSection.indexOf("await invoke('delete_instance_log'") < deleteSection.indexOf('deleteInstance(id)'),
+  'deleting an instance must remove its persisted log before releasing config ownership',
+)
 assert.match(
   deleteSection,
   /catch \(error\)[\s\S]*addRuntimeWarning/,

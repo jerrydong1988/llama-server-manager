@@ -34,6 +34,9 @@ const CHECKPOINT_HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_s
 const CHECKPOINT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 const CHECKPOINT_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 const CHECKPOINT_DRAIN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+const RUNTIME_LOG_MAINTENANCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+const DAILY_ARTIFACT_MAINTENANCE_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(24 * 60 * 60);
 
 fn sorted_ids<'a>(ids: impl Iterator<Item = &'a String>) -> Vec<String> {
     let mut ids = ids.cloned().collect::<Vec<_>>();
@@ -1617,6 +1620,24 @@ impl RuntimeSupervisor {
                 "runtime-supervisor-recovery",
             );
         }
+        let active_session_ids = self
+            .state
+            .lock()
+            .unwrap()
+            .running
+            .values()
+            .filter_map(|running| running.telemetry_session_id.clone())
+            .collect();
+        match crate::commands::telemetry::reconcile_open_run_sessions(
+            &active_session_ids,
+            "runtime-supervisor-orphan-recovery",
+        ) {
+            Ok(reconciled) if reconciled > 0 => {
+                eprintln!("Telemetry recovery closed {reconciled} orphan sessions")
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!("Telemetry session reconciliation failed: {error}"),
+        }
         self.persist()?;
         let (running, desired, proxy_enabled) = {
             let state = self.state.lock().unwrap();
@@ -1875,6 +1896,59 @@ impl ProxyDataSource for RuntimeSupervisor {
     fn checkpoint_blocked_phase(&self) -> Option<CheckpointPhase> {
         self.checkpoint_coordinator.blocked_phase()
     }
+}
+
+impl RuntimeSupervisor {
+    fn run_daily_artifact_maintenance(&self) {
+        let (known_instance_ids, active_instance_ids) = {
+            let state = self.state.lock().unwrap();
+            (
+                state.instances.keys().cloned().collect(),
+                state.running.keys().cloned().collect(),
+            )
+        };
+        match crate::artifact_maintenance::prune_instance_logs(
+            &crate::utils::get_data_dir().join("configs"),
+            &known_instance_ids,
+            &active_instance_ids,
+        ) {
+            Ok(report) if report.removed_files > 0 => eprintln!(
+                "Instance log maintenance removed {} files ({} bytes)",
+                report.removed_files, report.removed_bytes
+            ),
+            Ok(_) => {}
+            Err(error) => eprintln!("Instance log maintenance failed: {error}"),
+        }
+        match crate::commands::telemetry::prune_telemetry_storage(
+            crate::commands::telemetry::DEFAULT_TELEMETRY_RETENTION_DAYS,
+        ) {
+            Ok(removed) if removed > 0 => {
+                eprintln!("Telemetry retention maintenance removed {removed} rows")
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!("Telemetry retention maintenance failed: {error}"),
+        }
+    }
+}
+
+pub fn start_runtime_maintenance(supervisor: Arc<RuntimeSupervisor>) {
+    std::thread::Builder::new()
+        .name("runtime-artifact-maintenance".into())
+        .spawn(move || {
+            supervisor.run_daily_artifact_maintenance();
+            let mut last_daily_maintenance = std::time::Instant::now();
+            loop {
+                std::thread::sleep(RUNTIME_LOG_MAINTENANCE_INTERVAL);
+                if let Err(error) = super::maintain_runtime_service_log() {
+                    eprintln!("Runtime service log maintenance failed: {error}");
+                }
+                if last_daily_maintenance.elapsed() >= DAILY_ARTIFACT_MAINTENANCE_INTERVAL {
+                    supervisor.run_daily_artifact_maintenance();
+                    last_daily_maintenance = std::time::Instant::now();
+                }
+            }
+        })
+        .expect("runtime artifact maintenance thread must start");
 }
 
 pub fn start_watchdog(supervisor: Arc<RuntimeSupervisor>) {

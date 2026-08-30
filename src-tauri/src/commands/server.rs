@@ -1884,6 +1884,26 @@ pub(crate) fn validate_instance_id(instance_id: &str) -> AppResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn delete_instance_log(
+    instance_id: String,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<u64> {
+    validate_instance_id(&instance_id)?;
+    if state.running.lock().unwrap().contains_key(&instance_id)
+        || state.starting.lock().unwrap().contains(&instance_id)
+    {
+        return Err(AppError::new(
+            "INSTANCE_LOG_ACTIVE",
+            "Stop the instance before deleting its persisted log.",
+            true,
+        ));
+    }
+    let config_dir = state.config_dir.lock().unwrap().clone();
+    crate::artifact_maintenance::remove_instance_log(&config_dir, &instance_id)
+        .map_err(|error| AppError::new("INSTANCE_LOG_CLEANUP_FAILED", error, true))
+}
+
 fn is_loopback_bind_host(host: &str) -> bool {
     let trimmed = host.trim();
     let host = trimmed
