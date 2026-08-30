@@ -176,12 +176,12 @@ const InstanceManager = () => {
     setNewInst({ name: '', modelId: '', modelPath: '', mmprojPath: '', port: newInst.port + 1, engineId: newInst.engineId })
     setPortStatus('')
   }
-
   const handleDelete = async (id: string) => {
     if (!await confirm(t.instance.confirmDelete, { title: t.instance.delete, kind: 'warning' })) return
     try {
       await stopInstance(id)
       await useAppStore.getState().clearCheckpoint(id)
+      await invoke('delete_instance_log', { instanceId: id })
       deleteInstance(id)
       await useAppStore.getState().saveConfig()
     } catch (error) {

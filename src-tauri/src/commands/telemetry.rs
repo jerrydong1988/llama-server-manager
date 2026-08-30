@@ -3,6 +3,7 @@ use crate::models::{InstanceConfig, SystemMetrics};
 use crate::vector_policy::ModelWorkload;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, LazyLock, Mutex};
@@ -12,6 +13,7 @@ const SCHEMA_VERSION: i64 = 8;
 const VECTOR_RATE_WINDOW_MS: i64 = 60_000;
 const TELEMETRY_WRITE_QUEUE_CAPACITY: usize = 4_096;
 const TELEMETRY_WRITE_BATCH_SIZE: usize = 128;
+pub(crate) const DEFAULT_TELEMETRY_RETENTION_DAYS: u32 = 14;
 
 static TELEMETRY_SCHEMA_READY: AtomicBool = AtomicBool::new(false);
 static TELEMETRY_DROPPED_WRITES: AtomicU64 = AtomicU64::new(0);
@@ -815,9 +817,9 @@ fn telemetry_writer_loop(receiver: mpsc::Receiver<TelemetryWrite>) {
                 } else {
                     prune_connection(&mut conn, before)
                 };
-                if matches!(result, Ok(affected) if affected > 0) {
+                if result.is_ok() {
                     if let Err(error) =
-                        conn.execute_batch("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;")
+                        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA optimize;")
                     {
                         result = Err(format!("Telemetry cleanup maintenance failed: {error}"));
                     }
@@ -1449,10 +1451,62 @@ pub async fn get_telemetry_session_detail(
 }
 
 pub async fn prune_telemetry(retention_days: Option<u32>) -> Result<u32, String> {
-    let days = retention_days.unwrap_or(14).clamp(1, 365);
+    let days = retention_days
+        .unwrap_or(DEFAULT_TELEMETRY_RETENTION_DAYS)
+        .clamp(1, 365);
     tokio::task::spawn_blocking(move || prune_telemetry_storage(days))
         .await
         .map_err(|e| format!("遥测清理失败: {}", e))?
+}
+
+fn reconcile_open_run_sessions_connection(
+    conn: &mut Connection,
+    active_session_ids: &HashSet<String>,
+    stopped_at: i64,
+    stop_reason: &str,
+) -> Result<u32, String> {
+    let open_session_ids = {
+        let mut statement = conn
+            .prepare("SELECT id FROM run_sessions WHERE stopped_at IS NULL")
+            .map_err(|error| format!("Unable to prepare open telemetry session query: {error}"))?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("Unable to query open telemetry sessions: {error}"))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("Unable to read open telemetry sessions: {error}"))?
+    };
+    let transaction = conn
+        .transaction()
+        .map_err(|error| format!("Unable to begin telemetry reconciliation: {error}"))?;
+    let mut reconciled = 0_u32;
+    for session_id in open_session_ids {
+        if active_session_ids.contains(&session_id) {
+            continue;
+        }
+        reconciled = reconciled.saturating_add(
+            transaction
+                .execute(
+                    "UPDATE run_sessions
+                     SET stopped_at = ?2, stop_reason = COALESCE(stop_reason, ?3)
+                     WHERE id = ?1 AND stopped_at IS NULL",
+                    params![session_id, stopped_at, stop_reason],
+                )
+                .map_err(|error| format!("Unable to close orphan telemetry session: {error}"))?
+                as u32,
+        );
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Unable to commit telemetry reconciliation: {error}"))?;
+    Ok(reconciled)
+}
+
+pub(crate) fn reconcile_open_run_sessions(
+    active_session_ids: &HashSet<String>,
+    stop_reason: &str,
+) -> Result<u32, String> {
+    let mut conn = open_connection()?;
+    reconcile_open_run_sessions_connection(&mut conn, active_session_ids, now_ms(), stop_reason)
 }
 
 fn prune_connection(conn: &mut Connection, before: i64) -> Result<u32, String> {
@@ -4091,6 +4145,52 @@ mod tests {
 
         assert_eq!(removed, 1);
         assert_eq!(remaining, 1);
+    }
+
+    #[test]
+    fn runtime_reconciliation_closes_only_orphan_open_sessions() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        for session_id in ["active", "orphan", "already-stopped"] {
+            conn.execute(
+                "INSERT INTO run_sessions
+                    (id, instance_id, instance_name, model_name, model_path, engine_id, backend,
+                     config_hash, command_line, started_at, stopped_at)
+                 VALUES (?1, 'instance', 'Instance', 'Model', 'model.gguf', 'engine', 'cpu',
+                         'hash', 'cmd', 1, ?2)",
+                params![
+                    session_id,
+                    (session_id == "already-stopped").then_some(50_i64)
+                ],
+            )
+            .unwrap();
+        }
+
+        let active = HashSet::from(["active".to_string()]);
+        assert_eq!(
+            reconcile_open_run_sessions_connection(&mut conn, &active, 100, "runtime-recovery")
+                .unwrap(),
+            1
+        );
+        let rows = conn
+            .prepare("SELECT id, stopped_at, stop_reason FROM run_sessions ORDER BY id")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(rows[0], ("active".into(), None, None));
+        assert_eq!(rows[1], ("already-stopped".into(), Some(50), None));
+        assert_eq!(
+            rows[2],
+            ("orphan".into(), Some(100), Some("runtime-recovery".into()))
+        );
     }
 
     #[test]

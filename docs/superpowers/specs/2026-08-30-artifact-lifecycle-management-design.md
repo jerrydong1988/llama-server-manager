@@ -38,7 +38,9 @@ Prevent long-running installations from accumulating files that no active instan
 - Fingerprint hashes: 256 entries, 90-day inactivity TTL.
 - Completed downloads: retained in a separate ownership ledger until the final artifact is removed or reconciliation proves it no longer exists.
 - Failed downloads: clearing the task also removes its registered `.part` and `.part.json`; retry keeps them.
-- Logs and telemetry: bounded by both age and size, with maintenance running in GUI and background-only lifecycles.
+- Instance logs: each active writer retains at most 32 MiB, compacting to an 8 MiB tail; inactive configured-instance logs expire after 30 days and orphan logs after 7 days. Instance deletion removes the exact private log before configuration ownership is released.
+- Runtime-service diagnostics: compact above 4 MiB to a 1 MiB recent tail, including while the background-only runtime remains alive.
+- Telemetry: 14-day row retention runs at startup and every 24 hours in the runtime service. Startup reconciles open sessions against live persisted process identities, and every prune attempts a truncating WAL checkpoint plus query-plan optimization.
 - Quarantine and atomic scratch: age-limited and count-limited inside fixed application roots.
 
 ## Delivery batches

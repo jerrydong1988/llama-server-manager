@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod artifact_maintenance;
 pub mod checkpoint;
 mod commands;
 mod error;
@@ -56,9 +57,9 @@ use crate::commands::scanner::{
     scan_models,
 };
 use crate::commands::server::{
-    check_port, generate_server_command, get_checkpoint_eligibility, get_metrics, get_slots,
-    get_system_health, get_system_metrics, open_browser, start_server, stop_server,
-    test_connection,
+    check_port, delete_instance_log, generate_server_command, get_checkpoint_eligibility,
+    get_metrics, get_slots, get_system_health, get_system_metrics, open_browser, start_server,
+    stop_server, test_connection,
 };
 use crate::commands::telemetry::{
     get_telemetry_overview, get_telemetry_session_analysis, get_telemetry_session_detail,
@@ -458,7 +459,9 @@ fn main() {
             }
             std::thread::spawn(|| {
                 if let Err(error) =
-                    crate::commands::telemetry::prune_telemetry_storage(14)
+                    crate::commands::telemetry::prune_telemetry_storage(
+                        crate::commands::telemetry::DEFAULT_TELEMETRY_RETENTION_DAYS,
+                    )
                 {
                     eprintln!("Telemetry retention cleanup failed: {}", error);
                 }
@@ -669,7 +672,7 @@ fn main() {
             probe_engine_capabilities,
             get_checkpoint_status, list_checkpoint_statuses, clear_checkpoint,
             load_app_data, get_cached_scan,
-            generate_server_command, get_checkpoint_eligibility, start_server, stop_server, open_browser,
+            generate_server_command, get_checkpoint_eligibility, start_server, stop_server, delete_instance_log, open_browser,
             save_config, load_config,
             browse_modelscope, download_modelscope_files,
             browse_huggingface, download_huggingface_files, check_local_file, check_local_files, delete_managed_local_file,
