@@ -3711,7 +3711,13 @@ fn prune_empty_managed_download_dirs(root: &Path, start: &Path) {
     let Ok(canonical_root) = std::fs::canonicalize(root) else {
         return;
     };
-    let mut current = start.to_path_buf();
+    // Windows can canonicalize one side through an 8.3 path alias (for example
+    // RUNNER~1) while the caller still holds the long path. Normalize both
+    // identities before the containment walk so safe empty descendants are not
+    // silently retained just because the two spellings differ.
+    let Ok(mut current) = std::fs::canonicalize(start) else {
+        return;
+    };
     while current != canonical_root && path_is_within(&current, &canonical_root) {
         let Ok(metadata) = std::fs::symlink_metadata(&current) else {
             break;
