@@ -41,6 +41,9 @@ Prevent long-running installations from accumulating files that no active instan
 - Instance logs: each active writer retains at most 32 MiB, compacting to an 8 MiB tail; inactive configured-instance logs expire after 30 days and orphan logs after 7 days. Instance deletion removes the exact private log before configuration ownership is released.
 - Runtime-service diagnostics: compact above 4 MiB to a 1 MiB recent tail, including while the background-only runtime remains alive.
 - Telemetry: 14-day row retention runs at startup and every 24 hours in the runtime service. Startup reconciles open sessions against live persisted process identities, and every prune attempts a truncating WAL checkpoint plus query-plan optimization.
+- Sharded models: deletion previews and then re-resolves the complete physical GGUF set. The confirmation discloses file count and total bytes; incomplete/conflicting groups, links/reparse points, and references from saved or running instances fail closed.
+- Authorized external roots: explicit engine, model, and download grants are listable and exactly revocable. Revocation persists before the in-memory authority changes and never deletes files.
+- External engine outputs: configured fields, custom arguments, and manual commands are inspected for lookup caches, slot state, prompt logs, engine logs, and projector URLs; every match remains an operator-owned reference. Relative paths are not resolved against the manager process, and no automatic deletion is permitted.
 - Quarantine and atomic scratch: age-limited and count-limited inside fixed application roots.
 
 ## Delivery batches

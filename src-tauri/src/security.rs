@@ -18,6 +18,13 @@ struct PathAuthority {
     download_roots: BTreeSet<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthorizedDirectory {
+    pub purpose: String,
+    pub root: String,
+}
+
 fn normalize_authority(authority: PathAuthority) -> PathAuthority {
     let normalize_roots = |roots: BTreeSet<String>| {
         roots
@@ -118,6 +125,68 @@ fn record_authorized_root(purpose: &str, root: &Path) -> Result<(), String> {
     persist_authority(&updated)?;
     *authority = updated;
     Ok(())
+}
+
+fn roots_for_purpose_mut<'a>(
+    authority: &'a mut PathAuthority,
+    purpose: &str,
+) -> Result<&'a mut BTreeSet<String>, String> {
+    match purpose {
+        "engine" => Ok(&mut authority.engine_roots),
+        "model" => Ok(&mut authority.model_roots),
+        "download" => Ok(&mut authority.download_roots),
+        _ => Err("未知的目录授权用途".to_string()),
+    }
+}
+
+fn revoke_authorized_root(
+    authority: &mut PathAuthority,
+    purpose: &str,
+    root: &Path,
+) -> Result<bool, String> {
+    let key = normalized_authority_key(root);
+    if key.is_empty() {
+        return Err("授权目录不能为空".to_string());
+    }
+    Ok(roots_for_purpose_mut(authority, purpose)?.remove(&key))
+}
+
+#[tauri::command]
+pub async fn list_authorized_directories() -> Vec<AuthorizedDirectory> {
+    let authority = PATH_AUTHORITY.lock().unwrap();
+    let mut directories = Vec::with_capacity(
+        authority.engine_roots.len() + authority.model_roots.len() + authority.download_roots.len(),
+    );
+    for (purpose, roots) in [
+        ("engine", &authority.engine_roots),
+        ("model", &authority.model_roots),
+        ("download", &authority.download_roots),
+    ] {
+        directories.extend(roots.iter().cloned().map(|root| AuthorizedDirectory {
+            purpose: purpose.to_string(),
+            root,
+        }));
+    }
+    directories
+}
+
+#[tauri::command]
+pub async fn revoke_authorized_directory(
+    purpose: String,
+    root: String,
+) -> crate::error::AppResult<bool> {
+    let mut authority = PATH_AUTHORITY.lock().unwrap();
+    let mut updated = authority.clone();
+    let removed = revoke_authorized_root(&mut updated, &purpose, Path::new(root.trim()))
+        .map_err(crate::error::AppError::from)?;
+    if !removed {
+        return Ok(false);
+    }
+    // Persist before publishing the in-memory authority so a failed write never
+    // creates a session-only revocation that returns after restart.
+    persist_authority(&updated).map_err(crate::error::AppError::from)?;
+    *authority = updated;
+    Ok(true)
 }
 
 pub fn initialize_path_authority(
@@ -448,6 +517,30 @@ mod tests {
             &Path::new("authorized-models-sibling").join("model.gguf"),
             &roots
         ));
+    }
+
+    #[test]
+    fn authorization_revocation_is_exact_idempotent_and_purpose_scoped() {
+        let root = normalized_authority_key(Path::new("authorized-models"));
+        let sibling = normalized_authority_key(Path::new("authorized-models-sibling"));
+        let mut authority = PathAuthority {
+            engine_roots: BTreeSet::from([root.clone()]),
+            model_roots: BTreeSet::from([root.clone(), sibling.clone()]),
+            download_roots: BTreeSet::new(),
+        };
+
+        assert!(
+            revoke_authorized_root(&mut authority, "model", Path::new("authorized-models"))
+                .unwrap()
+        );
+        assert!(!authority.model_roots.contains(&root));
+        assert!(authority.model_roots.contains(&sibling));
+        assert!(authority.engine_roots.contains(&root));
+        assert!(
+            !revoke_authorized_root(&mut authority, "model", Path::new("authorized-models"))
+                .unwrap()
+        );
+        assert!(revoke_authorized_root(&mut authority, "unknown", Path::new("root")).is_err());
     }
 
     #[cfg(windows)]

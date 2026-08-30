@@ -98,3 +98,30 @@ test('download storage paths use the readable Windows form', async ({ page }) =>
   await expect(page.locator('[data-guide="download-save-dir"] input')).toHaveValue('C:\\browser-test\\downloads')
   await expect(page.getByTitle('C:\\browser-test\\downloads\\<repo>\\<file>')).toBeVisible()
 })
+
+test('sharded model deletion previews and removes the complete physical artifact set', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('lang', 'zh-CN')
+    localStorage.setItem('lastTab', 'model-repo')
+  })
+  await page.goto('/')
+
+  const explorer = page.locator('[data-guide="model-search"]')
+  await expect(explorer.getByText('Qwen Browser Test Q8_0.gguf', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '删除', exact: true }).click()
+  await expect(page.getByText('Qwen Browser Test Q8_0.gguf', { exact: true })).toHaveCount(0)
+
+  const deletionFlow = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls
+    .filter(call => [
+      'preview_model_deletion',
+      'plugin:dialog|message',
+      'delete_model_file',
+    ].includes(call.command)))
+  expect(deletionFlow.map(call => call.command)).toEqual([
+    'preview_model_deletion',
+    'plugin:dialog|message',
+    'delete_model_file',
+  ])
+  expect(JSON.stringify(deletionFlow[1].payload)).toContain('3')
+  expect(JSON.stringify(deletionFlow[1].payload)).toContain('12.00 GB')
+})

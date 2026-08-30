@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, Database, File, FolderOpen, FolderTree, HardDrive, Image, RefreshCw, Search, Trash2 } from 'lucide-react'
-import { confirm } from '@tauri-apps/plugin-dialog'
+import { confirm, message } from '@tauri-apps/plugin-dialog'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useAppStore, type ModelInfo } from '../store'
+import { useAppStore, type ModelDeletionPreview, type ModelInfo } from '../store'
 import { invokeApp as invoke } from '../lib/ipc'
 import { formatMessage, useI18n } from '../i18n'
 import { dedupePaths, formatPathForDisplay, isPathWithinRoot, normalizePath, pathJoin, pathsEqual } from '../utils/path'
@@ -262,12 +262,28 @@ const ModelRepo = () => {
   }
 
   const handleDeleteFile = async (path: string) => {
-    const confirmed = await confirm(t.modelRepo.deleteConfirm, { title: t.modelRepo.delete, kind: 'warning' })
-    if (!confirmed) {
-      return
+    setScanError('')
+    try {
+      const preview = await invoke<ModelDeletionPreview>('preview_model_deletion', { path })
+      if (preview.referencedBy.length > 0) {
+        await message(
+          formatMessage(t.modelRepo.deleteBlocked, { instances: preview.referencedBy.join(', ') }),
+          { title: t.modelRepo.deleteBlockedTitle, kind: 'warning' },
+        )
+        return
+      }
+      const confirmed = await confirm(
+        formatMessage(t.modelRepo.deleteArtifactSetConfirm, {
+          count: preview.artifactCount,
+          size: formatSize(preview.totalBytes),
+        }),
+        { title: t.modelRepo.delete, kind: 'warning' },
+      )
+      if (!confirmed) return
+      await deleteModelFile(path)
+    } catch (error) {
+      setScanError(String(error))
     }
-
-    await deleteModelFile(path)
   }
 
   const renderNode = (node: TreeNode, depth: number): ReactNode => {

@@ -5295,7 +5295,7 @@ fn split_args(input: &str) -> Vec<String> {
     split_args_checked(input).unwrap_or_default()
 }
 
-fn split_args_checked(input: &str) -> Result<Vec<String>, String> {
+pub(crate) fn split_args_checked(input: &str) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
