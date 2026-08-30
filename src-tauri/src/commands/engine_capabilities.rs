@@ -1,4 +1,5 @@
 use crate::commands::model_inventory;
+use crate::model_artifacts::resolve_engine_runtime_artifacts;
 use crate::models::{AppState, EngineCapabilities, EngineInfo};
 use crate::path_utils::{path_identity_key, paths_equal};
 use std::collections::{BTreeSet, HashMap};
@@ -12,6 +13,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_PROBE_STREAM_BYTES: usize = 512 * 1024;
 const MIN_CONFIDENT_FLAG_COUNT: usize = 10;
 const REPORTED_DEFAULTS_VERSION: u8 = 2;
+const CONTEXT_CHECKPOINT_HELP_MARKER: &str = "path to save slot kv cache and context checkpoints";
 
 #[derive(Debug)]
 struct CommandOutput {
@@ -327,6 +329,15 @@ fn help_hash(output: &str) -> String {
     format!("{hash:016x}")
 }
 
+pub(crate) fn detects_context_checkpoint_persistence(output: &str) -> bool {
+    output
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .contains(CONTEXT_CHECKPOINT_HELP_MARKER)
+}
+
 fn first_nonempty_line(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
         let trimmed = line.trim();
@@ -414,48 +425,74 @@ pub(crate) fn executable_fingerprint(executable: &str) -> String {
     const SAMPLE_BYTES: u64 = 32 * 1024;
 
     let path = std::fs::canonicalize(executable).unwrap_or_else(|_| executable.into());
-    let metadata = match path.metadata() {
-        Ok(metadata) if metadata.is_file() => metadata,
-        _ => return String::new(),
+    let Some(artifacts) = resolve_engine_runtime_artifacts(&path) else {
+        return String::new();
     };
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
     let normalized_path = path_identity_key(&path);
 
     let mut hash = 0xcbf29ce484222325_u64;
     update_fingerprint_hash(&mut hash, normalized_path.as_bytes());
-    update_fingerprint_hash(&mut hash, &metadata.len().to_le_bytes());
-    update_fingerprint_hash(&mut hash, &modified.to_le_bytes());
-
-    let mut file = match File::open(&path) {
-        Ok(file) => file,
-        Err(_) => return String::new(),
-    };
-    let mut offsets = BTreeSet::new();
-    offsets.insert(0_u64);
-    offsets.insert(metadata.len().saturating_sub(SAMPLE_BYTES) / 2);
-    offsets.insert(metadata.len().saturating_sub(SAMPLE_BYTES));
-    let mut buffer = vec![0_u8; SAMPLE_BYTES as usize];
-    for offset in offsets {
-        if file.seek(SeekFrom::Start(offset)).is_err() {
-            return String::new();
-        }
-        let count = match file.read(&mut buffer) {
-            Ok(count) => count,
+    update_fingerprint_hash(&mut hash, &(artifacts.len() as u32).to_le_bytes());
+    for artifact in &artifacts {
+        let canonical = match std::fs::canonicalize(artifact) {
+            Ok(path) => path,
             Err(_) => return String::new(),
         };
-        update_fingerprint_hash(&mut hash, &offset.to_le_bytes());
-        update_fingerprint_hash(&mut hash, &buffer[..count]);
+        let metadata = match canonical.metadata() {
+            Ok(metadata) if metadata.is_file() => metadata,
+            _ => return String::new(),
+        };
+        let modified = metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let name = artifact
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        update_fingerprint_hash(&mut hash, name.as_bytes());
+        update_fingerprint_hash(&mut hash, &metadata.len().to_le_bytes());
+        update_fingerprint_hash(&mut hash, &modified.to_le_bytes());
+
+        let mut file = match File::open(&canonical) {
+            Ok(file) => file,
+            Err(_) => return String::new(),
+        };
+        let mut offsets = BTreeSet::new();
+        offsets.insert(0_u64);
+        offsets.insert(metadata.len().saturating_sub(SAMPLE_BYTES) / 2);
+        offsets.insert(metadata.len().saturating_sub(SAMPLE_BYTES));
+        let mut buffer = vec![0_u8; SAMPLE_BYTES as usize];
+        for offset in offsets {
+            if file.seek(SeekFrom::Start(offset)).is_err() {
+                return String::new();
+            }
+            let count = match file.read(&mut buffer) {
+                Ok(count) => count,
+                Err(_) => return String::new(),
+            };
+            update_fingerprint_hash(&mut hash, &offset.to_le_bytes());
+            update_fingerprint_hash(&mut hash, &buffer[..count]);
+        }
+        let after = match canonical.metadata() {
+            Ok(metadata) if metadata.is_file() => metadata,
+            _ => return String::new(),
+        };
+        let modified_after = after
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        if after.len() != metadata.len() || modified_after != modified {
+            return String::new();
+        }
     }
 
-    format!(
-        "v2:{normalized_path}:{}:{modified}:{hash:016x}",
-        metadata.len()
-    )
+    format!("v3:{normalized_path}:{}:{hash:016x}", artifacts.len())
 }
 
 pub(crate) fn capabilities_match_executable(
@@ -473,6 +510,7 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
     let supported_flags = extract_supported_flags(&help_output.text);
     let reported_defaults = extract_reported_defaults(&help_output.text);
     let speculative_types = extract_speculative_types(&help_output.text);
+    let context_checkpoint_persistence = detects_context_checkpoint_persistence(&help_output.text);
     let status = classify_probe_status(&supported_flags, help_output.timed_out);
     let fingerprint = executable_fingerprint(&engine.exe);
     if fingerprint_before.is_empty() || fingerprint_before != fingerprint {
@@ -525,6 +563,7 @@ fn probe_engine(mut engine: EngineInfo) -> EngineInfo {
         reported_defaults,
         reported_defaults_version: REPORTED_DEFAULTS_VERSION,
         speculative_types,
+        context_checkpoint_persistence,
         help_hash: if help_output.text.is_empty() {
             String::new()
         } else {
@@ -1064,6 +1103,16 @@ mod tests {
     }
 
     #[test]
+    fn detects_only_the_documented_context_checkpoint_capability_marker() {
+        assert!(detects_context_checkpoint_persistence(
+            "  --slot-save-path PATH\n      path to save slot KV cache and context checkpoints (default: disabled)\n"
+        ));
+        assert!(!detects_context_checkpoint_persistence(
+            "  --slot-save-path PATH\n      path to save slot kv cache (default: disabled)\n"
+        ));
+    }
+
+    #[test]
     fn version_extraction_skips_backend_logs_and_requires_a_version_marker() {
         let output = "load_backend: loaded RPC backend\nversion: 9055 (8e52631d5)\nbuilt with MSVC";
         assert_eq!(
@@ -1215,18 +1264,29 @@ mod tests {
     }
 
     #[test]
-    fn executable_fingerprint_includes_sampled_file_content() {
-        let path = std::env::temp_dir().join(format!(
+    fn executable_fingerprint_covers_the_launcher_and_adjacent_runtime_libraries() {
+        let directory = std::env::temp_dir().join(format!(
             "lsm-engine-fingerprint-{}-{}",
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("llama-server");
+        let library = directory.join("llama-server-impl.dll");
         std::fs::write(&path, vec![b'a'; 128 * 1024]).unwrap();
+        std::fs::write(&library, vec![b'c'; 128 * 1024]).unwrap();
         let first = executable_fingerprint(&path.to_string_lossy());
         std::fs::write(&path, vec![b'b'; 128 * 1024]).unwrap();
         let second = executable_fingerprint(&path.to_string_lossy());
         assert_ne!(first, second);
-        let _ = std::fs::remove_file(path);
+
+        std::fs::write(&library, vec![b'd'; 128 * 1024]).unwrap();
+        let third = executable_fingerprint(&path.to_string_lossy());
+        assert_ne!(second, third);
+
+        std::fs::write(directory.join("release-notes.txt"), b"not runtime code").unwrap();
+        assert_eq!(third, executable_fingerprint(&path.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

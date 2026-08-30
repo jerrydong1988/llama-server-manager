@@ -23,6 +23,16 @@ assert.match(
   /reported_speculative_types[\s\S]*--spec-type=\{speculative_type\}/,
   'detected engines must validate every configured speculative type against their reported enum values',
 )
+assert.match(
+  capabilityBackend,
+  /path to save slot kv cache and context checkpoints/,
+  'full target/draft checkpoint persistence must require an explicit engine help marker',
+)
+assert.match(
+  capabilityBackend,
+  /resolve_engine_runtime_artifacts/,
+  'capability staleness must cover the launcher and adjacent runtime libraries',
+)
 
 const entry = `
   import assert from 'node:assert/strict'

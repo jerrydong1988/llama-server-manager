@@ -552,7 +552,7 @@
 
   checkpoint: {
     configTitle: 'KV / Prefill 缓存检查点',
-    configDescription: '在受管 llama.cpp 引擎重启之间持久化 slot 状态。',
+    configDescription: '在受管 llama.cpp 引擎重启之间持久化兼容的主模型与草稿模型 slot 状态。',
     experimentalBadge: '实验性',
     experimental: '实验性功能：仅支持明确兼容的 llama.cpp 构建、单个本地文本生成 slot。',
     sensitive: '检查点包含由提示词派生的模型状态，会按敏感本地应用数据保存。',
@@ -603,7 +603,7 @@
       vector_workload_unsupported: '不支持 embedding 与 reranking 工作负载', parallel_must_be_one: '并行 slot 数必须设为 1',
       prompt_cache_required: '必须启用 prompt cache', prompt_cache_retention_required: '必须启用 Cache RAM 与 idle-slot cache，才能在 Harness 元数据请求之后保留已恢复前缀', slots_required: '必须启用 slots API',
       loopback_http_required: '引擎必须使用无 TLS 的本机回环 HTTP 端点', custom_endpoint_unsupported: '不支持自定义 path 或 API 前缀',
-      engine_capability_missing: '所选引擎尚未确认支持 slots 与 slot-save-path', speculative_decoding_unsupported: '检查点仅支持可由提示词重建的 ngram-* 推测解码；draft-*、自动推测或外部 lookup cache 会沿用冷启动',
+      engine_capability_missing: '所选引擎尚未确认支持 slots 与 slot-save-path', speculative_decoding_unsupported: 'draft-* 检查点要求引擎明确确认可持久化主模型与草稿模型上下文；自动推测、外部 lookup cache、未知类型，以及未显式选择 draft-* 的草稿模型仍会冷启动',
       lora_unsupported: '不支持 LoRA 适配器', multimodal_unsupported: '不支持多模态投影器',
       hybrid_recurrent_unsupported: '不支持混合或循环模型架构', sliding_window_requires_full_cache: '滑动窗口模型必须启用 SWA 完整缓存，才能生成可跨进程复用的检查点', model_architecture_unknown: '模型架构未知',
       sharded_model_unsupported: '旧版不支持分片模型', model_artifacts_incomplete: '模型文件集合缺失或分片不完整，无法生成完整内容指纹', conflicting_slot_save_path: '用户指定的 slot 保存目录与管理器所有权冲突',

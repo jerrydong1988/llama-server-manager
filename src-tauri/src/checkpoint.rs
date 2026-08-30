@@ -1,10 +1,13 @@
-use crate::model_artifacts::resolve_model_artifacts;
+use crate::model_artifacts::{resolve_engine_runtime_artifacts, resolve_model_artifacts};
 use crate::models::{
     InstanceConfig, KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MAX,
     KV_CHECKPOINT_MINIMUM_PROMPT_TOKENS_MIN, KV_CHECKPOINT_STORAGE_LIMIT_GIB_MAX,
     KV_CHECKPOINT_STORAGE_LIMIT_GIB_MIN,
 };
-use crate::speculative::{checkpoint_speculative_types_supported, normalize_speculative_types};
+use crate::speculative::{
+    checkpoint_speculative_types_supported, checkpoint_uses_draft_state,
+    normalize_speculative_types,
+};
 use crate::vector_policy::ModelWorkload;
 use chrono::{DateTime, Utc};
 use serde::de::DeserializeOwned;
@@ -187,6 +190,7 @@ pub struct EngineCheckpointCapabilities {
     pub cache_ram: bool,
     pub cache_idle_slots: bool,
     pub swa_full: bool,
+    pub context_checkpoint_persistence: bool,
 }
 
 impl EngineCheckpointCapabilities {
@@ -202,7 +206,13 @@ impl EngineCheckpointCapabilities {
             cache_ram: has("--cache-ram"),
             cache_idle_slots: has("--cache-idle-slots"),
             swa_full: has("--swa-full"),
+            context_checkpoint_persistence: false,
         }
+    }
+
+    pub const fn with_context_checkpoint_persistence(mut self, supported: bool) -> Self {
+        self.context_checkpoint_persistence = supported;
+        self
     }
 
     pub const fn complete(self) -> bool {
@@ -357,10 +367,12 @@ pub fn evaluate_checkpoint_eligibility(
     if !context.engine_capabilities.complete() {
         push_reason(&mut reasons, CheckpointReasonCode::EngineCapabilityMissing);
     }
-    if !config.draft_model_path.trim().is_empty()
+    if (!config.draft_model_path.trim().is_empty()
+        && !checkpoint_uses_draft_state(&config.spec_type))
         || !checkpoint_speculative_types_supported(
             &config.spec_type,
             context.engine_speculative_types,
+            context.engine_capabilities.context_checkpoint_persistence,
         )
         || !config.lookup_cache_static.trim().is_empty()
         || !config.lookup_cache_dynamic.trim().is_empty()
@@ -415,7 +427,7 @@ pub fn evaluate_checkpoint_eligibility(
 }
 
 pub const CHECKPOINT_MANIFEST_SCHEMA_VERSION: u32 = 1;
-pub const CHECKPOINT_FINGERPRINT_SCHEMA_VERSION: u32 = 2;
+pub const CHECKPOINT_FINGERPRINT_SCHEMA_VERSION: u32 = 3;
 const HASH_CACHE_SCHEMA_VERSION: u32 = 1;
 const LATEST_POINTER_SCHEMA_VERSION: u32 = 1;
 const USAGE_SCHEMA_VERSION: u32 = 1;
@@ -753,6 +765,8 @@ pub struct CheckpointFingerprint {
     pub algorithm: String,
     pub digest: String,
     pub model_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft_model_sha256: Option<String>,
     pub engine_sha256: String,
     pub engine_version: String,
     pub backend: String,
@@ -763,6 +777,10 @@ impl CheckpointFingerprint {
         if self.algorithm != "sha256"
             || !is_lower_hex_digest(&self.digest)
             || !is_lower_hex_digest(&self.model_sha256)
+            || self
+                .draft_model_sha256
+                .as_deref()
+                .is_some_and(|digest| !is_lower_hex_digest(digest))
             || !is_lower_hex_digest(&self.engine_sha256)
             || self.engine_version.trim().is_empty()
             || self.backend.trim().is_empty()
@@ -778,6 +796,7 @@ impl CheckpointFingerprint {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintMaterials {
     pub model_sha256: String,
+    pub draft_model_sha256: Option<String>,
     pub engine_sha256: String,
     pub engine_version: String,
     pub backend: String,
@@ -786,15 +805,27 @@ pub struct FingerprintMaterials {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CanonicalFingerprintV2<'a> {
+struct CanonicalFingerprintV3<'a> {
     fingerprint_schema_version: u32,
     manifest_schema_version: u32,
     state_format: &'static str,
     model_sha256: &'a str,
+    draft_model_sha256: Option<&'a str>,
     engine_sha256: &'a str,
     engine_version: &'a str,
     backend: &'a str,
     spec_type: String,
+    cache_type_draft_k: &'a str,
+    cache_type_draft_v: &'a str,
+    draft_gpu_layers: u32,
+    draft_tokens: u32,
+    spec_draft_n_min: u32,
+    spec_draft_p_min: f32,
+    spec_draft_p_split: f32,
+    spec_draft_device: &'a str,
+    spec_draft_backend_sampling: bool,
+    spec_draft_threads: u32,
+    spec_draft_threads_batch: u32,
     ctx_size: u32,
     ctx_size_auto: bool,
     parallel: i32,
@@ -853,6 +884,11 @@ fn canonical_fingerprint_bytes(
     materials: &FingerprintMaterials,
 ) -> StoreResult<Vec<u8>> {
     if !is_lower_hex_digest(&materials.model_sha256)
+        || materials
+            .draft_model_sha256
+            .as_deref()
+            .is_some_and(|digest| !is_lower_hex_digest(digest))
+        || (config.draft_model_path.trim().is_empty() != materials.draft_model_sha256.is_none())
         || !is_lower_hex_digest(&materials.engine_sha256)
         || materials.engine_version.trim().is_empty()
         || materials.backend.trim().is_empty()
@@ -868,15 +904,27 @@ fn canonical_fingerprint_bytes(
             "checkpoint fingerprint material is unavailable",
         ));
     }
-    let canonical = CanonicalFingerprintV2 {
+    let canonical = CanonicalFingerprintV3 {
         fingerprint_schema_version: CHECKPOINT_FINGERPRINT_SCHEMA_VERSION,
         manifest_schema_version: CHECKPOINT_MANIFEST_SCHEMA_VERSION,
         state_format: STATE_FORMAT,
         model_sha256: &materials.model_sha256,
+        draft_model_sha256: materials.draft_model_sha256.as_deref(),
         engine_sha256: &materials.engine_sha256,
         engine_version: materials.engine_version.trim(),
         backend: materials.backend.trim(),
         spec_type: normalize_speculative_types(&config.spec_type),
+        cache_type_draft_k: config.cache_type_draft_k.trim(),
+        cache_type_draft_v: config.cache_type_draft_v.trim(),
+        draft_gpu_layers: config.draft_gpu_layers,
+        draft_tokens: config.draft_tokens,
+        spec_draft_n_min: config.spec_draft_n_min,
+        spec_draft_p_min: config.spec_draft_p_min,
+        spec_draft_p_split: config.spec_draft_p_split,
+        spec_draft_device: config.spec_draft_device.trim(),
+        spec_draft_backend_sampling: config.spec_draft_backend_sampling,
+        spec_draft_threads: config.spec_draft_threads,
+        spec_draft_threads_batch: config.spec_draft_threads_batch,
         ctx_size: config.ctx_size,
         ctx_size_auto: config.ctx_size_auto,
         parallel: config.parallel,
@@ -946,6 +994,7 @@ pub fn build_checkpoint_fingerprint(
         algorithm: "sha256".into(),
         digest: sha256_bytes(&canonical),
         model_sha256: materials.model_sha256.clone(),
+        draft_model_sha256: materials.draft_model_sha256.clone(),
         engine_sha256: materials.engine_sha256.clone(),
         engine_version: materials.engine_version.trim().to_string(),
         backend: materials.backend.trim().to_string(),
@@ -1372,6 +1421,33 @@ impl CheckpointStore {
         Ok(sha256_bytes(&canonical))
     }
 
+    pub fn engine_artifact_sha256(&self, engine_path: &Path) -> StoreResult<String> {
+        let artifacts = resolve_engine_runtime_artifacts(engine_path).ok_or_else(|| {
+            CheckpointStoreError::new(
+                CheckpointReasonCode::FingerprintUnavailable,
+                "engine runtime artifact set is unavailable",
+            )
+        })?;
+        if artifacts.len() == 1 {
+            return self.content_sha256(&artifacts[0]);
+        }
+
+        let mut canonical = Vec::with_capacity(40 + artifacts.len() * 112);
+        canonical.extend_from_slice(b"llama-engine-artifact-set-v1\0");
+        canonical.extend_from_slice(&(artifacts.len() as u32).to_le_bytes());
+        for artifact in &artifacts {
+            let name = artifact
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_ascii_lowercase();
+            canonical.extend_from_slice(&(name.len() as u32).to_le_bytes());
+            canonical.extend_from_slice(name.as_bytes());
+            canonical.extend_from_slice(self.content_sha256(artifact)?.as_bytes());
+        }
+        Ok(sha256_bytes(&canonical))
+    }
+
     pub fn build_fingerprint(
         &self,
         config: &InstanceConfig,
@@ -1385,9 +1461,15 @@ impl CheckpointStore {
         } else {
             Some(self.content_sha256(Path::new(&config.chat_template_file))?)
         };
+        let draft_model_sha256 = if config.draft_model_path.trim().is_empty() {
+            None
+        } else {
+            Some(self.model_artifact_sha256(Path::new(&config.draft_model_path))?)
+        };
         let materials = FingerprintMaterials {
             model_sha256: self.model_artifact_sha256(model_path)?,
-            engine_sha256: self.content_sha256(engine_path)?,
+            draft_model_sha256,
+            engine_sha256: self.engine_artifact_sha256(engine_path)?,
             engine_version: engine_version.into(),
             backend: backend.into(),
             chat_template_file_sha256,
@@ -3612,7 +3694,10 @@ mod tests {
         }
     }
 
-    fn evaluate(config: &InstanceConfig) -> CheckpointEligibility {
+    fn evaluate_with_context_persistence(
+        config: &InstanceConfig,
+        context_checkpoint_persistence: bool,
+    ) -> CheckpointEligibility {
         evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
             config,
             workload: ModelWorkload::Inference,
@@ -3623,16 +3708,22 @@ mod tests {
                 cache_ram: true,
                 cache_idle_slots: true,
                 swa_full: true,
+                context_checkpoint_persistence,
             },
             engine_speculative_types: &[
                 "ngram-mod".into(),
                 "ngram-cache".into(),
                 "draft-mtp".into(),
+                "draft-dflash".into(),
             ],
             model_architecture: Some("llama"),
             model_artifacts_complete: true,
             model_has_swa: Some(false),
         })
+    }
+
+    fn evaluate(config: &InstanceConfig) -> CheckpointEligibility {
+        evaluate_with_context_persistence(config, true)
     }
 
     fn assert_config_reason(
@@ -3901,15 +3992,26 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_allows_ngram_fallbacks_but_rejects_draft_state() {
+    fn checkpoint_allows_draft_state_only_with_a_compatible_context_appendix() {
         let mut config = eligible_config();
         config.spec_type = "ngram-cache,ngram-mod".into();
         assert!(evaluate(&config).eligible);
 
         config.spec_type = "ngram-mod,draft-mtp".into();
+        assert!(evaluate_with_context_persistence(&config, false)
+            .reasons
+            .contains(&CheckpointReasonCode::SpeculativeDecodingUnsupported));
+        assert!(evaluate(&config).eligible);
+
+        config.spec_type = "draft-dflash".into();
+        config.draft_model_path = "draft.gguf".into();
+        assert!(evaluate(&config).eligible);
+
+        config.spec_type = "ngram-mod".into();
         assert!(evaluate(&config)
             .reasons
             .contains(&CheckpointReasonCode::SpeculativeDecodingUnsupported));
+        config.draft_model_path.clear();
 
         config.spec_type = "ngram-cache".into();
         config.lookup_cache_static = "external-cache.bin".into();
@@ -4007,6 +4109,7 @@ mod tests {
                 cache_ram: true,
                 cache_idle_slots: true,
                 swa_full: true,
+                context_checkpoint_persistence: true,
             },
             engine_speculative_types: &[],
             model_architecture: Some("llama"),
@@ -4037,6 +4140,7 @@ mod tests {
                 cache_ram: true,
                 cache_idle_slots: true,
                 swa_full: true,
+                context_checkpoint_persistence: true,
             },
             ..base
         });
@@ -4245,6 +4349,7 @@ mod tests {
     fn fingerprint_materials() -> FingerprintMaterials {
         FingerprintMaterials {
             model_sha256: digest(0x11),
+            draft_model_sha256: None,
             engine_sha256: digest(0x22),
             engine_version: "b10679".into(),
             backend: "hip".into(),
@@ -4545,6 +4650,19 @@ mod tests {
         assert_fingerprint_changes(&base, |config| config.reasoning_effort = "high".into());
         assert_fingerprint_changes(&base, |config| config.reasoning = "on".into());
         assert_fingerprint_changes(&base, |config| config.spec_type = "ngram-mod".into());
+        assert_fingerprint_changes(&base, |config| config.cache_type_draft_k = "q8_0".into());
+        assert_fingerprint_changes(&base, |config| config.cache_type_draft_v = "q8_0".into());
+        assert_fingerprint_changes(&base, |config| config.draft_gpu_layers = 48);
+        assert_fingerprint_changes(&base, |config| config.draft_tokens = 15);
+        assert_fingerprint_changes(&base, |config| config.spec_draft_n_min = 1);
+        assert_fingerprint_changes(&base, |config| config.spec_draft_p_min = 0.2);
+        assert_fingerprint_changes(&base, |config| config.spec_draft_p_split = 0.3);
+        assert_fingerprint_changes(&base, |config| config.spec_draft_device = "HIP0".into());
+        assert_fingerprint_changes(&base, |config| {
+            config.spec_draft_backend_sampling = false;
+        });
+        assert_fingerprint_changes(&base, |config| config.spec_draft_threads = 4);
+        assert_fingerprint_changes(&base, |config| config.spec_draft_threads_batch = 8);
         assert_fingerprint_changes(&base, |config| config.reasoning_preserve = "true".into());
         assert_fingerprint_changes(&base, |config| config.reasoning_budget = "8192".into());
         assert_fingerprint_changes(&base, |config| {
@@ -4597,6 +4715,47 @@ mod tests {
             build_checkpoint_fingerprint(&relocated, &changed)
                 .unwrap()
                 .digest
+        );
+    }
+
+    #[test]
+    fn fingerprint_uses_draft_model_contents_not_draft_path() {
+        let config = InstanceConfig {
+            draft_model_path: "first-draft.gguf".into(),
+            spec_type: "draft-dflash".into(),
+            ..eligible_config()
+        };
+        let mut first = fingerprint_materials();
+        first.draft_model_sha256 = Some(digest(0x66));
+        let expected = build_checkpoint_fingerprint(&config, &first).unwrap();
+        assert_eq!(expected.draft_model_sha256, Some(digest(0x66)));
+
+        let relocated = InstanceConfig {
+            draft_model_path: "relocated-draft.gguf".into(),
+            ..config.clone()
+        };
+        assert_eq!(
+            expected.digest,
+            build_checkpoint_fingerprint(&relocated, &first)
+                .unwrap()
+                .digest
+        );
+
+        let mut changed = first.clone();
+        changed.draft_model_sha256 = Some(digest(0x67));
+        assert_ne!(
+            expected.digest,
+            build_checkpoint_fingerprint(&config, &changed)
+                .unwrap()
+                .digest
+        );
+
+        changed.draft_model_sha256 = None;
+        assert_eq!(
+            build_checkpoint_fingerprint(&config, &changed)
+                .unwrap_err()
+                .reason_code,
+            CheckpointReasonCode::FingerprintUnavailable
         );
     }
 
@@ -4693,6 +4852,27 @@ mod tests {
             error.reason_code,
             CheckpointReasonCode::ModelArtifactsIncomplete
         );
+    }
+
+    #[test]
+    fn engine_artifact_hash_covers_adjacent_runtime_libraries_but_not_documents() {
+        let sandbox = TestSandbox::new("engine-artifact-hash");
+        let store = sandbox.store();
+        let engine = sandbox.path.join("llama-server.exe");
+        let implementation = sandbox.path.join("llama-server-impl.dll");
+        let notes = sandbox.path.join("release-notes.txt");
+        fs::write(&engine, b"launcher").unwrap();
+        fs::write(&implementation, b"implementation one").unwrap();
+        fs::write(&notes, b"notes one").unwrap();
+
+        let initial = store.engine_artifact_sha256(&engine).unwrap();
+        assert_ne!(initial, store.content_sha256(&engine).unwrap());
+
+        fs::write(&notes, b"notes two").unwrap();
+        assert_eq!(store.engine_artifact_sha256(&engine).unwrap(), initial);
+
+        fs::write(&implementation, b"implementation two").unwrap();
+        assert_ne!(store.engine_artifact_sha256(&engine).unwrap(), initial);
     }
 
     #[test]

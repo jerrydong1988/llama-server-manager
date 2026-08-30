@@ -552,7 +552,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
 
   checkpoint: {
     configTitle: 'KV / Prefill Cache Checkpoint',
-    configDescription: 'Persist llama.cpp slot state across managed engine restarts.',
+    configDescription: 'Persist compatible llama.cpp target and draft slot state across managed engine restarts.',
     experimentalBadge: 'Experimental',
     experimental: 'Experimental: limited to one local text-generation slot on explicitly supported llama.cpp builds.',
     sensitive: 'Checkpoint files contain prompt-derived model state and are stored as sensitive local application data.',
@@ -603,7 +603,7 @@ paused: 'Paused', scrollToBottom: 'Latest', following: 'Live', entries: 'entries
       vector_workload_unsupported: 'Embedding and reranking workloads are not supported', parallel_must_be_one: 'Parallel slots must be set to 1',
       prompt_cache_required: 'Prompt cache must be enabled', prompt_cache_retention_required: 'Cache RAM and idle-slot caching are required to preserve the restored prefix across Harness metadata requests', slots_required: 'The slots API must be enabled',
       loopback_http_required: 'The engine must use a loopback HTTP endpoint without TLS', custom_endpoint_unsupported: 'Custom path or API prefixes are not supported',
-      engine_capability_missing: 'The selected engine has not confirmed slots and slot-save-path support', speculative_decoding_unsupported: 'Checkpointing supports only prompt-rebuildable ngram-* speculation; draft-*, automatic speculation, and external lookup caches use a cold start',
+      engine_capability_missing: 'The selected engine has not confirmed slots and slot-save-path support', speculative_decoding_unsupported: 'draft-* checkpointing requires an engine that confirms target/draft context persistence; automatic speculation, external lookup caches, unknown types, and draft models without an explicit draft-* type use a cold start',
       lora_unsupported: 'LoRA adapters are not supported', multimodal_unsupported: 'Multimodal projections are not supported',
       hybrid_recurrent_unsupported: 'Hybrid or recurrent model architectures are not supported', sliding_window_requires_full_cache: 'Sliding-window models require SWA Full Cache for a reusable cross-process checkpoint', model_architecture_unknown: 'Model architecture is unknown',
       sharded_model_unsupported: 'Sharded models were unsupported by the previous checkpoint format', model_artifacts_incomplete: 'The model file set is missing or incomplete, so a complete content fingerprint cannot be built', conflicting_slot_save_path: 'A user-defined slot save path conflicts with manager ownership',

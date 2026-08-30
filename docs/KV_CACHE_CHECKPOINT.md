@@ -14,10 +14,11 @@ KV / Prefill Cache Checkpoint is an opt-in experimental feature. It saves prompt
 - 上游是无 TLS、无自定义 path/API prefix 的 loopback HTTP 端点。
 - 所选引擎明确公开 `--slots`、`--slot-save-path`、`--cache-ram` 和 `--cache-idle-slots`。
 - 滑动窗口注意力模型还必须启用 `--swa-full`，且引擎必须支持该参数。
-- 推测解码关闭，或只使用当前引擎 `--help` 明确报告、可从恢复后的 target prompt 重建的 `ngram-*` 类型；任何 `draft-*`、`spec-default` 或外部 lookup cache 均不支持检查点。
+- 推测解码关闭，或只使用当前引擎 `--help` 明确报告的类型。`ngram-*` 可从恢复后的 target prompt 重建；`draft-*` 还要求引擎在 `--slot-save-path` 帮助中明确声明支持 `slot KV cache and context checkpoints`，证明 slot 文件会同时携带 target/draft 上下文。
+- 配置外部草稿模型时必须显式选择至少一个受支持的 `draft-*` 类型，且草稿 GGUF（包括完整分片集）必须可读取；`spec-default`、未知类型和外部 lookup cache 仍不支持检查点。
 - 模型架构必须可读，且不属于已有反例证明的 hybrid/recurrent 架构；不使用自定义参数、多模型 preset、router、Embedding、Reranker、LoRA 或 mmproj/multimodal。
 
-The experimental v2 scope supports one manager-owned local text-generation slot backed by either one GGUF or a complete same-directory shard set. Speculative decoding is eligible only when every selected type is a rebuildable `ngram-*` implementation explicitly reported by the current engine. Draft implementations, external lookup state, multimodal state, and known hybrid or recurrent architectures remain excluded. Sliding-window models additionally require full SWA cache.
+The experimental v3 scope supports one manager-owned local text-generation slot. Every selected speculative type must be reported by the current engine. Rebuildable `ngram-*` types remain eligible on the original slot format; `draft-*` types additionally require the explicit context-checkpoint help marker introduced by a compatible llama.cpp build. External lookup state, automatic speculation, multimodal state, and known hybrid or recurrent architectures remain excluded. Sliding-window models additionally require full SWA cache.
 
 不符合条件只会关闭本次运行的 checkpoint；实例仍按原来的冷启动流程运行。配置页会显示稳定的资格原因，不会静默猜测兼容性。
 
@@ -47,13 +48,17 @@ Cache RAM is a capacity limit, not a permanent pin. Competing large prefixes can
 
 ## 推测解码与 Qwen3.8-Flash-Next / Speculation and Qwen3.8-Flash-Next
 
-`--spec-type` 是逗号分隔的候选集合。配置页会根据当前引擎探测结果提供多选，并按 llama.cpp 的固定运行优先级生成一个规范化参数；用户勾选的先后顺序不改变运行优先级。`ngram-mod,draft-mtp` 可以作为普通推理配置传给支持它的引擎，但因为 slot payload 不包含独立 draft/MTP 状态，这种组合不能使用 checkpoint。
+`--spec-type` 是逗号分隔的候选集合。配置页会在下拉选择器中根据当前引擎探测结果提供多项选择，并按 llama.cpp 的固定运行优先级生成一个规范化参数；用户勾选的先后顺序不改变运行优先级。`ngram-mod,draft-mtp` 只有在引擎明确声明 context-checkpoint 能力时才可使用 checkpoint；旧引擎仍安全回退冷启动。
 
-`--spec-type` is a comma-separated candidate set. The configuration page uses the selected engine's reported choices and emits one normalized value in llama.cpp runtime-priority order. A supported engine may accept `ngram-mod,draft-mtp` for ordinary inference, but that combination is checkpoint-ineligible because slot payloads do not contain independent draft/MTP state.
+`--spec-type` is a comma-separated candidate set. The configuration page presents the selected engine's reported choices in a dropdown and emits one normalized value in llama.cpp runtime-priority order. A mixed `ngram-mod,draft-mtp` chain is checkpoint-eligible only when the engine explicitly confirms context-checkpoint persistence; older engines still fall back cold.
 
 本机 B10679 与三分片 Qwen3.8-Flash-Next 验收确认：普通同进程 prompt cache 可把 4805-token prefill 从约 15.11 秒降到约 135 毫秒，`ngram-mod` 也能正常启动和生成；但该 GGUF 的 `qwen4exp` 架构使用 hybrid recurrent memory。跨 PID restore 虽成功读回 4808/4831 token，后续相同前缀仍为 `cache_n = 0`、约 14.54 秒 prefill；引擎同时明确报告 `swa_full` 不适用于该模型。因此它可以使用普通 KV/prompt cache 和 n-gram 推测解码，但当前不能使用持久化 KV checkpoint，管理器会在哈希与 restore 前安全回退冷启动。
 
 Local B10679 testing with the three-shard Qwen3.8-Flash-Next confirmed working in-process prompt reuse and `ngram-mod`, but its `qwen4exp` architecture uses hybrid recurrent memory. Cross-process slot restore read the saved state successfully while the next identical prompt still reported `cache_n = 0`; the engine also disabled unsupported `swa_full`. This model can use ordinary KV/prompt caching and n-gram speculation, but not persistent checkpoint reuse in the current implementation.
+
+本机基于当前 `master` B10688 重放并加固 llama.cpp PR #26004 后，使用 `Qwen3.8-27B-UD-Q8_K_XL.gguf` 与外部 `Qwen3.8-27B-DFlash2-Q4_K_M.gguf` 完成了真实跨进程验收：slot 文件同时恢复 3 个 context checkpoint，冷启动处理 5610 个 prompt token、约 17.81 秒；同进程复用和进程重启恢复后均处理 1028 个，重启后约 4.36 秒。DFlash2 在恢复后实际生成 16 个并接受 12 个 draft token。保存返回值、磁盘文件大小和恢复读取量均为 1,122,352,516 bytes。该模型的 DFlash block size 为 8，因此 `--spec-draft-n-max 15` 会被引擎安全收敛为 7，这与检查点恢复无关。
+
+Local B10688 plus the replayed and hardened llama.cpp PR #26004 passed a real cross-process run with Qwen3.8-27B Q8_K_XL and the external DFlash2 Q4_K_M draft. Three context checkpoints were restored. The cold run processed 5,610 prompt tokens in about 17.81 seconds; both in-process reuse and post-restart restore processed 1,028, with the latter taking about 4.36 seconds. Post-restore speculation generated 16 and accepted 12 draft tokens. The save response, on-disk size, and restore response all reported exactly 1,122,352,516 bytes. This DFlash model has block size 8, so llama.cpp clamps `--spec-draft-n-max 15` to 7 independently of checkpointing.
 
 ## 生命周期与故障行为 / Lifecycle and Failure Behavior
 
@@ -66,7 +71,7 @@ On a controlled stop, the manager gates routing, drains requests, saves slot 0, 
 以下情况都会安全退化为可路由的冷启动，而不会阻止实例启动：
 
 - 没有检查点、自动恢复关闭或提示 token 低于保存阈值。
-- 任一模型分片、引擎二进制、引擎版本/backend、规范化 spec-type 或其他强兼容配置改变。
+- 任一主模型或草稿模型分片、引擎启动器或相邻动态运行库、引擎版本/backend、规范化 spec-type 或其他强兼容配置改变。
 - manifest、大小、摘要、slot API 响应或恢复后状态不一致。
 - 保存/恢复超时、I/O 错误或容量限制。
 

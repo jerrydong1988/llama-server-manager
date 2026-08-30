@@ -20,7 +20,7 @@ The application uses three complementary controls so parameter support does not 
 
 引擎扫描只读取文件系统，不执行全部被发现的二进制。程序仅在实例明确选择了某个引擎，或用户在“引擎管理”中主动操作时进行探测。
 
-探测不经过 Shell，只直接执行 `--version` 和 `--help`；同时限制执行时间和输出容量，在 Windows 隐藏控制台，并持续排空输出管道。结果绑定二进制指纹，文件变化后自动失效。
+探测不经过 Shell，只直接执行 `--version` 和 `--help`；同时限制执行时间和输出容量，在 Windows 隐藏控制台，并持续排空输出管道。结果绑定引擎运行时指纹；除启动器外，同目录的 DLL、dylib 和版本化 `.so` 变化也会自动使探测失效。
 
 版本识别与参数能力相互独立。程序只接受 `version:`、`llama-server version` 或 `llama.cpp version` 等明确版本行；初始化日志不会被当作版本。未能识别标准版本号时会显示提醒，但只要 `--help` 能力完整，参数仍按实际能力严格校验。
 
@@ -36,13 +36,13 @@ Scanning never executes every discovered binary. Probes run only for explicitly 
 
 ## 有状态检查点采用更严格策略 / Stricter Stateful Checkpoint Policy
 
-引擎公开某个参数只代表命令语法可用，不代表跨进程 slot 状态一定能被真实复用。实验性 KV / Prefill Cache Checkpoint 因此使用独立的证据门：引擎必须明确公开 slots、slot-save-path、Cache RAM 和 idle-slot cache 能力；模型、引擎二进制、版本/backend 和全部状态相关配置必须命中完整 SHA-256 fingerprint。完整分片 GGUF 会按索引对每个分片做内容摘要后再聚合；任一分片变化都产生安全 miss。滑动窗口模型还必须启用且支持 SWA 完整缓存。
+引擎公开某个参数只代表命令语法可用，不代表跨进程 slot 状态一定能被真实复用。实验性 KV / Prefill Cache Checkpoint 因此使用独立的证据门：引擎必须明确公开 slots、slot-save-path、Cache RAM 和 idle-slot cache 能力；模型、引擎运行库、版本/backend 和全部状态相关配置必须命中完整 SHA-256 fingerprint。完整的主模型与草稿模型分片集都会按索引逐片摘要后聚合；引擎启动器及同目录动态运行库也会聚合。任一组成变化都产生安全 miss。滑动窗口模型还必须启用且支持 SWA 完整缓存。
 
-Advertising a flag proves only command-line availability, not reusable cross-process state. The experimental checkpoint feature therefore requires the complete slot and prompt-cache capability set plus an exact model-artifact set, engine, version/backend, and state-bearing configuration fingerprint. Complete GGUF shard sets are hashed per shard and then aggregated, so any changed shard causes a safe miss. Sliding-window models additionally require supported full SWA cache.
+Advertising a flag proves only command-line availability, not reusable cross-process state. The experimental checkpoint feature therefore requires the complete slot and prompt-cache capability set plus exact target/draft model artifacts, engine runtime libraries, version/backend, and state-bearing configuration fingerprint. Complete GGUF shard sets and adjacent dynamic engine libraries are hashed and aggregated, so any changed component causes a safe miss. Sliding-window models additionally require supported full SWA cache.
 
-推测解码能力探测还会读取引擎实际报告的 `--spec-type` 候选。普通命令可以包含多个逗号分隔类型，并按 llama.cpp 固定优先级规范化；checkpoint 只允许当前引擎明确报告的可重建 `ngram-*` 集合。任何 draft/MTP、未知类型或外部 lookup 状态都退回冷启动。`qwen4exp` 已由 B10679 跨进程实测及上游实现确认使用 hybrid recurrent memory：普通 prompt cache 和 `ngram-mod` 可用，但 slot restore 后没有 target cache hit，因此列入 checkpoint 反例，而不是根据模型名称乐观放行。
+推测解码能力探测还会读取引擎实际报告的 `--spec-type` 候选。普通命令可以包含多个逗号分隔类型，并按 llama.cpp 固定优先级规范化。可重建 `ngram-*` 沿用原 slot 格式；`draft-*` 只有在引擎的 `--slot-save-path` 帮助明确包含 `slot KV cache and context checkpoints` 能力标记时才放行，表示 target、draft 与相关上下文会共同序列化。自动推测、未知类型和外部 lookup 状态仍退回冷启动。`qwen4exp` 已由 B10679 跨进程实测及上游实现确认使用 hybrid recurrent memory：普通 prompt cache 和 `ngram-mod` 可用，但 slot restore 后没有 target cache hit，因此继续列为 checkpoint 反例。
 
-Runtime probing also records the engine-reported `--spec-type` choices. Ordinary commands may combine comma-separated types in normalized llama.cpp priority order; checkpointing allows only reported, rebuildable `ngram-*` sets. Draft/MTP, unknown types, and external lookup state fall back cold. B10679 cross-process testing and the corresponding llama.cpp implementation confirm that `qwen4exp` uses hybrid recurrent memory: ordinary prompt caching and `ngram-mod` work, but restored slot state does not yield a target cache hit, so the architecture is an explicit checkpoint counterexample.
+Runtime probing also records the engine-reported `--spec-type` choices. Ordinary commands may combine comma-separated types in normalized llama.cpp priority order. Rebuildable `ngram-*` types retain the original slot behavior; `draft-*` is admitted only when `--slot-save-path` explicitly advertises context checkpoints for target/draft state. Automatic speculation, unknown types, and external lookup state still fall back cold. B10679 cross-process testing confirms that `qwen4exp` remains an explicit checkpoint counterexample.
 
 资格不满足、fingerprint miss、损坏或 restore 验证失败都会安全回到冷启动；不会因为引擎处于通用参数支持窗口就放宽有状态兼容条件。完整范围和操作说明见 [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md)。
 
