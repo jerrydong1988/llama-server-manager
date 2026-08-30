@@ -1013,6 +1013,42 @@ mockIPC((command, payload) => {
       return BROWSER_SCENARIO === 'delayed-inventory-cache' && !delayedInventoryCacheLoaded
         ? []
         : clone(models)
+    case 'preview_model_deletion': {
+      const logicalPath = String(args.path ?? '')
+      const artifactPaths = logicalPath === MODEL_PATH
+        ? [
+            MODEL_PATH,
+            'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0-00002-of-00003.gguf',
+            'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0-00003-of-00003.gguf',
+          ]
+        : [logicalPath]
+      return {
+        logicalPath,
+        artifactPaths,
+        artifactCount: artifactPaths.length,
+        totalBytes: logicalPath === MODEL_PATH ? 12_884_901_888 : 536_870_912,
+        isSharded: artifactPaths.length > 1,
+        referencedBy: [],
+      }
+    }
+    case 'delete_model_file': {
+      const logicalPath = String(args.path ?? '')
+      const artifactPaths = logicalPath === MODEL_PATH
+        ? [
+            MODEL_PATH,
+            'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0-00002-of-00003.gguf',
+            'C:\\browser-test\\models\\Qwen-Browser-Test-Q8_0-00003-of-00003.gguf',
+          ]
+        : [logicalPath]
+      for (let index = models.length - 1; index >= 0; index -= 1) {
+        if (artifactPaths.includes(models[index].path)) models.splice(index, 1)
+      }
+      return {
+        artifactPaths,
+        artifactCount: artifactPaths.length,
+        removedBytes: logicalPath === MODEL_PATH ? 12_884_901_888 : 536_870_912,
+      }
+    }
     case 'scan_engines':
       if (BROWSER_SCENARIO === 'engine-scan-error') {
         throw new Error('engine directory unavailable')

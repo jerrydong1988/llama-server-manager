@@ -30,6 +30,8 @@ export const enUS = {
     cancel: '\u2715 Cancel', done: '\u2713 Done', failed: '\u2717 Failed', cancelled: 'Cancelled',
     noModels: 'No models found. Click "Scan Models" or "Add Directory".',
     delete: 'Delete', deleteConfirm: 'Delete this model? This cannot be undone!',
+    deleteArtifactSetConfirm: 'This model contains {count} GGUF file(s), totaling {size}. Delete the complete file set? This cannot be undone.',
+    deleteBlockedTitle: 'Model in use', deleteBlocked: 'This model artifact set is referenced by the following instance(s): {instances}',
     openFolder: 'Show in Folder',
     modelDirs: 'Added Model Directories:', remove: 'Remove', removeDirConfirm: 'Remove this directory from scan list? Files will not be deleted.',
     modelDirEmpty: 'No .gguf files found in',

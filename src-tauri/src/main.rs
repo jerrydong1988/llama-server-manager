@@ -4,6 +4,7 @@ mod artifact_maintenance;
 pub mod checkpoint;
 mod commands;
 mod error;
+mod external_artifacts;
 mod model_artifacts;
 mod models;
 mod operation_timing;
@@ -53,8 +54,8 @@ use crate::commands::proxy::{
 };
 use crate::commands::scanner::{
     delete_engine, delete_model_file, get_cached_scan, get_engines, get_models, load_app_data,
-    open_engine_folder, open_model_folder, read_gguf_metadata, rename_engine, scan_engines,
-    scan_models,
+    open_engine_folder, open_model_folder, preview_model_deletion, read_gguf_metadata,
+    rename_engine, scan_engines, scan_models,
 };
 use crate::commands::server::{
     check_port, delete_instance_log, generate_server_command, get_checkpoint_eligibility,
@@ -667,7 +668,7 @@ fn main() {
             restored_runtime_instances: Mutex::new(std::collections::HashSet::new()),
         })
         .invoke_handler(tauri::generate_handler![
-            scan_models, get_models, delete_model_file, open_model_folder, read_gguf_metadata,
+            scan_models, get_models, preview_model_deletion, delete_model_file, open_model_folder, read_gguf_metadata,
             scan_engines, get_engines, delete_engine, rename_engine, open_engine_folder,
             probe_engine_capabilities,
             get_checkpoint_status, list_checkpoint_statuses, clear_checkpoint,
@@ -710,6 +711,9 @@ fn main() {
             crate::runtime_service::get_runtime_service_status,
             crate::runtime_service::clear_runtime_service_error,
             crate::security::pick_authorized_directory,
+            crate::security::list_authorized_directories,
+            crate::security::revoke_authorized_directory,
+            crate::external_artifacts::get_external_artifact_inventory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -74,6 +74,157 @@ fn instances_referencing_model(
     names.into_iter().collect()
 }
 
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDeletionPreview {
+    pub logical_path: String,
+    pub artifact_paths: Vec<String>,
+    pub artifact_count: u32,
+    pub total_bytes: u64,
+    pub is_sharded: bool,
+    pub referenced_by: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDeletionResult {
+    pub artifact_paths: Vec<String>,
+    pub artifact_count: u32,
+    pub removed_bytes: u64,
+}
+
+fn resolve_model_deletion_artifacts(selected: &Path) -> Result<Vec<PathBuf>, String> {
+    let canonical = std::fs::canonicalize(selected)
+        .map_err(|error| format!("无法解析模型文件 {}: {error}", selected.display()))?;
+    let canonical_parent = canonical
+        .parent()
+        .ok_or_else(|| "模型文件没有可验证的父目录".to_string())?;
+    let artifacts = crate::model_artifacts::resolve_model_artifacts(&canonical).map_err(
+        |error| match error {
+            crate::model_artifacts::ModelArtifactError::Unavailable => {
+                "模型文件不可用，无法建立删除清单".to_string()
+            }
+            crate::model_artifacts::ModelArtifactError::Incomplete => {
+                "检测到不完整或冲突的模型分片组；为避免留下更多孤立分片，已拒绝删除".to_string()
+            }
+        },
+    )?;
+    let mut resolved = Vec::with_capacity(artifacts.len());
+    let mut identities = HashSet::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        let metadata = std::fs::symlink_metadata(&artifact)
+            .map_err(|error| format!("无法检查模型分片 {}: {error}", artifact.display()))?;
+        if crate::artifact_maintenance::metadata_is_link_like(&metadata) || !metadata.is_file() {
+            return Err(format!(
+                "拒绝删除链接、重解析点或非普通模型文件: {}",
+                artifact.display()
+            ));
+        }
+        let artifact = std::fs::canonicalize(&artifact)
+            .map_err(|error| format!("无法解析模型分片 {}: {error}", artifact.display()))?;
+        if artifact.parent() != Some(canonical_parent) {
+            return Err(format!(
+                "模型分片解析到了选定目录之外: {}",
+                artifact.display()
+            ));
+        }
+        if artifact
+            .extension()
+            .and_then(OsStr::to_str)
+            .map(|extension| extension.eq_ignore_ascii_case("gguf"))
+            != Some(true)
+        {
+            return Err(format!("模型分片不是 GGUF 文件: {}", artifact.display()));
+        }
+        if !identities.insert(path_identity_key(&artifact)) {
+            return Err("模型分片清单包含重复的物理文件，已拒绝删除".to_string());
+        }
+        resolved.push(artifact);
+    }
+    Ok(resolved)
+}
+
+fn prepare_model_deletion(
+    path: &str,
+    state: &AppState,
+) -> Result<(Vec<PathBuf>, ModelDeletionPreview), String> {
+    let selected = Path::new(path);
+    let selected_metadata =
+        std::fs::symlink_metadata(selected).map_err(|error| format!("路径无效: {error}"))?;
+    if crate::artifact_maintenance::metadata_is_link_like(&selected_metadata) {
+        return Err("Cannot delete symlinked or reparse-point model files".to_string());
+    }
+    if selected
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|extension| extension.eq_ignore_ascii_case("gguf"))
+        != Some(true)
+    {
+        return Err("只能删除 .gguf 文件".to_string());
+    }
+    let canonical = crate::security::require_authorized_model_path(selected)?;
+    let artifacts = resolve_model_deletion_artifacts(&canonical)?;
+    let known_models = state.models.lock().unwrap();
+    let is_known = known_models
+        .iter()
+        .filter_map(|model| std::fs::canonicalize(&model.path).ok())
+        .any(|model_path| paths_equal(&model_path, &canonical));
+    drop(known_models);
+    if !is_known {
+        return Err("文件不在已扫描的模型列表中".to_string());
+    }
+
+    let instances = state.instances.lock().unwrap().clone();
+    let running = state.running.lock().unwrap().clone();
+    let mut referenced_by = std::collections::BTreeSet::new();
+    let mut total_bytes = 0_u64;
+    for artifact in &artifacts {
+        referenced_by.extend(instances_referencing_model(&instances, &running, artifact));
+        total_bytes = total_bytes.saturating_add(
+            std::fs::metadata(artifact)
+                .map_err(|error| format!("无法读取模型分片大小 {}: {error}", artifact.display()))?
+                .len(),
+        );
+    }
+    let artifact_paths = artifacts
+        .iter()
+        .map(|artifact| artifact.to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    let preview = ModelDeletionPreview {
+        logical_path: canonical.to_string_lossy().to_string(),
+        artifact_count: artifact_paths.len().try_into().unwrap_or(u32::MAX),
+        total_bytes,
+        is_sharded: artifact_paths.len() > 1,
+        artifact_paths,
+        referenced_by: referenced_by.into_iter().collect(),
+    };
+    Ok((artifacts, preview))
+}
+
+#[derive(Debug)]
+struct ModelArtifactRemovalFailure {
+    removed: Vec<PathBuf>,
+    failed_path: PathBuf,
+    error: std::io::Error,
+}
+
+fn remove_model_artifact_files(
+    artifacts: &[PathBuf],
+) -> Result<Vec<PathBuf>, ModelArtifactRemovalFailure> {
+    let mut removed = Vec::with_capacity(artifacts.len());
+    for artifact in artifacts {
+        if let Err(error) = std::fs::remove_file(artifact) {
+            return Err(ModelArtifactRemovalFailure {
+                removed,
+                failed_path: artifact.clone(),
+                error,
+            });
+        }
+        removed.push(artifact.clone());
+    }
+    Ok(removed)
+}
+
 fn instances_referencing_engine(
     instances: &HashMap<String, InstanceConfig>,
     engine_id: &str,
@@ -1164,53 +1315,69 @@ pub async fn get_models(state: tauri::State<'_, AppState>) -> Result<Vec<ModelIn
     Ok(state.models.lock().unwrap().clone())
 }
 
+pub async fn preview_model_deletion(
+    path: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<ModelDeletionPreview, String> {
+    prepare_model_deletion(&path, &state).map(|(_, preview)| preview)
+}
+
 pub async fn delete_model_file(
     path: String,
     state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
-    let p = std::path::Path::new(&path);
-    if std::fs::symlink_metadata(p)
-        .map_err(|e| format!("路径无效: {}", e))?
-        .file_type()
-        .is_symlink()
-    {
-        return Err("Cannot delete symlinked model files".to_string());
-    }
-    if p.extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_lowercase())
-        != Some("gguf".to_string())
-    {
-        return Err("只能删除 .gguf 文件".to_string());
-    }
-    let canonical = crate::security::require_authorized_model_path(p)?;
-    let state_models = state.models.lock().unwrap();
-    let is_known = state_models
-        .iter()
-        .filter_map(|model| std::fs::canonicalize(&model.path).ok())
-        .any(|model_path| paths_equal(&model_path, &canonical));
-    drop(state_models);
-    if !is_known {
-        return Err("文件不在已扫描的模型列表中".to_string());
-    }
-    let instances = state.instances.lock().unwrap().clone();
-    let running = state.running.lock().unwrap().clone();
-    let referenced_by = instances_referencing_model(&instances, &running, &canonical);
-    if !referenced_by.is_empty() {
+) -> Result<ModelDeletionResult, String> {
+    // Rebuild the complete artifact set at execution time. The preview is only
+    // explanatory and never grants authority to a stale set of paths.
+    let (artifacts, preview) = prepare_model_deletion(&path, &state)?;
+    if !preview.referenced_by.is_empty() {
         return Err(format!(
             "模型文件正被实例引用，无法删除: {}",
-            referenced_by.join(", ")
+            preview.referenced_by.join(", ")
         ));
     }
-    std::fs::remove_file(&canonical).map_err(|e| format!("删除文件失败: {}", e))?;
-    let _ = model_inventory::delete_model(&canonical.to_string_lossy());
-    let mut models = state.models.lock().unwrap();
-    models.retain(|model| {
-        std::fs::canonicalize(&model.path)
-            .map(|model_path| !paths_equal(&model_path, &canonical))
-            .unwrap_or(true)
-    });
-    Ok(())
+
+    let removed =
+        match remove_model_artifact_files(&artifacts) {
+            Ok(removed) => removed,
+            Err(failure) => {
+                for removed_artifact in &failure.removed {
+                    let _ = model_inventory::delete_model(&removed_artifact.to_string_lossy());
+                }
+                let removed_keys = failure
+                    .removed
+                    .iter()
+                    .map(|removed_artifact| path_identity_key(removed_artifact))
+                    .collect::<HashSet<_>>();
+                state.models.lock().unwrap().retain(|model| {
+                    !removed_keys.contains(&path_identity_key(Path::new(&model.path)))
+                });
+                return Err(format!(
+                    "删除模型分片失败: {}: {}。已删除 {}/{} 个文件，请重新扫描模型目录后重试。",
+                    failure.failed_path.display(),
+                    failure.error,
+                    failure.removed.len(),
+                    artifacts.len()
+                ));
+            }
+        };
+
+    let removed_keys = removed
+        .iter()
+        .map(|artifact| path_identity_key(artifact))
+        .collect::<HashSet<_>>();
+    for artifact in &removed {
+        let _ = model_inventory::delete_model(&artifact.to_string_lossy());
+    }
+    state
+        .models
+        .lock()
+        .unwrap()
+        .retain(|model| !removed_keys.contains(&path_identity_key(Path::new(&model.path))));
+    Ok(ModelDeletionResult {
+        artifact_paths: preview.artifact_paths,
+        artifact_count: preview.artifact_count,
+        removed_bytes: preview.total_bytes,
+    })
 }
 
 pub async fn open_model_folder(path: String) -> Result<(), String> {
@@ -1500,6 +1667,79 @@ mod incremental_scan_tests {
         assert!(!models[0].is_shard);
         assert!(models[1].is_shard);
         assert!(models[0].architecture.is_none());
+    }
+
+    #[test]
+    fn deletion_preview_resolves_every_physical_model_shard() {
+        let dir = temp_test_dir("delete-shards");
+        let first = dir.join("Qwen-00001-of-00003.gguf");
+        let second = dir.join("Qwen-00002-of-00003.gguf");
+        let third = dir.join("Qwen-00003-of-00003.gguf");
+        for path in [&first, &second, &third] {
+            std::fs::write(path, b"shard").unwrap();
+        }
+
+        assert_eq!(
+            resolve_model_deletion_artifacts(&first).unwrap(),
+            vec![
+                std::fs::canonicalize(&first).unwrap(),
+                std::fs::canonicalize(&second).unwrap(),
+                std::fs::canonicalize(&third).unwrap(),
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn deletion_preview_rejects_an_incomplete_model_shard_set() {
+        let dir = temp_test_dir("delete-incomplete-shards");
+        let first = dir.join("Qwen-00001-of-00003.gguf");
+        std::fs::write(&first, b"shard").unwrap();
+        std::fs::write(dir.join("Qwen-00003-of-00003.gguf"), b"shard").unwrap();
+
+        let error = resolve_model_deletion_artifacts(&first).unwrap_err();
+        assert!(error.contains("不完整"));
+        assert!(first.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn artifact_set_deletion_removes_all_shards_and_preserves_siblings() {
+        let dir = temp_test_dir("delete-shard-set");
+        let first = dir.join("Qwen-00001-of-00002.gguf");
+        let second = dir.join("Qwen-00002-of-00002.gguf");
+        let sibling = dir.join("Other.gguf");
+        for path in [&first, &second, &sibling] {
+            std::fs::write(path, b"model").unwrap();
+        }
+        let artifacts = resolve_model_deletion_artifacts(&first).unwrap();
+
+        assert_eq!(remove_model_artifact_files(&artifacts).unwrap().len(), 2);
+        assert!(!first.exists());
+        assert!(!second.exists());
+        assert!(sibling.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn references_to_any_physical_shard_block_artifact_set_deletion() {
+        let instances = HashMap::from([(
+            "draft".to_string(),
+            InstanceConfig {
+                name: "Draft".into(),
+                draft_model_path: "/models/Qwen-00002-of-00003.gguf".into(),
+                ..InstanceConfig::default()
+            },
+        )]);
+
+        assert_eq!(
+            instances_referencing_model(
+                &instances,
+                &HashMap::new(),
+                Path::new("/models/Qwen-00002-of-00003.gguf")
+            ),
+            vec!["Draft"]
+        );
     }
 
     #[cfg(windows)]
@@ -2025,10 +2265,20 @@ pub mod ipc {
     }
 
     #[tauri::command]
+    pub async fn preview_model_deletion(
+        path: String,
+        state: tauri::State<'_, AppState>,
+    ) -> crate::error::AppResult<ModelDeletionPreview> {
+        super::preview_model_deletion(path, state)
+            .await
+            .map_err(crate::error::AppError::from)
+    }
+
+    #[tauri::command]
     pub async fn delete_model_file(
         path: String,
         state: tauri::State<'_, AppState>,
-    ) -> crate::error::AppResult<()> {
+    ) -> crate::error::AppResult<ModelDeletionResult> {
         super::delete_model_file(path, state)
             .await
             .map_err(crate::error::AppError::from)

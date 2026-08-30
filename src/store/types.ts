@@ -41,6 +41,21 @@ export interface ModelInfo {
   is_shard?: boolean
 }
 
+export interface ModelDeletionPreview {
+  logicalPath: string
+  artifactPaths: string[]
+  artifactCount: number
+  totalBytes: number
+  isSharded: boolean
+  referencedBy: string[]
+}
+
+export interface ModelDeletionResult {
+  artifactPaths: string[]
+  artifactCount: number
+  removedBytes: number
+}
+
 export interface EngineInfo {
   id: string
   name: string
@@ -593,7 +608,7 @@ export interface AppState {
 
   loadInitialData: () => Promise<void>
   scanModels: (paths: string[]) => Promise<string | null>
-  deleteModelFile: (path: string) => Promise<void>
+  deleteModelFile: (path: string) => Promise<ModelDeletionResult>
   openModelFolder: (path: string) => Promise<void>
   readGgufMetadata: (path: string) => Promise<GgufMetadataSummary>
 

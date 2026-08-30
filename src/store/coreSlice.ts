@@ -10,7 +10,7 @@ import {
   isCurrentModelInventoryRequest,
 } from './bootstrap'
 import type { AppStoreGet, AppStoreSet } from './helpers'
-import type { AppState, EngineInfo, GgufMetadataSummary, ModelInfo } from './types'
+import type { AppState, EngineInfo, GgufMetadataSummary, ModelDeletionResult, ModelInfo } from './types'
 import { dedupePaths, pathsEqual } from '../utils/path'
 
 const DEFAULT_MODEL_DIRECTORY = 'models'
@@ -155,8 +155,13 @@ export function createCoreSlice(set: AppStoreSet, get: AppStoreGet): Pick<
       }
     },
     deleteModelFile: async (path) => {
-      await invoke('delete_model_file', { path })
-      set((state) => ({ models: state.models.filter((model) => !pathsEqual(model.path, path)) }))
+      const result = await invoke<ModelDeletionResult>('delete_model_file', { path })
+      set((state) => ({
+        models: state.models.filter((model) => (
+          !result.artifactPaths.some(artifactPath => pathsEqual(model.path, artifactPath))
+        )),
+      }))
+      return result
     },
     openModelFolder: async (path) => {
       await invoke('open_model_folder', { path })
