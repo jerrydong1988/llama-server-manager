@@ -52,6 +52,7 @@ const VECTOR_ALLOWED_FIELDS: &[&str] = &[
     "moe_cpu_layers",
     "cpu_moe",
     "load_mode",
+    "lazy_mode",
     "no_repack",
     "numa",
     "numa_mode",

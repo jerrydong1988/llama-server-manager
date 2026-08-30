@@ -316,13 +316,13 @@ The experimental KV / Prefill Cache Checkpoint is off by default. It saves one m
 
 - `parallel = 1`，启用 prompt cache、slots、idle-slot cache，并让 Cache RAM 为正数或 `-1`。
 - 滑动窗口模型启用 SWA 完整缓存；请先评估额外 KV 内存。
-- 使用单文件或同目录完整分片集的文本 GGUF、本机受管 loopback HTTP 引擎；不要使用 custom args、router、多模型、Embedding、Reranker、LoRA 或 mmproj。
+- 使用单文件或同目录完整分片集的文本 GGUF、本机受管 loopback HTTP 引擎；不要使用 router、多模型、Embedding、Reranker、LoRA 或 mmproj。自定义参数默认阻断；只有安全分类器明确认可的加载 I/O 参数可放行，当前为 `--lazy-mode` / `-lzm` / 旧 `--tensor-read-lazy` 的 `auto`、`on`、`off`。界面会列出其他具体阻断标志。
 - 推测解码可以关闭，也可以选择当前引擎明确报告的组合。`ngram-*` 可从 target prompt 重建；`draft-*` 还要求引擎的 `--slot-save-path` 帮助明确包含 `slot KV cache and context checkpoints`，证明 target/draft context 会共同序列化。未知类型、`spec-default` 或外部 lookup cache 仍会安全回退冷启动。
 - 已知 hybrid/recurrent 架构仍不支持。Qwen3.8-Flash-Next 的 `qwen4exp` 可正常使用同进程 prompt cache 和 `ngram-mod`，但 B10679 跨进程实测 restore 后 `cache_n = 0`，因此不能启用持久检查点。
 - DeepSeek Harness 必须连接管理器代理而不是实例直连端口。Harness 的标题请求可能先占用 slot，idle-slot cache 和足够的 Cache RAM 用于保留刚恢复的长前缀。
 - 从实例页查看 `Ready (restored)` / `Ready (cold)`、token、文件大小和原因；只有实例完全停止时才能清除数据。
 
-Complete shard sets are fingerprinted as one logical model, including every shard. Rebuildable `ngram-*` types use the original slot format; `draft-*` additionally requires an engine that explicitly advertises target/draft context checkpoints. Hybrid/recurrent state remains unsupported. Checkpoint files contain sensitive prompt-derived state and are not portable session backups. Confirm actual benefit with llama.cpp `cache_n`, `n_past`, or prompt-evaluation metrics, not only a successful restore response. See [KV / Prefill Cache Checkpoint](docs/KV_CACHE_CHECKPOINT.md) for the compatibility matrix, lifecycle, privacy model, and troubleshooting steps.
+Complete shard sets are fingerprinted as one logical model, including every shard. Rebuildable `ngram-*` types use the original slot format; `draft-*` additionally requires an engine that explicitly advertises target/draft context checkpoints. Custom arguments fail closed except for validated lazy-loading aliases and values. Hybrid/recurrent state remains unsupported. Checkpoint files contain sensitive prompt-derived state and are not portable session backups. Confirm actual benefit with llama.cpp `cache_n`, `n_past`, or prompt-evaluation metrics, not only a successful restore response. See [KV / Prefill Cache Checkpoint](docs/KV_CACHE_CHECKPOINT.md) for the compatibility matrix, lifecycle, privacy model, and troubleshooting steps.
 
 ---
 

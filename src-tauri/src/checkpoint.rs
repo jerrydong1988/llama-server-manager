@@ -231,15 +231,25 @@ pub struct CheckpointEligibility {
     pub eligible: bool,
     pub reason_code: CheckpointReasonCode,
     pub reasons: Vec<CheckpointReasonCode>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_argument_blockers: Vec<String>,
 }
 
 impl CheckpointEligibility {
     fn from_reasons(reasons: Vec<CheckpointReasonCode>) -> Self {
+        Self::from_reasons_and_blockers(reasons, Vec::new())
+    }
+
+    fn from_reasons_and_blockers(
+        reasons: Vec<CheckpointReasonCode>,
+        custom_argument_blockers: Vec<String>,
+    ) -> Self {
         let reason_code = reasons.first().copied().unwrap_or_default();
         Self {
             eligible: reasons.is_empty(),
             reason_code,
             reasons,
+            custom_argument_blockers,
         }
     }
 
@@ -303,6 +313,87 @@ fn push_reason(reasons: &mut Vec<CheckpointReasonCode>, reason: CheckpointReason
     }
 }
 
+const CHECKPOINT_SAFE_LAZY_FLAGS: &[&str] = &["--lazy-mode", "-lzm", "--tensor-read-lazy"];
+
+fn push_custom_argument_blocker(blockers: &mut Vec<String>, blocker: &str) {
+    if !blockers.iter().any(|existing| existing == blocker) {
+        blockers.push(blocker.to_string());
+    }
+}
+
+fn looks_like_flag(token: &str) -> bool {
+    token.starts_with('-')
+        && token
+            .trim_start_matches('-')
+            .chars()
+            .any(|character| character.is_ascii_alphabetic())
+}
+
+fn checkpoint_custom_argument_blockers(config: &InstanceConfig) -> Vec<String> {
+    let mut blockers = Vec::new();
+    let mut tokens = Vec::new();
+    for row in &config.custom_args {
+        match crate::utils::split_command_line_checked(row) {
+            Ok(parsed) => tokens.extend(parsed),
+            Err(_) => push_custom_argument_blocker(&mut blockers, "<malformed-custom-arguments>"),
+        }
+    }
+
+    let structured_lazy_mode = config.lazy_mode.trim().to_ascii_lowercase();
+    let mut observed_lazy_mode: Option<String> = None;
+    let mut pending_unknown_value = false;
+    let mut index = 0;
+    while index < tokens.len() {
+        let token = &tokens[index];
+        let (flag, inline_value) = token
+            .split_once('=')
+            .map_or((token.as_str(), None), |(flag, value)| (flag, Some(value)));
+        if CHECKPOINT_SAFE_LAZY_FLAGS.contains(&flag) {
+            pending_unknown_value = false;
+            let mut consumed_next = false;
+            let value = if let Some(value) = inline_value {
+                Some(value)
+            } else {
+                let next = tokens.get(index + 1).map(String::as_str);
+                consumed_next = next.is_some_and(|candidate| !looks_like_flag(candidate));
+                if consumed_next {
+                    next
+                } else {
+                    None
+                }
+            };
+            let normalized = value.map(str::trim).map(str::to_ascii_lowercase);
+            let valid = normalized
+                .as_deref()
+                .is_some_and(|mode| matches!(mode, "auto" | "on" | "off"));
+            let conflicts_with_structured = valid
+                && !structured_lazy_mode.is_empty()
+                && normalized.as_deref() != Some(structured_lazy_mode.as_str());
+            let conflicts_with_custom = valid
+                && observed_lazy_mode
+                    .as_deref()
+                    .is_some_and(|mode| normalized.as_deref() != Some(mode));
+            if !valid || conflicts_with_structured || conflicts_with_custom {
+                push_custom_argument_blocker(&mut blockers, flag);
+            } else if observed_lazy_mode.is_none() {
+                observed_lazy_mode = normalized;
+            }
+            index += if consumed_next { 2 } else { 1 };
+            continue;
+        }
+        if looks_like_flag(flag) {
+            push_custom_argument_blocker(&mut blockers, flag);
+            pending_unknown_value = inline_value.is_none();
+        } else if pending_unknown_value {
+            pending_unknown_value = false;
+        } else {
+            push_custom_argument_blocker(&mut blockers, "<positional-argument>");
+        }
+        index += 1;
+    }
+    blockers
+}
+
 pub fn evaluate_checkpoint_eligibility(
     context: CheckpointEligibilityContext<'_>,
 ) -> CheckpointEligibility {
@@ -325,7 +416,8 @@ pub fn evaluate_checkpoint_eligibility(
     if !context.managed_local_engine {
         push_reason(&mut reasons, CheckpointReasonCode::ManagedLocalRequired);
     }
-    if !config.custom_args.is_empty() {
+    let custom_argument_blockers = checkpoint_custom_argument_blockers(config);
+    if !custom_argument_blockers.is_empty() {
         push_reason(
             &mut reasons,
             CheckpointReasonCode::CustomArgumentsUnsupported,
@@ -429,7 +521,7 @@ pub fn evaluate_checkpoint_eligibility(
         Some(_) => {}
     }
 
-    CheckpointEligibility::from_reasons(reasons)
+    CheckpointEligibility::from_reasons_and_blockers(reasons, custom_argument_blockers)
 }
 
 pub const CHECKPOINT_MANIFEST_SCHEMA_VERSION: u32 = 1;
@@ -4284,6 +4376,65 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_allows_only_valid_lazy_loading_custom_arguments() {
+        for custom_args in [
+            vec!["--tensor-read-lazy".into(), "on".into()],
+            vec!["--tensor-read-lazy=auto".into()],
+            vec!["--lazy-mode off".into()],
+            vec!["-lzm".into(), "on".into()],
+        ] {
+            let mut config = eligible_config();
+            config.custom_args = custom_args;
+            let result = evaluate(&config);
+            assert!(result.eligible, "unexpected blockers: {result:?}");
+            assert!(result.custom_argument_blockers.is_empty());
+        }
+
+        let mut same_as_structured = eligible_config();
+        same_as_structured.lazy_mode = "on".into();
+        same_as_structured.custom_args = vec!["--tensor-read-lazy on".into()];
+        assert!(evaluate(&same_as_structured).eligible);
+    }
+
+    #[test]
+    fn checkpoint_reports_unsafe_invalid_and_conflicting_custom_flags() {
+        for (custom_args, structured, expected) in [
+            (vec!["--ctx-size=4096"], "", vec!["--ctx-size"]),
+            (vec!["--tensor-read-lazy"], "", vec!["--tensor-read-lazy"]),
+            (
+                vec!["--tensor-read-lazy maybe"],
+                "",
+                vec!["--tensor-read-lazy"],
+            ),
+            (
+                vec!["--lazy-mode on --tensor-read-lazy off"],
+                "",
+                vec!["--tensor-read-lazy"],
+            ),
+            (
+                vec!["--tensor-read-lazy off"],
+                "on",
+                vec!["--tensor-read-lazy"],
+            ),
+            (
+                vec!["--tensor-read-lazy on unexpected"],
+                "",
+                vec!["<positional-argument>"],
+            ),
+        ] {
+            let mut config = eligible_config();
+            config.lazy_mode = structured.into();
+            config.custom_args = custom_args.into_iter().map(str::to_string).collect();
+            let result = evaluate(&config);
+            assert!(!result.eligible);
+            assert!(result
+                .reasons
+                .contains(&CheckpointReasonCode::CustomArgumentsUnsupported));
+            assert_eq!(result.custom_argument_blockers, expected);
+        }
+    }
+
+    #[test]
     fn eligibility_rejects_every_unsupported_config_row() {
         assert_config_reason(CheckpointReasonCode::UnsupportedConfiguration, |config| {
             config.kv_checkpoint.storage_limit_gib = 0
@@ -4510,6 +4661,28 @@ mod tests {
         assert_eq!(CheckpointPhase::Restoring.as_str(), "restoring");
         assert!(CheckpointPhase::Saving.is_busy());
         assert!(!CheckpointPhase::Starting.is_busy());
+    }
+
+    #[test]
+    fn eligibility_contract_omits_empty_blockers_and_accepts_legacy_payloads() {
+        let eligible = serde_json::to_value(evaluate(&eligible_config())).unwrap();
+        assert!(eligible.get("custom_argument_blockers").is_none());
+
+        let mut blocked_config = eligible_config();
+        blocked_config.custom_args = vec!["--ctx-size 4096".into()];
+        let blocked = serde_json::to_value(evaluate(&blocked_config)).unwrap();
+        assert_eq!(
+            blocked["custom_argument_blockers"],
+            serde_json::json!(["--ctx-size"])
+        );
+
+        let legacy: CheckpointEligibility = serde_json::from_value(serde_json::json!({
+            "eligible": false,
+            "reason_code": "disabled",
+            "reasons": ["disabled"]
+        }))
+        .unwrap();
+        assert!(legacy.custom_argument_blockers.is_empty());
     }
 
     #[test]
@@ -5013,7 +5186,7 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_excludes_transport_ui_sampling_and_manager_policy_fields() {
+    fn fingerprint_excludes_transport_ui_sampling_load_io_and_manager_policy_fields() {
         let base = eligible_config();
         assert_fingerprint_stable(&base, |config| config.model_path = "relocated.gguf".into());
         assert_fingerprint_stable(&base, |config| config.host = "localhost".into());
@@ -5030,6 +5203,7 @@ mod tests {
         assert_fingerprint_stable(&base, |config| config.metrics = false);
         assert_fingerprint_stable(&base, |config| config.props = false);
         assert_fingerprint_stable(&base, |config| config.no_ui = true);
+        assert_fingerprint_stable(&base, |config| config.lazy_mode = "on".into());
         assert_fingerprint_stable(&base, |config| config.name = "renamed".into());
         assert_fingerprint_stable(&base, |config| config.alias = "alias".into());
         assert_fingerprint_stable(&base, |config| config.tags = "tag".into());

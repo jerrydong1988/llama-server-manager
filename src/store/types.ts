@@ -127,6 +127,7 @@ export interface CheckpointEligibility {
   eligible: boolean
   reason_code: string
   reasons: string[]
+  custom_argument_blockers?: string[]
 }
 
 export interface InstanceConfig {
@@ -152,7 +153,7 @@ export interface InstanceConfig {
   rope_scaling: string; rope_scale: number; rope_freq_base: number; rope_freq_scale: number;
   yarn_ext_factor: number; yarn_attn_factor: number; yarn_beta_slow: number; yarn_beta_fast: number; yarn_orig_ctx: number;
   // Memory & KV Cache
-  flash_attn: string; moe_cpu_layers: number; cpu_moe: boolean; load_mode: string; mlock: boolean;
+  flash_attn: string; moe_cpu_layers: number; cpu_moe: boolean; load_mode: string; lazy_mode: string; mlock: boolean;
   no_mmap: boolean; no_repack: boolean; direct_io: boolean; numa: boolean; numa_mode: string; context_shift: boolean;
   perf: boolean; check_tensors: boolean; fit: boolean; fit_mode: string; fit_target: string; fit_ctx: number; kv_unified: boolean; kv_unified_mode: string; cache_idle_slots: boolean; no_kv_offload: boolean;
   cache_type_k: string; cache_type_v: string;

@@ -2068,6 +2068,7 @@ mod tests {
                 eligible: true,
                 reason_code: CheckpointReasonCode::None,
                 reasons: Vec::new(),
+                custom_argument_blockers: Vec::new(),
             },
             fingerprint: Some(checkpoint_fingerprint()),
         }

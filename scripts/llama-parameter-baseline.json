@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-08-26",
+  "verifiedAt": "2026-08-30",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
@@ -9,7 +9,7 @@
   },
   "upstreamRelease": "v0.3.0",
   "upstreamCommit": "c1d0e7a004015f23bc0233470b747b596f29b264",
-  "upstreamMasterChecked": "5d5cb4c3a4ea8769490d39a275ee49a45184774d",
+  "upstreamMasterChecked": "9723942adc518b43c4b95dc4dce6906903eb5e09",
   "releaseSnapshot": {
     "ref": "v0.3.0",
     "commit": "c1d0e7a004015f23bc0233470b747b596f29b264",
@@ -2170,9 +2170,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "5d5cb4c3a4ea8769490d39a275ee49a45184774d",
-    "parameterCount": 249,
-    "snapshotHash": "81acaae6068758606c2d5ef863b8abc10845ac825075c575ae12cd9ca73c9ad9",
+    "commit": "9723942adc518b43c4b95dc4dce6906903eb5e09",
+    "parameterCount": 257,
+    "snapshotHash": "f907ceab288e98adbafe8cd868e9b34f2c097b771c434896e2d3cdeac889c4d9",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2930,6 +2930,23 @@
         "descriptionHash": "7b6de1397c079c5b307e418964135a7fe420e1a57366fff4552d7dd52056ea77"
       },
       {
+        "canonical": "--kv-unified-per-slot",
+        "aliases": [
+          "--kv-unified-per-slot"
+        ],
+        "synopsisHash": "cc62a39ed5c4822e846f7bc4fd48213e01a95dca5bd758ce9d5c9dc40156020b",
+        "descriptionHash": "613542b1d8ff7cac1de1a7419a1c3142fcbae33edfbcdc8fca0fbead0a05cc4c"
+      },
+      {
+        "canonical": "--lazy-mode",
+        "aliases": [
+          "--lazy-mode",
+          "-lzm"
+        ],
+        "synopsisHash": "38a2e61f0c118b467d04276d151a3bf3d0354e3152f4d32bd31561614805cf40",
+        "descriptionHash": "bb13084dcf0c6488a685728b2e647bbfd13e7a032ae99d58c4f73e5151b29a9c"
+      },
+      {
         "canonical": "--list-devices",
         "aliases": [
           "--list-devices"
@@ -3241,6 +3258,15 @@
         ],
         "synopsisHash": "89a2a305050a6c1c6be94e5b010051b26b87a3078986b82d000ef0e562882493",
         "descriptionHash": "953711acbf0466ad966ec3dd0b269c5a0665065499707538ea2c645c08143405"
+      },
+      {
+        "canonical": "--n-cpu-ffn",
+        "aliases": [
+          "--n-cpu-ffn",
+          "-ncffn"
+        ],
+        "synopsisHash": "85feb5048af64f3dc176fe5202a436af389456e68cc367c03691d9bae9c98d4c",
+        "descriptionHash": "a94ef3857601f3d21bf3104d52fc19eee2ba22fd5c253fdf74a01490711b956a"
       },
       {
         "canonical": "--n-cpu-moe",
@@ -3990,6 +4016,22 @@
         "descriptionHash": "6dc9c2228ae3acd0ccfb73e85cc18c27484646ca40d4bebca2a47676129eebfe"
       },
       {
+        "canonical": "--spec-synth-len",
+        "aliases": [
+          "--spec-synth-len"
+        ],
+        "synopsisHash": "10aab8d27dea4b3967cb32811aa28454b2c0aa2bd78e831e897b86ca279a7d65",
+        "descriptionHash": "4705fe0f2c2c2bc5de3daef4655bc23fbd80e7c70636cddac0f8af4abc7985f5"
+      },
+      {
+        "canonical": "--spec-synth-rates",
+        "aliases": [
+          "--spec-synth-rates"
+        ],
+        "synopsisHash": "47c97cfd4c9329042fde2f396391857c051a164e38a294ce3df22b9fcab7abc6",
+        "descriptionHash": "b3a1679de836717693d53f57b774e73f7618072e4e88f8f7391ed9597083f9b9"
+      },
+      {
         "canonical": "--spec-type",
         "aliases": [
           "--spec-type"
@@ -4244,6 +4286,30 @@
         "descriptionHash": "0d3335cb33ec0baeea85ad3d69c98f3dbdd206894c7dbe7c920d549475f4227d"
       },
       {
+        "canonical": "--video-ffmpeg-dir",
+        "aliases": [
+          "--video-ffmpeg-dir"
+        ],
+        "synopsisHash": "192606c603712be54ab04a9d8373757f80e2b39fcefd991b659b661a07ec2bee",
+        "descriptionHash": "4a03570e15fc4202c3c9e73e8355191aab9d7d40994f9581d6787890b282467a"
+      },
+      {
+        "canonical": "--video-fps",
+        "aliases": [
+          "--video-fps"
+        ],
+        "synopsisHash": "04bc035353808f0f863db37ef3f6bfc1ff68b868c6e2792bcfbc7fabbb3b4d43",
+        "descriptionHash": "1cfb19c72e880cf5d77dd03b0fe2749e8962011fc639b31c456e9465820958ea"
+      },
+      {
+        "canonical": "--video-timestamp-interval",
+        "aliases": [
+          "--video-timestamp-interval"
+        ],
+        "synopsisHash": "56197ed656c070dc95f762b94815492062362b69ef1c427e8431c66468b30d9d",
+        "descriptionHash": "8b666c0186b8a23cf1e7dc13c5387582eb60f3183c7e072b6d7b72396af6c7a1"
+      },
+      {
         "canonical": "--vision-gemma-12b-default",
         "aliases": [
           "--vision-gemma-12b-default"
@@ -4326,7 +4392,9 @@
       }
     ]
   },
-  "masterPreviewFlags": [],
+  "masterPreviewFlags": [
+    "--lazy-mode"
+  ],
   "structuredFlagsAdded": [
     "--cors-origins",
     "--cors-methods",

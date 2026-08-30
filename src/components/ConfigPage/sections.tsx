@@ -51,6 +51,7 @@ export const PERFORMANCE_CONFIG_KEYS: Array<keyof InstanceConfig> = [
   'cont_batching',
   'flash_attn',
   'load_mode',
+  'lazy_mode',
   'no_repack',
   'numa_mode',
 ]
@@ -248,7 +249,8 @@ export function PerformanceSection({ local, set, inherit, t, emittedParams, chan
         <Switch label={`${t.configPage.contBatching} (--cont-batching, -cb)`} value={local.cont_batching} onChange={v => set('cont_batching', v)} title={t.configPage.contBatchingTip}  fieldKey={a('cont_batching')} />
         <Select label={`${t.configPage.flashAttn} (--flash-attn, -fa)`} value={local.flash_attn} onChange={v => set('flash_attn', v)} options={['auto', 'on', 'off']} title={t.configPage.flashAttnTip} defaultLabel={t.common.default}  fieldKey={a('flash_attn')} />
         <Select label={`${t.configPage.loadMode} (--load-mode)`} value={local.load_mode} onChange={v => set('load_mode', v)} options={['', 'auto', 'none', 'mmap', 'mlock', 'mmap+mlock', 'dio']} title={t.configPage.loadModeTip} defaultLabel={t.common.default} fieldKey={a('load_mode')} />
-      <Switch label={`${t.configPage.noRepack} (--repack / --no-repack)`} value={!local.no_repack} onChange={v => set('no_repack', !v)} title={t.configPage.noRepackTip}  fieldKey={a('no_repack')} />
+        <Select label={`${t.configPage.lazyMode} (--lazy-mode, -lzm / --tensor-read-lazy)`} value={local.lazy_mode} onChange={v => set('lazy_mode', v)} options={['', 'auto', 'on', 'off']} title={t.configPage.lazyModeTip} defaultLabel={t.common.default} fieldKey={a('lazy_mode')} />
+        <Switch label={`${t.configPage.noRepack} (--repack / --no-repack)`} value={!local.no_repack} onChange={v => set('no_repack', !v)} title={t.configPage.noRepackTip}  fieldKey={a('no_repack')} />
         <Select label={`${t.configPage.numa} (--numa)`} value={local.numa_mode || (local.numa ? 'distribute' : '')} onChange={v => { set('numa_mode', v); set('numa', v === 'distribute') }} options={['', 'distribute', 'isolate', 'numactl']} title={t.configPage.numaTip} defaultLabel={t.common.default} fieldKey={a('numa_mode')} />
       </div>
     </Section>

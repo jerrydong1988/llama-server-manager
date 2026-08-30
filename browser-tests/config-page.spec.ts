@@ -219,6 +219,14 @@ test('automatic numeric modes and the unified loading mode produce unambiguous c
     const command = window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []
     return command.filter(argument => ['--mlock', '--no-mmap', '--direct-io'].includes(argument))
   })).toEqual([])
+
+  const lazyMode = page.locator('[data-config-field="lazy_mode"]')
+  const lazyModeSelect = lazyMode.getByRole('combobox')
+  await expect(lazyModeSelect).toHaveValue('')
+  await lazyModeSelect.selectOption('on')
+  await expect(lazyMode).toHaveAttribute('data-config-source', 'explicit')
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.lastGenerated?.command ?? []))
+    .toEqual(expect.arrayContaining(['--lazy-mode', 'on']))
 })
 
 test('speculative decoding accepts a normalized multi-type fallback chain', async ({ page }) => {

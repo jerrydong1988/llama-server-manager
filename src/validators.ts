@@ -42,7 +42,8 @@ export const KNOWN_FLAGS = new Set([
   '--yarn-ext-factor', '--yarn-attn-factor', '--yarn-beta-slow', '--yarn-beta-fast', '--yarn-orig-ctx',
   // Flash attention and memory
   '-fa', '--flash-attn', '--n-cpu-moe', '--cpu-moe', '-cmoe', '--cpu-moe-layers',
-  '--load-mode', '-lm', '--mlock', '--mmap', '--no-mmap', '--repack', '--no-repack',
+  '--load-mode', '-lm', '--lazy-mode', '-lzm', '--tensor-read-lazy',
+  '--mlock', '--mmap', '--no-mmap', '--repack', '--no-repack',
   '--numa', '--check-tensors', '--perf', '--no-perf', '--fit', '-fitt', '--fit-target',
   '-fitc', '--fit-ctx', '--direct-io', '-dio',
   // KV cache

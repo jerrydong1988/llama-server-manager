@@ -16,9 +16,9 @@ KV / Prefill Cache Checkpoint is an opt-in experimental feature. It saves prompt
 - 滑动窗口注意力模型还必须启用 `--swa-full`，且引擎必须支持该参数。
 - 推测解码关闭，或只使用当前引擎 `--help` 明确报告的类型。`ngram-*` 可从恢复后的 target prompt 重建；`draft-*` 还要求引擎在 `--slot-save-path` 帮助中明确声明支持 `slot KV cache and context checkpoints`，证明 slot 文件会同时携带 target/draft 上下文。
 - 配置外部草稿模型时必须显式选择至少一个受支持的 `draft-*` 类型，且草稿 GGUF（包括完整分片集）必须可读取；`spec-default`、未知类型和外部 lookup cache 仍不支持检查点。
-- 模型架构必须可读，且不属于已有反例证明的 hybrid/recurrent 架构；不使用自定义参数、多模型 preset、router、Embedding、Reranker、LoRA 或 mmproj/multimodal。
+- 模型架构必须可读，且不属于已有反例证明的 hybrid/recurrent 架构；不使用多模型 preset、router、Embedding、Reranker、LoRA 或 mmproj/multimodal。自定义参数只允许检查点安全分类器明确认可的纯加载 I/O 参数；当前包括取值为 `auto`、`on` 或 `off` 的 `--lazy-mode`、`-lzm` 与旧 `--tensor-read-lazy`。未知、缺值、非法、互相冲突或会改变推理状态的自定义参数仍会阻断，并在配置页显示具体标志。
 
-The experimental v3 scope supports one manager-owned local text-generation slot. Every selected speculative type must be reported by the current engine. Rebuildable `ngram-*` types remain eligible on the original slot format; `draft-*` types additionally require the explicit context-checkpoint help marker introduced by a compatible llama.cpp build. External lookup state, automatic speculation, multimodal state, and known hybrid or recurrent architectures remain excluded. Sliding-window models additionally require full SWA cache.
+The experimental v3 scope supports one manager-owned local text-generation slot. Every selected speculative type must be reported by the current engine. Rebuildable `ngram-*` types remain eligible on the original slot format; `draft-*` types additionally require the explicit context-checkpoint help marker introduced by a compatible llama.cpp build. Custom arguments remain fail-closed except for explicitly classified load-I/O-only forms; the current safe set is `--lazy-mode`, `-lzm`, and legacy `--tensor-read-lazy` with `auto`, `on`, or `off`. External lookup state, automatic speculation, multimodal state, and known hybrid or recurrent architectures remain excluded. Sliding-window models additionally require full SWA cache.
 
 不符合条件只会关闭本次运行的 checkpoint；实例仍按原来的冷启动流程运行。配置页会显示稳定的资格原因，不会静默猜测兼容性。
 

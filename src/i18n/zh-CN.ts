@@ -184,6 +184,7 @@
     cpuMoe: '\u5168 MoE CPU', cpuMoeTip: '把全部 MoE 专家权重保留在 CPU，而不是只指定前 N 个 MoE 层。它通常进一步降低专家权重的 GPU 显存需求，但可能显著增加 CPU/内存带宽压力；非 MoE 模型不会由此受益。',
     mlock: '\u5185\u5B58\u9501\u5B9A', mlockTip: '请求操作系统尽量将已加载的模型数据保留在物理内存，减少换页造成的延迟波动。它会限制系统回收内存，只有在 RAM 充足且系统允许锁页时才适合开启；内存不足时反而可能影响整机稳定性。',
     loadMode: '\u6a21\u578b\u52a0\u8f7d\u6a21\u5f0f', loadModeTip: '\u9009\u62e9\u552f\u4e00\u7684\u6a21\u578b\u52a0\u8f7d\u7b56\u7565\uff1aauto \u7531 llama.cpp \u5224\u65ad\uff0c\u4efb\u4e00\u8bbe\u5907\u4e0d\u652f\u6301 mmap \u65f6\u4e0d\u4f7f\u7528 mmap\uff1bnone \u4f7f\u7528\u666e\u901a\u8bfb\u53d6\uff0cmmap \u4f7f\u7528\u5185\u5b58\u6620\u5c04\uff0cmlock \u4f7f\u7528\u666e\u901a\u8bfb\u53d6\u5e76\u5c1d\u8bd5\u9501\u5b9a\u5185\u5b58\uff0cmmap+mlock \u540c\u65f6\u6620\u5c04\u5e76\u5c1d\u8bd5\u9501\u5b9a\u5185\u5b58\uff0cdio \u4f7f\u7528\u76f4\u63a5 I/O\u3002\u7ee7\u627f\u65f6\u4e0d\u53d1\u5c04\u53c2\u6570\uff0c\u4f7f\u7528\u6240\u9009\u5f15\u64ce\u81ea\u8eab\u9ed8\u8ba4\u503c\uff08b10423 \u4e4b\u524d\u4e3a mmap\uff0cb10423 \u8d77\u4e3a auto\uff09\u3002',
+    lazyMode: 'Lazy \u5f20\u91cf\u52a0\u8f7d', lazyModeTip: '\u4f7f\u7528 auto\u3001on \u6216 off \u63a7\u5236\u6a21\u578b\u5f20\u91cf\u7684\u5ef6\u8fdf\u8bfb\u53d6\uff1b\u7ee7\u627f\u65f6\u4e0d\u53d1\u5c04\u53c2\u6570\u3002\u7ba1\u7406\u5668\u4f18\u5148\u4f7f\u7528\u5f53\u524d --lazy-mode\uff0c\u5176\u6b21\u4f7f\u7528 -lzm\uff0c\u4ec5\u5728\u6240\u9009\u5f15\u64ce\u62a5\u544a\u652f\u6301\u65f6\u9000\u56de\u65e7 --tensor-read-lazy\u3002\u8be5\u8bbe\u7f6e\u53ea\u6539\u53d8\u52a0\u8f7d I/O\uff0c\u4e0d\u6539\u53d8\u63a8\u7406\u72b6\u6001\uff0c\u56e0\u6b64\u901a\u8fc7\u9a8c\u8bc1\u7684\u5f62\u5f0f\u53ef\u4e0e\u68c0\u67e5\u70b9\u5171\u5b58\uff1b\u5b9e\u9a8c\u6027 Windows \u5f15\u64ce\u4ecd\u5e94\u5b9e\u6d4b\u542f\u52a8\u65f6\u95f4\u548c\u5185\u5b58\u884c\u4e3a\u3002',
     noMmap: '\u5185\u5B58\u6620\u5C04 (mmap)', noMmapTip: '开启时允许 llama.cpp 使用内存映射加载模型，由操作系统按需调页，通常有利于启动和共享文件页；关闭时发射 --no-mmap，改为常规读取路径，可能增加加载时 RAM 与 I/O。仅在文件系统、驱动或映射访问出现兼容问题时考虑关闭。',
   noRepack: '\u6743\u91CD\u91CD\u6253\u5305', noRepackTip: '开启时允许 llama.cpp 在适用后端上把部分权重转换为更适合计算的内存布局，可能提高推理效率但增加加载时间和额外内存；关闭时发射 --no-repack。实际收益依模型、量化和后端而异。',
     directIo: '直接 I/O', directIoTip: '绕过操作系统文件页缓存直接读取模型。[场景] 专用高速存储或需要避免模型文件挤占系统缓存时启用。[权衡] 效果取决于操作系统和存储设备，普通环境建议保持关闭。',
@@ -601,7 +602,7 @@
     reasons: {
       none: '无错误', disabled: '检查点功能未启用', unsupported_configuration: '检查点策略值超出支持范围',
       managed_local_required: '仅支持由管理器拥有的本地引擎', manual_launch_unsupported: '不支持手动启动模式',
-      custom_arguments_unsupported: '不支持自定义 llama-server 参数', multi_model_unsupported: '不支持多模型路由',
+      custom_arguments_unsupported: '存在尚未纳入检查点安全验证的自定义 llama-server 参数', multi_model_unsupported: '不支持多模型路由',
       vector_workload_unsupported: '不支持 embedding 与 reranking 工作负载', parallel_must_be_one: '并行 slot 数必须设为 1',
       prompt_cache_required: '必须启用 prompt cache', prompt_cache_retention_required: '必须启用 Cache RAM 与 idle-slot cache，才能在 Harness 元数据请求之后保留已恢复前缀', slots_required: '必须启用 slots API',
       loopback_http_required: '引擎必须使用无 TLS 的本机回环 HTTP 端点', custom_endpoint_unsupported: '不支持自定义 path 或 API 前缀',
