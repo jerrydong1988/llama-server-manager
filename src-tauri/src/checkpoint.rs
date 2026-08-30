@@ -614,18 +614,41 @@ fn protect_windows_checkpoint_root(path: &Path) -> StoreResult<()> {
         .map(|value| value.trim().trim_matches('"'))
         .filter(|value| value.starts_with("S-1-"))
         .ok_or_else(|| CheckpointStoreError::io("current user identity lookup failed"))?;
-    let grant = format!("*{sid}:(OI)(CI)F");
-    let status = Command::new("icacls.exe")
+    // Existing files need an effective ACE of their own. Applying only an
+    // inheritable (OI)(CI) ACE recursively leaves regular files with an empty
+    // DACL on Windows, because files cannot pass that ACE to children. This is
+    // observable when the main process and runtime supervisor each initialize
+    // a CheckpointStore: the second pass makes fingerprints-v1.json unreadable.
+    let direct_grant = format!("*{sid}:F");
+    let inheritable_grant = format!("*{sid}:(OI)(CI)F");
+    let direct_status = Command::new("icacls.exe")
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
-        .arg(grant)
-        .args(["/T", "/C", "/Q"])
+        .arg(direct_grant)
+        .args(["/T", "/Q"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .map_err(|_| CheckpointStoreError::io("checkpoint ACL update failed"))?;
-    if !status.success() {
+    if !direct_status.success() {
+        return Err(CheckpointStoreError::io("checkpoint ACL update failed"));
+    }
+
+    // Add inheritance separately so every existing directory also protects
+    // files created after this pass. The direct ACE above remains effective on
+    // regular files, making repeated hardening safe and idempotent.
+    let inheritable_status = Command::new("icacls.exe")
+        .arg(path)
+        .arg("/grant")
+        .arg(inheritable_grant)
+        .args(["/T", "/Q"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|_| CheckpointStoreError::io("checkpoint ACL update failed"))?;
+    if !inheritable_status.success() {
         return Err(CheckpointStoreError::io("checkpoint ACL update failed"));
     }
     Ok(())
@@ -4986,6 +5009,48 @@ mod tests {
                 .unwrap();
             assert!(status.success());
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_acl_hardening_is_idempotent_across_checkpoint_stores() {
+        let sandbox = TestSandbox::new("windows-acl-idempotent");
+        let model = sandbox.path.join("model.gguf");
+        fs::write(&model, b"first model contents").unwrap();
+
+        // The application process computes the fingerprint cache first.
+        let application_store = sandbox.store();
+        let first_digest = application_store.content_sha256(&model).unwrap();
+        let cache_path = application_store.root().join("fingerprints-v1.json");
+        assert!(!fs::read(&cache_path).unwrap().is_empty());
+
+        // The runtime supervisor owns a separate CheckpointStore for the same
+        // root. Its first access reapplies Windows ACL protection recursively.
+        let runtime_store = sandbox.store();
+        let scratch = runtime_store.prepare_instance("runtime-instance").unwrap();
+
+        // Existing regular files must remain readable and writable after that
+        // second protection pass, and newly created descendants must inherit
+        // an effective current-user ACE.
+        assert!(!fs::read(&cache_path).unwrap().is_empty());
+        assert_eq!(runtime_store.content_sha256(&model).unwrap(), first_digest);
+        fs::write(&model, b"second model contents with a new size").unwrap();
+        let second_digest = runtime_store.content_sha256(&model).unwrap();
+        assert_ne!(second_digest, first_digest);
+        assert!(!fs::read(&cache_path).unwrap().is_empty());
+
+        let descendant = scratch.join("created-after-protection.json");
+        fs::write(&descendant, b"readable").unwrap();
+        assert_eq!(fs::read(&descendant).unwrap(), b"readable");
+
+        // A later process restart may initialize yet another store. Repeating
+        // hardening must not regress either existing or newly created files.
+        let restarted_store = sandbox.store();
+        restarted_store
+            .prepare_instance("restarted-instance")
+            .unwrap();
+        assert!(!fs::read(&cache_path).unwrap().is_empty());
+        assert_eq!(fs::read(&descendant).unwrap(), b"readable");
     }
 
     #[test]
