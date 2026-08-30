@@ -394,7 +394,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     clearCompletedDownloadTasks: async () => {
       try {
-        await invoke('clear_download_tasks_by_status', { statuses: ['completed'] })
+        await invoke('clear_download_tasks_by_status', { statuses: ['completed'], cleanupArtifacts: false })
         const tasks = { ...get().downloadTasks }
         for (const key of Object.keys(tasks)) {
           if (tasks[key].status === 'completed') delete tasks[key]
@@ -407,7 +407,7 @@ export function createDownloadSlice(set: AppStoreSet, get: AppStoreGet): Pick<
     },
     clearFailedDownloadTasks: async () => {
       try {
-        await invoke('clear_download_tasks_by_status', { statuses: ['error'] })
+        await invoke('clear_download_tasks_by_status', { statuses: ['error'], cleanupArtifacts: true })
         const tasks = { ...get().downloadTasks }
         for (const key of Object.keys(tasks)) {
           if (tasks[key].status === 'error') delete tasks[key]

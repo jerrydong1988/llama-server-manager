@@ -37,6 +37,16 @@ assert.ok(
   deleteSection.indexOf('await stopInstance(id)') < deleteSection.indexOf('deleteInstance(id)'),
   'deleting an instance must stop its backend process before removing the config',
 )
+assert.ok(
+  deleteSection.indexOf('await stopInstance(id)') < deleteSection.indexOf('await useAppStore.getState().clearCheckpoint(id)')
+    && deleteSection.indexOf('await useAppStore.getState().clearCheckpoint(id)') < deleteSection.indexOf('deleteInstance(id)'),
+  'deleting an instance must clear its stopped checkpoint before removing the ownership record',
+)
+assert.match(
+  deleteSection,
+  /catch \(error\)[\s\S]*addRuntimeWarning/,
+  'instance deletion must remain recoverable when artifact cleanup fails',
+)
 assert.match(
   serverSource,
   /let ri = state\.running[\s\S]*if ri\.is_none\(\) \{\s*return Ok\(\(\)\)/,

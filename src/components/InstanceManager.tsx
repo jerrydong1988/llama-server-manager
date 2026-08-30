@@ -179,11 +179,15 @@ const InstanceManager = () => {
 
   const handleDelete = async (id: string) => {
     if (!await confirm(t.instance.confirmDelete, { title: t.instance.delete, kind: 'warning' })) return
-    await stopInstance(id)
-    deleteInstance(id)
-    await useAppStore.getState().saveConfig()
+    try {
+      await stopInstance(id)
+      await useAppStore.getState().clearCheckpoint(id)
+      deleteInstance(id)
+      await useAppStore.getState().saveConfig()
+    } catch (error) {
+      useAppStore.getState().addRuntimeWarning(`instance deletion cleanup failed: ${error instanceof Error ? error.message : String(error)}`)
+    }
   }
-
   const [copyFeedback, setCopyFeedback] = useState(false)
   const handleCopyCommand = async (text: string) => {
     try {
