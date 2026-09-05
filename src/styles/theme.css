@@ -1,4 +1,5 @@
-/* Stitch Studio: shared by the desktop shell, pages, and body-mounted dialogs. */
+/* Stitch Studio: shared by the desktop shell, pages, and body-mounted dialogs.
+   Font licenses ship in public/font-licenses.txt, including native builds. */
 @font-face {
   font-family: Geist;
   font-style: normal;

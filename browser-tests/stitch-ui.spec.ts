@@ -90,6 +90,9 @@ test('model cards preserve selection and search when switching views or themes',
 
 test('interface fonts load locally and the theme uses opaque component surfaces', async ({ page }) => {
   await openWorkspace(page)
+  const license = await page.request.get('/font-licenses.txt')
+  expect(license.ok()).toBe(true)
+  expect(await license.text()).toContain('SIL OPEN FONT LICENSE')
   await page.evaluate(() => document.fonts.ready)
   const fonts = await page.evaluate(() => ({
     geist: document.fonts.check('500 13px Geist', 'Llama'),
