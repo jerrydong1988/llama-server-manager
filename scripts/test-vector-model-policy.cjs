@@ -575,8 +575,8 @@ assert.match(advancedSectionSource, /onShowMmprojPicker/, 'the mmproj field must
 assert.match(advancedSectionSource, /mmprojPathBtn/, 'the mmproj picker button must have a localized accessible label')
 
 assert.doesNotMatch(configPageSource, /\[activeConfigInstanceId, inst\?\.config\]/, 'inventory reconciliation must not overwrite an active local draft')
-assert.match(configPageSource, /const \[baseline, setBaseline\]/, 'the editor must retain a stable local baseline')
-assert.match(configPageSource, /const committedModelPathRef = useRef/, 'the editor must distinguish typed paths from committed model selections')
+assert.match(configPageSource, /baseline, setBaseline[\s\S]*useConfigDraft\(configInstanceId\)/, 'the editor must retain a stable per-instance baseline')
+assert.match(configPageSource, /committedModelPathRef[\s\S]*useConfigDraft/, 'the editor must distinguish typed paths from committed model selections')
 assert.match(configPageSource, /const savedBaseline = baseline \?\?/, 'unsaved diffs must compare against the stable local baseline')
 
 for (const locale of ['zh-CN.ts', 'en-US.ts']) {

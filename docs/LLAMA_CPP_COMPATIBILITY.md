@@ -32,7 +32,7 @@ The application uses three complementary controls so parameter support does not 
 
 保守模式不会静默删除配置。更换回能力完整的引擎后，原有参数可以重新参与校验和命令生成。Embedding 与 Reranker 的工作模式参数以及认证/TLS 等安全参数不会因保守模式被静默移除。
 
-Lazy 张量加载使用结构化 `lazy_mode` 配置。当前 `master` 的规范参数是 `--lazy-mode`（短别名 `-lzm`）；部分实验分支仍公开旧 `--tensor-read-lazy`。程序只在所选引擎的能力探测明确报告对应别名时协商替换，优先级为 `--lazy-mode`、`-lzm`、`--tensor-read-lazy`。稳定版基线仍是权威来源，master-only 参数只作为已复核前瞻能力。
+Lazy 张量加载使用结构化 `lazy_mode` 配置。稳定版 v0.4.0 的规范参数是 `--lazy-mode`（短别名 `-lzm`）；部分实验分支仍公开旧 `--tensor-read-lazy`。程序只在所选引擎的能力探测明确报告对应别名时协商替换，优先级为 `--lazy-mode`、`-lzm`、`--tensor-read-lazy`。
 
 Scanning never executes every discovered binary. Probes run only for explicitly selected engines, without a shell, with time and output limits. Version recognition is independent from parameter capability detection. Complete results enforce compatibility at save and launch; partial results retain recognized and essential flags; unknown results use a minimal command without deleting saved configuration. Structured lazy loading prefers current `--lazy-mode`, then `-lzm`, and negotiates legacy `--tensor-read-lazy` only when the selected engine advertises it.
 
@@ -51,6 +51,18 @@ Runtime probing also records the engine-reported `--spec-type` choices. Ordinary
 Ineligibility, fingerprint misses, corruption, and restore-validation failures always fall back to a cold start. The general parameter support window never relaxes state compatibility. See [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md) for the full matrix and operating guide.
 
 ## 上游监控 / Upstream Watcher
+
+2026-09-05 已复核 v0.4.0（`5266f24da75dc449bd56cbed7addb9c8e4a6a73e`）的 [参数表](https://github.com/ggml-org/llama.cpp/blob/5266f24da75dc449bd56cbed7addb9c8e4a6a73e/tools/server/README.md) 和 [参数解析](https://github.com/ggml-org/llama.cpp/blob/5266f24da75dc449bd56cbed7addb9c8e4a6a73e/common/arg.cpp)。相对 v0.3.0 新增 8 项，已有条目的别名、语法及说明摘要均未改变。新增参数的处理如下；基线通过代表命令契约复核，不代表真实模型或 GPU 的端到端验证。
+
+| 参数 | 管理器处理 |
+| --- | --- |
+| `--lazy-mode` / `-lzm` | 已有结构化配置进入稳定版基线；继续按所选引擎能力协商。合法加载 I/O 设置沿用检查点安全分类。 |
+| `--kv-unified-per-slot` | 保留为自定义参数，影响 slot 上限和未显式设定上下文时的 KV 池大小；检查点继续阻断。 |
+| `--n-cpu-ffn` / `-ncffn` | 保留为自定义参数，用于 dense FFN 放置；检查点继续阻断。 |
+| `--spec-synth-len`、`--spec-synth-rates` | 仅供合成接受率基准测试，保留为自定义参数，不加入普通推理预设；检查点继续阻断。 |
+| `--video-fps`、`--video-timestamp-interval`、`--video-ffmpeg-dir` | 保留为自定义视频输入参数；检查点继续排除多模态状态。 |
+
+The v0.4.0 review promotes lazy loading to the stable registry. Slot sizing, dense FFN placement, synthetic benchmarks, and video input remain explicit custom arguments. Stateful checkpoint eligibility remains conservative, and parameter review does not claim model or GPU execution coverage.
 
 `scripts/check-llama-upstream.cjs` 读取官方最新稳定版和 `master` 的 `tools/server/README.md` 参数表，并在 `scripts/llama-parameter-baseline.json` 中保存参数名、别名、语法摘要及说明/默认值摘要。
 

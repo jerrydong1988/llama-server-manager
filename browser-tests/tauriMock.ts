@@ -621,6 +621,7 @@ type BrowserTestControl = {
   releaseBrowse: (repoId: string, files: MsFileEntry[]) => void
   releasePortCheck: (port: number, available: boolean) => void
   releaseStart: () => void
+  releaseSave: (fail?: boolean) => void
   releaseWorkerScan: (workers: WorkerInfo[]) => void
 }
 
@@ -631,6 +632,7 @@ declare global {
 }
 
 let releasePendingStart: (() => void) | null = null
+let releasePendingSave: ((fail?: boolean) => void) | null = null
 let delayedInventoryCacheLoaded = false
 let mdnsDiscoveryActive = false
 let storageWebviewScheduled = false
@@ -691,6 +693,7 @@ const control: BrowserTestControl = {
     resolve(available)
   },
   releaseStart: () => releasePendingStart?.(),
+  releaseSave: fail => releasePendingSave?.(fail),
   releaseWorkerScan: (workers) => {
     const resolve = pendingWorkerScans.shift()
     if (!resolve) throw new Error('No pending browser-test worker scan')
@@ -1383,11 +1386,23 @@ mockIPC((command, payload) => {
     }
     case 'save_config': {
       const instances = clone(args.instances as Record<string, InstanceConfig>)
-      control.state.instances = instances
-      if (Array.isArray(args.modelDirs)) control.state.model_dirs = clone(args.modelDirs as string[])
-      control.saveCount += 1
-      syncAutomationProbe()
-      return instances
+      const persist = () => {
+        control.state.instances = instances
+        if (Array.isArray(args.modelDirs)) control.state.model_dirs = clone(args.modelDirs as string[])
+        control.saveCount += 1
+        syncAutomationProbe()
+        return instances
+      }
+      if (BROWSER_SCENARIO === 'delayed-config-save') {
+        return new Promise((resolve, reject) => {
+          releasePendingSave = fail => {
+            releasePendingSave = null
+            if (fail) reject(new Error('Simulated configuration write failure'))
+            else resolve(persist())
+          }
+        })
+      }
+      return persist()
     }
     case 'start_server': {
       const instanceId = String(args.instanceId ?? '')

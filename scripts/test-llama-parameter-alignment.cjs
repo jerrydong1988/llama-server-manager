@@ -33,6 +33,13 @@ const emittedFlags = [...new Set(
 const officialAliases = new Set(baseline.releaseSnapshot.parameters.flatMap(parameter => parameter.aliases))
 const masterAliases = new Set(baseline.masterSnapshot.parameters.flatMap(parameter => parameter.aliases))
 const previewFlags = new Set(baseline.masterPreviewFlags)
+for (const group of ['advancedSlotSizing', 'denseFfnPlacement', 'syntheticBenchmarks', 'videoInput']) {
+  const flags = baseline.intentionalCustomArgsOnly[group]
+  assert.ok(flags?.length, `missing reviewed custom-only group: ${group}`)
+  for (const flag of flags) {
+    assert.ok(officialAliases.has(flag), `reviewed custom-only flag is absent from stable: ${flag}`)
+  }
+}
 assert.ok(emittedFlags.length >= 80, `expected a substantial command registry, found ${emittedFlags.length}`)
 for (const flag of emittedFlags) {
   assert.ok(

@@ -773,6 +773,18 @@ impl RuntimeSupervisor {
                             &config,
                         );
                     }
+                    // A probe can outlive stop/start; publish only for its owner.
+                    let lifecycle = supervisor.instance_lifecycle.lock().unwrap();
+                    if !supervisor
+                        .state
+                        .lock()
+                        .unwrap()
+                        .running
+                        .get(&instance_id)
+                        .is_some_and(|current| current.pid == expected_pid)
+                    {
+                        break;
+                    }
                     match health_transition {
                         HealthTransition::Ready => {
                             if checkpoint_startup_resolved {
@@ -821,6 +833,7 @@ impl RuntimeSupervisor {
                         );
                     }
                     let _ = crate::commands::monitoring::capture_frame(&instance_id);
+                    drop(lifecycle);
                     std::thread::sleep(
                         std::time::Duration::from_secs(5)
                             .saturating_sub(iteration_started.elapsed()),
@@ -1036,7 +1049,6 @@ impl RuntimeSupervisor {
                 let exit_code = child.wait().ok().and_then(|status| status.code());
                 let _ = stdout_pump.join();
                 let _ = stderr_pump.join();
-                perf_tracker.lock().unwrap().finish();
                 if let Some(supervisor) = supervisor.upgrade() {
                     supervisor.record_process_exit(&instance_id, pid, exit_code);
                 }
@@ -1079,6 +1091,18 @@ impl RuntimeSupervisor {
     }
 
     fn record_process_exit(&self, instance_id: &str, pid: u32, exit_code: Option<i32>) {
+        // Serialize generation ownership with start/stop through all cleanup.
+        let _lifecycle = self.instance_lifecycle.lock().unwrap();
+        if !self
+            .state
+            .lock()
+            .unwrap()
+            .running
+            .get(instance_id)
+            .is_some_and(|running| running.pid == pid)
+        {
+            return;
+        }
         let stop_intent = self.stop_intents.lock().unwrap().remove(instance_id);
         let expected_stop = stop_intent.is_some();
         let preserve_desired = stop_intent
@@ -1128,7 +1152,9 @@ impl RuntimeSupervisor {
             }
         }
         self.health.lock().unwrap().remove(instance_id);
-        self.perf_trackers.lock().unwrap().remove(instance_id);
+        if let Some(tracker) = self.perf_trackers.lock().unwrap().remove(instance_id) {
+            tracker.lock().unwrap().finish();
+        }
         crate::commands::monitoring::remove_instance(instance_id);
     }
 
@@ -1339,7 +1365,9 @@ impl RuntimeSupervisor {
         self.stop_intents.lock().unwrap().remove(instance_id);
         if removed.is_some() {
             self.health.lock().unwrap().remove(instance_id);
-            self.perf_trackers.lock().unwrap().remove(instance_id);
+            if let Some(tracker) = self.perf_trackers.lock().unwrap().remove(instance_id) {
+                tracker.lock().unwrap().finish();
+            }
             crate::commands::monitoring::remove_instance(instance_id);
             let _ = crate::commands::telemetry::finish_run_session(
                 running.telemetry_session_id.as_deref(),
@@ -1998,6 +2026,73 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_DIRECTORY_ID: AtomicU64 = AtomicU64::new(1);
+
+    #[test]
+    fn stale_process_exit_preserves_the_replacement_generation() {
+        use super::*;
+        let directory = TestDirectory::new();
+        let id = "stale-exit-test";
+        let mut running = detach_instance(200);
+        running.instance_id = id.into();
+        let supervisor = RuntimeSupervisor {
+            state: Mutex::new(PersistedRuntimeState {
+                running: [(id.into(), running)].into_iter().collect(),
+                desired_instances: [(id.into(), detach_spec())].into_iter().collect(),
+                ..Default::default()
+            }),
+            proxy_status: Mutex::new(ProxyStatus {
+                running: false,
+                bound_addr: String::new(),
+                active_routes: 0,
+                healthy_routes: 0,
+                unhealthy_routes: 0,
+                in_flight_requests: 0,
+                total_requests: 0,
+                last_error: None,
+            }),
+            proxy_runtime: tokio::sync::Mutex::new(None),
+            proxy_router_runtime: Mutex::new(None),
+            health: Mutex::new([(id.into(), "ok".into())].into_iter().collect()),
+            perf_trackers: Mutex::new(HashMap::new()),
+            last_error: Mutex::new(None),
+            stop_intents: Mutex::new(
+                [(
+                    id.into(),
+                    StopIntent {
+                        preserve_desired: true,
+                        telemetry_reason: "replacement-stop".into(),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            instance_lifecycle: Mutex::new(()),
+            checkpoint_coordinator: Arc::new(CheckpointCoordinator::new(CheckpointStore::new(
+                directory.path(),
+            ))),
+            gui_owner: Mutex::new(None),
+            last_gui_heartbeat: Mutex::new(std::time::Instant::now()),
+        };
+        supervisor.record_process_exit(id, 100, Some(0));
+        assert_eq!(supervisor.state.lock().unwrap().running[id].pid, 200);
+        assert!(supervisor
+            .state
+            .lock()
+            .unwrap()
+            .desired_instances
+            .contains_key(id));
+        assert_eq!(
+            supervisor
+                .health
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(String::as_str),
+            Some("ok")
+        );
+        assert!(supervisor.stop_intents.lock().unwrap().contains_key(id));
+        assert!(supervisor.last_error.lock().unwrap().is_none());
+    }
 
     struct TestDirectory(std::path::PathBuf);
 
