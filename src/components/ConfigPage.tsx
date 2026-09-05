@@ -242,7 +242,7 @@ const ConfigPage = () => {
       timing.mark('persist')
       const persistedConfig = useAppStore.getState().instances
         .find(item => item.id === targetInstanceId)?.config ?? normalized.config
-      setBaseline(persistedConfig)
+      setBaseline(persistedConfig, normalized.config)
       if (editRevisionRef.current === saveRevision) {
         committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
         setLocal(persistedConfig)

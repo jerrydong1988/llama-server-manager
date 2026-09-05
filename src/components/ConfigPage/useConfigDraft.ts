@@ -2,6 +2,7 @@ import { useSyncExternalStore, type SetStateAction } from 'react'
 import { useAppStore, type InstanceConfig } from '../../store'
 import { migrateParameterIntent } from '../../parameterIntent'
 import { normalizeModelPath } from '../../store/bootstrap'
+import { isEqualValue } from './configWorkspace'
 
 type Draft = {
   sourceConfig: InstanceConfig
@@ -22,10 +23,12 @@ const subscribe = (listener: () => void) => {
 }
 const notify = () => listeners.forEach(listener => listener())
 
-useAppStore.subscribe(state => {
+useAppStore.subscribe((state, previous) => {
+  if (state.instances === previous.instances) return
+  const instanceIds = new Set(state.instances.map(instance => instance.id))
   let removed = false
   for (const id of drafts.keys()) {
-    if (!state.instances.some(instance => instance.id === id)) {
+    if (!instanceIds.has(id)) {
       drafts.delete(id)
       removed = true
     }
@@ -33,17 +36,35 @@ useAppStore.subscribe(state => {
   if (removed) notify()
 })
 
+function rebaseLocal(baseline: InstanceConfig, local: InstanceConfig, persisted: InstanceConfig): InstanceConfig {
+  // Preserve edits relative to the old baseline (or submitted snapshot), while
+  // accepting unrelated settings changed elsewhere and backend normalization.
+  const edits = Object.fromEntries((Object.keys(local) as Array<keyof InstanceConfig>)
+    .filter(key => key !== 'explicit_overrides' && !isEqualValue(local[key], baseline[key]))
+    .map(key => [key, local[key]]))
+  const before = new Set(baseline.explicit_overrides ?? [])
+  const after = new Set(local.explicit_overrides ?? [])
+  const overrides = new Set(persisted.explicit_overrides ?? [])
+  for (const key of before) if (!after.has(key)) overrides.delete(key)
+  for (const key of after) if (!before.has(key)) overrides.add(key)
+  return { ...persisted, ...edits, explicit_overrides: [...overrides] }
+}
+
 function getDraft(id: string | undefined): Draft | null {
   const instance = useAppStore.getState().instances.find(item => item.id === id)
   if (!id || !instance) return null
   let draft = drafts.get(id)
   if (draft && draft.sourceConfig !== instance.config) {
-    if (!draft.saveInFlightRef.current && JSON.stringify(draft.local) === JSON.stringify(draft.baseline)) {
-      draft = undefined
-    } else {
-      draft = { ...draft, sourceConfig: instance.config }
-      drafts.set(id, draft)
+    if (!draft.saveInFlightRef.current) {
+      const baseline = migrateParameterIntent(instance.config)
+      const local = rebaseLocal(draft.baseline, draft.local, baseline)
+      if (local.model_path !== draft.local.model_path) {
+        draft.committedModelPathRef.current = normalizeModelPath(local.model_path)
+      }
+      draft = { ...draft, baseline, local }
     }
+    draft = { ...draft, sourceConfig: instance.config }
+    drafts.set(id, draft)
   }
   if (!draft) {
     const config = migrateParameterIntent(instance.config)
@@ -72,18 +93,28 @@ export function useConfigDraft(instanceId: string | undefined) {
     drafts.set(instanceId, { ...current, saveStage })
     notify()
   }
-  const setField = (field: 'local' | 'baseline', action: SetStateAction<InstanceConfig | null>) => {
+  const setBaseline = (baseline: InstanceConfig, submitted: InstanceConfig) => {
     const current = getDraft(instanceId)
     if (!instanceId || !current) return
-    const value = typeof action === 'function' ? action(current[field]) : action
+    const local = rebaseLocal(submitted, current.local, baseline)
+    if (local.model_path !== current.local.model_path) {
+      current.committedModelPathRef.current = normalizeModelPath(local.model_path)
+    }
+    drafts.set(instanceId, { ...current, baseline, local })
+    notify()
+  }
+  const setLocal = (action: SetStateAction<InstanceConfig | null>) => {
+    const current = getDraft(instanceId)
+    if (!instanceId || !current) return
+    const value = typeof action === 'function' ? action(current.local) : action
     if (!value) return
-    drafts.set(instanceId, { ...current, [field]: value })
+    drafts.set(instanceId, { ...current, local: value })
     notify()
   }
   return {
     local: draft?.local ?? null, baseline: draft?.baseline ?? null,
-    setLocal: (action: SetStateAction<InstanceConfig | null>) => setField('local', action),
-    setBaseline: (action: SetStateAction<InstanceConfig | null>) => setField('baseline', action),
+    setLocal,
+    setBaseline,
     committedModelPathRef: (draft ?? emptyRefs).committedModelPathRef,
     editRevisionRef: (draft ?? emptyRefs).editRevisionRef,
     saveInFlightRef: (draft ?? emptyRefs).saveInFlightRef,

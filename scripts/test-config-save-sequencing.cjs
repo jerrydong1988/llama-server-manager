@@ -124,7 +124,7 @@ assert.doesNotMatch(
 
 assert.match(
   configPageSource,
-  /await saveConfig\(\)[\s\S]*useAppStore\.getState\(\)\.instances[\s\S]*setBaseline\(persistedConfig\)/,
+  /await saveConfig\(\)[\s\S]*useAppStore\.getState\(\)\.instances[\s\S]*setBaseline\(persistedConfig, normalized\.config\)/,
   'save feedback must use the backend-normalized configuration',
 )
 assert.match(

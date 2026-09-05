@@ -60,6 +60,22 @@ test('switching instances keeps their configuration drafts independent', async (
   await expect(temperature).toHaveValue('0.91')
 })
 
+test('saving a retained draft preserves settings changed on another page', async ({ page }) => {
+  await openConfiguration(page)
+  const temperature = page.locator('[data-config-field="temp"] input')
+  await temperature.fill('0.91')
+  await page.locator('[data-nav-id="instances"]').click()
+  await page.getByRole('main').getByRole('switch').first().click()
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance']?.auto_start)).toBe(true)
+  await page.locator('[data-nav-id="config"]').click()
+  await expect(temperature).toHaveValue('0.91')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '2')
+  const persisted = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'])
+  expect(persisted?.temp).toBe(0.91)
+  expect(persisted?.auto_start).toBe(true)
+})
+
 for (const fail of [false, true]) {
   test(`navigation during a ${fail ? 'failed' : 'successful'} save preserves newer edits`, async ({ page }) => {
     await openConfiguration(page, 'delayed-config-save')
