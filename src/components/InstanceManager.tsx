@@ -7,7 +7,7 @@ import { formatMessage, useI18n } from '../i18n'
 import { formatHostPort } from '../utils/network'
 import { normalizeInstanceConfig } from '../modelPolicy'
 import type { Instance } from '../store/types'
-import { Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
+import { SegmentedControl, Badge, Button, EmptyState, MetricCard, PathText, SelectInput, Surface, TextInput } from './ui'
 import { InstanceModelPicker } from './InstanceManager/InstanceModelPicker'
 import { CommandFeedbackModal, MissingEngineBanner } from './InstanceManager/CommandFeedbackModal'
 import { isConfiguredEngineMissing, resolveEffectiveEngine } from '../store/engineResolution'
@@ -296,10 +296,10 @@ const InstanceManager = () => {
         onAction={() => { setSelectedInstanceId(missingEngineInstances[0].id); setEnginePickerForId(missingEngineInstances[0].id) }}
       />}
 
-      <Surface as="section">
-        <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-5">
+      <section className="ui-page-hero">
+        <div className="flex flex-wrap items-start justify-between gap-4 py-2">
           <div>
-            <h2 className="text-2xl font-semibold text-slate-950 dark:text-slate-50">{t.instance.title}</h2>
+            <h2 className="ui-page-heading text-[var(--ui-text)]">{t.instance.title}</h2>
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
               <Badge tone="slate">
                 {instances.length} {labels.instances}
@@ -320,7 +320,7 @@ const InstanceManager = () => {
             </Button>
           </div>
         </div>
-      </Surface>
+      </section>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {[
@@ -334,7 +334,7 @@ const InstanceManager = () => {
       </div>
 
       <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
-        <Surface as="section" className="min-w-0 overflow-hidden">
+        <Surface as="section" className="instance-list-container min-w-0 overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
@@ -344,18 +344,11 @@ const InstanceManager = () => {
                 </p>
               </div>
               <div className="flex flex-col gap-3 xl:items-end">
-                <div className="flex flex-wrap items-center gap-2">
-                  {(['all', 'running', 'stopped'] as const).map(filter => (
-                    <Button
-                      key={filter}
-                      onClick={() => setStatusFilter(filter)}
-                      variant={statusFilter === filter ? 'primary' : 'subtle'}
-                      size="sm"
-                    >
-                      {filter === 'all' ? labels.all : filter === 'running' ? t.instance.running : t.instance.stopped}
-                    </Button>
-                  ))}
-                </div>
+                <SegmentedControl value={statusFilter} onChange={setStatusFilter} options={[
+                  { value: 'all', label: labels.all },
+                  { value: 'running', label: t.instance.running },
+                  { value: 'stopped', label: t.instance.stopped },
+                ]} />
 
                 <div className="grid w-full min-w-0 gap-2 sm:grid-cols-[minmax(220px,1fr)_180px] xl:w-[520px]">
                   <TextInput
@@ -381,7 +374,7 @@ const InstanceManager = () => {
           {filteredInstances.length === 0 ? (
             <EmptyState icon={<Play className="h-10 w-10" />} title={t.instance.noInstances} className="rounded-none border-0 shadow-none" />
           ) : (
-            <div className="divide-y divide-slate-200 dark:divide-slate-800">
+            <div className="space-y-1 p-3">
               {filteredInstances.map((inst, index) => {
                 const selected = selectedInstance?.id === inst.id
                 const isRunning = inst.status === 'running'
@@ -398,10 +391,10 @@ const InstanceManager = () => {
                     }}
                     aria-selected={selected}
                     aria-current={selected ? 'true' : undefined}
-                    className={`relative grid min-w-0 gap-3 px-5 py-4 text-left transition lg:grid-cols-[minmax(280px,1fr)_minmax(210px,0.72fr)_minmax(150px,0.42fr)_minmax(166px,auto)] lg:items-center ${
+                    className={`instance-service-row relative grid min-w-0 items-center gap-3 rounded-lg px-4 py-3 text-left transition ${
                       selected
-                        ? 'bg-blue-50/95 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.24)] dark:bg-blue-500/15 dark:shadow-[inset_0_0_0_1px_rgba(96,165,250,0.32)]'
-                        : 'hover:bg-slate-50 dark:hover:bg-slate-900/60'
+                        ? 'bg-[var(--ui-control)]'
+                        : 'bg-[var(--ui-soft)] hover:bg-[var(--ui-control)]'
                     }`}
                   >
                     {selected && <span aria-hidden="true" className="absolute inset-y-0 left-0 w-1 bg-blue-500 dark:bg-blue-400" />}
@@ -487,11 +480,12 @@ const InstanceManager = () => {
                         type="button"
                         role="switch"
                         aria-checked={!!inst.config.auto_start}
+                        aria-label={labels.autoStartHint}
                         onClick={() => toggleAutoStart(inst)}
-                        className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ${inst.config.auto_start ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}
+                        className="ui-switch"
                         title={labels.autoStartHint}
                       >
-                        <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ${inst.config.auto_start ? 'translate-x-4' : 'translate-x-0'}`} />
+                        <span className="ui-switch-thumb" />
                       </button>
                       {isRunning ? (
                         <Button

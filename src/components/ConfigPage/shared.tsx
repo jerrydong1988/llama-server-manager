@@ -11,6 +11,7 @@ import {
 } from '../../parameterCatalog'
 import { reviewFieldKeys } from './configWorkspace'
 import { SelectInput, TextInput, surfaceClassName } from '../ui'
+import { SamplingInput } from './SamplingInput'
 import {
   FALLBACK_SPECULATIVE_TYPES,
   normalizeSpeculativeTypes,
@@ -134,7 +135,7 @@ const FieldStatusMarker = ({ source, changed, labels }: { source: ParameterSourc
         aria-label={labels?.unsaved}
       />
     )}
-    <span data-config-status="source" data-config-source={source} className={`rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${sourceTone[source]}`}>
+    <span data-config-status="source" data-config-source={source} className={`rounded-full border border-transparent px-1.5 py-0.5 text-[10px] font-medium ${sourceTone[source]}`}>
       {sourceText(source, labels)}
     </span>
   </span>
@@ -300,6 +301,8 @@ const FieldFrame = ({
   const engineDefault = fieldKey
     ? parameterEngineDefault(fieldKey, runtime.capabilities, runtime.engineVersion, runtime.lang, flags)
     : undefined
+  const flagSuffix = label.match(/\s+(\(-{1,2}.*\))$/)?.[1]
+  const displayLabel = flagSuffix ? label.slice(0, -flagSuffix.length).trim() : label
   return (
     <div
       className={`flex h-full min-w-0 flex-col justify-between ${disabled ? 'opacity-50' : ''} ${match ? 'flash-match rounded-lg ring-2 ring-amber-400/70' : ''} ${className}`}
@@ -311,9 +314,10 @@ const FieldFrame = ({
       {showLabel && (
         <div className="mb-1 flex min-h-8 min-w-0 items-start justify-between gap-2">
           <span className="flex min-w-0 items-start gap-1">
-            <label className={`min-w-0 break-words text-xs font-medium leading-4 ${match ? 'text-amber-300' : 'text-slate-500 dark:text-slate-400'}`}>
-              {label}
-            </label>
+            <span className="min-w-0">
+              <span className={`block break-words text-xs font-medium leading-4 ${match ? 'text-amber-600 dark:text-amber-300' : 'text-[var(--ui-secondary)]'}`}>{displayLabel}</span>
+              {flagSuffix && <span className="ui-chip mt-1 max-w-full break-all text-[10px]">{flagSuffix.slice(1, -1)}</span>}
+            </span>
             {title && <ParameterHelp label={label} title={title} fieldKey={fieldKey} source={source} engineDefault={engineDefault} flags={flags} labels={runtime.labels} onInherit={runtime.onInherit} canRestore={explicit} />}
           </span>
           <FieldStatusMarker source={source} changed={changed} labels={runtime.labels} />
@@ -369,7 +373,7 @@ export const Section = ({
   const isOpen = hasSearch || (!userToggled.current && shouldOpen) || open
   return (
     <section id={id} className={`${surfaceClassName} scroll-mt-6 overflow-hidden p-0`}>
-      <button onClick={handleToggle} className="flex w-full items-center gap-2 border-b border-slate-800 bg-slate-950/80 px-4 py-3 text-left text-slate-100 transition hover:bg-slate-900">
+      <button onClick={handleToggle} className="ui-section-trigger flex w-full items-center gap-2 border-b px-4 py-3 text-left transition">
         {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-slate-500" /> : <ChevronRight className="h-4 w-4 shrink-0 text-slate-500" />}
         <span className="text-sm font-medium">{title}</span>
         {disabled && <span className="ml-1 text-xs text-slate-500">{'\uD83D\uDED1'}</span>}
@@ -399,14 +403,21 @@ export const Section = ({
 export const Input = ({ label, value, onChange, placeholder, type, title, disabled, fieldKey }: { label: string; value: string; onChange: (v: string) => void; placeholder?: string; type?: string; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
   return (
     <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
-      <TextInput type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className="h-10 w-full" />
+      <TextInput type={type || 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} disabled={disabled} className="h-9 w-full" />
     </FieldFrame>
 )}
 
+const samplingRanges: Partial<Record<FieldKey, number>> = { temp: 2, top_k: 100, top_p: 1, repeat_penalty: 2 }
+
 export const Num = ({ label, value, onChange, min, max, step, title, disabled, fieldKey }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number; title?: string; disabled?: boolean; fieldKey?: FieldKey }) => {
+  const sliderMax = fieldKey ? samplingRanges[fieldKey] : undefined
   return (
     <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
-      <TextInput type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className="h-10 w-full" />
+      {sliderMax !== undefined ? (
+        <SamplingInput label={label} value={value} onChange={onChange} min={min} max={max} step={step} sliderMax={sliderMax} disabled={disabled} />
+      ) : (
+        <TextInput aria-label={label} type="number" value={value} min={min} max={max} step={step || 1} onChange={e => onChange(parseFloat(e.target.value) || 0)} disabled={disabled} className="h-9 w-full font-mono" />
+      )}
     </FieldFrame>
 )}
 
@@ -459,7 +470,7 @@ export const IntentNum = ({
           value={inherited ? 'inherit' : 'manual'}
           onChange={event => event.target.value === 'inherit' ? onInherit() : onManual()}
           disabled={disabled}
-          className="h-10 min-w-0 px-2 text-xs"
+          className="h-9 min-w-0 px-2 text-xs"
         >
           <option value="inherit">{inheritedLabel}</option>
           <option value="manual">{manualLabel}</option>
@@ -467,7 +478,7 @@ export const IntentNum = ({
         {inherited ? (
           <div
             data-config-inherited-value="true"
-            className="flex h-10 min-w-0 items-center truncate rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-400"
+            className="flex h-9 min-w-0 items-center truncate rounded-lg border border-dashed border-slate-300 bg-slate-50 px-3 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-950/40 dark:text-slate-400"
             title={engineDefault ?? inheritedLabel}
           >
             {engineDefault ?? inheritedLabel}
@@ -481,7 +492,7 @@ export const IntentNum = ({
             step={step || 1}
             onChange={event => onChange(parseFloat(event.target.value) || 0)}
             disabled={disabled}
-            className="h-10 min-w-0 w-full"
+            className="h-9 min-w-0 w-full"
           />
         )}
       </div>
@@ -506,11 +517,9 @@ export const Switch = ({ label, value, onChange, title, disabled, fieldKey }: { 
         aria-checked={value}
         onClick={() => onChange(!value)}
         disabled={disabled}
-        className="flex h-11 w-full items-center rounded-lg border border-slate-300 bg-white px-3 transition hover:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700"
+        className="ui-control flex h-9 w-full items-center px-3 disabled:cursor-not-allowed"
       >
-        <span className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${value ? 'bg-blue-600' : 'bg-slate-400 dark:bg-slate-700'}`}>
-          <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition duration-200 ease-in-out ${value ? 'translate-x-4' : 'translate-x-0'}`} />
-        </span>
+        <span className="ui-switch"><span className="ui-switch-thumb" /></span>
       </button>
     </FieldFrame>
 )}
@@ -518,7 +527,7 @@ export const Switch = ({ label, value, onChange, title, disabled, fieldKey }: { 
 export const Select = ({ label, value, onChange, options, title, disabled, defaultLabel, fieldKey }: { label: string; value: string; onChange: (v: string) => void; options: string[]; title?: string; disabled?: boolean; defaultLabel?: string; fieldKey?: FieldKey }) => {
   return (
     <FieldFrame label={label} fieldKey={fieldKey} title={title} disabled={disabled}>
-      <SelectInput value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-10 w-full">
+      <SelectInput value={value} onChange={e => onChange(e.target.value)} disabled={disabled} className="h-9 w-full">
       {options.map(o => <option key={o} value={o}>{o || defaultLabel || '\u9ED8\u8BA4'}</option>)}
       </SelectInput>
     </FieldFrame>
@@ -649,7 +658,7 @@ export const SpecTypeMultiSelect = ({
             setOpen(current => !current)
           }}
           disabled={disabled}
-          className="flex h-10 w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-left text-sm transition hover:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700"
+          className="flex h-9 w-full items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-left text-sm transition hover:border-slate-400 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-not-allowed dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-slate-700"
         >
           <span className="min-w-0 flex-1 truncate font-mono text-xs">
             {normalized || defaultLabel}
@@ -766,8 +775,8 @@ export const CollapsibleGroup = ({
   const [open, setOpen] = useState(defaultOpen || false)
   const hasSearch = !!q
   return (
-    <div id={id} className="scroll-mt-6 overflow-hidden rounded-lg border border-slate-800 bg-slate-950/50" data-config-field={fieldKey} data-config-search-match={fieldState.match ? 'true' : undefined} data-config-emitted={fieldState.emitted ? 'true' : undefined}>
-      <div className="flex items-center border-b border-slate-800 bg-slate-950/80 text-slate-200 transition hover:bg-slate-900">
+    <div id={id} className="ui-inset scroll-mt-6 overflow-hidden" data-config-field={fieldKey} data-config-search-match={fieldState.match ? 'true' : undefined} data-config-emitted={fieldState.emitted ? 'true' : undefined}>
+      <div className="ui-section-trigger flex items-center border-b transition">
         <button type="button" onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left">
           {(hasSearch || open) ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-500" />}
           <span className={`text-xs font-medium ${fieldState.match ? 'text-amber-300' : ''}`}>{title}</span>

@@ -11,15 +11,15 @@ export function ConfigDirectory({ title, groups }: { title: string; groups: Conf
     document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   return (
-    <Surface as="aside" className="h-fit p-4 xl:sticky xl:top-4">
+    <Surface as="aside" className="h-fit p-3 xl:sticky xl:top-4">
       <SectionHeader title={title} />
-      <nav className="mt-4 space-y-1">
+      <nav className="mt-3 grid grid-cols-2 gap-1 sm:grid-cols-4 xl:block xl:space-y-1">
         {groups.map(group => (
           <div key={group.id}>
             <button
               type="button"
               onClick={() => scrollToSection(group.id)}
-              className="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+              className="flex w-full items-center rounded-lg px-2 py-2 text-left text-xs text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
             >
               <span>{group.title}</span>
             </button>

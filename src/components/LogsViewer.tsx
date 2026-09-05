@@ -160,7 +160,7 @@ const LogsViewer = () => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-50">{t.logs.title}</h1>
+                <h1 className="ui-page-heading text-[var(--ui-text)]">{t.logs.title}</h1>
                 <span className="rounded-full border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400">
                   {sourceLogs.length} {t.logs.entries}
                 </span>
@@ -199,7 +199,7 @@ const LogsViewer = () => {
         ))}
       </div>
 
-      <div className="grid gap-6 2xl:grid-cols-[320px,minmax(0,1fr)]">
+      <div className="grid items-start gap-4 xl:grid-cols-[248px_minmax(0,1fr)]">
         <Surface as="aside" className="h-fit p-5">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-slate-50">{labels.logScope}</h2>
@@ -270,7 +270,7 @@ const LogsViewer = () => {
           <div
             ref={scrollRef}
             onScroll={handleScroll}
-            className="relative h-[560px] overflow-y-auto bg-[#050816] px-5 py-4 font-mono text-sm leading-7"
+            className="relative h-[560px] overflow-y-auto bg-[var(--ui-inset)] px-3 py-3 font-mono text-xs leading-6"
           >
             {!hasLogs ? (
               <div className="flex h-full flex-col items-center justify-center text-center">
@@ -291,15 +291,15 @@ const LogsViewer = () => {
                   const text = entry.text
                   const lower = text.toLowerCase()
 
-                  let tone = 'text-slate-300'
+                  let tone = 'text-[var(--ui-secondary)]'
                   if (ERROR_LOG_PATTERN.test(text)) {
-                    tone = 'text-red-300'
+                    tone = 'text-[var(--ui-danger)]'
                   } else if (WARNING_LOG_PATTERN.test(text)) {
-                    tone = 'text-amber-300'
+                    tone = 'text-[var(--ui-warning)]'
                   } else if (/listening|ready|ok|success|loaded/.test(lower)) {
-                    tone = 'text-emerald-300'
+                    tone = 'text-[var(--ui-success)]'
                   } else if (/token|speed|t\/s/.test(lower)) {
-                    tone = 'text-sky-300'
+                    tone = 'text-[var(--ui-link)]'
                   }
 
                   return (
@@ -310,10 +310,10 @@ const LogsViewer = () => {
                       className="absolute left-0 top-0 w-full pb-1"
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >
-                      <div className="grid grid-cols-[84px,minmax(120px,180px),minmax(0,1fr)] gap-4 rounded-lg px-2 py-1 hover:bg-white/5">
+                      <div className="grid grid-cols-[68px_minmax(0,1fr)] gap-x-3 gap-y-1 md:grid-cols-[72px_120px_minmax(0,1fr)] rounded-lg px-2 py-1 hover:bg-white/5">
                         <span className="text-xs text-slate-600">{time}</span>
                         <span className="truncate text-xs text-slate-500">{instanceName}</span>
-                        <span className={`${tone} whitespace-pre-wrap break-all`}>{text}</span>
+                        <span className={`${tone} col-span-2 whitespace-pre-wrap break-all md:col-span-1`}>{text}</span>
                       </div>
                     </div>
                   )

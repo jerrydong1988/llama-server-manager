@@ -1,0 +1,276 @@
+/* Stitch Studio: shared by the desktop shell, pages, and body-mounted dialogs. */
+@font-face {
+  font-family: Geist;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/geist-latin.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('../assets/fonts/jetbrains-mono-latin.woff2') format('woff2');
+}
+
+:root {
+  --app-radius-panel: 18px;
+  --app-radius-control: 12px;
+  --app-radius-chip: 5px;
+  --ui-canvas: #edf3f6;
+  --ui-surface: #ffffff;
+  --ui-sidebar: #e7eef2;
+  --ui-inset: #e9f0f4;
+  --ui-soft: #f1f6f8;
+  --ui-raised: #dbe7ed;
+  --ui-text: #162b3f;
+  --ui-secondary: #506679;
+  --ui-muted: #677e8c;
+  --ui-line: #dce6eb;
+  --ui-action: #19384b;
+  --ui-on-action: #f0f8ff;
+  --ui-control: #dce9ef;
+  --ui-success: #007851;
+  --ui-success-bg: #ddf4e9;
+  --ui-mint: #10b981;
+  --ui-on-mint: #003824;
+  --ui-telemetry: #189acb;
+  --ui-link: #00779e;
+  --ui-blue-bg: #e0f2fa;
+  --ui-danger: #b73f51;
+  --ui-danger-bg: #ffeaed;
+  --ui-warning: #91620d;
+  --ui-warning-bg: #fff2d9;
+  --ui-violet: #76529a;
+  --ui-violet-bg: #f0eafa;
+  --ui-shadow: 0 4px 24px rgb(22 43 63 / 3%);
+  --color-app-bg: var(--ui-canvas);
+  --color-app-bg-dark: var(--ui-canvas);
+  --color-app-panel: var(--ui-sidebar);
+  --color-app-panel-dark: var(--ui-sidebar);
+  --color-app-surface: var(--ui-surface);
+  --color-app-surface-dark: var(--ui-surface);
+  --color-app-border: var(--ui-line);
+  --color-app-border-dark: var(--ui-line);
+  --color-app-muted: var(--ui-muted);
+  --color-app-accent: var(--ui-link);
+  --shadow-app-panel: var(--ui-shadow);
+}
+
+.dark {
+  --ui-canvas: #051424;
+  --ui-surface: #0d1c2d;
+  --ui-sidebar: #051424;
+  --ui-inset: #010f1f;
+  --ui-soft: #122131;
+  --ui-raised: #273647;
+  --ui-text: #d4e4fa;
+  --ui-secondary: #bbcabf;
+  --ui-muted: #8eaaa7;
+  --ui-line: #203442;
+  --ui-action: #d4e4fa;
+  --ui-on-action: #233143;
+  --ui-control: #1c2b3c;
+  --ui-success: #4edea3;
+  --ui-success-bg: #0a342f;
+  --ui-mint: #4edea3;
+  --ui-telemetry: #7bd0ff;
+  --ui-link: #7bd0ff;
+  --ui-blue-bg: #073346;
+  --ui-danger: #ffb2b7;
+  --ui-danger-bg: #362434;
+  --ui-warning: #f4ce83;
+  --ui-warning-bg: #332d23;
+  --ui-violet: #cfb6ef;
+  --ui-violet-bg: #29243c;
+  --ui-shadow: none;
+}
+
+@layer base {
+  html { color-scheme: light; }
+  body { font-size: 14px; }
+  button, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+  button:focus-visible, a:focus-visible, [role='button']:focus-visible {
+    outline: 2px solid var(--ui-link);
+    outline-offset: 3px;
+  }
+  input[type='checkbox'], input[type='radio'] { accent-color: var(--ui-success); }
+  ::selection { background: var(--ui-control); color: var(--ui-text); }
+}
+
+@layer components {
+  .ui-panel {
+    border: 1px solid transparent;
+    border-radius: var(--app-radius-panel);
+    background: var(--ui-surface);
+    color: var(--ui-text);
+    box-shadow: var(--ui-shadow);
+  }
+  .ui-inset {
+    border: 1px solid transparent;
+    border-radius: var(--app-radius-control);
+    background: var(--ui-inset);
+    color: var(--ui-text);
+  }
+  .ui-control {
+    min-width: 0;
+    border: 1px solid transparent;
+    border-radius: var(--app-radius-control);
+    background-color: var(--ui-inset);
+    color: var(--ui-text);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 150ms, box-shadow 150ms;
+  }
+  .ui-control::placeholder { color: var(--ui-muted); opacity: 1; }
+  .ui-control:focus { border-color: var(--ui-link); box-shadow: 0 0 0 2px var(--ui-blue-bg); }
+  .ui-control:disabled { cursor: not-allowed; opacity: .5; }
+  .ui-button {
+    border: 1px solid transparent;
+    border-radius: var(--app-radius-control);
+    background: var(--ui-control);
+    color: var(--ui-text);
+    line-height: 1.4;
+    transition: background-color 150ms, box-shadow 150ms;
+  }
+  .ui-button:hover:not(:disabled) { box-shadow: inset 0 0 0 1px var(--ui-muted); }
+  .ui-button-primary { background: var(--ui-action); color: var(--ui-on-action); }
+  .ui-button-subtle { background: transparent; color: var(--ui-secondary); }
+  .ui-button-subtle:hover:not(:disabled) { background: var(--ui-control); box-shadow: none; }
+  .ui-button-danger { background: var(--ui-danger-bg); color: var(--ui-danger); }
+  .ui-button-success { background: var(--ui-mint); color: var(--ui-on-mint); }
+  .ui-button-cyan { background: var(--ui-blue-bg); color: var(--ui-link); }
+  .ui-button-violet { background: var(--ui-violet-bg); color: var(--ui-violet); }
+  .ui-badge {
+    border: 0;
+    border-radius: 999px;
+    background: var(--ui-raised);
+    color: var(--ui-secondary);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+  .ui-tone-blue { background: var(--ui-blue-bg); color: var(--ui-link); }
+  .ui-tone-emerald { background: var(--ui-success-bg); color: var(--ui-success); }
+  .ui-tone-amber { background: var(--ui-warning-bg); color: var(--ui-warning); }
+  .ui-tone-red { background: var(--ui-danger-bg); color: var(--ui-danger); }
+  .ui-tone-violet { background: var(--ui-violet-bg); color: var(--ui-violet); }
+  .ui-chip {
+    display: inline-flex;
+    align-items: center;
+    border-radius: var(--app-radius-chip);
+    padding: 3px 6px;
+    background: var(--ui-raised);
+    color: var(--ui-secondary);
+    font-family: 'JetBrains Mono', 'Microsoft YaHei UI', monospace;
+    font-size: 11px;
+    line-height: 1.4;
+  }
+  .ui-segmented {
+    display: inline-flex;
+    max-width: 100%;
+    gap: 3px;
+    overflow-x: auto;
+    border: 0;
+    border-radius: 12px;
+    background: var(--ui-inset);
+    padding: 4px;
+  }
+  .ui-segment {
+    flex-shrink: 0;
+    min-height: 30px;
+    border-radius: 9px;
+    padding: 5px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--ui-muted);
+    transition: background-color 150ms;
+  }
+  .ui-segment:hover { color: var(--ui-text); }
+  .ui-segment[aria-pressed='true'] { background: var(--ui-control); color: var(--ui-text); }
+  .ui-switch {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    width: 36px;
+    height: 21px;
+    align-items: center;
+    border-radius: 999px;
+    background: var(--ui-raised);
+    padding: 3px;
+    transition: background-color 150ms;
+  }
+  .ui-switch[aria-checked='true'], [aria-checked='true'] > .ui-switch { background: var(--ui-mint); }
+  .ui-switch-thumb {
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    background: var(--ui-surface);
+    transition: transform 150ms;
+  }
+  [aria-checked='true'] > .ui-switch-thumb, [aria-checked='true'] > .ui-switch > .ui-switch-thumb {
+    transform: translateX(15px);
+    background: var(--ui-on-mint);
+  }
+  .ui-meter-track {
+    height: 7px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: var(--ui-raised);
+    mask-image: repeating-linear-gradient(to right, #000 0 calc(12.5% - 3px), transparent calc(12.5% - 3px) 12.5%);
+  }
+  .ui-range { width: 100%; height: 24px; appearance: none; background: transparent; cursor: pointer; }
+  .ui-range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(to right, var(--ui-mint) var(--range-progress), var(--ui-raised) var(--range-progress));
+  }
+  .ui-range::-webkit-slider-thumb {
+    appearance: none;
+    width: 15px;
+    height: 15px;
+    margin-top: -5.5px;
+    border-radius: 50%;
+    background: var(--ui-mint);
+    box-shadow: 0 0 0 3px var(--ui-success-bg);
+  }
+  .ui-range:focus-visible { outline: 2px solid var(--ui-link); outline-offset: 3px; border-radius: 4px; }
+  .ui-range:disabled { cursor: not-allowed; opacity: .5; }
+  .ui-page-hero {
+    border-radius: var(--app-radius-panel);
+    background: radial-gradient(ellipse at right top, color-mix(in srgb, var(--ui-mint) 7%, transparent), transparent 60%);
+  }
+  .ui-page-heading { font-size: 28px; font-weight: 600; letter-spacing: -.025em; line-height: 1.25; }
+  .ui-metric-value { font-size: 34px; font-weight: 500; letter-spacing: -.035em; font-variant-numeric: tabular-nums; }
+  .ui-table { border-collapse: separate; border-spacing: 0 4px; font-size: 13px; }
+  .ui-table thead { background: transparent; color: var(--ui-muted); }
+  .ui-table tbody tr { background: var(--ui-soft); }
+  .ui-table tbody tr:hover { background: var(--ui-control); }
+  .ui-table tbody td { border: 0; }
+  .ui-table tbody td:first-child { border-radius: 12px 0 0 12px; }
+  .ui-table tbody td:last-child { border-radius: 0 12px 12px 0; }
+  .ui-section-trigger { background: var(--ui-soft); color: var(--ui-text); border-color: var(--ui-line); }
+  .ui-section-trigger:hover { background: var(--ui-control); }
+}
+
+.instance-list-container { container-type: inline-size; }
+@container (min-width: 580px) {
+  .instance-service-row { grid-template-columns: minmax(0, 1fr) minmax(210px, .7fr); }
+}
+@container (min-width: 980px) {
+  .instance-service-row { grid-template-columns: minmax(260px, 1fr) minmax(200px, .72fr) minmax(130px, .42fr) auto; }
+}
+
+/* Older pages still use unqualified dark palette labels. Keep their light-mode
+   meaning readable while they share the same semantic component theme. */
+:not(.dark) > .app-shell :is(.text-blue-100, .text-blue-200, .text-blue-300, .text-blue-400, .text-sky-200, .text-sky-300, .text-sky-400, .text-cyan-200, .text-cyan-300, .text-cyan-400) { color: var(--ui-link); }
+:not(.dark) > .app-shell :is(.text-emerald-200, .text-emerald-300, .text-emerald-400, .text-green-300, .text-green-400) { color: var(--ui-success); }
+:not(.dark) > .app-shell :is(.text-amber-100, .text-amber-200, .text-amber-300, .text-amber-400, .text-yellow-300) { color: var(--ui-warning); }
+:not(.dark) > .app-shell :is(.text-red-100, .text-red-200, .text-red-300, .text-red-400, .text-rose-200, .text-rose-300, .text-rose-400) { color: var(--ui-danger); }
+:not(.dark) > .app-shell :is(.text-violet-200, .text-violet-300, .text-violet-400, .text-fuchsia-200, .text-fuchsia-300, .text-fuchsia-400, .text-purple-300) { color: var(--ui-violet); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+}

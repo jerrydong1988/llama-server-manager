@@ -61,7 +61,7 @@ test('search navigation, change review, emission preview, and save use the mock 
 
   const search = page.getByRole('textbox', { name: '参数搜索' })
   const temperature = page.locator('[data-config-field="temp"]')
-  const temperatureInput = temperature.locator('input')
+  const temperatureInput = temperature.getByRole('spinbutton')
   await search.fill('--temp')
   await expect(temperature).toHaveAttribute('data-config-search-match', 'true')
   await search.press('Enter')
@@ -99,7 +99,7 @@ test('search navigation, change review, emission preview, and save use the mock 
 test('Ctrl+S persists the active configuration draft through the validated save path', async ({ page }) => {
   await openConfiguration(page)
 
-  const temperatureInput = page.locator('[data-config-field="temp"] input')
+  const temperatureInput = page.locator('[data-config-field="temp"] input[type="number"]')
   await temperatureInput.fill('0.7')
   await temperatureInput.press('Control+s')
 
@@ -112,7 +112,7 @@ test('Ctrl+S persists the active configuration draft through the validated save 
 test('Ctrl+Enter does not start an instance while a configuration input is focused', async ({ page }) => {
   await openConfiguration(page)
 
-  const temperatureInput = page.locator('[data-config-field="temp"] input')
+  const temperatureInput = page.locator('[data-config-field="temp"] input[type="number"]')
   await temperatureInput.focus()
   await temperatureInput.press('Control+Enter')
 
@@ -146,7 +146,7 @@ test('configuration search and custom arguments wait for IME composition to fini
 test('floating config actions save without a long scroll and return to the top', async ({ page }) => {
   await openConfiguration(page)
 
-  await page.locator('[data-config-field="temp"] input').fill('0.7')
+  await page.locator('[data-config-field="temp"] input[type="number"]').fill('0.7')
   await page.locator('[data-config-field="custom_args"]').scrollIntoViewIfNeeded()
 
   const floatingActions = page.locator('[data-config-floating-actions]')
@@ -163,7 +163,7 @@ test('parameter intent remains explicit at a default value and only inheritance 
   await openConfiguration(page)
 
   const temperature = page.locator('[data-config-field="temp"]')
-  const input = temperature.locator('input')
+  const input = temperature.getByRole('spinbutton')
   await input.fill('0.8')
   await expect(temperature).toHaveAttribute('data-config-source', 'explicit')
   await expect(temperature).toHaveAttribute('data-config-emitted', 'true')
@@ -267,7 +267,7 @@ test('speculative decoding accepts a normalized multi-type fallback chain', asyn
   await expect(trigger).toBeFocused()
   await trigger.click()
   await expect(popup).toBeVisible()
-  await page.locator('[data-config-field="temp"] input').click()
+  await page.locator('[data-config-field="temp"] input[type="number"]').click()
   await expect(popup).toBeHidden()
 
   await page.getByRole('button', { name: '保存配置', exact: true }).click()

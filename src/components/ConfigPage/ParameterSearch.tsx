@@ -74,15 +74,15 @@ export function ParameterSearch({ query, onQueryChange, labels }: { query: strin
   }
 
   return (
-    <Surface className="p-5">
+    <Surface className="p-4">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.parameterSearch}</p>
-          <p className="mt-1 text-sm text-slate-500">{labels.parameterSearchDesc}</p>
+          <p className="mt-1 text-xs text-slate-500">{labels.parameterSearchDesc}</p>
         </div>
         <p className="text-xs text-slate-500">{labels.parameterSearchKeys}</p>
       </div>
-      <div className="mt-4 flex items-center gap-2">
+      <div className="mt-3 flex items-center gap-2">
         <TextInput
           type="text"
           value={query}

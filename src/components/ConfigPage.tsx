@@ -474,15 +474,15 @@ const ConfigPage = () => {
 
   return (
     <div className="space-y-5">
-      <Surface as="section" id="config-page-actions">
-        <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+      <section className="ui-page-hero" id="config-page-actions">
+        <div className="flex flex-col gap-4 py-2 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-blue-500/20 bg-blue-500/10 text-blue-300">
               <SlidersHorizontal className="h-5 w-5" />
             </div>
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="truncate text-xl font-semibold text-slate-950 dark:text-slate-50">{t.configPage.title}</h1>
+                <h1 className="ui-page-heading text-[var(--ui-text)]">{t.configPage.title}</h1>
                 <Badge tone="slate" className="max-w-[220px] truncate">
                   {inst?.name}
                 </Badge>
@@ -507,7 +507,7 @@ const ConfigPage = () => {
             </Button>
           </div>
         </div>
-      </Surface>
+      </section>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         {[
@@ -517,11 +517,11 @@ const ConfigPage = () => {
           { label: labels.model, value: currentModel ? pathBasename(currentModel.path) : '--', icon: File, tone: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/20' },
           { label: labels.engine, value: currentEngine?.name || '--', icon: Cpu, tone: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20' },
         ].map(card => (
-          <MetricCard key={card.label} label={card.label} value={card.value} icon={<card.icon className="h-5 w-5" />} tone={card.tone} valueClassName="text-xl leading-7" />
+          <MetricCard key={card.label} label={card.label} value={card.value} icon={<card.icon className="h-5 w-5" />} tone={card.tone} valueClassName="text-sm font-medium leading-6" />
         ))}
       </div>
 
-      <div className={manualMode ? 'grid gap-5 2xl:grid-cols-[minmax(0,1fr)_320px]' : 'grid gap-5 xl:grid-cols-[220px,minmax(0,1fr)] 2xl:grid-cols-[220px,minmax(0,1fr)_320px]'}>
+      <div className={manualMode ? 'grid gap-5 2xl:grid-cols-[minmax(0,1fr)_320px]' : 'grid items-start gap-4 xl:grid-cols-[176px_minmax(0,1fr)] 2xl:grid-cols-[176px_minmax(0,1fr)_280px]'}>
         {!manualMode && <ConfigDirectory title={labels.parameterGroups} groups={directoryGroups} />}
 
         <div className="space-y-4">
@@ -563,9 +563,6 @@ const ConfigPage = () => {
             />
           )}
 
-          <CheckpointPanel config={local} engineExe={currentEngine?.exe} instanceId={configInstanceId || local.id} labels={t.checkpoint}
-            onCheckpointChange={next => set('kv_checkpoint', next)}
-            onApplyRequirements={reasons => { set('parallel', 1); set('cache_prompt', true); set('cache_idle_slots', true); if (local.cache_ram !== -1 && local.cache_ram <= 0) set('cache_ram', 8192); set('slots_enabled', true); if (reasons.includes('sliding_window_requires_full_cache')) set('swa_full', true) }} />
           {!manualMode && visibleVectorCleanupGroups.length > 0 && (
             <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-200">
               <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
@@ -595,37 +592,6 @@ const ConfigPage = () => {
                 {labels.undoTemplate}
               </Button>
             </div>
-          )}
-
-          {!manualMode && !isEmbedding && (
-          <Surface className="p-5" data-guide="config-presets">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
-              <Button
-                onClick={() => setShowPresetAssistant(true)}
-                disabled={engineCompatibilityMode !== 'full'}
-                title={engineCompatibilityMode !== 'full' ? labels.templateCompatibilityDisabled : undefined}
-                icon={<Sparkles className="h-4 w-4" />}
-                className="shrink-0"
-              >
-                {labels.openPresetAssistant}
-              </Button>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <InsetSurface className="flex items-center gap-3 p-3">
-                <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-400" />
-                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetNoDirectApply}</span>
-              </InsetSurface>
-              <InsetSurface className="flex items-center gap-3 p-3">
-                <ListChecks className="h-5 w-5 shrink-0 text-blue-400" />
-                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetSafeHint}</span>
-              </InsetSurface>
-              <InsetSurface className="flex items-center gap-3 p-3">
-                <Sparkles className="h-5 w-5 shrink-0 text-violet-400" />
-                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetRecommended}: {quickTemplates[0]?.title}</span>
-              </InsetSurface>
-            </div>
-          </Surface>
           )}
 
           {!manualMode && (
@@ -660,6 +626,40 @@ const ConfigPage = () => {
               <AdvancedSection {...sectionProps} />
             </FieldRuntimeProvider>
           )}
+          <CheckpointPanel config={local} engineExe={currentEngine?.exe} instanceId={configInstanceId || local.id} labels={t.checkpoint}
+            onCheckpointChange={next => set('kv_checkpoint', next)}
+            onApplyRequirements={reasons => { set('parallel', 1); set('cache_prompt', true); set('cache_idle_slots', true); if (local.cache_ram !== -1 && local.cache_ram <= 0) set('cache_ram', 8192); set('slots_enabled', true); if (reasons.includes('sliding_window_requires_full_cache')) set('swa_full', true) }} />
+          {!manualMode && !isEmbedding && (
+          <Surface className="p-5" data-guide="config-presets">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <SectionHeader title={labels.quickTemplates} description={labels.quickTemplatesDesc} />
+              <Button
+                onClick={() => setShowPresetAssistant(true)}
+                disabled={engineCompatibilityMode !== 'full'}
+                title={engineCompatibilityMode !== 'full' ? labels.templateCompatibilityDisabled : undefined}
+                icon={<Sparkles className="h-4 w-4" />}
+                className="shrink-0"
+              >
+                {labels.openPresetAssistant}
+              </Button>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <InsetSurface className="flex items-center gap-3 p-3">
+                <ShieldCheck className="h-5 w-5 shrink-0 text-emerald-400" />
+                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetNoDirectApply}</span>
+              </InsetSurface>
+              <InsetSurface className="flex items-center gap-3 p-3">
+                <ListChecks className="h-5 w-5 shrink-0 text-blue-400" />
+                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetSafeHint}</span>
+              </InsetSurface>
+              <InsetSurface className="flex items-center gap-3 p-3">
+                <Sparkles className="h-5 w-5 shrink-0 text-violet-400" />
+                <span className="min-w-0 text-sm text-slate-600 dark:text-slate-300">{labels.presetRecommended}: {quickTemplates[0]?.title}</span>
+              </InsetSurface>
+            </div>
+          </Surface>
+          )}
+
         </div>
 
         <Surface as="aside" className="h-fit p-5 xl:col-span-2 2xl:sticky 2xl:top-4 2xl:col-span-1">

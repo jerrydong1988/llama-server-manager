@@ -887,16 +887,18 @@ export default function DownloadManager() {
                     <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">{ui.sourceSection}</div>
                     <div className="mt-1 text-[11px] leading-5 text-slate-500 dark:text-slate-400">{ui.sourceHelp}</div>
                   </div>
-                  <div className="inline-flex max-w-full shrink-0 rounded-lg bg-slate-200/70 p-1 dark:bg-slate-800" data-guide="download-source">
+                  <div className="ui-segmented shrink-0" data-guide="download-source">
                     <button
                       onClick={() => handleSourceChange('modelscope')}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'modelscope' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                      aria-pressed={source === 'modelscope'}
+                      className="ui-segment"
                     >
                       ModelScope
                     </button>
                     <button
                       onClick={() => handleSourceChange('huggingface')}
-                      className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${source === 'huggingface' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                      aria-pressed={source === 'huggingface'}
+                      className="ui-segment"
                     >
                       HuggingFace
                     </button>

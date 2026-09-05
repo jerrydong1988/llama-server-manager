@@ -1145,16 +1145,16 @@ export default function ProxyPage() {
                       <span className="mb-1 block text-xs font-medium text-slate-500 dark:text-slate-400">{labels.apiKeyRequestsPerMinute}</span>
                       <TextInput type="number" min={0} value={apiKey.requestsPerMinute} onChange={event => updateApiKey(apiKey.id, { requestsPerMinute: Math.max(0, Number(event.target.value) || 0) })} />
                     </label>
-                    <div className="flex h-11 items-center justify-end gap-2 lg:mt-5">
+                    <div className="flex h-9 items-center justify-end gap-2 lg:mt-5">
                       <button
                         type="button"
                         role="switch"
                         aria-label={labels.enabled}
                         aria-checked={apiKey.enabled}
                         onClick={() => updateApiKey(apiKey.id, { enabled: !apiKey.enabled })}
-                        className={`relative inline-flex h-6 w-11 shrink-0 rounded-full transition ${apiKey.enabled ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-700'}`}
+                        className="ui-switch"
                       >
-                        <span className={`absolute top-1 h-4 w-4 rounded-full bg-white transition ${apiKey.enabled ? 'left-6' : 'left-1'}`} />
+                        <span className="ui-switch-thumb" />
                       </button>
                       <IconButton label={labels.removeApiKey} onClick={() => removeApiKey(apiKey.id)} icon={<Trash2 className="h-4 w-4" />} />
                     </div>

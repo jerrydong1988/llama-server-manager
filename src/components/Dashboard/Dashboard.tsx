@@ -27,7 +27,7 @@ import { pathsEqual } from '../../utils/path'
 import type { DownloadProgress, Instance } from '../../store'
 import { useI18n } from '../../i18n'
 import { getDashboardLabels } from '../../i18n/pageLabels'
-import { Badge, Button, InsetSurface, SectionHeader, SelectInput, Surface, TextInput } from '../ui'
+import { Badge, Button, InsetSurface, MetricCard, SectionHeader, SegmentedControl, SelectInput, Surface, TextInput } from '../ui'
 
 type StatusScope = 'running' | 'stopped' | 'all'
 type SortMode = 'name' | 'port' | 'uptime'
@@ -76,9 +76,9 @@ function formatRate(value?: number | null) {
 }
 
 function meterColor(tone: MeterTone) {
-  if (tone === 'gpu') return 'bg-emerald-500'
+  if (tone === 'gpu') return 'bg-[var(--ui-mint)]'
   if (tone === 'vram') return 'bg-amber-500'
-  if (tone === 'memory') return 'bg-violet-500'
+  if (tone === 'memory') return 'bg-[var(--ui-telemetry)]'
   return 'bg-blue-500'
 }
 
@@ -114,7 +114,7 @@ function MiniStat({
   tone?: string
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-800 dark:bg-slate-950/60">
+    <div className="min-w-0 rounded-lg bg-[var(--ui-soft)] px-3 py-2">
       <div className="truncate text-[11px] uppercase tracking-wide text-slate-500 dark:text-slate-500" title={label}>{label}</div>
       <div className={`mt-1 truncate text-lg font-semibold ${tone}`} title={String(value)}>{value}</div>
     </div>
@@ -140,7 +140,7 @@ function ResourceMeter({
   const safePercent = clampPercent(available ? percent : 0)
 
   return (
-    <div className="min-w-0 border-b border-slate-200 px-4 py-3 last:border-b-0 md:border-b-0 md:border-r md:last:border-r-0 dark:border-slate-800">
+    <div className="min-w-0 px-4 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-slate-500 dark:border-slate-800 dark:bg-slate-950 dark:text-slate-400">
@@ -151,9 +151,9 @@ function ResourceMeter({
             <div className="truncate text-xs text-slate-500 dark:text-slate-500" title={secondary}>{secondary}</div>
           </div>
         </div>
-        <div className="shrink-0 text-xl font-semibold text-slate-950 dark:text-slate-50">{available ? `${safePercent}%` : '--'}</div>
+        <div className="shrink-0 font-mono text-xl text-[var(--ui-text)]">{available ? `${safePercent}%` : '--'}</div>
       </div>
-      <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+      <div className="ui-meter-track mt-3">
         <div className={`h-full rounded-full ${meterColor(tone)}`} style={{ width: `${safePercent}%` }} />
       </div>
       <div className="mt-2 truncate text-xs text-slate-500 dark:text-slate-500" title={primary}>{primary}</div>
@@ -179,7 +179,7 @@ function ActionIconButton({
       disabled={disabled}
       title={title}
       aria-label={title}
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-35 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:bg-slate-800"
+      className="inline-flex ui-button h-[30px] w-[30px] items-center justify-center disabled:cursor-not-allowed disabled:opacity-35"
     >
       {children}
     </button>
@@ -201,9 +201,8 @@ export default function Dashboard() {
   const openBrowser = useAppStore(state => state.openBrowser)
   const setActiveConfigInstanceId = useAppStore(state => state.setActiveConfigInstanceId)
   const downloadTasks = useAppStore(state => state.downloadTasks)
-  const downloadQueue = useAppStore(state => state.downloadQueue)
 
-  const [statusScope, setStatusScope] = useState<StatusScope>('running')
+  const [statusScope, setStatusScope] = useState<StatusScope>('all')
   const [search, setSearch] = useState('')
   const [engineFilter, setEngineFilter] = useState('all')
   const [sortMode, setSortMode] = useState<SortMode>('name')
@@ -425,11 +424,11 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4" data-guide="dashboard">
-      <Surface as="section">
-        <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
+      <section className="ui-page-hero">
+        <div className="flex flex-col gap-4 py-2 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <h2 className="text-xl font-semibold text-slate-950 dark:text-slate-50">{labels.title}</h2>
+              <h2 className="ui-page-heading text-[var(--ui-text)]">{labels.title}</h2>
               <Badge tone={attentionCount > 0 ? 'amber' : 'emerald'}>{attentionCount > 0 ? labels.attention : labels.healthy}</Badge>
               <Badge>{labels.workspace}</Badge>
             </div>
@@ -445,82 +444,29 @@ export default function Dashboard() {
             </Button>
           </div>
         </div>
-      </Surface>
+      </section>
 
-      <Surface as="section" className="p-5">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <SectionHeader title={labels.actionCenter} description={labels.actionCenterDesc} />
-          <div className="grid w-full gap-3 xl:max-w-[920px] xl:grid-cols-3">
-            {cockpitActions.map(action => (
-              <button
-                key={action.id}
-                type="button"
-                onClick={action.action}
-                className="group flex min-h-[116px] min-w-0 flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950/55 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
-              >
-                <span className="flex items-start gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 dark:border-slate-800 dark:bg-slate-950 dark:text-blue-300">
-                    {action.icon}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-semibold text-slate-950 dark:text-slate-100">{action.title}</span>
-                    <span className="mt-1 line-clamp-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">{action.description}</span>
-                  </span>
-                </span>
-                <span className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 transition group-hover:text-blue-500 dark:text-blue-300">
-                  {labels.goHandle}
-                  <ArrowUpRight className="h-3.5 w-3.5" />
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </Surface>
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        <MetricCard label={labels.running} value={runningCount + ' / ' + instances.length} icon={<Server className="h-5 w-5" />} />
+        <MetricCard label={labels.models} value={modelCount} icon={<Package className="h-5 w-5" />} />
+        <MetricCard label={labels.engines} value={engines.length} icon={<Cpu className="h-5 w-5" />} />
+        <MetricCard label={labels.attention} value={attentionCount} icon={<AlertTriangle className="h-5 w-5" />} />
+      </div>
 
-      <Surface as="section" className="overflow-hidden">
-        <div className="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <SectionHeader title={labels.resources} />
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-              <MiniStat label={labels.running} value={`${runningCount}/${instances.length}`} tone="text-emerald-600 dark:text-emerald-300" />
-              <MiniStat label={labels.attention} value={attentionCount} tone={attentionCount > 0 ? 'text-amber-600 dark:text-amber-300' : 'text-slate-700 dark:text-slate-300'} />
-              <MiniStat label={labels.transfer} value={formatRate(transferBytes)} tone="text-blue-600 dark:text-blue-300" />
-              <MiniStat label={labels.queue} value={downloadQueue.length} tone="text-violet-600 dark:text-violet-300" />
-            </div>
-          </div>
-        </div>
-        <div className="grid md:grid-cols-2 xl:grid-cols-4">
-          {resourceMeters.map(meter => (
-            <ResourceMeter key={meter.label} {...meter} />
-          ))}
-        </div>
-      </Surface>
-
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
         <Surface as="section" className="min-w-0 overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
             <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
-              <div className="min-w-0">
+              <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
                 <SectionHeader
                   title={statusScope === 'running' ? labels.running : statusScope === 'stopped' ? labels.stopped : labels.instances}
                   description={`${labels.visibleRows}: ${filteredInstances.length} / ${instances.length}`}
                 />
-                <div className="mt-3 inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950/70">
-                  {(['running', 'stopped', 'all'] as const).map(scope => (
-                    <button
-                      type="button"
-                      key={scope}
-                      onClick={() => setStatusScope(scope)}
-                      className={`h-8 rounded-md px-3 text-xs font-medium transition ${
-                        statusScope === scope
-                          ? 'bg-blue-600 text-white'
-                          : 'text-slate-600 hover:bg-white hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
-                      }`}
-                    >
-                      {scope === 'running' ? labels.running : scope === 'stopped' ? labels.stopped : labels.all}
-                    </button>
-                  ))}
-                </div>
+                <SegmentedControl className="mt-2" value={statusScope} onChange={setStatusScope} options={[
+                  { value: 'running', label: labels.running },
+                  { value: 'stopped', label: labels.stopped },
+                  { value: 'all', label: labels.all },
+                ]} />
               </div>
 
               <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_180px_150px] 2xl:w-[610px]">
@@ -544,12 +490,7 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-              <MiniStat label={labels.running} value={runningCount} tone="text-emerald-600 dark:text-emerald-300" />
-              <MiniStat label={labels.stopped} value={stoppedCount} tone="text-slate-700 dark:text-slate-300" />
-              <MiniStat label={t.instance.error} value={erroredCount} tone="text-rose-600 dark:text-rose-300" />
-              <MiniStat label={labels.autoStart} value={autoStartCount} tone="text-blue-600 dark:text-blue-300" />
-            </div>
+
           </div>
 
           {filteredInstances.length === 0 ? (
@@ -558,8 +499,8 @@ export default function Dashboard() {
               <div className="mt-3 text-sm text-slate-500 dark:text-slate-500">{labels.noMatches}</div>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px] table-fixed text-sm">
+            <div className="overflow-x-auto px-3 pb-3">
+              <table className="ui-table w-full min-w-[760px] table-fixed">
                 <colgroup>
                   <col className="w-[22%]" />
                   <col className="w-[16%]" />
@@ -568,17 +509,17 @@ export default function Dashboard() {
                   <col className="w-[17%]" />
                   <col className="w-[20%]" />
                 </colgroup>
-                <thead className="bg-slate-50 dark:bg-slate-950/70">
+                <thead className="">
                   <tr className="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-500">
-                    <th className="px-5 py-3 font-medium">{labels.name}</th>
-                    <th className="px-5 py-3 font-medium">{labels.engine}</th>
-                    <th className="px-5 py-3 font-medium">{labels.status}</th>
-                    <th className="px-5 py-3 font-medium">{labels.health}</th>
-                    <th className="px-5 py-3 font-medium">{labels.endpoint}</th>
-                    <th className="px-5 py-3 text-right font-medium">{labels.actions}</th>
+                    <th className="px-3 py-2 font-medium">{labels.name}</th>
+                    <th className="px-3 py-2 font-medium">{labels.engine}</th>
+                    <th className="px-3 py-2 font-medium">{labels.status}</th>
+                    <th className="px-3 py-2 font-medium">{labels.health}</th>
+                    <th className="px-3 py-2 font-medium">{labels.endpoint}</th>
+                    <th className="px-3 py-2 text-right font-medium">{labels.actions}</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                <tbody >
                   {filteredInstances.map(instance => {
                     const isRunning = instance.status === 'running'
                     const lifecyclePhase = instanceLifecycle[instance.id]
@@ -588,16 +529,16 @@ export default function Dashboard() {
 
                     return (
                       <tr key={instance.id} className="h-[68px] text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-900/70">
-                        <td className="px-5 py-3 align-middle">
+                        <td className="px-3 py-2.5 align-middle">
                           <div className="min-w-0">
                             <div className="truncate font-medium text-slate-950 dark:text-slate-100" title={instance.name}>{instance.name}</div>
                             <div className="mt-1 text-xs text-slate-500 dark:text-slate-500">{labels.uptime} {formatUptime(instance.startTime)}</div>
                           </div>
                         </td>
-                        <td className="px-5 py-3 align-middle">
+                        <td className="px-3 py-2.5 align-middle">
                           <div className="truncate text-slate-600 dark:text-slate-400" title={engineName}>{engineName}</div>
                         </td>
-                        <td className="px-5 py-3 align-middle">
+                        <td className="px-3 py-2.5 align-middle">
                           <Badge tone={isLifecycleBusy ? 'blue' : statusTone(instance)}>
                             {lifecyclePhase === 'starting'
                               ? t.instance.starting
@@ -606,17 +547,17 @@ export default function Dashboard() {
                                 : isRunning ? t.instance.running : instance.status === 'stopped' ? t.instance.stopped : t.instance.error}
                           </Badge>
                         </td>
-                        <td className="px-5 py-3 align-middle">
+                        <td className="px-3 py-2.5 align-middle">
                           <span className="inline-flex min-w-0 items-center gap-2 text-slate-600 dark:text-slate-400">
                             <span className={`h-2 w-2 shrink-0 rounded-full ${healthDotClass(instance)}`} />
                             <span className="truncate">{healthText(instance)}</span>
                           </span>
                         </td>
-                        <td className="px-5 py-3 align-middle">
+                        <td className="px-3 py-2.5 align-middle">
                           <div className="truncate font-mono text-xs text-slate-600 dark:text-slate-400" title={endpoint}>{endpoint}</div>
                         </td>
-                        <td className="px-5 py-3 align-middle">
-                          <div className="ml-auto grid w-[172px] grid-cols-[92px_34px_34px] items-center justify-end gap-2">
+                        <td className="px-3 py-2.5 align-middle">
+                          <div className="ml-auto grid w-[148px] grid-cols-[72px_30px_30px] items-center justify-end gap-2">
                             {isRunning ? (
                               <Button
                                 onClick={() => void stopInstance(instance.id).catch(() => {})}
@@ -659,9 +600,28 @@ export default function Dashboard() {
               </table>
             </div>
           )}
+            <div className="mx-4 mb-4 mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+              <MiniStat label={labels.running} value={runningCount} tone="text-emerald-600 dark:text-emerald-300" />
+              <MiniStat label={labels.stopped} value={stoppedCount} tone="text-slate-700 dark:text-slate-300" />
+              <MiniStat label={t.instance.error} value={erroredCount} tone="text-rose-600 dark:text-rose-300" />
+              <MiniStat label={labels.autoStart} value={autoStartCount} tone="text-blue-600 dark:text-blue-300" />
+            </div>
         </Surface>
 
         <div className="space-y-4">
+          <Surface as="section" className="overflow-hidden">
+        <div className="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <SectionHeader title={labels.resources} />
+
+          </div>
+        </div>
+        <div className="grid sm:grid-cols-2 xl:grid-cols-1">
+          {resourceMeters.map(meter => (
+            <ResourceMeter key={meter.label} {...meter} />
+          ))}
+        </div>
+      </Surface>
           <Surface as="aside" className="space-y-3 p-4">
             <SectionHeader title={labels.operations} />
             <InsetSurface className="space-y-3 p-3 text-sm">
@@ -707,7 +667,7 @@ export default function Dashboard() {
                 <div className="mt-1 truncate text-slate-500 dark:text-slate-500">{labels.activeDownloads}</div>
               </div>
               <div>
-                <div className="font-semibold text-violet-600 dark:text-violet-300">{queuedDownloadCount}</div>
+                <div className="font-semibold text-[var(--ui-link)]">{queuedDownloadCount}</div>
                 <div className="mt-1 truncate text-slate-500 dark:text-slate-500">{labels.queuedDownloads}</div>
               </div>
               <div>
@@ -740,6 +700,35 @@ export default function Dashboard() {
           </Surface>
         </div>
       </div>
+      <Surface as="section" className="p-5">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <SectionHeader title={labels.actionCenter} description={labels.actionCenterDesc} />
+          <div className="grid w-full gap-3 xl:max-w-[920px] xl:grid-cols-3">
+            {cockpitActions.map(action => (
+              <button
+                key={action.id}
+                type="button"
+                onClick={action.action}
+                className="group flex min-h-[92px] min-w-0 flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950/55 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
+              >
+                <span className="flex items-start gap-3">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 dark:border-slate-800 dark:bg-slate-950 dark:text-blue-300">
+                    {action.icon}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-semibold text-slate-950 dark:text-slate-100">{action.title}</span>
+                    <span className="mt-1 line-clamp-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">{action.description}</span>
+                  </span>
+                </span>
+                <span className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 transition group-hover:text-blue-500 dark:text-blue-300">
+                  {labels.goHandle}
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </Surface>
     </div>
   )
 }

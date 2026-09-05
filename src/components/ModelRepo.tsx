@@ -7,7 +7,9 @@ import { invokeApp as invoke } from '../lib/ipc'
 import { formatMessage, useI18n } from '../i18n'
 import { dedupePaths, formatPathForDisplay, isPathWithinRoot, normalizePath, pathJoin, pathsEqual } from '../utils/path'
 import { formatSize } from '../utils/format'
-import { Button, InsetSurface, MetricCard, PathText, Surface, TextInput } from './ui'
+import { Button, InsetSurface, MetricCard, PathText, SegmentedControl, Surface, TextInput } from './ui'
+
+import { ModelAssetGrid } from './ModelRepo/ModelAssetGrid'
 
 interface TreeStats {
   models: number
@@ -122,7 +124,7 @@ const highlightText = (text: string, query: string): ReactNode => {
   return (
     <>
       {text.slice(0, index)}
-      <mark className="rounded bg-blue-500/20 px-0.5 text-blue-100">
+      <mark className="rounded bg-blue-500/20 px-0.5 text-[var(--ui-link)]">
         {text.slice(index, index + query.length)}
       </mark>
       {text.slice(index + query.length)}
@@ -143,6 +145,7 @@ const ModelRepo = () => {
   const copy = t.modelRepoWorkspace
 
   const [searchQuery, setSearchQuery] = useState('')
+  const [view, setView] = useState<'tree' | 'cards'>('tree')
   const [scanError, setScanError] = useState('')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selectedPath, setSelectedPath] = useState<string | null>(null)
@@ -174,6 +177,7 @@ const ModelRepo = () => {
   }, [models, selectedPath])
 
   const trees = useMemo(() => modelDirs.map(dir => buildTree(dir, models)), [modelDirs, models])
+  const cardModels = useMemo(() => models.filter(model => !searchQuery || matchNode({ name: model.name, path: model.path, isDir: false, model, stats: emptyTreeStats() }, searchQuery)), [models, searchQuery])
   const selectedModel = useMemo(
     () => models.find(model => selectedPath && pathsEqual(model.path, selectedPath)) ?? null,
     [models, selectedPath],
@@ -319,7 +323,7 @@ const ModelRepo = () => {
           >
             <span className="w-4 shrink-0 text-slate-500">{isCollapsed ? '>' : 'v'}</span>
             <FolderTree className="h-4 w-4 shrink-0 text-amber-400" />
-            <span className={`min-w-0 flex-1 truncate text-sm ${isMatch ? 'text-blue-100' : 'text-slate-100'}`}>
+            <span className={`min-w-0 flex-1 truncate text-sm ${isMatch ? 'text-[var(--ui-link)]' : 'text-slate-100'}`}>
               {highlightText(displayName, searchQuery)}
             </span>
             <span className="shrink-0 text-xs text-slate-500">
@@ -356,10 +360,10 @@ const ModelRepo = () => {
         ) : (
           <File className="h-4 w-4 shrink-0 text-sky-400" />
         )}
-        <span className={`min-w-0 flex-1 truncate text-sm ${isSelected ? 'text-blue-100' : 'text-slate-100'}`}>
+        <span className={`min-w-0 flex-1 truncate text-sm ${isSelected ? 'text-[var(--ui-link)]' : 'text-slate-100'}`}>
           {highlightText(model.name, searchQuery)}
         </span>
-        <span className="hidden shrink-0 text-xs text-slate-500 lg:inline">{model.quant_type ?? ''}</span>
+        <span className="ui-chip hidden shrink-0 lg:inline">{model.quant_type ?? ''}</span>
         <span className="hidden shrink-0 rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300 md:inline">
           {kindLabel}
         </span>
@@ -370,7 +374,7 @@ const ModelRepo = () => {
 
   return (
     <div className="space-y-5">
-      <div className="mb-6 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
+      <div className="mb-4 flex flex-col gap-5 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-3">
           <div className="flex items-center gap-3">
             <div className="rounded-2xl border border-blue-500/20 bg-blue-500/10 p-3 text-blue-300">
@@ -378,7 +382,7 @@ const ModelRepo = () => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-3xl font-semibold tracking-tight text-slate-50">{t.nav.modelRepo}</h1>
+                <h1 className="ui-page-heading text-[var(--ui-text)]">{t.nav.modelRepo}</h1>
                 <span className="rounded-full border border-slate-800 bg-slate-900 px-2.5 py-1 text-xs text-slate-400">
                   {formatMessage(copy.sourceCount, { count: modelDirs.length })}
                 </span>
@@ -414,7 +418,7 @@ const ModelRepo = () => {
         </div>
       </div>
 
-      <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         {[
           { label: t.modelRepo.typeModelShort, value: stats.primaryCount, icon: File, tone: 'text-sky-300 bg-sky-500/10 border-sky-500/20' },
           { label: t.modelRepo.typeMmprojShort, value: stats.projectorCount, icon: Image, tone: 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/20' },
@@ -425,8 +429,8 @@ const ModelRepo = () => {
         ))}
       </div>
 
-      <div className="grid gap-6 2xl:grid-cols-[280px,minmax(0,1.45fr),280px]">
-        <Surface as="aside" className="p-5">
+      <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_280px] 2xl:grid-cols-[220px_minmax(0,1fr)_280px]">
+        <Surface as="aside" className="p-4 xl:col-span-2 2xl:col-span-1">
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-50">{copy.scanRoots}</h2>
@@ -471,7 +475,7 @@ const ModelRepo = () => {
           </div>
         </Surface>
 
-        <Surface as="section" className="min-h-[620px] p-5" data-guide="model-search">
+        <Surface as="section" className="min-w-0 p-4" data-guide="model-search">
           <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-50">{copy.explorer}</h2>
@@ -488,7 +492,10 @@ const ModelRepo = () => {
             />
           </div>
 
-          {models.length === 0 ? (
+          <SegmentedControl className="mb-4" value={view} onChange={setView} options={[
+            { value: 'tree', label: copy.treeView }, { value: 'cards', label: copy.cardView },
+          ]} />
+          {view === 'cards' ? <ModelAssetGrid models={cardModels} selectedPath={selectedPath} onSelect={setSelectedPath} /> : models.length === 0 ? (
             <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-dashed border-slate-800 text-center">
               <Database className="mb-4 h-12 w-12 text-slate-700" />
               <p className="text-base text-slate-300">{t.modelRepo.noModels}</p>

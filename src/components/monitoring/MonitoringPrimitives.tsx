@@ -51,7 +51,7 @@ export function MonitorPanel({
   bodyClassName?: string
 }) {
   return (
-    <section className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white text-slate-900 shadow-sm dark:border-slate-800 dark:bg-slate-900/70 dark:text-slate-100', className)}>
+    <section className={joinClassNames('ui-panel min-w-0 overflow-hidden', className)}>
       <div className="flex min-h-[52px] items-center justify-between gap-3 border-b border-slate-200 px-4 dark:border-slate-800">
         <div className="flex min-w-0 items-center gap-2">
           {icon ? <span className="shrink-0 text-blue-500 dark:text-blue-300">{icon}</span> : null}
@@ -80,14 +80,14 @@ export function StatusTile({
   className?: string
 }) {
   return (
-    <div className={joinClassNames('min-w-0 rounded-lg border px-4 py-3', toneBorder[tone], className)}>
+    <div className={joinClassNames('ui-panel min-w-0 px-4 py-3', className)}>
       <div className="flex min-w-0 items-center justify-between gap-3">
         <div className="truncate text-sm font-medium text-slate-600 dark:text-slate-400">{label}</div>
         <div className={joinClassNames('flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border', toneBorder[tone], toneText[tone])}>
           {icon}
         </div>
       </div>
-      <div className="mt-3 truncate text-3xl font-semibold text-slate-950 dark:text-white" title={String(value)}>{value}</div>
+      <div className="ui-metric-value mt-2 truncate text-[var(--ui-text)]" title={String(value)}>{value}</div>
       <div className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400" title={typeof detail === 'string' ? detail : undefined}>{detail}</div>
     </div>
   )
@@ -151,7 +151,7 @@ export function SignalMeter({
       </div>
       <div className="min-h-8 break-words text-xs leading-4 text-slate-500 dark:text-slate-400" title={detail}>{detail}</div>
       <div className="grid min-w-0 grid-cols-[minmax(32px,1fr)_minmax(80px,120px)] items-center gap-3">
-        <div className="h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-800">
+        <div className="ui-meter-track">
           <div className={joinClassNames('h-full rounded-full transition-[width]', toneBar[tone])} style={{ width: `${safeValue}%` }} />
         </div>
         <MiniSparkline values={sparkline} tone={tone} />

@@ -20,7 +20,7 @@ export function LaunchModePanel({ config, engine, labels, overrideKeys, inheritK
   const manualMode = config.launch_mode === 'manual'
   const manualRecommended = Boolean(engine && getEngineCompatibilityMode(engine.capabilities) !== 'full')
   return (
-    <Surface className="p-5">
+    <Surface className="p-4">
       <SectionHeader title={labels.launchPolicy} />
       <div className="mt-4 grid gap-3 md:grid-cols-2">
         {([
@@ -71,11 +71,11 @@ export function LaunchModePanel({ config, engine, labels, overrideKeys, inheritK
           </div>
         </div>
       ) : (
-        <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/40">
+        <div className="ui-inset mt-3 p-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.explicitOverrides}</p>
-              <p className="mt-1 text-sm text-slate-500">{labels.explicitOverridesDesc}</p>
+              <p className="mt-1 text-xs text-slate-500">{labels.explicitOverridesDesc}</p>
             </div>
             <div className="flex shrink-0 items-center gap-2">
               <Badge tone={overrideKeys.length > 0 ? 'blue' : 'emerald'}>{overrideKeys.length} {labels.activeParams}</Badge>
@@ -87,7 +87,7 @@ export function LaunchModePanel({ config, engine, labels, overrideKeys, inheritK
             </div>
           </div>
           {overrideKeys.length === 0 && <p className="mt-3 text-sm text-emerald-700 dark:text-emerald-300">{labels.noExplicitOverrides}</p>}
-          <p className="mt-3 text-xs text-slate-500">{labels.systemArgsHint}</p>
+          <p className="mt-2 text-xs text-slate-500">{labels.systemArgsHint}</p>
         </div>
       )}
     </Surface>
