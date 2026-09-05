@@ -203,20 +203,28 @@ impl RouterRuntime {
         let limit = max_concurrent_requests.max(1) as usize;
         let acquire = async {
             loop {
+                // Register before checking capacity so simultaneous releases wake
+                // distinct waiters instead of collapsing into one stored notification.
+                let notified = self.limiter.notify.notified();
+                tokio::pin!(notified);
+                notified.as_mut().enable();
                 let active = self.limiter.active.load(Ordering::Acquire);
-                if active < limit
-                    && self
+                if active < limit {
+                    if self
                         .limiter
                         .active
                         .compare_exchange(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
                         .is_ok()
-                {
-                    self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
-                    return GlobalRequestPermit {
-                        runtime: self.clone(),
-                    };
+                    {
+                        self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
+                        return GlobalRequestPermit {
+                            runtime: self.clone(),
+                        };
+                    }
+                    // Another admission changed the count, but capacity may remain.
+                    continue;
                 }
-                self.limiter.notify.notified().await;
+                notified.await;
             }
         };
         match tokio::time::timeout(queue_timeout, acquire).await {
@@ -619,6 +627,57 @@ impl RouterRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn simultaneous_admissions_use_all_available_capacity() {
+        for _ in 0..40 {
+            let runtime = Arc::new(RouterRuntime::default());
+            let barrier = Arc::new(tokio::sync::Barrier::new(64));
+            let tasks = (0..64)
+                .map(|_| {
+                    let runtime = runtime.clone();
+                    let barrier = barrier.clone();
+                    tokio::spawn(async move {
+                        barrier.wait().await;
+                        runtime.acquire_global(64, Duration::from_secs(2)).await
+                    })
+                })
+                .collect::<Vec<_>>();
+            // Hold every returned permit until all admissions have completed.
+            let permits = futures_util::future::join_all(tasks).await;
+            assert!(permits.iter().all(|result| matches!(result, Ok(Some(_)))));
+            assert_eq!(runtime.in_flight_requests(), 64);
+            drop(permits);
+            assert_eq!(runtime.in_flight_requests(), 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn simultaneous_releases_wake_all_queued_admissions() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let first = runtime
+            .acquire_global(2, Duration::from_secs(1))
+            .await
+            .unwrap();
+        let second = runtime
+            .acquire_global(2, Duration::from_secs(1))
+            .await
+            .unwrap();
+        let mut waiting_a = Box::pin(runtime.acquire_global(2, Duration::from_secs(1)));
+        let mut waiting_b = Box::pin(runtime.acquire_global(2, Duration::from_secs(1)));
+        assert!(matches!(
+            futures_util::poll!(&mut waiting_a),
+            std::task::Poll::Pending
+        ));
+        assert!(matches!(
+            futures_util::poll!(&mut waiting_b),
+            std::task::Poll::Pending
+        ));
+        drop(first);
+        drop(second);
+        let (a, b) = tokio::join!(waiting_a, waiting_b);
+        assert!(a.is_some() && b.is_some());
+    }
 
     fn candidate(id: &str, priority: i32, weight: u32) -> RoutingCandidate {
         RoutingCandidate {

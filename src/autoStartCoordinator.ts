@@ -20,12 +20,12 @@ export type AutoStartSequenceResult = {
 const matchingWorkerIsOnline = (instance: Instance, workers: WorkerInfo[]) => {
   if (!instance.config.rpc_servers) return true
   const configuredServers = instance.config.rpc_servers.split(/[, ]+/).filter(Boolean)
-  return workers.some(worker => (
-    worker.status === 'Online' && configuredServers.some(server => {
-      const endpoint = parseHostPort(server, 50052)
-      return worker.host === endpoint.host && worker.port === endpoint.port
-    })
-  ))
+  return configuredServers.every(server => {
+    const endpoint = parseHostPort(server, 50052)
+    return workers.some(worker => (
+      worker.status === 'Online' && worker.host === endpoint.host && worker.port === endpoint.port
+    ))
+  })
 }
 
 const wait = (delayMs: number) => new Promise(resolve => globalThis.setTimeout(resolve, delayMs))

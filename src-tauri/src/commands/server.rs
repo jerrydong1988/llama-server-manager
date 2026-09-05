@@ -4881,6 +4881,7 @@ pub(crate) struct RuntimePerfTracker {
     tasks: HashMap<u32, TaskPerfState>,
     last_completed: Option<TaskPerfState>,
     last_recorded_task_id: Option<u32>,
+    finished: bool,
 }
 
 impl RuntimePerfTracker {
@@ -4897,6 +4898,7 @@ impl RuntimePerfTracker {
             tasks: HashMap::new(),
             last_completed: None,
             last_recorded_task_id: None,
+            finished: false,
         }
     }
 
@@ -4928,6 +4930,9 @@ impl RuntimePerfTracker {
     }
 
     pub(crate) fn process_line(&mut self, line: &str) {
+        if self.finished {
+            return;
+        }
         if !parse_perf_line(
             &self.parser,
             line,
@@ -4967,6 +4972,10 @@ impl RuntimePerfTracker {
     }
 
     pub(crate) fn finish(&mut self) {
+        if self.finished {
+            return;
+        }
+        self.finished = true;
         self.tasks.clear();
         crate::commands::monitoring::update_tasks(
             &self.instance_id,
@@ -6525,6 +6534,27 @@ mod perf_parser_tests {
 
         tracker.finish();
         crate::commands::monitoring::remove_instance(&instance_id);
+    }
+
+    #[test]
+    fn finished_tracker_cannot_overwrite_replacement_monitoring() {
+        let id = "finished-tracker-replacement";
+        let mut old = RuntimePerfTracker::new(id.into(), None, ModelWorkload::Inference);
+        old.finish();
+        crate::commands::monitoring::update_tasks(
+            id,
+            Some("replacement"),
+            ModelWorkload::Inference,
+            1,
+            42.0,
+        );
+        old.process_line("0 I slot launch_slot_: id 0 | task 22 | processing task, is_child = 0");
+        old.finish();
+        let frame = crate::commands::monitoring::capture_frame(id).unwrap();
+        assert_eq!(frame.session_id.as_deref(), Some("replacement"));
+        assert_eq!(frame.active_requests, 1);
+        assert_eq!(frame.output_tokens_per_second, Some(42.0));
+        crate::commands::monitoring::remove_instance(id);
     }
 
     #[test]

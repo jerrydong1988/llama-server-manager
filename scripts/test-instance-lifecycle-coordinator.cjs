@@ -114,8 +114,27 @@ assert.doesNotMatch(
 const entry = `
   import assert from 'node:assert/strict'
   import { runInstanceStart, runInstanceStop } from './src/store/instanceLifecycleCoordinator'
+  import { runAutoStartSequence } from './src/autoStartCoordinator'
 
   async function run() {
+    const instance = { id: 'rpc-instance', status: 'stopped', config: {
+      auto_start: true, rpc_servers: 'worker-a:50052,worker-b:50053',
+    } }
+    const workers = [
+      { host: 'worker-a', port: 50052, status: 'Online' },
+      { host: 'worker-b', port: 50053, status: 'Offline' },
+    ]
+    let starts = 0
+    const options = {
+      instanceIds: [instance.id], getInstance: () => instance,
+      getWorkers: async () => workers, startInstance: async () => { starts += 1 }, delayMs: 0,
+    }
+    assert.deepEqual(await runAutoStartSequence(options), { missingWorkerIds: [instance.id] })
+    assert.equal(starts, 0, 'all configured workers must be online before starting')
+    workers[1].status = 'Online'
+    assert.deepEqual(await runAutoStartSequence(options), { missingWorkerIds: [] })
+    assert.equal(starts, 1, 'the deferred instance must start once all dependencies recover')
+
     let calls = 0
     let release
     const operation = () => {

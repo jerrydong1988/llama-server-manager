@@ -1778,6 +1778,7 @@ fn append_bounded_response_chunk(
 async fn collect_bounded_response_body(
     response: reqwest::Response,
     limit: usize,
+    idle_timeout: Duration,
 ) -> Result<Bytes, String> {
     if response
         .content_length()
@@ -1787,7 +1788,15 @@ async fn collect_bounded_response_body(
     }
     let mut body = Vec::new();
     let mut stream = response.bytes_stream();
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = tokio::time::timeout(idle_timeout, stream.next())
+        .await
+        .map_err(|_| {
+            format!(
+                "upstream response body was idle for {} milliseconds",
+                idle_timeout.as_millis()
+            )
+        })?
+    {
         let chunk = chunk.map_err(|error| error.to_string())?;
         append_bounded_response_chunk(&mut body, &chunk, limit)?;
     }
@@ -1820,9 +1829,13 @@ async fn fetch_token_count_value(
     if !response.status().is_success() {
         return None;
     }
-    let body = collect_bounded_response_body(response, MAX_TOKEN_COUNT_RESPONSE_BYTES)
-        .await
-        .ok()?;
+    let body = collect_bounded_response_body(
+        response,
+        MAX_TOKEN_COUNT_RESPONSE_BYTES,
+        Duration::from_millis(timeout_ms),
+    )
+    .await
+    .ok()?;
     serde_json::from_slice(&body).ok()
 }
 
@@ -2036,6 +2049,8 @@ fn capabilities_from_values(
             .get("is_sleeping")
             .and_then(serde_json::Value::as_bool)
             .or(capabilities.is_sleeping);
+        // Slots are polled more frequently; they must not renew the props cache.
+        capabilities.updated_at_ms = current_time_ms().max(0) as u64;
     }
     if let Some(items) = slots.and_then(serde_json::Value::as_array) {
         capabilities.total_slots = Some(items.len() as u64);
@@ -2055,7 +2070,6 @@ fn capabilities_from_values(
             .min()
             .or(capabilities.context_length);
     }
-    capabilities.updated_at_ms = current_time_ms().max(0) as u64;
     capabilities
 }
 
@@ -2761,7 +2775,21 @@ async fn proxy_upstream(
     }
     request = apply_target_request_headers(request, &headers, &target);
 
-    let response = match request.body(upstream_body).send().await {
+    let header_timeout = Duration::from_millis(if request_streaming {
+        proxy_config.streaming_idle_timeout_ms
+    } else {
+        proxy_config.timeout_ms.max(1_000)
+    });
+    let response = tokio::time::timeout(header_timeout, request.body(upstream_body).send())
+        .await
+        .map_err(|_| {
+            format!(
+                "upstream response headers timed out after {} milliseconds",
+                header_timeout.as_millis()
+            )
+        })
+        .and_then(|result| result.map_err(|error| error.to_string()));
+    let response = match response {
         Ok(response) => response,
         Err(err) => {
             router_state.runtime.mark_request_failure(
@@ -2861,18 +2889,23 @@ async fn proxy_upstream(
         _target_permit: Some(target_permit),
     };
     if (response_is_json && !response_is_sse) || (api_format.is_anthropic() && !status_success) {
-        let response_body =
-            match collect_bounded_response_body(response, MAX_PROXY_JSON_RESPONSE_BYTES).await {
-                Ok(bytes) => bytes,
-                Err(error_text) => {
-                    telemetry_guard.record_once(Some(error_text.clone()));
-                    return error_response(
-                        api_format,
-                        StatusCode::BAD_GATEWAY,
-                        &format!("proxy response error: {error_text}"),
-                    );
-                }
-            };
+        let response_body = match collect_bounded_response_body(
+            response,
+            MAX_PROXY_JSON_RESPONSE_BYTES,
+            header_timeout,
+        )
+        .await
+        {
+            Ok(bytes) => bytes,
+            Err(error_text) => {
+                telemetry_guard.record_once(Some(error_text.clone()));
+                return error_response(
+                    api_format,
+                    StatusCode::BAD_GATEWAY,
+                    &format!("proxy response error: {error_text}"),
+                );
+            }
+        };
         telemetry_guard.record_once(if status_success {
             None
         } else {
@@ -3579,6 +3612,9 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        capabilities_from_values, RouterRuntime, TargetCapabilities, TARGET_CAPABILITY_MAX_AGE,
+    };
     use crate::models::{
         InstanceConfig, ProxyApiKey, ProxyConfig, ProxyRoute, ProxyTarget, RunningInstance,
     };
@@ -3590,11 +3626,121 @@ mod tests {
     use axum::routing::post;
     use axum::{Json, Router};
     use bytes::Bytes;
+    use futures_util::StreamExt;
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
+
+    async fn stalled_headers_upstream() -> Response {
+        std::future::pending::<Response>().await
+    }
+
+    async fn stalled_json_upstream() -> Response {
+        let stream =
+            futures_util::stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"{")) })
+                .chain(futures_util::stream::pending());
+        Response::builder()
+            .header("content-type", "application/json")
+            .body(Body::from_stream(stream))
+            .unwrap()
+    }
+
+    async fn assert_streaming_deadline(upstream: Router, expected_error: &str) {
+        let (upstream_address, upstream_task) = spawn_test_router(upstream).await;
+        let mut snapshot = openai_proxy_snapshot(upstream_address, "");
+        snapshot.config.streaming_idle_timeout_ms = 1_000;
+        snapshot.config.max_concurrent_requests = 1;
+        let (router, runtime) =
+            super::proxy_router_from_source_with_runtime(Arc::new(TestProxySource { snapshot }));
+        let (proxy_address, proxy_task) = spawn_test_router(router).await;
+        let client = reqwest::Client::new();
+        let result = client
+            .post(format!("http://{proxy_address}/v1/chat/completions"))
+            .json(&json!({"model":"local-openai", "stream":true,
+                "messages":[{"role":"user","content":"hello"}], "max_tokens":1}))
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await;
+        proxy_task.abort();
+        upstream_task.abort();
+        let response = result.expect("proxy must enforce its own deadline");
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(response.text().await.unwrap().contains(expected_error));
+        assert_eq!(
+            runtime.in_flight_requests(),
+            0,
+            "timeout must release route capacity"
+        );
+    }
+
+    #[tokio::test]
+    async fn streaming_response_headers_have_a_deadline() {
+        let upstream = Router::new()
+            .route("/v1/chat/completions", post(stalled_headers_upstream))
+            .fallback(|| async { Json(json!({"status":"ok"})) });
+        assert_streaming_deadline(upstream, "response headers timed out").await;
+    }
+
+    #[tokio::test]
+    async fn streaming_json_response_body_has_an_idle_deadline() {
+        let upstream = Router::new()
+            .route("/v1/chat/completions", post(stalled_json_upstream))
+            .fallback(|| async { Json(json!({"status":"ok"})) });
+        assert_streaming_deadline(upstream, "response body was idle").await;
+    }
+
+    #[test]
+    fn slots_do_not_renew_props_freshness_or_cache_a_failed_props_probe() {
+        let runtime = RouterRuntime::default();
+        let previous = TargetCapabilities {
+            updated_at_ms: 1,
+            ..Default::default()
+        };
+        let slots = json!([{"n_ctx":4096, "is_processing":true}]);
+        let refreshed = capabilities_from_values(None, Some(&slots), &previous);
+        assert_eq!(refreshed.busy_slots, Some(1));
+        runtime.mark_probe_success("instance", 1.0, Some(refreshed));
+        assert!(runtime.capabilities_stale("instance", TARGET_CAPABILITY_MAX_AGE));
+        let failed = capabilities_from_values(None, Some(&slots), &TargetCapabilities::default());
+        assert_eq!(failed.updated_at_ms, 0);
+        let props = json!({"modalities":{"vision":true}});
+        let fresh = capabilities_from_values(Some(&props), Some(&slots), &previous);
+        assert_eq!(fresh.modalities, props["modalities"]);
+        runtime.mark_probe_success("instance", 1.0, Some(fresh));
+        assert!(!runtime.capabilities_stale("instance", TARGET_CAPABILITY_MAX_AGE));
+    }
+
+    #[tokio::test]
+    async fn active_json_body_can_outlive_its_idle_timeout() {
+        let upstream = Router::new().route(
+            "/",
+            post(|| async {
+                let stream = futures_util::stream::iter(["{", "\"ok\"", ":", "true", "}"]).then(
+                    |part| async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                        Ok::<_, std::io::Error>(Bytes::from(part))
+                    },
+                );
+                Response::new(Body::from_stream(stream))
+            }),
+        );
+        let (address, task) = spawn_test_router(upstream).await;
+        let response = reqwest::Client::new()
+            .post(format!("http://{address}/"))
+            .send()
+            .await
+            .unwrap();
+        let result = super::collect_bounded_response_body(
+            response,
+            1024,
+            std::time::Duration::from_millis(750),
+        )
+        .await;
+        task.abort();
+        assert_eq!(result.unwrap(), Bytes::from_static(b"{\"ok\":true}"));
+    }
 
     #[test]
     fn adaptive_context_preflight_only_counts_tokens_near_the_limit() {

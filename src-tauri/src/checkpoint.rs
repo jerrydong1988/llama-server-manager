@@ -4435,6 +4435,32 @@ mod tests {
     }
 
     #[test]
+    fn stable_v040_custom_parameters_do_not_relax_checkpoint_eligibility() {
+        for argument in [
+            "--kv-unified-per-slot 4096",
+            "--n-cpu-ffn 2",
+            "-ncffn 2",
+            "--spec-synth-len 4",
+            "--spec-synth-rates 0.8,0.5",
+            "--video-fps 4",
+            "--video-timestamp-interval 5000",
+            "--video-ffmpeg-dir /tmp/ffmpeg",
+        ] {
+            let mut config = eligible_config();
+            config.custom_args = vec![argument.into()];
+            let result = evaluate(&config);
+            assert!(!result.eligible, "unexpectedly accepted {argument}");
+            assert!(result
+                .reasons
+                .contains(&CheckpointReasonCode::CustomArgumentsUnsupported));
+            assert_eq!(
+                result.custom_argument_blockers,
+                vec![argument.split_whitespace().next().unwrap()]
+            );
+        }
+    }
+
+    #[test]
     fn eligibility_rejects_every_unsupported_config_row() {
         assert_config_reason(CheckpointReasonCode::UnsupportedConfiguration, |config| {
             config.kv_checkpoint.storage_limit_gib = 0

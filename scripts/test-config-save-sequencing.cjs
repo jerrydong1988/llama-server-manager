@@ -25,13 +25,13 @@ const configPageSource = fs.readFileSync(
 assert.match(configPageSource, /const warningTone = warningCounts\.high > 0 \? 'red' : warningCounts\.medium > 0 \? 'amber' : warningCounts\.low > 0 \? 'sky' : 'emerald'/)
 assert.match(configPageSource, /label: labels\.warnings[\s\S]*tone: warningTone === 'red'[\s\S]*warningTone === 'sky'/)
 assert.match(configPageSource, /message\.tone === 'amber'[\s\S]*bg-sky-50/)
-assert.match(configPageSource, /const \[saving, setSaving\] = useState\(false\)/)
+assert.match(configPageSource, /saving, saveStage, setSaveStage } = useConfigDraft/)
 assert.match(
   configPageSource,
   /useEffect\(\(\) => \{\s*mountedRef\.current = true\s*return \(\) => \{\s*mountedRef\.current = false/,
   'StrictMode effect replay must restore the mounted flag',
 )
-assert.match(configPageSource, /setSaving\(true\)[\s\S]*await saveConfig\(\)[\s\S]*finally[\s\S]*setSaving\(false\)/)
+assert.match(configPageSource, /saveInFlightRef\.current = true[\s\S]*await saveConfig\(\)[\s\S]*finally[\s\S]*saveInFlightRef\.current = false/)
 assert.match(
   configPageSource,
   /clearTimeout\(saveFeedbackTimerRef\.current\)[\s\S]*saveFeedbackTimerRef\.current = setTimeout/,
@@ -39,7 +39,7 @@ assert.match(
 )
 assert.match(
   configPageSource,
-  /const targetIsActive = \(\) => mountedRef\.current[\s\S]*if \(!targetIsActive\(\)\) \{[\s\S]*return[\s\S]*setSaved\(true\)/,
+  /const targetIsActive = \(\) => mountedRef\.current[\s\S]*if \(!targetIsActive\(\)\) return[\s\S]*setSaved\(true\)/,
   'a completed save must not update feedback for another instance',
 )
 const saveDisabledLine = configPageSource
@@ -64,15 +64,14 @@ assert.equal(
 assert.match(configPageSource, /saving \? savingLabel :/)
 assert.match(configPageSource, /preflight-reused/)
 assert.match(configPageSource, /setSaveStage\('validating'\)[\s\S]*setSaveStage\('persisting'\)/)
-assert.match(configPageSource, /const editRevisionRef = useRef\(0\)/)
-assert.match(configPageSource, /const saveInFlightRef = useRef\(false\)/)
+assert.match(configPageSource, /editRevisionRef, saveInFlightRef[\s\S]*useConfigDraft\(configInstanceId\)/)
 assert.match(
   configPageSource,
   /const saveRevision = editRevisionRef\.current[\s\S]*await runRevisionGuarded[\s\S]*if \(editRevisionRef\.current === saveRevision\)/,
   'a completed save must not replace local fields edited while persistence was in flight',
 )
 assert.ok(
-  configPageSource.indexOf('setSaving(true)') < configPageSource.indexOf('await runRevisionGuarded'),
+  configPageSource.indexOf('saveInFlightRef.current = true') < configPageSource.indexOf('await runRevisionGuarded'),
   'the save button must lock before asynchronous compatibility validation starts',
 )
 assert.ok(
@@ -125,7 +124,7 @@ assert.doesNotMatch(
 
 assert.match(
   configPageSource,
-  /await saveConfig\(\)[\s\S]*useAppStore\.getState\(\)\.instances[\s\S]*setBaseline\(persistedConfig\)/,
+  /await saveConfig\(\)[\s\S]*useAppStore\.getState\(\)\.instances[\s\S]*setBaseline\(persistedConfig, normalized\.config\)/,
   'save feedback must use the backend-normalized configuration',
 )
 assert.match(

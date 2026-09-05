@@ -20,7 +20,7 @@ import { runRevisionGuarded } from './ConfigPage/configSaveGuard'
 import { resolveEffectiveEngine } from '../store/engineResolution'
 import { findMatchingProjector } from '../modelProjector'
 import { Badge, Button, EmptyState, InsetSurface, MetricCard, PathText, SectionHeader, Surface } from './ui'
-import { applyExplicitOverrides, explicitOverrideKeys, inheritParameters, markExplicitOverride, migrateParameterIntent } from '../parameterIntent'
+import { applyExplicitOverrides, explicitOverrideKeys, inheritParameters, markExplicitOverride } from '../parameterIntent'
 import { LaunchModePanel } from './ConfigPage/LaunchModePanel'
 import { ConfigDirectory } from './ConfigPage/ConfigDirectory'
 import { ParameterSearch } from './ConfigPage/ParameterSearch'
@@ -32,6 +32,7 @@ import { canReuseConfigPreflight, configForPreflight, createConfigPreflightKey }
 import { beginOperationTiming, type OperationOutcome } from '../operationTiming'
 import { useConfigSaveShortcut } from './ConfigPage/useConfigSaveShortcut'
 import { CheckpointPanel } from './ConfigPage/CheckpointPanel'
+import { useConfigDraft } from './ConfigPage/useConfigDraft'
 
 const ConfigPage = () => {
   const instances = useAppStore(state => state.instances)
@@ -49,11 +50,8 @@ const ConfigPage = () => {
   const inst = instances.find(instance => instance.id === activeConfigInstanceId)
   const configInstanceId = inst?.id
 
-  const [local, setLocal] = useState<InstanceConfig | null>(null)
-  const [baseline, setBaseline] = useState<InstanceConfig | null>(null)
+  const { local, setLocal, baseline, setBaseline, committedModelPathRef, editRevisionRef, saveInFlightRef, saving, saveStage, setSaveStage } = useConfigDraft(configInstanceId)
   const [saved, setSaved] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [saveStage, setSaveStage] = useState<'validating' | 'persisting' | null>(null)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<ModelAssetPickerTarget>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
@@ -65,9 +63,6 @@ const ConfigPage = () => {
   const [selectedTemplateId, setSelectedTemplateId] = useState('safe-start')
   const [lastTemplateSnapshot, setLastTemplateSnapshot] = useState<TemplateSnapshot | null>(null)
   const mountedRef = useRef(true)
-  const committedModelPathRef = useRef('')
-  const editRevisionRef = useRef(0)
-  const saveInFlightRef = useRef(false)
   const saveShortcutRef = useConfigSaveShortcut()
   const saveFeedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
@@ -79,22 +74,6 @@ const ConfigPage = () => {
       }
     }
   }, [])
-
-  useEffect(() => {
-    const selected = useAppStore.getState().instances.find(instance => instance.id === configInstanceId)
-    if (selected) {
-      const next = migrateParameterIntent(selected.config)
-      setLocal(next)
-      setBaseline(next)
-      editRevisionRef.current = 0
-      committedModelPathRef.current = normalizeModelPath(next.model_path)
-    } else {
-      setLocal(null)
-      setBaseline(null)
-      editRevisionRef.current = 0
-      committedModelPathRef.current = ''
-    }
-  }, [activeConfigInstanceId, configInstanceId])
 
   useEffect(() => {
     setAppliedTemplateId(null)
@@ -148,7 +127,7 @@ const ConfigPage = () => {
   }, [defaultEngineId, engines, local])
   const compatibilityConfig = useMemo(() => local
     ? configForPreflight(local, currentModel, committedModelPathRef.current)
-    : null, [currentModel, local])
+    : null, [committedModelPathRef, currentModel, local])
   const trustedEngineId = local?.engine_id || defaultEngineId || ''
   const { unsupportedEngineFlags, setUnsupportedEngineFlags, commandPreview, commandPreviewKey, previewingCommand, probingEngineCompatibility, capabilityProbeRequired } = useEngineCompatibility({ local: compatibilityConfig, currentEngine, trustedEngineId })
   saveShortcutRef.current = async () => {}
@@ -207,7 +186,7 @@ const ConfigPage = () => {
     }
 
     saveInFlightRef.current = true
-    setSaving(true); setSaved(false)
+    setSaved(false)
     setSaveStage('validating')
     const timing = beginOperationTiming('config.save')
     let outcome: OperationOutcome = 'failure'
@@ -261,16 +240,16 @@ const ConfigPage = () => {
       updateInstance(targetInstanceId, { config: normalized.config })
       await saveConfig()
       timing.mark('persist')
-      if (!targetIsActive()) {
-        outcome = 'cancelled'
-        return
-      }
       const persistedConfig = useAppStore.getState().instances
         .find(item => item.id === targetInstanceId)?.config ?? normalized.config
-      setBaseline(persistedConfig)
+      setBaseline(persistedConfig, normalized.config)
       if (editRevisionRef.current === saveRevision) {
         committedModelPathRef.current = normalizeModelPath(persistedConfig.model_path)
         setLocal(persistedConfig)
+      }
+      outcome = 'success'
+      if (!targetIsActive()) return
+      if (editRevisionRef.current === saveRevision) {
         setSaved(true)
         const persistedModelPath = normalizeModelPath(persistedConfig.model_path)
         const persistedModel = models.find(model => normalizeModelPath(model.path) === persistedModelPath) ?? null
@@ -302,7 +281,7 @@ const ConfigPage = () => {
       return
     } finally {
       saveInFlightRef.current = false
-      if (mountedRef.current) { setSaving(false); setSaveStage(null) }
+      setSaveStage(null)
       timing.finish(outcome)
     }
   }

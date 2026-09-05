@@ -29,6 +29,73 @@ test('opening an instance config keeps React hook order stable (issue #5)', asyn
   expect(pageErrors).toEqual([])
 })
 
+test('unsaved configuration survives page navigation and saves against the original baseline', async ({ page }) => {
+  await openConfiguration(page)
+  const temperature = page.locator('[data-config-field="temp"]')
+  await temperature.locator('input').fill('0.91')
+  await page.locator('[data-nav-id="instances"]').click()
+  await page.locator('[data-nav-id="config"]').click()
+  await expect(temperature.locator('input')).toHaveValue('0.91')
+  await expect(temperature.locator('[data-config-status="changed"]')).toBeVisible()
+  expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance']?.temp)).toBe(0.6)
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+  await page.locator('[data-nav-id="instances"]').click()
+  await page.locator('[data-nav-id="config"]').click()
+  await expect(temperature.locator('input')).toHaveValue('0.91')
+  await expect(temperature.locator('[data-config-status="changed"]')).toHaveCount(0)
+})
+
+test('switching instances keeps their configuration drafts independent', async ({ page }) => {
+  await openConfiguration(page, 'monitoring')
+  const temperature = page.locator('[data-config-field="temp"] input')
+  await temperature.fill('0.91')
+  await page.locator('[data-nav-id="instances"]').click()
+  await page.getByText('Stopped Monitoring Instance', { exact: true }).first().click()
+  await page.getByRole('button', { name: '配置参数', exact: true }).last().click()
+  await expect(temperature).toHaveValue('0.6')
+  await temperature.fill('0.72')
+  await page.locator('[data-nav-id="instances"]').click()
+  await page.getByRole('button', { name: '配置参数', exact: true }).first().click()
+  await expect(temperature).toHaveValue('0.91')
+})
+
+test('saving a retained draft preserves settings changed on another page', async ({ page }) => {
+  await openConfiguration(page)
+  const temperature = page.locator('[data-config-field="temp"] input')
+  await temperature.fill('0.91')
+  await page.locator('[data-nav-id="instances"]').click()
+  await page.getByRole('main').getByRole('switch').first().click()
+  await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance']?.auto_start)).toBe(true)
+  await page.locator('[data-nav-id="config"]').click()
+  await expect(temperature).toHaveValue('0.91')
+  await page.getByRole('button', { name: '保存配置', exact: true }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '2')
+  const persisted = await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance'])
+  expect(persisted?.temp).toBe(0.91)
+  expect(persisted?.auto_start).toBe(true)
+})
+
+for (const fail of [false, true]) {
+  test(`navigation during a ${fail ? 'failed' : 'successful'} save preserves newer edits`, async ({ page }) => {
+    await openConfiguration(page, 'delayed-config-save')
+    const temperature = page.locator('[data-config-field="temp"]')
+    await temperature.locator('input').fill('0.7')
+    await page.getByRole('button', { name: '保存配置', exact: true }).click()
+    await expect.poll(() => page.evaluate(() => window.__TAURI_BROWSER_TEST__.calls.filter(call => call.command === 'save_config').length)).toBe(1)
+    await page.locator('[data-nav-id="instances"]').click()
+    await page.locator('[data-nav-id="config"]').click()
+    await expect(page.getByRole('button', { name: '正在写入...', exact: true })).toBeDisabled()
+    await temperature.locator('input').fill('0.8')
+    await page.evaluate(shouldFail => window.__TAURI_BROWSER_TEST__.releaseSave(shouldFail), fail)
+    if (!fail) await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-save-count', '1')
+    await expect(page.getByRole('button', { name: '保存配置', exact: true })).toBeEnabled()
+    await expect(temperature.locator('input')).toHaveValue('0.8')
+    await expect(temperature.locator('[data-config-status="changed"]')).toBeVisible()
+    expect(await page.evaluate(() => window.__TAURI_BROWSER_TEST__.state.instances['browser-test-instance']?.temp)).toBe(fail ? 0.6 : 0.7)
+  })
+}
+
 test('checkpoint requirements are explicit and repaired only after confirmation', async ({ page }) => {
   await openConfiguration(page, 'checkpoint-requirements')
 
