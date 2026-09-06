@@ -97,7 +97,9 @@ async function request(endpoint, token, command, requestId) {
         })
       })
     } catch (error) {
-      if (attempt === 79) throw error
+      if (attempt === 79) {
+        throw new Error(`runtime request ${requestId} (${command.command}) failed after 80 attempts`, { cause: error })
+      }
       await sleep(50)
     }
   }
@@ -537,7 +539,7 @@ async function main() {
       throw new Error(`runtime background handoff verification failed: ${JSON.stringify(detached)}`)
     }
 
-    // No GUI process sends a heartbeat in this test. Surviving a watchdog
+    // No GUI process sends a heartbeat in this phase. Surviving a watchdog
     // interval proves that the verified detach flag, not the tray process,
     // owns the runtime lifetime.
     await sleep(21_500)
@@ -719,6 +721,15 @@ async function main() {
     if (enabled.reply?.payload?.background_enabled !== true) {
       throw new Error('runtime did not persist background enablement')
     }
+    // Switching back to foreground ownership requires a live GUI owner. Without
+    // this handshake, slow runners let the watchdog exit during checkpoint tests.
+    const reattached = await request(
+      endpoint,
+      token,
+      { command: 'heartbeat', payload: { gui_pid: process.pid } },
+      'reattach-gui-owner',
+    )
+    assert.equal(reattached.reply?.result, 'status', JSON.stringify(reattached))
     const disabled = await request(
       endpoint,
       token,
@@ -728,6 +739,15 @@ async function main() {
     if (disabled.reply?.payload?.background_enabled !== false) {
       throw new Error('runtime did not persist background disablement')
     }
+
+    // Cross the 20-second heartbeat deadline and a full 5-second watchdog tick.
+    // The verified live owner must keep the foreground runtime alive even when
+    // no additional heartbeat is sent while a long operation is in progress.
+    await sleep(26_000)
+    assert.equal(pidIsAlive(service.pid), true, 'foreground runtime exited despite its live GUI owner')
+    const foregroundStatus = await request(endpoint, token, { command: 'get_status' }, 'foreground-owner-status')
+    assert.equal(foregroundStatus.reply?.payload?.service_pid, service.pid)
+    assert.equal(foregroundStatus.reply?.payload?.background_enabled, false)
 
     await verifyCheckpointRecovery(endpoint, token, dataDir, launchedPids)
 
