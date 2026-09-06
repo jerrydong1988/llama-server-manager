@@ -734,9 +734,14 @@ fn protect_file(_path: &Path) -> StoreResult<()> {
 
 #[cfg(windows)]
 fn protect_windows_checkpoint_root(path: &Path) -> StoreResult<()> {
+    use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
+    // This also runs during stop-time scratch cleanup from the windowless GUI
+    // and runtime service. Redirected stdio alone does not prevent a console.
     let identity = Command::new("whoami.exe")
+        .creation_flags(CREATE_NO_WINDOW)
         .args(["/user", "/fo", "csv", "/nh"])
         .stdin(Stdio::null())
         .stderr(Stdio::null())
@@ -763,6 +768,7 @@ fn protect_windows_checkpoint_root(path: &Path) -> StoreResult<()> {
     let direct_grant = format!("*{sid}:F");
     let inheritable_grant = format!("*{sid}:(OI)(CI)F");
     let direct_status = Command::new("icacls.exe")
+        .creation_flags(CREATE_NO_WINDOW)
         .arg(path)
         .args(["/inheritance:r", "/grant:r"])
         .arg(direct_grant)
@@ -780,6 +786,7 @@ fn protect_windows_checkpoint_root(path: &Path) -> StoreResult<()> {
     // files created after this pass. The direct ACE above remains effective on
     // regular files, making repeated hardening safe and idempotent.
     let inheritable_status = Command::new("icacls.exe")
+        .creation_flags(CREATE_NO_WINDOW)
         .arg(path)
         .arg("/grant")
         .arg(inheritable_grant)
