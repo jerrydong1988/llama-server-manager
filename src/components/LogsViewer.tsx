@@ -5,6 +5,7 @@ import { Activity, ChevronDown, Pause, Play, Search, Trash2 } from 'lucide-react
 import { useAppStore } from '../store'
 import { useI18n } from '../i18n'
 import { getLogsLabels } from '../i18n/pageLabels'
+import { useLogSelection } from '../hooks/useLogSelection'
 import { Button, InsetSurface, MetricCard, SelectInput, Surface, TextInput } from './ui'
 
 const ERROR_LOG_PATTERN = /error|fail|panic|fatal|\u9519\u8bef|\u5931\u8d25|\u5f02\u5e38|\u81f4\u547d/i
@@ -25,8 +26,6 @@ const LogsViewer = () => {
   const [autoScroll, setAutoScroll] = useState(true)
   const [filterText, setFilterText] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
-  const userInteractedRef = useRef(false)
-  const lastLogTimestampRef = useRef(0)
   const labels = useMemo(() => getLogsLabels(lang), [lang])
 
   const sourceLogs = selectedInstanceId ? instanceLogs : allLogs
@@ -35,7 +34,7 @@ const LogsViewer = () => {
     [instances],
   )
 
-  const displayLogs = useMemo(() => {
+  const filteredLogs = useMemo(() => {
     const query = filterText.trim().toLowerCase()
     if (!query) {
       return sourceLogs
@@ -49,11 +48,16 @@ const LogsViewer = () => {
     })
   }, [filterText, instanceNames, sourceLogs])
 
+  const {
+    selectedLogs: displayLogs, selectionActive, beginSelection, clearSelection, rangeExtractor,
+  } = useLogSelection(filteredLogs, scrollRef)
+
   const logVirtualizer = useVirtualizer({
     count: displayLogs.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 36,
     overscan: 16,
+    rangeExtractor,
     getItemKey: index => {
       const entry = displayLogs[index]
       return entry ? `${entry.instanceId}-${entry.timestamp}-${index}` : index
@@ -81,45 +85,39 @@ const LogsViewer = () => {
   }, [sourceLogs])
 
   useEffect(() => {
-    if (latestLogTimestamp === lastLogTimestampRef.current) {
-      return
-    }
-    lastLogTimestampRef.current = latestLogTimestamp
-    if (autoScroll && scrollRef.current) {
-      requestAnimationFrame(() => {
+    if (autoScroll && !selectionActive && scrollRef.current) {
+      const frame = requestAnimationFrame(() => {
         if (displayLogs.length > 0) logVirtualizer.scrollToIndex(displayLogs.length - 1, { align: 'end' })
       })
+      return () => cancelAnimationFrame(frame)
     }
-  }, [displayLogs.length, latestLogTimestamp, autoScroll, logVirtualizer])
+  }, [displayLogs.length, latestLogTimestamp, autoScroll, selectionActive, selectedInstanceId, filterText, logVirtualizer])
 
   const handleInstanceChange = (id: string) => {
+    clearSelection()
     setSelectedInstanceId(id)
     setAutoScroll(true)
     setFilterText('')
-    userInteractedRef.current = false
-    lastLogTimestampRef.current = 0
   }
 
   const handleScroll = useCallback(() => {
     const element = scrollRef.current
-    if (!element) {
+    if (!element || selectionActive) {
       return
     }
     const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 80
     if (!atBottom && autoScroll) {
-      userInteractedRef.current = true
       setAutoScroll(false)
     }
     if (atBottom && !autoScroll) {
-      userInteractedRef.current = false
       setAutoScroll(true)
     }
-  }, [autoScroll])
+  }, [autoScroll, selectionActive])
 
   const scrollToBottom = () => {
+    clearSelection()
     if (displayLogs.length > 0) logVirtualizer.scrollToIndex(displayLogs.length - 1, { align: 'end' })
     setAutoScroll(true)
-    userInteractedRef.current = false
   }
 
   const toggleAutoScroll = () => {
@@ -146,7 +144,7 @@ const LogsViewer = () => {
         clearLogs(id)
       }
     }
-    lastLogTimestampRef.current = 0
+    clearSelection()
     setAutoScroll(true)
   }
 
@@ -224,7 +222,7 @@ const LogsViewer = () => {
 
           <TextInput
             value={filterText}
-            onChange={event => setFilterText(event.target.value)}
+            onChange={event => { clearSelection(); setFilterText(event.target.value) }}
             placeholder={labels.filterPlaceholder}
             leadingIcon={<Search className="h-4 w-4" />}
           />
@@ -248,11 +246,11 @@ const LogsViewer = () => {
         </Surface>
 
         <Surface as="section" className="overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-800 bg-slate-950/90 px-5 py-3">
-            <div>
+          <div className="flex items-center justify-between gap-3 border-b border-slate-800 bg-slate-950/90 px-5 py-3">
+            <div className="min-w-0 flex-1">
               <h2 className="text-lg font-semibold text-slate-50">{labels.liveConsole}</h2>
-              <p className="mt-1 text-sm text-slate-400">
-                {selectedInstanceId ? labels.focusedStream : labels.mergedTimeline}
+              <p className="mt-1 truncate text-sm text-slate-400" title={selectionActive ? t.logs.selectionHint : undefined}>
+                {selectionActive ? t.logs.selectionHint : selectedInstanceId ? labels.focusedStream : labels.mergedTimeline}
               </p>
             </div>
             {!autoScroll && hasLogs && (
@@ -269,7 +267,9 @@ const LogsViewer = () => {
 
           <div
             ref={scrollRef}
+            data-log-console
             onScroll={handleScroll}
+            onMouseDownCapture={event => { if (beginSelection(event)) setAutoScroll(false) }}
             className="relative h-[560px] overflow-y-auto bg-[#050816] px-5 py-4 font-mono text-sm leading-7"
           >
             {!hasLogs ? (
@@ -307,6 +307,7 @@ const LogsViewer = () => {
                       key={virtualRow.key}
                       ref={logVirtualizer.measureElement}
                       data-index={virtualRow.index}
+                      data-log-row={virtualRow.index}
                       className="absolute left-0 top-0 w-full pb-1"
                       style={{ transform: `translateY(${virtualRow.start}px)` }}
                     >

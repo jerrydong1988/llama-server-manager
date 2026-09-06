@@ -359,6 +359,7 @@ export const enUS = {
     gpu: 'GPU',
   },
   logs: {
+    selectionHint: 'Display updates pause while text is selected. Clear the selection to show new logs, or choose Latest to resume following.',
     title: 'Server Logs', selectInstance: 'View instance logs:', allInstances: 'All Instances',
     clear: 'Clear Logs', clearConfirm: 'Clear all logs for this instance?', clearAllConfirm: 'Clear logs for ALL instances?', noLogs: 'No log output',
     runningTag: '(running)', noInstances: 'No running instances. Create and start an instance first.',

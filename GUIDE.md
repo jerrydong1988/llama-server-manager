@@ -512,6 +512,10 @@ Monitoring Wall condenses instances, throughput, request pressure, downloads, lo
 
 Server Logs collects instance stdout and stderr, startup commands, PIDs, health checks, and timing output. Per-instance logs persist and can be restored after restart.
 
+实时控制台支持按住鼠标跨屏选择并复制日志。选择期间固定当前显示内容，避免新日志或缓存轮换破坏选区；取消选择后继续显示新日志，点击“最新”恢复自动跟随。
+
+Drag across multiple console screens to select and copy logs. Displayed entries stay fixed while selected so incoming logs and buffer eviction cannot destroy the selection. Clear the selection to show new entries, or choose Latest to resume automatic following.
+
 ![实时日志、实例筛选和自动跟随 / Live logs, instance filtering, and tail follow](public/docs/guide/11-server-logs.png)
 
 ### 使用方法 / Usage
