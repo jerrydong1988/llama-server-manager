@@ -352,9 +352,11 @@ export function validateConfig(
     .some(flag => flags.has(flag))
   if (!customContext && !config.ctx_size_auto && config.ctx_size > 0 && model?.context_length) {
     const kvMode = config.kv_unified_mode || (config.kv_unified ? 'on' : '')
-    const unified = kvMode === 'on' || (kvMode !== 'off' && config.parallel < 0)
-    const perSlotContext = unified ? config.ctx_size
-      : config.parallel > 0 ? Math.ceil(config.ctx_size / config.parallel / 256) * 256 : undefined
+    // Automatic parallelism forces unified KV even with an explicit --no-kv-unified.
+    const unified = kvMode === 'on' || config.parallel < 0
+    const totalContext = Math.ceil(config.ctx_size / 256) * 256
+    const perSlotContext = unified ? totalContext
+      : config.parallel > 0 ? Math.ceil(Math.floor(totalContext / config.parallel) / 256) * 256 : undefined
     if (perSlotContext !== undefined && perSlotContext > model.context_length) {
       warnings.push({ field: 'ctx_size', severity: 'low', key: 'warnA7' })
     }

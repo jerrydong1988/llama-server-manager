@@ -172,8 +172,12 @@ const entry = `
   }
   assert.equal(has('warnA7', { ctx_size: 262144, parallel: -1 }, longContextModel), true)
   assert.equal(has('warnA7', { ctx_size: 262144, parallel: 2, kv_unified_mode: 'off' }, longContextModel), false)
-  assert.equal(has('warnA7', { ctx_size: 262144, parallel: -1, kv_unified_mode: 'off' }, longContextModel), false,
-    'the per-slot share is unknown when the engine chooses the separate slot count')
+  assert.equal(has('warnA7', { ctx_size: 262144, parallel: -1, kv_unified_mode: 'off' }, longContextModel), true,
+    'automatic parallelism forces unified KV even when the user requested separate KV')
+  assert.equal(has('warnA7', { ctx_size: 1793, parallel: 7, kv_unified_mode: 'off' }, model({ context_length: 256 })), true,
+    'the engine pads total capacity before dividing it between separate sequences')
+  assert.equal(has('warnA7', { ctx_size: 131328, parallel: 512, kv_unified_mode: 'off' }, model({ context_length: 256 })), false,
+    'sequence division truncates before the engine pads per-sequence capacity')
   assert.equal(has('warnA7', { ctx_size: 262144, ctx_size_auto: true, kv_unified_mode: 'on' }, longContextModel), false)
   assert.equal(has('warnA7', { ctx_size: 262144, kv_unified_mode: 'on', custom_args: ['--kv-unified-per-slot 32768'] }, longContextModel), false,
     'do not claim a per-slot size from structured fields when custom sizing overrides it')
