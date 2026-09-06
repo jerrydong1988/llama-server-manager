@@ -3,6 +3,7 @@ import type { Translations } from './i18n'
 import { defaultInstanceConfig } from './store/defaults'
 import { assessProjectorMatch } from './modelProjector'
 import { PARAMETER_CATALOG } from './parameterCatalog'
+import { engineBuildNumber, speculativeBackendSamplingSupport } from './engineParameterSupport'
 import {
   ngramCacheEnabled,
   projectorEnabled,
@@ -23,6 +24,12 @@ export interface Warning {
 // Flags represented by managed configuration fields. Custom arguments are
 // appended last, so repeating one of these flags can silently override the UI.
 export const KNOWN_FLAGS = new Set([
+  // Additional official aliases, checked against every overlapping stable parameter row.
+  '--gpu-layers', '--predict', '-s', '-j', '-tb', '-ncmoe', '-fit',
+  '-nocb', '--swa-checkpoints', '--no-direct-io', '-ndio', '-nr',
+  '-kvo', '-nkvo', '-kvu', '-no-kvu', '--no-skip-chat-parsing',
+  '--device-draft', '-devd', '--spec-draft-model', '--gpu-layers-draft',
+  '--draft-p-min', '--draft-p-split', '--threads-draft', '--threads-batch-draft',
   // Basic
   '-m', '--model', '-a', '--alias', '--lora', '--lora-init-without-apply', '--lora-scaled',
   '-mm', '--mmproj', '-mmu', '--mmproj-url', '--mmproj-auto', '--no-mmproj', '--no-mmproj-auto',
@@ -216,7 +223,9 @@ function customFlags(config: InstanceConfig): Set<string> {
 
 function samplerNames(config: InstanceConfig): Set<string> | null {
   const aliases: Record<string, string> = {
-    nucleus: 'top_p', temp: 'temperature', typ: 'typ_p', typical: 'typ_p',
+    nucleus: 'top_p', temp: 'temperature', typ: 'typ_p',
+    topk: 'top_k', topp: 'top_p', topnsigma: 'top_n_sigma',
+    typp: 'typ_p', minp: 'min_p', adaptivep: 'adaptive_p',
   }
   if (config.sampler_seq.trim()) {
     const chars: Record<string, string> = {
@@ -231,7 +240,7 @@ function samplerNames(config: InstanceConfig): Set<string> | null {
       .split(/[;,]/)
       .map(value => value.trim().toLowerCase())
       .filter(Boolean)
-      .map(value => aliases[value] ?? value),
+      .map(value => aliases[value.replace(/[-_]/g, '')] ?? value),
   )
 }
 
@@ -277,7 +286,7 @@ function hasMirostatIgnoredSettings(config: InstanceConfig, defaults: InstanceCo
 export function validateConfig(
   config: InstanceConfig,
   model: ModelInfo | null | undefined,
-  _engine: EngineInfo | null | undefined,
+  engine: EngineInfo | null | undefined,
   projector?: ModelInfo | null,
 ): Warning[] {
   const warnings: Warning[] = []
@@ -304,6 +313,7 @@ export function validateConfig(
     const hasExternalDraft = Boolean(config.draft_model_path.trim())
       || flags.has('--spec-draft-hf')
       || flags.has('--model-draft')
+      || flags.has('--spec-draft-model')
       || flags.has('-md')
     if (needsExternalDraft && !hasExternalDraft) {
       warnings.push({ field: 'draft_model_path', severity: 'medium', key: 'warnA3' })
@@ -335,12 +345,18 @@ export function validateConfig(
     warnings.push({ field: 'spec_type', severity: 'low', key: 'warnA5' })
   }
 
-  // llama-server allocates the configured total context across parallel slots.
-  if (!config.ctx_size_auto && config.ctx_size > 0 && model?.context_length) {
-    const parallel = config.parallel > 0 ? config.parallel : 1
-    const perSlotContext = Math.floor(config.ctx_size / parallel)
-    if (perSlotContext > model.context_length) {
-      warnings.push({ field: 'ctx_size', severity: 'medium', key: 'warnA7' })
+  // Unified KV shares total capacity; separate KV divides it between sequences.
+  // See llama-context.cpp n_ctx_seq and server-context.cpp n_ctx_slot (v0.4.0).
+  const customContext = ['-c', '--ctx-size', '-np', '--parallel', '-kvu', '--kv-unified',
+    '-no-kvu', '--no-kv-unified', '--kv-unified-per-slot', '--override-kv']
+    .some(flag => flags.has(flag))
+  if (!customContext && !config.ctx_size_auto && config.ctx_size > 0 && model?.context_length) {
+    const kvMode = config.kv_unified_mode || (config.kv_unified ? 'on' : '')
+    const unified = kvMode === 'on' || (kvMode !== 'off' && config.parallel < 0)
+    const perSlotContext = unified ? config.ctx_size
+      : config.parallel > 0 ? Math.ceil(config.ctx_size / config.parallel / 256) * 256 : undefined
+    if (perSlotContext !== undefined && perSlotContext > model.context_length) {
+      warnings.push({ field: 'ctx_size', severity: 'low', key: 'warnA7' })
     }
   }
 
@@ -369,9 +385,6 @@ export function validateConfig(
   if (config.cache_reuse > 0 && !config.cache_prompt) {
     warnings.push({ field: 'cache_prompt', severity: 'low', key: 'warnB2' })
   }
-  if (!config.slots_enabled && config.slot_save_path.trim()) {
-    warnings.push({ field: 'slots_enabled', severity: 'low', key: 'warnB3' })
-  }
   if (config.mirostat > 0 && hasMirostatIgnoredSettings(config, defaults)) {
     warnings.push({ field: 'mirostat', severity: 'low', key: 'warnB4' })
   }
@@ -381,7 +394,7 @@ export function validateConfig(
   if (config.pooling.trim() && !config.embedding) {
     warnings.push({ field: 'pooling', severity: 'low', key: 'warnB6' })
   }
-  if (config.gpu_layers === 0 && config.device.trim()) {
+  if (!config.gpu_layers_auto && config.gpu_layers === 0 && config.device.trim()) {
     warnings.push({ field: 'gpu_layers', severity: 'low', key: 'warnB7' })
   }
   if (specActive && (config.lookup_cache_static || config.lookup_cache_dynamic) && !ngramCacheEnabled(config)) {
@@ -401,9 +414,28 @@ export function validateConfig(
     if (hasReasoningBudget) {
       warnings.push({ field: 'backend_sampling', severity: 'medium', key: 'warnBackendSamplingReasoning' })
     }
-    if (specActive) {
+    const speculativeSampling = speculativeBackendSamplingSupport(engine)
+    if (specActive && speculativeSampling === false) {
       warnings.push({ field: 'backend_sampling', severity: 'medium', key: 'warnBackendSamplingSpeculative' })
+    } else if (specActive && speculativeSampling === undefined) {
+      warnings.push({ field: 'backend_sampling', severity: 'low', key: 'warnBackendSamplingSpeculativeUnknown' })
     }
+    if (config.split_mode === 'tensor') {
+      warnings.push({ field: 'backend_sampling', severity: 'medium', key: 'warnBackendSamplingTensorSplit' })
+    }
+  }
+
+  if (config.split_mode === 'tensor' && config.flash_attn === 'off') {
+    warnings.push({ field: 'flash_attn', severity: 'high', key: 'warnTensorSplitFlashAttention' })
+  }
+  if (config.flash_attn === 'off'
+    && ['q8_0', 'q4_0', 'q4_1', 'iq4_nl', 'q5_0', 'q5_1'].includes(config.cache_type_v)) {
+    warnings.push({ field: 'cache_type_v', severity: 'high', key: 'warnQuantizedVFlashAttention' })
+  }
+  // p_split is read by examples/speculative, not by the common server draft implementations.
+  if (specActive && config.spec_draft_p_split !== defaults.spec_draft_p_split
+    && (engineBuildNumber(engine?.version) ?? 0) >= 10068) {
+    warnings.push({ field: 'spec_draft_p_split', severity: 'low', key: 'warnSpecDraftPSplitUnused' })
   }
 
   if (config.cache_idle_slots && config.cache_ram === 0) {

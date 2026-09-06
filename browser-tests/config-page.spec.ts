@@ -29,6 +29,21 @@ test('opening an instance config keeps React hook order stable (issue #5)', asyn
   expect(pageErrors).toEqual([])
 })
 
+for (const oldEngine of [false, true]) {
+  test(`backend sampling dependency follows the ${oldEngine ? 'old' : 'current'} engine build`, async ({ page }) => {
+    await openConfiguration(page, `parameter-compatibility${oldEngine ? '-old' : ''}`)
+    await page.getByRole('textbox', { name: '参数搜索' }).fill('--backend-sampling')
+    const backendSampling = page.locator('[data-config-field="backend_sampling"]')
+    await expect(backendSampling).toHaveAttribute('data-config-source', oldEngine ? 'inactive' : 'explicit')
+    await expect(page.getByText(/此引擎早于官方 b10355/)).toHaveCount(oldEngine ? 1 : 0)
+    await page.getByRole('textbox', { name: '参数搜索' }).fill('--fit')
+    for (const key of ['fit_target', 'fit_ctx']) {
+      await expect(page.locator(`[data-config-field="${key}"]`)).toHaveAttribute('data-config-source', 'explicit')
+    }
+    await expect(page.locator('[data-config-field="fit_mode"]')).toHaveAttribute('data-config-source', 'inherited')
+  })
+}
+
 test('unsaved configuration survives page navigation and saves against the original baseline', async ({ page }) => {
   await openConfiguration(page)
   const temperature = page.locator('[data-config-field="temp"]')

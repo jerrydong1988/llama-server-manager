@@ -282,7 +282,10 @@ const FieldFrame = ({
   const runtime = useContext(FieldRuntimeCtx)
   const explicit = !!(fieldKey && runtime.explicitKeys.has(fieldKey))
   const managed = !!(fieldKey && SYSTEM_MANAGED_PARAMETER_KEYS.has(fieldKey))
-  const dependencyActive = !!(!fieldKey || !runtime.config || parameterDependencyActive(fieldKey, runtime.config, runtime.isEmbedding))
+  const dependencyActive = !!(!fieldKey || !runtime.config || parameterDependencyActive(fieldKey, runtime.config, runtime.isEmbedding, {
+    version: runtime.engineVersion,
+    capabilities: runtime.capabilities,
+  }))
   const catalogFlags = fieldKey ? parameterFlags(fieldKey) : []
   const flags = catalogFlags.length > 0
     ? catalogFlags

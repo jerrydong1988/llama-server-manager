@@ -256,6 +256,20 @@ const instanceConfig: InstanceConfig = {
   explicit_overrides: ['temp', 'top_k', 'kv_unified', 'kv_unified_mode', 'models_autoload', 'image_min_tokens'],
 }
 
+if (BROWSER_SCENARIO?.startsWith('parameter-compatibility')) {
+  engine.version = BROWSER_SCENARIO.endsWith('-old')
+    ? 'version: 10354 (browser-test)'
+    : 'version: 0.4.0 (build 10819, commit 6a1a922d2)'
+  engine.capabilities?.supportedFlags.push('--backend-sampling', '-bs', '--fit-target', '-fitt', '--fit-ctx', '-fitc')
+  Object.assign(instanceConfig, {
+    backend_sampling: true,
+    spec_type: 'draft-mtp',
+    fit_target: '2048',
+    fit_ctx: 8192,
+    explicit_overrides: [...(instanceConfig.explicit_overrides ?? []), 'backend_sampling', 'spec_type', 'fit_target', 'fit_ctx'],
+  })
+}
+
 const docsVisionConfig: InstanceConfig = {
   ...clone(instanceConfig),
   id: STOPPED_INSTANCE_ID,
