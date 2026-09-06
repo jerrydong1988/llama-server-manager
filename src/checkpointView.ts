@@ -12,6 +12,7 @@ export const CHECKPOINT_PHASES: readonly CheckpointPhase[] = [
   'starting',
   'engine_healthy',
   'restoring',
+  'restart_required',
   'ready',
   'ready_cold',
   'draining',
@@ -72,3 +73,4 @@ export const canClearCheckpoint = (
   && lifecycle === undefined
   && checkpoint?.phase !== 'saving'
   && checkpoint?.phase !== 'restoring'
+  && checkpoint?.phase !== 'restart_required'

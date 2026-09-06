@@ -318,11 +318,15 @@ if (BROWSER_SCENARIO === 'checkpoint-requirements') {
     cache_ram: 0,
     slots_enabled: false,
     swa_full: false,
+    ctx_checkpoints: 0,
     kv_checkpoint: {
       ...state.instances[INSTANCE_ID].kv_checkpoint,
       enabled: true,
     },
   })
+}
+if (BROWSER_SCENARIO === 'checkpoint-observation') {
+  state.instances[INSTANCE_ID].kv_checkpoint.enabled = true
 }
 
 type BrowserProxyRoute = {
@@ -995,6 +999,9 @@ mockIPC((command, payload) => {
       if (!config.slots_enabled) reasons.push('slots_required')
       if (BROWSER_SCENARIO === 'checkpoint-requirements' && !config.swa_full) {
         reasons.push('sliding_window_requires_full_cache')
+      }
+      if (BROWSER_SCENARIO === 'checkpoint-requirements' && config.ctx_checkpoints === 0) {
+        reasons.push('context_checkpoints_required')
       }
       return {
         eligible: reasons.length === 0,

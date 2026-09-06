@@ -16,6 +16,33 @@ test.afterEach(async ({ page }) => {
   await expect(page.locator('html')).toHaveAttribute('data-tauri-mock-unhandled', '[]')
 })
 
+test('checkpoint file verification does not invent request cache hits', async ({ page }) => {
+  await openTab(page, 'instances', 'checkpoint-observation')
+  await expect(page.getByText('检查点状态', { exact: true })).toBeVisible()
+  const emit = async (phase: string, cachedTokens?: number) => page.evaluate(({ phase, cachedTokens }) => {
+    window.__TAURI_BROWSER_TEST__.emitEvent('checkpoint-status', {
+      instance_id: 'browser-test-instance', phase, routable: phase === 'ready',
+      expected_pid: 1234, last_operation: 'restore', last_outcome: 'success',
+      reason_code: 'none', reasons: [], updated_at: Date.now(),
+      reuse_observation: cachedTokens === undefined ? undefined : {
+        task_id: 7, cached_tokens: cachedTokens, processed_tokens: 512, observed_at: Date.now(),
+      },
+    })
+  }, { phase, cachedTokens })
+
+  await emit('ready')
+  await expect(page.getByText('已就绪（文件已验证）', { exact: true })).toBeVisible()
+  await expect(page.getByText('最近观测请求复用 token: --', { exact: true })).toBeVisible()
+  await emit('ready', 0)
+  await expect(page.getByText('最近观测请求复用 token: 0', { exact: true })).toBeVisible()
+  await expect(page.getByText('最近观测请求预填充 token: 512', { exact: true })).toBeVisible()
+  await expect(page.getByText('该请求预填充耗时: --', { exact: true })).toBeVisible()
+  await emit('restart_required', 0)
+  await expect(page.getByText('恢复失败，等待新进程隔离', { exact: true })).toBeVisible()
+  await expect(page.getByText('最近观测请求复用 token: 0', { exact: true })).toBeHidden()
+  await expect(page.getByRole('button', { name: '清除检查点', exact: true })).toBeDisabled()
+})
+
 test('instance rename recovers after Escape and waits for IME composition', async ({ page }) => {
   await openTab(page, 'instances')
 

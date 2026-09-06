@@ -1242,6 +1242,7 @@ pub struct AppState {
     pub instances: Mutex<HashMap<String, InstanceConfig>>,
     pub running: Mutex<HashMap<String, RunningInstance>>,
     pub starting: Mutex<std::collections::HashSet<String>>,
+    pub server_operation_locks: Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
     pub config_dir: Mutex<PathBuf>,
     pub cancel_flags: Mutex<HashMap<String, bool>>,
     pub pause_flags: Mutex<HashMap<String, bool>>,

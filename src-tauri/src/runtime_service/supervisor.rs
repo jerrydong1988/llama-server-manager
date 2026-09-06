@@ -152,6 +152,7 @@ fn downgrade_runtime_checkpoint(
     spec.command_display = format_command_for_display(&spec.command);
     let eligibility = CheckpointEligibility::ineligible(reason_code);
     spec.checkpoint = Some(RuntimeCheckpointLaunchSpec {
+        eligibility_revision: crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION,
         eligibility: eligibility.clone(),
         fingerprint: None,
     });
@@ -170,6 +171,9 @@ fn prepare_runtime_checkpoint_launch(
     };
     if !checkpoint.eligibility.eligible {
         return (checkpoint.eligibility, checkpoint.fingerprint);
+    }
+    if checkpoint.eligibility_revision != crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION {
+        return downgrade_runtime_checkpoint(spec, CheckpointReasonCode::EngineCapabilityMissing);
     }
     let Some(fingerprint) = checkpoint.fingerprint else {
         return downgrade_runtime_checkpoint(spec, CheckpointReasonCode::FingerprintUnavailable);
@@ -644,17 +648,8 @@ impl RuntimeSupervisor {
         if !coordinator.gate_active(instance_id) {
             return true;
         }
-        if coordinator.restore_cleanup_pending(instance_id, expected_pid) {
-            let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_SLOT_OPERATION_TIMEOUT) {
-                Ok(client) => {
-                    coordinator.retry_failed_restore_cleanup(instance_id, expected_pid, &client)
-                }
-                Err(error) => Err(error),
-            };
-            if let Err(error) = cleanup {
-                eprintln!("Checkpoint restore cleanup failed for {instance_id}: {error}");
-            }
-            return coordinator.gate_allows_routing(instance_id);
+        if coordinator.restore_restart_required(instance_id, expected_pid) {
+            return false;
         }
         if let Err(error) = coordinator.on_engine_healthy(instance_id, expected_pid) {
             eprintln!("Checkpoint health transition failed for {instance_id}: {error}");
@@ -773,6 +768,17 @@ impl RuntimeSupervisor {
                             &config,
                         );
                     }
+                    if supervisor
+                        .checkpoint_coordinator
+                        .restore_restart_required(&instance_id, expected_pid)
+                    {
+                        if let Err(error) =
+                            supervisor.recover_checkpoint_process(&instance_id, expected_pid)
+                        {
+                            *supervisor.last_error.lock().unwrap() = Some(error);
+                        }
+                        break;
+                    }
                     // A probe can outlive stop/start; publish only for its owner.
                     let lifecycle = supervisor.instance_lifecycle.lock().unwrap();
                     if !supervisor
@@ -819,6 +825,13 @@ impl RuntimeSupervisor {
                         sample.llama,
                     );
                     if let Some(slots) = sample.slots {
+                        for slot in &slots {
+                            supervisor.checkpoint_coordinator.observe_restored_request(
+                                &instance_id,
+                                expected_pid,
+                                slot,
+                            );
+                        }
                         crate::commands::monitoring::update_slots(
                             &instance_id,
                             telemetry_session_id.as_deref(),
@@ -849,12 +862,38 @@ impl RuntimeSupervisor {
         spec: RuntimeLaunchSpec,
     ) -> Result<RunningInstance, String> {
         let _lifecycle = self.instance_lifecycle.lock().unwrap();
-        self.start_instance_locked(spec)
+        self.start_instance_locked(spec, false)
+    }
+
+    fn recover_checkpoint_process(
+        self: &Arc<Self>,
+        instance_id: &str,
+        expected_pid: u32,
+    ) -> Result<(), String> {
+        let _lifecycle = self.instance_lifecycle.lock().unwrap();
+        let spec = {
+            let state = self.state.lock().unwrap();
+            if !state
+                .running
+                .get(instance_id)
+                .is_some_and(|running| running.pid == expected_pid)
+                || !self
+                    .checkpoint_coordinator
+                    .restore_restart_required(instance_id, expected_pid)
+            {
+                return Ok(());
+            }
+            state.desired_instances.get(instance_id).cloned()
+        }
+        .ok_or_else(|| "checkpoint recovery launch configuration is unavailable".to_string())?;
+        self.stop_instance_locked(instance_id, true, "checkpoint-restore-failed")?;
+        self.start_instance_locked(spec, true).map(|_| ())
     }
 
     fn start_instance_locked(
         self: &Arc<Self>,
         mut spec: RuntimeLaunchSpec,
+        cold_recovery: bool,
     ) -> Result<RunningInstance, String> {
         crate::commands::server::validate_instance_id(&spec.instance_id)
             .map_err(|error| error.to_string())?;
@@ -973,6 +1012,17 @@ impl RuntimeSupervisor {
                 "checkpoint lifecycle registration failed for {}: {error}",
                 spec.instance_id
             ));
+        }
+        if cold_recovery && checkpoint_eligibility.eligible {
+            if let Err(error) = self
+                .checkpoint_coordinator
+                .prepare_cold_recovery(&spec.instance_id, pid)
+            {
+                let _ = child.kill();
+                let _ = child.wait();
+                self.cleanup_checkpoint_after_exit(&spec.instance_id, pid);
+                return Err(format!("checkpoint cold recovery setup failed: {error}"));
+            }
         }
         let workload = ModelWorkload::from_storage(&spec.workload);
         let telemetry_session_id = crate::commands::telemetry::begin_run_session(
@@ -1198,7 +1248,8 @@ impl RuntimeSupervisor {
             Some(
                 CheckpointPhase::Starting
                 | CheckpointPhase::EngineHealthy
-                | CheckpointPhase::Restoring,
+                | CheckpointPhase::Restoring
+                | CheckpointPhase::RestartRequired,
             ) => {
                 let _ = coordinator.skip_save_not_ready(instance_id, running.pid);
                 return None;
@@ -2159,6 +2210,7 @@ mod tests {
 
     fn eligible_checkpoint() -> RuntimeCheckpointLaunchSpec {
         RuntimeCheckpointLaunchSpec {
+            eligibility_revision: crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION,
             eligibility: CheckpointEligibility {
                 eligible: true,
                 reason_code: CheckpointReasonCode::None,
@@ -2220,6 +2272,33 @@ mod tests {
             .checkpoint
             .as_ref()
             .is_some_and(|checkpoint| !checkpoint.eligibility.eligible));
+    }
+
+    #[test]
+    fn runtime_checkpoint_rejects_persisted_eligibility_from_an_older_policy() {
+        let directory = TestDirectory::new();
+        let coordinator = CheckpointCoordinator::new(CheckpointStore::new(directory.path()));
+        let scratch = coordinator.store().prepare_instance("instance-1").unwrap();
+        let mut spec = detach_spec();
+        spec.command = vec![
+            "llama-server".into(),
+            "--slot-save-path".into(),
+            scratch.to_string_lossy().to_string(),
+        ];
+        let mut legacy = serde_json::to_value(eligible_checkpoint()).unwrap();
+        legacy
+            .as_object_mut()
+            .unwrap()
+            .remove("eligibility_revision");
+        spec.checkpoint = Some(serde_json::from_value(legacy).unwrap());
+        let (eligibility, fingerprint) = prepare_runtime_checkpoint_launch(&coordinator, &mut spec);
+        assert!(!eligibility.eligible);
+        assert_eq!(
+            eligibility.reason_code,
+            CheckpointReasonCode::EngineCapabilityMissing
+        );
+        assert!(fingerprint.is_none());
+        assert_eq!(spec.command, vec!["llama-server"]);
     }
 
     #[test]

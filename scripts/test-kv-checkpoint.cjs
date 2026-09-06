@@ -70,13 +70,13 @@ assert.match(runtimeSupervisorSource, /prepare_runtime_checkpoint_launch/, 'runt
 assert.match(runtimeSupervisorSource, /resolve_checkpoint_startup/, 'runtime must resolve restore before routing')
 assert.match(runtimeSupervisorSource, /checkpoint_before_termination/, 'runtime must save at the controlled stop boundary')
 assert.match(runtimeSupervisorSource, /gate_allows_routing/, 'runtime proxy paths must enforce the checkpoint gate')
-assert.match(runtimeSupervisorSource, /retry_failed_restore_cleanup/, 'runtime must retry erase before cold routing')
+assert.match(runtimeSupervisorSource, /recover_checkpoint_process/, 'runtime must replace the contaminated process before cold routing')
 
 const serverSource = fs.readFileSync(
   path.join(process.cwd(), 'src-tauri', 'src', 'commands', 'server.rs'),
   'utf8',
 )
-assert.match(serverSource, /retry_failed_restore_cleanup/, 'direct lifecycle must retry erase before cold routing')
+assert.match(serverSource, /recover_gui_checkpoint_process/, 'direct lifecycle must replace the contaminated process before cold routing')
 
 const functionSlice = (source, start, end) => {
   const startIndex = source.indexOf(start)
