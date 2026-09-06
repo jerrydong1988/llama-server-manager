@@ -17,6 +17,10 @@ import { Badge, Button } from '../ui'
 export function CheckpointStatusCard({ instance }: { instance: Instance }) {
   const { t } = useI18n()
   const status = useAppStore(state => state.checkpointStatuses[instance.id])
+  const lastTask = useAppStore(state => state.lastCompletedTaskByInstance[instance.id])
+  const observation = status?.phase === 'ready' ? status.reuse_observation : undefined
+  const prefillMs = observation && lastTask?.task_id === observation.task_id && lastTask.started_at_ms >= (status?.updated_at ?? Infinity)
+    ? lastTask.prompt_time_ms : undefined
   const lifecycle = useAppStore(state => state.instanceLifecycle[instance.id])
   const clearCheckpoint = useAppStore(state => state.clearCheckpoint)
   const [clearing, setClearing] = useState(false)
@@ -85,6 +89,15 @@ export function CheckpointStatusCard({ instance }: { instance: Instance }) {
         </div>
       ) : (
         <p className="text-xs leading-5 text-slate-500 dark:text-slate-400">{t.checkpoint.noData}</p>
+      )}
+      {status?.phase === 'ready' && (
+        <div className="space-y-2 border-t border-violet-200 pt-2 text-xs dark:border-violet-500/20">
+          <p className="text-slate-500">{t.checkpoint.restoreVerifiedHint}</p>
+          <div>{t.checkpoint.observedCachedTokens}: {observation?.cached_tokens.toLocaleString() ?? '--'}</div>
+          <div>{t.checkpoint.observedProcessedTokens}: {observation?.processed_tokens.toLocaleString() ?? '--'}</div>
+          <div>{t.checkpoint.observedPrefill}: {prefillMs == null ? '--' : `${prefillMs.toLocaleString()} ms`}</div>
+          <p className="text-slate-500">{t.checkpoint.observationHint}</p>
+        </div>
       )}
       <Button
         onClick={() => void handleClear()}

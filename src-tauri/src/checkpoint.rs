@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 pub const CHECKPOINT_SLOT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+pub const CHECKPOINT_ELIGIBILITY_REVISION: u32 = 2;
 const CHECKPOINT_SLOT_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const CHECKPOINT_SLOT_CLEANUP_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECKPOINT_DISK_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
@@ -35,6 +36,7 @@ pub enum CheckpointPhase {
     Starting,
     EngineHealthy,
     Restoring,
+    RestartRequired,
     Ready,
     ReadyCold,
     Draining,
@@ -49,7 +51,7 @@ impl CheckpointPhase {
     }
 
     pub const fn is_busy(self) -> bool {
-        matches!(self, Self::Restoring | Self::Saving)
+        matches!(self, Self::Restoring | Self::RestartRequired | Self::Saving)
     }
 
     pub const fn as_str(self) -> &'static str {
@@ -59,6 +61,7 @@ impl CheckpointPhase {
             Self::Starting => "starting",
             Self::EngineHealthy => "engine_healthy",
             Self::Restoring => "restoring",
+            Self::RestartRequired => "restart_required",
             Self::Ready => "ready",
             Self::ReadyCold => "ready_cold",
             Self::Draining => "draining",
@@ -112,6 +115,7 @@ pub enum CheckpointReasonCode {
     LoraUnsupported,
     MultimodalUnsupported,
     HybridRecurrentUnsupported,
+    ContextCheckpointsRequired,
     SlidingWindowRequiresFullCache,
     ModelArchitectureUnknown,
     ShardedModelUnsupported,
@@ -138,6 +142,16 @@ pub enum CheckpointReasonCode {
     InvalidStateTransition,
     ClearWhileRunning,
     UnexpectedExit,
+    RestoreGenerationRejected,
+    ColdAfterRestoreFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CheckpointReuseObservation {
+    pub task_id: u64,
+    pub cached_tokens: u64,
+    pub processed_tokens: u64,
+    pub observed_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +174,8 @@ pub struct CheckpointStatus {
     pub bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reuse_observation: Option<CheckpointReuseObservation>,
     pub updated_at: u64,
 }
 
@@ -178,6 +194,7 @@ impl CheckpointStatus {
             prompt_tokens: None,
             bytes: None,
             duration_ms: None,
+            reuse_observation: None,
             updated_at,
         }
     }
@@ -301,6 +318,15 @@ fn is_known_hybrid_or_recurrent(architecture: &str) -> bool {
         "hgrn",
         "hymba",
         "granitehybrid",
+        "plamo2",
+        "lfm2",
+        "nemotronh",
+        "kimilinear",
+        "kimik3",
+        "bailingmoe3",
+        "qwen35",
+        "deepseek4",
+        "minimax01",
     ];
     UNSUPPORTED_HINTS
         .iter()
@@ -514,11 +540,26 @@ pub fn evaluate_checkpoint_eligibility(
         None | Some("") => {
             push_reason(&mut reasons, CheckpointReasonCode::ModelArchitectureUnknown)
         }
+        // qwen35 is the one hybrid architecture with a verified local
+        // cross-process target + DFlash round trip. Other hybrids remain cold.
+        Some("qwen35") if context.engine_capabilities.context_checkpoint_persistence => {}
         Some(architecture) if is_known_hybrid_or_recurrent(architecture) => push_reason(
             &mut reasons,
             CheckpointReasonCode::HybridRecurrentUnsupported,
         ),
         Some(_) => {}
+    }
+
+    if config.ctx_checkpoints == 0
+        && (checkpoint_uses_draft_state(&config.spec_type)
+            || context
+                .model_architecture
+                .is_some_and(is_known_hybrid_or_recurrent))
+    {
+        push_reason(
+            &mut reasons,
+            CheckpointReasonCode::ContextCheckpointsRequired,
+        );
     }
 
     CheckpointEligibility::from_reasons_and_blockers(reasons, custom_argument_blockers)
@@ -1866,6 +1907,18 @@ impl CheckpointStore {
         }
         let generation_dir = generations_root.join(generation_id);
         verified_child_path(&generation_dir, generations_root)?;
+        if generation_dir
+            .join("restore-rejected.json")
+            .try_exists()
+            .map_err(|_| {
+                CheckpointStoreError::io("checkpoint rejection marker could not be inspected")
+            })?
+        {
+            return Err(CheckpointStoreError::new(
+                CheckpointReasonCode::RestoreGenerationRejected,
+                "checkpoint generation was rejected by an earlier restore",
+            ));
+        }
         let manifest_path = generation_dir.join("manifest.json");
         let manifest_bytes = read_bounded(&manifest_path, MAX_MANIFEST_BYTES)?;
         if expected_manifest_sha256
@@ -1907,6 +1960,22 @@ impl CheckpointStore {
         })?;
         latest.validate()?;
         Ok(latest)
+    }
+
+    fn reject_generation(
+        &self,
+        instance_id: &str,
+        generation: &LoadedGeneration,
+    ) -> StoreResult<()> {
+        let (_, generations_root) =
+            self.ensure_generation_roots(instance_id, &generation.manifest.fingerprint.digest)?;
+        verified_child_path(&generation.generation_dir, &generations_root)?;
+        crate::persistence::atomic_write(
+            &generation.generation_dir.join("restore-rejected.json"),
+            b"{\"schema_version\":1}\n",
+            None,
+        )
+        .map_err(|_| CheckpointStoreError::io("checkpoint rejection could not be persisted"))
     }
 
     pub fn load_latest(
@@ -2694,6 +2763,7 @@ struct CoordinatorEntry {
     status: CheckpointStatus,
     fingerprint: Option<CheckpointFingerprint>,
     policy: crate::models::KvCheckpointConfig,
+    cold_recovery: bool,
 }
 
 #[derive(Clone)]
@@ -2745,7 +2815,9 @@ fn legal_checkpoint_transition(from: CheckpointPhase, to: CheckpointPhase) -> bo
             | (CheckpointPhase::EngineHealthy, CheckpointPhase::Stopping)
             | (CheckpointPhase::Restoring, CheckpointPhase::Ready)
             | (CheckpointPhase::Restoring, CheckpointPhase::ReadyCold)
+            | (CheckpointPhase::Restoring, CheckpointPhase::RestartRequired)
             | (CheckpointPhase::Restoring, CheckpointPhase::Stopping)
+            | (CheckpointPhase::RestartRequired, CheckpointPhase::Stopping)
             | (CheckpointPhase::Ready, CheckpointPhase::Draining)
             | (CheckpointPhase::ReadyCold, CheckpointPhase::Draining)
             | (CheckpointPhase::Ready, CheckpointPhase::Stopping)
@@ -2833,6 +2905,7 @@ impl CheckpointCoordinator {
             prompt_tokens: None,
             bytes: None,
             duration_ms: None,
+            reuse_observation: None,
             updated_at: checkpoint_now_millis(),
         };
         let mut entries = self
@@ -2846,9 +2919,34 @@ impl CheckpointCoordinator {
                 status: status.clone(),
                 fingerprint,
                 policy,
+                cold_recovery: false,
             },
         );
         Ok(status)
+    }
+
+    /// Only the owner of a freshly spawned process may suppress restore for
+    /// recovery. The saved user policy and future starts remain unchanged.
+    pub fn prepare_cold_recovery(&self, instance_id: &str, expected_pid: u32) -> StoreResult<()> {
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| CheckpointStoreError::io("checkpoint status lock failed"))?;
+        let entry = entries
+            .get_mut(instance_id)
+            .filter(|entry| {
+                entry.status.expected_pid == Some(expected_pid)
+                    && entry.status.phase == CheckpointPhase::Starting
+            })
+            .ok_or_else(|| {
+                CheckpointStoreError::new(
+                    CheckpointReasonCode::StaleProcessEvent,
+                    "cold recovery requires a fresh starting process",
+                )
+            })?;
+        entry.cold_recovery = true;
+        entry.policy.auto_restore = false;
+        Ok(())
     }
 
     pub fn registered_checkpoint(
@@ -2895,6 +2993,47 @@ impl CheckpointCoordinator {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    pub fn observe_restored_request(
+        &self,
+        instance_id: &str,
+        expected_pid: u32,
+        slot: &crate::commands::telemetry::SlotSnapshotRecord,
+    ) {
+        if slot.slot_id != 0 || slot.is_processing {
+            return;
+        }
+        let (Some(task_id), Some(cached_tokens), Some(processed_tokens)) =
+            (slot.task_id, slot.cached_tokens, slot.processed_tokens)
+        else {
+            return;
+        };
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        let Some(entry) = entries.get_mut(instance_id) else {
+            return;
+        };
+        if entry.status.expected_pid != Some(expected_pid)
+            || entry.status.phase != CheckpointPhase::Ready
+        {
+            return;
+        }
+        if entry
+            .status
+            .reuse_observation
+            .as_ref()
+            .is_some_and(|value| value.task_id == task_id)
+        {
+            return;
+        }
+        entry.status.reuse_observation = Some(CheckpointReuseObservation {
+            task_id,
+            cached_tokens,
+            processed_tokens,
+            observed_at: checkpoint_now_millis(),
+        });
     }
 
     pub fn blocked_phase(&self) -> Option<CheckpointPhase> {
@@ -2970,6 +3109,7 @@ impl CheckpointCoordinator {
         status.prompt_tokens = None;
         status.bytes = None;
         status.duration_ms = Some(0);
+        status.reuse_observation = None;
         status.updated_at = checkpoint_now_millis();
         entries.insert(
             instance_id.into(),
@@ -2978,6 +3118,7 @@ impl CheckpointCoordinator {
                 status: status.clone(),
                 fingerprint: None,
                 policy: crate::models::KvCheckpointConfig::default(),
+                cold_recovery: false,
             },
         );
         Ok(status)
@@ -3103,14 +3244,13 @@ impl CheckpointCoordinator {
         &self,
         instance_id: &str,
         expected_pid: u32,
-        backend: &B,
+        _backend: &B,
         error: CheckpointStoreError,
         started: Instant,
     ) -> StoreResult<CheckpointStatus> {
         let cleanup_required = self
             .status(instance_id)
             .is_some_and(|status| status.phase == CheckpointPhase::Restoring);
-        let cleanup = backend.erase();
         let update = CheckpointOperationUpdate::new(
             CheckpointOperation::Restore,
             CheckpointOutcome::Failed,
@@ -3119,39 +3259,23 @@ impl CheckpointCoordinator {
             None,
             started.elapsed().as_millis() as u64,
         );
-        if cleanup_required && cleanup.is_err() {
-            // A restore request may have modified slot state even when its
-            // response failed. Keep the routing gate closed until a later
-            // health pass can prove the erase request succeeded.
+        if cleanup_required {
+            // Upstream #27068: erase can succeed while corrupted tensor data
+            // still affects inference. Only a fresh process is a cold start.
+            self.transition(instance_id, expected_pid, CheckpointPhase::RestartRequired)?;
             self.update_operation(instance_id, expected_pid, update)
         } else {
             self.finish_ready_cold(instance_id, expected_pid, update)
         }
     }
 
-    pub fn restore_cleanup_pending(&self, instance_id: &str, expected_pid: u32) -> bool {
+    pub fn restore_restart_required(&self, instance_id: &str, expected_pid: u32) -> bool {
         self.status(instance_id).is_some_and(|status| {
             status.expected_pid == Some(expected_pid)
-                && status.phase == CheckpointPhase::Restoring
+                && status.phase == CheckpointPhase::RestartRequired
                 && status.last_operation == CheckpointOperation::Restore
                 && status.last_outcome == CheckpointOutcome::Failed
         })
-    }
-
-    pub fn retry_failed_restore_cleanup<B: SlotBackend + ?Sized>(
-        &self,
-        instance_id: &str,
-        expected_pid: u32,
-        backend: &B,
-    ) -> StoreResult<CheckpointStatus> {
-        if !self.restore_cleanup_pending(instance_id, expected_pid) {
-            return Err(CheckpointStoreError::new(
-                CheckpointReasonCode::InvalidStateTransition,
-                "checkpoint restore cleanup is not pending",
-            ));
-        }
-        backend.erase()?;
-        self.transition(instance_id, expected_pid, CheckpointPhase::ReadyCold)
     }
 
     pub fn fail_restore_setup(
@@ -3192,14 +3316,27 @@ impl CheckpointCoordinator {
         }
         let started = Instant::now();
         if !auto_restore {
+            let recovering = self.entries.lock().ok().is_some_and(|entries| {
+                entries
+                    .get(instance_id)
+                    .is_some_and(|entry| entry.cold_recovery)
+            });
             return self.finish_ready_cold(
                 instance_id,
                 expected_pid,
                 CheckpointOperationUpdate::new(
                     CheckpointOperation::Restore,
                     CheckpointOutcome::Skipped,
-                    CheckpointReasonCode::AutoRestoreDisabled,
-                    "automatic checkpoint restore is disabled",
+                    if recovering {
+                        CheckpointReasonCode::ColdAfterRestoreFailure
+                    } else {
+                        CheckpointReasonCode::AutoRestoreDisabled
+                    },
+                    if recovering {
+                        "started a fresh process after checkpoint restore failure"
+                    } else {
+                        "automatic checkpoint restore is disabled"
+                    },
                     None,
                     started.elapsed().as_millis() as u64,
                 ),
@@ -3266,7 +3403,6 @@ impl CheckpointCoordinator {
             }
         };
 
-        self.transition(instance_id, expected_pid, CheckpointPhase::Restoring)?;
         let restore_path =
             match self
                 .store
@@ -3291,6 +3427,7 @@ impl CheckpointCoordinator {
         let mut verification_path = None;
         let restore_result = (|| {
             backend.health()?;
+            self.transition(instance_id, expected_pid, CheckpointPhase::Restoring)?;
             let restored = backend.restore(&restore_filename)?;
             let slot = generation.manifest.slot();
             if restored.id_slot != 0
@@ -3364,6 +3501,15 @@ impl CheckpointCoordinator {
             .and(restore_cleanup)
             .and(verification_cleanup.map(|_| ()))
         {
+            if self.status(instance_id).is_some_and(|status| {
+                status.expected_pid == Some(expected_pid)
+                    && status.phase == CheckpointPhase::Restoring
+            }) {
+                // Preserve the evidence, but never retry a rejected generation.
+                // Even if this marker cannot be written, automatic recovery
+                // suppresses restore for the entire fresh process.
+                let _ = self.store.reject_generation(instance_id, &generation);
+            }
             return self.restore_failure(instance_id, expected_pid, backend, error, started);
         }
 
@@ -4083,7 +4229,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn http_slot_checkpoint_round_trip_gates_restore_and_erases_partial_state() {
+    async fn http_slot_checkpoint_round_trip_gates_restore_and_isolates_partial_state() {
         const INSTANCE_ID: &str = "http-round-trip";
         const PRIVATE_PAYLOAD: &[u8] = b"private prompt-derived slot bytes";
         const PRIVATE_API_KEY: &str = "private-test-api-key";
@@ -4260,17 +4406,18 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(partial.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(partial.phase, CheckpointPhase::RestartRequired);
         assert_eq!(partial.last_outcome, CheckpointOutcome::Failed);
         assert_eq!(partial.reason_code, CheckpointReasonCode::SlotStateMismatch);
-        assert!(third.gate_allows_routing(INSTANCE_ID));
+        assert!(!third.gate_allows_routing(INSTANCE_ID));
         {
             let state = server.state.lock().unwrap();
-            assert_eq!(state.erase_count, 1);
-            assert_eq!(state.prompt_tokens, 0);
-            assert!(state.payload.is_empty());
+            assert_eq!(state.erase_count, 0);
+            assert_eq!(state.prompt_tokens, 7);
+            assert_eq!(state.payload, b"unverified state");
         }
-        assert_eq!(server.events(), ["health", "restore", "save", "erase"]);
+        assert_eq!(server.events(), ["health", "restore", "save"]);
+        commit_test_generation(&store, INSTANCE_ID, &fingerprint, 1_536, PRIVATE_PAYLOAD);
 
         server.configure(|state| {
             state.restore_applies = true;
@@ -4305,12 +4452,12 @@ mod tests {
         .await
         .unwrap()
         .unwrap();
-        assert_eq!(malformed.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(malformed.phase, CheckpointPhase::RestartRequired);
         assert_eq!(
             malformed.reason_code,
             CheckpointReasonCode::RestoreResponseInvalid
         );
-        assert_eq!(server.state.lock().unwrap().erase_count, 1);
+        assert_eq!(server.state.lock().unwrap().erase_count, 0);
 
         server.stop().await;
     }
@@ -4330,6 +4477,80 @@ mod tests {
         assert!(result.eligible);
         assert_eq!(result.reason_code, CheckpointReasonCode::None);
         assert!(result.reasons.is_empty());
+    }
+
+    #[test]
+    fn hybrid_support_requires_the_verified_architecture_and_context_persistence() {
+        let mut config = eligible_config();
+        for architecture in [
+            "qwen35",
+            "qwen35moe",
+            "deepseek4",
+            "kimi_k3",
+            "bailingmoe3",
+            "lfm2",
+            "nemotron_h",
+            "plamo2",
+            "minimax_01",
+            "qwen4exp",
+        ] {
+            for persistence in [false, true] {
+                let result = evaluate_checkpoint_eligibility(CheckpointEligibilityContext {
+                    config: &config,
+                    workload: ModelWorkload::Inference,
+                    managed_local_engine: true,
+                    engine_capabilities: EngineCheckpointCapabilities {
+                        slots: true,
+                        slot_save_path: true,
+                        cache_ram: true,
+                        cache_idle_slots: true,
+                        swa_full: true,
+                        context_checkpoint_persistence: persistence,
+                    },
+                    engine_speculative_types: &[],
+                    model_architecture: Some(architecture),
+                    model_artifacts_complete: true,
+                    model_has_swa: Some(false),
+                });
+                assert_eq!(
+                    result.eligible,
+                    architecture == "qwen35" && persistence,
+                    "{architecture}, persistence={persistence}"
+                );
+            }
+        }
+        config.ctx_checkpoints = 0;
+        config.spec_type = "draft-dflash".into();
+        assert!(evaluate(&config)
+            .reasons
+            .contains(&CheckpointReasonCode::ContextCheckpointsRequired));
+        config.spec_type.clear();
+        assert!(
+            evaluate(&config).eligible,
+            "ordinary full-attention state does not need rollback checkpoints"
+        );
+    }
+
+    #[test]
+    fn model_memory_policy_covers_every_reviewed_upstream_hybrid_and_recurrent_name() {
+        let baseline: serde_json::Value =
+            serde_json::from_str(include_str!("../../scripts/llama-parameter-baseline.json"))
+                .unwrap();
+        for channel in ["releaseSnapshot", "masterSnapshot"] {
+            for kind in ["hybrid", "recurrent"] {
+                let architectures = baseline[channel]["checkpointMemoryArchitectures"][kind]
+                    .as_array()
+                    .unwrap();
+                assert!(!architectures.is_empty());
+                for architecture in architectures {
+                    let architecture = architecture.as_str().unwrap();
+                    assert!(
+                        is_known_hybrid_or_recurrent(architecture),
+                        "unreviewed {channel} {kind}: {architecture}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -6013,7 +6234,81 @@ mod tests {
     }
 
     #[test]
-    fn restore_noop_or_invalid_response_erases_slot_and_fails_open() {
+    fn reuse_observation_requires_an_idle_request_from_the_restored_process() {
+        let sandbox = TestSandbox::new("reuse-observation");
+        let store = sandbox.store();
+        let fingerprint = test_fingerprint(&eligible_config());
+        commit_test_generation(&store, "observed", &fingerprint, 768, b"observed payload");
+        let backend = FakeSlotBackend::new(&store, "observed");
+        backend.configure(|state| state.restore_tokens = 768);
+        let coordinator = coordinator_with_healthy_engine(&store, "observed", 301);
+        let mut slot = crate::commands::telemetry::SlotSnapshotRecord {
+            slot_id: 0,
+            is_processing: false,
+            n_ctx: 4096,
+            n_past: None,
+            task_id: Some(5),
+            cached_tokens: Some(700),
+            processed_tokens: Some(68),
+        };
+        coordinator.observe_restored_request("observed", 301, &slot);
+        assert!(coordinator
+            .status("observed")
+            .unwrap()
+            .reuse_observation
+            .is_none());
+        coordinator
+            .restore_or_cold("observed", 301, &fingerprint, true, &backend)
+            .unwrap();
+        coordinator.observe_restored_request("observed", 300, &slot);
+        slot.is_processing = true;
+        coordinator.observe_restored_request("observed", 301, &slot);
+        assert!(coordinator
+            .status("observed")
+            .unwrap()
+            .reuse_observation
+            .is_none());
+        slot.is_processing = false;
+        coordinator.observe_restored_request("observed", 301, &slot);
+        assert_eq!(
+            coordinator
+                .status("observed")
+                .unwrap()
+                .reuse_observation
+                .unwrap()
+                .cached_tokens,
+            700
+        );
+        slot.task_id = Some(6);
+        slot.cached_tokens = Some(0);
+        coordinator.observe_restored_request("observed", 301, &slot);
+        assert_eq!(
+            coordinator
+                .status("observed")
+                .unwrap()
+                .reuse_observation
+                .unwrap()
+                .cached_tokens,
+            0,
+            "a miss must not be reported as a hit"
+        );
+        slot.task_id = Some(7);
+        slot.cached_tokens = None;
+        coordinator.observe_restored_request("observed", 301, &slot);
+        assert_eq!(
+            coordinator
+                .status("observed")
+                .unwrap()
+                .reuse_observation
+                .unwrap()
+                .task_id,
+            6,
+            "missing measurements must not be invented"
+        );
+    }
+
+    #[test]
+    fn restore_noop_or_invalid_response_requires_a_fresh_process_even_if_erase_succeeds() {
         let sandbox = TestSandbox::new("coordinator-restore-noop");
         let store = sandbox.store();
         let fingerprint = test_fingerprint(&eligible_config());
@@ -6035,12 +6330,18 @@ mod tests {
         let status = coordinator
             .restore_or_cold("instance-1", 401, &fingerprint, true, &backend)
             .unwrap();
-        assert_eq!(status.phase, CheckpointPhase::ReadyCold);
-        assert!(status.routable);
+        assert_eq!(status.phase, CheckpointPhase::RestartRequired);
+        assert!(!status.routable);
         assert_eq!(status.last_outcome, CheckpointOutcome::Failed);
         assert_eq!(status.reason_code, CheckpointReasonCode::SlotStateMismatch);
-        assert_eq!(backend.erase_count(), 1);
-        assert_eq!(backend.events().last().unwrap(), "erase");
+        assert_eq!(backend.erase_count(), 0);
+        assert_eq!(
+            store
+                .load_latest("instance-1", &fingerprint.digest)
+                .unwrap_err()
+                .reason_code,
+            CheckpointReasonCode::RestoreGenerationRejected
+        );
 
         let backend = FakeSlotBackend::new(&store, "instance-2");
         commit_test_generation(
@@ -6058,12 +6359,12 @@ mod tests {
         let status = coordinator
             .restore_or_cold("instance-2", 402, &fingerprint, true, &backend)
             .unwrap();
-        assert_eq!(status.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(status.phase, CheckpointPhase::RestartRequired);
         assert_eq!(
             status.reason_code,
             CheckpointReasonCode::RestoreResponseInvalid
         );
-        assert_eq!(backend.erase_count(), 1);
+        assert_eq!(backend.erase_count(), 0);
 
         let backend = FakeSlotBackend::new(&store, "instance-3");
         commit_test_generation(
@@ -6087,25 +6388,61 @@ mod tests {
         let blocked = coordinator
             .restore_or_cold("instance-3", 403, &fingerprint, true, &backend)
             .unwrap();
-        assert_eq!(blocked.phase, CheckpointPhase::Restoring);
+        assert_eq!(blocked.phase, CheckpointPhase::RestartRequired);
         assert!(!blocked.routable);
         assert!(!coordinator.gate_allows_routing("instance-3"));
-        assert!(coordinator.restore_cleanup_pending("instance-3", 403));
+        assert!(coordinator.restore_restart_required("instance-3", 403));
+        assert!(!coordinator.restore_restart_required("instance-3", 999));
         assert_eq!(blocked.reason_code, CheckpointReasonCode::HttpTimeout);
-        assert_eq!(backend.erase_count(), 1);
+        assert_eq!(backend.erase_count(), 0);
 
         backend.configure(|state| state.erase_error = None);
+        backend.erase().unwrap();
+        assert!(!coordinator.gate_allows_routing("instance-3"));
+        assert!(coordinator
+            .prepare_cold_recovery("instance-3", 403)
+            .is_err());
+        coordinator.skip_save_not_ready("instance-3", 403).unwrap();
+        coordinator.mark_stopped("instance-3", 403).unwrap();
+        coordinator
+            .register_start_with_context(
+                "instance-3",
+                404,
+                &evaluate(&eligible_config()),
+                Some(fingerprint.clone()),
+                eligible_config().kv_checkpoint,
+            )
+            .unwrap();
+        coordinator
+            .prepare_cold_recovery("instance-3", 404)
+            .unwrap();
+        coordinator.on_engine_healthy("instance-3", 404).unwrap();
+        let (_, policy) = coordinator
+            .registered_checkpoint("instance-3", 404)
+            .unwrap()
+            .unwrap();
+        assert!(!policy.auto_restore);
+        let before = backend.events();
         let cold = coordinator
-            .retry_failed_restore_cleanup("instance-3", 403, &backend)
+            .restore_or_cold(
+                "instance-3",
+                404,
+                &fingerprint,
+                policy.auto_restore,
+                &backend,
+            )
             .unwrap();
         assert_eq!(cold.phase, CheckpointPhase::ReadyCold);
         assert!(cold.routable);
-        assert_eq!(cold.reason_code, CheckpointReasonCode::HttpTimeout);
-        assert_eq!(backend.erase_count(), 2);
+        assert_eq!(
+            cold.reason_code,
+            CheckpointReasonCode::ColdAfterRestoreFailure
+        );
+        assert_eq!(backend.events(), before);
     }
 
     #[test]
-    fn restore_timeout_fails_open_while_no_checkpoint_and_mismatch_skip_io() {
+    fn restore_timeout_isolates_process_while_no_checkpoint_and_mismatch_skip_io() {
         let sandbox = TestSandbox::new("coordinator-restore-fallbacks");
         let store = sandbox.store();
         let fingerprint = test_fingerprint(&eligible_config());
@@ -6177,9 +6514,10 @@ mod tests {
                 &timeout_backend,
             )
             .unwrap();
-        assert_eq!(status.phase, CheckpointPhase::ReadyCold);
+        assert_eq!(status.phase, CheckpointPhase::RestartRequired);
+        assert!(!status.routable);
         assert_eq!(status.reason_code, CheckpointReasonCode::HttpTimeout);
-        assert_eq!(timeout_backend.erase_count(), 1);
+        assert_eq!(timeout_backend.erase_count(), 0);
     }
 
     #[test]

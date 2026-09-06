@@ -103,6 +103,7 @@ test('checkpoint requirements are explicit and repaired only after confirmation'
   await expect(page.getByText('必须启用 prompt cache')).toBeVisible()
   await expect(page.getByText(/Harness 元数据请求之后保留已恢复前缀/)).toBeVisible()
   await expect(page.getByText(/滑动窗口模型必须启用 SWA 完整缓存/)).toBeVisible()
+  await expect(page.getByText('需要启用上下文检查点（ctx-checkpoints 大于 0）')).toBeVisible()
 
   await page.getByRole('button', { name: '应用必需设置', exact: true }).click()
   await expect(page.getByText('可使用受管检查点', { exact: true })).toBeVisible()
@@ -120,6 +121,7 @@ test('checkpoint requirements are explicit and repaired only after confirmation'
     cache_ram: 8192,
     slots_enabled: true,
     swa_full: true,
+    ctx_checkpoints: 32,
   })
 })
 

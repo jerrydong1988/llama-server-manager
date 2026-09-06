@@ -13,6 +13,7 @@ const REQUIRED_SETTING_REASONS = new Set([
   'prompt_cache_retention_required',
   'slots_required',
   'sliding_window_requires_full_cache',
+  'context_checkpoints_required',
 ])
 
 const boundedInteger = (value: string, minimum: number, maximum: number) => {

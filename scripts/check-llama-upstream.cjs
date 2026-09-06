@@ -113,13 +113,29 @@ function parseParameterTable(markdown) {
 }
 
 async function readSnapshot(ref, commit) {
-  const readme = await fetchText(`https://raw.githubusercontent.com/${repository}/${encodeURIComponent(commit)}/tools/server/README.md`)
-  return { ref, commit, ...parseParameterTable(readme) }
+  const base = `https://raw.githubusercontent.com/${repository}/${encodeURIComponent(commit)}`
+  const [readme, architectureSource] = await Promise.all([
+    fetchText(`${base}/tools/server/README.md`),
+    fetchText(`${base}/src/llama-arch.cpp`),
+  ])
+  const names = new Map([...architectureSource.matchAll(/\{\s*LLM_ARCH_(\w+),\s*"([^"]+)"\s*\}/g)].map(match => [match[1], match[2]]))
+  const checkpointMemoryArchitectures = {}
+  for (const kind of ['hybrid', 'recurrent']) {
+    const body = architectureSource.match(new RegExp(`bool llm_arch_is_${kind}\\([^]*?\\n\\}`))?.[0]
+    if (!body) throw new Error(`Missing upstream ${kind} memory classifier`)
+    checkpointMemoryArchitectures[kind] = [...body.matchAll(/case LLM_ARCH_(\w+):/g)].map(match => {
+      const name = names.get(match[1])
+      if (!name) throw new Error(`Unknown upstream architecture ${match[1]}`)
+      return name
+    }).sort()
+    if (checkpointMemoryArchitectures[kind].length === 0) throw new Error(`Empty upstream ${kind} memory classifier`)
+  }
+  return { ref, commit, ...parseParameterTable(readme), checkpointMemoryArchitectures }
 }
 
 function compareSnapshots(baseline, current) {
   if (!baseline) {
-    return { added: current.parameters.map(item => item.canonical), removed: [], aliasesChanged: [], synopsisChanged: [], descriptionChanged: [] }
+    return { added: current.parameters.map(item => item.canonical), removed: [], aliasesChanged: [], synopsisChanged: [], descriptionChanged: [], checkpointMemoryChanged: ['hybrid', 'recurrent'] }
   }
   const before = new Map(baseline.parameters.map(item => [item.canonical, item]))
   const after = new Map(current.parameters.map(item => [item.canonical, item]))
@@ -132,6 +148,7 @@ function compareSnapshots(baseline, current) {
     aliasesChanged: shared.filter(flag => JSON.stringify(before.get(flag).aliases) !== JSON.stringify(after.get(flag).aliases)).sort(),
     synopsisChanged: shared.filter(flag => before.get(flag).synopsisHash !== after.get(flag).synopsisHash).sort(),
     descriptionChanged: shared.filter(flag => before.get(flag).descriptionHash !== after.get(flag).descriptionHash).sort(),
+    checkpointMemoryChanged: ['hybrid', 'recurrent'].filter(kind => JSON.stringify(baseline.checkpointMemoryArchitectures?.[kind]) !== JSON.stringify(current.checkpointMemoryArchitectures?.[kind])),
   }
 }
 
@@ -150,6 +167,7 @@ function snapshotReport(title, baseline, current, diff) {
     `- Alias changes: ${formatFlags(diff.aliasesChanged)}`,
     `- Synopsis changes: ${formatFlags(diff.synopsisChanged)}`,
     `- Description/default changes: ${formatFlags(diff.descriptionChanged)}`,
+    `- Checkpoint memory classification changes: ${formatFlags(diff.checkpointMemoryChanged || [])}`,
     '',
   ].join('\n')
 }

@@ -2403,20 +2403,8 @@ fn resolve_checkpoint_startup(
     if !coordinator.gate_active(instance_id) {
         return true;
     }
-    if coordinator.restore_cleanup_pending(instance_id, expected_pid) {
-        let cleanup = match LlamaSlotClient::new(config, CHECKPOINT_SLOT_OPERATION_TIMEOUT) {
-            Ok(client) => {
-                coordinator.retry_failed_restore_cleanup(instance_id, expected_pid, &client)
-            }
-            Err(error) => Err(error),
-        };
-        match cleanup {
-            Ok(status) => emit_checkpoint_status(app, &status),
-            Err(error) => {
-                eprintln!("Checkpoint restore cleanup failed for {instance_id}: {error}")
-            }
-        }
-        return coordinator.gate_allows_routing(instance_id);
+    if coordinator.restore_restart_required(instance_id, expected_pid) {
+        return false;
     }
     let healthy = match coordinator.on_engine_healthy(instance_id, expected_pid) {
         Ok(status) => status,
@@ -2550,6 +2538,99 @@ pub async fn start_server(
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> AppResult<()> {
+    let operation = instance_operation_lock(state.inner(), &instance_id);
+    let _operation = operation.lock().await;
+    start_server_impl(
+        instance_id,
+        config,
+        engine_exe,
+        engine_backend,
+        state,
+        app,
+        false,
+    )
+    .await
+}
+
+fn instance_operation_lock(state: &AppState, instance_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    state
+        .server_operation_locks
+        .lock()
+        .unwrap()
+        .entry(instance_id.to_string())
+        .or_default()
+        .clone()
+}
+
+fn recover_gui_checkpoint_process(
+    app: tauri::AppHandle,
+    instance_id: String,
+    expected_pid: u32,
+    config: InstanceConfig,
+) {
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<AppState>();
+        let operation = instance_operation_lock(state.inner(), &instance_id);
+        let _operation = operation.lock().await;
+        if !state
+            .running
+            .lock()
+            .unwrap()
+            .get(&instance_id)
+            .is_some_and(|running| running.pid == expected_pid)
+            || !state
+                .checkpoint_coordinator
+                .restore_restart_required(&instance_id, expected_pid)
+        {
+            return;
+        }
+        let engine = state
+            .engines
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|engine| engine.id == config.engine_id)
+            .cloned();
+        let result = async {
+            let engine = engine.ok_or_else(|| {
+                AppError::new(
+                    "CHECKPOINT_RECOVERY",
+                    "恢复失败，实例保持隔离：原引擎配置已不可用",
+                    true,
+                )
+            })?;
+            stop_server_impl(instance_id.clone(), state.clone(), app.clone()).await?;
+            start_server_impl(
+                instance_id.clone(),
+                config,
+                engine.exe,
+                engine.backend,
+                state.clone(),
+                app.clone(),
+                true,
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = result {
+            eprintln!("Checkpoint cold recovery failed for {instance_id}: {error}");
+            let _ = app.emit(
+                "health-status",
+                serde_json::json!({"instanceId": instance_id, "status": "fail"}),
+            );
+        }
+    });
+}
+
+async fn start_server_impl(
+    instance_id: String,
+    config: InstanceConfig,
+    engine_exe: String,
+    engine_backend: String,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+    cold_recovery: bool,
+) -> AppResult<()> {
     let mut timing = crate::operation_timing::OperationTiming::new("start_server");
     validate_configured_engine(state.inner(), &config, &engine_exe)?;
     validate_instance_id(&instance_id)?;
@@ -2616,7 +2697,9 @@ pub async fn start_server(
     let cmd_display = format_command_for_display(&cmd);
     timing.mark("preflight");
 
-    if crate::runtime_service::manages_instances() {
+    // A GUI-owned recovery must keep the same owner so its one-launch
+    // restore suppression cannot be lost when delegating to the daemon.
+    if crate::runtime_service::manages_instances() && !cold_recovery {
         let running =
             crate::runtime_service::start_instance(crate::runtime_service::RuntimeLaunchSpec {
                 instance_id: instance_id.clone(),
@@ -2629,6 +2712,7 @@ pub async fn start_server(
                     .ok()
                     .map(|path| path.to_string_lossy().to_string()),
                 checkpoint: Some(crate::runtime_service::RuntimeCheckpointLaunchSpec {
+                    eligibility_revision: crate::checkpoint::CHECKPOINT_ELIGIBILITY_REVISION,
                     eligibility: checkpoint_plan.eligibility.clone(),
                     fingerprint: checkpoint_plan.fingerprint.clone(),
                 }),
@@ -2791,6 +2875,19 @@ pub async fn start_server(
         }
     };
     emit_checkpoint_status(&app, &checkpoint_status);
+    if cold_recovery && checkpoint_plan.eligibility.eligible {
+        if let Err(error) = state
+            .checkpoint_coordinator
+            .prepare_cold_recovery(&instance_id, pid)
+        {
+            let _ = terminate_spawned_child(&mut child);
+            return Err(AppError::new(
+                "CHECKPOINT_RECOVERY",
+                error.to_string(),
+                true,
+            ));
+        }
+    }
     let telemetry_session_id = crate::commands::telemetry::begin_run_session(
         &instance_id,
         &config,
@@ -3177,6 +3274,13 @@ pub(crate) fn collect_instance_monitor_sample(
                             .get("n_past")
                             .and_then(|item| item.as_u64())
                             .map(|item| item as u32),
+                        task_id: value.get("id_task").and_then(|item| item.as_u64()),
+                        cached_tokens: value
+                            .get("n_prompt_tokens_cache")
+                            .and_then(|item| item.as_u64()),
+                        processed_tokens: value
+                            .get("n_prompt_tokens_processed")
+                            .and_then(|item| item.as_u64()),
                     },
                 )
                 .collect()
@@ -3297,6 +3401,32 @@ fn monitor_loop(
         if sample.ready && !checkpoint_startup_resolved {
             checkpoint_startup_resolved =
                 resolve_checkpoint_startup(&app, instance_id, expected_pid, &launch_config);
+        }
+        if app
+            .state::<AppState>()
+            .checkpoint_coordinator
+            .restore_restart_required(instance_id, expected_pid)
+        {
+            recover_gui_checkpoint_process(
+                app.clone(),
+                instance_id.to_string(),
+                expected_pid,
+                launch_config.clone(),
+            );
+            break;
+        }
+        if let Some(slots) = &sample.slots {
+            let state = app.state::<AppState>();
+            for slot in slots {
+                state.checkpoint_coordinator.observe_restored_request(
+                    instance_id,
+                    expected_pid,
+                    slot,
+                );
+            }
+            if let Some(status) = state.checkpoint_coordinator.status(instance_id) {
+                emit_checkpoint_status(&app, &status);
+            }
         }
         match health_transition {
             HealthTransition::Ready => {
@@ -3492,7 +3622,8 @@ fn checkpoint_before_termination_blocking(
         Some(
             crate::checkpoint::CheckpointPhase::Starting
             | crate::checkpoint::CheckpointPhase::EngineHealthy
-            | crate::checkpoint::CheckpointPhase::Restoring,
+            | crate::checkpoint::CheckpointPhase::Restoring
+            | crate::checkpoint::CheckpointPhase::RestartRequired,
         ) => {
             if let Ok(status) = coordinator.skip_save_not_ready(instance_id, running.pid) {
                 emit_checkpoint_status(app, &status);
@@ -3631,6 +3762,16 @@ async fn checkpoint_before_termination(
 }
 
 pub async fn stop_server(
+    instance_id: String,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    let operation = instance_operation_lock(state.inner(), &instance_id);
+    let _operation = operation.lock().await;
+    stop_server_impl(instance_id, state, app).await
+}
+
+async fn stop_server_impl(
     instance_id: String,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,

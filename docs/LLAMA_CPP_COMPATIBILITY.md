@@ -46,9 +46,11 @@ Advertising a flag proves only command-line availability, not reusable cross-pro
 
 Runtime probing also records the engine-reported `--spec-type` choices. Ordinary commands may combine comma-separated types in normalized llama.cpp priority order. Rebuildable `ngram-*` types retain the original slot behavior; `draft-*` is admitted only when `--slot-save-path` explicitly advertises context checkpoints for target/draft state. Automatic speculation, unknown types, and external lookup state still fall back cold. B10679 cross-process testing confirms that `qwen4exp` remains an explicit checkpoint counterexample.
 
-资格不满足、fingerprint miss、损坏或 restore 验证失败都会安全回到冷启动；不会因为引擎处于通用参数支持窗口就放宽有状态兼容条件。完整范围和操作说明见 [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md)。
+帮助标记是必要的能力声明，不能单独证明跨进程复用。Draft 状态及实验性 `qwen35` 还必须启用 `ctx_checkpoints > 0`；其它已知 hybrid/recurrent 架构保持禁用。上游基线同时跟踪这两类内存架构，分类新增或变化须重新审阅。
 
-Ineligibility, fingerprint misses, corruption, and restore-validation failures always fall back to a cold start. The general parameter support window never relaxes state compatibility. See [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md) for the full matrix and operating guide.
+资格不满足或 restore 发送前验证失败可直接冷启动。一旦 restore 已发送，失败后必须关闭旧 PID、启动干净进程并确认健康，再恢复路由；不会依赖 erase 清理潜在的残留状态。进程替换失败时继续关闭路由。完整范围和操作说明见 [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md)。
+
+The help marker is a necessary capability claim, not proof of reuse. Draft state and the experimental `qwen35` exception require positive `ctx_checkpoints`; other known hybrid/recurrent models remain excluded. The upstream baseline tracks memory classifications for review. Failures after sending restore require process replacement before cold routing, which remains closed if replacement fails. The general parameter support window never relaxes state compatibility. See [KV / Prefill Cache Checkpoint](KV_CACHE_CHECKPOINT.md) for the matrix and pending official disk-cache support.
 
 ## 上游监控 / Upstream Watcher
 

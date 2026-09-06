@@ -101,7 +101,7 @@ export interface KvCheckpointConfig {
 
 export type CheckpointPhase =
   | 'disabled' | 'ineligible' | 'starting' | 'engine_healthy'
-  | 'restoring' | 'ready' | 'ready_cold' | 'draining'
+  | 'restoring' | 'restart_required' | 'ready' | 'ready_cold' | 'draining'
   | 'saving' | 'stopping' | 'stopped'
 
 export type CheckpointOperation = 'none' | 'save' | 'restore' | 'clear'
@@ -120,6 +120,12 @@ export interface CheckpointStatus {
   prompt_tokens?: number
   bytes?: number
   duration_ms?: number
+  reuse_observation?: {
+    task_id: number
+    cached_tokens: number
+    processed_tokens: number
+    observed_at: number
+  }
   updated_at: number
 }
 

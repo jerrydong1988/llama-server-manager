@@ -645,6 +645,7 @@ fn main() {
             instances: Mutex::new(HashMap::new()),
             running: Mutex::new(HashMap::new()),
             starting: Mutex::new(std::collections::HashSet::new()),
+            server_operation_locks: Mutex::new(HashMap::new()),
             config_dir: Mutex::new(config_dir),
             cancel_flags: Mutex::new(HashMap::new()),
             pause_flags: Mutex::new(HashMap::new()),

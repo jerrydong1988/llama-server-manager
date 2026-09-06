@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-09-05",
+  "verifiedAt": "2026-09-06",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
@@ -9,7 +9,7 @@
   },
   "upstreamRelease": "v0.4.0",
   "upstreamCommit": "5266f24da75dc449bd56cbed7addb9c8e4a6a73e",
-  "upstreamMasterChecked": "6a1a922d269908a29cbd4b49c27e6a8e7fd10fae",
+  "upstreamMasterChecked": "971595d6697f53b215d02a8381f8b5af142a4d86",
   "releaseSnapshot": {
     "ref": "v0.4.0",
     "commit": "5266f24da75dc449bd56cbed7addb9c8e4a6a73e",
@@ -2232,11 +2232,40 @@
         "synopsisHash": "3dd0ff05aac7c860e5e75fae8cc4f0df6eb646a400597f2383cd6edf6e2c54e0",
         "descriptionHash": "fbb42d589b92dc64e242a24bb908cc950de1ecbacedb8dcde8383641f796eef3"
       }
-    ]
+    ],
+    "checkpointMemoryArchitectures": {
+      "hybrid": [
+        "bailingmoe3",
+        "deepseek4",
+        "falcon-h1",
+        "granitehybrid",
+        "jamba",
+        "kimi-k3",
+        "kimi-linear",
+        "lfm2",
+        "lfm2moe",
+        "minimax-01",
+        "nemotron_h",
+        "nemotron_h_moe",
+        "plamo2",
+        "qwen35",
+        "qwen35moe",
+        "qwen3next",
+        "qwen4exp"
+      ],
+      "recurrent": [
+        "arwkv7",
+        "mamba",
+        "mamba2",
+        "rwkv6",
+        "rwkv6qwen2",
+        "rwkv7"
+      ]
+    }
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "6a1a922d269908a29cbd4b49c27e6a8e7fd10fae",
+    "commit": "971595d6697f53b215d02a8381f8b5af142a4d86",
     "parameterCount": 257,
     "snapshotHash": "f907ceab288e98adbafe8cd868e9b34f2c097b771c434896e2d3cdeac889c4d9",
     "parameters": [
@@ -4456,7 +4485,36 @@
         "synopsisHash": "3dd0ff05aac7c860e5e75fae8cc4f0df6eb646a400597f2383cd6edf6e2c54e0",
         "descriptionHash": "fbb42d589b92dc64e242a24bb908cc950de1ecbacedb8dcde8383641f796eef3"
       }
-    ]
+    ],
+    "checkpointMemoryArchitectures": {
+      "hybrid": [
+        "bailingmoe3",
+        "deepseek4",
+        "falcon-h1",
+        "granitehybrid",
+        "jamba",
+        "kimi-k3",
+        "kimi-linear",
+        "lfm2",
+        "lfm2moe",
+        "minimax-01",
+        "nemotron_h",
+        "nemotron_h_moe",
+        "plamo2",
+        "qwen35",
+        "qwen35moe",
+        "qwen3next",
+        "qwen4exp"
+      ],
+      "recurrent": [
+        "arwkv7",
+        "mamba",
+        "mamba2",
+        "rwkv6",
+        "rwkv6qwen2",
+        "rwkv7"
+      ]
+    }
   },
   "masterPreviewFlags": [],
   "structuredFlagsAdded": [

@@ -308,21 +308,21 @@ Configuration is stored per instance and covers structured options for models, g
 
 ### KV / Prefill 缓存检查点 / Cache Checkpoint
 
-实验性 KV / Prefill Cache Checkpoint 默认关闭。它在受控停止本机受管实例时保存单个文本生成 slot，并在相同模型、引擎和强兼容配置重启后、管理器代理重新开放路由前完成验证与恢复。检查点失败只会进入 `Ready (cold)`，不会阻止实例启动。
+实验性 KV / Prefill Cache Checkpoint 默认关闭。它在受控停止本机受管实例时保存当前 slot 0 前缀，不会导出 Cache RAM 中的其它前缀。相同模型、引擎和强兼容配置重启后，先验证恢复再开放代理路由。若 restore 已发送后失败，必须终止旧 PID、启动干净进程后才进入 `Ready (cold)`；进程重建失败时保持不可路由。
 
-The experimental KV / Prefill Cache Checkpoint is off by default. It saves one managed local text-generation slot on a controlled stop and verifies restore before the manager proxy reopens routing. Any failure falls back to `Ready (cold)` without blocking startup.
+The experimental KV / Prefill Cache Checkpoint is off by default. It saves the current slot 0 prefix on a controlled stop, not all prefixes in Cache RAM. Restore is verified before routing opens. A failure after sending restore requires a fresh healthy process before cold routing; failed process replacement remains unavailable.
 
 使用要求：
 
 - `parallel = 1`，启用 prompt cache、slots、idle-slot cache，并让 Cache RAM 为正数或 `-1`。
 - 滑动窗口模型启用 SWA 完整缓存；请先评估额外 KV 内存。
 - 使用单文件或同目录完整分片集的文本 GGUF、本机受管 loopback HTTP 引擎；不要使用 router、多模型、Embedding、Reranker、LoRA 或 mmproj。自定义参数默认阻断；只有安全分类器明确认可的加载 I/O 参数可放行，当前为 `--lazy-mode` / `-lzm` / 旧 `--tensor-read-lazy` 的 `auto`、`on`、`off`。界面会列出其他具体阻断标志。
-- 推测解码可以关闭，也可以选择当前引擎明确报告的组合。`ngram-*` 可从 target prompt 重建；`draft-*` 还要求引擎的 `--slot-save-path` 帮助明确包含 `slot KV cache and context checkpoints`，证明 target/draft context 会共同序列化。未知类型、`spec-default` 或外部 lookup cache 仍会安全回退冷启动。
-- 已知 hybrid/recurrent 架构仍不支持。Qwen3.8-Flash-Next 的 `qwen4exp` 可正常使用同进程 prompt cache 和 `ngram-mod`，但 B10679 跨进程实测 restore 后 `cache_n = 0`，因此不能启用持久检查点。
+- 推测解码可以关闭，也可以选择当前引擎明确报告的组合。`ngram-*` 可从 target prompt 重建；`draft-*` 还要求引擎的 `--slot-save-path` 帮助包含 `slot KV cache and context checkpoints`，并启用 `ctx_checkpoints > 0`。帮助标记不能代替真实跨进程验证。未知类型、`spec-default` 或外部 lookup cache 仍回退冷启动。
+- 已知 hybrid/recurrent 架构默认不支持；仅保留已有验收记录的 `qwen35` 实验组合，且须满足 context 持久化与数量条件。Qwen3.8-Flash-Next 的 `qwen4exp` 跨进程实测 restore 后 `cache_n = 0`，继续禁用持久检查点。
 - DeepSeek Harness 必须连接管理器代理而不是实例直连端口。Harness 的标题请求可能先占用 slot，idle-slot cache 和足够的 Cache RAM 用于保留刚恢复的长前缀。
-- 从实例页查看 `Ready (restored)` / `Ready (cold)`、token、文件大小和原因；只有实例完全停止时才能清除数据。
+- 从实例页分别查看文件恢复验证结果，以及最近一次观察到的已完成请求的缓存 token、处理 token 和可关联的 prefill 时间；只有实例完全停止时才能清除数据。
 
-Complete shard sets are fingerprinted as one logical model, including every shard. Rebuildable `ngram-*` types use the original slot format; `draft-*` additionally requires an engine that explicitly advertises target/draft context checkpoints. Custom arguments fail closed except for validated lazy-loading aliases and values. Hybrid/recurrent state remains unsupported. Checkpoint files contain sensitive prompt-derived state and are not portable session backups. Confirm actual benefit with llama.cpp `cache_n`, `n_past`, or prompt-evaluation metrics, not only a successful restore response. See [KV / Prefill Cache Checkpoint](docs/KV_CACHE_CHECKPOINT.md) for the compatibility matrix, lifecycle, privacy model, and troubleshooting steps.
+Complete shard sets are fingerprinted as one logical model. Draft state requires an explicit target/draft context-persistence capability claim and positive `ctx_checkpoints`. Hybrid/recurrent models remain excluded except the documented experimental `qwen35` combination. Custom arguments fail closed except validated lazy-loading settings. Files contain sensitive prompt-derived state and are not portable session backups. The status card distinguishes file verification from observed request reuse; polling can miss short requests and cannot attribute all cache hits to disk restore. See [KV / Prefill Cache Checkpoint](docs/KV_CACHE_CHECKPOINT.md) for the matrix, failure isolation, and pending official disk-cache integration.
 
 ---
 

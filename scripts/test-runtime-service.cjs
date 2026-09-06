@@ -5,6 +5,7 @@ const http = require('node:http')
 const net = require('node:net')
 const os = require('node:os')
 const path = require('node:path')
+const assert = require('node:assert/strict')
 
 const sleep = (milliseconds) => new Promise(resolve => setTimeout(resolve, milliseconds))
 
@@ -252,6 +253,110 @@ function terminatePid(pid) {
   }
 }
 
+async function verifyCheckpointRecovery(endpoint, token, dataDir, launchedPids) {
+  const instanceId = 'checkpoint-recovery-fixture'
+  const port = await reserveLoopbackPort()
+  const instanceRoot = path.join(dataDir, 'kv-checkpoints', instanceId)
+  const scratch = path.join(instanceRoot, 'scratch')
+  const fingerprint = {
+    algorithm: 'sha256', digest: 'a'.repeat(64), modelSha256: 'b'.repeat(64),
+    engineSha256: 'c'.repeat(64), engineVersion: 'recovery-fixture', backend: 'test',
+  }
+  const generationId = crypto.randomUUID()
+  const generation = path.join(instanceRoot, fingerprint.digest, 'generations', generationId)
+  fs.mkdirSync(generation, { recursive: true, mode: 0o700 })
+  const payload = Buffer.from('a valid file whose restore poisons the engine')
+  fs.writeFileSync(path.join(generation, 'slot-0.bin'), payload, { mode: 0o600 })
+  fs.writeFileSync(path.join(generation, 'manifest.json'), JSON.stringify({
+    schemaVersion: 1, stateFormat: 'llama.cpp-slot-state', generationId, instanceId,
+    fingerprint, createdAt: new Date().toISOString(),
+    slots: [{ id: 0, filename: 'slot-0.bin', promptTokens: 512, bytes: payload.length,
+      sha256: crypto.createHash('sha256').update(payload).digest('hex') }],
+  }), { mode: 0o600 })
+  const eventsPath = path.join(dataDir, 'checkpoint-fixture-events.jsonl')
+  const fixturePath = path.join(dataDir, 'checkpoint-fixture.cjs')
+  fs.writeFileSync(fixturePath, `
+const fs = require('node:fs')
+const http = require('node:http')
+const [port, eventsPath] = process.argv.slice(2)
+const log = event => fs.appendFileSync(eventsPath, JSON.stringify({ pid: process.pid, event }) + '\\n')
+let poisoned = false
+log('start')
+http.createServer((request, response) => {
+  request.resume()
+  request.on('end', () => {
+    response.setHeader('content-type', 'application/json')
+    const url = new URL(request.url, 'http://localhost')
+    if (url.searchParams.get('action') === 'restore') {
+      poisoned = true
+      log('restore')
+      response.statusCode = 400
+      response.end('{"error":"partial state load failed"}')
+    } else if (url.searchParams.has('action')) {
+      log(url.searchParams.get('action'))
+      response.end('{}') // erase would succeed without fixing poisoned state
+    } else if (url.pathname === '/slots') {
+      response.end('[{"id":0,"n_ctx":4096,"is_processing":false}]')
+    } else if (url.pathname === '/health') {
+      response.end('{"status":"ok"}')
+    } else if (url.pathname === '/completion') {
+      response.end(JSON.stringify({ content: poisoned ? '' : 'clean response', pid: process.pid }))
+    } else {
+      response.end('{}')
+    }
+  })
+}).listen(Number(port), '127.0.0.1')
+`, 'utf8')
+  const spec = {
+    ...testLaunchSpec(dataDir, port), instance_id: instanceId,
+    config: {
+      ...testLaunchSpec(dataDir, port).config,
+      kv_checkpoint: { enabled: true, auto_save: true, auto_restore: true,
+        storage_limit_gib: 1, minimum_prompt_tokens: 1 },
+    },
+    command: [process.execPath, fixturePath, String(port), eventsPath, '--slot-save-path', scratch],
+    checkpoint: { eligibility_revision: 2, eligibility: { eligible: true, reason_code: 'none', reasons: [] }, fingerprint },
+  }
+  spec.command_display = spec.command.join(' ')
+  const started = await request(endpoint, token, { command: 'start_instance', payload: { spec } }, 'checkpoint-start')
+  assert.equal(started.reply?.result, 'instance', JSON.stringify(started))
+  const oldPid = started.reply.payload.pid
+  launchedPids.add(oldPid)
+  let recovered
+  for (let attempt = 0; attempt < 160; attempt += 1) {
+    const reply = await request(endpoint, token, { command: 'get_status' }, `checkpoint-status-${attempt}`)
+    const state = reply.reply?.payload
+    const running = state?.running?.[instanceId]
+    if (running) launchedPids.add(running.pid)
+    const checkpoint = state?.checkpoints?.[instanceId]
+    if (running?.pid === oldPid) assert.equal(checkpoint?.routable, false, 'poisoned PID became routable')
+    if (running?.pid !== oldPid && checkpoint?.phase === 'ready_cold') {
+      recovered = { running, checkpoint }
+      break
+    }
+    await sleep(100)
+  }
+  assert.ok(recovered?.running, 'failed restore did not recover into a fresh process')
+  assert.equal(pidIsAlive(oldPid), false, 'old process survived recovery')
+  assert.equal(recovered.checkpoint.reason_code, 'cold_after_restore_failure')
+  assert.equal(recovered.checkpoint.routable, true)
+  const result = await httpRequest(port, '/completion', { method: 'POST', body: '{}' })
+  assert.equal(JSON.parse(result.body).content, 'clean response')
+  const events = fs.readFileSync(eventsPath, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+  assert.deepEqual(events.map(value => value.event), ['start', 'restore', 'start'], 'recovery must not erase, save poisoned state, or restore twice')
+  assert.ok(fs.existsSync(path.join(generation, 'restore-rejected.json')))
+  const persisted = JSON.parse(fs.readFileSync(path.join(dataDir, 'runtime', 'runtime-state.json'), 'utf8'))
+  assert.equal(persisted.desired_instances[instanceId].config.kv_checkpoint.auto_restore, true)
+  // Ordinary stop still follows the user's save policy; make this fixture ineligible
+  // for saving by leaving its idle slot below the minimum prompt threshold.
+  const stopped = await request(endpoint, token, { command: 'stop_instance', payload: { instance_id: instanceId } }, 'checkpoint-stop')
+  assert.equal(stopped.reply?.result, 'ack', JSON.stringify(stopped))
+  assert.equal(pidIsAlive(recovered.running.pid), false)
+  launchedPids.delete(oldPid)
+  launchedPids.delete(recovered.running.pid)
+  console.log('Checkpoint recovery replaced the poisoned PID before routing and preserved auto-restore policy.')
+}
+
 async function main() {
   const executable = debugExecutable()
   if (!fs.existsSync(executable)) {
@@ -310,7 +415,7 @@ async function main() {
       || !status.reply.payload?.capabilities?.includes('background_detach_v1')
       || !status.reply.payload?.capabilities?.includes('config_sync_ack_v1')
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')
-      || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v1')
+      || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v2')
       || typeof status.reply.payload?.checkpoints !== 'object') {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }
@@ -623,6 +728,8 @@ async function main() {
     if (disabled.reply?.payload?.background_enabled !== false) {
       throw new Error('runtime did not persist background disablement')
     }
+
+    await verifyCheckpointRecovery(endpoint, token, dataDir, launchedPids)
 
     const shutdown = await request(
       endpoint,

@@ -208,6 +208,9 @@ pub struct SlotSnapshotRecord {
     pub is_processing: bool,
     pub n_ctx: u32,
     pub n_past: Option<u32>,
+    pub task_id: Option<u64>,
+    pub cached_tokens: Option<u64>,
+    pub processed_tokens: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
