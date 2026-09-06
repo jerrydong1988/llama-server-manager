@@ -1,4 +1,5 @@
 import type { EngineCapabilities, InstanceConfig } from './store'
+import { engineBuildNumber, speculativeBackendSamplingSupport, type ParameterEngine } from './engineParameterSupport'
 import {
   ngramCacheEnabled,
   projectorEnabled,
@@ -16,20 +17,21 @@ export type ParameterDefinition = {
   defaultKind?: ParameterDefaultKind
   verifiedDefaults?: Record<number, LocalizedText>
   managed?: boolean
-  dependency?: (config: InstanceConfig, isEmbedding: boolean) => boolean
+  dependency?: (config: InstanceConfig, isEmbedding: boolean, engine?: ParameterEngine) => boolean
 }
 
 const text = (zh: string, en: string): LocalizedText => ({ zh, en })
 const specEnabled = (config: InstanceConfig, isEmbedding: boolean) => (
   speculativeEnabled(config, isEmbedding)
 )
-const fitEnabled = (config: InstanceConfig) => (config.fit_mode || (config.fit ? 'on' : '')) === 'on'
+const fitEnabled = (config: InstanceConfig) => config.fit_mode !== 'off'
 const multimodalEnabled = (config: InstanceConfig, isEmbedding: boolean) => (
   projectorEnabled(config, isEmbedding)
 )
-const backendSamplingCompatible = (config: InstanceConfig, isEmbedding: boolean) => (
+const backendSamplingCompatible = (config: InstanceConfig, isEmbedding: boolean, engine?: ParameterEngine) => (
   !isEmbedding
-  && !speculativeEnabled(config, isEmbedding)
+  && !(speculativeEnabled(config, isEmbedding) && speculativeBackendSamplingSupport(engine) === false)
+  && config.split_mode !== 'tensor'
   && !reasoningBudgetEnabled(config)
   && !config.grammar.trim()
   && !config.grammar_file.trim()
@@ -185,17 +187,12 @@ export const SYSTEM_MANAGED_PARAMETER_KEYS = new Set<keyof InstanceConfig>(
     .map(([key]) => key),
 )
 
-export function parameterDependencyActive(key: keyof InstanceConfig, config: InstanceConfig, isEmbedding: boolean) {
-  return PARAMETER_CATALOG[key]?.dependency?.(config, isEmbedding) ?? true
+export function parameterDependencyActive(key: keyof InstanceConfig, config: InstanceConfig, isEmbedding: boolean, engine?: ParameterEngine) {
+  return PARAMETER_CATALOG[key]?.dependency?.(config, isEmbedding, engine) ?? true
 }
 
 export function parameterFlags(key: keyof InstanceConfig): string[] {
   return PARAMETER_CATALOG[key]?.flags ?? []
-}
-
-const engineBuild = (version?: string) => {
-  const match = version?.match(/(?:version:\s*)?(\d{4,})/i)
-  return match ? Number(match[1]) : undefined
 }
 
 const localizeReportedDefault = (value: string, lang: string) => {
@@ -222,7 +219,7 @@ export function parameterEngineDefault(
   fallbackFlags: string[] = [],
 ): string | undefined {
   const definition = PARAMETER_CATALOG[key]
-  const build = engineBuild(engineVersion)
+  const build = engineBuildNumber(engineVersion)
   const verified = build === undefined ? undefined : definition?.verifiedDefaults?.[build]
   if (verified) return lang === 'zh-CN' ? verified.zh : verified.en
 

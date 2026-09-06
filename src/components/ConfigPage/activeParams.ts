@@ -49,8 +49,7 @@ export function getActiveParams(config: InstanceConfig, isEmbedding: boolean): S
     )) {
       remove(['no_mmproj_offload'])
     }
-    const fitMode = config.fit_mode || (config.fit ? 'on' : '')
-    if (fitMode !== 'on') remove(['fit_target', 'fit_ctx'])
+    if (config.fit_mode === 'off') remove(['fit_target', 'fit_ctx'])
     if (!(config.mirostat > 0 && a.has('mirostat'))) remove(['mirostat_lr', 'mirostat_ent'])
     if (!(config.xtc_probability > 0 && a.has('xtc_probability'))) remove(['xtc_threshold'])
     if (!(config.dynatemp_range > 0 && a.has('dynatemp_range'))) remove(['dynatemp_exp'])

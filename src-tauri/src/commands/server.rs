@@ -752,13 +752,19 @@ fn append_memory_flags(config: &InstanceConfig, cmd: &mut Vec<String>) {
     {
         cmd.extend_from_slice(&["--fit".into(), fit_mode.into()]);
     }
-    if fit_mode == "on" {
+    // Inherited --fit follows the engine (currently on); explicit child values
+    // must still reach the engine without pinning its parent mode.
+    if fit_mode != "off" {
         if should_emit(config, "fit_target", !config.fit_target.is_empty())
             && !config.fit_target.is_empty()
         {
             cmd.extend_from_slice(&["-fitt".into(), config.fit_target.clone()]);
         }
-        if should_emit(config, "fit_ctx", true) {
+        if should_emit(
+            config,
+            "fit_ctx",
+            fit_mode == "on" || config.fit_ctx != 4096,
+        ) {
             cmd.extend_from_slice(&["-fitc".into(), config.fit_ctx.to_string()]);
         }
     }
@@ -5550,6 +5556,61 @@ mod perf_parser_tests {
         command
             .windows(2)
             .any(|arguments| arguments[0] == flag && arguments[1] == value)
+    }
+
+    #[test]
+    fn inherited_fit_preserves_explicit_memory_constraints_without_pinning_parent() {
+        let config = InstanceConfig {
+            fit_target: "2048,3072".into(),
+            fit_ctx: 8192,
+            explicit_overrides: Some(vec!["fit_target".into(), "fit_ctx".into()]),
+            ..InstanceConfig::default()
+        };
+        let command = generate_normalized_command(&config, "llama-server");
+        assert!(has_flag_value(&command, "-fitt", "2048,3072"));
+        assert!(has_flag_value(&command, "-fitc", "8192"));
+        assert!(!command.iter().any(|arg| arg == "--fit"));
+
+        let disabled = InstanceConfig {
+            fit_mode: "off".into(),
+            explicit_overrides: Some(vec![
+                "fit_mode".into(),
+                "fit_target".into(),
+                "fit_ctx".into(),
+            ]),
+            ..config
+        };
+        let command = generate_normalized_command(&disabled, "llama-server");
+        assert!(has_flag_value(&command, "--fit", "off"));
+        assert!(!command.iter().any(|arg| arg == "-fitt" || arg == "-fitc"));
+
+        let inherited = generate_normalized_command(&InstanceConfig::default(), "llama-server");
+        assert!(!inherited
+            .iter()
+            .any(|arg| arg == "--fit" || arg == "-fitt" || arg == "-fitc"));
+    }
+
+    #[test]
+    fn main_backend_sampling_is_emitted_with_each_draft_type() {
+        for spec_type in ["draft-mtp", "draft-dflash", "draft-dspark"] {
+            let config = InstanceConfig {
+                spec_type: spec_type.into(),
+                backend_sampling: true,
+                spec_draft_backend_sampling: false,
+                explicit_overrides: Some(vec![
+                    "spec_type".into(),
+                    "backend_sampling".into(),
+                    "spec_draft_backend_sampling".into(),
+                ]),
+                ..InstanceConfig::default()
+            };
+            let command = generate_normalized_command(&config, "llama-server");
+            assert!(has_flag_value(&command, "--spec-type", spec_type));
+            assert!(command.iter().any(|arg| arg == "-bs"));
+            assert!(command
+                .iter()
+                .any(|arg| arg == "--no-spec-draft-backend-sampling"));
+        }
     }
 
     #[test]
