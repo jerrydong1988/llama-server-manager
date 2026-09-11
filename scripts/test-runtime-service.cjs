@@ -191,6 +191,18 @@ function closeServer(server) {
   return new Promise(resolve => server.close(resolve))
 }
 
+function assertPersistedRouterUsage(dataDir) {
+  const database = path.join(dataDir, 'router-usage.db')
+  assert.equal(fs.readFileSync(database).subarray(0, 16).toString('utf8'), 'SQLite format 3\0')
+  // A clean process handoff may leave committed pages in WAL. Check both files;
+  // the storage unit tests separately verify the relational totals and replay.
+  const pages = Buffer.concat([database, `${database}-wal`]
+    .filter(file => fs.existsSync(file)).map(file => fs.readFileSync(file)))
+  assert.ok(pages.includes(Buffer.from('"keyId":"runtime-smoke-client"')), 'background routing must persist caller identity')
+  assert.ok(pages.includes(Buffer.from('"input":10,"output":2')), 'background routing must persist reported usage')
+  assert.equal(pages.includes(Buffer.from('runtime-smoke-proxy-key')), false, 'usage must not contain API key secrets')
+}
+
 async function reserveLoopbackPort() {
   const server = net.createServer()
   const port = await listen(server)
@@ -382,7 +394,7 @@ async function main() {
         response.end('[]')
       } else if (request.url === '/v1/chat/completions') {
         forwardedRequests += 1
-        response.end('{"id":"runtime-smoke-response","model":"runtime-smoke-model","choices":[]}')
+        response.end('{"id":"runtime-smoke-response","model":"runtime-smoke-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}')
       } else {
         response.statusCode = 404
         response.end('{"error":"not found"}')
@@ -418,6 +430,7 @@ async function main() {
       || !status.reply.payload?.capabilities?.includes('config_sync_ack_v1')
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')
       || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v2')
+      || !status.reply.payload?.capabilities?.includes('router_usage_v1')
       || typeof status.reply.payload?.checkpoints !== 'object') {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }
@@ -574,6 +587,7 @@ async function main() {
     if (firstExitCode !== 0) {
       throw new Error(`first runtime service exited with code ${firstExitCode}`)
     }
+    assertPersistedRouterUsage(dataDir)
     if (pidIsAlive(firstInstancePid)) {
       throw new Error('runtime upgrade left the old supervised child process alive')
     }
@@ -763,6 +777,7 @@ async function main() {
     const exitCode = await waitForExit(service, 8_000)
     if (exitCode === null) throw new Error('runtime service did not exit after shutdown')
     if (exitCode !== 0) throw new Error(`runtime service exited with code ${exitCode}`)
+    assertPersistedRouterUsage(dataDir)
     console.log(`Runtime service IPC smoke test passed (PID ${status.reply.payload.service_pid}).`)
   } finally {
     for (const process of serviceProcesses) {
