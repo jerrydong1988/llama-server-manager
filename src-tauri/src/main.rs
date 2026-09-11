@@ -68,6 +68,7 @@ use crate::commands::telemetry::{
     get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
     list_telemetry_sessions, optimize_telemetry_storage, prune_telemetry,
 };
+use crate::commands::usage_store::{clear_router_usage, get_router_usage};
 use crate::models::{AppState, WindowState, WorkerOrigin};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -150,6 +151,9 @@ fn finalize_app_exit(app: &tauri::AppHandle, keep_runtime: bool) {
         eprintln!("Telemetry flush failed during shutdown: {error}");
     }
     crate::commands::nvml::shutdown();
+    if let Err(error) = crate::commands::usage_store::flush() {
+        eprintln!("Usage flush failed during shutdown: {error}");
+    }
     app.exit(0);
 }
 
@@ -703,6 +707,7 @@ fn main() {
             get_system_metrics, get_system_health, get_slots, get_metrics, get_monitoring_series,
             get_telemetry_overview, list_telemetry_sessions, get_telemetry_session_samples, get_telemetry_session_detail, get_telemetry_session_analysis, get_telemetry_session_diagnostics, list_inference_requests, prune_telemetry, optimize_telemetry_storage,
             get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
+            get_router_usage, clear_router_usage,
             save_window_state, load_window_state,
             resolve_path,
             scan_workers_tcp, test_worker, get_worker_info,

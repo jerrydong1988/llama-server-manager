@@ -5,6 +5,8 @@ import { useAppStore } from '../store'
 import { formatHostPort, httpUrl } from '../utils/network'
 import { useI18n } from '../i18n'
 import { getProxyLabels } from '../i18n/pageLabels'
+import { getRouterUsageLabels } from '../i18n/routerUsage'
+import ProxyUsagePanel from './ProxyUsagePanel'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
 
 type ProxyRoute = {
@@ -374,6 +376,8 @@ function routeAvailabilityView(kind: RouteAvailabilityKind, labels: ReturnType<t
 
 export default function ProxyPage() {
   const { lang } = useI18n()
+  const [view, setView] = useState<'settings' | 'usage'>('settings')
+  const usageLabels = useMemo(() => getRouterUsageLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
   const [config, setConfig] = useState<ProxyConfig>(defaultConfig)
   const [draft, setDraft] = useState<ProxyConfig>(defaultConfig)
@@ -865,9 +869,16 @@ export default function ProxyPage() {
   }
 
   const dirty = JSON.stringify(config) !== JSON.stringify(draft)
+  const viewTabs = <div className="flex gap-2" role="tablist" aria-label={labels.title}>
+    <Button role="tab" variant={view === 'settings' ? 'primary' : 'secondary'} aria-selected={view === 'settings'} onClick={() => setView('settings')}>{usageLabels.settings}{dirty ? ' *' : ''}</Button>
+    <Button role="tab" variant={view === 'usage' ? 'primary' : 'secondary'} aria-selected={view === 'usage'} onClick={() => setView('usage')}>{usageLabels.title}</Button>
+  </div>
+
+  if (view === 'usage') return <div className="space-y-5">{viewTabs}<ProxyUsagePanel /></div>
 
   return (
     <div className="space-y-5">
+      {viewTabs}
       <Surface as="section" className="p-5" data-guide="proxy-overview">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">

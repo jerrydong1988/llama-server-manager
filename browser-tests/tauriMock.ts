@@ -2,6 +2,7 @@ import { mockConvertFileSrc, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 import { emit } from '@tauri-apps/api/event'
 import { defaultInstanceConfig } from '../src/store/defaults'
 import { normalizeSpeculativeTypes } from '../src/speculativeTypes'
+import { routerUsageMock, clearUsageMock } from './routerUsageMock'
 import type { GlobalConfigShape } from '../src/store/bootstrap'
 import type {
   EngineInfo,
@@ -1341,6 +1342,8 @@ mockIPC((command, payload) => {
     case 'test_connection': return 'HTTP 200'
     case 'process_download_queue': return null
     case 'get_proxy_config': return clone(proxyConfig)
+    case 'get_router_usage': return routerUsageMock((args.query || {}) as Record<string, unknown>)
+    case 'clear_router_usage': clearUsageMock(); return null
     case 'get_proxy_status':
       if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')
       return clone(proxyStatus)

@@ -1,8 +1,8 @@
 use super::protocol::{
     PersistedRuntimeState, RuntimeCheckpointLaunchSpec, RuntimeCommand, RuntimeLaunchSpec,
     RuntimeReply, RuntimeServiceStatus, BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY,
-    KV_CHECKPOINT_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
-    RUNTIME_STATE_SCHEMA_VERSION,
+    KV_CHECKPOINT_CAPABILITY, ROUTER_USAGE_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
+    RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
 use crate::checkpoint::{
@@ -402,6 +402,7 @@ impl RuntimeSupervisor {
                 CONFIG_SYNC_ACK_CAPABILITY.to_string(),
                 RUNTIME_ERROR_ACK_CAPABILITY.to_string(),
                 KV_CHECKPOINT_CAPABILITY.to_string(),
+                ROUTER_USAGE_CAPABILITY.to_string(),
             ],
             config_revision,
             background_enabled,
@@ -1922,6 +1923,7 @@ impl RuntimeSupervisor {
                     }
                 }
                 let _ = crate::commands::telemetry::flush_telemetry_writer();
+                let _ = crate::commands::usage_store::flush();
                 tokio::spawn(async {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     std::process::exit(0);
@@ -2046,6 +2048,7 @@ pub fn start_watchdog(supervisor: Arc<RuntimeSupervisor>) {
             let failures = supervisor.stop_all_instances();
             if failures.is_empty() {
                 let _ = crate::commands::telemetry::flush_telemetry_writer();
+                let _ = crate::commands::usage_store::flush();
                 std::process::exit(0);
             }
         })
