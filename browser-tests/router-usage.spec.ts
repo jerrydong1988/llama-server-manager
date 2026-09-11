@@ -51,6 +51,23 @@ test('usage reports storage errors without presenting zero totals', async ({ pag
   await expect(page.getByRole('alert')).toContainText('Usage storage unavailable')
   await expect(page.getByRole('button', { name: '导出当前汇总 CSV' })).toBeDisabled()
 })
+
+test('input counting exposes its own caller filters without inflating inference usage', async ({ page }) => {
+  await page.goto('/?scenario=proxy-routing')
+  await page.getByRole('tab', { name: '使用统计' }).click()
+  const keyFilter = page.getByRole('combobox', { name: '使用统计 API Key' })
+  const kindFilter = page.getByRole('combobox', { name: '调用类型' })
+  await expect(keyFilter.locator('option[value="count-only-key"]')).toHaveCount(0)
+  await kindFilter.selectOption('count')
+  await expect(keyFilter.locator('option[value="count-only-key"]')).toHaveCount(1)
+  await keyFilter.selectOption('count-only-key')
+  await expect(page.getByTestId('router-usage-panel')).toContainText('不适用')
+  await expect(page.getByTestId('router-usage-panel')).not.toContainText('10,023')
+  await keyFilter.selectOption('')
+  await kindFilter.selectOption('generation')
+  await expect(page.getByTestId('router-usage-panel')).toContainText('10,023')
+  await expect(keyFilter.locator('option[value="count-only-key"]')).toHaveCount(0)
+})
 test('usage layout supports a narrow dark viewport', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1040, height: 880 })
   await page.addInitScript(() => localStorage.setItem('theme', 'dark'))

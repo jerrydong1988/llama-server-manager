@@ -68,7 +68,7 @@ export default function ProxyUsagePanel() {
       inFlight = true
       setLoading(true)
       try {
-        const base = { ...query, keyId: null, model: null, instanceId: null, endpoint: null, kind: null }
+        const base = { ...query, keyId: null, model: null, instanceId: null, endpoint: null }
         const [next, options] = await Promise.all([
           invokeApp<Report>('get_router_usage', { query }),
           invokeApp<Report>('get_router_usage', { query: base }),
