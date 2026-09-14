@@ -6,14 +6,11 @@ import { getRouterUsageLabels } from '../i18n/routerUsage'
 import { Button, MetricCard, SelectInput, Surface, TextInput } from './ui'
 import ProxyRequestHistory from './ProxyRequestHistory'
 import { getRouterDiagnosticsLabels } from '../i18n/routerDiagnostics'
+import UsageTrendChart from './routerUsage/UsageTrendChart'
+import UsageOutcomeChart from './routerUsage/UsageOutcomeChart'
+import UsageRankingChart, { type RankingDimension } from './routerUsage/UsageRankingChart'
+import { DAY, utcDate, type ChartMetric, type UsageSummary as Summary, type UsageGroup as Group } from './routerUsage/chartData'
 
-type Summary = {
-  requests: number; forwarded: number; success: number; failed: number; rejected: number; cancelled: number; incomplete: number
-  complete: number; partial: number; unknown: number; notApplicable: number
-  input: number; output: number; cached: number; cacheInput: number; cacheKnown: number; inputKnown: number; outputKnown: number
-  items: number; durationMs: number; queueMs: number; firstOutputMs: number; firstOutputCount: number; lastUsed: number
-}
-type Group = { id: string; name: string; summary: Summary }
 export type UsageRecord = {
   requestId: string; keyId: string; keyName: string; model: string; instanceId: string; endpoint: string; kind: string
   startedAt: number; completedAt: number; httpStatus: number; forwarded: boolean; outcome: string; quality: string; source: string
@@ -30,8 +27,6 @@ type Report = {
   storage?: { pendingRecords: number; lastCommitAt: number | null; writeDelayMs: number | null; interruptedSessions: number; lastInterruptionAt: number | null }
 }
 type Grouping = 'keys' | 'models' | 'instances' | 'endpoints'
-const DAY = 86_400_000
-const utcDate = (time: number) => new Date(time).toISOString().slice(0, 10)
 const cell = 'whitespace-nowrap px-3 py-3 text-left align-top'
 
 function csvCell(value: string | number) {
@@ -52,6 +47,9 @@ export default function ProxyUsagePanel() {
   const [endpoint, setEndpoint] = useState('')
   const [kind, setKind] = useState('')
   const [grouping, setGrouping] = useState<Grouping>('keys')
+  const [trendMetric, setTrendMetric] = useState<ChartMetric>('tokens')
+  const [rankingMetric, setRankingMetric] = useState<ChartMetric>('tokens')
+  const [rankingDimension, setRankingDimension] = useState<RankingDimension>('keys')
   const [report, setReport] = useState<Report | null>(null)
   const [catalog, setCatalog] = useState<Report | null>(null)
   const [error, setError] = useState('')
@@ -101,8 +99,6 @@ export default function ProxyUsagePanel() {
   const groups = useMemo(() => [...(report?.[grouping] || [])].sort((a, b) => b.summary.requests - a.summary.requests || a.id.localeCompare(b.id)), [report, grouping])
   const summary = report?.summary
   const eligible = summary ? summary.complete + summary.partial + summary.unknown : 0
-  const days = [...(report?.days || [])].sort((a, b) => Number(a.id) - Number(b.id))
-  const peak = Math.max(1, ...days.map(d => d.summary.input + d.summary.output))
   const range = (count: number) => { setFrom(utcDate(Date.now() - (count - 1) * DAY)); setTo(utcDate(Date.now())) }
 
   const exportSummary = () => {
@@ -171,18 +167,20 @@ export default function ProxyUsagePanel() {
         <MetricCard label={l.output} value={summary.outputKnown ? number(summary.output) : '—'} />
         <MetricCard label={l.coverage} value={percent(summary.complete, eligible)} />
       </div>
-      <Surface className="p-4 text-sm">
-        <div className="flex flex-wrap gap-x-5 gap-y-2">
-          <span>{l.success}: {number(summary.success)}</span><span>{l.failed}: {number(summary.failed)}</span>
-          <span>{l.rejected}: {number(summary.rejected)}</span><span>{l.cancelled}: {number(summary.cancelled)}</span>
-          <span>{l.incomplete}: {number(summary.incomplete)}</span><span>{l.partial}: {number(summary.partial)}</span>
-          <span>{l.unknown}: {number(summary.unknown)}</span><span>{l.cacheRatio}: {percent(summary.cached, summary.cacheInput)}</span>
-        </div>
-        <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">{l.qualityHint}</p>
-      </Surface>
+      <UsageTrendChart days={report.days} from={query.from} to={query.to} lang={lang} metric={trendMetric} onMetricChange={setTrendMetric} />
+      <div className="grid min-w-0 gap-5 xl:grid-cols-2">
+        <UsageOutcomeChart summary={summary} lang={lang} />
+        <UsageRankingChart groups={report} lang={lang} dimension={rankingDimension} onDimensionChange={setRankingDimension}
+          metric={rankingMetric} onMetricChange={setRankingMetric} onFilter={(dimension, id) => {
+          if (dimension === 'keys') setKeyId(id)
+          else if (dimension === 'models') setModel(id)
+          else setInstanceId(id)
+        }} />
+      </div>
       <Surface as="section" className="p-5">
         <h3 className="font-semibold">{d.protocolCoverage}</h3>
         <div className="mt-3 flex flex-wrap gap-x-6 gap-y-2 text-sm">{report.endpoints.map(e => <span key={e.id}>{e.name}: {percent(e.summary.complete, e.summary.complete + e.summary.partial + e.summary.unknown)}</span>)}</div>
+        <p className="mt-3 text-xs leading-5 text-slate-500 dark:text-slate-400">{l.qualityHint}</p>
         {report.storage ? <div className="mt-4 space-y-2 text-sm">
           <p>{d.pending}: {number(report.storage.pendingRecords)} · {d.delay}: {report.storage.writeDelayMs == null ? '—' : `${number(report.storage.writeDelayMs)} ms`}</p>
           <p>{d.lastCommit}: {time(report.storage.lastCommitAt || 0)}</p>
@@ -207,13 +205,6 @@ export default function ProxyUsagePanel() {
             <td className={cell}>{g.summary.cacheKnown ? number(g.summary.cached) : '—'}</td><td className={cell}>{percent(g.summary.complete, g.summary.complete + g.summary.partial + g.summary.unknown)}</td><td className={cell}>{time(g.summary.lastUsed)}</td>
           </tr>)}</tbody>
         </table></div>}
-      </Surface>
-      <Surface as="section" className="p-5"><h3 className="mb-4 font-semibold">{l.trend}</h3>
-        <div className="max-h-80 space-y-3 overflow-auto">{days.length ? days.map(d => <div key={d.id} className="grid grid-cols-[90px_minmax(40px,1fr)_100px] items-center gap-3 text-xs">
-          <span>{utcDate(Number(d.id))}</span><div className="h-3 rounded bg-slate-100 dark:bg-slate-800" title={`${l.input}: ${number(d.summary.input)} · ${l.output}: ${number(d.summary.output)}`}>
-            <div className="h-3 rounded bg-blue-500" style={{ width: `${(d.summary.input + d.summary.output) / peak * 100}%` }} />
-          </div><span className="text-right">{d.summary.inputKnown || d.summary.outputKnown ? number(d.summary.input + d.summary.output) : '—'} Token</span>
-        </div>) : <p className="text-sm text-slate-500">{l.empty}</p>}</div>
       </Surface>
       <ProxyRequestHistory key={`${JSON.stringify(query)}:${revision}`} query={query} />
       <Surface className="p-4">

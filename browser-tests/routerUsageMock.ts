@@ -1,3 +1,5 @@
+import { routerUsageChartsMock } from './routerUsageChartsMock'
+
 const day = 86_400_000
 const empty = () => ({ requests: 0, forwarded: 0, success: 0, failed: 0, rejected: 0, cancelled: 0, incomplete: 0,
   complete: 0, partial: 0, unknown: 0, notApplicable: 0, input: 0, output: 0, cached: 0, cacheInput: 0,
@@ -6,6 +8,7 @@ let cleared = false
 export function clearUsageMock() { cleared = true }
 export function routerUsageMock(query: Record<string, unknown>) {
   if (new URLSearchParams(window.location.search).has('usageError')) throw new Error('Usage storage unavailable')
+  if (new URLSearchParams(window.location.search).has('usageCharts') && !cleared) return routerUsageChartsMock(query)
   const now = Date.now()
   const s = { ...empty(), requests: 2, forwarded: 1, success: 1, rejected: 1, complete: 1, notApplicable: 1,
     input: 10000, output: 1000, cached: 8000, cacheInput: 10000, inputKnown: 1, outputKnown: 1, cacheKnown: 1, lastUsed: now }
