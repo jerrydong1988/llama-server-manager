@@ -7,7 +7,7 @@ use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
     BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, KV_CHECKPOINT_CAPABILITY,
-    RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
+    ROUTER_USAGE_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -42,6 +42,7 @@ fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
         CONFIG_SYNC_ACK_CAPABILITY,
         RUNTIME_ERROR_ACK_CAPABILITY,
         KV_CHECKPOINT_CAPABILITY,
+        ROUTER_USAGE_CAPABILITY,
     ]
     .iter()
     .all(|required| {
@@ -919,6 +920,7 @@ mod tests {
                 CONFIG_SYNC_ACK_CAPABILITY.into(),
                 RUNTIME_ERROR_ACK_CAPABILITY.into(),
                 KV_CHECKPOINT_CAPABILITY.into(),
+                ROUTER_USAGE_CAPABILITY.into(),
             ],
             config_revision: 1,
             background_enabled: false,

@@ -29,6 +29,7 @@ use crate::commands::proxy_runtime::{
     GlobalRequestPermit, InFlightBodyPermit, RouterRuntime, RoutingCandidate, TargetCapabilities,
     TargetHealthSnapshot, TargetRequestPermit,
 };
+use crate::commands::proxy_usage::{is_usage_only_line, request_stream_usage, UsageHandle};
 use crate::commands::server::{effective_api_key, effective_server_scheme};
 use crate::commands::telemetry::{
     current_time_ms, record_proxy_request, record_vector_activity, ProxyRequestRecord,
@@ -1566,6 +1567,15 @@ async fn proxy_security_middleware(
         apply_cors_headers(&mut response, origin.as_deref());
         return response;
     };
+    if let Some(usage) = request.extensions().get::<UsageHandle>() {
+        let name = config
+            .api_keys
+            .iter()
+            .find(|key| key.id == auth.client_id)
+            .map(|key| key.name.as_str())
+            .unwrap_or("anonymous");
+        usage.identity(&auth.client_id, name);
+    }
     if !auth.scopes.is_empty()
         && !auth
             .scopes
@@ -1595,14 +1605,18 @@ async fn proxy_security_middleware(
         return response;
     }
     if request.method() == Method::POST && request_scope(request.uri().path()) == "inference" {
-        let Some(permit) = router_state
+        let queued_at = std::time::Instant::now();
+        let permit = router_state
             .runtime
             .acquire_global(
                 config.max_concurrent_requests,
                 Duration::from_millis(config.queue_timeout_ms),
             )
-            .await
-        else {
+            .await;
+        if let Some(usage) = request.extensions().get::<UsageHandle>() {
+            usage.queue(queued_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
+        }
+        let Some(permit) = permit else {
             let mut response = error_response(
                 format,
                 StatusCode::TOO_MANY_REQUESTS,
@@ -2580,9 +2594,24 @@ fn listed_proxy_model_ids(config: &ProxyConfig, targets: &[ProxyTarget]) -> Vec<
     ids
 }
 
+async fn proxy_usage_middleware(mut request: Request, next: Next) -> Response {
+    let usage = (request.method() == Method::POST)
+        .then(|| UsageHandle::new(request.uri().path()))
+        .flatten();
+    if let Some(usage) = &usage {
+        request.extensions_mut().insert(usage.clone());
+    }
+    let response = next.run(request).await;
+    match usage {
+        Some(usage) => usage.wrap(response),
+        None => response,
+    }
+}
+
 async fn proxy_upstream(
     State(router_state): State<ProxyRouterState>,
     Extension(admission): Extension<ProxyAdmissionPermit>,
+    Extension(usage): Extension<UsageHandle>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -2626,6 +2655,7 @@ async fn proxy_upstream(
         Ok(model) => model,
         Err(error) => return error_response(api_format, StatusCode::BAD_REQUEST, &error),
     };
+    usage.request(&body);
     let request_streaming = request_uses_streaming(&body);
     let vector_metadata = vector_request_metadata(uri.path(), &body);
     let resolution = router_state.source.resolve_proxy_request(
@@ -2700,7 +2730,9 @@ async fn proxy_upstream(
     }
     let response_model =
         public_response_model(&proxy_config, &target.public, requested_model.as_deref());
+    usage.target(&target.public.instance_id, &response_model);
     let upstream_body = rewrite_request_model(&body, &target.upstream_model_id);
+    let (upstream_body, hide_usage) = request_stream_usage(upstream_body, uri.path());
     let started_at = std::time::Instant::now();
     let started_at_ms = current_time_ms();
     let proxy_task_id = next_proxy_task_id();
@@ -2780,6 +2812,7 @@ async fn proxy_upstream(
     } else {
         proxy_config.timeout_ms.max(1_000)
     });
+    usage.forwarded();
     let response = tokio::time::timeout(header_timeout, request.body(upstream_body).send())
         .await
         .map_err(|_| {
@@ -2906,6 +2939,7 @@ async fn proxy_upstream(
                 );
             }
         };
+        usage.json(&response_body);
         telemetry_guard.record_once(if status_success {
             None
         } else {
@@ -2932,6 +2966,7 @@ async fn proxy_upstream(
     }
 
     if response_is_sse {
+        usage.start_stream();
         let upstream_stream = response
             .bytes_stream()
             .map_err(|err| std::io::Error::other(err.to_string()));
@@ -2947,6 +2982,7 @@ async fn proxy_upstream(
                 response_model,
                 api_format,
                 Duration::from_millis(proxy_config.streaming_idle_timeout_ms),
+                usage,
             ),
             move |(
                 mut line_stream,
@@ -2955,12 +2991,19 @@ async fn proxy_upstream(
                 response_model,
                 api_format,
                 idle_timeout,
+                usage,
             )| async move {
                 if finalized {
                     return None;
                 }
                 match tokio::time::timeout(idle_timeout, line_stream.as_mut().next()).await {
                     Ok(Some(Ok(line))) => {
+                        usage.sse(&line);
+                        let line = if hide_usage && is_usage_only_line(&line) {
+                            String::new()
+                        } else {
+                            line
+                        };
                         let line = rewrite_sse_line(&line, &response_model, api_format);
                         Some((
                             Ok::<_, std::io::Error>(Bytes::from(format!("{line}\n"))),
@@ -2971,6 +3014,7 @@ async fn proxy_upstream(
                                 response_model,
                                 api_format,
                                 idle_timeout,
+                                usage,
                             ),
                         ))
                     }
@@ -2986,6 +3030,7 @@ async fn proxy_upstream(
                                 response_model,
                                 api_format,
                                 idle_timeout,
+                                usage,
                             ),
                         ))
                     }
@@ -3015,6 +3060,7 @@ async fn proxy_upstream(
                                 response_model,
                                 api_format,
                                 idle_timeout,
+                                usage,
                             ),
                         ))
                     }
@@ -3135,6 +3181,7 @@ fn proxy_router_from_source_with_runtime_and_limits(
         .route("/v1/rerank", post(proxy_upstream))
         .route("/v1/reranking", post(proxy_upstream))
         .route_layer(security_layer)
+        .route_layer(middleware::from_fn(proxy_usage_middleware))
         .layer(DefaultBodyLimit::max(request_body_limit))
         .with_state(router_state)
 }
@@ -5882,6 +5929,152 @@ mod tests {
         assert!(sdk_result["chatChunks"].as_u64().unwrap_or(0) >= 1);
         assert!(sdk_result["responseEvents"].as_u64().unwrap_or(0) >= 2);
 
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    async fn mock_usage_upstream(uri: Uri, body: Bytes) -> Response {
+        if uri.path() == "/health" {
+            return Json(json!({"status":"ok"})).into_response();
+        }
+        if uri.path() == "/props" {
+            return Json(json!({})).into_response();
+        }
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap_or(json!({}));
+        if value.get("stream").and_then(serde_json::Value::as_bool) == Some(true) {
+            if uri.path() == "/v1/chat/completions" {
+                assert_eq!(
+                    value.pointer("/stream_options/include_usage"),
+                    Some(&json!(true))
+                );
+            }
+            let mode = value
+                .get("test_mode")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let text = if uri.path() == "/v1/messages" {
+                concat!("event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":2,\"cache_read_input_tokens\":8,\"output_tokens\":0}}}\n\n",
+                    "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\n",
+                    "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":1}}\n\n",
+                    "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":2}}\n\n",
+                    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n").to_string()
+            } else if mode == "error" {
+                "data: {\"error\":{\"message\":\"backend failed\"}}\n\ndata: [DONE]\n\n".into()
+            } else {
+                let mut text=concat!("data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n",
+                    "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":8}}}\n\n").to_string();
+                if mode != "eof" {
+                    text.push_str("data: [DONE]\n\n");
+                }
+                text
+            };
+            // Split inside UTF-8 characters and JSON tokens to exercise the real codec.
+            let chunks = text
+                .as_bytes()
+                .chunks(3)
+                .map(Bytes::copy_from_slice)
+                .collect::<Vec<_>>();
+            return Response::builder()
+                .header("content-type", "text/event-stream")
+                .body(Body::from_stream(futures_util::stream::iter(
+                    chunks.into_iter().map(Ok::<_, std::io::Error>),
+                )))
+                .unwrap();
+        }
+        Json(json!({"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":8}}})).into_response()
+    }
+
+    #[tokio::test]
+    async fn router_usage_accounts_concurrent_keys_and_stream_outcomes_without_sessions() {
+        let (upstream, upstream_task) = spawn_test_router(
+            Router::new()
+                .route("/health", axum::routing::get(mock_usage_upstream))
+                .route("/props", axum::routing::get(mock_usage_upstream))
+                .route("/v1/chat/completions", post(mock_usage_upstream))
+                .route("/v1/messages", post(mock_usage_upstream)),
+        )
+        .await;
+        let mut snapshot = openai_proxy_snapshot(upstream, "test-key-a");
+        let key_a = uuid::Uuid::new_v4().to_string();
+        let key_b = uuid::Uuid::new_v4().to_string();
+        let denied = uuid::Uuid::new_v4().to_string();
+        snapshot.config.api_keys[0].id = key_a.clone();
+        snapshot.config.api_keys.push(ProxyApiKey {
+            id: key_b.clone(),
+            key: "test-key-b".into(),
+            ..Default::default()
+        });
+        snapshot.config.api_keys.push(ProxyApiKey {
+            id: denied.clone(),
+            key: "denied-key".into(),
+            scopes: vec!["discovery".into()],
+            ..Default::default()
+        });
+        let (address, proxy_task) =
+            spawn_test_router(super::proxy_router_from_source(Arc::new(TestProxySource {
+                snapshot,
+            })))
+            .await;
+        let client = reqwest::Client::new();
+        let calls=(0..24).map(|i| {
+            let client=client.clone(); async move {
+                let text=client.post(format!("http://{address}/v1/chat/completions"))
+                    .bearer_auth(if i%2==0 {"test-key-a"} else {"test-key-b"})
+                    .json(&json!({"model":"local-openai","messages":[{"role":"user","content":"hello"}]}))
+                    .send().await.unwrap().text().await.unwrap(); assert!(text.contains("usage"));
+            }
+        });
+        futures_util::future::join_all(calls).await;
+        for (path, mode, include) in [
+            ("/v1/chat/completions", "", false),
+            ("/v1/chat/completions", "", true),
+            ("/v1/chat/completions", "eof", false),
+            ("/v1/chat/completions", "error", false),
+            ("/v1/messages", "", false),
+        ] {
+            let text=client.post(format!("http://{address}{path}"))
+                .bearer_auth("test-key-a").header("anthropic-version","2023-06-01")
+                .json(&json!({"model":"local-openai","messages":[{"role":"user","content":"hello"}],"stream":true,"stream_options":{"include_usage":include},"test_mode":mode}))
+                .send().await.unwrap().text().await.unwrap();
+            if path == "/v1/chat/completions" {
+                assert_eq!(text.contains("prompt_tokens"), include);
+            }
+            if mode != "error" {
+                assert!(text.contains("你好"));
+            }
+        }
+        let rejected = client
+            .post(format!("http://{address}/v1/chat/completions"))
+            .bearer_auth("denied-key")
+            .json(&json!({"model":"local-openai"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+        rejected.bytes().await.unwrap();
+        let records = super::super::usage_store::TEST_RECORDS.lock().unwrap();
+        let a = records
+            .iter()
+            .filter(|r| r.key_id == key_a)
+            .collect::<Vec<_>>();
+        assert_eq!(a.len(), 17);
+        assert_eq!(a.iter().filter(|r| r.outcome == "success").count(), 15);
+        assert_eq!(a.iter().filter(|r| r.outcome == "failed").count(), 1);
+        assert_eq!(a.iter().filter(|r| r.outcome == "incomplete").count(), 1);
+        assert_eq!(a.iter().filter(|r| r.quality == "complete").count(), 15);
+        assert!(a
+            .iter()
+            .filter(|r| r.quality == "complete")
+            .all(|r| r.tokens.input == Some(10)
+                && r.tokens.output == Some(2)
+                && r.tokens.cached == Some(8)));
+        assert_eq!(records.iter().filter(|r| r.key_id == key_b).count(), 12);
+        let r = records.iter().find(|r| r.key_id == denied).unwrap();
+        assert!(!r.forwarded);
+        assert_eq!(r.outcome, "rejected");
+        assert_eq!(r.quality, "not_applicable");
+        drop(records);
         proxy_task.abort();
         upstream_task.abort();
     }

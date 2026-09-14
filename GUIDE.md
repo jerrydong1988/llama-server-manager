@@ -23,10 +23,11 @@ Visit the [documentation site](https://docs.cnzone.net/docs) for the latest onli
 7. [参数配置 / Parameter Configuration](#参数配置-parameter-configuration)
 8. [集群管理 / Cluster Management](#集群管理-cluster-management)
 9. [实例路由 / Instance Routing](#实例路由-instance-routing)
-10. [性能监控 / Performance Monitoring](#性能监控-performance-monitoring)
-11. [监控大屏 / Monitoring Wall](#监控大屏-monitoring-wall)
-12. [服务器日志 / Server Logs](#服务器日志-server-logs)
-13. [常见问题 / FAQ](#常见问题-faq)
+10. [路由使用统计 / Router Usage Statistics](#路由使用统计-router-usage-statistics)
+11. [性能监控 / Performance Monitoring](#性能监控-performance-monitoring)
+12. [监控大屏 / Monitoring Wall](#监控大屏-monitoring-wall)
+13. [服务器日志 / Server Logs](#服务器日志-server-logs)
+14. [常见问题 / FAQ](#常见问题-faq)
 
 ---
 
@@ -447,6 +448,21 @@ The proxy does not translate request bodies between OpenAI and Anthropic formats
 - Before moving a portable installation or uninstalling, disable the independent runtime so the app can remove its per-user login entry.
 - Phase one guarantees continuity after a normal UI exit and recovery at the next user login; it is not a machine-level high-availability service. The open UI relaunches a failed runtime. If a directly spawned runtime itself crashes after the UI has exited, reopen the manager or sign in again. A login-started macOS/Linux runtime can then use its launcher restart policy; the Windows login entry provides login recovery only.
 - Starting with a valid unsaved draft persists it before launch.
+
+---
+
+## 路由使用统计 / Router Usage Statistics
+
+在 **实例路由 → 使用统计** 中查看每个 API Key 的请求数、输入和输出 Token、缓存读取量、完整用量覆盖率、最近调用及每日趋势。可按 UTC 日期、Key、公开模型、实际实例、接口和业务类型筛选，并导出当前维度的完整汇总 CSV。日期按请求结束时间归集，最近调用时间按本地时区显示。
+
+- 每个客户端建议使用独立 Key。改名、删除 Key 或重启实例不会删除历史归属；共享 Key 只能得到合计。直连实例、健康检查和模型发现不计入业务用量，输入计数接口需单独选择。
+- 输入包括本次完整上下文；缓存命中是输入的子集。总量为输入加输出，不能再加一次缓存或思考 Token。Anthropic 输入字段会加回协议单独报告的缓存读取及创建量。
+- 流式请求采集引擎最终 usage，累计事件不会重复相加。完整、部分、未知、不适用分别展示；取消、异常断流和失败可能已有消耗，缺失用量不能视为零。部分请求报告的数量也计入已报告总量。
+- 完整用量覆盖率的分母为应计量的已转发请求；缓存比例只使用同时有输入和缓存计数的请求。首个有效输出不包含角色事件和心跳；流式输出正文和工具参数都可触发该时间点。计数不能用于推断实际 GPU 时间或正式计费。
+- 数据保存在独立 `router-usage.db` 中，明细保留 90 天、日汇总保留 365 天；只展示最近 100 条明细，汇总和导出包含筛选范围内全部统计。后台路由不依赖界面保持打开。统计从新版本开始，不追溯旧数据。
+- 不保存提示词、回答正文或密钥。写入失败／丢失会显示历史提示；突然断电或进程崩溃仍可能丢失尚未落盘的记录。清除所选日期会清除该日期内所有 Key、模型与接口的数据，需要再次确认；运行中随后完成的新请求仍会产生新记录。
+
+Open **Instance Routing → Usage statistics** for per-key requests, reported input/output/cache tokens, accounting coverage, recent calls and daily trends. Filters use completion dates in UTC; displayed call timestamps use your local timezone. Summaries and CSV exports cover the full selected range, while recent details are limited to 100 records. Details are retained for 90 days and daily summaries for 365 days in an independent SQLite database. Cache reads are part of input, not additional total tokens. Partial or unknown usage is never assumed to be zero. Direct instance calls are excluded. Background recording continues without the UI, but abnormal exits may lose uncommitted records. No prompts, response content or API secrets are stored.
 
 ---
 
