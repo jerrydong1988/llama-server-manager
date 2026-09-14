@@ -1923,7 +1923,7 @@ impl RuntimeSupervisor {
                     }
                 }
                 let _ = crate::commands::telemetry::flush_telemetry_writer();
-                let _ = crate::commands::usage_store::flush();
+                let _ = crate::commands::usage_store::shutdown();
                 tokio::spawn(async {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     std::process::exit(0);
@@ -2048,7 +2048,7 @@ pub fn start_watchdog(supervisor: Arc<RuntimeSupervisor>) {
             let failures = supervisor.stop_all_instances();
             if failures.is_empty() {
                 let _ = crate::commands::telemetry::flush_telemetry_writer();
-                let _ = crate::commands::usage_store::flush();
+                let _ = crate::commands::usage_store::shutdown();
                 std::process::exit(0);
             }
         })

@@ -31,5 +31,28 @@ export function routerUsageMock(query: Record<string, unknown>) {
       httpStatus: 200, forwarded: true, outcome: g.id === 'key-b' ? 'cancelled' : 'success', quality: counting ? 'not_applicable' : g.id === 'key-b' ? 'partial' : 'complete', source: counting ? 'none' : 'upstream_usage',
       tokens: { input: counting ? null : g.summary.input, output: !counting && g.id === 'key-a' ? 1000 : null, cached: !counting && g.id === 'key-a' ? 8000 : null, cacheWrite: null, reasoning: null },
       durationMs: 1000, queueMs: 2, firstOutputMs: 100, finishReason: null, items: null })),
-    recentTruncated: false, droppedRecords: 1, writeErrors: 0, lastWriteError: null, updatedAt: now, detailDays: 90, summaryDays: 365 }
+    recentTruncated: false, droppedRecords: 1, writeErrors: 0, lastWriteError: null, updatedAt: now, detailDays: 90, summaryDays: 365,
+    storage: { pendingRecords: 2, lastCommitAt: now - 500, writeDelayMs: 120, interruptedSessions: 1, lastInterruptionAt: now - day } }
+}
+
+export function routerUsageRequestsMock(query: Record<string, unknown>) {
+  const report = routerUsageMock(query)
+  let records = report.recent.map(r => ({ ...r, failure: r.outcome === 'cancelled' ? { stage: 'delivery', code: 'client_cancelled', reason: 'Request was dropped.' } : null,
+    responseRequestId: `req-${r.requestId}`, upstreamRequestId: null as string | null, contextBudget: null as object | null }))
+  if (new URLSearchParams(window.location.search).has('usageDiagnostics') && records.length) {
+    records = Array.from({ length: 125 }, (_, i) => ({ ...records[0], requestId: `usage-page-${String(i).padStart(3, '0')}`, responseRequestId: `req-page-${i}`,
+      completedAt: report.updatedAt - i * 1000, httpStatus: 400, forwarded: false, outcome: 'rejected', quality: 'not_applicable', source: 'none',
+      tokens: { input: null, output: null, cached: null, cacheWrite: null, reasoning: null },
+      failure: { stage: 'preflight', code: 'context_length_exceeded', reason: 'Input and requested output exceed the route context window.' },
+      contextBudget: { inputTokens: 91675, requestedOutputTokens: 65536, contextWindow: 131072, excessTokens: 26139, inputSource: 'exact' } }))
+  }
+  records = records.filter(r => r.completedAt >= Number(query.from) && r.completedAt < Number(query.to)
+    && (!query.outcome || r.outcome === query.outcome) && (!query.failureCode || r.failure?.code === query.failureCode)
+    && (!query.requestId || [r.requestId, r.responseRequestId, r.upstreamRequestId].includes(String(query.requestId))))
+  const cursor = query.cursor as { requestId: string } | null
+  const start = cursor ? records.findIndex(r => r.requestId === cursor.requestId) + 1 : 0
+  const page = records.slice(start, start + 50)
+  const last = page[page.length - 1]
+  return { records: page, nextCursor: start + 50 < records.length && last ? { completedAt: last.completedAt, requestId: last.requestId, snapshotRowId: 125 } : null,
+    firstCursor: { completedAt: query.to, requestId: '', snapshotRowId: 125 } }
 }

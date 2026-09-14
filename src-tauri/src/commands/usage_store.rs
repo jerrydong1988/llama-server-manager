@@ -15,11 +15,15 @@ const QUEUE_CAPACITY: usize = 8192;
 static WRITER: Mutex<Option<mpsc::SyncSender<Write>>> = Mutex::new(None);
 static DROPPED: AtomicU64 = AtomicU64::new(0);
 static WRITE_ERRORS: AtomicU64 = AtomicU64::new(0);
+static PENDING: AtomicU64 = AtomicU64::new(0);
+static ACTIVE: AtomicU64 = AtomicU64::new(0);
 static WRITER_ID: LazyLock<String> = LazyLock::new(|| uuid::Uuid::new_v4().to_string());
 
 enum Write {
+    Start,
     Record(Box<UsageRecord>),
     Flush(mpsc::Sender<Result<(), String>>),
+    Shutdown(mpsc::Sender<Result<(), String>>),
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -134,11 +138,14 @@ pub(crate) struct UsageQuery {
 
 impl UsageQuery {
     fn validate(&self) -> Result<(), String> {
+        self.validate_range(true)
+    }
+
+    pub(super) fn validate_range(&self, aligned: bool) -> Result<(), String> {
         if self.from < 0
             || self.to <= self.from
             || self.to - self.from > SUMMARY_DAYS * DAY_MS
-            || self.from % DAY_MS != 0
-            || self.to % DAY_MS != 0
+            || (aligned && (self.from % DAY_MS != 0 || self.to % DAY_MS != 0))
         {
             return Err("Select a UTC day range of 1–365 days".into());
         }
@@ -177,15 +184,18 @@ pub(crate) struct UsageReport {
     pub updated_at: i64,
     pub detail_days: i64,
     pub summary_days: i64,
+    pub storage: super::usage_health::UsageHealth,
 }
 
-fn schema(conn: &Connection) -> Result<(), String> {
+pub(super) fn schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS usage_events (
         id TEXT PRIMARY KEY, day INTEGER NOT NULL, completed INTEGER NOT NULL,
         key_id TEXT NOT NULL, model TEXT NOT NULL, instance_id TEXT NOT NULL,
         endpoint TEXT NOT NULL, kind TEXT NOT NULL, record TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS usage_events_completed ON usage_events(completed);
+        CREATE INDEX IF NOT EXISTS usage_events_page ON usage_events(completed DESC,id DESC);
+        CREATE INDEX IF NOT EXISTS usage_events_failure ON usage_events(json_extract(record,'$.failure.code'),completed DESC,id DESC);
         CREATE TABLE IF NOT EXISTS usage_daily (
         id TEXT PRIMARY KEY, day INTEGER NOT NULL, key_id TEXT NOT NULL, key_name TEXT NOT NULL,
         model TEXT NOT NULL, instance_id TEXT NOT NULL, endpoint TEXT NOT NULL, kind TEXT NOT NULL,
@@ -198,10 +208,11 @@ fn schema(conn: &Connection) -> Result<(), String> {
         CREATE TABLE IF NOT EXISTS usage_deletions (from_day INTEGER NOT NULL, to_day INTEGER NOT NULL, cleared_at INTEGER NOT NULL);
         PRAGMA user_version=1;",
     )
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    super::usage_health::schema(conn)
 }
 
-fn open() -> Result<Connection, String> {
+pub(super) fn open() -> Result<Connection, String> {
     let dir = crate::utils::get_data_dir();
     open_path(&dir.join("router-usage.db"))
 }
@@ -310,20 +321,25 @@ fn writer_loop(receiver: mpsc::Receiver<Write>, path: std::path::PathBuf) {
     let mut conn = None;
     let mut last_error: Option<String> = None;
     let mut last_prune = 0;
+    let mut session = None;
     loop {
         let first = receiver.recv_timeout(Duration::from_secs(2));
-        if matches!(first, Err(mpsc::RecvTimeoutError::Disconnected)) {
-            break;
-        }
         let mut records = Vec::new();
         let mut flushes = Vec::new();
+        let mut closing = matches!(first, Err(mpsc::RecvTimeoutError::Disconnected));
         if let Ok(first) = first {
             let mut pending = Some(first);
             while let Some(write) = pending {
                 match write {
+                    Write::Start => {}
                     Write::Record(r) => records.push(r),
                     Write::Flush(f) => {
                         flushes.push(f);
+                        break;
+                    }
+                    Write::Shutdown(f) => {
+                        flushes.push(f);
+                        closing = true;
                         break;
                     }
                 }
@@ -339,7 +355,26 @@ fn writer_loop(receiver: mpsc::Receiver<Write>, path: std::path::PathBuf) {
                 Err(e) => last_error = Some(e),
             }
         }
+        if session.is_none() {
+            match super::usage_health::WriterSession::start(&path) {
+                Ok(s) => session = Some(s),
+                Err(e) => last_error = Some(e),
+            }
+        }
         let result = if let Some(c) = conn.as_mut() {
+            if let Some(session) = &session {
+                // Mark the batch as outstanding before committing it. A crash
+                // between these operations leaves a conservative gap warning.
+                if let Err(e) = session.update(
+                    c,
+                    PENDING.load(Ordering::Relaxed).max(records.len() as u64),
+                    None,
+                    None,
+                    false,
+                ) {
+                    last_error = Some(e);
+                }
+            }
             let mut result = write_batch(c, &records);
             // Idempotent event IDs make a retry safe even after an uncertain commit.
             if result.is_err() {
@@ -356,6 +391,9 @@ fn writer_loop(receiver: mpsc::Receiver<Write>, path: std::path::PathBuf) {
             WRITE_ERRORS.fetch_add(1, Ordering::Relaxed);
             last_error = Some(e.clone());
         }
+        let _ = PENDING.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            Some(n.saturating_sub(records.len() as u64))
+        });
         if let Some(c) = conn.as_mut() {
             let now = super::telemetry::current_time_ms();
             if now - last_prune > 900_000 {
@@ -367,9 +405,30 @@ fn writer_loop(receiver: mpsc::Receiver<Write>, path: std::path::PathBuf) {
             if let Err(e) = health(c, last_error.as_deref()) {
                 last_error = Some(e);
             }
+            if let Some(session) = &session {
+                let completed = records.iter().map(|r| r.completed_at).min();
+                let committed = result.is_ok() && completed.is_some();
+                if let Err(e) = session.update(
+                    c,
+                    PENDING.load(Ordering::Relaxed),
+                    committed.then_some(now),
+                    completed
+                        .filter(|_| committed)
+                        .map(|t| now.saturating_sub(t).max(0)),
+                    closing
+                        && result.is_ok()
+                        && ACTIVE.load(Ordering::Relaxed) == 0
+                        && PENDING.load(Ordering::Relaxed) == 0,
+                ) {
+                    last_error = Some(e);
+                }
+            }
         }
         for flush in flushes {
             let _ = flush.send(result.clone());
+        }
+        if closing {
+            break;
         }
     }
 }
@@ -386,7 +445,16 @@ fn writer() -> Result<mpsc::SyncSender<Write>, String> {
         .spawn(move || writer_loop(rx, path))
         .map_err(|e| e.to_string())?;
     *guard = Some(tx.clone());
+    // Register a recorder promptly, even if its first request never finishes.
+    let _ = tx.try_send(Write::Start);
     Ok(tx)
+}
+
+pub(crate) fn begin_recording() {
+    if !cfg!(test) {
+        ACTIVE.fetch_add(1, Ordering::Relaxed);
+        let _ = writer();
+    }
 }
 
 pub(crate) fn record(record: UsageRecord) {
@@ -394,6 +462,10 @@ pub(crate) fn record(record: UsageRecord) {
         capture_test_record(&record);
         return;
     }
+    PENDING.fetch_add(1, Ordering::Relaxed);
+    let _ = ACTIVE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+        Some(n.saturating_sub(1))
+    });
     if writer()
         .and_then(|w| {
             w.try_send(Write::Record(Box::new(record)))
@@ -401,6 +473,7 @@ pub(crate) fn record(record: UsageRecord) {
         })
         .is_err()
     {
+        PENDING.fetch_sub(1, Ordering::Relaxed);
         DROPPED.fetch_add(1, Ordering::Relaxed);
     }
 }
@@ -413,13 +486,26 @@ fn capture_test_record(record: &UsageRecord) {
 }
 
 pub(crate) fn flush() -> Result<(), String> {
+    drain(false)
+}
+
+pub(crate) fn shutdown() -> Result<(), String> {
+    flush()?;
+    drain(true)
+}
+
+fn drain(shutdown: bool) -> Result<(), String> {
     let writer = WRITER.lock().map_err(|e| e.to_string())?.clone();
     let Some(writer) = writer else {
         return Ok(());
     };
     let (tx, rx) = mpsc::channel();
     writer
-        .try_send(Write::Flush(tx))
+        .try_send(if shutdown {
+            Write::Shutdown(tx)
+        } else {
+            Write::Flush(tx)
+        })
         .map_err(|e| e.to_string())?;
     rx.recv_timeout(Duration::from_secs(5))
         .map_err(|e| e.to_string())?
@@ -545,6 +631,7 @@ fn query(conn: &Connection, q: &UsageQuery) -> Result<UsageReport, String> {
         updated_at: super::telemetry::current_time_ms(),
         detail_days: DETAIL_DAYS,
         summary_days: SUMMARY_DAYS,
+        storage: Default::default(),
     })
 }
 
@@ -558,7 +645,12 @@ pub async fn get_router_usage(query: UsageQuery) -> crate::error::AppResult<Usag
             .map_err(|e| e.to_string())?;
         let report = self::query(&conn, &query);
         conn.execute_batch("ROLLBACK").map_err(|e| e.to_string())?;
-        report
+        let mut report = report?;
+        report.storage = super::usage_health::inspect(
+            &conn,
+            &crate::utils::get_data_dir().join("router-usage.db"),
+        )?;
+        Ok::<_, String>(report)
     })
     .await
     .map_err(|e| crate::error::AppError::from(e.to_string()))?
@@ -637,6 +729,11 @@ mod tests {
             first_output_ms: None,
             finish_reason: None,
             items: None,
+            failure: None,
+            context_budget: None,
+            response_request_id: None,
+            response_x_request_id: None,
+            upstream_request_id: None,
         }
     }
     #[test]
@@ -758,7 +855,8 @@ mod tests {
             assert_eq!(summary.requests, 20);
             assert_eq!(summary.input, 200);
         }
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.with_extension("writers")).unwrap();
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use super::usage_diagnostics::{correlation_id, ContextBudget, UsageFailure};
 use super::usage_protocol::{TokenUsage, UsageAccumulator, UsageProtocol};
 use axum::{
     body::{Body, Bytes},
@@ -32,6 +33,16 @@ pub(crate) struct UsageRecord {
     pub first_output_ms: Option<u64>,
     pub finish_reason: Option<String>,
     pub items: Option<u64>,
+    #[serde(default)]
+    pub failure: Option<UsageFailure>,
+    #[serde(default)]
+    pub context_budget: Option<ContextBudget>,
+    #[serde(default)]
+    pub response_request_id: Option<String>,
+    #[serde(default)]
+    pub response_x_request_id: Option<String>,
+    #[serde(default)]
+    pub upstream_request_id: Option<String>,
 }
 
 struct Observation {
@@ -64,6 +75,18 @@ impl Observation {
             "success"
         }
         .into();
+        if self.record.failure.is_none() {
+            self.record.failure = match self.record.outcome.as_str() {
+                "cancelled" => Some(UsageFailure::new("delivery", "client_cancelled")),
+                "incomplete" => Some(UsageFailure::new("stream", "stream_interrupted")),
+                "failed" => Some(UsageFailure::new(
+                    if self.streaming { "stream" } else { "upstream" },
+                    "upstream_error",
+                )),
+                "rejected" => Some(UsageFailure::local(self.record.http_status, "")),
+                _ => None,
+            };
+        }
         self.record.tokens = self.parser.tokens.clone();
         self.record.quality = self.parser.quality(self.record.forwarded).into();
         if self.streaming && !self.parser.terminal && self.record.quality == "complete" {
@@ -87,6 +110,7 @@ pub(crate) struct UsageHandle(Arc<Mutex<Observation>>);
 impl UsageHandle {
     pub fn new(endpoint: &str) -> Option<Self> {
         let protocol = UsageProtocol::from_path(endpoint)?;
+        super::usage_store::begin_recording();
         let started_at = super::telemetry::current_time_ms();
         Some(Self(Arc::new(Mutex::new(Observation {
             record: UsageRecord {
@@ -110,6 +134,11 @@ impl UsageHandle {
                 first_output_ms: None,
                 finish_reason: None,
                 items: None,
+                failure: None,
+                context_budget: None,
+                response_request_id: None,
+                response_x_request_id: None,
+                upstream_request_id: None,
             },
             parser: UsageAccumulator::new(protocol),
             started: Instant::now(),
@@ -165,6 +194,19 @@ impl UsageHandle {
     pub fn forwarded(&self) {
         self.0.lock().unwrap().record.forwarded = true;
     }
+    pub fn failure(&self, stage: &str, code: &str) {
+        let mut s = self.0.lock().unwrap();
+        if s.record.failure.is_none() {
+            s.record.failure = Some(UsageFailure::new(stage, code));
+        }
+    }
+    pub fn budget(&self, input: Option<u64>, output: u64, window: u64, source: &str) {
+        self.0.lock().unwrap().record.context_budget =
+            Some(ContextBudget::new(input, output, window, source));
+    }
+    pub fn upstream_id(&self, headers: &axum::http::HeaderMap) {
+        self.0.lock().unwrap().record.upstream_request_id = header_request_id(headers);
+    }
     pub fn start_stream(&self) {
         self.0.lock().unwrap().streaming = true;
     }
@@ -194,9 +236,24 @@ impl UsageHandle {
         s.finalize();
     }
     pub fn wrap(self, response: Response) -> Response {
-        let (parts, body) = response.into_parts();
+        let (mut parts, body) = response.into_parts();
         let status = parts.status.as_u16();
-        self.0.lock().unwrap().record.http_status = status;
+        {
+            let mut s = self.0.lock().unwrap();
+            s.record.http_status = status;
+            s.record.response_request_id = header_request_id(&parts.headers);
+            s.record.response_x_request_id = parts
+                .headers
+                .get("x-request-id")
+                .and_then(|v| v.to_str().ok())
+                .and_then(correlation_id);
+            if s.record.failure.is_none() {
+                s.record.failure = parts.extensions.get::<UsageFailure>().cloned();
+            }
+            if let Ok(id) = axum::http::HeaderValue::from_str(&s.record.request_id) {
+                parts.headers.insert("x-lsm-request-id", id);
+            }
+        }
         let stream = futures_util::stream::unfold(
             (body.into_data_stream(), self, false),
             move |(mut stream, usage, ended)| async move {
@@ -206,6 +263,7 @@ impl UsageHandle {
                 match stream.next().await {
                     Some(Ok(bytes)) => Some((Ok(bytes), (stream, usage, false))),
                     Some(Err(e)) => {
+                        usage.failure("delivery", "stream_interrupted");
                         usage.finish(status, false);
                         Some((Err(e), (stream, usage, true)))
                     }
@@ -218,6 +276,12 @@ impl UsageHandle {
         );
         Response::from_parts(parts, Body::from_stream(stream))
     }
+}
+
+fn header_request_id(headers: &axum::http::HeaderMap) -> Option<String> {
+    ["request-id", "x-request-id"]
+        .iter()
+        .find_map(|name| headers.get(*name)?.to_str().ok().and_then(correlation_id))
 }
 
 /// Request usage only on llama.cpp's supported Chat streaming contract. Filtering

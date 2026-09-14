@@ -1,3 +1,4 @@
+use super::usage_diagnostics::UsageFailure;
 use axum::body::Bytes;
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -98,6 +99,9 @@ pub(crate) fn error_response(
         ProxyApiFormat::Anthropic => anthropic_error_value(status, message, &request_id),
     };
     let mut response = (status, Json(value)).into_response();
+    response
+        .extensions_mut()
+        .insert(UsageFailure::local(status.as_u16(), message));
     if let Ok(header_value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(
             if format.is_anthropic() {
@@ -141,6 +145,9 @@ pub(crate) fn checkpoint_unavailable_response(format: ProxyApiFormat, phase: &st
         }),
     };
     let mut response = (StatusCode::SERVICE_UNAVAILABLE, Json(value)).into_response();
+    response
+        .extensions_mut()
+        .insert(UsageFailure::new("routing", "route_unavailable"));
     response
         .headers_mut()
         .insert("retry-after", HeaderValue::from_static("1"));
@@ -207,6 +214,9 @@ pub(crate) fn context_limit_error_response(
         }
     };
     let mut response = (StatusCode::BAD_REQUEST, Json(value)).into_response();
+    response
+        .extensions_mut()
+        .insert(UsageFailure::new("preflight", "context_length_exceeded"));
     if let Ok(header_value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(
             if format.is_anthropic() {
