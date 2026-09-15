@@ -1188,6 +1188,16 @@ struct ContextLimitViolation {
     input_tokens: Option<u64>,
     requested_output_tokens: u64,
     context_window: u64,
+    input_source: &'static str,
+}
+
+impl ContextLimitViolation {
+    fn exceeded(&self) -> bool {
+        self.input_tokens
+            .unwrap_or(0)
+            .saturating_add(self.requested_output_tokens)
+            > self.context_window
+    }
 }
 
 fn context_preflight_spec(path: &str, body: &[u8]) -> Option<ContextPreflightSpec> {
@@ -1464,7 +1474,7 @@ fn apply_cors_headers(response: &mut Response, origin: Option<&str>) {
     response.headers_mut().insert(
         "access-control-expose-headers",
         HeaderValue::from_static(
-            "request-id, x-request-id, retry-after, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining",
+            "request-id, x-request-id, x-lsm-request-id, retry-after, x-ratelimit-limit-requests, x-ratelimit-remaining-requests, anthropic-ratelimit-requests-limit, anthropic-ratelimit-requests-remaining",
         ),
     );
     response
@@ -1911,6 +1921,7 @@ async fn context_limit_violation(
             input_tokens: None,
             requested_output_tokens: spec.requested_output_tokens,
             context_window,
+            input_source: "output_only",
         });
     }
     // A UTF-8 JSON request cannot tokenize to more input tokens than its byte length before the
@@ -1921,7 +1932,13 @@ async fn context_limit_violation(
         spec.requested_output_tokens,
         context_window,
     ) {
-        return None;
+        return Some(ContextLimitViolation {
+            error_param: spec.error_param,
+            input_tokens: None,
+            requested_output_tokens: spec.requested_output_tokens,
+            context_window,
+            input_source: "not_needed",
+        });
     }
     let input_tokens = fetch_input_token_count(
         client,
@@ -1931,15 +1948,18 @@ async fn context_limit_violation(
         spec.counter,
         proxy_config,
     )
-    .await?;
-    (input_tokens.saturating_add(spec.requested_output_tokens) > context_window).then_some(
-        ContextLimitViolation {
-            error_param: spec.error_param,
-            input_tokens: Some(input_tokens),
-            requested_output_tokens: spec.requested_output_tokens,
-            context_window,
+    .await;
+    Some(ContextLimitViolation {
+        error_param: spec.error_param,
+        input_tokens,
+        requested_output_tokens: spec.requested_output_tokens,
+        context_window,
+        input_source: if input_tokens.is_some() {
+            "exact"
+        } else {
+            "unavailable"
         },
-    )
+    })
 }
 
 fn exact_context_preflight_required(
@@ -2746,7 +2766,7 @@ async fn proxy_upstream(
         .or(target.configured_context_length)
         .filter(|value| *value > 0);
     if let Some(context_window) = context_window {
-        if let Some(violation) = context_limit_violation(
+        let check = context_limit_violation(
             &client,
             &target,
             &headers,
@@ -2755,8 +2775,16 @@ async fn proxy_upstream(
             &proxy_config,
             context_window,
         )
-        .await
-        {
+        .await;
+        if let Some(check) = &check {
+            usage.budget(
+                check.input_tokens,
+                check.requested_output_tokens,
+                check.context_window,
+                check.input_source,
+            );
+        }
+        if let Some(violation) = check.filter(ContextLimitViolation::exceeded) {
             router_state.runtime.record_rejected();
             let error_text = format!(
                 "context window exceeded: input_tokens={:?}, requested_output_tokens={}, context_window={}",
@@ -2816,12 +2844,25 @@ async fn proxy_upstream(
     let response = tokio::time::timeout(header_timeout, request.body(upstream_body).send())
         .await
         .map_err(|_| {
+            usage.failure("upstream", "upstream_timeout");
             format!(
                 "upstream response headers timed out after {} milliseconds",
                 header_timeout.as_millis()
             )
         })
-        .and_then(|result| result.map_err(|error| error.to_string()));
+        .and_then(|result| {
+            result.map_err(|error| {
+                usage.failure(
+                    "upstream",
+                    if error.is_timeout() {
+                        "upstream_timeout"
+                    } else {
+                        "upstream_connection_failed"
+                    },
+                );
+                error.to_string()
+            })
+        });
     let response = match response {
         Ok(response) => response,
         Err(err) => {
@@ -2857,6 +2898,10 @@ async fn proxy_upstream(
     };
     let status =
         StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    usage.upstream_id(response.headers());
+    if !status.is_success() {
+        usage.failure("upstream", "upstream_error");
+    }
     if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
         router_state.runtime.mark_request_failure(
             &target.public.instance_id,
@@ -2931,6 +2976,7 @@ async fn proxy_upstream(
         {
             Ok(bytes) => bytes,
             Err(error_text) => {
+                usage.failure("upstream", "response_error");
                 telemetry_guard.record_once(Some(error_text.clone()));
                 return error_response(
                     api_format,
@@ -3019,6 +3065,7 @@ async fn proxy_upstream(
                         ))
                     }
                     Ok(Some(Err(err))) => {
+                        usage.failure("stream", "stream_interrupted");
                         let error_text = err.to_string();
                         telemetry_guard.record_once(Some(error_text.clone()));
                         Some((
@@ -3043,6 +3090,7 @@ async fn proxy_upstream(
                         None
                     }
                     Err(_) => {
+                        usage.failure("stream", "stream_timeout");
                         let error_text = format!(
                             "upstream stream was idle for {} milliseconds",
                             idle_timeout.as_millis()
@@ -3083,22 +3131,23 @@ async fn proxy_upstream(
     let upstream_stream = Box::pin(response.bytes_stream());
     let idle_timeout = Duration::from_millis(proxy_config.streaming_idle_timeout_ms);
     let stream = futures_util::stream::unfold(
-        (upstream_stream, false, telemetry_guard, idle_timeout),
-        move |(mut upstream_stream, finalized, mut telemetry_guard, idle_timeout)| async move {
+        (upstream_stream, false, telemetry_guard, idle_timeout, usage),
+        move |(mut upstream_stream, finalized, mut telemetry_guard, idle_timeout, usage)| async move {
             if finalized {
                 return None;
             }
             match tokio::time::timeout(idle_timeout, upstream_stream.as_mut().next()).await {
                 Ok(Some(Ok(bytes))) => Some((
                     Ok(bytes),
-                    (upstream_stream, false, telemetry_guard, idle_timeout),
+                    (upstream_stream, false, telemetry_guard, idle_timeout, usage),
                 )),
                 Ok(Some(Err(err))) => {
+                    usage.failure("upstream", "response_error");
                     let error_text = err.to_string();
                     telemetry_guard.record_once(Some(error_text.clone()));
                     Some((
                         Err(std::io::Error::other(error_text)),
-                        (upstream_stream, true, telemetry_guard, idle_timeout),
+                        (upstream_stream, true, telemetry_guard, idle_timeout, usage),
                     ))
                 }
                 Ok(None) => {
@@ -3110,6 +3159,7 @@ async fn proxy_upstream(
                     None
                 }
                 Err(_) => {
+                    usage.failure("upstream", "upstream_timeout");
                     let error_text = format!(
                         "upstream stream was idle for {} milliseconds",
                         idle_timeout.as_millis()
@@ -3120,7 +3170,7 @@ async fn proxy_upstream(
                             std::io::ErrorKind::TimedOut,
                             error_text,
                         )),
-                        (upstream_stream, true, telemetry_guard, idle_timeout),
+                        (upstream_stream, true, telemetry_guard, idle_timeout, usage),
                     ))
                 }
             }
@@ -5714,9 +5764,33 @@ mod tests {
                     .and_then(|value| value.to_str().ok()),
                 Some("10")
             );
+            let usage_id = response.headers()["x-lsm-request-id"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let response_id = response.headers()["x-request-id"]
+                .to_str()
+                .unwrap()
+                .to_owned();
             let body: serde_json::Value = response.json().await.unwrap();
             assert_eq!(body["error"]["code"], "context_length_exceeded");
             assert_eq!(body["error"]["details"]["input_tokens"], 8);
+            let records = super::super::usage_store::TEST_RECORDS.lock().unwrap();
+            let record = records.iter().find(|r| r.request_id == usage_id).unwrap();
+            assert_eq!(
+                record.response_request_id.as_deref(),
+                Some(response_id.as_str())
+            );
+            assert_eq!(
+                record.failure.as_ref().unwrap().code,
+                "context_length_exceeded"
+            );
+            let budget = record.context_budget.as_ref().unwrap();
+            assert_eq!(budget.input_tokens, Some(8));
+            assert_eq!(budget.excess_tokens, Some(1));
+            assert!(!record.forwarded);
+            assert_eq!(record.quality, "not_applicable");
+            assert!(record.tokens.input.is_none() && record.tokens.output.is_none());
         }
 
         let anthropic = client
@@ -6074,9 +6148,128 @@ mod tests {
         assert!(!r.forwarded);
         assert_eq!(r.outcome, "rejected");
         assert_eq!(r.quality, "not_applicable");
+        assert_eq!(r.failure.as_ref().unwrap().code, "permission_denied");
+        assert!(a.iter().filter(|r| r.outcome == "incomplete").all(|r| r
+            .failure
+            .as_ref()
+            .unwrap()
+            .code
+            == "stream_interrupted"));
+        assert!(a.iter().filter(|r| r.outcome == "failed").all(|r| r
+            .failure
+            .as_ref()
+            .unwrap()
+            .code
+            == "upstream_error"));
         drop(records);
         proxy_task.abort();
         upstream_task.abort();
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a local llama-server at LSM_USAGE_TEST_ADDRESS with a loaded generation model"]
+    async fn real_engine_usage_matches_delivered_protocol_counters() {
+        let address: std::net::SocketAddr = std::env::var("LSM_USAGE_TEST_ADDRESS")
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(
+            address.ip().is_loopback(),
+            "only an explicitly selected local test engine is allowed"
+        );
+        let snapshot = openai_proxy_snapshot(address, "");
+        let (router, runtime) =
+            super::proxy_router_from_source_with_runtime(Arc::new(TestProxySource { snapshot }));
+        runtime.mark_probe_success(
+            "openai-upstream",
+            1.0,
+            Some(super::TargetCapabilities {
+                context_length: Some(4096),
+                updated_at_ms: u64::MAX,
+                ..Default::default()
+            }),
+        );
+        let (proxy_address, proxy_task) = spawn_test_router(router).await;
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap();
+        for path in ["/v1/chat/completions", "/v1/responses", "/v1/messages"] {
+            for streaming in [false, true] {
+                let mut request = json!({"model":"local-openai", "max_tokens":16, "stream":streaming,
+                    "messages":[{"role":"user","content":"Reply only OK."}], "chat_template_kwargs":{"enable_thinking":false}});
+                if path == "/v1/responses" {
+                    request = json!({"model":"local-openai","input":"Reply only OK.","max_output_tokens":16,"stream":streaming});
+                } else if path == "/v1/chat/completions" {
+                    request["stream_options"] = json!({"include_usage":true});
+                }
+                let response = client
+                    .post(format!("http://{proxy_address}{path}"))
+                    .header("anthropic-version", "2023-06-01")
+                    .json(&request)
+                    .send()
+                    .await
+                    .unwrap();
+                assert!(
+                    response.status().is_success(),
+                    "{path}: {}",
+                    response.status()
+                );
+                let id = response.headers()["x-lsm-request-id"]
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let body = response.text().await.unwrap();
+                let events: Vec<serde_json::Value> = if streaming {
+                    body.lines()
+                        .filter_map(|line| line.strip_prefix("data:"))
+                        .filter_map(|data| serde_json::from_str(data.trim()).ok())
+                        .collect()
+                } else {
+                    vec![serde_json::from_str(&body).unwrap()]
+                };
+                let mut input = None;
+                let mut output = None;
+                for event in events {
+                    let value = event
+                        .get("response")
+                        .or_else(|| event.get("message"))
+                        .unwrap_or(&event);
+                    if let Some(u) = value.get("usage") {
+                        if path == "/v1/chat/completions" {
+                            input = u["prompt_tokens"].as_u64().or(input);
+                            output = u["completion_tokens"].as_u64().or(output);
+                        } else {
+                            if let Some(n) = u["input_tokens"].as_u64() {
+                                input = Some(
+                                    n + u["cache_read_input_tokens"].as_u64().unwrap_or(0)
+                                        + u["cache_creation_input_tokens"].as_u64().unwrap_or(0),
+                                );
+                            }
+                            output = u["output_tokens"].as_u64().or(output);
+                        }
+                    }
+                }
+                assert!(
+                    input.is_some() && output.is_some(),
+                    "{path} must report usage"
+                );
+                let records = super::super::usage_store::TEST_RECORDS.lock().unwrap();
+                let r = records.iter().find(|r| r.request_id == id).unwrap();
+                assert_eq!(r.tokens.input, input, "{path} streaming={streaming}");
+                assert_eq!(r.tokens.output, output, "{path} streaming={streaming}");
+                assert_eq!(r.quality, "complete");
+                assert_eq!(r.outcome, "success");
+                assert!(r.failure.is_none());
+                println!(
+                    "{path} streaming={streaming}: input={}, output={}, quality={}",
+                    input.unwrap(),
+                    output.unwrap(),
+                    r.quality
+                );
+            }
+        }
+        proxy_task.abort();
     }
 
     #[tokio::test]
