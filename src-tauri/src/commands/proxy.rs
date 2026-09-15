@@ -638,6 +638,7 @@ fn proxy_status_from_state(state: &AppState) -> ProxyStatus {
         unhealthy_routes: active_routes,
         in_flight_requests: 0,
         total_requests: 0,
+        admission: None,
         last_error,
     }
 }
@@ -657,6 +658,7 @@ fn proxy_status_from_snapshot(snapshot: &ProxyRuntimeSnapshot) -> ProxyStatus {
         unhealthy_routes: active_routes,
         in_flight_requests: 0,
         total_requests: 0,
+        admission: None,
         last_error: snapshot.last_error.clone(),
     }
 }
@@ -744,6 +746,7 @@ pub(crate) fn normalize_and_validate_proxy_config(
                 enabled: true,
                 scopes: vec!["inference".into(), "discovery".into()],
                 requests_per_minute: 0,
+                ..Default::default()
             });
         }
     }
@@ -808,6 +811,10 @@ pub(crate) fn normalize_and_validate_proxy_config(
             return Err(format!("API Key {} 包含不支持的权限范围", api_key.name));
         }
         api_key.requests_per_minute = api_key.requests_per_minute.min(10_000_000);
+        api_key.max_concurrent_requests = api_key.max_concurrent_requests.min(100_000);
+        // Match the exact integer range supported by the desktop settings UI.
+        api_key.daily_token_budget = api_key.daily_token_budget.min(9_007_199_254_740_991);
+        api_key.monthly_token_budget = api_key.monthly_token_budget.min(9_007_199_254_740_991);
         if api_key.enabled && !is_hashed_proxy_api_key(&api_key.key) && api_key.key.len() < 16 {
             return Err(format!("API Key {} 至少需要 16 个字符", api_key.name));
         }
@@ -1615,17 +1622,18 @@ async fn proxy_security_middleware(
         return response;
     }
     if request.method() == Method::POST && request_scope(request.uri().path()) == "inference" {
-        let queued_at = std::time::Instant::now();
+        let queue_timer = request
+            .extensions()
+            .get::<UsageHandle>()
+            .map(UsageHandle::queue_timer);
         let permit = router_state
             .runtime
-            .acquire_global(
-                config.max_concurrent_requests,
+            .acquire_request(
+                &auth.client_id,
                 Duration::from_millis(config.queue_timeout_ms),
             )
             .await;
-        if let Some(usage) = request.extensions().get::<UsageHandle>() {
-            usage.queue(queued_at.elapsed().as_millis().min(u64::MAX as u128) as u64);
-        }
+        drop(queue_timer);
         let Some(permit) = permit else {
             let mut response = error_response(
                 format,
@@ -2199,12 +2207,16 @@ pub(crate) fn status_with_runtime(
     status.unhealthy_routes = unhealthy;
     status.in_flight_requests = runtime.in_flight_requests();
     status.total_requests = runtime.total_requests();
+    status.admission = Some(runtime.admission_snapshot());
     status
 }
 
 async fn proxy_health(State(router_state): State<ProxyRouterState>) -> Json<ProxyStatus> {
     let snapshot = router_state.source.proxy_snapshot();
-    Json(status_with_runtime(&snapshot, &router_state.runtime))
+    let mut status = status_with_runtime(&snapshot, &router_state.runtime);
+    // Per-key management data belongs to the local control interface.
+    status.admission = None;
+    Json(status)
 }
 
 async fn proxy_live(State(router_state): State<ProxyRouterState>) -> Json<serde_json::Value> {
@@ -2751,6 +2763,7 @@ async fn proxy_upstream(
     let response_model =
         public_response_model(&proxy_config, &target.public, requested_model.as_deref());
     usage.target(&target.public.instance_id, &response_model);
+    global_permit.target(&response_model, &target.public.instance_id);
     let upstream_body = rewrite_request_model(&body, &target.upstream_model_id);
     let (upstream_body, hide_usage) = request_stream_usage(upstream_body, uri.path());
     let started_at = std::time::Instant::now();
@@ -3196,6 +3209,7 @@ fn proxy_router_from_source_with_runtime_and_limits(
     anthropic_request_body_limit: usize,
 ) -> Router {
     let weak_source: Weak<dyn ProxyDataSource> = Arc::downgrade(&source);
+    runtime.configure_admission(&source.proxy_snapshot().config);
     spawn_health_probe_loop(weak_source, Arc::downgrade(&runtime));
     let router_state = ProxyRouterState { source, runtime };
     let security_layer =
@@ -3390,6 +3404,9 @@ pub async fn save_proxy_config(
         };
     }
     crate::runtime_service::mark_config_sync_complete(sync_generation);
+    if let Some(runtime) = state.proxy_router_runtime.lock().unwrap().as_ref() {
+        runtime.configure_admission(&config);
+    }
     Ok(config)
 }
 
@@ -4641,6 +4658,7 @@ mod tests {
                     enabled: true,
                     scopes: vec!["Discovery".into(), "discovery".into()],
                     requests_per_minute: 50,
+                    ..Default::default()
                 }],
                 ..ProxyConfig::default()
             },
@@ -5856,6 +5874,7 @@ mod tests {
                         enabled: true,
                         scopes: vec!["discovery".into()],
                         requests_per_minute: 1,
+                        ..Default::default()
                     },
                     ProxyApiKey {
                         id: "inference-client".into(),
@@ -5864,6 +5883,7 @@ mod tests {
                         enabled: true,
                         scopes: vec!["inference".into()],
                         requests_per_minute: 0,
+                        ..Default::default()
                     },
                 ],
                 ..ProxyConfig::default()

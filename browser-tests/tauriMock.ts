@@ -1,3 +1,4 @@
+import { routerPerformanceMock, routerBudgetsMock } from './routerManagementMock'
 import { mockConvertFileSrc, mockIPC, mockWindows } from '@tauri-apps/api/mocks'
 import { emit } from '@tauri-apps/api/event'
 import { defaultInstanceConfig } from '../src/store/defaults'
@@ -1342,12 +1343,14 @@ mockIPC((command, payload) => {
     case 'test_connection': return 'HTTP 200'
     case 'process_download_queue': return null
     case 'get_proxy_config': return clone(proxyConfig)
+    case 'get_router_performance': return routerPerformanceMock((args.query || {}) as Record<string, unknown>)
+    case 'get_router_budgets': return routerBudgetsMock(proxyConfig.api_keys)
     case 'get_router_usage': return routerUsageMock((args.query || {}) as Record<string, unknown>)
     case 'get_router_usage_requests': return routerUsageRequestsMock((args.query || {}) as Record<string, unknown>)
     case 'clear_router_usage': clearUsageMock(); return null
     case 'get_proxy_status':
       if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')
-      return clone(proxyStatus)
+      return { ...clone(proxyStatus), admission: { active: 1, queued: 2, limit: proxyConfig.max_concurrent_requests, models: { 'public-model': 1 }, instances: { 'instance-one': 1 }, keys: proxyConfig.api_keys.map(k => ({ id: k.id, active: 1, queued: 2, limit: 2 })) } }
     case 'list_proxy_targets':
       if (control.failProxyTargets) throw new Error('browser test proxy target status unavailable')
       return clone(proxyTargets)

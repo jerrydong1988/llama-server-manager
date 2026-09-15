@@ -30,6 +30,8 @@ pub(crate) struct UsageRecord {
     pub tokens: TokenUsage,
     pub duration_ms: u64,
     pub queue_ms: u64,
+    #[serde(default)]
+    pub queue_entered: bool,
     pub first_output_ms: Option<u64>,
     pub finish_reason: Option<String>,
     pub items: Option<u64>,
@@ -43,6 +45,18 @@ pub(crate) struct UsageRecord {
     pub response_x_request_id: Option<String>,
     #[serde(default)]
     pub upstream_request_id: Option<String>,
+}
+
+pub(crate) struct QueueTimer {
+    usage: UsageHandle,
+    started: Instant,
+}
+
+impl Drop for QueueTimer {
+    fn drop(&mut self) {
+        self.usage
+            .queue(self.started.elapsed().as_millis().min(u64::MAX as u128) as u64);
+    }
 }
 
 struct Observation {
@@ -131,6 +145,7 @@ impl UsageHandle {
                 tokens: TokenUsage::default(),
                 duration_ms: 0,
                 queue_ms: 0,
+                queue_entered: false,
                 first_output_ms: None,
                 finish_reason: None,
                 items: None,
@@ -189,7 +204,16 @@ impl UsageHandle {
         s.record.model = public_model.chars().take(512).collect();
     }
     pub fn queue(&self, ms: u64) {
-        self.0.lock().unwrap().record.queue_ms = ms;
+        let mut observation = self.0.lock().unwrap();
+        observation.record.queue_ms = ms;
+        observation.record.queue_entered = true;
+    }
+
+    pub fn queue_timer(&self) -> QueueTimer {
+        QueueTimer {
+            usage: self.clone(),
+            started: Instant::now(),
+        }
     }
     pub fn forwarded(&self) {
         self.0.lock().unwrap().record.forwarded = true;

@@ -209,6 +209,7 @@ pub(super) fn schema(conn: &Connection) -> Result<(), String> {
         PRAGMA user_version=1;",
     )
     .map_err(|e| e.to_string())?;
+    super::usage_performance::schema(conn)?;
     super::usage_health::schema(conn)
 }
 
@@ -299,7 +300,7 @@ fn insert(conn: &Connection, r: &UsageRecord) -> Result<(), String> {
         ],
     )
     .map_err(|e| e.to_string())?;
-    Ok(())
+    super::usage_performance::record(conn, r)
 }
 
 fn write_batch(conn: &mut Connection, records: &[Box<UsageRecord>]) -> Result<(), String> {
@@ -524,6 +525,7 @@ fn prune(conn: &mut Connection, now: i64) -> Result<(), String> {
         [day - SUMMARY_DAYS * DAY_MS],
     )
     .map_err(|e| e.to_string())?;
+    super::usage_performance::prune(&tx, day)?;
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -688,6 +690,7 @@ pub async fn clear_router_usage(from: i64, to: i64) -> crate::error::AppResult<(
             params![from, to],
         )
         .map_err(|e| e.to_string())?;
+        super::usage_performance::clear(&tx, from, to)?;
         tx.commit().map_err(|e| e.to_string())
     })
     .await
@@ -726,6 +729,7 @@ mod tests {
             },
             duration_ms: 10,
             queue_ms: 0,
+            queue_entered: true,
             first_output_ms: None,
             finish_reason: None,
             items: None,
@@ -870,6 +874,12 @@ mod tests {
         let batch = [Box::new(a), Box::new(b)];
         assert!(write_batch(&mut conn, &batch).is_err());
         assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM usage_performance_daily", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM usage_daily", [], |r| r
                 .get::<_, i64>(0))
                 .unwrap(),
@@ -878,11 +888,54 @@ mod tests {
         conn.execute_batch("DROP TRIGGER reject_test").unwrap();
         write_batch(&mut conn, &batch).unwrap();
         write_batch(&mut conn, &batch).unwrap();
+        for table in ["usage_performance_daily", "usage_performance_hourly"] {
+            assert_eq!(
+                conn.query_row(
+                    &format!("SELECT SUM(json_extract(summary,'$.requests')) FROM {table}"),
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                2
+            );
+        }
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM usage_events", [], |r| r
                 .get::<_, i64>(0))
                 .unwrap(),
             2
         );
+    }
+
+    #[test]
+    #[ignore = "local accounting throughput measurement"]
+    fn usage_capture_benchmark() {
+        let path =
+            std::env::temp_dir().join(format!("lsm-usage-bench-{}.db", uuid::Uuid::new_v4()));
+        let mut conn = open_path(&path).unwrap();
+        let started = std::time::Instant::now();
+        for batch in 0..50 {
+            let records: Vec<_> = (0..100)
+                .map(|i| {
+                    let mut r = request();
+                    r.request_id = format!("{batch}-{i}");
+                    r.key_id = format!("key-{}", i % 10);
+                    r.duration_ms = 100 + i * 37;
+                    r.first_output_ms = Some(10 + i * 3);
+                    Box::new(r)
+                })
+                .collect();
+            write_batch(&mut conn, &records).unwrap();
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM usage_events", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            5000
+        );
+        println!("5000 events, 10 keys, batch=100: {elapsed:?}, {:.1} us/event including base usage + daily/hourly histograms", elapsed.as_micros() as f64/5000.0);
+        drop(conn);
+        std::fs::remove_file(path).unwrap();
     }
 }

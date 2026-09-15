@@ -21,6 +21,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react'
+import RouterOverview from '../routerUsage/RouterOverview'
 import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
 import { pathsEqual } from '../../utils/path'
@@ -425,6 +426,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4" data-guide="dashboard">
+      <RouterOverview onOpen={() => setActiveTab('proxy')} />
       <Surface as="section">
         <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">

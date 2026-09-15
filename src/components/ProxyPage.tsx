@@ -7,6 +7,7 @@ import { useI18n } from '../i18n'
 import { getProxyLabels } from '../i18n/pageLabels'
 import { getRouterUsageLabels } from '../i18n/routerUsage'
 import ProxyUsagePanel from './ProxyUsagePanel'
+import { getRouterManagementLabels } from '../i18n/routerManagement'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
 
 type ProxyRoute = {
@@ -26,6 +27,9 @@ type ProxyApiKey = {
   enabled: boolean
   scopes: string[]
   requestsPerMinute: number
+  maxConcurrentRequests: number
+  dailyTokenBudget: number
+  monthlyTokenBudget: number
 }
 
 type ProxyConfig = {
@@ -44,6 +48,7 @@ type ProxyConfig = {
   unhealthyThreshold: number
   recoveryCooldownMs: number
   maxConcurrentRequests: number
+  fairQueueEnabled: boolean
   queueTimeoutMs: number
   requestsPerMinute: number
   corsAllowedOrigins: string[]
@@ -125,6 +130,7 @@ const defaultConfig: ProxyConfig = {
   unhealthyThreshold: 3,
   recoveryCooldownMs: 15000,
   maxConcurrentRequests: 64,
+  fairQueueEnabled: false,
   queueTimeoutMs: 1000,
   requestsPerMinute: 0,
   corsAllowedOrigins: [],
@@ -198,6 +204,9 @@ function normalizeApiKey(value: unknown, index: number): ProxyApiKey {
     enabled: getBoolean(record, ['enabled'], true),
     scopes: Array.isArray(record.scopes) ? record.scopes.filter((scope): scope is string => typeof scope === 'string') : ['inference', 'discovery'],
     requestsPerMinute: getNumber(record, ['requests_per_minute', 'requestsPerMinute'], 0),
+    maxConcurrentRequests: getNumber(record, ['max_concurrent_requests', 'maxConcurrentRequests'], 0),
+    dailyTokenBudget: getNumber(record, ['daily_token_budget', 'dailyTokenBudget'], 0),
+    monthlyTokenBudget: getNumber(record, ['monthly_token_budget', 'monthlyTokenBudget'], 0),
   }
 }
 
@@ -236,6 +245,7 @@ function normalizeConfig(value: unknown): ProxyConfig {
     unhealthyThreshold: getNumber(record, ['unhealthy_threshold', 'unhealthyThreshold'], defaultConfig.unhealthyThreshold),
     recoveryCooldownMs: getNumber(record, ['recovery_cooldown_ms', 'recoveryCooldownMs'], defaultConfig.recoveryCooldownMs),
     maxConcurrentRequests: getNumber(record, ['max_concurrent_requests', 'maxConcurrentRequests'], defaultConfig.maxConcurrentRequests),
+    fairQueueEnabled: getBoolean(record, ['fair_queue_enabled', 'fairQueueEnabled'], false),
     queueTimeoutMs: getNumber(record, ['queue_timeout_ms', 'queueTimeoutMs'], defaultConfig.queueTimeoutMs),
     requestsPerMinute: getNumber(record, ['requests_per_minute', 'requestsPerMinute'], defaultConfig.requestsPerMinute),
     corsAllowedOrigins: (Array.isArray(record.cors_allowed_origins) ? record.cors_allowed_origins : Array.isArray(record.corsAllowedOrigins) ? record.corsAllowedOrigins : []).filter((origin): origin is string => typeof origin === 'string'),
@@ -315,6 +325,7 @@ function toCommandConfig(config: ProxyConfig) {
     unhealthy_threshold: config.unhealthyThreshold,
     recovery_cooldown_ms: config.recoveryCooldownMs,
     max_concurrent_requests: config.maxConcurrentRequests,
+    fair_queue_enabled: config.fairQueueEnabled,
     queue_timeout_ms: config.queueTimeoutMs,
     requests_per_minute: config.requestsPerMinute,
     cors_allowed_origins: config.corsAllowedOrigins,
@@ -325,6 +336,9 @@ function toCommandConfig(config: ProxyConfig) {
       enabled: apiKey.enabled,
       scopes: apiKey.scopes,
       requests_per_minute: apiKey.requestsPerMinute,
+      max_concurrent_requests: apiKey.maxConcurrentRequests,
+      daily_token_budget: apiKey.dailyTokenBudget,
+      monthly_token_budget: apiKey.monthlyTokenBudget,
     })),
     background_service_mode: config.backgroundServiceMode,
     runtime_service_enabled: config.runtimeServiceEnabled,
@@ -376,6 +390,7 @@ function routeAvailabilityView(kind: RouteAvailabilityKind, labels: ReturnType<t
 
 export default function ProxyPage() {
   const { lang } = useI18n()
+  const management = getRouterManagementLabels(lang)
   const [view, setView] = useState<'settings' | 'usage'>('settings')
   const usageLabels = useMemo(() => getRouterUsageLabels(lang), [lang])
   const instances = useAppStore(state => state.instances)
@@ -679,6 +694,9 @@ export default function ProxyPage() {
         enabled: true,
         scopes: ['inference', 'discovery'],
         requestsPerMinute: 0,
+        maxConcurrentRequests: 0,
+        dailyTokenBudget: 0,
+        monthlyTokenBudget: 0,
       }],
     }))
   }
@@ -1096,6 +1114,8 @@ export default function ProxyPage() {
               </div>
               <Button onClick={addApiKey} icon={<Plus className="h-4 w-4" />}>{labels.addApiKey}</Button>
             </div>
+            <label className="mt-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={draft.fairQueueEnabled} onChange={e => updateDraft({ fairQueueEnabled: e.target.checked })} />{management.fairQueue}</label>
+            <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{management.fairHint} {management.budgetHint}</p>
             <div className="mt-4 grid gap-3 lg:grid-cols-3">
               {[
                 [labels.accessOriginTitle, labels.accessOriginDesc],
@@ -1169,6 +1189,9 @@ export default function ProxyPage() {
                       </button>
                       <IconButton label={labels.removeApiKey} onClick={() => removeApiKey(apiKey.id)} icon={<Trash2 className="h-4 w-4" />} />
                     </div>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    {([['maxConcurrentRequests', management.keyLimit, 100000], ['dailyTokenBudget', management.dayBudget, Number.MAX_SAFE_INTEGER], ['monthlyTokenBudget', management.monthBudget, Number.MAX_SAFE_INTEGER]] as const).map(([field, title, max]) => <label key={field} className="min-w-0 text-xs"><span className="mb-1 block text-slate-500 dark:text-slate-400">{title}</span><TextInput aria-label={title} type="number" min={0} max={max} step={1} value={apiKey[field]} onChange={e => updateApiKey(apiKey.id, { [field]: Math.min(max, Math.max(0, Math.floor(Number(e.target.value) || 0))) })} /></label>)}
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="text-xs text-slate-500 dark:text-slate-400">{labels.scopes}:</span>

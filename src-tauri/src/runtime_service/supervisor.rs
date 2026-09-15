@@ -345,6 +345,7 @@ impl RuntimeSupervisor {
                 unhealthy_routes: active_routes,
                 in_flight_requests: 0,
                 total_requests: 0,
+                admission: None,
                 last_error: None,
             }),
             proxy_runtime: tokio::sync::Mutex::new(None),
@@ -513,6 +514,9 @@ impl RuntimeSupervisor {
             drop(state);
             *self.proxy_status.lock().unwrap() = previous_proxy_status;
             return Err(error);
+        }
+        if let Some(runtime) = self.proxy_router_runtime.lock().unwrap().as_ref() {
+            runtime.configure_admission(&proxy_config);
         }
         Ok(())
     }
@@ -2102,6 +2106,7 @@ mod tests {
                 unhealthy_routes: 0,
                 in_flight_requests: 0,
                 total_requests: 0,
+                admission: None,
                 last_error: None,
             }),
             proxy_runtime: tokio::sync::Mutex::new(None),

@@ -68,6 +68,8 @@ use crate::commands::telemetry::{
     get_telemetry_session_diagnostics, get_telemetry_session_samples, list_inference_requests,
     list_telemetry_sessions, optimize_telemetry_storage, prune_telemetry,
 };
+use crate::commands::usage_budgets::get_router_budgets;
+use crate::commands::usage_performance::get_router_performance;
 use crate::commands::usage_requests::get_router_usage_requests;
 use crate::commands::usage_store::{clear_router_usage, get_router_usage};
 use crate::models::{AppState, WindowState, WorkerOrigin};
@@ -710,6 +712,8 @@ fn main() {
             get_proxy_config, save_proxy_config, get_proxy_status, list_proxy_targets, test_proxy_route, start_proxy, stop_proxy, restart_proxy,
             get_router_usage, clear_router_usage,
             get_router_usage_requests,
+            get_router_performance,
+            get_router_budgets,
             save_window_state, load_window_state,
             resolve_path,
             scan_workers_tcp, test_worker, get_worker_info,
