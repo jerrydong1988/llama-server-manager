@@ -472,7 +472,7 @@ const proxyConfig: BrowserProxyConfig = {
     : [],
 }
 const proxyStatus = {
-  running: HAS_PROXY_DATA,
+  running: HAS_PROXY_DATA && new URLSearchParams(location.search).get('usageManagement') !== 'layout-stopped',
   bound_addr: '127.0.0.1:11435',
   active_routes: IS_DOCS_SCENARIO ? 3 : ['proxy-route-health', 'proxy-route-legacy-ids'].includes(BROWSER_SCENARIO ?? '') ? 2 : BROWSER_SCENARIO === 'proxy-routing' ? 1 : 0,
   healthy_routes: HAS_PROXY_DATA ? 1 : 0,
@@ -1350,7 +1350,9 @@ mockIPC((command, payload) => {
     case 'clear_router_usage': clearUsageMock(); return null
     case 'get_proxy_status':
       if (control.failProxyStatus) throw new Error('browser test proxy status unavailable')
-      return { ...clone(proxyStatus), admission: { active: 1, queued: 2, limit: proxyConfig.max_concurrent_requests, models: { 'public-model': 1 }, instances: { 'instance-one': 1 }, keys: proxyConfig.api_keys.map(k => ({ id: k.id, active: 1, queued: 2, limit: 2 })) } }
+      return { ...clone(proxyStatus), admission: { active: 1, queued: 2, limit: proxyConfig.max_concurrent_requests, models: { 'public-model': 1 }, instances: { 'instance-one': 1 }, keys: new URLSearchParams(location.search).get('usageManagement')?.startsWith('layout')
+        ? routerBudgetsMock([]).keys.map((k, i) => ({ id: k.id, active: i === 2 ? 1 : 0, queued: i === 2 ? 2 : 0, limit: 2 }))
+        : proxyConfig.api_keys.map(k => ({ id: k.id, active: 1, queued: 2, limit: 2 })) } }
     case 'list_proxy_targets':
       if (control.failProxyTargets) throw new Error('browser test proxy target status unavailable')
       return clone(proxyTargets)

@@ -16,10 +16,22 @@ export function routerPerformanceMock(query: Record<string, unknown>) {
 }
 
 export function routerBudgetsMock(keys: { id: string; name: string; enabled: boolean; daily_token_budget?: number; monthly_token_budget?: number }[]) {
-  if (new URLSearchParams(location.search).has('usageManagement')) keys = [{ id: 'key-a', name: 'WorkBuddy', enabled: true, daily_token_budget: 10000, monthly_token_budget: 100000 }]
+  const variant = new URLSearchParams(location.search).get('usageManagement')
+  if (variant) keys = [{ id: 'key-a', name: 'WorkBuddy', enabled: true, daily_token_budget: 10000, monthly_token_budget: 100000 }]
   const now = Date.now()
-  return { keys: keys.map(k => ({ id: k.id, name: k.name, enabled: k.enabled, dailyBudget: k.daily_token_budget || 0, monthlyBudget: k.monthly_token_budget || 0,
+  const report = { keys: keys.map(k => ({ id: k.id, name: k.name, enabled: k.enabled, dailyBudget: k.daily_token_budget || 0, monthlyBudget: k.monthly_token_budget || 0,
     day: { used: 11000, partial: 0, unknown: 0 }, month: { used: 91000, partial: 1, unknown: 0 } })), dayFrom: Math.floor(now / day) * day,
     monthFrom: Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1), updatedAt: now,
     droppedRecords: 0, writeErrors: 0, health: { pendingRecords: 0, interruptedSessions: 0 } }
+  if (variant?.startsWith('layout')) {
+    const usage = (used: number, partial = 0, unknown = 0) => ({ used, partial, unknown })
+    report.keys = [
+      { id: 'key-a', name: 'WorkBuddy', enabled: true, dailyBudget: 0, monthlyBudget: 0, day: usage(0), month: usage(5811893) },
+      { id: 'key-b', name: 'Deepseek harness', enabled: true, dailyBudget: 0, monthlyBudget: 0, day: usage(0), month: usage(0) },
+      { id: 'key-c', name: 'opencode', enabled: true, dailyBudget: 10000000, monthlyBudget: 50000000, day: usage(6602629), month: usage(33828766, 1) },
+      { id: 'key-d', name: 'Hermes', enabled: true, dailyBudget: 300000, monthlyBudget: 400000, day: usage(323580, 1), month: usage(323580, 1) },
+      { id: 'key-e', name: 'Octop-research-team-local-development', enabled: false, dailyBudget: 0, monthlyBudget: 0, day: usage(1670109, 0, 1), month: usage(1670109, 0, 1) },
+    ]
+  }
+  return report
 }

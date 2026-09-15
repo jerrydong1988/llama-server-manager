@@ -58,3 +58,48 @@ test('performance filters and slow search preserve current-period budgets', asyn
   await page.screenshot({ path: testInfo.outputPath('management-narrow.png') })
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
 })
+
+for (const state of ['running', 'stopped']) {
+  test(`current usage stays readable with five keys while ${state}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: 1920, height: 1400 })
+    await page.goto(`/?scenario=proxy-routing&usageManagement=layout${state === 'stopped' ? '-stopped' : ''}`)
+    await page.getByRole('tab', { name: '使用统计' }).click()
+    const panel = page.getByTestId('router-management-panel')
+    await expect(panel.getByRole('listitem')).toHaveCount(5)
+    await expect(panel).toContainText('33,828,766')
+    await expect(panel.getByText('存在部分或未知用量，已知用量可能低于实际消耗。', { exact: true })).toHaveCount(1)
+    await expect(panel.getByRole('img', { name: '用量不完整' })).toHaveCount(5)
+    await expect(panel.getByRole('meter')).toHaveCount(4)
+    const workBuddy = panel.getByRole('listitem').filter({ has: page.getByRole('heading', { name: 'WorkBuddy', exact: true }) })
+    await expect(workBuddy.getByRole('meter')).toHaveCount(0)
+    await expect(workBuddy.locator('dl[aria-label="WorkBuddy · 今日"]')).toContainText('0')
+    const exceeded = panel.getByRole('meter', { name: 'Hermes · 今日 · 预算', exact: true })
+    await expect(exceeded).toHaveAttribute('aria-valuenow', '300000')
+    await expect(exceeded).toHaveAttribute('aria-valuetext', '323,580 / 300,000 Token (107.9%)')
+    await expect(panel).toContainText('已达预算')
+    if (state === 'stopped') {
+      await expect(panel).toContainText('路由未运行')
+      await expect(panel.locator('dl[aria-label$="实时并发"]')).toHaveCount(0)
+      await expect(panel.getByTestId('router-concurrency-strip')).not.toContainText('—')
+    } else {
+      await expect(panel.locator('dl[aria-label$="实时并发"]')).toHaveCount(5)
+      await expect(panel.locator('dl[aria-label="opencode · 实时并发"] dd')).toHaveText(['1', '2', '2'])
+      await expect(workBuddy.locator('dl[aria-label$="实时并发"] dd')).toHaveText(['0', '0', '2'])
+    }
+    await panel.evaluate(el => { el.style.scrollMarginTop = '110px'; el.scrollIntoView({ block: 'start' }) })
+    await page.mouse.move(10, 10)
+    await panel.screenshot({ path: testInfo.outputPath(`management-${state}-dark.png`) })
+    await page.getByRole('button', { name: '切换到明亮模式' }).click()
+    await panel.screenshot({ path: testInfo.outputPath(`management-${state}-light.png`) })
+    await page.setViewportSize({ width: 860, height: 1900 })
+    await panel.evaluate(el => el.scrollIntoView({ block: 'start' }))
+    await panel.screenshot({ path: testInfo.outputPath(`management-${state}-narrow.png`) })
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true)
+    if (state === 'running') {
+      await page.evaluate(() => { window.__TAURI_BROWSER_TEST__.failProxyStatus = true })
+      await expect(panel.getByRole('alert')).toContainText('status unavailable', { timeout: 10_000 })
+      await expect(panel.locator('dl[aria-label="opencode · 实时并发"] dd')).toHaveText(['—', '—', '—'])
+      await expect(panel).toContainText('33,828,766')
+    }
+  })
+}
