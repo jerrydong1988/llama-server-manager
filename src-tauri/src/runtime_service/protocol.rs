@@ -9,7 +9,7 @@ pub const BACKGROUND_DETACH_CAPABILITY: &str = "background_detach_v1";
 pub const RUNTIME_ERROR_ACK_CAPABILITY: &str = "runtime_error_ack_v1";
 pub const CONFIG_SYNC_ACK_CAPABILITY: &str = "config_sync_ack_v1";
 pub const KV_CHECKPOINT_CAPABILITY: &str = "kv_checkpoint_v2";
-pub const ROUTER_USAGE_CAPABILITY: &str = "router_usage_v2";
+pub const ROUTER_USAGE_CAPABILITY: &str = "router_usage_v3";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeCheckpointLaunchSpec {
@@ -270,6 +270,7 @@ mod tests {
                 unhealthy_routes: 0,
                 in_flight_requests: 0,
                 total_requests: 0,
+            admission: None,
                 last_error: None,
             },
             "running": {},

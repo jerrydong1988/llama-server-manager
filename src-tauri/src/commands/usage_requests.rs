@@ -18,6 +18,9 @@ pub(crate) struct RequestQuery {
     pub outcome: Option<String>,
     pub failure_code: Option<String>,
     pub request_id: Option<String>,
+    pub min_duration_ms: Option<u32>,
+    pub min_queue_ms: Option<u32>,
+    pub min_first_output_ms: Option<u32>,
     pub cursor: Option<RequestCursor>,
 }
 
@@ -70,6 +73,9 @@ fn query(conn: &Connection, q: &RequestQuery) -> Result<RequestPage, String> {
         AND (?9 IS NULL OR json_extract(record,'$.failure.code')=?9)
         AND (?10 IS NULL OR id=?10 OR json_extract(record,'$.responseRequestId')=?10 OR json_extract(record,'$.responseXRequestId')=?10 OR json_extract(record,'$.upstreamRequestId')=?10)
         AND rowid<=?11 AND (?12 IS NULL OR (completed,id)<(?12,?13))
+        AND (?14 IS NULL OR json_extract(record,'$.durationMs')>=?14)
+        AND (?15 IS NULL OR (json_extract(record,'$.queueEntered')=1 AND json_extract(record,'$.queueMs')>=?15))
+        AND (?16 IS NULL OR json_extract(record,'$.firstOutputMs')>=?16)
         ORDER BY completed DESC,id DESC LIMIT 51").map_err(|e| e.to_string())?;
     let f = &q.filters;
     let rows = stmt
@@ -87,7 +93,10 @@ fn query(conn: &Connection, q: &RequestQuery) -> Result<RequestPage, String> {
                 q.request_id,
                 snapshot,
                 q.cursor.as_ref().map(|c| c.completed_at),
-                q.cursor.as_ref().map(|c| &c.request_id)
+                q.cursor.as_ref().map(|c| &c.request_id),
+                q.min_duration_ms,
+                q.min_queue_ms,
+                q.min_first_output_ms
             ],
             |r| r.get::<_, String>(0),
         )
@@ -154,6 +163,36 @@ mod tests {
         for i in 0..125 {
             insert(&format!("id-{i:03}"));
         }
+        let slow: RequestQuery =
+            serde_json::from_value(json!({"from":DAY_MS,"to":2*DAY_MS,"minDurationMs":11}))
+                .unwrap();
+        assert!(query(&conn, &slow).unwrap().records.is_empty());
+        let slow = RequestQuery {
+            min_duration_ms: Some(10),
+            ..slow
+        };
+        assert_eq!(query(&conn, &slow).unwrap().records.len(), 50);
+        // Legacy records have no observed queue marker; absent first output is not zero.
+        assert!(query(
+            &conn,
+            &RequestQuery {
+                min_queue_ms: Some(0),
+                ..slow.clone()
+            }
+        )
+        .unwrap()
+        .records
+        .is_empty());
+        assert!(query(
+            &conn,
+            &RequestQuery {
+                min_first_output_ms: Some(0),
+                ..slow
+            }
+        )
+        .unwrap()
+        .records
+        .is_empty());
         let mut q: RequestQuery =
             serde_json::from_value(json!({"from":DAY_MS+1,"to":DAY_MS+20})).unwrap();
         q.validate().unwrap();

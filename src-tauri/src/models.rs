@@ -1126,6 +1126,10 @@ pub struct ProxyApiKey {
     pub scopes: Vec<String>,
     /// Optional per-key request limit. Zero inherits the router-wide value.
     pub requests_per_minute: u32,
+    pub max_concurrent_requests: u32,
+    /// Notification only. Zero disables the corresponding UTC token budget.
+    pub daily_token_budget: u64,
+    pub monthly_token_budget: u64,
 }
 
 impl Default for ProxyApiKey {
@@ -1137,6 +1141,9 @@ impl Default for ProxyApiKey {
             enabled: true,
             scopes: vec!["inference".into(), "discovery".into()],
             requests_per_minute: 0,
+            max_concurrent_requests: 0,
+            daily_token_budget: 0,
+            monthly_token_budget: 0,
         }
     }
 }
@@ -1167,6 +1174,7 @@ pub struct ProxyConfig {
     pub recovery_cooldown_ms: u64,
     pub max_concurrent_requests: u32,
     pub queue_timeout_ms: u64,
+    pub fair_queue_enabled: bool,
     /// Router-wide request limit per authenticated client. Zero disables it.
     pub requests_per_minute: u32,
     pub cors_allowed_origins: Vec<String>,
@@ -1197,6 +1205,7 @@ impl Default for ProxyConfig {
             recovery_cooldown_ms: 15_000,
             max_concurrent_requests: 64,
             queue_timeout_ms: 1_000,
+            fair_queue_enabled: false,
             requests_per_minute: 0,
             cors_allowed_origins: Vec::new(),
             api_keys: Vec::new(),
@@ -1219,6 +1228,8 @@ pub struct ProxyStatus {
     pub in_flight_requests: usize,
     #[serde(default)]
     pub total_requests: u64,
+    #[serde(default)]
+    pub admission: Option<crate::commands::proxy_admission::AdmissionSnapshot>,
     pub last_error: Option<String>,
 }
 
