@@ -47,3 +47,5 @@
 - 真实模型测试可通过 Node.js 24 执行 `node scripts/test-router-real-models.cjs --engine <llama-server路径> --generation <生成GGUF路径> --embedding <向量GGUF路径> --report <结果JSON路径>`，先构建当前调试版。测试使用隔离临时目录及 CPU 小模型，不修改用户配置。基准通过 `cargo test --manifest-path src-tauri/Cargo.toml usage_capture_benchmark -- --ignored --nocapture` 按需运行。
 
 CI 和用户验收分别记录在本轮 PR 中；强制 Token 额度仍待后续设计。
+
+构建依赖同时更新至 `rustls 0.23.45`（其要求的 `rustls-webpki 0.103.15`），修复 [RUSTSEC-2026-0285 / GHSA-2mjx-qc3c-rqvc](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc)。该依赖来自自动更新插件，未扩大既有审查例外；按现有策略审计后新增未处置漏洞为 0。
