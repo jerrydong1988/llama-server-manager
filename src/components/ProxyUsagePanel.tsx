@@ -5,6 +5,8 @@ import { useI18n } from '../i18n'
 import { getRouterUsageLabels } from '../i18n/routerUsage'
 import { Button, MetricCard, SelectInput, Surface, TextInput } from './ui'
 import ProxyRequestHistory from './ProxyRequestHistory'
+import PerformancePanel from './routerUsage/PerformancePanel'
+import ManagementPanel from './routerUsage/ManagementPanel'
 import { getRouterDiagnosticsLabels } from '../i18n/routerDiagnostics'
 import UsageTrendChart from './routerUsage/UsageTrendChart'
 import UsageOutcomeChart from './routerUsage/UsageOutcomeChart'
@@ -154,6 +156,7 @@ export default function ProxyUsagePanel() {
       <p className="mt-4 text-xs leading-5 text-slate-500 dark:text-slate-400">{l.retention}</p>
       <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">{l.accounting}</p>
     </Surface>
+    <ManagementPanel revision={revision} />
     {error ? <Surface className="p-4 text-sm text-red-700 dark:text-red-300" role="alert">{error}</Surface> : null}
     {report && (report.droppedRecords || report.writeErrors || report.lastWriteError) ? <Surface className="p-4 text-sm text-amber-700 dark:text-amber-300" role="status">
       {l.storageWarning} {l.dropped}: {number(report.droppedRecords)} · {l.errors}: {number(report.writeErrors)}
@@ -167,6 +170,7 @@ export default function ProxyUsagePanel() {
         <MetricCard label={l.output} value={summary.outputKnown ? number(summary.output) : '—'} />
         <MetricCard label={l.coverage} value={percent(summary.complete, eligible)} />
       </div>
+      <PerformancePanel query={query} revision={revision} />
       <UsageTrendChart days={report.days} from={query.from} to={query.to} lang={lang} metric={trendMetric} onMetricChange={setTrendMetric} />
       <div className="grid min-w-0 gap-5 xl:grid-cols-2">
         <UsageOutcomeChart summary={summary} lang={lang} />

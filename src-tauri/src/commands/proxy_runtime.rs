@@ -1,10 +1,10 @@
+use super::proxy_admission::{Admission, AdmissionPermit, AdmissionSnapshot};
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tokio::sync::Notify;
 
 const LATENCY_BUCKETS_MS: [u64; 9] = [10, 25, 50, 100, 250, 500, 1_000, 5_000, u64::MAX];
 const MAX_SCHEDULING_COUNTERS: usize = 4_096;
@@ -105,25 +105,11 @@ struct RouterMetrics {
     latency_buckets: Mutex<[u64; LATENCY_BUCKETS_MS.len()]>,
 }
 
-struct DynamicConcurrencyLimiter {
-    active: AtomicUsize,
-    notify: Notify,
-}
-
-impl Default for DynamicConcurrencyLimiter {
-    fn default() -> Self {
-        Self {
-            active: AtomicUsize::new(0),
-            notify: Notify::new(),
-        }
-    }
-}
-
 pub(crate) struct RouterRuntime {
     started_at: Instant,
     targets: Mutex<HashMap<String, TargetRuntime>>,
     scheduling_counters: Mutex<HashMap<String, u64>>,
-    limiter: DynamicConcurrencyLimiter,
+    admission: Arc<Admission>,
     in_flight_body_bytes: AtomicUsize,
     rate_buckets: Mutex<HashMap<String, RateBucket>>,
     metrics: RouterMetrics,
@@ -135,7 +121,7 @@ impl Default for RouterRuntime {
             started_at: Instant::now(),
             targets: Mutex::new(HashMap::new()),
             scheduling_counters: Mutex::new(HashMap::new()),
-            limiter: DynamicConcurrencyLimiter::default(),
+            admission: Arc::new(Admission::default()),
             in_flight_body_bytes: AtomicUsize::new(0),
             rate_buckets: Mutex::new(HashMap::new()),
             metrics: RouterMetrics::default(),
@@ -144,7 +130,13 @@ impl Default for RouterRuntime {
 }
 
 pub(crate) struct GlobalRequestPermit {
-    runtime: Arc<RouterRuntime>,
+    permit: AdmissionPermit,
+}
+
+impl GlobalRequestPermit {
+    pub(crate) fn target(&self, model: &str, instance: &str) {
+        self.permit.target(model, instance);
+    }
 }
 
 pub(crate) struct InFlightBodyPermit {
@@ -157,13 +149,6 @@ impl Drop for InFlightBodyPermit {
         self.runtime
             .in_flight_body_bytes
             .fetch_sub(self.bytes, Ordering::AcqRel);
-    }
-}
-
-impl Drop for GlobalRequestPermit {
-    fn drop(&mut self) {
-        self.runtime.limiter.active.fetch_sub(1, Ordering::AcqRel);
-        self.runtime.limiter.notify.notify_one();
     }
 }
 
@@ -195,41 +180,37 @@ impl RouterRuntime {
         ticket
     }
 
+    pub(crate) fn configure_admission(&self, config: &crate::models::ProxyConfig) {
+        self.admission.configure(config);
+    }
+    pub(crate) fn admission_snapshot(&self) -> AdmissionSnapshot {
+        self.admission.snapshot()
+    }
+
+    #[cfg(test)]
     pub(crate) async fn acquire_global(
         self: &Arc<Self>,
         max_concurrent_requests: u32,
         queue_timeout: Duration,
     ) -> Option<GlobalRequestPermit> {
-        let limit = max_concurrent_requests.max(1) as usize;
-        let acquire = async {
-            loop {
-                // Register before checking capacity so simultaneous releases wake
-                // distinct waiters instead of collapsing into one stored notification.
-                let notified = self.limiter.notify.notified();
-                tokio::pin!(notified);
-                notified.as_mut().enable();
-                let active = self.limiter.active.load(Ordering::Acquire);
-                if active < limit {
-                    if self
-                        .limiter
-                        .active
-                        .compare_exchange(active, active + 1, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                    {
-                        self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
-                        return GlobalRequestPermit {
-                            runtime: self.clone(),
-                        };
-                    }
-                    // Another admission changed the count, but capacity may remain.
-                    continue;
-                }
-                notified.await;
+        self.configure_admission(&crate::models::ProxyConfig {
+            max_concurrent_requests,
+            ..Default::default()
+        });
+        self.acquire_request("test", queue_timeout).await
+    }
+
+    pub(crate) async fn acquire_request(
+        self: &Arc<Self>,
+        key: &str,
+        queue_timeout: Duration,
+    ) -> Option<GlobalRequestPermit> {
+        match self.admission.acquire(key, queue_timeout).await {
+            Some(permit) => {
+                self.metrics.total_requests.fetch_add(1, Ordering::Relaxed);
+                Some(GlobalRequestPermit { permit })
             }
-        };
-        match tokio::time::timeout(queue_timeout, acquire).await {
-            Ok(permit) => Some(permit),
-            Err(_) => {
+            None => {
                 self.metrics
                     .rejected_requests
                     .fetch_add(1, Ordering::Relaxed);
@@ -239,7 +220,7 @@ impl RouterRuntime {
     }
 
     pub(crate) fn in_flight_requests(&self) -> usize {
-        self.limiter.active.load(Ordering::Acquire)
+        self.admission.active()
     }
 
     pub(crate) fn try_acquire_body_bytes(
@@ -336,7 +317,11 @@ impl RouterRuntime {
                 let active = state.map(|state| state.active_requests).unwrap_or(0);
                 let at_capacity = candidate.max_concurrent_requests > 0
                     && active >= candidate.max_concurrent_requests as usize;
-                !circuit_open && !at_capacity
+                let at_slot_capacity = state
+                    .and_then(|s| s.capabilities.total_slots)
+                    .filter(|slots| *slots > 0)
+                    .is_some_and(|slots| active as u64 >= slots);
+                !circuit_open && !at_capacity && !at_slot_capacity
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -397,6 +382,14 @@ impl RouterRuntime {
         let target = targets.entry(candidate.instance_id.clone()).or_default();
         if candidate.max_concurrent_requests > 0
             && target.active_requests >= candidate.max_concurrent_requests as usize
+        {
+            return None;
+        }
+        if target
+            .capabilities
+            .total_slots
+            .filter(|slots| *slots > 0)
+            .is_some_and(|slots| target.active_requests as u64 >= slots)
         {
             return None;
         }
@@ -840,5 +833,45 @@ mod tests {
         assert_eq!(runtime.in_flight_body_bytes(), 40);
         drop(second);
         assert_eq!(runtime.in_flight_body_bytes(), 0);
+    }
+
+    #[test]
+    fn known_engine_slots_bound_all_aliases_without_expanding_route_limits() {
+        let runtime = Arc::new(RouterRuntime::default());
+        let target = candidate("engine", 0, 1);
+        runtime.mark_probe_success(
+            "engine",
+            1.0,
+            Some(TargetCapabilities {
+                total_slots: Some(1),
+                ..Default::default()
+            }),
+        );
+        let permit = runtime.acquire_target(&target).unwrap();
+        assert!(runtime.acquire_target(&target).is_none());
+        assert!(runtime
+            .select_target(
+                std::slice::from_ref(&target),
+                "priorityFailover",
+                "other-alias"
+            )
+            .is_none());
+        drop(permit);
+        assert!(runtime.acquire_target(&target).is_some());
+        runtime.mark_probe_success(
+            "engine",
+            1.0,
+            Some(TargetCapabilities {
+                total_slots: Some(4),
+                ..Default::default()
+            }),
+        );
+        let limited = RoutingCandidate {
+            max_concurrent_requests: 1,
+            ..target
+        };
+        let permit = runtime.acquire_target(&limited).unwrap();
+        assert!(runtime.acquire_target(&limited).is_none());
+        drop(permit);
     }
 }

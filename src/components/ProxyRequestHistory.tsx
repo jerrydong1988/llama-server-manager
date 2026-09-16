@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { invokeApp } from '../lib/ipc'
 import { useI18n } from '../i18n'
+import { getRouterManagementLabels } from '../i18n/routerManagement'
 import { getRouterUsageLabels } from '../i18n/routerUsage'
 import { diagnosticValue, failureCodes, failureText, getRouterDiagnosticsLabels } from '../i18n/routerDiagnostics'
 import { Button, SelectInput, Surface, TextInput } from './ui'
@@ -19,6 +20,9 @@ export default function ProxyRequestHistory({ query }: { query: Filters }) {
   const [to, setTo] = useState(() => utcTime(query.to))
   const [outcome, setOutcome] = useState('')
   const [failureCode, setFailureCode] = useState('')
+  const management = getRouterManagementLabels(lang)
+  const [slowMetric, setSlowMetric] = useState('')
+  const [threshold, setThreshold] = useState(1000)
   const [requestId, setRequestId] = useState('')
   const [cursors, setCursors] = useState<(Cursor | null)[]>([null])
   const [page, setPage] = useState<Page | null>(null)
@@ -32,7 +36,7 @@ export default function ProxyRequestHistory({ query }: { query: Filters }) {
   const reset = () => { setCursors([null]); setSelected(null); setCopied('') }
   const cursor = cursors[cursors.length - 1]
   const filters = useMemo(() => ({ ...query, from: Date.parse(`${from}Z`), to: Date.parse(`${to}Z`),
-    outcome: outcome || null, failureCode: failureCode || null, requestId: requestId.trim() || null, cursor }), [query, from, to, outcome, failureCode, requestId, cursor])
+    outcome: outcome || null, failureCode: failureCode || null, requestId: requestId.trim() || null, cursor, minDurationMs: slowMetric === 'duration' ? threshold : null, minQueueMs: slowMetric === 'queue' ? threshold : null, minFirstOutputMs: slowMetric === 'firstOutput' ? threshold : null }), [query, from, to, outcome, failureCode, requestId, cursor, slowMetric, threshold])
   const valid = Number.isFinite(filters.from) && Number.isFinite(filters.to) && filters.from >= query.from && filters.to <= query.to && filters.to > filters.from
 
   useEffect(() => {
@@ -85,6 +89,7 @@ export default function ProxyRequestHistory({ query }: { query: Filters }) {
       </SelectInput></label>
       <label className="text-xs sm:col-span-2">{l.lookup}<TextInput aria-label={l.lookup} placeholder={l.lookupHint} className="mt-1 w-full" value={requestId} maxLength={128} onChange={e => { setRequestId(e.target.value); reset() }} /></label>
     </div>
+    <div className="mt-4 flex flex-wrap gap-3"><label className="text-xs">{management.slow}<SelectInput className="ml-2" aria-label={management.slow} value={slowMetric} onChange={e => { setSlowMetric(e.target.value); reset() }}><option value="">{management.all}</option>{(['duration', 'queue', 'firstOutput'] as const).map(m => <option key={m} value={m}>{management[m]}</option>)}</SelectInput></label>{slowMetric ? <label className="text-xs">{management.threshold}<TextInput className="ml-2 w-32" aria-label={management.threshold} type="number" min={0} max={4294967295} value={threshold} onChange={e => { setThreshold(Math.min(4294967295, Math.max(0, Math.floor(Number(e.target.value) || 0)))); reset() }} /></label> : null}</div>
     <div className="mt-4 flex flex-wrap items-center gap-3">
       <Button disabled={loading || cursors.length < 2} onClick={() => { setCursors(c => c.slice(0, -1)); setSelected(null) }}>{l.previous}</Button>
       <span className="text-sm">{l.page} {number(cursors.length)}</span>

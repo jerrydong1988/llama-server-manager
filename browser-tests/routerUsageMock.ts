@@ -51,6 +51,9 @@ export function routerUsageRequestsMock(query: Record<string, unknown>) {
   }
   records = records.filter(r => r.completedAt >= Number(query.from) && r.completedAt < Number(query.to)
     && (!query.outcome || r.outcome === query.outcome) && (!query.failureCode || r.failure?.code === query.failureCode)
+    && (query.minDurationMs == null || r.durationMs >= Number(query.minDurationMs))
+    && (query.minQueueMs == null || r.queueMs >= Number(query.minQueueMs))
+    && (query.minFirstOutputMs == null || (r.firstOutputMs != null && r.firstOutputMs >= Number(query.minFirstOutputMs)))
     && (!query.requestId || [r.requestId, r.responseRequestId, r.upstreamRequestId].includes(String(query.requestId))))
   const cursor = query.cursor as { requestId: string } | null
   const start = cursor ? records.findIndex(r => r.requestId === cursor.requestId) + 1 : 0

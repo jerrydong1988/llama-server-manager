@@ -21,6 +21,7 @@ import {
   Wrench,
   Zap,
 } from 'lucide-react'
+import RouterOverview from '../routerUsage/RouterOverview'
 import { useAppStore } from '../../store'
 import { formatHostPort } from '../../utils/network'
 import { pathsEqual } from '../../utils/path'
@@ -425,7 +426,7 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4" data-guide="dashboard">
-      <Surface as="section">
+      <Surface as="section" data-testid="dashboard-header">
         <div className="flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -433,7 +434,7 @@ export default function Dashboard() {
               <Badge tone={attentionCount > 0 ? 'amber' : 'emerald'}>{attentionCount > 0 ? labels.attention : labels.healthy}</Badge>
               <Badge>{labels.workspace}</Badge>
             </div>
-            <p className="mt-1 truncate text-sm text-slate-500 dark:text-slate-400">{labels.subtitle}</p>
+            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">{labels.subtitle}</p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -447,37 +448,7 @@ export default function Dashboard() {
         </div>
       </Surface>
 
-      <Surface as="section" className="p-5">
-        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-          <SectionHeader title={labels.actionCenter} description={labels.actionCenterDesc} />
-          <div className="grid w-full gap-3 xl:max-w-[920px] xl:grid-cols-3">
-            {cockpitActions.map(action => (
-              <button
-                key={action.id}
-                type="button"
-                onClick={action.action}
-                className="group flex min-h-[116px] min-w-0 flex-col justify-between rounded-lg border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950/55 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
-              >
-                <span className="flex items-start gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 dark:border-slate-800 dark:bg-slate-950 dark:text-blue-300">
-                    {action.icon}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block truncate text-sm font-semibold text-slate-950 dark:text-slate-100">{action.title}</span>
-                    <span className="mt-1 line-clamp-2 block text-xs leading-5 text-slate-500 dark:text-slate-400">{action.description}</span>
-                  </span>
-                </span>
-                <span className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-600 transition group-hover:text-blue-500 dark:text-blue-300">
-                  {labels.goHandle}
-                  <ArrowUpRight className="h-3.5 w-3.5" />
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      </Surface>
-
-      <Surface as="section" className="overflow-hidden">
+      <Surface as="section" className="overflow-hidden" data-testid="dashboard-resources">
         <div className="border-b border-slate-200 px-5 py-3 dark:border-slate-800">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <SectionHeader title={labels.resources} />
@@ -496,184 +467,216 @@ export default function Dashboard() {
         </div>
       </Surface>
 
-      <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
-        <Surface as="section" className="min-w-0 overflow-hidden">
-          <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-            <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
-              <div className="min-w-0">
-                <SectionHeader
-                  title={statusScope === 'running' ? labels.running : statusScope === 'stopped' ? labels.stopped : labels.instances}
-                  description={`${labels.visibleRows}: ${filteredInstances.length} / ${instances.length}`}
-                />
-                <div className="mt-3 inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950/70">
-                  {(['running', 'stopped', 'all'] as const).map(scope => (
-                    <button
-                      type="button"
-                      key={scope}
-                      onClick={() => setStatusScope(scope)}
-                      className={`h-8 rounded-md px-3 text-xs font-medium transition ${
-                        statusScope === scope
-                          ? 'bg-blue-600 text-white'
-                          : 'text-slate-600 hover:bg-white hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
-                      }`}
-                    >
-                      {scope === 'running' ? labels.running : scope === 'stopped' ? labels.stopped : labels.all}
-                    </button>
-                  ))}
+      <div className="grid items-start gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div className="min-w-0 space-y-4">
+          <Surface as="section" className="p-4" data-testid="dashboard-actions">
+            <div className="space-y-3">
+              <SectionHeader title={labels.actionCenter} />
+              <div className="grid gap-2">
+                {cockpitActions.map(action => (
+                  <button
+                    key={action.id}
+                    type="button"
+                    onClick={action.action}
+                    className="group flex min-w-0 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-blue-300 hover:bg-blue-50 dark:border-slate-800 dark:bg-slate-950/55 dark:hover:border-blue-500/40 dark:hover:bg-blue-500/10"
+                  >
+                    <span className="flex items-start gap-3">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-600 dark:border-slate-800 dark:bg-slate-950 dark:text-blue-300">
+                        {action.icon}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="block text-sm font-semibold text-slate-950 dark:text-slate-100">{action.title}</span>
+                        <span className="mt-1 block text-xs leading-5 text-slate-500 dark:text-slate-400">{action.description}</span>
+                      </span>
+                    </span>
+                    <span className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-blue-600 transition group-hover:text-blue-500 dark:text-blue-300">
+                      {labels.goHandle}
+                      <ArrowUpRight className="h-3.5 w-3.5" />
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Surface>
+          <Surface as="section" className="min-w-0 overflow-hidden" data-testid="dashboard-instances">
+            <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+              <div className="flex flex-col gap-4">
+                <div className="min-w-0">
+                  <SectionHeader
+                    title={statusScope === 'running' ? labels.running : statusScope === 'stopped' ? labels.stopped : labels.instances}
+                    description={`${labels.visibleRows}: ${filteredInstances.length} / ${instances.length}`}
+                  />
+                  <div className="mt-3 inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-800 dark:bg-slate-950/70">
+                    {(['running', 'stopped', 'all'] as const).map(scope => (
+                      <button
+                        type="button"
+                        key={scope}
+                        onClick={() => setStatusScope(scope)}
+                        className={`h-8 rounded-md px-3 text-xs font-medium transition ${
+                          statusScope === scope
+                            ? 'bg-blue-600 text-white'
+                            : 'text-slate-600 hover:bg-white hover:text-slate-950 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-100'
+                        }`}
+                      >
+                        {scope === 'running' ? labels.running : scope === 'stopped' ? labels.stopped : labels.all}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,180px)_minmax(0,150px)]">
+                  <TextInput
+                    value={search}
+                    onChange={event => setSearch(event.target.value)}
+                    placeholder={labels.searchPlaceholder}
+                    leadingIcon={<Search className="h-4 w-4" />}
+                  />
+                  <SelectInput value={engineFilter} onChange={event => setEngineFilter(event.target.value)}>
+                    <option value="all">{labels.allEngines}</option>
+                    {engines.map(engine => (
+                      <option key={engine.id} value={engine.id}>{engine.name}</option>
+                    ))}
+                  </SelectInput>
+                  <SelectInput value={sortMode} onChange={event => setSortMode(event.target.value as SortMode)}>
+                    <option value="name">{labels.sortName}</option>
+                    <option value="port">{labels.sortPort}</option>
+                    <option value="uptime">{labels.sortUptime}</option>
+                  </SelectInput>
                 </div>
               </div>
 
-              <div className="grid gap-2 sm:grid-cols-[minmax(220px,1fr)_180px_150px] 2xl:w-[610px]">
-                <TextInput
-                  value={search}
-                  onChange={event => setSearch(event.target.value)}
-                  placeholder={labels.searchPlaceholder}
-                  leadingIcon={<Search className="h-4 w-4" />}
-                />
-                <SelectInput value={engineFilter} onChange={event => setEngineFilter(event.target.value)}>
-                  <option value="all">{labels.allEngines}</option>
-                  {engines.map(engine => (
-                    <option key={engine.id} value={engine.id}>{engine.name}</option>
-                  ))}
-                </SelectInput>
-                <SelectInput value={sortMode} onChange={event => setSortMode(event.target.value as SortMode)}>
-                  <option value="name">{labels.sortName}</option>
-                  <option value="port">{labels.sortPort}</option>
-                  <option value="uptime">{labels.sortUptime}</option>
-                </SelectInput>
+              <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
+                <MiniStat label={labels.running} value={runningCount} tone="text-emerald-600 dark:text-emerald-300" />
+                <MiniStat label={labels.stopped} value={stoppedCount} tone="text-slate-700 dark:text-slate-300" />
+                <MiniStat label={t.instance.error} value={erroredCount} tone="text-rose-600 dark:text-rose-300" />
+                <MiniStat label={labels.autoStart} value={autoStartCount} tone="text-blue-600 dark:text-blue-300" />
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-2 md:grid-cols-4">
-              <MiniStat label={labels.running} value={runningCount} tone="text-emerald-600 dark:text-emerald-300" />
-              <MiniStat label={labels.stopped} value={stoppedCount} tone="text-slate-700 dark:text-slate-300" />
-              <MiniStat label={t.instance.error} value={erroredCount} tone="text-rose-600 dark:text-rose-300" />
-              <MiniStat label={labels.autoStart} value={autoStartCount} tone="text-blue-600 dark:text-blue-300" />
-            </div>
-          </div>
+            {filteredInstances.length === 0 ? (
+              <div className="px-5 py-12 text-center">
+                <Server className="mx-auto h-10 w-10 text-slate-300 dark:text-slate-700" />
+                <div className="mt-3 text-sm text-slate-500 dark:text-slate-500">{labels.noMatches}</div>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[860px] table-fixed text-sm">
+                  <colgroup>
+                    <col className="w-[22%]" />
+                    <col className="w-[16%]" />
+                    <col className="w-[12%]" />
+                    <col className="w-[13%]" />
+                    <col className="w-[17%]" />
+                    <col className="w-[20%]" />
+                  </colgroup>
+                  <thead className="bg-slate-50 dark:bg-slate-950/70">
+                    <tr className="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-500">
+                      <th className="px-5 py-3 font-medium">{labels.name}</th>
+                      <th className="px-5 py-3 font-medium">{labels.engine}</th>
+                      <th className="px-5 py-3 font-medium">{labels.status}</th>
+                      <th className="px-5 py-3 font-medium">{labels.health}</th>
+                      <th className="px-5 py-3 font-medium">{labels.endpoint}</th>
+                      <th className="px-5 py-3 text-right font-medium">{labels.actions}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {filteredInstances.map(instance => {
+                      const isRunning = instance.status === 'running'
+                      const lifecyclePhase = instanceLifecycle[instance.id]
+                      const isLifecycleBusy = Boolean(lifecyclePhase)
+                      const endpoint = formatHostPort(instance.config.host, instance.config.port)
+                      const engineName = engineNameFor(instance)
 
-          {filteredInstances.length === 0 ? (
-            <div className="px-5 py-12 text-center">
-              <Server className="mx-auto h-10 w-10 text-slate-300 dark:text-slate-700" />
-              <div className="mt-3 text-sm text-slate-500 dark:text-slate-500">{labels.noMatches}</div>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[860px] table-fixed text-sm">
-                <colgroup>
-                  <col className="w-[22%]" />
-                  <col className="w-[16%]" />
-                  <col className="w-[12%]" />
-                  <col className="w-[13%]" />
-                  <col className="w-[17%]" />
-                  <col className="w-[20%]" />
-                </colgroup>
-                <thead className="bg-slate-50 dark:bg-slate-950/70">
-                  <tr className="text-left text-xs uppercase tracking-wide text-slate-500 dark:text-slate-500">
-                    <th className="px-5 py-3 font-medium">{labels.name}</th>
-                    <th className="px-5 py-3 font-medium">{labels.engine}</th>
-                    <th className="px-5 py-3 font-medium">{labels.status}</th>
-                    <th className="px-5 py-3 font-medium">{labels.health}</th>
-                    <th className="px-5 py-3 font-medium">{labels.endpoint}</th>
-                    <th className="px-5 py-3 text-right font-medium">{labels.actions}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                  {filteredInstances.map(instance => {
-                    const isRunning = instance.status === 'running'
-                    const lifecyclePhase = instanceLifecycle[instance.id]
-                    const isLifecycleBusy = Boolean(lifecyclePhase)
-                    const endpoint = formatHostPort(instance.config.host, instance.config.port)
-                    const engineName = engineNameFor(instance)
-
-                    return (
-                      <tr key={instance.id} className="h-[68px] text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-900/70">
-                        <td className="px-5 py-3 align-middle">
-                          <div className="min-w-0">
-                            <div className="truncate font-medium text-slate-950 dark:text-slate-100" title={instance.name}>{instance.name}</div>
-                            <div className="mt-1 text-xs text-slate-500 dark:text-slate-500">{labels.uptime} {formatUptime(instance.startTime)}</div>
-                          </div>
-                        </td>
-                        <td className="px-5 py-3 align-middle">
-                          <div className="truncate text-slate-600 dark:text-slate-400" title={engineName}>{engineName}</div>
-                        </td>
-                        <td className="px-5 py-3 align-middle">
-                          <Badge tone={isLifecycleBusy ? 'blue' : statusTone(instance)}>
-                            {lifecyclePhase === 'starting'
-                              ? t.instance.starting
-                              : lifecyclePhase === 'stopping'
-                                ? t.instance.stopping
-                                : isRunning ? t.instance.running : instance.status === 'stopped' ? t.instance.stopped : t.instance.error}
-                          </Badge>
-                        </td>
-                        <td className="px-5 py-3 align-middle">
-                          <span className="inline-flex min-w-0 items-center gap-2 text-slate-600 dark:text-slate-400">
-                            <span className={`h-2 w-2 shrink-0 rounded-full ${healthDotClass(instance)}`} />
-                            <span className="truncate">{healthText(instance)}</span>
-                          </span>
-                        </td>
-                        <td className="px-5 py-3 align-middle">
-                          <div className="truncate font-mono text-xs text-slate-600 dark:text-slate-400" title={endpoint}>{endpoint}</div>
-                        </td>
-                        <td className="px-5 py-3 align-middle">
-                          <div className="ml-auto grid w-[172px] grid-cols-[92px_34px_34px] items-center justify-end gap-2">
-                            {isRunning ? (
-                              <Button
-                                onClick={() => void stopInstance(instance.id).catch(() => {})}
-                                disabled={isLifecycleBusy}
-                                variant="danger"
-                                size="sm"
-                                className="h-8 whitespace-nowrap px-2"
-                                icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+                      return (
+                        <tr key={instance.id} className="h-[68px] text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-900/70">
+                          <td className="px-5 py-3 align-middle">
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-slate-950 dark:text-slate-100" title={instance.name}>{instance.name}</div>
+                              <div className="mt-1 text-xs text-slate-500 dark:text-slate-500">{labels.uptime} {formatUptime(instance.startTime)}</div>
+                            </div>
+                          </td>
+                          <td className="px-5 py-3 align-middle">
+                            <div className="truncate text-slate-600 dark:text-slate-400" title={engineName}>{engineName}</div>
+                          </td>
+                          <td className="px-5 py-3 align-middle">
+                            <Badge tone={isLifecycleBusy ? 'blue' : statusTone(instance)}>
+                              {lifecyclePhase === 'starting'
+                                ? t.instance.starting
+                                : lifecyclePhase === 'stopping'
+                                  ? t.instance.stopping
+                                  : isRunning ? t.instance.running : instance.status === 'stopped' ? t.instance.stopped : t.instance.error}
+                            </Badge>
+                          </td>
+                          <td className="px-5 py-3 align-middle">
+                            <span className="inline-flex min-w-0 items-center gap-2 text-slate-600 dark:text-slate-400">
+                              <span className={`h-2 w-2 shrink-0 rounded-full ${healthDotClass(instance)}`} />
+                              <span className="truncate">{healthText(instance)}</span>
+                            </span>
+                          </td>
+                          <td className="px-5 py-3 align-middle">
+                            <div className="truncate font-mono text-xs text-slate-600 dark:text-slate-400" title={endpoint}>{endpoint}</div>
+                          </td>
+                          <td className="px-5 py-3 align-middle">
+                            <div className="ml-auto grid w-[172px] grid-cols-[92px_34px_34px] items-center justify-end gap-2">
+                              {isRunning ? (
+                                <Button
+                                  onClick={() => void stopInstance(instance.id).catch(() => {})}
+                                  disabled={isLifecycleBusy}
+                                  variant="danger"
+                                  size="sm"
+                                  className="h-8 whitespace-nowrap px-2"
+                                  icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Square className="h-3.5 w-3.5" />}
+                                >
+                                  {lifecyclePhase === 'stopping' ? t.instance.stopping : t.instance.stop}
+                                </Button>
+                              ) : (
+                                <Button
+                                  onClick={() => void startInstance(instance.id).catch(() => {})}
+                                  disabled={isLifecycleBusy}
+                                  variant="primary"
+                                  size="sm"
+                                  className="h-8 whitespace-nowrap px-2"
+                                  icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                                >
+                                  {lifecyclePhase === 'starting' ? t.instance.starting : t.instance.start}
+                                </Button>
+                              )}
+                              <ActionIconButton
+                                title={labels.open}
+                                onClick={() => openBrowser(instance.id, instance.config.host, instance.config.port, Boolean(instance.config.ssl_key_file && instance.config.ssl_cert_file), instance.config.api_prefix)}
+                                disabled={!isRunning}
                               >
-                                {lifecyclePhase === 'stopping' ? t.instance.stopping : t.instance.stop}
-                              </Button>
-                            ) : (
-                              <Button
-                                onClick={() => void startInstance(instance.id).catch(() => {})}
-                                disabled={isLifecycleBusy}
-                                variant="primary"
-                                size="sm"
-                                className="h-8 whitespace-nowrap px-2"
-                                icon={isLifecycleBusy ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
-                              >
-                                {lifecyclePhase === 'starting' ? t.instance.starting : t.instance.start}
-                              </Button>
-                            )}
-                            <ActionIconButton
-                              title={labels.open}
-                              onClick={() => openBrowser(instance.id, instance.config.host, instance.config.port, Boolean(instance.config.ssl_key_file && instance.config.ssl_cert_file), instance.config.api_prefix)}
-                              disabled={!isRunning}
-                            >
-                              <ArrowUpRight className="h-4 w-4" />
-                            </ActionIconButton>
-                            <ActionIconButton title={labels.config} onClick={() => openConfig(instance.id)}>
-                              <Settings2 className="h-4 w-4" />
-                            </ActionIconButton>
-                          </div>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Surface>
+                                <ArrowUpRight className="h-4 w-4" />
+                              </ActionIconButton>
+                              <ActionIconButton title={labels.config} onClick={() => openConfig(instance.id)}>
+                                <Settings2 className="h-4 w-4" />
+                              </ActionIconButton>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Surface>
 
-        <div className="space-y-4">
+        </div>
+        <div className="grid min-w-0 items-start gap-4 lg:grid-cols-2 2xl:grid-cols-1" data-testid="dashboard-secondary">
+          <RouterOverview onOpen={() => setActiveTab('proxy')} />
           <Surface as="aside" className="space-y-3 p-4">
             <SectionHeader title={labels.operations} />
-            <InsetSurface className="space-y-3 p-3 text-sm">
-              <div className="flex items-center justify-between gap-3">
+            <InsetSurface className="grid grid-cols-3 gap-2 p-3 text-xs">
+              <div className="flex flex-col items-center gap-1 text-center">
                 <span className="text-slate-500 dark:text-slate-500">{labels.healthy}</span>
                 <span className="font-medium text-emerald-600 dark:text-emerald-300">{healthyCount}</span>
               </div>
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col items-center gap-1 text-center">
                 <span className="text-slate-500 dark:text-slate-500">{labels.attention}</span>
                 <span className={attentionCount > 0 ? 'font-medium text-amber-600 dark:text-amber-300' : 'font-medium text-slate-700 dark:text-slate-300'}>{attentionCount}</span>
               </div>
-              <div className="flex items-center justify-between gap-3">
+              <div className="flex flex-col items-center gap-1 text-center">
                 <span className="text-slate-500 dark:text-slate-500">{labels.autoStart}</span>
                 <span className="font-medium text-blue-600 dark:text-blue-300">{autoStartCount}</span>
               </div>
@@ -686,6 +689,10 @@ export default function Dashboard() {
             </div>
           </Surface>
 
+        </div>
+      </div>
+
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
           <Surface as="aside" className="space-y-3 p-4">
             <SectionHeader title={labels.inventory} />
             <div className="grid grid-cols-2 gap-2">
@@ -738,7 +745,6 @@ export default function Dashboard() {
               </div>
             )}
           </Surface>
-        </div>
       </div>
     </div>
   )
