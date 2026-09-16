@@ -8,6 +8,7 @@ import { getProxyLabels } from '../i18n/pageLabels'
 import { getRouterUsageLabels } from '../i18n/routerUsage'
 import ProxyUsagePanel from './ProxyUsagePanel'
 import { getRouterManagementLabels } from '../i18n/routerManagement'
+import { QuotaSettings } from './routerUsage/QuotaSettings'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
 
 type ProxyRoute = {
@@ -1201,15 +1202,7 @@ export default function ProxyPage() {
                   <div className="mt-3 grid gap-3 sm:grid-cols-3">
                     {([['maxConcurrentRequests', management.keyLimit, 100000], ['dailyTokenBudget', management.dayBudget, Number.MAX_SAFE_INTEGER], ['monthlyTokenBudget', management.monthBudget, Number.MAX_SAFE_INTEGER]] as const).map(([field, title, max]) => <label key={field} className="min-w-0 text-xs"><span className="mb-1 block text-slate-500 dark:text-slate-400">{title}</span><TextInput aria-label={title} type="number" min={0} max={max} step={1} value={apiKey[field]} onChange={e => updateApiKey(apiKey.id, { [field]: Math.min(max, Math.max(0, Math.floor(Number(e.target.value) || 0))) })} /></label>)}
                   </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <details className="w-full rounded-lg border border-slate-200 p-3 dark:border-slate-700/60" open={apiKey.dailyTokenLimit > 0 || apiKey.monthlyTokenLimit > 0 || undefined}>
-                      <summary className="cursor-pointer text-xs font-medium">{management.hardQuota}</summary>
-                      <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{management.quotaHint}</p>
-                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                        {([['dailyTokenLimit', management.dayLimit], ['monthlyTokenLimit', management.monthLimit]] as const).map(([field, title]) => <label key={field} className="text-xs"><span className="mb-1 block text-slate-500 dark:text-slate-400">{title}</span><TextInput aria-label={title} type="number" min={0} max={Number.MAX_SAFE_INTEGER} step={1} value={apiKey[field]} onChange={e => updateApiKey(apiKey.id, { [field]: Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(Number(e.target.value) || 0))) })} /></label>)}
-                      </div>
-                    </details>
-                  </div>
+                  <QuotaSettings value={apiKey} onChange={patch => updateApiKey(apiKey.id, patch)} />
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="text-xs text-slate-500 dark:text-slate-400">{labels.scopes}:</span>
                     {['inference', 'discovery'].map(scope => (
