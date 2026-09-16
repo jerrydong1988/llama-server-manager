@@ -469,6 +469,16 @@ Open **Instance Routing → Usage statistics** for per-key requests, reported in
 
 ---
 
+### Key 预算与强制额度 / Key Budgets and Hard Quotas
+
+在 **路由配置 → API Key → 强制 Token 额度** 设置每日／每月上限；默认均为 0（关闭）。软预算只提醒，硬额度不足会在转发前拒绝请求，返回 `token_quota_exceeded`。Chat、Responses、Messages 与 Completions 请求省略输出上限、传 `null`、`-1` 或 `-2` 时，使用该 Key 的“客户端未指定时的输出上限”（默认 32768，可修改）；自动补齐的上限会根据实际输入和剩余上下文缩小。支持 `max_tokens`、`max_completion_tokens`、`max_output_tokens`、`n_predict`、`max_new_tokens` 别名及整数字符串，统一转为接口支持的单个参数；多个有效上限取较小值，不让别名绕过预留。显式有效上限不会因默认值被降低；0 保留客户端原值；因部分引擎仍报告首个采样 Token，额度至少预留 1 个输出 Token，最终按实际报告结算。多份生成和多条 Completions prompt 仍需拆成独立请求；错误响应以 `code` 和 `param` 指明原因。无法获得可靠输入计数或额度账不可写时，请求不会转发。
+
+硬额度使用独立 `router-quota.db`，仅记录硬额度启用期间的调用，不追溯历史；按获得预留时的 UTC 日／月归属，跨日完成仍结算原周期。使用统计中的“已结算”与“待结算／保守占用”分别显示实际结算和预留占用。完整成功响应释放多余预留；取消、断流、错误、未知用量以及崩溃遗留不自动当作零退款。清除使用统计、关闭再开启额度都不重置额度账；未结算占用不带入新周期，可通过提高相应额度继续调用。
+
+向量与重排序最多接受 4096 条输入，按引擎公布的上下文上限乘条数保守预留，再按完整 usage 结算；即使输入很短，也可能需要较大的可预留额度。重排序按全部文档计算，不能按 `top_n` 少算。推荐使用返回 usage 的 `/v1/embeddings` 和 `documents` 格式重排序；llama.cpp 原生 `/embedding`、`/embeddings` 与 TEI `texts` 格式未返回用量时，保持未知并保留额度占用。计数接口不扣额度，直连实例不受路由额度约束。
+
+Configure **Routing settings → API Key → Hard token quotas**. Zero disables a limit; soft budgets remain advisory. Enabled quotas require a durable reservation before forwarding. Chat, Responses, Messages and Completions use the per-key default output cap (32768, configurable) for omitted, null, -1 or -2 limits, reduced to fit remaining context. Standard output-limit aliases, n_predict, max_new_tokens and integer strings are normalized to one supported field; conflicting finite limits use the minimum. Explicit finite limits are preserved independently of the default; zero is forwarded unchanged, with a one-token reservation floor because some engines still report a first sampled token. Multiple generations and completion prompt batches still require separate requests; errors identify code and param. Missing reliable metering or an unavailable ledger fails closed. Quota accounting starts when enabled, uses the UTC reservation period, and survives toggling limits, restarts and statistics deletion. Successful complete usage releases excess reservations; interrupted, failed or unknown usage remains held. Held tokens do not carry into a new period. Vector/rerank batches reserve the engine context bound per input (up to 4096 inputs), including documents omitted by `top_n`. Prefer formats returning usage; native embedding and TEI responses without usage retain their reservation. Count-only calls are exempt, and direct instance access is outside router enforcement.
+
 ## 性能监控 / Performance Monitoring
 
 性能监控结合系统指标、实例指标、slots、日志时序和 SQLite 遥测，并按会话锁定生成、Embedding 或 Reranker 工作负载，展示与当前服务类型匹配的运行吞吐、历史基线和诊断建议。

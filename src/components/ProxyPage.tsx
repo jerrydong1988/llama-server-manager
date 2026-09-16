@@ -8,6 +8,7 @@ import { getProxyLabels } from '../i18n/pageLabels'
 import { getRouterUsageLabels } from '../i18n/routerUsage'
 import ProxyUsagePanel from './ProxyUsagePanel'
 import { getRouterManagementLabels } from '../i18n/routerManagement'
+import { QuotaSettings } from './routerUsage/QuotaSettings'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
 
 type ProxyRoute = {
@@ -30,6 +31,9 @@ type ProxyApiKey = {
   maxConcurrentRequests: number
   dailyTokenBudget: number
   monthlyTokenBudget: number
+  dailyTokenLimit: number
+  monthlyTokenLimit: number
+  quotaDefaultOutputTokens: number
 }
 
 type ProxyConfig = {
@@ -207,6 +211,9 @@ function normalizeApiKey(value: unknown, index: number): ProxyApiKey {
     maxConcurrentRequests: getNumber(record, ['max_concurrent_requests', 'maxConcurrentRequests'], 0),
     dailyTokenBudget: getNumber(record, ['daily_token_budget', 'dailyTokenBudget'], 0),
     monthlyTokenBudget: getNumber(record, ['monthly_token_budget', 'monthlyTokenBudget'], 0),
+    dailyTokenLimit: getNumber(record, ['daily_token_limit', 'dailyTokenLimit'], 0),
+    monthlyTokenLimit: getNumber(record, ['monthly_token_limit', 'monthlyTokenLimit'], 0),
+    quotaDefaultOutputTokens: getNumber(record, ['quota_default_output_tokens', 'quotaDefaultOutputTokens'], 32768) || 32768,
   }
 }
 
@@ -339,6 +346,9 @@ function toCommandConfig(config: ProxyConfig) {
       max_concurrent_requests: apiKey.maxConcurrentRequests,
       daily_token_budget: apiKey.dailyTokenBudget,
       monthly_token_budget: apiKey.monthlyTokenBudget,
+      daily_token_limit: apiKey.dailyTokenLimit,
+      monthly_token_limit: apiKey.monthlyTokenLimit,
+      quota_default_output_tokens: apiKey.quotaDefaultOutputTokens || 32768,
     })),
     background_service_mode: config.backgroundServiceMode,
     runtime_service_enabled: config.runtimeServiceEnabled,
@@ -697,6 +707,9 @@ export default function ProxyPage() {
         maxConcurrentRequests: 0,
         dailyTokenBudget: 0,
         monthlyTokenBudget: 0,
+        dailyTokenLimit: 0,
+        monthlyTokenLimit: 0,
+        quotaDefaultOutputTokens: 32768,
       }],
     }))
   }
@@ -1193,6 +1206,7 @@ export default function ProxyPage() {
                   <div className="mt-3 grid gap-3 sm:grid-cols-3">
                     {([['maxConcurrentRequests', management.keyLimit, 100000], ['dailyTokenBudget', management.dayBudget, Number.MAX_SAFE_INTEGER], ['monthlyTokenBudget', management.monthBudget, Number.MAX_SAFE_INTEGER]] as const).map(([field, title, max]) => <label key={field} className="min-w-0 text-xs"><span className="mb-1 block text-slate-500 dark:text-slate-400">{title}</span><TextInput aria-label={title} type="number" min={0} max={max} step={1} value={apiKey[field]} onChange={e => updateApiKey(apiKey.id, { [field]: Math.min(max, Math.max(0, Math.floor(Number(e.target.value) || 0))) })} /></label>)}
                   </div>
+                  <QuotaSettings value={apiKey} onChange={patch => updateApiKey(apiKey.id, patch)} />
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="text-xs text-slate-500 dark:text-slate-400">{labels.scopes}:</span>
                     {['inference', 'discovery'].map(scope => (

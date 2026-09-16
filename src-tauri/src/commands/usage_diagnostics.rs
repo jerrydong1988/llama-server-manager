@@ -12,6 +12,12 @@ pub(crate) struct UsageFailure {
 impl UsageFailure {
     pub fn new(stage: &str, code: &str) -> Self {
         let reason = match code {
+            "token_quota_exceeded" => "The API key token quota cannot cover this request and existing reservations.",
+            "token_quota_unavailable" => "The quota ledger is unavailable; the request was not forwarded.",
+            "token_quota_unmetered" => "A reliable token reservation is unavailable; the request was not forwarded.",
+            "token_quota_invalid_limit" => "An output limit has an invalid type or value; missing or unbounded limits are filled automatically.",
+            "token_quota_multiple_generations" => "Hard quotas require one generation per request; split multiple generations into separate requests.",
+            "token_quota_unsupported_batch" => "Hard quotas require one completion prompt per request; split the prompt batch.",
             "context_length_exceeded" => "Input and requested output exceed the route context window.",
             "authentication_failed" => "The router could not authenticate this request.",
             "permission_denied" => "The request is not permitted by the router access policy.",

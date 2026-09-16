@@ -1,9 +1,10 @@
 import { AlertTriangle } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { getRouterManagementLabels } from '../../i18n/routerManagement'
+import { QuotaUsage, type KeyQuota } from './QuotaUsage'
 
 type Usage = { used: number; partial: number; unknown: number }
-export type KeyBudget = { id: string; name: string; enabled: boolean; dailyBudget: number; monthlyBudget: number; day: Usage; month: Usage }
+export type KeyBudget = { id: string; name: string; enabled: boolean; dailyBudget: number; monthlyBudget: number; day: Usage; month: Usage; quota?: KeyQuota }
 export type KeyCapacity = { id: string; active: number; queued: number; limit: number }
 
 export function KeyUsageRow({ budget, capacity, showConcurrency, grid, incompleteId }: {
@@ -39,6 +40,7 @@ export function KeyUsageRow({ budget, capacity, showConcurrency, grid, incomplet
               <span>{l.budget} {number(limit)}</span><span className="tabular-nums">{percent.toFixed(1)}%{percent >= 100 ? ` · ${l.exceeded}` : warning ? ` · ${l.near}` : ''}</span>
             </p>
           </> : <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">{l.disabled}</p>}
+          {budget.quota ? <QuotaUsage quota={budget.quota} period={period} name={name} /> : null}
         </dd>
       </dl>
     })}

@@ -60,6 +60,7 @@ impl Drop for QueueTimer {
 }
 
 struct Observation {
+    quota: Option<super::usage_quota::QuotaPermit>,
     record: UsageRecord,
     parser: UsageAccumulator,
     started: Instant,
@@ -108,6 +109,9 @@ impl Observation {
         }
         self.record.source = self.parser.source.into();
         self.record.finish_reason = self.parser.finish_reason.clone();
+        if let Some(permit) = self.quota.take() {
+            permit.finish(&self.record);
+        }
         super::usage_store::record(self.record.clone());
     }
 }
@@ -127,6 +131,7 @@ impl UsageHandle {
         super::usage_store::begin_recording();
         let started_at = super::telemetry::current_time_ms();
         Some(Self(Arc::new(Mutex::new(Observation {
+            quota: None,
             record: UsageRecord {
                 request_id: format!("usage_{}", uuid::Uuid::new_v4().simple()),
                 key_id: "unauthenticated".into(),
@@ -181,7 +186,7 @@ impl UsageHandle {
             let items = if s.parser.protocol == UsageProtocol::Embedding {
                 value.get("input").or_else(|| value.get("content"))
             } else if s.parser.protocol == UsageProtocol::Rerank {
-                value.get("documents")
+                value.get("documents").or_else(|| value.get("texts"))
             } else {
                 None
             };
@@ -216,7 +221,18 @@ impl UsageHandle {
         }
     }
     pub fn forwarded(&self) {
-        self.0.lock().unwrap().record.forwarded = true;
+        let mut state = self.0.lock().unwrap();
+        state.record.forwarded = true;
+        if let Some(permit) = &mut state.quota {
+            permit.forwarded();
+        }
+    }
+    pub fn quota_identity(&self) -> (String, String) {
+        let state = self.0.lock().unwrap();
+        (state.record.key_id.clone(), state.record.request_id.clone())
+    }
+    pub fn quota(&self, permit: super::usage_quota::QuotaPermit) {
+        self.0.lock().unwrap().quota = Some(permit);
     }
     pub fn failure(&self, stage: &str, code: &str) {
         let mut s = self.0.lock().unwrap();
