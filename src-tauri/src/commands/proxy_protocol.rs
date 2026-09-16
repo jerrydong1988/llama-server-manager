@@ -121,14 +121,16 @@ pub(crate) fn quota_error_response(
     status: StatusCode,
     code: &str,
     message: &str,
+    param: Option<&str>,
 ) -> Response {
     let request_id = proxy_request_id();
     let value = if format.is_anthropic() {
         let mut value = anthropic_error_value(status, message, &request_id);
         value["error"]["code"] = json!(code);
+        value["error"]["param"] = json!(param);
         value
     } else {
-        json!({"error":{"message":message,"type":openai_error_type(status),"param":Value::Null,"code":code}})
+        json!({"error":{"message":message,"type":openai_error_type(status),"param":param,"code":code}})
     };
     let mut response = (status, Json(value)).into_response();
     response.extensions_mut().insert(UsageFailure::new("quota", code));

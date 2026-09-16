@@ -820,6 +820,11 @@ pub(crate) fn normalize_and_validate_proxy_config(
         api_key.monthly_token_budget = api_key.monthly_token_budget.min(9_007_199_254_740_991);
         api_key.daily_token_limit = api_key.daily_token_limit.min(9_007_199_254_740_991);
         api_key.monthly_token_limit = api_key.monthly_token_limit.min(9_007_199_254_740_991);
+        api_key.quota_default_output_tokens = if api_key.quota_default_output_tokens == 0 {
+            crate::models::DEFAULT_QUOTA_OUTPUT_TOKENS
+        } else {
+            api_key.quota_default_output_tokens.min(i32::MAX as u32)
+        };
         if api_key.enabled && !is_hashed_proxy_api_key(&api_key.key) && api_key.key.len() < 16 {
             return Err(format!("API Key {} 至少需要 16 个字符", api_key.name));
         }
@@ -2783,17 +2788,44 @@ async fn proxy_upstream(
         .context_length
         .or(target.configured_context_length)
         .filter(|value| *value > 0);
+    let quota::Prepared {
+        body: upstream_body,
+        context_check,
+        reservation,
+    } = match quota::prepare(
+        &usage,
+        &proxy_config,
+        &target,
+        &client,
+        &headers,
+        uri.path(),
+        upstream_body,
+        context_window,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            usage.failure("quota", error.code());
+            router_state.runtime.record_rejected();
+            return quota::response(api_format, error);
+        }
+    };
     if let Some(context_window) = context_window {
-        let check = context_limit_violation(
-            &client,
-            &target,
-            &headers,
-            uri.path(),
-            &upstream_body,
-            &proxy_config,
-            context_window,
-        )
-        .await;
+        let check = if context_check.is_some() {
+            context_check
+        } else {
+            context_limit_violation(
+                &client,
+                &target,
+                &headers,
+                uri.path(),
+                &upstream_body,
+                &proxy_config,
+                context_window,
+            )
+            .await
+        };
         if let Some(check) = &check {
             usage.budget(
                 check.input_tokens,
@@ -2834,11 +2866,7 @@ async fn proxy_upstream(
         }
     }
 
-    if let Err(error) = quota::admit(
-        &usage, &proxy_config, &target, &client, &headers, uri.path(), &upstream_body,
-    )
-    .await
-    {
+    if let Err(error) = quota::admit(&usage, reservation).await {
         usage.failure("quota", error.code());
         router_state.runtime.record_rejected();
         return quota::response(api_format, error);

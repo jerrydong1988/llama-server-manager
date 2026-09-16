@@ -2,46 +2,13 @@
 use super::*;
 use crate::commands::usage_quota::{self, QuotaError};
 
-fn output_limit(path: &str, value: &serde_json::Value) -> Result<u64, QuotaError> {
-    for field in ["n_predict", "max_new_tokens", "best_of"] {
-        if value.get(field).is_some() {
-            return Err(QuotaError::InvalidLimit);
-        }
-    }
-    if value.get("n").is_some_and(|n| n.as_u64() != Some(1)) {
-        return Err(QuotaError::InvalidLimit);
-    }
-    let fields: &[&str] = match path {
-        "/v1/chat/completions" => &["max_completion_tokens", "max_tokens"],
-        "/v1/responses" => &["max_output_tokens"],
-        "/v1/messages" | "/v1/completions" => &["max_tokens"],
-        _ => return Err(QuotaError::Unmetered),
-    };
-    if !fields.iter().any(|name| value.get(*name).is_some()) {
-        return Err(QuotaError::InvalidLimit);
-    }
-    // Reserve the largest alias as endpoint conversions may preserve both names.
-    let mut maximum = 0;
-    for name in ["max_tokens", "max_completion_tokens", "max_output_tokens"] {
-        if let Some(limit) = value.get(name) {
-            let n = limit
-                .as_u64()
-                .filter(|n| *n > 0 && *n <= i32::MAX as u64)
-                .ok_or(QuotaError::InvalidLimit)?;
-            maximum = maximum.max(n);
-        }
-    }
-    if path == "/v1/completions" {
-        let prompt = value.get("prompt").ok_or(QuotaError::Unmetered)?;
-        if !prompt.is_string()
-            && !prompt
-                .as_array()
-                .is_some_and(|a| !a.is_empty() && a.iter().all(|n| n.as_u64().is_some()))
-        {
-            return Err(QuotaError::Unmetered);
-        }
-    }
-    Ok(maximum)
+#[path = "proxy_quota_request.rs"]
+mod request;
+
+pub(super) struct Prepared {
+    pub body: Bytes,
+    pub context_check: Option<ContextLimitViolation>,
+    pub reservation: Option<(crate::models::ProxyApiKey, u64)>,
 }
 
 fn vector_items(path: &str, value: &serde_json::Value) -> Result<u64, QuotaError> {
@@ -67,42 +34,68 @@ fn vector_items(path: &str, value: &serde_json::Value) -> Result<u64, QuotaError
     Ok(count as u64)
 }
 
-pub(super) async fn admit(
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn prepare(
     usage: &UsageHandle,
     config: &ProxyConfig,
     target: &ResolvedProxyTarget,
     client: &reqwest::Client,
     headers: &HeaderMap,
     path: &str,
-    body: &Bytes,
-) -> Result<(), QuotaError> {
+    body: Bytes,
+    context_window: Option<u64>,
+) -> Result<Prepared, QuotaError> {
+    let mut prepared = Prepared {
+        body,
+        context_check: None,
+        reservation: None,
+    };
     if matches!(
         path,
         "/v1/messages/count_tokens"
             | "/v1/chat/completions/input_tokens"
             | "/v1/responses/input_tokens"
     ) {
-        return Ok(());
+        return Ok(prepared);
     }
-    let (key_id, id) = usage.quota_identity();
+    let (key_id, _) = usage.quota_identity();
     let Some(key) = config
         .api_keys
         .iter()
         .find(|key| key.id == key_id && usage_quota::enabled(key))
     else {
-        return Ok(());
+        // Preserve bytes and avoid count requests entirely when hard quotas are off.
+        return Ok(prepared);
     };
-    let value: serde_json::Value =
-        serde_json::from_slice(body).map_err(|_| QuotaError::Unmetered)?;
-    let amount = if let Some(spec) = context_preflight_spec(path, body) {
-        let output = output_limit(path, &value)?;
-        let input = fetch_input_token_count(client, target, headers, body, spec.counter, config)
-            .await
-            .ok_or(QuotaError::Unmetered)?;
-        input.checked_add(output).ok_or(QuotaError::Unmetered)?
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&prepared.body).map_err(|_| QuotaError::Unmetered)?;
+    let amount = if let Some(spec) = context_preflight_spec(path, &prepared.body) {
+        let mut output = request::normalize(path, &mut value, key.quota_default_output_tokens)?;
+        let count_body =
+            Bytes::from(serde_json::to_vec(&value).map_err(|_| QuotaError::Unmetered)?);
+        let input =
+            fetch_input_token_count(client, target, headers, &count_body, spec.counter, config)
+                .await
+                .ok_or(QuotaError::Unmetered)?;
+        output.fit_default(input, context_window, &mut value);
+        prepared.body = Bytes::from(serde_json::to_vec(&value).map_err(|_| QuotaError::Unmetered)?);
+        // llama.cpp can report its first sampled token even with max_tokens=0.
+        // Preserve the zero sent upstream, but cover that step in the reservation.
+        let reserved_output = output.tokens.max(1);
+        if let Some(context_window) = context_window {
+            prepared.context_check = Some(ContextLimitViolation {
+                error_param: spec.error_param,
+                input_tokens: Some(input),
+                requested_output_tokens: reserved_output,
+                context_window,
+                input_source: "exact",
+            });
+        }
+        input
+            .checked_add(reserved_output)
+            .ok_or(QuotaError::Unmetered)?
     } else {
         let items = vector_items(path, &value)?;
-        // A fresh engine property, not a configured guess or the smallest cached slot.
         let props = fetch_target_json(target, "/props", config)
             .await
             .map_err(|_| QuotaError::Unmetered)?;
@@ -113,7 +106,18 @@ pub(super) async fn admit(
             .ok_or(QuotaError::Unmetered)?;
         context.checked_mul(items).ok_or(QuotaError::Unmetered)?
     };
-    usage.quota(usage_quota::reserve(key.clone(), id, amount).await?);
+    prepared.reservation = Some((key.clone(), amount));
+    Ok(prepared)
+}
+
+pub(super) async fn admit(
+    usage: &UsageHandle,
+    reservation: Option<(crate::models::ProxyApiKey, u64)>,
+) -> Result<(), QuotaError> {
+    if let Some((key, amount)) = reservation {
+        let (_, id) = usage.quota_identity();
+        usage.quota(usage_quota::reserve(key, id, amount).await?);
+    }
     Ok(())
 }
 
@@ -127,40 +131,14 @@ pub(super) fn response(format: ProxyApiFormat, error: QuotaError) -> Response {
         format,
         status,
         error.code(),
-        error.message(),
+        &error.message(),
+        error.param(),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn overrides_unbounded_and_multiple_generations_fail_closed() {
-        for body in [
-            json!({}),
-            json!({"max_tokens":0}),
-            json!({"max_tokens":-1}),
-            json!({"max_tokens":1.5}),
-            json!({"max_tokens":10,"n_predict":-1}),
-            json!({"max_tokens":10,"n":2}),
-            json!({"max_tokens":10,"best_of":3}),
-        ] {
-            assert!(output_limit("/v1/chat/completions", &body).is_err());
-        }
-        assert_eq!(
-            output_limit(
-                "/v1/chat/completions",
-                &json!({"max_tokens":10,"max_completion_tokens":30})
-            )
-            .unwrap(),
-            30
-        );
-        assert!(output_limit(
-            "/v1/completions",
-            &json!({"max_tokens":10,"prompt":["a","b"]})
-        )
-        .is_err());
-    }
     #[test]
     fn vector_batches_count_all_work_not_top_n() {
         assert_eq!(

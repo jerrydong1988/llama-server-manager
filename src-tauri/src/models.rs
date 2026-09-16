@@ -1115,6 +1115,8 @@ impl Default for ProxyRoute {
     }
 }
 
+pub const DEFAULT_QUOTA_OUTPUT_TOKENS: u32 = 32_768;
+
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct ProxyApiKey {
@@ -1133,6 +1135,8 @@ pub struct ProxyApiKey {
     /// Enforced, durable quota; zero disables the corresponding period limit.
     pub daily_token_limit: u64,
     pub monthly_token_limit: u64,
+    /// Used only by hard quotas when the client leaves output unbounded.
+    pub quota_default_output_tokens: u32,
 }
 
 impl Default for ProxyApiKey {
@@ -1149,6 +1153,7 @@ impl Default for ProxyApiKey {
             monthly_token_budget: 0,
             daily_token_limit: 0,
             monthly_token_limit: 0,
+            quota_default_output_tokens: DEFAULT_QUOTA_OUTPUT_TOKENS,
         }
     }
 }

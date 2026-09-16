@@ -12,7 +12,9 @@ pub(crate) enum QuotaError {
     Exceeded,
     Unavailable,
     Unmetered,
-    InvalidLimit,
+    InvalidLimit(&'static str),
+    MultipleGenerations(&'static str),
+    UnsupportedBatch,
 }
 
 impl QuotaError {
@@ -21,16 +23,28 @@ impl QuotaError {
             Self::Exceeded => "token_quota_exceeded",
             Self::Unavailable => "token_quota_unavailable",
             Self::Unmetered => "token_quota_unmetered",
-            Self::InvalidLimit => "token_quota_invalid_limit",
+            Self::InvalidLimit(_) => "token_quota_invalid_limit",
+            Self::MultipleGenerations(_) => "token_quota_multiple_generations",
+            Self::UnsupportedBatch => "token_quota_unsupported_batch",
         }
     }
 
-    pub fn message(self) -> &'static str {
+    pub fn message(self) -> String {
         match self {
-            Self::Exceeded => "The API key token quota cannot cover this request and existing reservations. Reduce the request or increase the daily/monthly limit.",
-            Self::Unavailable => "The token quota ledger is unavailable. The request was not forwarded.",
-            Self::Unmetered => "A reliable token reservation is unavailable for this request or target. The request was not forwarded.",
-            Self::InvalidLimit => "Hard token quotas require an explicit positive output limit, a single generation, and no output-limit overrides (n_predict, max_new_tokens, best_of).",
+            Self::Exceeded => "The API key token quota cannot cover this request and existing reservations. Reduce the request or increase the daily/monthly limit.".into(),
+            Self::Unavailable => "The token quota ledger is unavailable. The request was not forwarded.".into(),
+            Self::Unmetered => "The target cannot provide reliable input token counts or context properties for quota reservation. Check the engine's count/props endpoints. The request was not forwarded.".into(),
+            Self::InvalidLimit(field) => format!("Invalid {field}: use an integer output limit from 0 to 2147483647. Omitted, null, -1 and -2 limits use the API key's default output limit when hard quotas are enabled. The request was not forwarded."),
+            Self::MultipleGenerations(field) => format!("Hard token quotas currently support one generation per request. Set {field}=1 or omit it; send multiple generations as separate requests. The request was not forwarded."),
+            Self::UnsupportedBatch => "Hard token quotas currently support one completion prompt per request. Split the prompt batch into separate requests. The request was not forwarded.".into(),
+        }
+    }
+
+    pub fn param(self) -> Option<&'static str> {
+        match self {
+            Self::InvalidLimit(field) | Self::MultipleGenerations(field) => Some(field),
+            Self::UnsupportedBatch => Some("prompt"),
+            _ => None,
         }
     }
 }
@@ -288,6 +302,7 @@ mod tests {
     #[test]
     fn older_configs_keep_hard_limits_disabled() {
         let old: ProxyApiKey = serde_json::from_str(r#"{"id":"old","daily_token_budget":50}"#).unwrap();
+        assert_eq!(old.quota_default_output_tokens, 32768);
         assert!(!enabled(&old));
         assert_eq!((old.daily_token_limit, old.monthly_token_limit), (0, 0));
         assert_eq!(old.daily_token_budget, 50);

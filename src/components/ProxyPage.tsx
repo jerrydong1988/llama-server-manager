@@ -33,6 +33,7 @@ type ProxyApiKey = {
   monthlyTokenBudget: number
   dailyTokenLimit: number
   monthlyTokenLimit: number
+  quotaDefaultOutputTokens: number
 }
 
 type ProxyConfig = {
@@ -212,6 +213,7 @@ function normalizeApiKey(value: unknown, index: number): ProxyApiKey {
     monthlyTokenBudget: getNumber(record, ['monthly_token_budget', 'monthlyTokenBudget'], 0),
     dailyTokenLimit: getNumber(record, ['daily_token_limit', 'dailyTokenLimit'], 0),
     monthlyTokenLimit: getNumber(record, ['monthly_token_limit', 'monthlyTokenLimit'], 0),
+    quotaDefaultOutputTokens: getNumber(record, ['quota_default_output_tokens', 'quotaDefaultOutputTokens'], 32768) || 32768,
   }
 }
 
@@ -346,6 +348,7 @@ function toCommandConfig(config: ProxyConfig) {
       monthly_token_budget: apiKey.monthlyTokenBudget,
       daily_token_limit: apiKey.dailyTokenLimit,
       monthly_token_limit: apiKey.monthlyTokenLimit,
+      quota_default_output_tokens: apiKey.quotaDefaultOutputTokens || 32768,
     })),
     background_service_mode: config.backgroundServiceMode,
     runtime_service_enabled: config.runtimeServiceEnabled,
@@ -706,6 +709,7 @@ export default function ProxyPage() {
         monthlyTokenBudget: 0,
         dailyTokenLimit: 0,
         monthlyTokenLimit: 0,
+        quotaDefaultOutputTokens: 32768,
       }],
     }))
   }

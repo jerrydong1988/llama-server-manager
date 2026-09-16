@@ -21,6 +21,7 @@ async function main() {
   const report = { engine: args.engine, generation: args.generation, embedding: args.embedding, reranking: args.reranking, observations, storage: null, quota: {} }
   const ledger = () => {
     const db = new DatabaseSync(path.join(dataDir, 'router-quota.db'), { readOnly: true })
+    db.exec('PRAGMA busy_timeout=5000')
     try { return { requests: db.prepare('SELECT * FROM quota_requests ORDER BY id').all(), periods: db.prepare('SELECT * FROM quota_periods ORDER BY key_id,kind,start').all() } } finally { db.close() }
   }
   try {
@@ -36,7 +37,7 @@ async function main() {
     const otherKey = 'isolated-router-other-key'
     let revision = Date.now()
     const config = { enabled: true, host: '127.0.0.1', port: proxyPort, max_concurrent_requests: 3, fair_queue_enabled: true, queue_timeout_ms: 5000,
-      strict_model_routing: true, api_keys: [{ id: 'test-key', name: 'Real model test', key, enabled: true, max_concurrent_requests: 1, daily_token_budget: 1, monthly_token_budget: 1, daily_token_limit: 100000, monthly_token_limit: 200000 },
+      strict_model_routing: true, api_keys: [{ id: 'test-key', name: 'Real model test', key, enabled: true, max_concurrent_requests: 1, daily_token_budget: 1, monthly_token_budget: 1, daily_token_limit: 100000, monthly_token_limit: 200000, quota_default_output_tokens: 32 },
         { id: 'other-key', name: 'Other caller', key: otherKey, enabled: true, max_concurrent_requests: 1, daily_token_limit: 100000, monthly_token_limit: 200000 }], routes: [], runtime_service_enabled: true }
     await command({ command: 'sync_config', payload: { revision: ++revision, proxy_config: config, instances: {} } })
     await command({ command: 'start_proxy' })
@@ -75,11 +76,12 @@ async function main() {
           cacheWrite = usage.cache_creation_input_tokens ?? cacheWrite
         }
         if (endpoint === '/v1/messages' && input != null) input += cacheRead + cacheWrite
-        if (known) assert.ok(Number.isFinite(input), `${endpoint} did not report input tokens`)
+        const clientUsage = endpoint !== '/v1/chat/completions' || !body.stream || body.stream_options?.include_usage === true
+        if (known && clientUsage) assert.ok(Number.isFinite(input), `${endpoint} did not report input tokens`)
         else assert.equal(input, undefined, `${endpoint} unexpectedly reported usage; update this verification`)
-        if (workload === 'generation') assert.ok(Number.isFinite(output), `${endpoint} did not report output tokens`)
-        tokensById.set(requestId, { input, output, stream: !!body.stream, workload, known })
-        observations.push({ endpoint, stream: !!body.stream, requestId, input, output, elapsedMs: Date.now() - started })
+        if (workload === 'generation' && clientUsage) assert.ok(Number.isFinite(output), `${endpoint} did not report output tokens`)
+        tokensById.set(requestId, { input, output, stream: !!body.stream, workload, known, clientUsage })
+        observations.push({ endpoint, stream: !!body.stream, requestId, input, output, clientUsage, elapsedMs: Date.now() - started })
       }
       if (workload === 'generation') {
         for (const stream of [false, true]) {
@@ -88,6 +90,15 @@ async function main() {
           await call('/v1/messages', { messages: [{ role: 'user', content: 'Reply with one short greeting.' }], max_tokens: 32, stream })
           await call('/v1/completions', { prompt: 'Hello, my name is', max_tokens: 16, stream, ...(stream ? { stream_options: { include_usage: true } } : {}) })
         }
+        // SDKs such as Octop omit the output cap; all protocol/stream variants must work.
+        for (const stream of [false, true]) {
+          await call('/v1/chat/completions', { messages: [{ role: 'user', content: 'Say hello.' }], stream })
+          await call('/v1/responses', { input: 'Say hello.', max_output_tokens: null, stream })
+          await call('/v1/messages', { messages: [{ role: 'user', content: 'Say hello.' }], stream })
+          await call('/v1/completions', { prompt: ['Hello'], n_predict: -1, stream })
+        }
+        await call('/v1/chat/completions', { messages: [{ role: 'user', content: 'Say hello.' }], max_tokens: 64, max_completion_tokens: '32', n_predict: -1, best_of: 1 })
+        await call('/v1/chat/completions', { messages: [{ role: 'user', content: 'Prefill only.' }], max_tokens: 0 })
         // Run distinct callers concurrently and cancel a long response after headers.
         await Promise.all([call('/v1/chat/completions', { messages: [{ role: 'user', content: 'Say hello.' }], max_tokens: 16 }), call('/v1/chat/completions', { messages: [{ role: 'user', content: 'Say hello.' }], max_tokens: 16 }, otherKey)])
         const abort = new AbortController()
@@ -114,10 +125,11 @@ async function main() {
       assert.equal((await command({ command: 'get_status' })).proxy.admission.keys.find(k => k.id === 'test-key').limit, 2)
       if (workload === 'generation') {
         const post = (endpoint, body, signal) => fetch(`http://127.0.0.1:${proxyPort}${endpoint}`, { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: id, ...body }), signal: signal || AbortSignal.timeout(30000) })
-        for (const body of [{}, { max_tokens: 10, n_predict: -1 }, { max_tokens: 10, n: 2 }]) {
+        for (const [body, code, param] of [[{ max_tokens: 1.5 }, 'token_quota_invalid_limit', 'max_tokens'], [{ max_tokens: 10, n: 2 }, 'token_quota_multiple_generations', 'n']]) {
           const rejected = await post('/v1/chat/completions', { messages: [{ role: 'user', content: 'Hello' }], ...body })
           assert.equal(rejected.status, 400)
-          assert.equal((await rejected.json()).error.code, 'token_quota_invalid_limit')
+          const error = (await rejected.json()).error
+          assert.equal(error.code, code); assert.equal(error.param, param)
         }
         await sleep(250)
         const countBefore = ledger().requests.length
@@ -144,7 +156,8 @@ async function main() {
         config.api_keys[0].daily_token_limit = 100000
         await command({ command: 'sync_config', payload: { revision: ++revision, proxy_config: config, instances: { [id]: instance } } })
         report.quota.concurrentDenial = true
-        report.quota.outputOverridesRejected = true
+        report.quota.outputAliasesNormalized = true
+        report.quota.missingLimitsCompatible = true
         report.quota.countEndpointsExempt = true
       }
       config.api_keys[0].max_concurrent_requests = 1
@@ -157,21 +170,26 @@ async function main() {
       const records = db.prepare('SELECT record FROM usage_events').all().map(r => JSON.parse(r.record))
       for (const [id, expected] of tokensById) {
         const record = records.find(r => r.requestId === id); assert.ok(record, id)
-        assert.equal(record.tokens.input, expected.input ?? null, `input usage for ${id}: ${JSON.stringify(expected)}`)
-        if (expected.workload === 'generation') assert.equal(record.tokens.output, expected.output)
+        if (expected.clientUsage) {
+          assert.equal(record.tokens.input, expected.input ?? null, `input usage for ${id}: ${JSON.stringify(expected)}`)
+          if (expected.workload === 'generation') assert.equal(record.tokens.output, expected.output)
+        } else {
+          assert.ok(Number.isFinite(record.tokens.input) && Number.isFinite(record.tokens.output), 'Hidden usage must still be accounted')
+          Object.assign(observations.find(r => r.requestId === id), { storedInput: record.tokens.input, storedOutput: record.tokens.output })
+        }
         assert.equal(record.outcome, 'success'); assert.equal(record.queueEntered, true)
         assert.equal(record.quality, expected.known ? 'complete' : 'unknown')
         const quota = ledger().requests.find(r => r.id === id); assert.ok(quota, id)
         if (expected.known) {
-          assert.equal(quota.state, 'settled'); assert.equal(quota.actual, expected.input + (expected.output || 0))
-          assert.ok(quota.reserved >= quota.actual, `Preflight under-reserved ${id}: ${JSON.stringify(quota)}`)
+          assert.equal(quota.state, 'settled'); assert.equal(quota.actual, record.tokens.input + (record.tokens.output || 0))
+          assert.ok(quota.reserved >= quota.actual, `Preflight under-reserved ${id}: ${JSON.stringify({ quota, record, expected })}`)
         } else { assert.equal(quota.state, 'held'); assert.equal(quota.actual, null) }
         if (!expected.stream) assert.equal(record.firstOutputMs, null)
       }
       const performance = db.prepare("SELECT SUM(json_extract(summary,'$.duration.count')) AS duration, SUM(json_extract(summary,'$.queue.count')) AS queue, SUM(json_extract(summary,'$.firstOutput.count')) AS firstOutput FROM usage_performance_daily").get()
       assert.equal(performance.duration, tokensById.size)
       assert.ok(performance.queue >= tokensById.size)
-      assert.ok(performance.firstOutput > 0 && performance.firstOutput <= 4)
+      assert.ok(performance.firstOutput > 0 && performance.firstOutput <= [...tokensById.values()].filter(v => v.stream).length)
       assert.ok(records.some(r => r.outcome === 'cancelled'))
       report.storage = { verifiedRequests: tokensById.size, totalRecords: records.length, performance, softBudgetsAreAdvisory: true, permitsReleased: true, hotUpdateVerified: true }
     } finally { db.close() }
