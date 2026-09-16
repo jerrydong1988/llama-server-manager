@@ -11,7 +11,7 @@ test('performance monitoring keeps global resources independent from the selecte
   })
   await page.goto('/?scenario=monitoring')
 
-  await expect(page.getByRole('heading', { name: '性能监控' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '性能监控', level: 1 })).toBeVisible()
   const resources = page.locator('section[aria-label="全局系统资源"]')
   await expect(resources).toBeVisible({ timeout: 15_000 })
   await expect(resources).toContainText('9%')
