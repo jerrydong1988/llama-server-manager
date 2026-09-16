@@ -3477,7 +3477,7 @@ async fn start_proxy_locked(app: tauri::AppHandle) -> Result<ProxyStatus, String
         return Err(msg);
     }
     let bind_addr = proxy_bound_addr(&config);
-    let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+    let listener = match super::proxy_listener::bind_proxy_listener(&bind_addr).await {
         Ok(listener) => listener,
         Err(err) => {
             let msg = proxy_bind_error_message(&bind_addr, &err);

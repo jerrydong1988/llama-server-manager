@@ -7,7 +7,8 @@ use fs2::FileExt;
 use protocol::{
     RuntimeCommand, RuntimeReply, RuntimeRequest, RuntimeResponse, RuntimeServiceStatus,
     BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY, KV_CHECKPOINT_CAPABILITY,
-    ROUTER_USAGE_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION,
+    ROUTER_LISTENER_CAPABILITY, ROUTER_USAGE_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
+    RUNTIME_PROTOCOL_VERSION,
 };
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -43,6 +44,7 @@ fn has_required_runtime_capabilities(status: &RuntimeServiceStatus) -> bool {
         RUNTIME_ERROR_ACK_CAPABILITY,
         KV_CHECKPOINT_CAPABILITY,
         ROUTER_USAGE_CAPABILITY,
+        ROUTER_LISTENER_CAPABILITY,
     ]
     .iter()
     .all(|required| {
@@ -921,6 +923,7 @@ mod tests {
                 RUNTIME_ERROR_ACK_CAPABILITY.into(),
                 KV_CHECKPOINT_CAPABILITY.into(),
                 ROUTER_USAGE_CAPABILITY.into(),
+                ROUTER_LISTENER_CAPABILITY.into(),
             ],
             config_revision: 1,
             background_enabled: false,
@@ -951,10 +954,12 @@ mod tests {
             .is_some_and(|value| value.is_empty()));
         assert!(has_required_runtime_capabilities(&status));
 
-        let mut legacy_status = status;
-        legacy_status
-            .capabilities
-            .retain(|capability| capability != RUNTIME_ERROR_ACK_CAPABILITY);
-        assert!(!has_required_runtime_capabilities(&legacy_status));
+        for missing in [RUNTIME_ERROR_ACK_CAPABILITY, ROUTER_LISTENER_CAPABILITY] {
+            let mut legacy_status = status.clone();
+            legacy_status
+                .capabilities
+                .retain(|capability| capability != missing);
+            assert!(!has_required_runtime_capabilities(&legacy_status));
+        }
     }
 }

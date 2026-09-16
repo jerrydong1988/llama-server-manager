@@ -431,6 +431,7 @@ async function main() {
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')
       || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v2')
       || !status.reply.payload?.capabilities?.includes('router_usage_v3')
+      || !status.reply.payload?.capabilities?.includes('router_listener_no_inherit_v1')
       || typeof status.reply.payload?.checkpoints !== 'object') {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)
     }
@@ -489,6 +490,12 @@ async function main() {
       throw new Error(`runtime configuration sync failed: ${JSON.stringify(synced)}`)
     }
 
+    // Start the listener before spawning a managed process: on Windows an
+    // inheritable listener survives router stop for as long as that child lives.
+    const proxyStarted = await request(endpoint, token, { command: 'start_proxy' }, 'start-proxy')
+    assert.equal(proxyStarted.reply?.payload?.running, true, JSON.stringify(proxyStarted))
+    assert.equal((await httpRequest(proxyPort, '/health')).status, 401)
+
     const started = await request(
       endpoint,
       token,
@@ -510,9 +517,25 @@ async function main() {
       throw new Error(`legacy launch did not fail open with checkpoints disabled: ${JSON.stringify(legacyCheckpointStatus)}`)
     }
 
-    const proxyStarted = await request(endpoint, token, { command: 'start_proxy' }, 'start-proxy')
-    if (proxyStarted.reply?.result !== 'proxy_status' || proxyStarted.reply.payload?.running !== true) {
-      throw new Error(`runtime routing start failed: ${JSON.stringify(proxyStarted)}`)
+    for (let cycle = 0; cycle < 5; cycle += 1) {
+      const stopped = await request(endpoint, token, { command: 'stop_proxy' }, `stop-proxy-${cycle}`)
+      assert.equal(stopped.reply?.payload?.running, false, JSON.stringify(stopped))
+      assert.equal(pidIsAlive(firstInstancePid), true, 'router stop must keep its managed instance alive')
+
+      // No delay or retry: a successful stop must release the actual TCP port,
+      // rather than just change the reported status. This failed with EADDRINUSE.
+      const releasedPort = net.createServer()
+      try {
+        await listen(releasedPort, proxyPort)
+      } finally {
+        await closeServer(releasedPort)
+      }
+      const restarted = await request(endpoint, token, { command: 'start_proxy' }, `restart-proxy-${cycle}`)
+      assert.equal(restarted.reply?.payload?.running, true, JSON.stringify(restarted))
+      assert.equal((await httpRequest(proxyPort, '/health')).status, 401)
+      const liveStatus = await request(endpoint, token, { command: 'get_status' }, `restart-status-${cycle}`)
+      assert.equal(liveStatus.reply?.payload?.running?.[launchSpec.instance_id]?.pid, firstInstancePid,
+        'router restart must not restart the managed instance')
     }
     const unauthorizedProxy = await httpRequest(proxyPort, '/health')
     if (unauthorizedProxy.status !== 401) {
