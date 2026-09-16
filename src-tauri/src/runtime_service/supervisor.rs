@@ -1,8 +1,8 @@
 use super::protocol::{
     PersistedRuntimeState, RuntimeCheckpointLaunchSpec, RuntimeCommand, RuntimeLaunchSpec,
     RuntimeReply, RuntimeServiceStatus, BACKGROUND_DETACH_CAPABILITY, CONFIG_SYNC_ACK_CAPABILITY,
-    KV_CHECKPOINT_CAPABILITY, ROUTER_USAGE_CAPABILITY, RUNTIME_ERROR_ACK_CAPABILITY,
-    RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
+    KV_CHECKPOINT_CAPABILITY, ROUTER_LISTENER_CAPABILITY, ROUTER_USAGE_CAPABILITY,
+    RUNTIME_ERROR_ACK_CAPABILITY, RUNTIME_PROTOCOL_VERSION, RUNTIME_STATE_SCHEMA_VERSION,
 };
 use super::transport::runtime_state_path;
 use crate::checkpoint::{
@@ -404,6 +404,7 @@ impl RuntimeSupervisor {
                 RUNTIME_ERROR_ACK_CAPABILITY.to_string(),
                 KV_CHECKPOINT_CAPABILITY.to_string(),
                 ROUTER_USAGE_CAPABILITY.to_string(),
+                ROUTER_LISTENER_CAPABILITY.to_string(),
             ],
             config_revision,
             background_enabled,
@@ -1570,7 +1571,7 @@ impl RuntimeSupervisor {
         }
         let host = config.host.trim();
         let bound_addr = crate::utils::format_host_port(host, config.port);
-        let listener = tokio::net::TcpListener::bind(&bound_addr)
+        let listener = crate::commands::proxy_listener::bind_proxy_listener(&bound_addr)
             .await
             .map_err(|error| {
                 if error.kind() == std::io::ErrorKind::AddrInUse {

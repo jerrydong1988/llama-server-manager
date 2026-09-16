@@ -13,6 +13,7 @@ pub mod monitoring;
 pub mod nvml;
 pub mod proxy;
 pub(crate) mod proxy_admission;
+pub(crate) mod proxy_listener;
 mod proxy_protocol;
 pub(crate) mod proxy_runtime;
 pub(crate) mod proxy_usage;
