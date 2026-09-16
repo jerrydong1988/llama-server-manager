@@ -6,7 +6,7 @@ import { Surface } from '../ui'
 import { KeyUsageRow, type KeyBudget, type KeyCapacity } from './KeyUsageRow'
 import { useRouterReport } from './useRouterReport'
 
-type Budgets = { keys: KeyBudget[]; dayFrom: number; monthFrom: number; updatedAt: number; droppedRecords: number; writeErrors: number; health: { pendingRecords: number; interruptedSessions: number } }
+type Budgets = { keys: KeyBudget[]; dayFrom: number; monthFrom: number; updatedAt: number; droppedRecords: number; writeErrors: number; health: { pendingRecords: number; interruptedSessions: number }; quotaStorage?: { databaseBytes: number; walBytes: number; reusableBytes: number; retentionDays: number } }
 type Admission = { active: number; queued: number; limit: number; keys: KeyCapacity[]; models: Record<string, number>; instances: Record<string, number> }
 type Status = { running: boolean; admission?: Admission | null }
 
@@ -19,6 +19,7 @@ export default function ManagementPanel({ revision }: { revision: number }) {
   const live = status?.running ? status.admission : null
   const stopped = status?.running === false
   const number = (n: number | null | undefined) => n == null ? '—' : n.toLocaleString(lang)
+  const mib = (n: number) => (n / 1048576).toLocaleString(lang, { maximumFractionDigits: 2 })
   const incomplete = budgets?.keys.some(key => key.day.partial + key.day.unknown + key.month.partial + key.month.unknown > 0)
   const grid = stopped ? 'lg:grid-cols-[minmax(0,.85fr)_minmax(0,1fr)_minmax(0,1fr)]' : 'lg:grid-cols-[minmax(0,.85fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(140px,.65fr)]'
 
@@ -64,6 +65,10 @@ export default function ManagementPanel({ revision }: { revision: number }) {
         {incomplete ? <p id={incompleteId} className="flex items-start gap-2 text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />{l.incomplete}</p> : null}
         {budgets.health.pendingRecords || budgets.health.interruptedSessions || budgets.droppedRecords || budgets.writeErrors ? <p role="status" className="text-amber-700 dark:text-amber-300">{l.gap}</p> : null}
         {budgets.keys.some(key => key.quota && (key.quota.dailyLimit || key.quota.monthlyLimit || key.quota.day.held || key.quota.month.held || key.quota.month.settled)) ? <p>{l.quotaNote}</p> : null}
+        {budgets.quotaStorage ? <details data-testid="quota-storage">
+          <summary className="cursor-pointer">{l.quotaStorage}: {mib(budgets.quotaStorage.databaseBytes + budgets.quotaStorage.walBytes)} MiB</summary>
+          <p className="mt-1">{l.quotaRetention.replace('{days}', number(budgets.quotaStorage.retentionDays))} {l.quotaReusable}: {mib(budgets.quotaStorage.reusableBytes)} MiB.</p>
+        </details> : null}
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1">
           <p className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />{l.softBudgetNote}</p>
           <p>{l.updated}: {new Date(budgets.updatedAt).toLocaleString(lang)}</p>

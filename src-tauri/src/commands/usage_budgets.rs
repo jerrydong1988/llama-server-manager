@@ -47,6 +47,7 @@ pub(crate) struct BudgetReport {
     dropped_records: u64,
     write_errors: u64,
     health: super::usage_health::UsageHealth,
+    quota_storage: super::usage_quota::QuotaStorage,
 }
 
 pub(super) fn periods(now: i64) -> Result<(i64, i64), String> {
@@ -145,6 +146,7 @@ pub async fn get_router_budgets(
             dropped_records: dropped.max(0) as u64,
             write_errors: errors.max(0) as u64,
             health: health?,
+            quota_storage: super::usage_quota::storage()?,
         })
     })
     .await

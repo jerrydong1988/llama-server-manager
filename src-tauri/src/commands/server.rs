@@ -6654,6 +6654,29 @@ mod perf_parser_tests {
         assert_eq!(task.tg_3s, Some(18.34));
         assert_eq!(task.history, vec![(100, 18.16)]);
         assert_eq!(task.spec_accept_rate, Some(0.92624));
+
+        // v0.4.1 --log-jsonl wraps the same messages as type=log / msg.
+        // The original JSONL line remains visible in logs; performance counters
+        // must agree with the plain-text engine mode without enabling JSONL by default.
+        tasks.clear();
+        let mut json_completed = None;
+        for line in lines {
+            let json = serde_json::json!({ "type": "log", "time": 1234, "level": "info", "msg": format!("{line}\n") }).to_string();
+            assert!(parse_perf_line(
+                &parser,
+                &json,
+                &mut tasks,
+                &mut json_completed
+            ));
+        }
+        let json_task = json_completed.unwrap();
+        assert_eq!(json_task.prompt_tokens, task.prompt_tokens);
+        assert_eq!(json_task.gen_tokens, task.gen_tokens);
+        assert_eq!(json_task.total_tokens, task.total_tokens);
+        assert_eq!(json_task.prompt_tps, task.prompt_tps);
+        assert_eq!(json_task.gen_tps, task.gen_tps);
+        assert_eq!(json_task.history, task.history);
+        assert_eq!(json_task.spec_accept_rate, task.spec_accept_rate);
     }
 
     #[test]

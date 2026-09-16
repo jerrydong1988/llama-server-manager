@@ -145,6 +145,49 @@ async function main() {
     response = await post('/v1/chat/completions/input_tokens', prompt)
     assert.equal(response.status, 200); assert.equal((await response.json()).input_tokens, 12)
     assert.equal(received.length, before)
+    // Hot configuration changes must never turn disabled keys into anonymous access.
+    const syncKeys = async keys => {
+      config.api_keys = keys
+      await command({ command: 'sync_config', payload: { revision: ++revision, proxy_config: config, instances: { [instance.id]: instance } } })
+    }
+    const authRequest = (route, headers = {}, method = 'POST') => fetch(`http://127.0.0.1:${proxyPort}${route}`, {
+      method, headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', ...headers },
+      ...(method === 'POST' ? { body: JSON.stringify({ model: 'localmodel', ...prompt }) } : {}),
+      signal: AbortSignal.timeout(15000),
+    })
+    const credentials = [{}, { authorization: `Bearer ${key}` }, { 'x-api-key': key }, { authorization: 'Bearer wrong-key' }, { 'x-api-key': 'wrong-key' }]
+    const limitedKey = { ...config.api_keys[0] }
+    for (const headers of [credentials[0], credentials[3], credentials[4]]) {
+      assert.equal((await authRequest('/v1/chat/completions', headers)).status, 401)
+    }
+    assert.equal((await authRequest('/v1/chat/completions', credentials[1])).status, 429)
+    const deniedRoutes = ['/v1/chat/completions', '/v1/completions', '/v1/responses', '/v1/messages', '/v1/messages/count_tokens', '/v1/chat/completions/input_tokens', '/v1/responses/input_tokens', '/v1/embeddings', '/embeddings', '/embedding', '/v1/rerank', '/rerank', '/reranking', '/v1/reranking']
+    before = received.length
+    for (const keys of [
+      [{ ...limitedKey, enabled: false }],
+      [{ ...limitedKey, enabled: false }, { ...limitedKey, id: 'disabled-2', enabled: false, key: 'second-disabled-fixture-key' }],
+      [{ ...limitedKey, enabled: false, key: '' }],
+    ]) {
+      await syncKeys(keys)
+      for (const headers of credentials) {
+        for (const route of deniedRoutes) assert.equal((await authRequest(route, headers)).status, 401, route)
+        for (const route of ['/v1/models', '/v1/models/localmodel', '/slots', '/health', '/live', '/props', '/ready', '/metrics', '/']) {
+          assert.equal((await authRequest(route, headers, 'GET')).status, 401, route)
+        }
+      }
+    }
+    assert.equal(received.length, before, 'Disabled credentials reached inference')
+    const activeKey = { ...limitedKey, id: 'active-peer', key: 'active-peer-fixture-key', daily_token_limit: 0, monthly_token_limit: 0 }
+    await syncKeys([{ ...limitedKey, enabled: false }, activeKey])
+    assert.equal((await authRequest('/v1/chat/completions', credentials[1])).status, 401)
+    assert.equal((await authRequest('/v1/chat/completions', { 'x-api-key': activeKey.key })).status, 200)
+    // Re-enabling restores the original quota, not a fresh anonymous identity.
+    await syncKeys([limitedKey])
+    const limited = await authRequest('/v1/chat/completions', credentials[2])
+    assert.equal(limited.status, 429); assert.equal((await limited.json()).error.code, 'token_quota_exceeded')
+    await syncKeys([])
+    for (const headers of credentials) assert.equal((await authRequest('/v1/chat/completions', headers)).status, 200)
+    console.log('Authentication passed: disabled/blank/all/mixed keys; Bearer and x-api-key; inference/discovery aliases; hot reload; quota preservation; explicit anonymous mode.')
     console.log(`Quota compatibility passed: ${cases.length} client shapes; default/context fit; exact reservation boundary; actionable errors; soft-only pass-through; count exemption; tools/images preserved.`)
   } finally {
     clearInterval(heartbeat)

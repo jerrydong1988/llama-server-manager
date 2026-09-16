@@ -1398,7 +1398,9 @@ fn authenticate_proxy_request(
         .iter()
         .filter(|api_key| api_key.enabled && !api_key.key.trim().is_empty())
         .collect::<Vec<_>>();
-    if enabled_keys.is_empty() {
+    // Only an explicitly empty key registry opts into local anonymous access.
+    // Disabled (or unusable) configured keys must never remove authentication.
+    if config.api_keys.is_empty() {
         return Some(ProxyAuthContext {
             client_id: "anonymous".into(),
             requests_per_minute: config.requests_per_minute,
@@ -4797,6 +4799,59 @@ mod tests {
             super::authenticate_proxy_request(&normalized, "/v1/chat/completions", &headers)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn configured_but_disabled_keys_never_enable_anonymous_access() {
+        let secret = "disabled-key-fixture-secret";
+        for key in [secret, ""] {
+            let mut config = super::normalize_and_validate_proxy_config(
+                ProxyConfig {
+                    api_keys: vec![ProxyApiKey {
+                        key: key.into(),
+                        enabled: false,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                &HashMap::new(),
+            )
+            .unwrap();
+            for name in ["authorization", "x-api-key"] {
+                for value in ["", "wrong-key", secret] {
+                    let mut headers = HeaderMap::new();
+                    if !value.is_empty() {
+                        headers.insert(
+                            name,
+                            if name == "authorization" {
+                                format!("Bearer {value}")
+                            } else {
+                                value.into()
+                            }
+                            .parse()
+                            .unwrap(),
+                        );
+                    }
+                    assert!(super::authenticate_proxy_request(
+                        &config,
+                        "/v1/chat/completions",
+                        &headers
+                    )
+                    .is_none());
+                }
+            }
+            config.api_keys.clear();
+            assert_eq!(
+                super::authenticate_proxy_request(
+                    &config,
+                    "/v1/chat/completions",
+                    &HeaderMap::new()
+                )
+                .unwrap()
+                .client_id,
+                "anonymous"
+            );
+        }
     }
 
     #[tokio::test]

@@ -87,6 +87,7 @@ test('production scheduling and scoped API keys round-trip through the settings 
   await expect(accessControl).toContainText('网页来源 → 调用身份 → 模型映射')
   await expect(accessControl).toContainText('Key 不绑定某个 Origin，也不绑定某条路由')
   await expect(accessControl).toContainText('当前不支持“一个 Key 只能调用某个模型”的逐路由授权')
+  await expect(accessControl).toContainText('全部禁用会拒绝调用')
   await expect(accessControl).toContainText('http://localhost:3000')
   await expect(page.getByText('旧版单一 API Key（可选）')).toHaveCount(0)
 

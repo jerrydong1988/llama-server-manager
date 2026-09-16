@@ -22,7 +22,8 @@ export function routerBudgetsMock(keys: { id: string; name: string; enabled: boo
   const report = { keys: keys.map(k => ({ id: k.id, name: k.name, enabled: k.enabled, dailyBudget: k.daily_token_budget || 0, monthlyBudget: k.monthly_token_budget || 0,
     day: { used: 11000, partial: 0, unknown: 0 }, month: { used: 91000, partial: 1, unknown: 0 } })), dayFrom: Math.floor(now / day) * day,
     monthFrom: Date.UTC(new Date(now).getUTCFullYear(), new Date(now).getUTCMonth(), 1), updatedAt: now,
-    droppedRecords: 0, writeErrors: 0, health: { pendingRecords: 0, interruptedSessions: 0 } }
+    droppedRecords: 0, writeErrors: 0, health: { pendingRecords: 0, interruptedSessions: 0 },
+    quotaStorage: { databaseBytes: 2097152, walBytes: 1048576, reusableBytes: 524288, retentionDays: 365 } }
   if (variant?.startsWith('layout')) {
     const usage = (used: number, partial = 0, unknown = 0) => ({ used, partial, unknown })
     report.keys = [
