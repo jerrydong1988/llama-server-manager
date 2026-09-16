@@ -33,6 +33,23 @@ const emittedFlags = [...new Set(
 const officialAliases = new Set(baseline.releaseSnapshot.parameters.flatMap(parameter => parameter.aliases))
 const masterAliases = new Set(baseline.masterSnapshot.parameters.flatMap(parameter => parameter.aliases))
 const previewFlags = new Set(baseline.masterPreviewFlags)
+// Retired by v0.4.1, but still needed for engines whose probed --help lacks --load-mode.
+// This exception applies only inside the capability adapter, never ordinary generation.
+const legacyFlags = new Set(['--direct-io', '--mlock', '--mmap', '--no-mmap'])
+const adapterStart = commandGeneration.indexOf('fn adapt_load_mode_for_capabilities(')
+const adapterEnd = commandGeneration.indexOf('fn adapt_reasoning_effort_for_capabilities(')
+assert.ok(adapterStart >= 0 && adapterEnd > adapterStart)
+const loadAdapter = commandGeneration.slice(adapterStart, adapterEnd)
+const modernGeneration = commandGeneration.slice(0, adapterStart) + commandGeneration.slice(adapterEnd)
+for (const flag of legacyFlags) {
+  assert.ok(loadAdapter.includes(`"${flag}"`), `unused legacy compatibility exception: ${flag}`)
+  assert.ok(!modernGeneration.includes(`"${flag}"`), `legacy flag escaped capability adaptation: ${flag}`)
+}
+assert.match(loadAdapter, /supported\.contains\(legacy\)/)
+assert.match(loadAdapter, /supported\.contains\("--mmap"\) && supported\.contains\("--mlock"\)/)
+const guide = read('GUIDE.md')
+assert.ok(guide.includes(`${baseline.releaseSnapshot.parameterCount} 个参数条目`), 'Chinese guide parameter count is stale')
+assert.ok(guide.includes(`${baseline.releaseSnapshot.parameterCount} parameter entries`), 'English guide parameter count is stale')
 for (const group of ['advancedSlotSizing', 'denseFfnPlacement', 'syntheticBenchmarks', 'videoInput']) {
   const flags = baseline.intentionalCustomArgsOnly[group]
   assert.ok(flags?.length, `missing reviewed custom-only group: ${group}`)
@@ -43,7 +60,7 @@ for (const group of ['advancedSlotSizing', 'denseFfnPlacement', 'syntheticBenchm
 assert.ok(emittedFlags.length >= 80, `expected a substantial command registry, found ${emittedFlags.length}`)
 for (const flag of emittedFlags) {
   assert.ok(
-    officialAliases.has(flag) || previewFlags.has(flag),
+    officialAliases.has(flag) || previewFlags.has(flag) || legacyFlags.has(flag),
     `Rust command generation emits a flag absent from ${baseline.upstreamRelease} and the reviewed master preview list: ${flag}`,
   )
   assert.ok(validators.includes(`'${flag}'`), `custom-argument conflict registry is missing generated flag ${flag}`)

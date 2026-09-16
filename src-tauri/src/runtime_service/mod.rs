@@ -954,6 +954,13 @@ mod tests {
             .is_some_and(|value| value.is_empty()));
         assert!(has_required_runtime_capabilities(&status));
 
+        let mut old_router = status.clone();
+        old_router
+            .capabilities
+            .retain(|value| value != ROUTER_USAGE_CAPABILITY);
+        old_router.capabilities.push("router_usage_v5".into());
+        assert!(!has_required_runtime_capabilities(&old_router));
+
         for missing in [RUNTIME_ERROR_ACK_CAPABILITY, ROUTER_LISTENER_CAPABILITY] {
             let mut legacy_status = status.clone();
             legacy_status

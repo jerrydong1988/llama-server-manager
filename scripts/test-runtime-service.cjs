@@ -430,7 +430,7 @@ async function main() {
       || !status.reply.payload?.capabilities?.includes('config_sync_ack_v1')
       || !status.reply.payload?.capabilities?.includes('runtime_error_ack_v1')
       || !status.reply.payload?.capabilities?.includes('kv_checkpoint_v2')
-      || !status.reply.payload?.capabilities?.includes('router_usage_v5')
+      || !status.reply.payload?.capabilities?.includes('router_usage_v6')
       || !status.reply.payload?.capabilities?.includes('router_listener_no_inherit_v1')
       || typeof status.reply.payload?.checkpoints !== 'object') {
       throw new Error(`runtime status is invalid: ${JSON.stringify(status)}`)

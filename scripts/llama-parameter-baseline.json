@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "verifiedAt": "2026-09-06",
+  "verifiedAt": "2026-09-16",
   "source": "https://github.com/ggml-org/llama.cpp",
   "supportPolicy": {
     "authoritative": "latest-stable-release",
     "compatibilityWindow": "latest stable plus two previous stable releases through runtime capability negotiation",
     "master": "canary-only"
   },
-  "upstreamRelease": "v0.4.0",
-  "upstreamCommit": "5266f24da75dc449bd56cbed7addb9c8e4a6a73e",
-  "upstreamMasterChecked": "971595d6697f53b215d02a8381f8b5af142a4d86",
+  "upstreamRelease": "v0.4.1",
+  "upstreamCommit": "b29c606e28a01b1bc8c1351026a0fa6e616bf6c4",
+  "upstreamMasterChecked": "7ceed8737fdb4eb09b4760e77bd12d38012de5a8",
   "releaseSnapshot": {
-    "ref": "v0.4.0",
-    "commit": "5266f24da75dc449bd56cbed7addb9c8e4a6a73e",
-    "parameterCount": 257,
-    "snapshotHash": "f907ceab288e98adbafe8cd868e9b34f2c097b771c434896e2d3cdeac889c4d9",
+    "ref": "v0.4.1",
+    "commit": "b29c606e28a01b1bc8c1351026a0fa6e616bf6c4",
+    "parameterCount": 255,
+    "snapshotHash": "b68470379cedd4c6323ec07767a7e034ce2bdb20c8ce7ba0189bfbafe2d3cfed",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -381,17 +381,6 @@
         "descriptionHash": "a6da7ea2ec54a4022aaab16634582cf45d46a5623b40c62de0c2299208403520"
       },
       {
-        "canonical": "--direct-io",
-        "aliases": [
-          "--direct-io",
-          "--no-direct-io",
-          "-dio",
-          "-ndio"
-        ],
-        "synopsisHash": "ffd7cb9f12c22e554124a94c044fd1e6fa974bda32dcc936ad0d08b66e6868e9",
-        "descriptionHash": "e0438214c814dbfb9e1b2ca287719fe5d33feb2e71dc5d64094fc3ebd43587e5"
-      },
-      {
         "canonical": "--docker-repo",
         "aliases": [
           "--docker-repo",
@@ -730,7 +719,7 @@
           "-j"
         ],
         "synopsisHash": "ae539cdeb9ac3abbd62732b31d715b9d421f3ee17c12fa167a86378f24f04ecd",
-        "descriptionHash": "2be0e97192cb6e851e92f6ce5041684fc2b5bd311fce1fc187d54e54873c72dc"
+        "descriptionHash": "ef88d7b8aed27cbfaffad715ec5ec669c214cae2bd838b0c337c336495e66c2e"
       },
       {
         "canonical": "--json-schema-file",
@@ -739,7 +728,7 @@
           "-jf"
         ],
         "synopsisHash": "6d5e69ec84dee3dc72abb5f55fa98c2f415eccb2b7e9e44b0126c7bb04c69be9",
-        "descriptionHash": "493d9c6b5326f189fab24b5fd2f6e8cf61aaee054ab6c02618f6722ee0c1bb7b"
+        "descriptionHash": "90a0adc6ff0a6d10f6065f6913d246e23832b627c13185b6e903eb6411fadae0"
       },
       {
         "canonical": "--keep",
@@ -828,6 +817,15 @@
         ],
         "synopsisHash": "b4193870feae1e622404dea4d80fdf83882eafd7c6d70b84894db07133a4fce9",
         "descriptionHash": "52e31252d8901f17e230060563051a7f981c7aab846599319dd29f39e4bcaed9"
+      },
+      {
+        "canonical": "--log-jsonl",
+        "aliases": [
+          "--log-jsonl",
+          "--no-log-jsonl"
+        ],
+        "synopsisHash": "678e752f2e592a6b37628b7d13bd86dc9914b14a96a2f0b38c4e74ba27713800",
+        "descriptionHash": "9a305f25c8896cd20d5aa4d1f41ab3cdfd0d113b4dccc7d956d78f55b860927b"
       },
       {
         "canonical": "--log-prefix",
@@ -980,23 +978,6 @@
         "descriptionHash": "e59d5fd7bb252e50d23617d0f5b986248f72250e2362d57fbc9f251985a3d697"
       },
       {
-        "canonical": "--mlock",
-        "aliases": [
-          "--mlock"
-        ],
-        "synopsisHash": "4331297dd654fe9774e73e091ad69141b0c2cb7e9c26fe3ec1fbb7f823712f9c",
-        "descriptionHash": "b128e2b9379cbd85e97485ed9bc516e12531bad77d5c5719f1c9f358a7f330f7"
-      },
-      {
-        "canonical": "--mmap",
-        "aliases": [
-          "--mmap",
-          "--no-mmap"
-        ],
-        "synopsisHash": "f8d755dc59d4bee2a12a2d99c936ad960ca4187b915d4b9894ee26a6e9f2722e",
-        "descriptionHash": "640f6e5af2fdbf74fb322c1513778406e3fe68532e13e4da4f3ffced4b8cc520"
-      },
-      {
         "canonical": "--mmproj",
         "aliases": [
           "--mmproj",
@@ -1022,7 +1003,7 @@
           "-mmdev"
         ],
         "synopsisHash": "2378231043178f13f044ce1c4b37cf584dbcb0cb885b0545ed22a4687258b432",
-        "descriptionHash": "564fbdb2408aed8cf8ccbdf3515cb12e2c301c3c61de159e637a91ea3c872d30"
+        "descriptionHash": "52f2e0d01cc1647978d27bd26ccd3b27a695fdd20de7b54915aa856be742ed4a"
       },
       {
         "canonical": "--mmproj-offload",
@@ -1326,7 +1307,7 @@
           "--reasoning-preserve"
         ],
         "synopsisHash": "ec8323c80897d00b419d498eb1fee33d65836ba8da345f92273afed7b4141504",
-        "descriptionHash": "9c0a77e9a49b9d9a4325ce4f325a2e724b1dc338103cf11efb19705cd94dd649"
+        "descriptionHash": "319ef9537427f02d8993b2bf27a09d2d745e50d8291eec93ec9431738123eed5"
       },
       {
         "canonical": "--repack",
@@ -1572,7 +1553,7 @@
           "-devd"
         ],
         "synopsisHash": "cbcf703e9c37d100556c6c0942475676b949843f4f2d7c5512b803c3fda4b539",
-        "descriptionHash": "8e5f4efc4d3c31ff90d61e6238d0d685ec65925d9f62b5efaca1e98f1fcf7656"
+        "descriptionHash": "3455ef861c5dbc51171e83ff110c6835659678e1934e2f7e2ff19e5affa31155"
       },
       {
         "canonical": "--spec-draft-hf",
@@ -2265,9 +2246,9 @@
   },
   "masterSnapshot": {
     "ref": "master",
-    "commit": "971595d6697f53b215d02a8381f8b5af142a4d86",
-    "parameterCount": 257,
-    "snapshotHash": "f907ceab288e98adbafe8cd868e9b34f2c097b771c434896e2d3cdeac889c4d9",
+    "commit": "7ceed8737fdb4eb09b4760e77bd12d38012de5a8",
+    "parameterCount": 255,
+    "snapshotHash": "b68470379cedd4c6323ec07767a7e034ce2bdb20c8ce7ba0189bfbafe2d3cfed",
     "parameters": [
       {
         "canonical": "--adaptive-decay",
@@ -2634,17 +2615,6 @@
         "descriptionHash": "a6da7ea2ec54a4022aaab16634582cf45d46a5623b40c62de0c2299208403520"
       },
       {
-        "canonical": "--direct-io",
-        "aliases": [
-          "--direct-io",
-          "--no-direct-io",
-          "-dio",
-          "-ndio"
-        ],
-        "synopsisHash": "ffd7cb9f12c22e554124a94c044fd1e6fa974bda32dcc936ad0d08b66e6868e9",
-        "descriptionHash": "e0438214c814dbfb9e1b2ca287719fe5d33feb2e71dc5d64094fc3ebd43587e5"
-      },
-      {
         "canonical": "--docker-repo",
         "aliases": [
           "--docker-repo",
@@ -2983,7 +2953,7 @@
           "-j"
         ],
         "synopsisHash": "ae539cdeb9ac3abbd62732b31d715b9d421f3ee17c12fa167a86378f24f04ecd",
-        "descriptionHash": "2be0e97192cb6e851e92f6ce5041684fc2b5bd311fce1fc187d54e54873c72dc"
+        "descriptionHash": "ef88d7b8aed27cbfaffad715ec5ec669c214cae2bd838b0c337c336495e66c2e"
       },
       {
         "canonical": "--json-schema-file",
@@ -2992,7 +2962,7 @@
           "-jf"
         ],
         "synopsisHash": "6d5e69ec84dee3dc72abb5f55fa98c2f415eccb2b7e9e44b0126c7bb04c69be9",
-        "descriptionHash": "493d9c6b5326f189fab24b5fd2f6e8cf61aaee054ab6c02618f6722ee0c1bb7b"
+        "descriptionHash": "90a0adc6ff0a6d10f6065f6913d246e23832b627c13185b6e903eb6411fadae0"
       },
       {
         "canonical": "--keep",
@@ -3081,6 +3051,15 @@
         ],
         "synopsisHash": "b4193870feae1e622404dea4d80fdf83882eafd7c6d70b84894db07133a4fce9",
         "descriptionHash": "52e31252d8901f17e230060563051a7f981c7aab846599319dd29f39e4bcaed9"
+      },
+      {
+        "canonical": "--log-jsonl",
+        "aliases": [
+          "--log-jsonl",
+          "--no-log-jsonl"
+        ],
+        "synopsisHash": "678e752f2e592a6b37628b7d13bd86dc9914b14a96a2f0b38c4e74ba27713800",
+        "descriptionHash": "9a305f25c8896cd20d5aa4d1f41ab3cdfd0d113b4dccc7d956d78f55b860927b"
       },
       {
         "canonical": "--log-prefix",
@@ -3233,23 +3212,6 @@
         "descriptionHash": "e59d5fd7bb252e50d23617d0f5b986248f72250e2362d57fbc9f251985a3d697"
       },
       {
-        "canonical": "--mlock",
-        "aliases": [
-          "--mlock"
-        ],
-        "synopsisHash": "4331297dd654fe9774e73e091ad69141b0c2cb7e9c26fe3ec1fbb7f823712f9c",
-        "descriptionHash": "b128e2b9379cbd85e97485ed9bc516e12531bad77d5c5719f1c9f358a7f330f7"
-      },
-      {
-        "canonical": "--mmap",
-        "aliases": [
-          "--mmap",
-          "--no-mmap"
-        ],
-        "synopsisHash": "f8d755dc59d4bee2a12a2d99c936ad960ca4187b915d4b9894ee26a6e9f2722e",
-        "descriptionHash": "640f6e5af2fdbf74fb322c1513778406e3fe68532e13e4da4f3ffced4b8cc520"
-      },
-      {
         "canonical": "--mmproj",
         "aliases": [
           "--mmproj",
@@ -3275,7 +3237,7 @@
           "-mmdev"
         ],
         "synopsisHash": "2378231043178f13f044ce1c4b37cf584dbcb0cb885b0545ed22a4687258b432",
-        "descriptionHash": "564fbdb2408aed8cf8ccbdf3515cb12e2c301c3c61de159e637a91ea3c872d30"
+        "descriptionHash": "52f2e0d01cc1647978d27bd26ccd3b27a695fdd20de7b54915aa856be742ed4a"
       },
       {
         "canonical": "--mmproj-offload",
@@ -3579,7 +3541,7 @@
           "--reasoning-preserve"
         ],
         "synopsisHash": "ec8323c80897d00b419d498eb1fee33d65836ba8da345f92273afed7b4141504",
-        "descriptionHash": "9c0a77e9a49b9d9a4325ce4f325a2e724b1dc338103cf11efb19705cd94dd649"
+        "descriptionHash": "319ef9537427f02d8993b2bf27a09d2d745e50d8291eec93ec9431738123eed5"
       },
       {
         "canonical": "--repack",
@@ -3825,7 +3787,7 @@
           "-devd"
         ],
         "synopsisHash": "cbcf703e9c37d100556c6c0942475676b949843f4f2d7c5512b803c3fda4b539",
-        "descriptionHash": "8e5f4efc4d3c31ff90d61e6238d0d685ec65925d9f62b5efaca1e98f1fcf7656"
+        "descriptionHash": "3455ef861c5dbc51171e83ff110c6835659678e1934e2f7e2ff19e5affa31155"
       },
       {
         "canonical": "--spec-draft-hf",

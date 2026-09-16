@@ -322,6 +322,7 @@ fn writer_loop(receiver: mpsc::Receiver<Write>, path: std::path::PathBuf) {
     let mut conn = None;
     let mut last_error: Option<String> = None;
     let mut last_prune = 0;
+    let mut next_quota_prune = std::time::Instant::now();
     let mut session = None;
     loop {
         let first = receiver.recv_timeout(Duration::from_secs(2));
@@ -395,6 +396,20 @@ fn writer_loop(receiver: mpsc::Receiver<Write>, path: std::path::PathBuf) {
         let _ = PENDING.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
             Some(n.saturating_sub(records.len() as u64))
         });
+        if !closing && std::time::Instant::now() >= next_quota_prune {
+            let more = match super::usage_quota::maintain(
+                &path.with_file_name("router-quota.db"),
+                super::telemetry::current_time_ms(),
+            ) {
+                Ok(more) => more,
+                Err(error) => {
+                    eprintln!("Quota history maintenance deferred: {error}");
+                    false
+                }
+            };
+            next_quota_prune =
+                std::time::Instant::now() + Duration::from_secs(if more { 2 } else { 900 });
+        }
         if let Some(c) = conn.as_mut() {
             let now = super::telemetry::current_time_ms();
             if now - last_prune > 900_000 {

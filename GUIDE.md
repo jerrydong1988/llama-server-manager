@@ -271,9 +271,9 @@ When startup fails, inspect the instance state and server logs instead of repeat
 
 ## 参数配置 / Parameter Configuration
 
-参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版基线跟踪 248 个参数条目。
+参数配置按当前实例保存，覆盖模型、生成、采样、性能、上下文、网络、鉴权、缓存、推测解码和多模型路由等结构化选项。程序会读取所选 `llama-server --help` 协商实际能力；当前上游稳定版 v0.4.1 基线跟踪 255 个参数条目。
 
-Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream baseline tracks 248 parameter entries.
+Configuration is stored per instance and covers structured options for models, generation, sampling, performance, context, networking, authentication, cache, speculative decoding, and routing. The app negotiates actual capabilities from the selected `llama-server --help`; the current stable upstream v0.4.1 baseline tracks 255 parameter entries.
 
 ![参数搜索、预设、分组和校验提示 / Configuration search, presets, groups, and validation](public/docs/guide/06-configuration.png)
 

@@ -24,8 +24,14 @@ const collectFlags = value => {
 }
 collectFlags(baseline)
 
+// The legacy no_mmap setting still explains imported old-engine configurations.
+// v0.4.1 removed these aliases; no other catalog entry may use this exception.
+const legacyMmapEntry = catalog.match(/\bno_mmap:\s*\{[^\n]+\}/)?.[0]
+assert.ok(legacyMmapEntry, 'legacy mmap metadata is missing')
+assert.match(legacyMmapEntry, /flags:\s*\['--mmap', '--no-mmap'\]/)
+const modernCatalog = catalog.replace(legacyMmapEntry, '')
 const catalogFlags = new Set(
-  [...catalog.matchAll(/flags:\s*\[([^\]]*)\]/g)]
+  [...modernCatalog.matchAll(/flags:\s*\[([^\]]*)\]/g)]
     .flatMap(match => [...match[1].matchAll(/['"](-{1,2}[a-z0-9-]+)['"]/gi)].map(flag => flag[1])),
 )
 for (const flag of catalogFlags) {

@@ -5,6 +5,10 @@ use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
+#[path = "usage_quota_maintenance.rs"]
+mod maintenance;
+pub(crate) use maintenance::{maintain, storage, QuotaStorage};
+
 const MAX_TOKENS: u64 = 9_007_199_254_740_991;
 
 #[derive(Debug, Clone, Copy)]
@@ -71,7 +75,9 @@ fn open(path: &Path) -> Result<Connection, String> {
          CREATE TABLE IF NOT EXISTS quota_requests (
            id TEXT PRIMARY KEY, key_id TEXT NOT NULL, day INTEGER NOT NULL, month INTEGER NOT NULL,
            reserved INTEGER NOT NULL, state TEXT NOT NULL, actual INTEGER, updated INTEGER NOT NULL);
-         CREATE INDEX IF NOT EXISTS quota_request_date ON quota_requests(day);",
+         CREATE INDEX IF NOT EXISTS quota_request_date ON quota_requests(day);
+         CREATE INDEX IF NOT EXISTS quota_request_key_day ON quota_requests(key_id,day);
+         CREATE INDEX IF NOT EXISTS quota_request_key_month ON quota_requests(key_id,month);",
     )
     .map_err(|e| e.to_string())?;
     Ok(conn)
@@ -197,7 +203,7 @@ fn settle(path: &Path, id: &str, actual: Option<u64>, complete: bool) -> Result<
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| e.to_string())?;
-    let (key, day, month, reserved, state): (String, i64, i64, u64, String) = tx
+    let request: Option<(String, i64, i64, u64, String)> = tx
         .query_row(
             "SELECT key_id,day,month,reserved,state FROM quota_requests WHERE id=?1",
             [id],
@@ -211,7 +217,13 @@ fn settle(path: &Path, id: &str, actual: Option<u64>, complete: bool) -> Result<
                 ))
             },
         )
+        .optional()
         .map_err(|e| e.to_string())?;
+    // Maintenance only removes terminal requests. A delayed duplicate after
+    // retention expiry is a no-op, just like a duplicate before expiry.
+    let Some((key, day, month, reserved, state)) = request else {
+        return Ok(());
+    };
     if state != "pending" {
         return Ok(());
     }
@@ -291,7 +303,7 @@ impl Drop for QuotaPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn key() -> ProxyApiKey {
+    pub(super) fn key() -> ProxyApiKey {
         ProxyApiKey {
             id: "key".into(),
             daily_token_limit: 100,
@@ -301,13 +313,14 @@ mod tests {
     }
     #[test]
     fn older_configs_keep_hard_limits_disabled() {
-        let old: ProxyApiKey = serde_json::from_str(r#"{"id":"old","daily_token_budget":50}"#).unwrap();
+        let old: ProxyApiKey =
+            serde_json::from_str(r#"{"id":"old","daily_token_budget":50}"#).unwrap();
         assert_eq!(old.quota_default_output_tokens, 32768);
         assert!(!enabled(&old));
         assert_eq!((old.daily_token_limit, old.monthly_token_limit), (0, 0));
         assert_eq!(old.daily_token_budget, 50);
     }
-    struct TestDir(PathBuf);
+    pub(super) struct TestDir(PathBuf);
     impl Drop for TestDir {
         fn drop(&mut self) {
             assert_eq!(self.0.parent(), Some(std::env::temp_dir().as_path()));
@@ -317,13 +330,13 @@ mod tests {
             let _ = std::fs::remove_dir(&self.0);
         }
     }
-    fn db() -> (TestDir, PathBuf) {
+    pub(super) fn db() -> (TestDir, PathBuf) {
         let dir = std::env::temp_dir().join(format!("lsm-quota-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&dir).unwrap();
         let path = dir.join("quota.db");
         (TestDir(dir), path)
     }
-    fn persist(mut p: QuotaPermit) {
+    pub(super) fn persist(mut p: QuotaPermit) {
         p.finished = true;
     }
 
