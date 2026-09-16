@@ -1,0 +1,72 @@
+name: Publish website release
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Already published stable release, e.g. v2.9.47'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-release-publication
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.repository == 'jerrydong1988/llama-server-manager' &&
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Verify stable release and every public installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: node scripts/publish-website-release.cjs "$RELEASE_TAG" "$RUNNER_TEMP/website-release.json"
+      - name: Publish immutable website manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/existing-manifest"
+          count="$(gh release view "$RELEASE_TAG" --json assets --jq '[.assets[] | select(.name == "website-release.json")] | length')"
+          if [ "$count" -gt 0 ]; then
+            gh release download "$RELEASE_TAG" --pattern website-release.json --dir "$RUNNER_TEMP/existing-manifest"
+            cmp "$RUNNER_TEMP/website-release.json" "$RUNNER_TEMP/existing-manifest/website-release.json"
+          else
+            gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/website-release.json"
+          fi
+      - name: Obtain scoped website dispatch permission
+        id: website-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ vars.WEBSITE_APP_ID }}
+          private-key: ${{ secrets.WEBSITE_APP_PRIVATE_KEY }}
+          owner: jerrydong1988
+          repositories: llama-server-manager-site
+          permission-actions: write
+      - name: Notify website after publication is complete
+        env:
+          GH_TOKEN: ${{ steps.website-token.outputs.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh workflow run sync-release.yml --repo jerrydong1988/llama-server-manager-site --ref main -f tag="$RELEASE_TAG"
+          printf 'Website synchronization requested for %s.\n' "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"

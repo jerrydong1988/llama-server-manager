@@ -14,6 +14,7 @@ const failures = []
 const rustsecNode24Commit = '858dc40f52ca2b8570b7a997c1c4e35c6fc9a432'
 const reviewedActionPins = new Map([
   ['actions/checkout', new Set(['3d3c42e5aac5ba805825da76410c181273ba90b1', '11d5960a326750d5838078e36cf38b85af677262'])],
+  ['actions/create-github-app-token', new Set(['bcd2ba49218906704ab6c1aa796996da409d3eb1'])],
   ['actions/dependency-review-action', new Set(['2031cfc080254a8a887f58cffee85186f0e49e48'])],
   ['actions/download-artifact', new Set(['3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c'])],
   ['actions/setup-node', new Set(['249970729cb0ef3589644e2896645e5dc5ba9c38', '49933ea5288caeca8642d1e84afbd3f7d6820020'])],
