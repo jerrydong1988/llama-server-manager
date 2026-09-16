@@ -116,6 +116,33 @@ pub(crate) fn error_response(
     response
 }
 
+pub(crate) fn quota_error_response(
+    format: ProxyApiFormat,
+    status: StatusCode,
+    code: &str,
+    message: &str,
+) -> Response {
+    let request_id = proxy_request_id();
+    let value = if format.is_anthropic() {
+        let mut value = anthropic_error_value(status, message, &request_id);
+        value["error"]["code"] = json!(code);
+        value
+    } else {
+        json!({"error":{"message":message,"type":openai_error_type(status),"param":Value::Null,"code":code}})
+    };
+    let mut response = (status, Json(value)).into_response();
+    response.extensions_mut().insert(UsageFailure::new("quota", code));
+    if let Ok(value) = HeaderValue::from_str(&request_id) {
+        response.headers_mut().insert(
+            if format.is_anthropic() { "request-id" } else { "x-request-id" },
+            value,
+        );
+    }
+    ensure_request_id_header(&mut response, format);
+    add_format_header(&mut response, format);
+    response
+}
+
 pub(crate) fn checkpoint_unavailable_response(format: ProxyApiFormat, phase: &str) -> Response {
     let request_id = proxy_request_id();
     let message = "matching route is temporarily unavailable while checkpoint state is resolving";

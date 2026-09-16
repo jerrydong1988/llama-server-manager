@@ -26,6 +26,7 @@ mod usage_health;
 mod usage_histogram;
 pub(crate) mod usage_performance;
 mod usage_protocol;
+mod usage_quota;
 pub(crate) mod usage_requests;
 pub(crate) mod usage_store;
 pub mod vector_metrics;

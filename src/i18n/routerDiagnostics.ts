@@ -32,6 +32,10 @@ export function getRouterDiagnosticsLabels(lang: string) {
 }
 
 const failures: Record<string, [string, string, string, string]> = {
+  token_quota_exceeded: ['Token 额度不足', 'Token quota exceeded', '查看已结算与保守占用，缩短请求、降低输出上限，或调整硬额度。', 'Check settled and held tokens, reduce input/output limits, or adjust the hard quota.'],
+  token_quota_unavailable: ['额度账不可用', 'Quota ledger unavailable', '请求未转发。检查数据目录可写性、磁盘空间与后台服务日志。', 'Not forwarded. Check data directory permissions, free space and runtime logs.'],
+  token_quota_unmetered: ['无法可靠预留额度', 'Cannot reserve tokens reliably', '请求未转发。检查引擎计数／属性接口，或拆分不支持的批量请求。', 'Not forwarded. Check engine count/props endpoints or split unsupported batches.'],
+  token_quota_invalid_limit: ['输出上限不适用', 'Unbounded output limit', '设置正数输出上限，使用单份生成，移除 n_predict、max_new_tokens、best_of 等覆盖参数。', 'Set a positive output limit, request one generation and remove n_predict/max_new_tokens/best_of overrides.'],
   context_length_exceeded: ['上下文超限', 'Context window exceeded', '降低客户端输出上限，或缩短对话历史和工具内容。', 'Reduce the client output limit or shorten history and tool content.'],
   authentication_failed: ['鉴权失败', 'Authentication failed', '检查客户端 API Key 是否有效、启用且与管理器一致。', 'Check that the client API key matches an enabled router key.'],
   permission_denied: ['权限不足', 'Permission denied', '检查 Key 接口权限及允许的来源设置。', 'Check the key scopes and allowed origins.'],
@@ -56,6 +60,7 @@ export function failureText(code: string, lang: string) {
   return { title: value[lang === 'zh-CN' ? 0 : 1], advice: value[lang === 'zh-CN' ? 2 : 3] }
 }
 export function diagnosticValue(value: string, lang: string) {
+  if (value === 'quota') return lang === 'zh-CN' ? '额度预留' : 'Quota reservation'
   const names: Record<string, string> = { authentication: '鉴权', admission: '请求准入', queue: '排队', routing: '实例选择', validation: '请求校验', preflight: '上下文预检', upstream: '上游响应', stream: '流传输', delivery: '客户端交付', upstream_usage: '上游报告', none: '未报告', exact: '精确计数', output_only: '仅检查输出上限', not_needed: '未触发精确计数', unavailable: '计数接口不可用' }
   return lang === 'zh-CN' ? names[value] || value : value
 }

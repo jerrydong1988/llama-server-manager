@@ -63,6 +63,7 @@ export default function ManagementPanel({ revision }: { revision: number }) {
       <div className="space-y-2 border-t border-slate-200/70 px-5 py-3 text-xs leading-5 text-slate-500 dark:border-slate-800 dark:text-slate-400">
         {incomplete ? <p id={incompleteId} className="flex items-start gap-2 text-amber-700 dark:text-amber-300"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />{l.incomplete}</p> : null}
         {budgets.health.pendingRecords || budgets.health.interruptedSessions || budgets.droppedRecords || budgets.writeErrors ? <p role="status" className="text-amber-700 dark:text-amber-300">{l.gap}</p> : null}
+        {budgets.keys.some(key => key.quota && (key.quota.dailyLimit || key.quota.monthlyLimit || key.quota.day.held || key.quota.month.held || key.quota.month.settled)) ? <p>{l.quotaNote}</p> : null}
         <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1">
           <p className="flex items-center gap-2"><ShieldCheck className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />{l.softBudgetNote}</p>
           <p>{l.updated}: {new Date(budgets.updatedAt).toLocaleString(lang)}</p>

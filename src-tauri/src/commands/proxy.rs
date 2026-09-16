@@ -41,6 +41,9 @@ use crate::models::{
 };
 use crate::vector_policy::ModelWorkload;
 
+#[path = "proxy_quota.rs"]
+mod quota;
+
 static PROXY_TASK_COUNTER: AtomicU32 = AtomicU32::new(0);
 static PROXY_HTTP_CLIENTS: LazyLock<Mutex<VecDeque<(u64, reqwest::Client)>>> =
     LazyLock::new(|| Mutex::new(VecDeque::new()));
@@ -815,6 +818,8 @@ pub(crate) fn normalize_and_validate_proxy_config(
         // Match the exact integer range supported by the desktop settings UI.
         api_key.daily_token_budget = api_key.daily_token_budget.min(9_007_199_254_740_991);
         api_key.monthly_token_budget = api_key.monthly_token_budget.min(9_007_199_254_740_991);
+        api_key.daily_token_limit = api_key.daily_token_limit.min(9_007_199_254_740_991);
+        api_key.monthly_token_limit = api_key.monthly_token_limit.min(9_007_199_254_740_991);
         if api_key.enabled && !is_hashed_proxy_api_key(&api_key.key) && api_key.key.len() < 16 {
             return Err(format!("API Key {} 至少需要 16 个字符", api_key.name));
         }
@@ -2827,6 +2832,16 @@ async fn proxy_upstream(
                 violation.context_window,
             );
         }
+    }
+
+    if let Err(error) = quota::admit(
+        &usage, &proxy_config, &target, &client, &headers, uri.path(), &upstream_body,
+    )
+    .await
+    {
+        usage.failure("quota", error.code());
+        router_state.runtime.record_rejected();
+        return quota::response(api_format, error);
     }
 
     let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {

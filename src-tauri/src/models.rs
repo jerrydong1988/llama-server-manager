@@ -1130,6 +1130,9 @@ pub struct ProxyApiKey {
     /// Notification only. Zero disables the corresponding UTC token budget.
     pub daily_token_budget: u64,
     pub monthly_token_budget: u64,
+    /// Enforced, durable quota; zero disables the corresponding period limit.
+    pub daily_token_limit: u64,
+    pub monthly_token_limit: u64,
 }
 
 impl Default for ProxyApiKey {
@@ -1144,6 +1147,8 @@ impl Default for ProxyApiKey {
             max_concurrent_requests: 0,
             daily_token_budget: 0,
             monthly_token_budget: 0,
+            daily_token_limit: 0,
+            monthly_token_limit: 0,
         }
     }
 }

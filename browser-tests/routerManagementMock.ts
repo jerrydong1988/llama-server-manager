@@ -15,7 +15,7 @@ export function routerPerformanceMock(query: Record<string, unknown>) {
     baseline: { ...summary, duration: make(500,1000), queue: make(0,100), firstOutput: empty() }, baselineFrom: Number(query.from) - 7 * day, baselineTo: query.from, elevated: active ? ['duration'] : [], updatedAt: Date.now() }
 }
 
-export function routerBudgetsMock(keys: { id: string; name: string; enabled: boolean; daily_token_budget?: number; monthly_token_budget?: number }[]) {
+export function routerBudgetsMock(keys: { id: string; name: string; enabled: boolean; daily_token_budget?: number; monthly_token_budget?: number; daily_token_limit?: number; monthly_token_limit?: number }[]) {
   const variant = new URLSearchParams(location.search).get('usageManagement')
   if (variant) keys = [{ id: 'key-a', name: 'WorkBuddy', enabled: true, daily_token_budget: 10000, monthly_token_budget: 100000 }]
   const now = Date.now()
@@ -33,5 +33,11 @@ export function routerBudgetsMock(keys: { id: string; name: string; enabled: boo
       { id: 'key-e', name: 'Octop-research-team-local-development', enabled: false, dailyBudget: 0, monthlyBudget: 0, day: usage(1670109, 0, 1), month: usage(1670109, 0, 1) },
     ]
   }
-  return report
+  return { ...report, keys: report.keys.map(k => {
+    const config = keys.find(key => key.id === k.id)
+    const active = variant === 'quota'
+    const day = { settled: active ? 1200 : 0, held: active ? 800 : 0, pending: active ? 1 : 0, uncertain: active ? 1 : 0 }
+    const month = { settled: active ? 8000 : 0, held: active ? 2000 : 0, pending: active ? 1 : 0, uncertain: active ? 3 : 0 }
+    return { ...k, quota: { dailyLimit: active ? 3000 : config?.daily_token_limit || 0, monthlyLimit: active ? 10000 : config?.monthly_token_limit || 0, day, month } }
+  }) }
 }

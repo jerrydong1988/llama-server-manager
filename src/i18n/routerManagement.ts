@@ -1,6 +1,16 @@
 export function getRouterManagementLabels(lang: string) {
   const zh = lang === 'zh-CN'
   return {
+    hardQuota: zh ? '强制 Token 额度' : 'Hard token quotas',
+    dayLimit: zh ? '每日 Token 硬额度' : 'Daily token hard limit',
+    monthLimit: zh ? '每月 Token 硬额度' : 'Monthly token hard limit',
+    quotaHint: zh ? '默认关闭，0 表示不限额。启用后按 UTC 日／月独立记账，不追溯历史；生成请求须明确输出上限。转发前预留额度，不足时拒绝；向量批量保守预留。中断或未知用量保留占用，清除统计、关闭再开启均不重置额度账。' : 'Off by default; zero means unlimited. Accounting starts when enabled, by UTC day/month, without historical backfill. Generation requires an explicit output limit. Requests reserve quota before forwarding and are rejected if insufficient; vector batches reserve conservatively. Interrupted/unknown usage retains its reservation. Clearing statistics or toggling limits does not reset the ledger.',
+    quotaAccounting: zh ? '额度账' : 'Quota ledger',
+    settled: zh ? '已结算' : 'Settled',
+    held: zh ? '待结算／保守占用' : 'Pending / retained',
+    remaining: zh ? '可预留' : 'Available',
+    unlimited: zh ? '不限额' : 'Unlimited',
+    quotaNote: zh ? '额度账按预留时的 UTC 日／月归属，仅记录启用硬额度后的调用，与上方实际用量独立。占用包含在途请求、异常退出遗留及未知用量；不会自动当作零退款，周期结束后不占用新周期。' : 'The ledger uses the UTC day/month of reservation and records only quota-enabled calls, separately from measured usage above. Held tokens include in-flight requests, crash leftovers and unknown usage; they are never automatically refunded as zero and do not carry into a new period.',
     performance: zh ? '性能与等待' : 'Performance and waiting',
     performanceHint: zh ? '总耗时与首个有效输出统计成功业务调用；排队包含等待超时。首个输出从请求进入路由时计时，包含排队。' : 'Duration and first output cover successful inference calls; queue time includes timeouts. First output includes admission waiting.',
     precision: zh ? '近似分位数，向上误差不超过约 6.25%。未采样显示 —；旧版本数据不补算分布。日分布保留 365 天，小时分布保留 30 天。' : 'Approximate percentiles, rounded up by at most about 6.25%. Missing samples show —; older data is not backfilled. Daily distributions: 365 days; hourly: 30 days.',

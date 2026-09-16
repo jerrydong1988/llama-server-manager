@@ -34,6 +34,7 @@ struct BudgetKey {
     monthly_budget: u64,
     day: PeriodUsage,
     month: PeriodUsage,
+    quota: super::usage_quota::KeyQuota,
 }
 
 #[derive(Serialize)]
@@ -48,7 +49,7 @@ pub(crate) struct BudgetReport {
     health: super::usage_health::UsageHealth,
 }
 
-fn periods(now: i64) -> Result<(i64, i64), String> {
+pub(super) fn periods(now: i64) -> Result<(i64, i64), String> {
     let date = Utc
         .timestamp_millis_opt(now)
         .single()
@@ -102,6 +103,7 @@ fn query(
                 monthly_budget: key.monthly_token_budget,
                 day,
                 month,
+                quota: Default::default(),
             }
         })
         .collect())
@@ -131,8 +133,12 @@ pub async fn get_router_budgets(
             &conn,
             &crate::utils::get_data_dir().join("router-usage.db"),
         );
+        let mut rows = result?;
+        for (row, quota) in rows.iter_mut().zip(super::usage_quota::report(&keys, now)?) {
+            row.quota = quota;
+        }
         Ok::<_, String>(BudgetReport {
-            keys: result?,
+            keys: rows,
             day_from: day,
             month_from: month,
             updated_at: now,

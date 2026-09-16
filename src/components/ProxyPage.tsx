@@ -30,6 +30,8 @@ type ProxyApiKey = {
   maxConcurrentRequests: number
   dailyTokenBudget: number
   monthlyTokenBudget: number
+  dailyTokenLimit: number
+  monthlyTokenLimit: number
 }
 
 type ProxyConfig = {
@@ -207,6 +209,8 @@ function normalizeApiKey(value: unknown, index: number): ProxyApiKey {
     maxConcurrentRequests: getNumber(record, ['max_concurrent_requests', 'maxConcurrentRequests'], 0),
     dailyTokenBudget: getNumber(record, ['daily_token_budget', 'dailyTokenBudget'], 0),
     monthlyTokenBudget: getNumber(record, ['monthly_token_budget', 'monthlyTokenBudget'], 0),
+    dailyTokenLimit: getNumber(record, ['daily_token_limit', 'dailyTokenLimit'], 0),
+    monthlyTokenLimit: getNumber(record, ['monthly_token_limit', 'monthlyTokenLimit'], 0),
   }
 }
 
@@ -339,6 +343,8 @@ function toCommandConfig(config: ProxyConfig) {
       max_concurrent_requests: apiKey.maxConcurrentRequests,
       daily_token_budget: apiKey.dailyTokenBudget,
       monthly_token_budget: apiKey.monthlyTokenBudget,
+      daily_token_limit: apiKey.dailyTokenLimit,
+      monthly_token_limit: apiKey.monthlyTokenLimit,
     })),
     background_service_mode: config.backgroundServiceMode,
     runtime_service_enabled: config.runtimeServiceEnabled,
@@ -697,6 +703,8 @@ export default function ProxyPage() {
         maxConcurrentRequests: 0,
         dailyTokenBudget: 0,
         monthlyTokenBudget: 0,
+        dailyTokenLimit: 0,
+        monthlyTokenLimit: 0,
       }],
     }))
   }
@@ -1192,6 +1200,15 @@ export default function ProxyPage() {
                   </div>
                   <div className="mt-3 grid gap-3 sm:grid-cols-3">
                     {([['maxConcurrentRequests', management.keyLimit, 100000], ['dailyTokenBudget', management.dayBudget, Number.MAX_SAFE_INTEGER], ['monthlyTokenBudget', management.monthBudget, Number.MAX_SAFE_INTEGER]] as const).map(([field, title, max]) => <label key={field} className="min-w-0 text-xs"><span className="mb-1 block text-slate-500 dark:text-slate-400">{title}</span><TextInput aria-label={title} type="number" min={0} max={max} step={1} value={apiKey[field]} onChange={e => updateApiKey(apiKey.id, { [field]: Math.min(max, Math.max(0, Math.floor(Number(e.target.value) || 0))) })} /></label>)}
+                  </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <details className="w-full rounded-lg border border-slate-200 p-3 dark:border-slate-700/60" open={apiKey.dailyTokenLimit > 0 || apiKey.monthlyTokenLimit > 0 || undefined}>
+                      <summary className="cursor-pointer text-xs font-medium">{management.hardQuota}</summary>
+                      <p className="mt-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{management.quotaHint}</p>
+                      <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                        {([['dailyTokenLimit', management.dayLimit], ['monthlyTokenLimit', management.monthLimit]] as const).map(([field, title]) => <label key={field} className="text-xs"><span className="mb-1 block text-slate-500 dark:text-slate-400">{title}</span><TextInput aria-label={title} type="number" min={0} max={Number.MAX_SAFE_INTEGER} step={1} value={apiKey[field]} onChange={e => updateApiKey(apiKey.id, { [field]: Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(Number(e.target.value) || 0))) })} /></label>)}
+                      </div>
+                    </details>
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="text-xs text-slate-500 dark:text-slate-400">{labels.scopes}:</span>
