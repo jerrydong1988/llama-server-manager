@@ -418,7 +418,7 @@ export default function ClusterPage() {
           </div>
         </div>
 
-        <div className="grid w-full gap-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] 2xl:w-auto 2xl:min-w-[680px]">
+        <div className="flex w-full flex-wrap items-center gap-2 2xl:w-auto 2xl:justify-end">
           <div className="grid min-w-0 grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/60 p-1.5">
             {clusterScanning ? (
               <Button
@@ -506,7 +506,7 @@ export default function ClusterPage() {
       </div>
 
       <div className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_320px]">
-        <Surface as="section" className="overflow-hidden">
+        <Surface as="section" className="min-w-0 overflow-hidden">
           <div className="border-b border-slate-800 bg-slate-950/90 px-5 py-4">
             <SectionHeader title={t.clusterPage.workerList} description={labels.workerListDesc} />
           </div>
@@ -525,8 +525,8 @@ export default function ClusterPage() {
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className={`inline-block h-2.5 w-2.5 rounded-full ${statusTone(worker.status)}`} title={statusText(worker.status)} />
-                          <p className="text-sm font-medium text-slate-100">{worker.name}</p>
-                          <span className="text-xs text-slate-500">{worker.host}:{worker.port}</span>
+                          <p className="min-w-0 max-w-full truncate text-sm font-medium text-slate-100" title={worker.name}>{worker.name}</p>
+                          <span className="min-w-0 break-all text-xs text-slate-500">{worker.host}:{worker.port}</span>
                           {worker.auto_discovered && (
                             <Badge tone="slate" className="px-2 py-0.5 text-[11px]">{labels.auto}</Badge>
                           )}
@@ -634,7 +634,7 @@ export default function ClusterPage() {
           )}
         </Surface>
 
-        <Surface as="aside" className="h-fit p-5">
+        <Surface as="aside" className="h-fit min-w-0 p-5">
           <div className="mb-5">
             <SectionHeader title={labels.clusterNotes} description={labels.clusterNotesDesc} />
           </div>
@@ -770,9 +770,9 @@ export default function ClusterPage() {
 
               {launchStep === 2 && (
                 <div className="space-y-3 text-sm">
-                  <div className="flex justify-between"><span className="text-slate-500">Worker</span><span className="text-slate-200">{launchForm.host}:{launchForm.port}</span></div>
-                  <div className="flex justify-between"><span className="text-slate-500">SSH</span><span className="text-slate-200">{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
-                  <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-xs text-blue-200">
+                  <div className="flex justify-between gap-3"><span className="shrink-0 text-slate-500">Worker</span><span className="min-w-0 break-all text-right text-slate-200">{launchForm.host}:{launchForm.port}</span></div>
+                  <div className="flex justify-between gap-3"><span className="shrink-0 text-slate-500">SSH</span><span className="min-w-0 break-all text-right text-slate-200">{launchForm.user}@{launchForm.host}:{launchForm.sshPort}</span></div>
+                  <div className="break-all rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-200">
                     {t.clusterPage.cmdPreview}: {(launchForm.rpcPath || 'rpc-server')} --host 127.0.0.1 --port {launchForm.port}
                   </div>
                   {launchError && (

@@ -690,9 +690,9 @@ const ConfigPage = () => {
                   [labels.medium, warningCounts.medium, 'text-amber-300 border-amber-500/20 bg-amber-500/10'],
                   [labels.low, warningCounts.low, 'text-sky-300 border-sky-500/20 bg-sky-500/10'],
                 ].map(([label, count, tone]) => (
-                  <div key={label} className={`rounded-lg border px-2 py-3 ${tone}`}>
+                  <div key={label} className={`rounded-lg border px-1 py-3 ${tone}`}>
                     <p className="text-lg font-semibold">{count}</p>
-                    <p className="mt-1 text-[11px] uppercase tracking-[0.14em]">{label}</p>
+                    <p className="mt-1 text-[11px]">{label}</p>
                   </div>
                 ))}
               </div>

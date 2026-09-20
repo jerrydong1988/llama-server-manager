@@ -674,7 +674,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
           fieldKey="custom_args"
         >
           <div className="space-y-2">
-            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_36px] gap-2 px-1 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_64px] gap-2 text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
               <span>{t.configPage.customArgName}</span>
               <span>{t.configPage.customArgValue}</span>
               <span className="text-right">{customArgAction}</span>
@@ -685,15 +685,15 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
               </div>
             )}
             {entries.map((e, i) => (
-              <div key={i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_28px] items-center gap-2">
+              <div key={i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_64px] items-center gap-2">
                 <span className="min-w-0 truncate rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200" title={e.name}>{e.name}</span>
                 <span className="min-w-0 truncate rounded-lg border border-slate-200 bg-white px-2 py-1 font-mono text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400" title={e.value}>
                   {e.value || '-'}
                 </span>
-                <Button onClick={() => removeEntry(i)} variant="danger" size="icon" className="h-7 w-7 shrink-0" title={customArgAction} aria-label={customArgAction}><X className="w-3.5 h-3.5"/></Button>
+                <Button onClick={() => removeEntry(i)} variant="danger" size="icon" className="h-7 w-7 shrink-0 justify-self-end" title={customArgAction} aria-label={customArgAction}><X className="w-3.5 h-3.5"/></Button>
               </div>
             ))}
-            <div className="flex items-center gap-2">
+            <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_64px] items-center gap-2">
               <TextInput
                 type="text"
                 value={newName}
@@ -716,7 +716,7 @@ export function AdvancedSection({ local, set, inherit, t, isEmbedding, modelWork
                 placeholder={t.configPage.customArgValue}
                 className="h-9 flex-1 text-xs"
               />
-              <Button onClick={addEntry} variant="primary" size="icon" className="h-9 w-9 shrink-0" title={t.configPage.customArgAdd}><Plus className="w-4 h-4"/></Button>
+              <Button onClick={addEntry} variant="primary" size="icon" className="h-9 w-9 shrink-0 justify-self-end" title={t.configPage.customArgAdd}><Plus className="w-4 h-4"/></Button>
             </div>
             {newName.trim().startsWith('-') && KNOWN_FLAGS.has(newName.trim()) && (
               <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">! {t.configPage.warnD1}</div>

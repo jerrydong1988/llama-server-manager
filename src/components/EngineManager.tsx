@@ -620,9 +620,9 @@ const EngineManager = () => {
                   [labels.default, defaultEngineId && pathsEqual(defaultEngineId, selectedEngine.id) ? labels.yes : labels.no],
                   [labels.scanRoot, engineDirs.find(dir => isPathWithinRoot(selectedEngine.dir, dir)) || '--'],
                 ].map(([label, value]) => (
-                  <div key={label} className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-slate-500">{label}</span>
-                    <span className="min-w-0 text-right text-sm text-slate-200">
+                  <div key={label} className="grid min-w-0 grid-cols-2 items-start gap-3">
+                    <span className="min-w-0 break-words text-sm text-slate-500">{label}</span>
+                    <span className="min-w-0 break-words text-right text-sm text-slate-200">
                       {label === (labels.scanRoot) && value !== '--'
                         ? <PathText value={String(value)} maxLength={32} className="justify-end text-slate-200" />
                         : value}

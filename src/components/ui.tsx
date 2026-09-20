@@ -190,13 +190,13 @@ export function TextInput({
   inputClassName?: string
 }) {
   if (!leadingIcon) {
-    return <input className={joinClassNames('h-11 w-full px-3', controlClassName, className)} {...props} />
+    return <input className={joinClassNames('h-11 w-full min-w-0 max-w-full px-3', controlClassName, className)} {...props} />
   }
 
   return (
-    <label className={joinClassNames('relative block', className)}>
+    <label className={joinClassNames('relative block min-w-0', className)}>
       <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">{leadingIcon}</span>
-      <input className={joinClassNames('h-11 w-full pl-10 pr-3', controlClassName, inputClassName)} {...props} />
+      <input className={joinClassNames('h-11 w-full min-w-0 max-w-full pl-10 pr-3', controlClassName, inputClassName)} {...props} />
     </label>
   )
 }
@@ -209,7 +209,7 @@ export function SelectInput({
   children: ReactNode
 }) {
   return (
-    <select className={joinClassNames('select-custom h-11 pl-3 pr-8', controlClassName, className)} {...props}>
+    <select className={joinClassNames('select-custom h-11 min-w-0 max-w-full pl-3 pr-8', controlClassName, className)} {...props}>
       {children}
     </select>
   )
@@ -400,11 +400,17 @@ export function DataTable<T>({
   density?: 'compact' | 'default'
 }) {
   const rowPadding = density === 'compact' ? 'px-3 py-2' : 'px-3 py-2.5'
+  // Fixed table layout ignores min-width on individual cells. Keep the table
+  // wide enough for its declared columns and let its wrapper scroll instead.
+  const minTableWidth = columns.reduce((total, column) => total + Math.max(
+    typeof column.width === 'number' ? column.width : 0,
+    typeof column.minWidth === 'number' ? column.minWidth : 0,
+  ), 0)
 
   return (
     <div className={joinClassNames('min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900', className)}>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-full table-fixed border-collapse text-left text-sm">
+        <table className="w-full min-w-full table-fixed border-collapse text-left text-sm" style={{ minWidth: minTableWidth || undefined }}>
           <thead className="border-b border-slate-200 bg-slate-50 text-xs uppercase text-slate-500 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-400">
             <tr>
               {columns.map(column => (
@@ -412,7 +418,7 @@ export function DataTable<T>({
                   key={column.key}
                   scope="col"
                   className={joinClassNames('h-10 whitespace-nowrap px-3 font-semibold', column.align === 'right' && 'text-right', column.align === 'center' && 'text-center', column.headerClassName)}
-                  style={{ width: column.width, minWidth: column.minWidth }}
+                  style={{ width: column.width ?? column.minWidth, minWidth: column.minWidth }}
                 >
                   {column.header}
                 </th>

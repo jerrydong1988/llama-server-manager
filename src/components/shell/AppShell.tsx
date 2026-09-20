@@ -201,7 +201,7 @@ export function AppShell({
                 </div>
               </div>
 
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
+              <div className="flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
                 <div className="flex flex-wrap items-center gap-2">
                   {secondaryChips.map(chip => (
                     <Badge key={String(chip.label)} tone={chip.tone || 'slate'} className={topStatusChipClassName}>
