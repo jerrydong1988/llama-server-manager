@@ -54,7 +54,7 @@ export function ConfigChangePanel({
   return (
     <InsetSurface className="p-4">
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <div className="min-w-0">
           <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{labels.changeReview}</p>
           <p className="mt-1 text-sm text-slate-500">{labels.changeReviewDesc}</p>
         </div>

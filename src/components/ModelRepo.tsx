@@ -426,7 +426,7 @@ const ModelRepo = () => {
       </div>
 
       <div className="grid gap-6 2xl:grid-cols-[280px,minmax(0,1.45fr),280px]">
-        <Surface as="aside" className="p-5">
+        <Surface as="aside" className="min-w-0 p-5">
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-50">{copy.scanRoots}</h2>
@@ -471,7 +471,7 @@ const ModelRepo = () => {
           </div>
         </Surface>
 
-        <Surface as="section" className="min-h-[620px] p-5" data-guide="model-search">
+        <Surface as="section" className="min-h-[620px] min-w-0 p-5" data-guide="model-search">
           <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="text-lg font-semibold text-slate-50">{copy.explorer}</h2>
@@ -521,7 +521,7 @@ const ModelRepo = () => {
           )}
         </Surface>
 
-        <Surface as="aside" className="p-5">
+        <Surface as="aside" className="min-w-0 p-5">
           <div className="mb-4">
             <h2 className="text-lg font-semibold text-slate-50">{copy.assetDetails}</h2>
             <p className="mt-1 text-sm text-slate-400">

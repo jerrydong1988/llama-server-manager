@@ -334,7 +334,7 @@ const InstanceManager = () => {
       </div>
 
       <div className="grid min-w-0 gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
-        <Surface as="section" className="min-w-0 overflow-hidden">
+        <Surface as="section" className="instance-list-container min-w-0 overflow-hidden">
           <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
@@ -398,7 +398,7 @@ const InstanceManager = () => {
                     }}
                     aria-selected={selected}
                     aria-current={selected ? 'true' : undefined}
-                    className={`relative grid min-w-0 gap-3 px-5 py-4 text-left transition lg:grid-cols-[minmax(280px,1fr)_minmax(210px,0.72fr)_minmax(150px,0.42fr)_minmax(166px,auto)] lg:items-center ${
+                    className={`instance-list-row relative grid min-w-0 gap-3 px-5 py-4 text-left transition ${
                       selected
                         ? 'bg-blue-50/95 shadow-[inset_0_0_0_1px_rgba(59,130,246,0.24)] dark:bg-blue-500/15 dark:shadow-[inset_0_0_0_1px_rgba(96,165,250,0.32)]'
                         : 'hover:bg-slate-50 dark:hover:bg-slate-900/60'
@@ -482,7 +482,7 @@ const InstanceManager = () => {
                       <div className="mt-1">{isRunning ? formatUptime(inst.startTime) : '--'}</div>
                     </div>
 
-                    <div className="flex min-w-0 items-center justify-end gap-1.5" onClick={e => e.stopPropagation()}>
+                    <div className="flex min-w-0 items-center justify-end gap-1.5 whitespace-nowrap" onClick={e => e.stopPropagation()}>
                       <button
                         type="button"
                         role="switch"
@@ -621,7 +621,7 @@ const InstanceManager = () => {
                     </div>
                     <p className="mt-1 truncate text-xs text-slate-600 dark:text-slate-300">{selectedInstance.config.host}:{selectedInstance.config.port}</p>
                   </div>
-                  <Badge tone={instanceLifecycle[selectedInstance.id] ? 'blue' : selectedInstance.status === 'running' ? 'emerald' : selectedInstance.status === 'error' ? 'red' : 'slate'}>
+                  <Badge className="shrink-0 whitespace-nowrap" tone={instanceLifecycle[selectedInstance.id] ? 'blue' : selectedInstance.status === 'running' ? 'emerald' : selectedInstance.status === 'error' ? 'red' : 'slate'}>
                     {statusText(selectedInstance)}
                   </Badge>
                 </div>
@@ -774,7 +774,7 @@ const InstanceManager = () => {
               </div>
               <div>
                 <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">{t.instance.selectEngine}</label>
-                <SelectInput
+                <SelectInput className="w-full"
                   value={newInst.engineId || defaultEngineId || ''}
                   onChange={e => setNewInst({ ...newInst, engineId: e.target.value })}
                 >
@@ -865,8 +865,8 @@ const InstanceManager = () => {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
             <Surface className="w-full max-w-sm overflow-hidden">
               <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-6 py-4 dark:border-slate-800 dark:bg-slate-950/90">
-                <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{t.instance.selectEngine} - {inst.name}</h3>
-                <Button onClick={() => setEnginePickerForId('')} variant="subtle" size="icon" aria-label="Close"><X className="h-5 w-5" /></Button>
+                <h3 className="min-w-0 truncate text-lg font-semibold text-slate-950 dark:text-slate-50" title={`${t.instance.selectEngine} - ${inst.name}`}>{t.instance.selectEngine} - {inst.name}</h3>
+                <Button onClick={() => setEnginePickerForId('')} variant="subtle" size="icon" className="shrink-0" aria-label="Close"><X className="h-5 w-5" /></Button>
               </div>
               <div className="max-h-64 overflow-y-auto p-2">
                 {engines.map(engine => (
@@ -882,7 +882,7 @@ const InstanceManager = () => {
                       void useAppStore.getState().saveConfig().catch(() => {})
                       setEnginePickerForId('')
                     }}
-                    className={`w-full rounded px-4 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800 ${pathsEqual(inst.config.engine_id || defaultEngineId || '', engine.id) ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300' : ''}`}
+                    className={`w-full break-all rounded px-4 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-slate-800 ${pathsEqual(inst.config.engine_id || defaultEngineId || '', engine.id) ? 'bg-blue-50 text-blue-600 dark:bg-blue-950/30 dark:text-blue-300' : ''}`}
                   >
                     {engine.name} <span className="text-xs text-slate-400">({engine.backend})</span>
                   </button>

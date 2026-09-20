@@ -6,6 +6,23 @@
   container-type: inline-size;
 }
 
+.instance-list-container {
+  container-type: inline-size;
+}
+
+@container (min-width: 36rem) {
+  .instance-list-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.85fr);
+    align-items: center;
+  }
+}
+
+@container (min-width: 56rem) {
+  .instance-list-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.72fr) 128px max-content;
+  }
+}
+
 .config-form-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -195,7 +212,7 @@ html.dark body {
 .dark .guide-content code { background: #334155; }
 .guide-content pre { background: #1e293b; color: #e2e8f0; padding: 0.75rem; border-radius: 0.5rem; overflow-x: auto; margin-bottom: 0.5rem; font-size: 0.8rem; }
 .guide-content pre code { background: transparent; padding: 0; }
-.guide-content table { border-collapse: collapse; margin-bottom: 0.5rem; font-size: 0.8rem; }
+.guide-content table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin-bottom: 0.5rem; font-size: 0.8rem; }
 .guide-content th, .guide-content td { border: 1px solid #cbd5e1; padding: 0.25rem 0.5rem; }
 .dark .guide-content th, .dark .guide-content td { border-color: #475569; }
 .guide-content th { background: #f1f5f9; font-weight: 600; }

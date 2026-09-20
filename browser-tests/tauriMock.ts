@@ -18,6 +18,8 @@ import type {
 
 const BROWSER_TEST_MARKER = '__LLAMA_MANAGER_BROWSER_TEST_BACKEND__'
 const BROWSER_SCENARIO = new URLSearchParams(window.location.search).get('scenario')
+const LAYOUT_STRESS = new URLSearchParams(window.location.search).get('layout') === 'stress'
+const LAYOUT_LONG_NAME = `Qwen${'LongCustomName'.repeat(12)}`
 const IS_DOCS_SCENARIO = BROWSER_SCENARIO === 'docs-screenshots'
 const HAS_MONITORING_DATA = BROWSER_SCENARIO === 'monitoring' || IS_DOCS_SCENARIO
 const HAS_PROXY_DATA = [
@@ -622,6 +624,13 @@ if (BROWSER_SCENARIO === 'instance-connection') {
     host: instanceConfig.host,
     start_time: Math.floor(Date.now() / 1000) - 120,
   }
+}
+
+if (LAYOUT_STRESS) {
+  models.forEach((item, index) => { item.name = `${LAYOUT_LONG_NAME}-${index}.gguf` })
+  engines.forEach((item, index) => { item.name = index === 0 ? 'B11046 (ROCm)' : `${LAYOUT_LONG_NAME}-ROCm-${index}` })
+  Object.values(state.instances).forEach((item, index) => { item.name = `${LAYOUT_LONG_NAME}-${index}` })
+  state.instances[INSTANCE_ID].rpc_servers = '127.0.0.1:50052'
 }
 
 type BrowserTestControl = {
@@ -1313,7 +1322,7 @@ mockIPC((command, payload) => {
               id: 'docs-local-worker',
               host: '127.0.0.1',
               port: 50052,
-              name: 'Local GPU Worker',
+              name: LAYOUT_STRESS ? LAYOUT_LONG_NAME : 'Local GPU Worker',
               origin: 'local',
               devices: [{ device_type: 'CUDA', name: 'NVIDIA GeForce RTX 5080', vram_mb: 16_384, free_mb: 12_288 }],
               status: 'Online',

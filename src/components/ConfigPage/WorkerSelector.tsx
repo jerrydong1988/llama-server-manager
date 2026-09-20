@@ -86,7 +86,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
           {t.clusterPage.switchToVisual}
         </Button>
         {value && (
-          <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-500">
+          <div className="mt-2 break-all rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-500">
             {t.clusterPage.cmdPreview}: --rpc {value}
           </div>
         )}
@@ -119,7 +119,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
                 />
                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${statusColor}`} />
                 <span className="min-w-0 flex-1 truncate text-xs">{w.name}</span>
-                <span className="text-xs text-slate-500">{addr}</span>
+                <span className="min-w-0 max-w-[60%] break-all text-xs text-slate-500">{addr}</span>
               </label>
             )
           })}
@@ -130,9 +130,9 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
       {selectedList.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
           {selectedList.map(s => (
-            <span key={s.addr} className="inline-flex items-center gap-1 rounded-md border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-xs text-blue-300">
-              {s.name}
-              <Button onClick={() => toggleWorker(s.host, s.port)} variant="subtle" size="sm" className="h-5 px-1 py-0 text-blue-300 hover:text-red-300">&times;</Button>
+            <span key={s.addr} className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-xs text-blue-300">
+              <span className="min-w-0 truncate" title={s.name}>{s.name}</span>
+              <Button onClick={() => toggleWorker(s.host, s.port)} variant="subtle" size="sm" className="h-5 shrink-0 px-1 py-0 text-blue-300 hover:text-red-300">&times;</Button>
             </span>
           ))}
         </div>
@@ -154,7 +154,7 @@ export default function WorkerSelector({ value, onChange, t, hideLabel = false }
 
       {/* Command preview */}
       {value && (
-        <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-500">
+        <div className="mt-2 break-all rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 font-mono text-xs text-slate-500">
           {t.clusterPage.cmdPreview}: --rpc {value}
         </div>
       )}
