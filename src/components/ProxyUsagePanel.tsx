@@ -76,9 +76,11 @@ export default function ProxyUsagePanel() {
       setLoading(true)
       try {
         const base = { ...query, keyId: null, model: null, instanceId: null, endpoint: null }
+        const current = invokeApp<Report>('get_router_usage', { query })
         const [next, options] = await Promise.all([
-          invokeApp<Report>('get_router_usage', { query }),
-          invokeApp<Report>('get_router_usage', { query: base }),
+          current,
+          query.keyId || query.model || query.instanceId || query.endpoint
+            ? invokeApp<Report>('get_router_usage', { query: base }) : current,
         ])
         if (!disposed) { setReport(next); setCatalog(options); setError('') }
       } catch (e) {

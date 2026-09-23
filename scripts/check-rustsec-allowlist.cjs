@@ -1,3 +1,4 @@
+require('./check-vendor-patches.cjs')
 const fs = require('node:fs')
 const path = require('node:path')
 

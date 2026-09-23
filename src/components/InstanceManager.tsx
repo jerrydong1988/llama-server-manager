@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { Play, Square, Plus, Trash2, Copy, Globe, X, Terminal, Settings, FolderOpen, Wifi, ArrowUp, ArrowDown, Pencil, Search, MoreHorizontal, LoaderCircle } from 'lucide-react'
-import { useAppStore, defaultInstanceConfig, formatStartupCommand, maskStartupCommandSecrets } from '../store'
+import { useAppStore, defaultInstanceConfig } from '../store'
+import { exportShellCommand, maskCommandArguments } from '../store/commandFormatting'
 import { invokeApp as invoke } from '../lib/ipc'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { formatMessage, useI18n } from '../i18n'
@@ -15,7 +16,6 @@ import { markExplicitOverride } from '../parameterIntent'
 import { pathsEqual } from '../utils/path'
 import { usePortAvailability } from './InstanceManager/usePortAvailability'
 import { CheckpointStatusCard } from './InstanceManager/CheckpointStatusCard'
-
 type TestState = 'checking' | `ok:${string}` | `error:${string}`
 type CommandErrorState = { instanceId: string; message: string; missingEngine: boolean }
 const InstanceManager = () => {
@@ -43,6 +43,7 @@ const InstanceManager = () => {
   const [showCmdModal, setShowCmdModal] = useState('')
   const [cmdText, setCmdText] = useState('')
   const [cmdRaw, setCmdRaw] = useState('')
+  const exportShell = /win/i.test(navigator.platform) ? 'powershell' : 'posix'
   const [cmdIncludesSecrets, setCmdIncludesSecrets] = useState(false)
   const [commandError, setCommandError] = useState<CommandErrorState | null>(null)
   const [showCreatePicker, setShowCreatePicker] = useState(false)
@@ -210,13 +211,11 @@ const InstanceManager = () => {
     setCommandError(null)
     try {
       const { command: cmd } = await generateCommand(inst.config, engine.exe)
-      const raw = cmd.map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ')
+      const raw = exportShellCommand(cmd, exportShell)
+      const masked = maskCommandArguments(cmd)
       setCmdRaw(raw)
-      setCmdIncludesSecrets(cmd.some((arg, index) => (
-        (index > 0 && cmd[index - 1] === '--api-key' && Boolean(arg)) ||
-        (arg.startsWith('--api-key=') && arg.length > '--api-key='.length)
-      )))
-      setCmdText(formatStartupCommand(maskStartupCommandSecrets(raw)))
+      setCmdIncludesSecrets(cmd.some((arg, index) => arg !== masked[index]))
+      setCmdText(exportShellCommand(masked, exportShell))
       setShowCmdModal(id)
     } catch (e) {
       console.error(e)
@@ -836,6 +835,7 @@ const InstanceManager = () => {
               <h3 className="text-lg font-semibold text-slate-950 dark:text-slate-50">{t.instance.genCommandTitle}</h3>
               <Button onClick={() => setShowCmdModal('')} variant="subtle" size="icon" aria-label="Close"><X className="h-5 w-5" /></Button>
             </div>
+            <p className="mb-2 text-xs text-slate-500">{exportShell === 'powershell' ? 'PowerShell 7.3+' : 'POSIX shell (sh / bash / zsh)'}</p>
             <pre className="max-h-80 overflow-y-auto overflow-x-auto rounded-lg bg-slate-950 p-4 text-sm text-slate-200">{cmdText}</pre>
             {cmdIncludesSecrets && (
               <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">

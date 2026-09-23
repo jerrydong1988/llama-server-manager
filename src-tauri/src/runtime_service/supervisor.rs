@@ -18,10 +18,10 @@ use crate::commands::proxy::{
 use crate::commands::proxy_runtime::RouterRuntime;
 use crate::commands::server::{
     advance_health_state, collect_instance_monitor_sample, effective_api_key,
-    effective_server_scheme, format_command_for_display, read_process_identity,
-    running_instance_matches_live_process, spawn_runtime_log_pump, telemetry_config_hash,
-    terminate_running_instance, CappedLogWriter, HealthTransition, RuntimePerfTracker,
-    INITIAL_HEALTH_GRACE, MAX_SERVER_LOG_BYTES, RETAINED_SERVER_LOG_BYTES,
+    effective_server_scheme, format_command_for_display, probe_instance_readiness,
+    read_process_identity, running_instance_matches_live_process, spawn_runtime_log_pump,
+    telemetry_config_hash, terminate_running_instance, CappedLogWriter, HealthTransition,
+    RuntimePerfTracker, INITIAL_HEALTH_GRACE, MAX_SERVER_LOG_BYTES, RETAINED_SERVER_LOG_BYTES,
 };
 use crate::models::{ProxyStatus, RunningInstance};
 use crate::vector_policy::ModelWorkload;
@@ -753,21 +753,14 @@ impl RuntimeSupervisor {
                         break;
                     }
 
-                    let sample = collect_instance_monitor_sample(
-                        &client,
-                        &endpoint_base,
-                        &api_key,
-                        &mut process_system,
-                        expected_pid,
-                        initial_uptime.saturating_add(started.elapsed().as_secs()),
-                    );
+                    let ready = probe_instance_readiness(&client, &endpoint_base, &api_key);
                     let health_transition = advance_health_state(
-                        sample.ready,
+                        ready,
                         started.elapsed() >= INITIAL_HEALTH_GRACE,
                         &mut health_failures,
                         &mut last_health_ready,
                     );
-                    if sample.ready && !checkpoint_startup_resolved {
+                    if ready && !checkpoint_startup_resolved {
                         checkpoint_startup_resolved = supervisor.resolve_checkpoint_startup(
                             &instance_id,
                             expected_pid,
@@ -815,6 +808,27 @@ impl RuntimeSupervisor {
                                 .insert(instance_id.clone(), "fail".into());
                         }
                         HealthTransition::None => {}
+                    }
+
+                    drop(lifecycle);
+                    let sample = collect_instance_monitor_sample(
+                        &client,
+                        &endpoint_base,
+                        &api_key,
+                        &mut process_system,
+                        expected_pid,
+                        initial_uptime.saturating_add(started.elapsed().as_secs()),
+                    );
+                    let lifecycle = supervisor.instance_lifecycle.lock().unwrap();
+                    if !supervisor
+                        .state
+                        .lock()
+                        .unwrap()
+                        .running
+                        .get(&instance_id)
+                        .is_some_and(|current| current.pid == expected_pid)
+                    {
+                        break;
                     }
 
                     let _ = crate::commands::telemetry::record_metric_sample(
@@ -908,6 +922,9 @@ impl RuntimeSupervisor {
         if spec.command.is_empty() || spec.command[0].trim().is_empty() {
             return Err("runtime launch command is empty".into());
         }
+        // Persisted launch specs may predate newly supported secret flags.
+        crate::security::validate_runtime_executable(&spec.command[0], &spec.executable_sha256)?;
+        spec.command_display = format_command_for_display(&spec.command);
         {
             let state = self.state.lock().unwrap();
             if state
@@ -2199,6 +2216,7 @@ mod tests {
             engine_backend: "test".into(),
             command: vec!["llama-server".into()],
             command_display: "llama-server".into(),
+            executable_sha256: String::new(),
             workload: "inference".into(),
             working_directory: None,
             checkpoint: None,

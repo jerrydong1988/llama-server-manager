@@ -133,10 +133,16 @@ pub(crate) fn quota_error_response(
         json!({"error":{"message":message,"type":openai_error_type(status),"param":param,"code":code}})
     };
     let mut response = (status, Json(value)).into_response();
-    response.extensions_mut().insert(UsageFailure::new("quota", code));
+    response
+        .extensions_mut()
+        .insert(UsageFailure::new("quota", code));
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response.headers_mut().insert(
-            if format.is_anthropic() { "request-id" } else { "x-request-id" },
+            if format.is_anthropic() {
+                "request-id"
+            } else {
+                "x-request-id"
+            },
             value,
         );
     }

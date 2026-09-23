@@ -6,7 +6,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
-use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::State;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tokio::time::timeout as tokio_timeout;
@@ -736,7 +735,7 @@ pub async fn stop_local_worker(port: u16) -> Result<bool, String> {
             terminate_rpc_child(&mut child)?;
             return Ok(true);
         }
-        stop_verified_rpc_server(port)
+        Ok(false)
     })
     .await
     .map_err(|e| format!("停止 Worker 失败: {}", e))?
@@ -766,40 +765,23 @@ pub async fn stop_worker(id: String, state: State<'_, AppState>) -> Result<bool,
     Ok(stopped)
 }
 
-pub fn stop_all_local_rpc_workers(managed_ports: &[u16]) {
+pub fn stop_all_local_rpc_workers(_managed_ports: &[u16]) {
     let workers = {
         let mut workers = LOCAL_RPC_WORKERS.lock().unwrap();
         std::mem::take(&mut *workers)
     };
-    let tracked_ports = workers.keys().copied().collect::<HashSet<_>>();
     for (port, mut child) in workers {
         if let Err(error) = terminate_rpc_child(&mut child) {
             eprintln!("Failed to terminate local Worker on port {port}: {error}");
         }
     }
-    for port in managed_ports {
-        if !tracked_ports.contains(port) {
-            if let Err(error) = stop_verified_rpc_server(*port) {
-                eprintln!("Failed to terminate restored local Worker on port {port}: {error}");
-            }
-        }
-    }
 }
 
+#[cfg(test)]
 fn is_rpc_server_executable(path: &std::path::Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.eq_ignore_ascii_case(RPC_SERVER_NAME))
-}
-
-fn is_rpc_server_process(pid: u32) -> bool {
-    let pid = Pid::from_u32(pid);
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::Some(&[pid]), true);
-    system
-        .process(pid)
-        .and_then(|process| process.exe())
-        .is_some_and(is_rpc_server_executable)
 }
 
 fn wait_for_tcp_ready(addr: SocketAddr, max_wait: Duration) -> Result<(), String> {
@@ -843,84 +825,6 @@ fn terminate_rpc_child(child: &mut std::process::Child) -> Result<(), String> {
             )),
         },
     }
-}
-
-fn listening_pids(port: u16) -> Result<Vec<u32>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::process::CommandExt;
-        let mut command = Command::new("cmd");
-        command.creation_flags(0x08000000);
-        let output = command
-            .args(["/c", &format!("netstat -ano | findstr :{}", port)])
-            .output()
-            .map_err(|e| format!("netstat 失败: {}", e))?;
-        let out = String::from_utf8_lossy(&output.stdout);
-        let pid_re = regex_lite::Regex::new(r"LISTENING\s+(\d+)$")
-            .map_err(|e| format!("PID 解析器初始化失败: {e}"))?;
-        Ok(out
-            .lines()
-            .filter(|line| line.contains(&format!(":{port}")) && line.contains("LISTENING"))
-            .filter_map(|line| pid_re.captures(line))
-            .filter_map(|captures| captures.get(1))
-            .filter_map(|value| value.as_str().parse::<u32>().ok())
-            .collect())
-    }
-    #[cfg(target_os = "linux")]
-    {
-        let output = Command::new("sh")
-            .arg("-c")
-            .arg(format!(
-                "ss -tlnp | grep ':{}' | sed -n 's/.*pid=\\([0-9]*\\).*/\\1/p'",
-                port
-            ))
-            .output()
-            .map_err(|e| format!("ss 失败: {}", e))?;
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| line.trim().parse::<u32>().ok())
-            .collect())
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let output = Command::new("lsof")
-            .args(["-ti", &format!(":{}", port)])
-            .output()
-            .map_err(|e| format!("lsof 失败: {}", e))?;
-        Ok(String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .filter_map(|line| line.trim().parse::<u32>().ok())
-            .collect())
-    }
-}
-
-fn stop_verified_rpc_server(port: u16) -> Result<bool, String> {
-    for pid in listening_pids(port)? {
-        if !is_rpc_server_process(pid) {
-            continue;
-        }
-        #[cfg(target_os = "windows")]
-        let stopped = {
-            use std::os::windows::process::CommandExt;
-            let mut command = Command::new("taskkill");
-            command.creation_flags(0x08000000);
-            command
-                .args(["/PID", &pid.to_string(), "/F", "/T"])
-                .status()
-                .map(|status| status.success())
-                .unwrap_or(false)
-        };
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        let stopped = Command::new("kill")
-            .arg(pid.to_string())
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-        if stopped {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 pub(crate) fn find_rpc_server_binary_internal() -> Option<String> {

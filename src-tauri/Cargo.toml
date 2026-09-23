@@ -26,6 +26,8 @@ walkdir = "2.0"
 bytes = "1.0"
 futures-util = "0.3"
 fs2 = "0.4"
+cap-std = "4.0.3"
+cap-fs-ext = "4.0.3"
 tokio-util = { version = "0.7", features = ["codec", "io"] }
 sysinfo = "0.32"
 libloading = "0.8"
@@ -40,10 +42,23 @@ base64 = "0.22"
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+urlpattern = "0.3"
+glib-macros = "0.18"
+gtk3-macros = "0.18"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+glib = "0.18"
+
+# The GLib pointer regression manifested under optimization. Keep that dependency
+# optimized in debug/test builds as well as release builds.
+[profile.dev.package.glib]
+opt-level = 2
 
 [features]
 default = ["custom-protocol"]
@@ -55,3 +70,10 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
+
+# ABI-compatible security backports; see vendor/README.md.
+[patch.crates-io]
+glib = { path = "vendor/glib-0.18.5" }
+glib-macros = { path = "vendor/glib-macros-0.18.5" }
+gtk3-macros = { path = "vendor/gtk3-macros-0.18.2" }
+urlpattern = { path = "vendor/urlpattern-0.3.0" }

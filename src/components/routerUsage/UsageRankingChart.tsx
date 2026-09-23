@@ -13,7 +13,7 @@ export default function UsageRankingChart({ groups, lang, onFilter, dimension, o
   const c = getRouterUsageChartLabels(lang)
   const ranked = rankUsage(groups[dimension], metric)
   const total = ranked.reduce((sum, g) => sum + (g.value ?? 0), 0)
-  const peak = Math.max(1, ...ranked.map(g => g.value ?? 0))
+  const peak = ranked.reduce((peak, g) => Math.max(peak, g.value ?? 0), 1)
   const name = (g: UsageGroup) => g.id === 'anonymous' ? l.anonymous : g.id === 'unauthenticated' ? l.unauthenticated : g.name || g.id || l.unknownName
   return <Surface as="section" className="min-w-0 p-5" aria-label={c.ranking} data-testid="usage-ranking-chart">
     <div className="flex flex-wrap items-center justify-between gap-3"><h3 className="font-semibold">{c.ranking}</h3>

@@ -1,5 +1,5 @@
 use super::{proxy_usage::UsageRecord, usage_store::UsageQuery};
-use rusqlite::{params, Connection};
+use rusqlite::{params_from_iter, types::Value, Connection};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +54,70 @@ impl RequestQuery {
     }
 }
 
+fn statement(q: &RequestQuery, snapshot: i64) -> (String, Vec<Value>) {
+    let f = &q.filters;
+    let mut sql = String::from(
+        "SELECT record FROM usage_events WHERE completed>=? AND completed<? AND rowid<=?",
+    );
+    let mut values = vec![
+        Value::Integer(f.from),
+        Value::Integer(f.to),
+        Value::Integer(snapshot),
+    ];
+    for (field, value) in [
+        ("key_id", &f.key_id),
+        ("model", &f.model),
+        ("instance_id", &f.instance_id),
+        ("endpoint", &f.endpoint),
+        ("kind", &f.kind),
+        ("json_extract(record,'$.outcome')", &q.outcome),
+        ("json_extract(record,'$.failure.code')", &q.failure_code),
+    ] {
+        if let Some(value) = value {
+            sql.push_str(&format!(" AND {field}=?"));
+            values.push(Value::Text(value.clone()));
+        }
+    }
+    if f.kind.is_none() {
+        sql.push_str(" AND kind<>'count'");
+    }
+    if let Some(id) = &q.request_id {
+        // Each UNION arm has an index, avoiding JSON extraction over the date range.
+        sql.push_str(
+            " AND id IN (SELECT id FROM usage_events WHERE id=?
+            UNION SELECT id FROM usage_events WHERE json_extract(record,'$.responseRequestId')=?
+            UNION SELECT id FROM usage_events WHERE json_extract(record,'$.responseXRequestId')=?
+            UNION SELECT id FROM usage_events WHERE json_extract(record,'$.upstreamRequestId')=?)",
+        );
+        values.extend((0..4).map(|_| Value::Text(id.clone())));
+    }
+    if let Some(cursor) = &q.cursor {
+        sql.push_str(" AND (completed,id)<(?,?)");
+        values.extend([
+            Value::Integer(cursor.completed_at),
+            Value::Text(cursor.request_id.clone()),
+        ]);
+    }
+    for (predicate, value) in [
+        ("json_extract(record,'$.durationMs')>=?", q.min_duration_ms),
+        (
+            "(json_extract(record,'$.queueEntered')=1 AND json_extract(record,'$.queueMs')>=?)",
+            q.min_queue_ms,
+        ),
+        (
+            "json_extract(record,'$.firstOutputMs')>=?",
+            q.min_first_output_ms,
+        ),
+    ] {
+        if let Some(value) = value {
+            sql.push_str(&format!(" AND {predicate}"));
+            values.push(Value::Integer(i64::from(value)));
+        }
+    }
+    sql.push_str(" ORDER BY completed DESC,id DESC LIMIT 51");
+    (sql, values)
+}
+
 fn query(conn: &Connection, q: &RequestQuery) -> Result<RequestPage, String> {
     let snapshot = match &q.cursor {
         Some(c) => c.snapshot_row_id,
@@ -65,41 +129,10 @@ fn query(conn: &Connection, q: &RequestQuery) -> Result<RequestPage, String> {
     };
     // The high-water mark excludes late commits as well as new requests. The
     // composite key avoids duplicates/skips when completion timestamps coincide.
-    let mut stmt = conn.prepare("SELECT record FROM usage_events WHERE
-        completed>=?1 AND completed<?2 AND (?3 IS NULL OR key_id=?3)
-        AND (?4 IS NULL OR model=?4) AND (?5 IS NULL OR instance_id=?5)
-        AND (?6 IS NULL OR endpoint=?6) AND ((?7 IS NULL AND kind<>'count') OR kind=?7)
-        AND (?8 IS NULL OR json_extract(record,'$.outcome')=?8)
-        AND (?9 IS NULL OR json_extract(record,'$.failure.code')=?9)
-        AND (?10 IS NULL OR id=?10 OR json_extract(record,'$.responseRequestId')=?10 OR json_extract(record,'$.responseXRequestId')=?10 OR json_extract(record,'$.upstreamRequestId')=?10)
-        AND rowid<=?11 AND (?12 IS NULL OR (completed,id)<(?12,?13))
-        AND (?14 IS NULL OR json_extract(record,'$.durationMs')>=?14)
-        AND (?15 IS NULL OR (json_extract(record,'$.queueEntered')=1 AND json_extract(record,'$.queueMs')>=?15))
-        AND (?16 IS NULL OR json_extract(record,'$.firstOutputMs')>=?16)
-        ORDER BY completed DESC,id DESC LIMIT 51").map_err(|e| e.to_string())?;
-    let f = &q.filters;
+    let (sql, values) = statement(q, snapshot);
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(
-            params![
-                f.from,
-                f.to,
-                f.key_id,
-                f.model,
-                f.instance_id,
-                f.endpoint,
-                f.kind,
-                q.outcome,
-                q.failure_code,
-                q.request_id,
-                snapshot,
-                q.cursor.as_ref().map(|c| c.completed_at),
-                q.cursor.as_ref().map(|c| &c.request_id),
-                q.min_duration_ms,
-                q.min_queue_ms,
-                q.min_first_output_ms
-            ],
-            |r| r.get::<_, String>(0),
-        )
+        .query_map(params_from_iter(values), |r| r.get::<_, String>(0))
         .map_err(|e| e.to_string())?;
     let mut records: Vec<UsageRecord> = rows
         .map(|r| serde_json::from_str(&r.map_err(|e| e.to_string())?).map_err(|e| e.to_string()))
@@ -142,8 +175,36 @@ pub async fn get_router_usage_requests(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn selective_filters_use_indexes_instead_of_scanning_json() {
+        let conn = Connection::open_in_memory().unwrap();
+        super::super::usage_store::schema(&conn).unwrap();
+        for filter in [
+            json!({"requestId":"req-match"}),
+            json!({"failureCode":"context_length_exceeded"}),
+        ] {
+            let mut value = json!({"from":DAY_MS,"to":2*DAY_MS});
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(filter.as_object().unwrap().clone());
+            let query: RequestQuery = serde_json::from_value(value).unwrap();
+            let (sql, values) = statement(&query, i64::MAX);
+            let mut explain = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let plan = explain
+                .query_map(params_from_iter(values), |r| r.get::<_, String>(3))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n");
+            assert!(!plan.contains("SCAN usage_events"), "{plan}");
+            assert!(plan.contains("USING INDEX"), "{plan}");
+        }
+    }
+
     use super::super::usage_store::DAY_MS;
     use super::*;
+    use rusqlite::params;
     use serde_json::json;
 
     #[test]

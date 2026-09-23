@@ -7,6 +7,9 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(windows)]
+#[path = "pipe_peer.rs"]
+mod pipe_peer;
 
 const RUNTIME_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const RUNTIME_IO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -376,7 +379,10 @@ async fn connect(
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
         match ClientOptions::new().open(&pipe_name) {
-            Ok(client) => return Ok(client),
+            Ok(client) => {
+                pipe_peer::validate(&client)?;
+                return Ok(client);
+            }
             Err(error) if std::time::Instant::now() < deadline => {
                 let _ = error;
                 tokio::time::sleep(Duration::from_millis(40)).await;

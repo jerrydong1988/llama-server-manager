@@ -391,8 +391,55 @@ pub(crate) fn initialize_telemetry_storage() -> Result<(), String> {
     conn.pragma_update(None, "journal_mode", "WAL")
         .map_err(|e| format!("无法启用遥测数据库 WAL: {}", e))?;
     init_schema(&conn)?;
+    redact_historical_commands(&conn)?;
     TELEMETRY_SCHEMA_READY.store(true, Ordering::Release);
     Ok(())
+}
+
+fn redact_historical_commands(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS telemetry_migrations (id TEXT PRIMARY KEY)")
+        .map_err(|e| e.to_string())?;
+    if conn
+        .query_row(
+            "SELECT 1 FROM telemetry_migrations WHERE id='redact-command-secrets-v1'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    {
+        let mut statement = tx
+            .prepare("SELECT id,command_line FROM run_sessions")
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (id, command) = row.map_err(|e| e.to_string())?;
+            let redacted = super::server::redact_command_secrets(&command);
+            if redacted != command {
+                tx.execute(
+                    "UPDATE run_sessions SET command_line=?1 WHERE id=?2",
+                    params![redacted, id],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    tx.execute(
+        "INSERT OR IGNORE INTO telemetry_migrations VALUES ('redact-command-secrets-v1')",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 fn open_connection() -> Result<Connection, String> {
@@ -693,7 +740,7 @@ fn insert_run_session(conn: &Connection, session: &RunSessionStart<'_>) -> Resul
             session.engine_id,
             session.backend,
             session.config_hash,
-            session.command_line,
+            super::server::redact_command_secrets(session.command_line),
             session.workload.as_str(),
             session.started_at,
         ],
@@ -3086,6 +3133,45 @@ fn sample_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TelemetrySampleS
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn historical_command_credentials_are_redacted_once_without_losing_arguments() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE run_sessions(id TEXT PRIMARY KEY,command_line TEXT NOT NULL)",
+        )
+        .unwrap();
+        for (id, command) in [
+            ("one", "llama-server --hf-token 'legacy secret' --port 8080"),
+            ("two", "llama-server -hft=legacy-other --api-key key-value"),
+        ] {
+            conn.execute(
+                "INSERT INTO run_sessions VALUES (?1,?2)",
+                params![id, command],
+            )
+            .unwrap();
+        }
+        redact_historical_commands(&conn).unwrap();
+        redact_historical_commands(&conn).unwrap();
+        let commands: Vec<String> = conn
+            .prepare("SELECT command_line FROM run_sessions ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(commands
+            .iter()
+            .all(|command| !command.contains("legacy") && !command.contains("key-value")));
+        assert!(commands[0].contains("--port 8080"));
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM telemetry_migrations", [], |row| row
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+            1
+        );
+    }
     use super::*;
 
     fn version_four_connection() -> Connection {

@@ -180,7 +180,7 @@ fn take_complete_log_lines(pending: &mut Vec<u8>, bytes: &[u8]) -> Vec<String> {
                 return None;
             }
             let line = line.strip_suffix(b"\r").unwrap_or(line);
-            Some(String::from_utf8_lossy(line).into_owned())
+            Some(redact_command_secrets(&String::from_utf8_lossy(line)))
         })
         .collect::<Vec<_>>();
     if truncated {
@@ -282,11 +282,14 @@ pub(crate) fn format_command_for_display(command: &[String]) -> String {
         let value = if hide_next {
             hide_next = false;
             "********".to_string()
-        } else if argument == "--api-key" {
+        } else if matches!(argument.as_str(), "--api-key" | "--hf-token" | "-hft") {
             hide_next = true;
             argument.clone()
-        } else if argument.starts_with("--api-key=") {
-            "--api-key=********".to_string()
+        } else if let Some(flag) = ["--api-key=", "--hf-token=", "-hft="]
+            .into_iter()
+            .find(|flag| argument.starts_with(flag))
+        {
+            format!("{flag}********")
         } else {
             argument.clone()
         };
@@ -297,6 +300,16 @@ pub(crate) fn format_command_for_display(command: &[String]) -> String {
         }
     }
     masked.join(" ")
+}
+
+pub(crate) fn redact_command_secrets(text: &str) -> String {
+    static SECRET: std::sync::LazyLock<regex_lite::Regex> = std::sync::LazyLock::new(|| {
+        regex_lite::Regex::new(
+            r#"((?:--api-key|--hf-token|-hft)(?:\s+|=))(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s]+)"#,
+        )
+        .unwrap()
+    });
+    SECRET.replace_all(text, "${1}********").into_owned()
 }
 
 pub(crate) fn effective_api_key(config: &InstanceConfig) -> String {
@@ -2713,6 +2726,9 @@ async fn start_server_impl(
                 engine_backend: engine_backend.clone(),
                 command: cmd.clone(),
                 command_display: cmd_display.clone(),
+                executable_sha256: crate::security::executable_sha256(std::path::Path::new(
+                    &cmd[0],
+                ))?,
                 workload: workload.as_str().to_string(),
                 working_directory: std::env::current_dir()
                     .ok()
@@ -3195,10 +3211,31 @@ struct MonitorLoopConfig {
 }
 
 pub(crate) struct InstanceMonitorSample {
-    pub ready: bool,
     pub system: SystemMetrics,
     pub llama: Option<crate::commands::telemetry::LlamaMetricSample>,
     pub slots: Option<Vec<crate::commands::telemetry::SlotSnapshotRecord>>,
+}
+
+pub(crate) fn probe_instance_readiness(
+    client: &reqwest::blocking::Client,
+    endpoint_base: &str,
+    api_key: &str,
+) -> bool {
+    let authenticated_get = |url: &str| {
+        let request = client.get(url).timeout(std::time::Duration::from_secs(2));
+        if api_key.is_empty() {
+            request
+        } else {
+            request.header("Authorization", format!("Bearer {api_key}"))
+        }
+    };
+    let probe = |path: &str| {
+        authenticated_get(&format!("{endpoint_base}{path}"))
+            .send()
+            .map(|response| response.status())
+    };
+    probe_status_is_success(&probe("/health").map_err(|error| error.to_string()))
+        || probe_status_is_success(&probe("/v1/models").map_err(|error| error.to_string()))
 }
 
 pub(crate) fn collect_instance_monitor_sample(
@@ -3217,13 +3254,6 @@ pub(crate) fn collect_instance_monitor_sample(
             request.header("Authorization", format!("Bearer {api_key}"))
         }
     };
-    let probe = |path: &str| {
-        authenticated_get(&format!("{endpoint_base}{path}"))
-            .send()
-            .map(|response| response.status())
-    };
-    let ready = probe_status_is_success(&probe("/health").map_err(|error| error.to_string()))
-        || probe_status_is_success(&probe("/v1/models").map_err(|error| error.to_string()));
 
     let gpu_system = collect_gpu_and_system();
     let (process_cpu, process_memory) = get_process_metrics(process_system, pid);
@@ -3293,7 +3323,6 @@ pub(crate) fn collect_instance_monitor_sample(
         });
 
     InstanceMonitorSample {
-        ready,
         system,
         llama,
         slots,
@@ -3390,21 +3419,17 @@ fn monitor_loop(
             break;
         }
 
-        let sample = collect_instance_monitor_sample(
-            &client,
-            &endpoint_base,
-            &api_key,
-            &mut proc_sys,
-            expected_pid,
-            start_instant.elapsed().as_secs(),
-        );
+        let ready = probe_instance_readiness(&client, &endpoint_base, &api_key);
+        if !is_my_instance() {
+            break;
+        }
         let health_transition = advance_health_state(
-            sample.ready,
+            ready,
             start_instant.elapsed() >= INITIAL_HEALTH_GRACE,
             &mut health_failures,
             &mut last_health_ready,
         );
-        if sample.ready && !checkpoint_startup_resolved {
+        if ready && !checkpoint_startup_resolved {
             checkpoint_startup_resolved =
                 resolve_checkpoint_startup(&app, instance_id, expected_pid, &launch_config);
         }
@@ -3420,19 +3445,6 @@ fn monitor_loop(
                 launch_config.clone(),
             );
             break;
-        }
-        if let Some(slots) = &sample.slots {
-            let state = app.state::<AppState>();
-            for slot in slots {
-                state.checkpoint_coordinator.observe_restored_request(
-                    instance_id,
-                    expected_pid,
-                    slot,
-                );
-            }
-            if let Some(status) = state.checkpoint_coordinator.status(instance_id) {
-                emit_checkpoint_status(&app, &status);
-            }
         }
         match health_transition {
             HealthTransition::Ready => {
@@ -3450,6 +3462,31 @@ fn monitor_loop(
                 );
             }
             HealthTransition::None => {}
+        }
+
+        let sample = collect_instance_monitor_sample(
+            &client,
+            &endpoint_base,
+            &api_key,
+            &mut proc_sys,
+            expected_pid,
+            start_instant.elapsed().as_secs(),
+        );
+        if !is_my_instance() {
+            break;
+        }
+        if let Some(slots) = &sample.slots {
+            let state = app.state::<AppState>();
+            for slot in slots {
+                state.checkpoint_coordinator.observe_restored_request(
+                    instance_id,
+                    expected_pid,
+                    slot,
+                );
+            }
+            if let Some(status) = state.checkpoint_coordinator.status(instance_id) {
+                emit_checkpoint_status(&app, &status);
+            }
         }
 
         let _ = crate::commands::telemetry::record_metric_sample(
@@ -5199,7 +5236,7 @@ fn read_log_tail_from_file(
         .lines()
         .rev()
         .take(max_lines)
-        .map(ToString::to_string)
+        .map(redact_command_secrets)
         .collect::<Vec<_>>();
     lines.reverse();
     Ok((lines, offset.saturating_add(complete_end as u64)))

@@ -38,6 +38,8 @@ async function main() {
     await new Promise(resolve => backend.listen(0, '127.0.0.1', resolve))
     const port = backend.address().port, proxyPort = await reserveLoopbackPort()
     const executable = path.resolve(__dirname, '../src-tauri/target/debug', process.platform === 'win32' ? 'llama-server-manager.exe' : 'llama-server-manager')
+    fs.mkdirSync(path.join(dataDir, 'configs'), { recursive: true })
+    fs.writeFileSync(path.join(dataDir, 'configs', 'authorized-paths.json'), JSON.stringify({ engine_roots: [path.dirname(fs.realpathSync(process.execPath))], model_roots: [] }))
     service = spawnRuntime(executable, dataDir)
     token = await readToken(dataDir); endpoint = runtimeEndpoint(dataDir, token)
     const command = async value => {
@@ -56,7 +58,16 @@ async function main() {
     }
     await configure(1000)
     const engineCommand = [process.execPath, '-e', 'setInterval(() => {}, 1000)']
-    await command({ command: 'start_instance', payload: { spec: { instance_id: instance.id, config: instance, engine_backend: 'test', command: engineCommand, command_display: 'isolated quota fixture', workload: 'inference', working_directory: dataDir } } })
+    const launchSpec = { instance_id: instance.id, config: instance, engine_backend: 'test', executable_sha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(process.execPath)).digest('hex'), command: engineCommand, command_display: 'isolated quota fixture', workload: 'inference', working_directory: dataDir }
+    let deniedLaunch = await request(endpoint, token, { command: 'start_instance', payload: { spec: { ...launchSpec, executable_sha256: '0'.repeat(64) } } }, 'changed-engine')
+    assert.ok(deniedLaunch.error?.includes('引擎文件已更改'), JSON.stringify(deniedLaunch))
+    const grantFile = path.join(dataDir, 'configs', 'authorized-paths.json')
+    const grants = fs.readFileSync(grantFile)
+    fs.writeFileSync(grantFile, JSON.stringify({ engine_roots: [] }))
+    deniedLaunch = await request(endpoint, token, { command: 'start_instance', payload: { spec: launchSpec } }, 'revoked-engine')
+    assert.ok(deniedLaunch.error?.includes('未获授权'), JSON.stringify(deniedLaunch))
+    fs.writeFileSync(grantFile, grants)
+    await command({ command: 'start_instance', payload: { spec: launchSpec } })
     await command({ command: 'start_proxy' })
     for (let i = 0; ; i++) {
       if ((await command({ command: 'get_status' })).proxy.healthy_routes === 1) break

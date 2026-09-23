@@ -181,7 +181,7 @@ fn rows(conn: &Connection, table: &str, q: &UsageQuery) -> Result<Vec<StoredRow>
             "SELECT bucket,key_id,key_name,model,instance_id,summary FROM {table}
         WHERE bucket>=?1 AND bucket<?2 AND (?3 IS NULL OR key_id=?3) AND (?4 IS NULL OR model=?4)
         AND (?5 IS NULL OR instance_id=?5) AND (?6 IS NULL OR endpoint=?6)
-        AND ((?7 IS NULL AND kind<>'count') OR kind=?7)"
+        AND ((?7 IS NULL AND kind<>'count') OR kind=?7) LIMIT 10001"
         ))
         .map_err(|e| e.to_string())?;
     let rows = statement
@@ -207,18 +207,22 @@ fn rows(conn: &Connection, table: &str, q: &UsageQuery) -> Result<Vec<StoredRow>
             },
         )
         .map_err(|e| e.to_string())?;
-    rows.map(|r| {
-        let (bucket, key, name, model, instance, json) = r.map_err(|e| e.to_string())?;
-        Ok((
-            bucket,
-            key,
-            name,
-            model,
-            instance,
-            serde_json::from_str(&json).map_err(|e| e.to_string())?,
-        ))
-    })
-    .collect()
+    rows.enumerate()
+        .map(|(index, r)| {
+            if index >= 10_000 {
+                return Err("性能查询数据过多，请缩小时间范围或增加筛选条件".into());
+            }
+            let (bucket, key, name, model, instance, json) = r.map_err(|e| e.to_string())?;
+            Ok((
+                bucket,
+                key,
+                name,
+                model,
+                instance,
+                serde_json::from_str(&json).map_err(|e| e.to_string())?,
+            ))
+        })
+        .collect()
 }
 
 fn query(conn: &Connection, q: &UsageQuery, now: i64) -> Result<PerformanceReport, String> {

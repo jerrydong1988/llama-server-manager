@@ -18,7 +18,7 @@ export default function UsageTrendChart({ days, from, to, lang, metric, onMetric
   const hasRequests = buckets.some(b => b.requests > 0)
   const hasTokens = buckets.some(b => b.inputKnown || b.outputKnown)
   const tokens = metric === 'tokens'
-  const maximum = usageAxisMax(Math.max(0, ...buckets.map(b => tokens ? b.input + b.output : b.requests)))
+  const maximum = usageAxisMax(buckets.reduce((peak, b) => Math.max(peak, tokens ? b.input + b.output : b.requests), 0))
   const number = (n: number) => n.toLocaleString(lang)
   const compact = (n: number) => n.toLocaleString(lang, { notation: 'compact', maximumFractionDigits: 1 })
   const date = (b: typeof active) => b.to - b.from === DAY ? utcDate(b.from) : `${utcDate(b.from)} – ${utcDate(b.to - DAY)}`

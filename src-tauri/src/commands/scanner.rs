@@ -460,7 +460,7 @@ fn model_reference_matches_target(references: &ModelArtifactReferences, target: 
         })
 }
 
-fn instances_referencing_models(
+pub(crate) fn instances_referencing_models(
     instances: &HashMap<String, InstanceConfig>,
     running: &HashMap<String, RunningInstance>,
     targets: &[PathBuf],
@@ -2852,6 +2852,7 @@ pub async fn rename_engine(
 }
 
 pub async fn open_engine_folder(dir: String) -> Result<(), String> {
+    let dir = crate::security::require_authorized_engine_root(Path::new(&dir))?;
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")

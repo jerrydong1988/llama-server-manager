@@ -562,6 +562,7 @@ export interface AppState {
   models: ModelInfo[]
   engines: EngineInfo[]
   instances: Instance[]
+  instancesHydrated: boolean
   instanceLifecycle: Record<string, InstanceLifecyclePhase>
   checkpointStatuses: Record<string, CheckpointStatus>
   logs: Record<string, LogEntry[]>

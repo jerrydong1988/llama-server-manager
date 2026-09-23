@@ -1124,7 +1124,7 @@ pub struct ProxyApiKey {
     pub name: String,
     pub key: String,
     pub enabled: bool,
-    /// Supported scopes are `inference` and `discovery`. Empty grants both.
+    /// Supported scopes are `inference` and `discovery`. Explicitly empty denies both.
     pub scopes: Vec<String>,
     /// Optional per-key request limit. Zero inherits the router-wide value.
     pub requests_per_minute: u32,

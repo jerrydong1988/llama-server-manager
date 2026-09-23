@@ -3,6 +3,8 @@
 mod artifact_maintenance;
 pub mod checkpoint;
 mod commands;
+#[cfg(test)]
+mod dependency_regressions;
 mod error;
 mod external_artifacts;
 mod model_artifacts;

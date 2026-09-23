@@ -1,8 +1,32 @@
 export function maskStartupCommandSecrets(cmdStr: string): string {
   return cmdStr.replace(
-    /(--api-key(?:\s+|=))(?:"[^"]*"|'[^']*'|[^\s]+)/g,
+    /((?:--api-key|--hf-token|-hft)(?:\s+|=))(?:"[^"]*"|'[^']*'|[^\s]+)/g,
     '$1********',
   )
+}
+
+export function maskCommandArguments(args: string[]): string[] {
+  let hideNext = false
+  return args.map(arg => {
+    if (hideNext) { hideNext = false; return '********' }
+    if (/^(--api-key|--hf-token|-hft)$/.test(arg)) { hideNext = true; return arg }
+    return arg.replace(/^(--api-key|--hf-token|-hft)=.*$/s, '$1=********')
+  })
+}
+
+export type ExportShell = 'powershell' | 'posix'
+
+/** Serialize literal argv only for the explicitly selected shell. */
+export function exportShellCommand(args: string[], shell: ExportShell): string {
+  if (!args.length || args.some(arg => arg.includes('\0'))) throw new Error('Invalid command argument')
+  const quote = (arg: string) => shell === 'powershell'
+    ? `'${arg.replace(/'/g, "''")}'`
+    : `'${arg.replace(/'/g, "'\"'\"'")}'`
+  const command = args.map(quote).join(' ')
+  // Standard mode preserves empty arguments and embedded quotes in native argv.
+  return shell === 'powershell'
+    ? `& { if ($PSVersionTable.PSVersion -lt [version]'7.3') { throw 'PowerShell 7.3+ required' }; $PSNativeCommandArgumentPassing = 'Standard'; & ${command} }`
+    : command
 }
 
 export function formatStartupCommand(cmdStr: string): string {

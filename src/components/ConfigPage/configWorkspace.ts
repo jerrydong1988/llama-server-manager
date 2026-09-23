@@ -1,5 +1,6 @@
 import type { InstanceConfig, ModelInfo } from '../../store'
 import type { Translations } from '../../i18n'
+import { maskStartupCommandSecrets } from '../../store/commandFormatting'
 import { isPathWithinRoot, normalizePath, pathJoin } from '../../utils/path'
 
 export interface PickerNode {
@@ -153,6 +154,9 @@ export const formatValue = (value: unknown, labels: Record<string, string>) => {
 }
 
 export const formatConfigValue = (key: keyof InstanceConfig, value: unknown, labels: Record<string, string>, t: Translations) => (
+  key === 'api_key' ? (value ? '********' : labels.emptyValue)
+    : key === 'manual_command' ? maskStartupCommandSecrets(String(value || '')) || labels.emptyValue
+    :
   key === 'custom_args'
     ? `${Array.isArray(value) ? value.length : 0} ${t.configPage.vectorCleanupItems}`
     : formatValue(value, labels)

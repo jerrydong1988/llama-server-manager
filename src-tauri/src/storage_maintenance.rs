@@ -413,6 +413,18 @@ fn collect_private_scratch(root: &Path, now: SystemTime) -> StorageMaintenanceGr
                         continue;
                     }
                 };
+                // Model/provider names never establish manager ownership. Only
+                // our private configuration/runtime/checkpoint namespaces qualify.
+                if entry.depth() == 1
+                    && entry.file_type().is_dir()
+                    && !matches!(
+                        entry.file_name().to_str(),
+                        Some("configs" | "runtime" | "kv-checkpoints")
+                    )
+                {
+                    walker.skip_current_dir();
+                    continue;
+                }
                 let name = entry.file_name().to_string_lossy();
                 let metadata = match std::fs::symlink_metadata(entry.path()) {
                     Ok(metadata) => metadata,
@@ -424,8 +436,16 @@ fn collect_private_scratch(root: &Path, now: SystemTime) -> StorageMaintenanceGr
                         continue;
                     }
                 };
+                let relative = entry.path().strip_prefix(root).unwrap_or(entry.path());
+                let components: Vec<_> = relative.iter().filter_map(|part| part.to_str()).collect();
+                let checkpoint_pending = components.len() == 5
+                    && components[0] == "kv-checkpoints"
+                    && components[3] == "generations"
+                    && crate::commands::server::validate_instance_id(components[1]).is_ok()
+                    && components[2].len() == 64
+                    && components[2].bytes().all(|b| b.is_ascii_hexdigit());
                 let matches = (metadata.is_file() && atomic_scratch_name(&name))
-                    || (metadata.is_dir() && pending_checkpoint_name(&name));
+                    || (metadata.is_dir() && checkpoint_pending && pending_checkpoint_name(&name));
                 if !matches {
                     continue;
                 }
@@ -1016,6 +1036,29 @@ pub async fn schedule_webview_cache_cleanup(enabled: bool) -> AppResult<bool> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn provider_names_never_grant_private_scratch_ownership() {
+        let base = sandbox("provider-scratch");
+        let roots = roots(&base);
+        let provider = roots
+            .app_data
+            .join("models")
+            .join(format!(".pending-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&provider).unwrap();
+        let model = provider.join(format!(".model.{}.tmp", uuid::Uuid::new_v4()));
+        fs::write(&model, b"model-data").unwrap();
+        let group = collect_private_scratch(
+            &roots.app_data,
+            SystemTime::now() + Duration::from_secs(365 * 86400),
+        );
+        assert!(group.items.iter().all(|item| !item
+            .path
+            .starts_with(&provider.to_string_lossy().to_string())));
+        assert!(model.exists());
+        fs::remove_dir_all(base).unwrap();
+    }
+
     use super::*;
     use std::fs;
 

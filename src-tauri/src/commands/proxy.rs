@@ -41,6 +41,8 @@ use crate::models::{
 };
 use crate::vector_policy::ModelWorkload;
 
+#[path = "proxy_delivery.rs"]
+mod delivery;
 #[path = "proxy_quota.rs"]
 mod quota;
 
@@ -995,6 +997,36 @@ fn resolve_proxy_candidates_from(
     requested_model: Option<&str>,
     endpoint_workload: Option<ModelWorkload>,
 ) -> Vec<ResolvedProxyTarget> {
+    let mut targets = resolve_proxy_candidates_unbounded(
+        proxy_config,
+        instances,
+        running,
+        requested_model,
+        endpoint_workload,
+    );
+    for target in &mut targets {
+        target.route_max_concurrent_requests = proxy_config
+            .routes
+            .iter()
+            .filter(|route| {
+                route_is_configured(route)
+                    && route.target_instance_id.trim() == target.public.instance_id
+                    && route.max_concurrent_requests > 0
+            })
+            .map(|route| route.max_concurrent_requests)
+            .min()
+            .unwrap_or(0);
+    }
+    targets
+}
+
+fn resolve_proxy_candidates_unbounded(
+    proxy_config: &ProxyConfig,
+    instances: &HashMap<String, InstanceConfig>,
+    running: &HashMap<String, crate::models::RunningInstance>,
+    requested_model: Option<&str>,
+    endpoint_workload: Option<ModelWorkload>,
+) -> Vec<ResolvedProxyTarget> {
     let requested_model = requested_model
         .map(str::trim)
         .filter(|model| !model.is_empty());
@@ -1371,6 +1403,21 @@ struct ProxyAuthContext {
     client_id: String,
     requests_per_minute: u32,
     scopes: Vec<String>,
+    policy: Option<crate::models::ProxyApiKey>,
+}
+
+impl ProxyAuthContext {
+    fn still_authorized(&self, config: &ProxyConfig, path: &str) -> bool {
+        match &self.policy {
+            None => config.api_keys.is_empty(),
+            Some(original) => config.api_keys.iter().any(|key| {
+                key.id == original.id
+                    && key.enabled
+                    && constant_time_eq(key.key.as_bytes(), original.key.as_bytes())
+                    && key.scopes.iter().any(|scope| scope == request_scope(path))
+            }),
+        }
+    }
 }
 
 fn request_scope(path: &str) -> &'static str {
@@ -1405,6 +1452,7 @@ fn authenticate_proxy_request(
             client_id: "anonymous".into(),
             requests_per_minute: config.requests_per_minute,
             scopes: vec!["inference".into(), "discovery".into()],
+            policy: None,
         });
     }
     for api_key in enabled_keys {
@@ -1417,6 +1465,7 @@ fn authenticate_proxy_request(
                     api_key.requests_per_minute
                 },
                 scopes: api_key.scopes.clone(),
+                policy: Some(api_key.clone()),
             });
         }
     }
@@ -1605,11 +1654,10 @@ async fn proxy_security_middleware(
             .unwrap_or("anonymous");
         usage.identity(&auth.client_id, name);
     }
-    if !auth.scopes.is_empty()
-        && !auth
-            .scopes
-            .iter()
-            .any(|scope| scope == request_scope(request.uri().path()))
+    if !auth
+        .scopes
+        .iter()
+        .any(|scope| scope == request_scope(request.uri().path()))
     {
         let mut response = error_response(format, StatusCode::FORBIDDEN, "API key scope denied");
         apply_cors_headers(&mut response, origin.as_deref());
@@ -1697,10 +1745,30 @@ async fn proxy_security_middleware(
         request
             .extensions_mut()
             .insert(ProxyAdmissionPermit::new(permit, body_permit));
+        let limit = request_body_limit(request.uri().path());
+        let body = std::mem::replace(request.body_mut(), Body::empty());
+        match delivery::receive(body, limit, delivery::UPLOAD_IDLE, delivery::UPLOAD_TOTAL).await {
+            Ok(bytes) => *request.body_mut() = Body::from(bytes),
+            Err(status) => {
+                let mut response = error_response(
+                    format,
+                    status,
+                    "request body exceeded its receive limit or deadline",
+                );
+                ensure_request_id_header(&mut response, format);
+                apply_cors_headers(&mut response, origin.as_deref());
+                return response;
+            }
+        }
     }
     request.headers_mut().remove("authorization");
     request.headers_mut().remove("x-api-key");
+    request.extensions_mut().insert(auth);
+    let delivery_usage = request.extensions().get::<UsageHandle>().cloned();
     let mut response = next.run(request).await;
+    let body = std::mem::replace(response.body_mut(), Body::empty());
+    *response.body_mut() =
+        delivery::bounded_delivery(body, delivery::DELIVERY_IDLE, delivery_usage);
     ensure_request_id_header(&mut response, format);
     apply_rate_headers(&mut response, format, rate.limit, rate.remaining);
     apply_cors_headers(&mut response, origin.as_deref());
@@ -1823,6 +1891,7 @@ async fn collect_bounded_response_body(
     response: reqwest::Response,
     limit: usize,
     idle_timeout: Duration,
+    mut reservation: Option<&mut delivery::ResponseReservation>,
 ) -> Result<Bytes, String> {
     if response
         .content_length()
@@ -1842,6 +1911,16 @@ async fn collect_bounded_response_body(
         })?
     {
         let chunk = chunk.map_err(|error| error.to_string())?;
+        let required = body.len().saturating_add(chunk.len());
+        if required > limit {
+            return Err(format!("upstream JSON response exceeds {limit} bytes"));
+        }
+        if reservation
+            .as_mut()
+            .is_some_and(|budget| !budget.resize(required.saturating_mul(4)))
+        {
+            return Err("router response memory budget exceeded".into());
+        }
         append_bounded_response_chunk(&mut body, &chunk, limit)?;
     }
     Ok(Bytes::from(body))
@@ -1877,6 +1956,7 @@ async fn fetch_token_count_value(
         response,
         MAX_TOKEN_COUNT_RESPONSE_BYTES,
         Duration::from_millis(timeout_ms),
+        None,
     )
     .await
     .ok()?;
@@ -2652,10 +2732,13 @@ async fn proxy_usage_middleware(mut request: Request, next: Next) -> Response {
     }
 }
 
+// Each argument is a separate Axum extractor at this HTTP boundary.
+#[allow(clippy::too_many_arguments)]
 async fn proxy_upstream(
     State(router_state): State<ProxyRouterState>,
     Extension(admission): Extension<ProxyAdmissionPermit>,
     Extension(usage): Extension<UsageHandle>,
+    Extension(auth): Extension<ProxyAuthContext>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -2707,6 +2790,16 @@ async fn proxy_upstream(
         vector_metadata.as_ref().map(|metadata| metadata.workload),
     );
     let proxy_config = resolution.config;
+    if !auth.still_authorized(&proxy_config, uri.path()) {
+        return error_response(
+            api_format,
+            StatusCode::UNAUTHORIZED,
+            "API key authorization changed",
+        );
+    }
+    // Pin quota policy at authentication, and recheck revocation before dispatch.
+    let mut quota_config = proxy_config.clone();
+    quota_config.api_keys = auth.policy.clone().into_iter().collect();
     let checkpoint_phase = resolution.checkpoint_phase;
     let mut candidates = resolution.candidates;
     let routing_key = routing_group_key(
@@ -2796,7 +2889,7 @@ async fn proxy_upstream(
         reservation,
     } = match quota::prepare(
         &usage,
-        &proxy_config,
+        &quota_config,
         &target,
         &client,
         &headers,
@@ -2868,6 +2961,13 @@ async fn proxy_upstream(
         }
     }
 
+    if !auth.still_authorized(&router_state.source.proxy_config(), uri.path()) {
+        return error_response(
+            api_format,
+            StatusCode::UNAUTHORIZED,
+            "API key authorization changed",
+        );
+    }
     if let Err(error) = quota::admit(&usage, reservation).await {
         usage.failure("quota", error.code());
         router_state.runtime.record_rejected();
@@ -3025,10 +3125,18 @@ async fn proxy_upstream(
         _target_permit: Some(target_permit),
     };
     if (response_is_json && !response_is_sse) || (api_format.is_anthropic() && !status_success) {
+        let Some(mut response_reservation) = delivery::ResponseReservation::acquire(0) else {
+            return error_response(
+                api_format,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "router response memory budget exceeded",
+            );
+        };
         let response_body = match collect_bounded_response_body(
             response,
             MAX_PROXY_JSON_RESPONSE_BYTES,
             header_timeout,
+            Some(&mut response_reservation),
         )
         .await
         {
@@ -3051,6 +3159,21 @@ async fn proxy_upstream(
         });
         let response_body =
             rewrite_json_response(response_body, &response_model, api_format, status);
+        if response_body.len() > MAX_PROXY_JSON_RESPONSE_BYTES {
+            return error_response(
+                api_format,
+                StatusCode::BAD_GATEWAY,
+                "rewritten response exceeds size limit",
+            );
+        }
+        if !response_reservation.resize(response_body.len().saturating_mul(2)) {
+            return error_response(
+                api_format,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "router response memory budget exceeded",
+            );
+        }
+        let response_body = response_reservation.attach(response_body);
         if api_format.is_anthropic() && !status_success {
             if let Some(request_id) = response_request_id(&response_body) {
                 builder = builder.header("request-id", request_id);
@@ -3771,6 +3894,165 @@ pub async fn shutdown_proxy_for_app(app: &tauri::AppHandle) -> Result<(), String
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+    #[tokio::test]
+    async fn credentials_revoked_during_upload_never_reach_inference() {
+        struct MutableSource(Mutex<super::ProxyRuntimeSnapshot>);
+        impl super::ProxyDataSource for MutableSource {
+            fn proxy_snapshot(&self) -> super::ProxyRuntimeSnapshot {
+                self.0.lock().unwrap().clone()
+            }
+        }
+        let upstream_state = Arc::new(ContextGuardUpstreamState::default());
+        let (upstream, upstream_task) = spawn_test_router(
+            Router::new()
+                .fallback(axum::routing::any(mock_context_guard_upstream))
+                .with_state(upstream_state.clone()),
+        )
+        .await;
+        for revoke in [false, true] {
+            let source = Arc::new(MutableSource(Mutex::new(openai_proxy_snapshot(
+                upstream,
+                "upload-key",
+            ))));
+            let (router, runtime) = super::proxy_router_from_source_with_runtime(source.clone());
+            let (address, task) = spawn_test_router(router).await;
+            let (release, hold) = tokio::sync::oneshot::channel::<()>();
+            let body = futures_util::stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"{")) })
+                .chain(futures_util::stream::once(async move {
+                    hold.await.unwrap();
+                    Ok::<_, std::io::Error>(Bytes::from_static(br#""model":"local-openai","messages":[{"role":"user","content":"hello"}],"max_tokens":1}"#))
+                }));
+            let request = tokio::spawn(async move {
+                reqwest::Client::new()
+                    .post(format!("http://{address}/v1/chat/completions"))
+                    .bearer_auth("upload-key")
+                    .header("content-type", "application/json")
+                    .body(reqwest::Body::wrap_stream(body))
+                    .send()
+                    .await
+                    .unwrap()
+            });
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while runtime.in_flight_requests() == 0 {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let before = upstream_state.generation_requests.load(Ordering::Relaxed);
+            if revoke {
+                source.0.lock().unwrap().config.api_keys.clear();
+            }
+            release.send(()).unwrap();
+            let response = request.await.unwrap();
+            if revoke {
+                assert!(matches!(
+                    response.status(),
+                    StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+                ));
+                assert_eq!(
+                    upstream_state.generation_requests.load(Ordering::Relaxed),
+                    before
+                );
+            } else {
+                assert_eq!(
+                    response.status(),
+                    StatusCode::OK,
+                    "{}",
+                    response.text().await.unwrap()
+                );
+                assert_eq!(
+                    upstream_state.generation_requests.load(Ordering::Relaxed),
+                    before + 1
+                );
+            }
+            task.abort();
+        }
+        upstream_task.abort();
+    }
+
+    #[tokio::test]
+    async fn empty_json_upstream_error_can_grow_into_a_safe_error_envelope() {
+        let (upstream, upstream_task) = spawn_test_router(Router::new().fallback(|| async {
+            (
+                StatusCode::BAD_REQUEST,
+                [("content-type", "application/json")],
+                "",
+            )
+        }))
+        .await;
+        let (address, proxy_task) =
+            spawn_test_router(super::proxy_router_from_source(Arc::new(TestProxySource {
+                snapshot: openai_proxy_snapshot(upstream, ""),
+            })))
+            .await;
+        let response = reqwest::Client::new()
+            .post(format!("http://{address}/v1/chat/completions"))
+            .json(&json!({"model":"local-openai","messages":[{"role":"user","content":"hello"}]}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response.json::<serde_json::Value>().await.unwrap()["error"].is_object());
+        proxy_task.abort();
+        upstream_task.abort();
+    }
+
+    #[test]
+    fn explicit_empty_scope_and_revoked_pinned_identity_fail_closed() {
+        let mut config = ProxyConfig {
+            api_keys: vec![ProxyApiKey {
+                id: "client".into(),
+                key: "secret".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer secret".parse().unwrap());
+        let auth =
+            super::authenticate_proxy_request(&config, "/v1/chat/completions", &headers).unwrap();
+        assert!(auth.still_authorized(&config, "/v1/chat/completions"));
+        config.api_keys[0].scopes.clear();
+        assert!(!auth.still_authorized(&config, "/v1/chat/completions"));
+        let denied = super::authenticate_proxy_request(&config, "/v1/models", &headers).unwrap();
+        assert!(denied.scopes.is_empty());
+        assert!(!denied.still_authorized(&config, "/v1/models"));
+        config.api_keys.clear();
+        assert!(!auth.still_authorized(&config, "/v1/chat/completions"));
+        assert!(
+            auth.policy.is_some(),
+            "upload retains its original quota policy"
+        );
+        let legacy: ProxyApiKey =
+            serde_json::from_value(json!({ "id": "legacy", "key": "secret" })).unwrap();
+        assert!(legacy.scopes.contains(&"inference".into()));
+    }
+    #[test]
+    fn default_and_alias_routes_share_the_instance_capacity_limit() {
+        let mut snapshot = openai_proxy_snapshot("127.0.0.1:8999".parse().unwrap(), "");
+        snapshot.config.default_instance_id = "openai-upstream".into();
+        snapshot.config.routes[0].max_concurrent_requests = 1;
+        let mut alias = snapshot.config.routes[0].clone();
+        alias.model_alias = "second-public-alias".into();
+        alias.max_concurrent_requests = 5;
+        snapshot.config.routes.push(alias);
+        for selector in [None, Some("local-openai"), Some("second-public-alias")] {
+            let candidates = super::resolve_proxy_candidates_from(
+                &snapshot.config,
+                &snapshot.instances,
+                &snapshot.running,
+                selector,
+                None,
+            );
+            assert!(!candidates.is_empty(), "{selector:?}");
+            assert!(candidates
+                .iter()
+                .all(|target| target.route_max_concurrent_requests == 1));
+        }
+    }
+
     use super::{
         capabilities_from_values, RouterRuntime, TargetCapabilities, TARGET_CAPABILITY_MAX_AGE,
     };
@@ -3895,6 +4177,7 @@ mod tests {
             response,
             1024,
             std::time::Duration::from_millis(750),
+            None,
         )
         .await;
         task.abort();
