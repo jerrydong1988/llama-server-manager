@@ -18,6 +18,8 @@ export function getGuideTourCopy(lang: string) {
     returnToStep: zh ? '返回当前步骤' : 'Return to this step',
     ready: zh ? '条件已满足，可以继续。' : 'Ready to continue.',
     selectInstance: zh ? '本次引导的实例' : 'Instance for this guide',
+    switchInstance: zh ? '切换实例' : 'Switch instance',
+    cancelSwitch: zh ? '取消切换' : 'Cancel switch',
     chooseInstance: zh ? '请选择实例，或在页面中创建' : 'Choose an instance, or create one on this page',
     noInstance: zh ? '请先创建或选择实例；后续操作将始终使用该实例。' : 'Create or select an instance first. The remaining steps will use it.',
     needModel: zh ? '请添加模型目录并扫描出至少一个 GGUF 模型。已有模型时可直接继续。' : 'Add a model directory and scan at least one GGUF model. Existing models can be reused.',

@@ -9,6 +9,7 @@ import { getRouterUsageLabels } from '../i18n/routerUsage'
 import ProxyUsagePanel from './ProxyUsagePanel'
 import { getRouterManagementLabels } from '../i18n/routerManagement'
 import { QuotaSettings } from './routerUsage/QuotaSettings'
+import { WorkspaceFloatingActions } from './shell/WorkspaceActions'
 import { Badge, Button, DataTable, EmptyPanel, IconButton, MetricCard, SelectInput, StatusBadge, Surface, TextInput } from './ui'
 
 type ProxyRoute = {
@@ -1537,32 +1538,34 @@ export default function ProxyPage() {
         </div>
       </div>
       {(dirty || saving) ? (
-        <div
-          data-testid="proxy-floating-save"
-          role="region"
-          aria-label={labels.unsaved}
-          aria-live="polite"
-          className="fixed bottom-4 right-4 z-30 flex max-w-[calc(100vw-2rem)] items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl shadow-slate-950/15 dark:border-slate-700 dark:bg-slate-900 dark:shadow-slate-950/50 sm:bottom-14 sm:right-6"
-        >
-          <div className="min-w-0 px-1">
-            <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">{labels.unsaved}</div>
-            {hasRouteIssues || hasApiKeyIssues ? (
-              <div className="mt-0.5 max-w-md truncate text-xs text-rose-600 dark:text-rose-300" title={hasRouteIssues ? labels.routeValidationSummary : labels.apiKeyValidation}>
-                {hasRouteIssues ? labels.routeValidationSummary : labels.apiKeyValidation}
-              </div>
-            ) : null}
-          </div>
-          <Button
-            data-testid="proxy-floating-save-button"
-            onClick={saveConfig}
-            disabled={saving || hasRouteIssues || hasApiKeyIssues}
-            variant="primary"
-            className="shrink-0"
-            icon={<Save className="h-4 w-4" />}
+        <WorkspaceFloatingActions>
+          <div
+            data-testid="proxy-floating-save"
+            role="region"
+            aria-label={labels.unsaved}
+            aria-live="polite"
+            className="pointer-events-auto flex items-center gap-3 rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl shadow-slate-950/15 dark:border-slate-700 dark:bg-slate-900 dark:shadow-slate-950/50"
           >
-            {saving ? labels.saving : labels.save}
-          </Button>
-        </div>
+            <div className="min-w-0 px-1">
+              <div className="text-xs font-semibold text-slate-900 dark:text-slate-100">{labels.unsaved}</div>
+              {hasRouteIssues || hasApiKeyIssues ? (
+                <div className="mt-0.5 max-w-md truncate text-xs text-rose-600 dark:text-rose-300" title={hasRouteIssues ? labels.routeValidationSummary : labels.apiKeyValidation}>
+                  {hasRouteIssues ? labels.routeValidationSummary : labels.apiKeyValidation}
+                </div>
+              ) : null}
+            </div>
+            <Button
+              data-testid="proxy-floating-save-button"
+              onClick={saveConfig}
+              disabled={saving || hasRouteIssues || hasApiKeyIssues}
+              variant="primary"
+              className="shrink-0"
+              icon={<Save className="h-4 w-4" />}
+            >
+              {saving ? labels.saving : labels.save}
+            </Button>
+          </div>
+        </WorkspaceFloatingActions>
       ) : null}
       {stopRuntimeConfirmOpen ? (
         <div className="fixed inset-0 z-[120] flex items-center justify-center bg-slate-950/60 px-4 backdrop-blur-sm" role="presentation">

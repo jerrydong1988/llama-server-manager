@@ -34,7 +34,7 @@ export const GUIDE_TOUR_STEPS: GuideTourStep[] = [
     en: { title: 'Create or choose an instance', description: 'Create an instance with a model, engine and port, or select an existing one below. The remaining steps stay with that instance.' },
   },
   {
-    id: 'config', tab: 'config', selector: '[data-guide="config-save"]',
+    id: 'config', tab: 'config', selector: '[data-guide="config-actions"]',
     zh: { title: '检查必要参数', description: '确认实例名称、模型、端口和硬件参数，按需调整。修改后请保存并处理校验提示，再继续启动。' },
     en: { title: 'Review configuration', description: 'Check the instance, model, port and hardware settings. Save any changes and resolve validation messages before continuing.' },
   },

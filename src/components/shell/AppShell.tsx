@@ -2,6 +2,7 @@ import { useEffect, useRef, type ComponentType, type ReactNode } from 'react'
 import { AlertTriangle, Download, Languages, LoaderCircle, Moon, RefreshCw, Search, Sun, Zap } from 'lucide-react'
 import appIconUrl from '../../../src-tauri/icons/128x128.png'
 import { Badge, Button, IconButton, joinClassNames } from '../ui'
+import { WorkspaceActionsProvider, WorkspaceFloatingActionsHost } from './WorkspaceActions'
 
 type NavIcon = ComponentType<{ className?: string }>
 
@@ -293,19 +294,24 @@ export function AppShell({
             </div>
           </header>
 
-          <div className={joinClassNames('min-h-0 flex-1', constrainContent ? 'overflow-hidden' : 'overflow-y-auto')}>
-            <div
-              className={joinClassNames(
-                constrainContent ? 'flex h-full min-h-0 flex-col' : 'min-h-full',
-                immersiveContent ? '' : 'px-4 py-4 sm:px-5',
-                !immersiveContent && !wideContent ? 'mx-auto w-full max-w-[1480px]' : '',
-              )}
-            >
-              {children}
+          <WorkspaceActionsProvider>
+            <div data-workspace-content className="relative flex min-h-0 flex-1 flex-col">
+              <div data-workspace-scroll className={joinClassNames('min-h-0 flex-1', constrainContent ? 'overflow-hidden' : 'overflow-y-auto')}>
+                <div
+                  className={joinClassNames(
+                    constrainContent ? 'flex h-full min-h-0 flex-col' : 'min-h-full',
+                    immersiveContent ? '' : 'px-4 py-4 sm:px-5',
+                    !immersiveContent && !wideContent ? 'mx-auto w-full max-w-[1480px]' : '',
+                  )}
+                >
+                  {children}
+                </div>
+              </div>
+              <WorkspaceFloatingActionsHost />
             </div>
-          </div>
 
-          {guidePanel}
+            {guidePanel}
+          </WorkspaceActionsProvider>
 
           {!immersiveContent && (
             <footer className="hidden h-9 shrink-0 items-center justify-between border-t border-slate-200 bg-white/85 px-4 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/85 dark:text-slate-400 sm:flex">

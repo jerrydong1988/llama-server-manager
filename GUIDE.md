@@ -65,6 +65,10 @@ The app checks the project's Cloudflare R2 update service at startup. When an up
 
 Use Guide → Start Interactive Tour for six steps: model, engine, instance, configuration, startup, and connection testing. The bottom guide bar preserves progress across pages and supports Previous, Pause, and Exit without blocking forms. Reuse existing resources or take the optional download branch. The guide never automatically saves configuration or starts a service; completion requires a successful connection test.
 
+检查参数时，底部引导栏整合保存、返回顶部和步骤导航，滚动页面也能直接操作。收起引导只隐藏详细说明；保存成功后可点击“已检查配置，继续”。后续步骤显示当前实例名称，需要更换时点击“切换实例”；存在未保存修改时需先保存或撤销。
+
+During configuration review, the bottom guide bar combines Save, Back to top, and step navigation so actions remain available while scrolling. Collapsing the guide hides the detailed instructions. After saving, select Configuration reviewed, continue. Later steps show the current instance with a Switch instance action; save or revert pending edits before switching.
+
 “进阶功能导览”单独介绍总览、下载、集群、实例路由和监控。暂停进度只保留在本次应用会话内；退出会恢复进入引导前的上下文。如果正在填写创建表单或有未保存的配置，退出只关闭引导并保留编辑页面。
 
 Explore Advanced Features separately covers the dashboard, downloads, clusters, routing, and monitoring. Paused progress lasts for the current application session. Exit restores the original context, except when a creation form or unsaved configuration needs to stay open to preserve your input.

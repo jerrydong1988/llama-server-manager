@@ -53,6 +53,7 @@ const ConfigPage = () => {
 
   const { local, setLocal, baseline, setBaseline, committedModelPathRef, editRevisionRef, saveInFlightRef, saving, saveStage, setSaveStage } = useConfigDraft(configInstanceId)
   const [saved, setSaved] = useState(false)
+  const [saveFailedFor, setSaveFailedFor] = useState<string | null>(null)
   const [showPicker, setShowPicker] = useState(false)
   const [pickerTarget, setPickerTarget] = useState<ModelAssetPickerTarget>('model')
   const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set())
@@ -202,6 +203,7 @@ const ConfigPage = () => {
 
     saveInFlightRef.current = true
     setSaved(false)
+    setSaveFailedFor(null)
     setSaveStage('validating')
     const timing = beginOperationTiming('config.save')
     let outcome: OperationOutcome = 'failure'
@@ -286,6 +288,7 @@ const ConfigPage = () => {
       }, 6000)
       outcome = 'success'
     } catch (error) {
+      if (targetIsActive()) setSaveFailedFor(targetInstanceId)
       updateInstance(targetInstanceId, { config: previousSave.config })
       if (saveIsCurrent()) { committedModelPathRef.current = previousSave.committedModelPath; setLocal(localSnapshot) }
       if (manualMode) {
@@ -785,6 +788,8 @@ const ConfigPage = () => {
         saving={saving}
         saved={saved}
         disabled={saveDisabled}
+        hasChanges={configChanges.length > 0}
+        error={saveFailedFor === configInstanceId ? labels.saveFailed : null}
         onSave={save}
       />
 
